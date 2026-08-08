@@ -268,9 +268,9 @@ assert(hostileOk, `chat modules import with localStorage throwing + no crypto/na
 const chatUiSrc = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
 const bareLS = chatUiSrc
   .split('\n')
-  .filter(l => /localStorage\./.test(l) && !/^\s*\*/.test(l) && !/function lsGet|function lsSet/.test(l));
+  .filter(l => /localStorage\./.test(l) && !/^\s*\*/.test(l) && !/function lsGet|function lsSet|function lsRemove/.test(l));
 assert(bareLS.length === 0,
-  `chat-ui.js routes all localStorage through lsGet/lsSet${bareLS.length ? ' — found: ' + bareLS[0].trim() : ''}`);
+  `chat-ui.js routes all localStorage through lsGet/lsSet/lsRemove${bareLS.length ? ' — found: ' + bareLS[0].trim() : ''}`);
 
 // setAppBadge returns a Promise; an unhandled rejection breaks sync (CONVENTIONS #4).
 assert(/setAppBadge[\s\S]{0,220}?\.catch\(/.test(chatUiSrc),
@@ -632,8 +632,11 @@ const tagsFn = (chatUiRetSrc.match(/function activeGameTags\(\)[\s\S]*?\n}/) || 
 assert(/respectRetention:\s*true/.test(tagsFn),
   'game filter pills respect retention (no pill for a fully hidden thread)');
 
-assert(/retentionOn\(\)\s*\?\s*''\s*:\s*'<button class="chat-load-older"/.test(chatUiRetSrc),
-  '"load earlier" is hidden when retention is on (it would fetch nothing)');
+// UN-112 widened this condition to ALSO hide the control once the epoch
+// blocks further backfill (§[29b] tests that half) — retention's own half
+// of the OR still must hold.
+assert(/\(retentionOn\(\)\s*\|\|\s*backfillBlockedByEpoch\(\)\)\s*\?\s*''\s*:\s*'<button class="chat-load-older"/.test(chatUiRetSrc),
+  '"load earlier" is hidden when retention is on (it would fetch nothing) — now composed with the UN-112 epoch check, not replaced by it');
 
 // 10g. The cutoff is resolved ONCE per unread pass, not per message. Left
 // unhoisted this cost ~1.9ms per 800 messages EVEN WITH RETENTION OFF, paid on
@@ -1345,18 +1348,23 @@ const hoverNoneBlock23 = (cssSrc.match(/@media \(hover:none\)\{[\s\S]*?\}\}/) ||
 assert(hoverNoneBlock23.length > 0, '@media (hover:none) rule for .chat-actions visibility still exists');
 assert(!/\.chat-actions\{opacity:\.75\}/.test(hoverNoneBlock23),
   '.chat-actions is NOT permanently opacity:.75 on touch devices (the "too busy" defect this batch fixes)');
-assert(/\.chat-msg\.chat-actions-revealed \.chat-actions\{opacity:1;pointer-events:auto\}/.test(hoverNoneBlock23),
-  'touch reveal restores BOTH opacity and pointer-events (v0.17.4: opacity alone left live invisible buttons)');
+assert(/\.chat-msg\.chat-actions-revealed \.chat-actions\{display:flex\}/.test(hoverNoneBlock23),
+  'touch reveal restores .chat-actions via display:flex (UN-113 mechanism — see below)');
 const baseActionsRule23 = (cssSrc.match(/^\.chat-actions\{[^}]*\}/m) || [''])[0];
-assert(/opacity:0/.test(baseActionsRule23), '.chat-actions base rule (all devices, all input types) starts hidden at opacity:0');
-// v0.17.4, caught in review: opacity:0 WITHOUT pointer-events:none left a 40px
-// strip of live controls under every message on touch. 🏛 pin and 📎 callout
-// fire with no confirmation, so a stray tap could publish someone's message to
-// the Hall of Records. Hidden must mean untappable.
-assert(/pointer-events:\s*none/.test(baseActionsRule23),
-  '.chat-actions hidden state is also UNTAPPABLE, not just invisible');
-assert(/\.chat-msg:hover \.chat-actions,\.chat-msg:focus-within \.chat-actions\{opacity:1;pointer-events:auto\}/.test(cssSrc),
-  'desktop hover-reveal restores opacity AND pointer-events (the pointer-events pair is the v0.17.4 fix)');
+// UN-113 (message density) — caught the ROOT CAUSE of "only 4-5 messages fit
+// on a screen": the old opacity:0/pointer-events:none hidden state was still
+// display:flex, so the hidden .chat-act (40px) row reserved ~42px of
+// INVISIBLE layout height on EVERY message. Asserting the DISPLAY mechanism,
+// not just that something is hidden (Testing Protocol step 12 — a computed
+// constraint, not source presence of an unrelated property) is the whole
+// point of this guard: opacity:0 alone would pass an "is it hidden" check
+// while still reserving the height that caused the bug.
+assert(/display:\s*none/.test(baseActionsRule23),
+  '.chat-actions base rule hides via display:none — NOT opacity:0 — so it reserves zero layout height (UN-113 root cause fix)');
+assert(!/opacity:\s*0/.test(baseActionsRule23) && !/pointer-events:\s*none/.test(baseActionsRule23),
+  '.chat-actions no longer needs opacity:0/pointer-events:none — display:none already makes it both invisible and untappable, with no separate height-reserving hidden state');
+assert(/\.chat-msg:hover \.chat-actions,\.chat-msg:focus-within \.chat-actions\{display:flex\}/.test(cssSrc),
+  'desktop hover-reveal restores .chat-actions via display:flex (same mechanism as the touch reveal, so both are governed by one property, not a drifting opacity/pointer-events pair)');
 
 // Computed-constraint, not source presence (Testing Protocol step 12) — parse
 // the ACTUAL declared px values, the same technique already proven on
@@ -1996,6 +2004,275 @@ chatUi.setChatSyncStatus(null);   // reset — don't leak state into any test th
 // The badge is wired into renderChatPage()'s header row, beside the BETA badge.
 assert(/<h2>Chat <span class="badge badge-beta"[^>]*>BETA<\/span> \$\{_chatSyncBadgeHTML\(\)\}<\/h2>/.test(chatUiSrc),
   'renderChatPage() renders _chatSyncBadgeHTML() inline in the <h2>, beside the BETA badge (design input placement)');
+
+// ── 28. UN-114 — who reacted with what: always-visible names + tap target ────
+console.log('\n[28] UN-114 — reaction attribution: always-visible names, escaped, 40px pill…');
+
+// Exercise the REAL rendering function, not a source regex — multiple emoji,
+// multiple reactors per emoji, and a reactor "name" (nameOf() falls back to
+// the raw id when no player/nickname matches) containing HTML, to prove
+// escaping actually happens at render time.
+const fakeReactMsg = {
+  id: 'react_test_1', reactions: {
+    '🔥': ['<script>xss</script>', 'p2'],
+    '👍': ['p3'],
+  },
+};
+const reactHTML28 = chatUi._reactionsHTML(fakeReactMsg, null);
+assert(/class="chat-reaction-names"/.test(reactHTML28), '.chat-reaction-names element renders beneath the pill row');
+assert(!/<script>xss<\/script>/.test(reactHTML28) && /&lt;script&gt;xss&lt;\/script&gt;/.test(reactHTML28),
+  'a reactor name containing HTML is escaped, not injected verbatim — escHtml() around every piece of user data (CONVENTIONS #12)');
+assert(/🔥 &lt;script&gt;xss&lt;\/script&gt;, p2/.test(reactHTML28),
+  'multiple reactors on the SAME emoji are joined by ", "');
+assert(/🔥[\s\S]* · 👍 p3/.test(reactHTML28), 'multiple emoji GROUPS are joined by " · "');
+assert(!/title="/.test(reactHTML28),
+  'the react pill no longer carries a `title` tooltip — REMOVED per design input (tooltips do not fire on touch)');
+
+// Empty reactions: no stray empty .chat-reaction-names div.
+assert(chatUi._reactionsHTML({ id: 'no_react', reactions: {} }, null) === '',
+  'a message with no reactions renders neither the pill row nor the names line');
+
+// Computed-constraint (Testing Protocol step 12), same technique as .chat-pill
+// (v0.17.2) / .chat-act (v0.17.4) — parse the ACTUAL declared px value.
+//
+// v0.17.5: the tap target is now an INVISIBLE ::after overlay, not the pill's
+// own min-height. The first version grew the visible pill to 40px, which —
+// stacked with UN-114's names line — added back almost exactly the 42px UN-113
+// had just freed, so messages with reactions got NO density gain (4.58 -> 4.60
+// per screen measured). Hit area and visible size are now decoupled: assert the
+// overlay's height, and assert the pill itself did NOT regain a tall min-height.
+const reactPillRule28 = (cssSrc.match(/\.chat-react-pill\{[^}]*\}/) || [''])[0];
+const pillHitRule28 = (cssSrc.match(/\.chat-react-pill::after\{[^}]*\}/) || [''])[0];
+const pillHitH28 = Number((pillHitRule28.match(/height:\s*(\d+)px/) || [])[1] || 0);
+assert(pillHitH28 >= 40, `.chat-react-pill tap target >= 40px via ::after overlay (CONVENTIONS #17 / UN-114) — got ${pillHitH28}`);
+assert(/position:\s*relative/.test(reactPillRule28),
+  '.chat-react-pill is a positioning context, so the ::after hit overlay anchors to it');
+const pillOwnMinH28 = Number((reactPillRule28.match(/min-height:\s*(\d+)px/) || [])[1] || 0);
+assert(pillOwnMinH28 < 30,
+  `the pill's VISIBLE height stays compact so UN-113's density gain survives — got min-height ${pillOwnMinH28}px`);
+assert(!/width:\s*40px/.test(reactPillRule28),
+  '.chat-react-pill keeps a content-driven width (min-height only, not a fixed box) — the compact pill shape is intentional, per design input');
+
+// ── 29. UN-112 — chat epoch clear (LAUNCH BLOCKER) ────────────────────────────
+console.log('\n[29a] UN-112 — epoch predicate: default-when-missing, unconditional hide, pinned divergence…');
+chat._resetForTest();
+storage.saveSetting('chatEpochSeq', 0);
+storage.saveSetting('chatEpochSetAt', null);
+localStorage.removeItem('cfbp_chat_epoch_applied');
+
+assert(dm.DEFAULT_SETTINGS.chatEpochSeq === 0 && dm.DEFAULT_SETTINGS.chatEpochSetAt === null,
+  'DEFAULT_SETTINGS carries chatEpochSeq:0 / chatEpochSetAt:null');
+assert(chat.getChatEpochSeq() === 0,
+  'chatEpochSeq defaults to 0 when absent from a stored settings blob (CONVENTIONS #10 — mirrors retention\'s own default-when-missing test, §[10])');
+assert(chat.isHiddenByEpoch({ seq: 1 }) === false, 'epoch OFF (0) hides nothing, no matter the seq');
+
+// Fixed log spanning an epoch boundary, incl. one message PINNED during
+// "testing" — the whole point of the divergence-from-retention assertion.
+chat.ingest([
+  ev({ id: 'ep1', seq: 201, ts: Date.now() - 5000, body: 'pre-launch test chatter', author: 'p1' }),
+  ev({ id: 'ep2', seq: 202, ts: Date.now() - 4000, body: 'more testing, right at the boundary', author: 'p2' }),
+  ev({ id: 'ep3', seq: 203, ts: Date.now() - 3000, body: 'real message, after launch', author: 'p3' }),
+]);
+chat.ingest([{ id: 'ep1pin', type: 'pin', targetId: 'ep1', author: 'p1', notify: false }]);
+assert(chat.getMessage('ep1').pinned === true,
+  'fixture check: ep1 is actually pinned before trusting the divergence assertion below');
+
+storage.saveSetting('chatEpochSeq', 202);   // hides ep1 (201, below) and ep2 (202, AT the boundary); ep3 (203) survives
+assert(chat.getChatEpochSeq() === 202, 'getChatEpochSeq reads the synced setting through the storage seam');
+assert(chat.isHiddenByEpoch(chat.getMessage('ep1')) === true, 'a message BELOW the epoch is hidden');
+assert(chat.isHiddenByEpoch(chat.getMessage('ep2')) === true, 'a message exactly AT the epoch seq is hidden ("at or below", not strictly below)');
+assert(chat.isHiddenByEpoch(chat.getMessage('ep3')) === false, 'a message ABOVE the epoch is visible');
+
+// THE deliberate divergence from retention — asserted explicitly so nobody
+// "fixes" it later by copying isHiddenByRetention's pinned exemption.
+assert(chat.isHiddenByEpoch(chat.getMessage('ep1')) === true,
+  'a PINNED message at/below the epoch is STILL HIDDEN — unlike retention, epoch carries NO pinned exemption (a pin made during testing is still test content)');
+
+// getMessages() — UNCONDITIONAL. No respectRetention-style opt-in flag exists
+// or is honored for epoch; passing NOTHING still hides it (contrast with §[10]'s
+// rtUnfiltered check, which deliberately proves retention's opt-in leaves data
+// visible without the flag — epoch must do the opposite).
+const epUnfiltered = chat.getMessages({ tag: 'all' }).map(m => m.id);
+assert(!epUnfiltered.includes('ep1') && !epUnfiltered.includes('ep2'),
+  'getMessages() hides epoch-covered messages UNCONDITIONALLY — composed into the choke point itself, not behind an opt-in flag');
+assert(epUnfiltered.includes('ep3'), 'getMessages() still returns messages after the epoch');
+const epPinnedView = chat.getMessages({ tag: 'all', pinned: true }).map(m => m.id);
+assert(!epPinnedView.includes('ep1'),
+  'the Hall of Records (pinned) view does not resurrect an epoch-hidden pinned message either — same unconditional check');
+
+// isUnreadFor() (via unreadCount) — the second and last choke point.
+localStorage.setItem('cfbp_chat_lastseen2', JSON.stringify({ seq: 0, byTag: {} }));
+const epUnread = chat.unreadCount('someone_else', 'all');
+assert(epUnread === 1,
+  `unread count excludes BOTH epoch-hidden messages (ep1, ep2) and counts only the real one after it (ep3) — got ${epUnread}`);
+localStorage.removeItem('cfbp_chat_lastseen2');
+
+// Reversible — nothing was ever deleted (same guarantee retention makes).
+storage.saveSetting('chatEpochSeq', 0);
+const epRestored = chat.getMessages({ tag: 'all' }).map(m => m.id);
+assert(epRestored.includes('ep1') && epRestored.includes('ep2'),
+  'setting the epoch back to 0 immediately restores the hidden messages — nothing was deleted');
+
+console.log('\n[29b] UN-112 — "load earlier" hides once backfill can only surface epoch-hidden messages…');
+chat._resetForTest();
+storage.saveSetting('chatEpochSeq', 0);
+assert(chat.backfillBlockedByEpoch() === false, 'epoch OFF: backfill is never blocked by epoch');
+chat.ingest([ev({ id: 'bf1', seq: 50, ts: Date.now(), body: 'oldest loaded', author: 'p1' })]);
+storage.saveSetting('chatEpochSeq', 100);
+assert(chat.backfillBlockedByEpoch() === true,
+  'the oldest loaded message (seq 50) is at/below the epoch (100) — further backfill could only surface epoch-hidden messages, so the control hides');
+chat.ingest([ev({ id: 'bf2', seq: 150, ts: Date.now(), body: 'newer', author: 'p1' })]);
+assert(chat.backfillBlockedByEpoch() === true,
+  'backfillLow tracks the MINIMUM seq ingested so far — a later, higher-seq message does not un-block it');
+storage.saveSetting('chatEpochSeq', 10);
+assert(chat.backfillBlockedByEpoch() === false,
+  'once the epoch is below the oldest loaded message, backfill unblocks again — unlike retention\'s rolling window, real history can still exist mid-season');
+assert(/\(retentionOn\(\) \|\| backfillBlockedByEpoch\(\)\) \? '' : '<button class="chat-load-older"/.test(chatUiSrc),
+  '"load earlier" is hidden when EITHER retention is on OR the epoch blocks further backfill');
+
+console.log('\n[29c] UN-112 (DI-112b) — device-local self-heal reaches all six phones…');
+chat._resetForTest();
+storage.saveSetting('chatEnabled', true);
+storage.saveSetting('chatEpochSeq', 0);
+localStorage.removeItem('cfbp_chat_epoch_applied');
+localStorage.removeItem('cfbp_chat_lastseen2');
+localStorage.removeItem('cfbp_chat_outbox2');
+
+// Simulate the exact hazard: a stale queued send AND a stale-but-lower read
+// cursor left over from before another device set the epoch.
+localStorage.setItem('cfbp_chat_outbox2', JSON.stringify([
+  { id: 'stale_send_1', type: 'message', body: 'test message from before the wipe', author: 'p1', gameTag: '', notify: true },
+]));
+localStorage.setItem('cfbp_chat_lastseen2', JSON.stringify({ seq: 40, byTag: { g1: 40 } }));
+storage.saveSetting('chatEpochSeq', 200);   // higher than this device's local watermark (absent = 0) — self-heal must fire
+
+const preOutboxRaw29 = JSON.parse(localStorage.getItem('cfbp_chat_outbox2'));
+assert(preOutboxRaw29.length === 1, 'fixture check: the stale outbox message is actually queued before initChat() runs');
+
+chat.initChat('p1');
+
+assert(JSON.parse(localStorage.getItem('cfbp_chat_outbox2') || '[]').length === 0,
+  '_applyEpochLocally empties AND PERSISTS the outbox — nothing stale can flush into the freshly-cleared room (this is what actually reaches the other five phones)');
+const lsAfterHeal29 = JSON.parse(localStorage.getItem('cfbp_chat_lastseen2'));
+assert(lsAfterHeal29.seq === 200 && Object.keys(lsAfterHeal29.byTag).length === 0,
+  `_applyEpochLocally fast-forwards K_LASTSEEN to {seq: epochSeq, byTag: {}} — got ${JSON.stringify(lsAfterHeal29)}`);
+assert(Number(localStorage.getItem('cfbp_chat_epoch_applied')) === 200,
+  'the device-local watermark (cfbp_chat_epoch_applied) is updated so this self-heal runs exactly once per epoch bump');
+
+// Idempotency — a second initChat() at the SAME epoch must NOT re-run the
+// heal (e.g. must not re-empty an outbox the player has since started using).
+localStorage.setItem('cfbp_chat_outbox2', JSON.stringify([
+  { id: 'fresh_send_1', type: 'message', body: 'a legit post-clear message', author: 'p1', gameTag: '', notify: true },
+]));
+chat.initChat('p1');
+assert(JSON.parse(localStorage.getItem('cfbp_chat_outbox2') || '[]').length === 1,
+  'a second initChat() at the SAME epoch does not re-run the heal — a legitimately queued post-clear message survives');
+chat._resetForTest();
+localStorage.removeItem('cfbp_chat_epoch_applied');
+localStorage.removeItem('cfbp_chat_lastseen2');
+localStorage.removeItem('cfbp_chat_outbox2');
+storage.saveSetting('chatEpochSeq', 0);
+
+// Structural: the epoch check must run BEFORE loadOutbox() AND flushOutbox()
+// in source order — this is the actual ordering hazard (flushOutbox() fires
+// unconditionally later in the same function).
+const initChatFnSrc29raw = (chatRetSrc.match(/export function initChat\(selfId\) \{[\s\S]*?\n\}/) || [''])[0];
+assert(initChatFnSrc29raw.length > 0, 'initChat() function body located for structural assertions');
+// Comment-stripped (reuses the SAME `code` filter as §[7]/[26a]) — the
+// explanatory comment above the epoch check legitimately mentions
+// "loadOutbox()" and "flushOutbox()" BY NAME before the real calls, which
+// would otherwise fool a plain indexOf() into seeing the wrong order.
+const initChatFnSrc29 = stripComments(initChatFnSrc29raw);
+const epochCheckIdx29 = initChatFnSrc29.indexOf('_applyEpochLocally(epochSeq)');
+const loadOutboxIdx29 = initChatFnSrc29.indexOf('loadOutbox()');
+const flushOutboxIdx29 = initChatFnSrc29.lastIndexOf('flushOutbox()');
+assert(epochCheckIdx29 > -1 && loadOutboxIdx29 > -1 && flushOutboxIdx29 > -1 &&
+  epochCheckIdx29 < loadOutboxIdx29 && loadOutboxIdx29 < flushOutboxIdx29,
+  'initChat() runs the epoch self-heal check BEFORE loadOutbox() AND before flushOutbox() — a device with a stale queued message never gets the chance to load/flush it into the freshly-cleared room');
+
+console.log('\n[29d] UN-112 — startFreshChat() loud-fails, never a guessed/partial epoch…');
+chat._resetForTest();
+storage.saveSetting('chatEpochSeq', 0);
+storage.saveSetting('chatEpochSetAt', null);
+// No backend is configured in this harness (no config.json loaded) — fetchHead()
+// must throw BEFORE any setting is written.
+let startFreshThrew = false;
+try { await chat.startFreshChat(); } catch { startFreshThrew = true; }
+assert(startFreshThrew, 'startFreshChat() throws rather than silently succeeding when the live head cannot be fetched');
+assert(chat.getChatEpochSeq() === 0 && storage.getSettings().chatEpochSetAt === null,
+  'a failed startFreshChat() writes NOTHING — chatEpochSeq/chatEpochSetAt remain untouched, never a partial or guessed epoch (loud-fail)');
+assert(/const \{ head \} = await fetchHead\(\);/.test(chatRetSrc) &&
+  chatRetSrc.indexOf('const { head } = await fetchHead();') < chatRetSrc.indexOf("saveSetting('chatEpochSeq'"),
+  'startFreshChat() fetches the LIVE head BEFORE writing chatEpochSeq — never guesses');
+
+chat._resetForTest();
+storage.saveSetting('chatEnabled', true);
+
+console.log('\n[29e] UN-112 — commissioner Data-tab copy: correct factory-reset confirm text, wired into both controls…');
+assert(/chat-epoch-clear-btn/.test(appJsSrc), 'the repeatable Data-tab "Clear Chat" control exists');
+assert(/chat rows are hidden, not deleted — reversible from the Data tab/.test(appJsSrc),
+  'the factory-reset confirm copy no longer claims to delete ALL data now that chat is wired in (both the password prompt and the FINAL WARNING)');
+const resetDemoBlock29 = (appJsSrc.match(/document\.getElementById\('reset-demo-btn'\)\?\.addEventListener\('click', async e => \{[\s\S]*?\n  \}\);/) || [''])[0];
+assert(resetDemoBlock29.length > 0, 'reset-demo-btn click handler located');
+assert(/startFreshChat\(\)/.test(resetDemoBlock29), 'the "⚠️ Full Factory Reset" button is wired into the chat epoch clear (satisfies Drew\'s literal words)');
+assert(/chat could not be cleared/.test(resetDemoBlock29),
+  'a failed chat clear inside factory reset gets its OWN distinct message — never folded into a blanket success toast');
+
+// ── 30. UN-115 — picks page opens at the TOP after login/edit/submit ─────────
+console.log('\n[30] UN-115 — picks page scrolls to top after login/edit/submit, ordering matters…');
+const doLoginBlock30 = (appJsSrc.match(/const doLogin = \(\) => \{[\s\S]*?\n  \};/) || [''])[0];
+assert(doLoginBlock30.length > 0, 'doLogin() success-branch block located for structural assertions');
+const renderIdx30 = doLoginBlock30.indexOf('renderPicksPage();');
+const scrollIdx30 = doLoginBlock30.indexOf('window.scrollTo({ top: 0 });');
+const resumeIdx30 = doLoginBlock30.indexOf('resumeChatAfterLogin();');
+assert(renderIdx30 > -1 && scrollIdx30 > -1 && resumeIdx30 > -1 &&
+  renderIdx30 < scrollIdx30 && scrollIdx30 < resumeIdx30,
+  'doLogin(): window.scrollTo({top:0}) runs AFTER renderPicksPage() (scrolling the NEW DOM, not the tree about to be replaced) and BEFORE resumeChatAfterLogin() — the exact placement named in the design input');
+assert(!/scrollTo\(\{ top: 0, behavior: 'smooth' \}\)/.test(doLoginBlock30),
+  "doLogin()'s scrollTo is instant, not smooth — smooth is reserved for same-panel tab switches");
+
+const editPicksBlock30 = (appJsSrc.match(/document\.getElementById\('edit-picks-btn'\)\?\.addEventListener\('click', \(\) => \{[\s\S]*?\n  \}\);/) || [''])[0];
+assert(editPicksBlock30.length > 0, 'edit-picks-btn click handler located');
+const editRenderIdx30 = editPicksBlock30.indexOf('renderPicksPage();');
+const editScrollIdx30 = editPicksBlock30.indexOf('window.scrollTo({ top: 0 });');
+assert(editRenderIdx30 > -1 && editScrollIdx30 > -1 && editRenderIdx30 < editScrollIdx30,
+  'Edit My Picks: scrollTo runs AFTER renderPicksPage() (DI-115b — same driver, beyond the literal ask: the form replaces the submitted view)');
+
+const submitPicksFnSrc30 = (appJsSrc.match(/function submitPicks\(week, games\) \{[\s\S]*?\n\}/) || [''])[0];
+assert(submitPicksFnSrc30.length > 0, 'submitPicks() function body located');
+const submitRenderIdx30 = submitPicksFnSrc30.indexOf('renderPicksPage();');
+const submitScrollIdx30 = submitPicksFnSrc30.indexOf('window.scrollTo({ top: 0 });');
+assert(submitRenderIdx30 > -1 && submitScrollIdx30 > -1 && submitRenderIdx30 < submitScrollIdx30,
+  'submitPicks(): scrollTo runs AFTER renderPicksPage() inside the SAME setTimeout callback (DI-115b — the submitted view replaces the form)');
+
+// 30b. F2 — the epochApplied subscriber must be registered BEFORE initChat().
+// initChat() synchronously fires notify('epochApplied') via _applyEpochLocally,
+// and that call stamps cfbp_chat_epoch_applied, so it is idempotent and can
+// never fire again. Registering after meant the chat-ui half of DI-112b never
+// ran on any device except Drew's own (where startFreshChat calls it post-boot).
+console.log('\n[30b] Epoch heal — subscriber registered before the engine boots…');
+const initUiSrc = (chatUiSrc.match(/export function initChatUI\(\)[\s\S]*?\n\}/) || [''])[0];
+const onChatAt = initUiSrc.indexOf('onChat(');
+const initChatAt = initUiSrc.indexOf('initChat(me())');
+assert(onChatAt > -1 && initChatAt > -1 && onChatAt < initChatAt,
+  'initChatUI registers its onChat subscriber BEFORE calling initChat(me())');
+
+// 30c. F3 — a failed chat clear during factory reset must NOT un-hide chat.
+// resetToDemo() writes DEFAULT_SETTINGS, resetting chatEpochSeq to 0. If the
+// awaited startFreshChat() then throws (Apps Script cold start, a NORMAL
+// condition at 10-20s), a previously hidden test log becomes visible again on
+// every device — the opposite of what UN-112 exists to do.
+const appSrcF3 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+const resetHandlerSrc = appSrcF3.slice(appSrcF3.indexOf("getElementById('reset-demo-btn')"), appSrcF3.indexOf("getElementById('reset-demo-btn')") + 3500);
+assert(/_prevEpochSeq\s*=\s*getChatEpochSeq\(\)/.test(resetHandlerSrc),
+  'the factory-reset handler captures the prior epoch BEFORE resetToDemo() wipes it');
+const capAt = resetHandlerSrc.indexOf('_prevEpochSeq = getChatEpochSeq()');
+// Match the CALL, not the mention of it in the explanatory comment above.
+const resetAt = resetHandlerSrc.indexOf('resetToDemo(); clearSession();');
+assert(capAt > -1 && resetAt > -1 && capAt < resetAt,
+  'the capture happens before resetToDemo(), not after');
+assert(/catch\s*\{[\s\S]{0,400}saveSetting\('chatEpochSeq',\s*_prevEpochSeq\)/.test(resetHandlerSrc),
+  'a failed chat clear RESTORES the prior epoch instead of leaving it at 0');
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

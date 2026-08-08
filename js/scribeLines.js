@@ -166,6 +166,20 @@ function saveLastPosts(l) { try { localStorage.setItem(LAST_POST_KEY, JSON.strin
 
 function hashLine(s) { let h = 0; for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; } return 'h' + (h >>> 0).toString(36); }
 
+/**
+ * UN-112 (DI-112b) — chat epoch clear. Empties SCRIBE's device-local
+ * "already said" memory (the 14-day no-repeat ledger and the per-room
+ * rate-limit cooldowns) so a freshly-cleared room doesn't inherit a burned
+ * line pool or a live cooldown from pre-launch testing. Called via
+ * chat.js's notify('epochApplied', ...) — chat-ui.js is the subscriber.
+ * Module layering: this module clears only the two keys IT owns; chat.js
+ * clears its own (outbox, lastseen) directly, never through here.
+ */
+export function resetScribeMemory() {
+  try { localStorage.removeItem(LEDGER_KEY); } catch {}
+  try { localStorage.removeItem(LAST_POST_KEY); } catch {}
+}
+
 function rateLimited(gameTag) {
   const lp = lastPosts();
   const key = gameTag || 'main';

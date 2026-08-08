@@ -1464,25 +1464,51 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-failed{color:#B02A37;font-weight:700;font-size:.65rem}
 .chat-retry{background:#B02A37;color:#fff;border:none;border-radius:6px;padding:1px 6px;font-size:.6rem;cursor:pointer;margin-left:4px}
 .chat-reply-quote{display:block;width:100%;text-align:left;background:var(--bg-card-alt);border:none;border-left:3px solid var(--maroon-light);border-radius:6px;padding:4px 8px;font-size:.7rem;color:var(--text-secondary);margin-top:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-reactions{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap}
-.chat-react-pill{background:var(--bg-card-alt);border:1px solid var(--bg-input);border-radius:999px;padding:1px 7px;font-size:.7rem;cursor:pointer}
+.chat-reactions{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;align-items:center}
+/* CONVENTIONS #17 / UN-114: was padding:1px 7px at .7rem, ~17px tall — worse
+   than either prior named tap-target offender in this file. min-height (not
+   a fixed height) + box-sizing:border-box raises the hit box to the 40px
+   floor while keeping the pill's width content-driven — do NOT switch this
+   to `.chat-act`'s fixed 40x40 box, the compact pill shape is intentional. */
+/* v0.17.5 (caught in review): min-height:40px grew the VISIBLE pill by ~23px.
+   Combined with UN-114's names line (~18px) that added back almost exactly the
+   42px UN-113 had just freed — so messages WITH reactions saw no density gain
+   at all (measured 4.58 -> 4.60 per screen), and those are the messages Drew
+   actually looks at. The design input said raise the HIT BOX "while keeping the
+   compact pill shape"; this now does that via an invisible ::after overlay, so
+   the tap target is 40px while the pill stays small. */
+.chat-react-pill{background:var(--bg-card-alt);border:1px solid var(--bg-input);border-radius:999px;
+  padding:3px 10px;font-size:.7rem;cursor:pointer;box-sizing:border-box;
+  display:inline-flex;align-items:center;position:relative}
+.chat-react-pill::after{content:'';position:absolute;left:0;right:0;top:50%;
+  transform:translateY(-50%);height:40px}
 .chat-react-pill.me{border-color:var(--maroon);background:var(--maroon-pale)}
+/* UN-114 — "who reacted with what," always visible (never a `title` tooltip,
+   which doesn't fire on touch). Same scale as .chat-time/.chat-meta. */
+.chat-reaction-names{font-size:.66rem;color:var(--text-muted);margin-top:2px}
 /* position:relative anchors the UN-103 per-message react picker
    (.reaction-picker), appended as a child of .chat-actions. */
 /* v0.17.4 (caught in review): opacity:0 alone left a 40px-tall strip of LIVE
    controls under every message on touch. 🏛 pin and 📎 callout fire with no
    confirmation, so a stray tap could publish someone's message to the Hall of
-   Records. Hidden must mean untappable. */
-.chat-actions{display:flex;gap:4px;margin-top:2px;opacity:0;pointer-events:none;transition:opacity .15s;position:relative}
+   Records. Hidden must mean untappable.
+   UN-113 (message density): opacity:0 ALSO left `display:flex` in force, so
+   the hidden `.chat-act`(40px) row still reserved ~42px of INVISIBLE layout
+   height on every message — measured root cause of "only 4-5 fit on a
+   screen." `display:none` removes both the visibility AND the layout claim
+   in one property; `pointer-events:none` becomes redundant (a display:none
+   element already can't be hit-tested) but is harmless to leave off. Do NOT
+   reintroduce opacity-only hiding here. */
+.chat-actions{display:none;gap:4px;margin-top:2px;position:relative}
 /* Desktop — UNCHANGED by UN-103 (Drew: "desktop needs zero changes"). Matches
    Slack/Discord convention already. */
-.chat-msg:hover .chat-actions,.chat-msg:focus-within .chat-actions{opacity:1;pointer-events:auto}
+.chat-msg:hover .chat-actions,.chat-msg:focus-within .chat-actions{display:flex}
 /* UN-103: touch previously left this permanently semi-visible
    (opacity:.75 on every message, every screen) — "too busy" (Drew). Touch now
    starts hidden like desktop and reveals ONE message's actions via a
    long-press (bindMessageActionsLongPress, chat-ui.js), which adds
    .chat-actions-revealed to that message only. */
-@media (hover:none){.chat-msg.chat-actions-revealed .chat-actions{opacity:1;pointer-events:auto}}
+@media (hover:none){.chat-msg.chat-actions-revealed .chat-actions{display:flex}}
 /* CONVENTIONS #17 — was padding:2px 4px, well under the 40px tap-target
    floor. Bumped now that this row is reachable by touch at all. */
 .chat-act{background:none;border:none;font-size:.85rem;cursor:pointer;border-radius:8px;padding:0;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}

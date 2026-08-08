@@ -25,17 +25,20 @@
  */
 
 import {
-  appendEvents, subscribe, fetchBefore, StaleDeploymentError,
+  appendEvents, subscribe, fetchBefore, fetchHead, StaleDeploymentError,
 } from './chatTransport.js';
 import { isBackendConfigured } from './backend.js';
 // v0.17.3 — chat retention (UN-88) reads settings.chatRetentionDays through
 // the storage seam. Safe: storage.js imports only data-model.js + backend.js,
 // neither of which imports chat.js, so this cannot cycle.
-import { getSettings } from './storage.js';
+// UN-112 — the epoch clear writes settings.chatEpochSeq/chatEpochSetAt through
+// the same seam, via saveSetting. Same import, same safety argument.
+import { getSettings, saveSetting } from './storage.js';
 
 // ── Device-local persistence keys (AD-12) ─────────────────────────────────────
 const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq } }
 const K_OUTBOX   = 'cfbp_chat_outbox2';
+const K_EPOCH_APPLIED = 'cfbp_chat_epoch_applied';   // UN-112 — device-local watermark, see initChat()
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
@@ -137,6 +140,116 @@ export function retentionStats() {
   return { enabled: true, days, hiddenCount, protectedCount, oldestTs, newestTs };
 }
 
+// ── Chat epoch clear (UN-112) — LAUNCH BLOCKER ────────────────────────────────
+// Drew: factory reset kept historical chat from testing. resetToDemo() clears
+// 17 seam keys but the chat log lives in a separate Messages sheet reachable
+// only through chatTransport.js (AD-16) — the seam has no path to it, and a
+// real backend purge needs a new Code.gs endpoint + redeploy (RG-09's exact
+// failure mechanism) for a one-time action, at the highest-stakes moment.
+// Drew already declined that tradeoff once for UN-88 (retention); same call,
+// same reason. So: a WATERMARK, exactly like retention, hides rather than
+// deletes — reversible, no redeploy, no new endpoint.
+export function getChatEpochSeq() {
+  return Number(getSettings().chatEpochSeq) || 0;
+}
+export function getChatEpochSetAt() {
+  return getSettings().chatEpochSetAt || null;
+}
+
+/**
+ * Pure predicate: is this message at or below the epoch watermark?
+ *
+ * DELIBERATE DIVERGENCE FROM RETENTION (`isHiddenByRetention`, above) — NO
+ * pinned exemption. A message pinned during pre-launch testing is still
+ * test content; the entire point of this feature is to erase that testing
+ * from view before the six players ever see the room. Do not "fix" this by
+ * copying the retention pattern and exempting pins — that would defeat the
+ * feature. Asserted explicitly in loadtest so nobody does.
+ */
+export function isHiddenByEpoch(m) {
+  const epochSeq = getChatEpochSeq();
+  if (!epochSeq) return false;
+  return typeof m?.seq === 'number' && m.seq <= epochSeq;
+}
+
+/**
+ * UN-112 — unlike retention (a rolling window that keeps sliding), the epoch
+ * is a FIXED point in the sequence. "Load earlier" should keep working past
+ * a retention cutoff (there is real history further back mid-season), but
+ * stop once backfilling further could only ever surface epoch-hidden test
+ * messages — i.e. once the oldest message already loaded is at or before the
+ * epoch. Exported because chat-ui.js's "load earlier" control needs this and
+ * S.backfillLow is private module state — no other module reaches into it
+ * directly.
+ */
+export function backfillBlockedByEpoch() {
+  const epochSeq = getChatEpochSeq();
+  return epochSeq > 0 && S.backfillLow !== null && S.backfillLow <= epochSeq;
+}
+
+/** Commissioner Data-tab card: how many currently-loaded messages the active
+ *  epoch is hiding. Purely informational, same shape as retentionStats()
+ *  above — computing this never mutates anything. Counts only what this
+ *  device has ingested so far (S.items), same caveat retentionStats() already
+ *  carries. */
+export function epochStats() {
+  const epochSeq = getChatEpochSeq();
+  if (!epochSeq) return { enabled: false, epochSeq: 0, setAt: null, hiddenCount: 0 };
+  let hiddenCount = 0;
+  S.items.forEach(m => {
+    if (m.type !== 'message' || m.deleted) return;
+    if (isHiddenByEpoch(m)) hiddenCount++;
+  });
+  return { enabled: true, epochSeq, setAt: getChatEpochSetAt(), hiddenCount };
+}
+
+function localEpochApplied() {
+  try { return Number(localStorage.getItem(K_EPOCH_APPLIED)) || 0; } catch { return 0; }
+}
+
+/**
+ * DI-112b — the device-local self-heal. The epoch watermark alone only hides
+ * old messages from RENDERING; it does nothing to stop a device with a stale
+ * queued message from re-sending it into the freshly-cleared room, because
+ * flushOutbox() fires unconditionally in initChat() on every boot. This is
+ * what actually reaches all six phones:
+ *  - empties the outbox/failed queue and persists the empty outbox, so
+ *    nothing stale can flush;
+ *  - fast-forwards K_LASTSEEN to the epoch seq — without this a device with
+ *    a high old read-cursor would silently UNDER-count real new messages
+ *    (isUnreadFor() requires seq > afterSeq);
+ *  - notifies so other modules can clear keys THEY own (chat.js owns
+ *    outbox/lastseen only — module layering, no new imports here).
+ * Called from initChat() (gated by the watermark comparison, so it runs
+ * exactly once per epoch bump) AND directly from startFreshChat() so the
+ * commissioner's own device empties immediately as built-in verification.
+ */
+function _applyEpochLocally(epochSeq) {
+  S.outbox = [];
+  S.failed.clear();
+  persistOutbox();
+  putLastSeen({ seq: epochSeq, byTag: {} });
+  try { localStorage.setItem(K_EPOCH_APPLIED, String(epochSeq)); } catch {}
+  notify('epochApplied', { epochSeq });
+}
+
+/**
+ * Commissioner action — "🧹 Clear Chat History Before Launch" / "Clear Chat
+ * Again". LOUD-FAIL: fetches the LIVE head from the server and NEVER guesses.
+ * A guessed or partial epoch either hides real messages forever (set too
+ * high) or fails to hide test ones (set too low) — so if fetchHead() throws,
+ * this throws too, before touching settings at all. The caller (app.js) is
+ * responsible for the disabled/loading UI state and the error toast; Apps
+ * Script cold starts run 10-20s.
+ */
+export async function startFreshChat() {
+  const { head } = await fetchHead();          // LIVE head — the whole point
+  saveSetting('chatEpochSeq', head);
+  saveSetting('chatEpochSetAt', new Date().toISOString());
+  _applyEpochLocally(head);                     // this device empties immediately — doubles as verification
+  return head;
+}
+
 // ── Fold ──────────────────────────────────────────────────────────────────────
 function newItem(ev) {
   return { id: ev.id, seq: ev.seq ?? null, ts: ev.ts ?? ev._localTs ?? null,
@@ -229,6 +342,12 @@ export function getMessages(filter = {}) {
     if (filter.types && !filter.types.includes(m.type)) return;
     if (tag !== 'all' && (m.gameTag || '') !== tag) return;
     if (filter.pinned && !m.pinned) return;
+    // UN-112 — UNCONDITIONAL, unlike respectRetention's opt-in above. No
+    // reader (or any other caller of this one choke point) should ever see
+    // pre-launch test chatter again. Composed here, not per-surface — see
+    // the epoch section's comments for why per-surface checks half-shipped
+    // retention before this.
+    if (isHiddenByEpoch(m)) return;
     if (filter.respectRetention && isHiddenByRetention(m)) return;
     if (filter.mentionsOf) {
       const mentioned = (m.meta?.mentions || []).includes(filter.mentionsOf);
@@ -421,6 +540,14 @@ function _subscribeNow() {
 
 export function initChat(selfId) {
   S.selfId = selfId || S.selfId;
+  // UN-112 (DI-112b) — device-local self-heal, MUST run before loadOutbox()/
+  // flushOutbox(). flushOutbox() fires unconditionally below on every boot;
+  // without this check-first, a device with a stale queued message would
+  // re-send test chatter into the freshly-cleared room the moment it next
+  // opens the app. Gated on a device-local watermark (not just "epoch > 0")
+  // so this runs exactly once per epoch bump, not on every boot.
+  const epochSeq = getChatEpochSeq();
+  if (epochSeq > localEpochApplied()) _applyEpochLocally(epochSeq);
   loadOutbox();
   // v0.17.2 — presence was removed; drop its orphaned device-local key so it
   // doesn't linger as a mystery on already-deployed devices.
@@ -506,6 +633,10 @@ function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   // A message hidden by retention can never count toward unread — a player
   // who can't scroll to it should never see a badge promising it's there.
   if (_hiddenBy(cutoff, m)) return false;
+  // UN-112 — the second (and last) choke point. Feeds unreadCount /
+  // unreadAuthors / mentionUnreadCount, which in turn feed the title badge,
+  // the PWA badge, per-game bubbles, and filter pills. Fixed once here.
+  if (isHiddenByEpoch(m)) return false;
   return m.type === 'message' && !m.deleted && m.notify &&
          typeof m.seq === 'number' && m.seq > afterSeq && m.author !== selfId;
 }
@@ -565,6 +696,16 @@ export function latestNotifying(selfId) {
     if (m.type !== 'message' || m.deleted || !m.notify) return;
     if (m.author === selfId) return;                    // never surface the viewer's own post
     if (isHiddenByRetention(m)) return;                // don't preview a message the reader can't open
+    // UN-112 (beyond DI-112a's two named choke points — flagged in the
+    // handoff): this function reads S.items directly rather than going
+    // through getMessages(), exactly like retentionStats()/chatDigest() —
+    // but unlike those two, it feeds READER-FACING preview text (the
+    // dashboard teaser body, chat-ui.js). It already carries its own
+    // isHiddenByRetention() check immediately above for that reason. Mirrors
+    // that existing pattern rather than inventing a new one — without this,
+    // a pre-epoch test message could still surface as the dashboard's chat
+    // preview even though every other surface has forgotten it.
+    if (isHiddenByEpoch(m)) return;
     if (!best || orderKey(m) > orderKey(best)) best = m;
   });
   return best;

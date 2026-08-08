@@ -261,6 +261,19 @@ export const DEFAULT_SETTINGS = {
   // blobs without this field spread in as 0 via DEFAULT_SETTINGS, same as
   // every other new field (CONVENTIONS #10).
   chatRetentionDays: 0,
+  // UN-112 — chat epoch clear (LAUNCH BLOCKER). A watermark, not a delete:
+  // messages at-or-below this seq stop rendering everywhere (chat.js
+  // getMessages()/isUnreadFor(), unconditionally — see there), same
+  // hide-not-destroy shape as chatRetentionDays above, chosen for the same
+  // reason (a real backend purge needs a new Code.gs endpoint + redeploy —
+  // RG-09's exact failure mechanism — Drew already declined that tradeoff
+  // once for retention; same call). Default-when-missing: 0/absent = "hide
+  // nothing" — old settings blobs written before this field existed must
+  // read as a no-op, never as "hide everything" (CONVENTIONS #10).
+  // chatEpochSetAt is display-only (the admin card's "cleared" copy);
+  // clearing logic never reads it.
+  chatEpochSeq: 0,
+  chatEpochSetAt: null,
   // Batch 3+4 item A — commissioner chat on/off toggle. Default TRUE: chat is
   // on today, and a missing value (every pre-existing settings blob in the
   // Sheet) must not silently disable it (CONVENTIONS #10). Synced through the

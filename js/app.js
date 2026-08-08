@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.17.4';
+export const APP_VERSION = 'v0.17.5';
 export const APP_VERSION_DATE = '2026-08-08';
 
 
@@ -90,7 +90,7 @@ import {
   chatDigest,
   setChatSyncStatus,
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled } from './chat.js';
+import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats } from './chat.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
 import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
 import { renderPicksFooterHTML, renderWeekRecapCardHTML } from './recap.js';
@@ -830,6 +830,14 @@ function bindLoginScreen() {
       // player (they may differ from device default or previous player).
       resyncPlayerPreferences();
       showToast('✅ Logged in!','success'); renderPicksPage();
+      // UN-115: tapping a player tile focuses the PIN input, which the mobile
+      // browser auto-scrolls to lift above the keyboard. That scroll offset
+      // survives the renderPicksPage() re-render (a much taller tree replaces
+      // #page-picks) and lands the player mid-form. Must run AFTER the
+      // re-render — resetting scroll on the DOM about to be replaced does
+      // nothing. Instant, not smooth — same call bindPicksWeekNav() already
+      // uses for the identical "landed mid-page" case.
+      window.scrollTo({ top: 0 });
       // v0.17.2: if they came here from the chat composer's "Log in" button,
       // bounce them back to the thread they were reading (doc 1.2).
       try { resumeChatAfterLogin(); } catch {}
@@ -874,6 +882,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
     state.draftPicks = {};      // cleared so the prefill block sees a fresh slate
     state.draftTiebreaker = null;
     renderPicksPage();
+    window.scrollTo({ top: 0 });   // UN-115 (DI-115b): same driver as login — the form replaces the submitted view
   });
   const list = document.getElementById('submitted-games'); if (!list) return;
   list.innerHTML = games.map(game => {
@@ -1227,7 +1236,7 @@ function submitPicks(week, games) {
   showToast(syncBroken
     ? '✅ Picks saved locally. ⚠️ Sync still off — picks not yet shared.'
     : (wasEditing ? '✅ Picks updated!' : '✅ Picks submitted! Good luck!'),'success');
-  setTimeout(()=>renderPicksPage(),300);
+  setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); },300);   // UN-115 (DI-115b): submitted view replaces the form
 }
 
 // ─── ALMA MATER WATCH ─────────────────────────────────────────────────────────
@@ -2970,6 +2979,17 @@ function renderCommPage() {
         <div class="card">${renderChatRetentionAdmin()}</div>
       </div>`);
 
+    // Chat epoch clear (UN-112, LAUNCH BLOCKER) — its own repeatable control,
+    // same tab (RG-10), directly below retention. Separate from the Full
+    // Factory Reset button above (which also wires this in) so a failed
+    // clear has a retry path and testing chatter can be cleared again later
+    // without re-wiping players/weeks.
+    sections.push(`
+      <div class="admin-section" data-comm-tab="data">
+        <div class="admin-section-title">🧹 Chat History</div>
+        <div class="card">${renderChatEpochAdmin()}</div>
+      </div>`);
+
     c.innerHTML = sections.join('\n');
     // Tab visibility lives on the panel container as a data attribute so a
     // single CSS rule handles show/hide for all 18 sections at once.
@@ -4111,6 +4131,27 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
     renderCommPage();
   });
 
+  // Chat epoch clear (UN-112, LAUNCH BLOCKER) — the repeatable Data-tab
+  // control. LOUD-FAIL: startFreshChat() fetches the LIVE head and throws if
+  // it can't — never writes a guessed/partial epoch. Apps Script cold starts
+  // run 10-20s, so the button goes into a disabled loading state rather than
+  // leaving the panel looking frozen.
+  document.getElementById('chat-epoch-clear-btn')?.addEventListener('click', async e => {
+    const btn = e.target;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Clearing… (may take up to 20s)';
+    try {
+      await startFreshChat();
+      showToast('✅ Chat history cleared', 'success');
+      renderCommPage();
+    } catch {
+      btn.disabled = false;
+      btn.textContent = original;
+      showToast('❌ Could not clear chat — check your connection and try again', 'error');
+    }
+  });
+
   // Auto-refresh
   document.getElementById('save-refresh-btn')?.addEventListener('click', ()=>{
     const val=parseInt(document.getElementById('auto-refresh-select')?.value||'60');
@@ -4146,13 +4187,52 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
       showToast(`Week data cleared for ${formatWeekLabel(week)}`,'warning'); renderCommPage();
     }
   });
-  document.getElementById('reset-demo-btn')?.addEventListener('click', ()=>{
+  document.getElementById('reset-demo-btn')?.addEventListener('click', async e => {
     // Require Commissioner to re-enter password for full reset
-    const pw = prompt('Enter Commissioner password to confirm FULL factory reset. This deletes ALL data including all weeks and players:');
+    // UN-112: the confirm copy used to claim this deletes ALL data — now that
+    // chat is wired in below, that would be a lie (chat is HIDDEN, not
+    // deleted, same as retention). Corrected in both prompts.
+    const pw = prompt('Enter Commissioner password to confirm FULL factory reset. This deletes ALL data including all weeks and players, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab):');
     if (!pw) return;
     if (btoa(pw) !== getSettings().adminPasswordHash) { showToast('❌ Incorrect password — reset cancelled','error'); return; }
-    if(!confirm('FINAL WARNING: This will permanently delete ALL weeks, picks, players, results, and standings. Type OK to proceed.'))return;
-    resetToDemo(); clearSession(); showToast('Full reset complete','warning'); renderCommPage(); refreshHeader();
+    if(!confirm('FINAL WARNING: This will permanently delete ALL weeks, picks, players, results, and standings, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab). Type OK to proceed.'))return;
+    // v0.17.5 (caught in review): resetToDemo() writes DEFAULT_SETTINGS, which
+    // resets chatEpochSeq to 0 — so if the awaited startFreshChat() below then
+    // FAILS (Apps Script cold starts run 10-20s; a timeout here is a normal
+    // condition, not an edge case), a previously-hidden test log becomes VISIBLE
+    // AGAIN on all six phones. That is the exact opposite of what UN-112 exists
+    // to do, at the moment Drew is most likely to be using it. Capture the epoch
+    // first and restore it if the chat half fails.
+    const _prevEpochSeq = getChatEpochSeq();
+    const _prevEpochSetAt = getSettings().chatEpochSetAt ?? null;
+    resetToDemo(); clearSession();
+    // Wires the "⚠️ Full Factory Reset" button into the chat epoch clear
+    // (DI-112a) — satisfies Drew's literal words ("I went to factory reset
+    // everything, and it kept the historical chat"). Loud-fail on the chat
+    // half must NOT be folded into the reset's success toast (DI-112a) — the
+    // rest of the reset already succeeded by this point and that must not be
+    // hidden by a chat-specific network hiccup.
+    const btn = e.target;
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Clearing chat… (may take up to 20s)';
+    let chatCleared = true;
+    try { await startFreshChat(); }
+    catch {
+      chatCleared = false;
+      // Restore the prior epoch rather than leaving it at DEFAULT_SETTINGS' 0.
+      // Failing to clear is recoverable; UN-hiding what was already hidden is not.
+      if (_prevEpochSeq > 0) {
+        saveSetting('chatEpochSeq', _prevEpochSeq);
+        saveSetting('chatEpochSetAt', _prevEpochSetAt);
+      }
+    }
+    btn.disabled = false;
+    btn.textContent = original;
+    showToast(chatCleared
+      ? 'Full reset complete'
+      : 'Full reset complete, but chat could not be cleared — check your connection and try again from the Data tab.', 'warning');
+    renderCommPage(); refreshHeader();
   });
   document.getElementById('logout-comm-btn')?.addEventListener('click', ()=>{
     const s=getSession();setSession(s.playerId,false,s.playerVerified);renderCommPage();
@@ -4756,6 +4836,25 @@ function renderChatRetentionAdmin() {
       ? 'Older messages stop showing in chat. Nothing is deleted — flip this back off and the full history returns. 🏛 Hall of Records pins are always visible, no matter how old.'
       : 'Off — the full Locker Room history is visible.'}</p>
     ${countLines()}`;
+}
+
+/** Chat epoch clear (UN-112, LAUNCH BLOCKER) — commissioner Data-tab card.
+ *  A WATERMARK, same hide-not-delete shape as chat retention above and for
+ *  the same reason: the backend has no row-removal endpoint, so a real purge
+ *  needs a new Code.gs endpoint + redeploy (RG-09 risk) for a one-time
+ *  action at the highest-stakes moment. This is the REPEATABLE control
+ *  (DI-112a) — separate from the "⚠️ Full Factory Reset" button above, which
+ *  also wires this in, so a failed clear has a retry path here and testing
+ *  chatter can be cleared again later without re-wiping players/weeks. */
+function renderChatEpochAdmin() {
+  const cleared = getChatEpochSeq() > 0;
+  const stats = cleared ? epochStats() : null;
+  const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+  return `
+    <p class="text-muted text-xs mb-sm">${cleared
+      ? `✅ Chat history before ${escHtml(fmtDate(getChatEpochSetAt()))} is hidden (${stats.hiddenCount} messages). Nothing is deleted — this only affects what renders.`
+      : `Full Locker Room history is visible, including anything sent during testing.`}</p>
+    <button class="btn btn-danger btn-sm" id="chat-epoch-clear-btn">${cleared ? '🧹 Clear Chat Again' : '🧹 Clear Chat History Before Launch'}</button>`;
 }
 
 function renderCommLogin(c) {

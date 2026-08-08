@@ -44,8 +44,9 @@ import {
   unreadCount, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
   backfill, chatDigest as _digest, setViewOpen,
   getRetentionDays, isChatEnabled,
+  backfillBlockedByEpoch,
 } from './chat.js';
-import { scribeInspectMessage, scribeTrigger } from './scribeLines.js';
+import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
 import {
   getSession, getPlayers, getPlayer, getCurrentWeek, getGames, getWeeks,
   getPicks, getEffectiveWeekStatus,
@@ -115,6 +116,7 @@ export function _chatSyncBadgeHTML() {
  */
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* private browsing */ } }
+function lsRemove(k) { try { localStorage.removeItem(k); } catch { /* private browsing */ } }
 function me() { const s = getSession(); return (s?.playerId && s?.playerVerified) ? s.playerId : null; }
 function nameOf(id) {
   if (id === 'scribe') return 'S.C.R.I.B.E.';
@@ -431,6 +433,13 @@ function retentionOn() {
   try { return getRetentionDays() > 0; } catch { return false; }
 }
 
+// UN-112: unlike retention (a rolling window that keeps sliding forward),
+// the epoch is a FIXED point in the sequence — real history can still exist
+// between "3 days ago" and a mid-season epoch, so this can't reuse
+// retentionOn()'s always-hide-the-button logic. backfillBlockedByEpoch()
+// (chat.js) only reports true once backfilling further could ONLY surface
+// epoch-hidden messages — see the "load earlier" render site below.
+
 function retentionNoticeHTML() {
   const days = getRetentionDays();
   if (days <= 0) return '';
@@ -458,10 +467,36 @@ function quoteHTML(m) {
 function reactionsHTML(m, self) {
   const entries = Object.entries(m.reactions || {});
   if (!entries.length) return '';
-  return `<div class="chat-reactions">${entries.map(([emoji, who]) =>
-    `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}"
-       title="${esc(who.map(nameOf).join(', '))}">${emoji} ${who.length}</button>`).join('')}</div>`;
+  // UN-114: attribution moved off `title` (removed below) and onto an
+  // always-visible line — tooltips don't fire on touch, the exact
+  // anti-pattern already named three times in this codebase (see
+  // reactionNamesHTML). The pill's own tap-to-toggle ([data-react] handler)
+  // is unchanged.
+  const pills = entries.map(([emoji, who]) =>
+    `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}">${emoji} ${who.length}</button>`).join('');
+  return `<div class="chat-reactions">${pills}</div>${reactionNamesHTML(entries)}`;
 }
+
+/**
+ * UN-114 — "who reacted with what," always-visible plain text beneath the
+ * pill row. NOT a tooltip/`title` (doesn't fire on touch) and NOT a gesture
+ * (would collide with the pill's existing tap-to-toggle-my-own-reaction
+ * behavior). Format: "🔥 Drew, Kevin · 👍 Kihoon" — groups joined by " · ",
+ * names within a group by ", ", via the existing nickname-aware nameOf().
+ * No truncation/"+2 more" logic — a six-player room (plus SCRIBE) never
+ * produces a list long enough to need one, per design input.
+ */
+function reactionNamesHTML(entries) {
+  if (!entries.length) return '';
+  const groups = entries.map(([emoji, who]) =>
+    `${esc(emoji)} ${who.map(id => esc(nameOf(id))).join(', ')}`).join(' · ');
+  return `<div class="chat-reaction-names">${groups}</div>`;
+}
+
+// Exported test-only (see _chatSyncBadgeHTML's convention above) so loadtest
+// can exercise the REAL reaction-attribution rendering, not just regex-match
+// template source.
+export const _reactionsHTML = reactionsHTML;
 
 function tagChipHTML(m) {
   if (!m.gameTag || U.filter === m.gameTag) return '';
@@ -706,7 +741,7 @@ export function renderChatPage() {
     </div>
     ${U.prefsOpen ? prefsPanelHTML() : ''}
     <div class="chat-scroll" id="chat-scroll">
-      ${retentionOn() ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}
+      ${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}
       ${msgsHTML}
     </div>
     <button class="chat-jump-latest" id="chat-jump" style="display:none">↓ latest</button>
@@ -1515,7 +1550,14 @@ function maybeAnniversary() {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 export function initChatUI() {
-  initChat(me());
+  // v0.17.5 (caught in review): initChat() was called FIRST, but it synchronously
+  // fires notify('epochApplied') via _applyEpochLocally() — into an empty
+  // subscriber set. And because that call also stamps cfbp_chat_epoch_applied,
+  // it is idempotent and can NEVER fire again for that epoch. Drew's own device
+  // looked fine (startFreshChat calls the heal post-boot, when the subscriber
+  // exists), so he would have verified it working while it silently did nothing
+  // on the other five phones — permanently, for every future mid-season clear.
+  // Register first, then boot.
   wireRevealCloser();
 
   onChat((kind, detail) => {
@@ -1550,7 +1592,20 @@ export function initChatUI() {
     if (kind === 'offline' || kind === 'online') {
       if (chatPageActive()) renderChatPage();
     }
+    // UN-112 (DI-112b) — chat.js owns the outbox/lastseen keys and clears
+    // them itself before firing this; module layering means every OTHER
+    // module clears only the keys IT owns, via this notification, rather
+    // than chat.js reaching into them directly.
+    if (kind === 'epochApplied') {
+      lsRemove(TEASER_DISMISS_KEY);   // same stale-cursor risk as lastseen — a dismissal from before the clear must not suppress genuinely new activity
+      lsRemove('cfbp_chat_sheet_hint');   // cosmetic — let the first-use helper reappear in the freshly-cleared room
+      resetScribeMemory();
+      if (chatPageActive()) renderChatPage();
+    }
   });
+
+  // Boot the engine LAST — everything above is now listening.
+  initChat(me());
 
   // Delegated clicks that survive any re-render
   document.addEventListener('click', e => {
