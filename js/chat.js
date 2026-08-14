@@ -260,22 +260,47 @@ function newItem(ev) {
            _editTs: 0, _reactOps: new Map(), _pinOps: new Map() };
 }
 
+/**
+ * AD-10 — (ts, seq) is an ordered PAIR and has to be compared as one.
+ *
+ * It used to be packed into a single double as `ts * 1e7 + seq`. At a real
+ * epoch (~1.79e12) that product is ~1.79e19, where a double's ulp is 2048 — so
+ * every realistic `seq` was rounded clean away and every event sharing a `ts`
+ * collapsed onto one identical key. Ordering then fell through to whatever
+ * arrival order that particular device happened to see, which is exactly the
+ * order-independence guarantee this module is built on.
+ *
+ * It mattered because bursts are real: finalizeWeek() emits the week-final
+ * post, one game-final post per game, and the Extra Point reveal in a single
+ * synchronous tick, all stamped with one Date.now().
+ *
+ * Comparing the components instead has no precision to lose, and only changes
+ * the result where the packed key was ambiguous anyway.
+ */
+function cmpOrder(a, b) {
+  return ((a?.ts || 0) - (b?.ts || 0)) || ((a?.seq || 0) - (b?.seq || 0));
+}
+
 function applyTo(target, ev) {
-  const stamp = (ev.ts || 0) * 1e7 + (ev.seq || 0);
+  // Same pair, same reason as cmpOrder() above — these last-writer-wins races
+  // used the identical packed scalar, so two devices could disagree about
+  // whether a message was edited, pinned or reacted to. `_editTs` starts as the
+  // falsy sentinel 0, which cmpOrder() reads as {ts:0, seq:0}.
+  const stamp = { ts: ev.ts || 0, seq: ev.seq || 0 };
   if (ev.type === 'edit') {
-    if (stamp >= target._editTs) { target.body = ev.body || ''; target.edited = true; target._editTs = stamp; }
+    if (cmpOrder(stamp, target._editTs) >= 0) { target.body = ev.body || ''; target.edited = true; target._editTs = stamp; }
   } else if (ev.type === 'delete') {
     target.deleted = true;
   } else if (ev.type === 'pin' || ev.type === 'unpin') {
     const cur = target._pinOps.get('pin');
-    if (!cur || stamp >= cur.stamp) { target._pinOps.set('pin', { stamp }); target.pinned = ev.type === 'pin'; }
+    if (!cur || cmpOrder(stamp, cur.stamp) >= 0) { target._pinOps.set('pin', { stamp }); target.pinned = ev.type === 'pin'; }
   } else if (ev.type === 'react' || ev.type === 'unreact') {
     // Latest-wins per (emoji, author) — order-independent (RG-06 guard).
     const emoji = ev.meta?.emoji; if (!emoji) return;
     const key = `${emoji}|${ev.author}`;
     const cur = target._reactOps.get(key);
     if (cur && cur.id === ev.id) return;
-    if (cur && cur.stamp >= stamp) return;
+    if (cur && cmpOrder(cur.stamp, stamp) >= 0) return;
     target._reactOps.set(key, { stamp, on: ev.type === 'react', id: ev.id });
     const next = {};
     target._reactOps.forEach((op, k) => {
@@ -327,8 +352,6 @@ export function ingest(events, head) {
   return n;
 }
 
-function orderKey(m) { return (m.ts || 0) * 1e7 + (m.seq || 0); }
-
 /** Chronological list. filter: {tag:'all'|''|gameId, pinned, mentionsOf, types,
  *  respectRetention}. `respectRetention` is opt-in and defaults to false so
  *  existing non-display callers (the weekly digest, SCRIBE's pre-kick lookup)
@@ -356,7 +379,7 @@ export function getMessages(filter = {}) {
     }
     out.push(m);
   });
-  return out.sort((a, b) => orderKey(a) - orderKey(b));
+  return out.sort(cmpOrder);          // AD-10 — ordered pair, see cmpOrder()
 }
 
 export function getMessage(id) { return S.items.get(id) || null; }
@@ -706,7 +729,7 @@ export function latestNotifying(selfId) {
     // a pre-epoch test message could still surface as the dashboard's chat
     // preview even though every other surface has forgotten it.
     if (isHiddenByEpoch(m)) return;
-    if (!best || orderKey(m) > orderKey(best)) best = m;
+    if (!best || cmpOrder(m, best) > 0) best = m;   // AD-10 — ordered pair, see cmpOrder()
   });
   return best;
 }

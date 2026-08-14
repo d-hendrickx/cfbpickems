@@ -427,11 +427,21 @@ export function createPlayer(displayName, email='', pin='0000', almaMater='', in
 export function createWeek(season, weekNumber, startDate='', endDate='') {
   // v0.16.0 — weeks carry Ischemic Extra Point fields (enabled/actual/detect)
   // v0.17.1 — weeks carry auto-transition config (auto-lock/auto-live/auto-final)
+  // v0.17.7 (UN-118/UN-125) — weeks carry multi-part GROUP fields. A week
+  // record is a scheduling unit (one lock time); `groupId` says which
+  // COMPETITIVE week it belongs to when that competitive week can't share one
+  // lock time (a split slate, bowls, CFP). null = this record IS its own
+  // competitive week (the overwhelming common case). See
+  // getEffectiveGroupId()/weeksInGroup() below — old records in the Sheet
+  // lack these keys ENTIRELY (absent, not null); every reader here treats
+  // absent and null identically via `||`/`!== true`.
   return {
     weekId:`w_${Date.now()}`,
     season, weekNumber,
     label:`Week ${weekNumber}`,
     roundLabel:'', espnWeekNumber:'',
+    groupId: null,              // null | another week's weekId (the group's canonical id)
+    isGroupTiebreaker: false,   // true on AT MOST one member — that member's tiebreaker breaks ties for the whole group
     startDate, endDate,
     status: WEEK_STATUS.DRAFT,
     dataSourceMode: DATA_SOURCE_MODE.MANUAL,
@@ -467,6 +477,59 @@ export function getAutoLiveEnabled(week) {
 }
 export function getAutoFinalizeEnabled(week) {
   return week?.autoFinalizeEnabled !== false; // default true
+}
+
+// ─── MULTI-PART WEEK GROUPING (UN-118/UN-125, v0.17.7) ───────────────────────
+// A week RECORD is a scheduling unit (one lock time, derived by
+// computeEffectiveLockAt() in scoring.js). A competitive week is what players
+// actually compete over and win a prize for. They diverge whenever one real
+// week's games can't share a lock time. These four helpers are the ONLY
+// place group membership is resolved — never re-derive it ad hoc (same
+// discipline as AD-20's shared-mapping rule). Zero imports here, so
+// scoring.js and app.js can both pull from this file safely.
+
+/**
+ * The canonical id of the COMPETITIVE week `week` belongs to. A week with no
+ * `groupId` (including old records that never had the field at all) is its
+ * own group, keyed by its own weekId — so every singleton week (still the
+ * overwhelming common case) behaves identically whether or not grouping
+ * exists in the app at all.
+ */
+export function getEffectiveGroupId(week) {
+  return (week && week.groupId) || (week ? week.weekId : null);
+}
+
+/**
+ * Every week record that shares `week`'s effective group id, `allWeeks`
+ * included. A singleton week's own array always has length 1 (itself).
+ */
+export function weeksInGroup(allWeeks, week) {
+  if (!week) return [];
+  const gid = getEffectiveGroupId(week);
+  return (allWeeks || []).filter(w => getEffectiveGroupId(w) === gid);
+}
+
+/**
+ * The ONE member whose tiebreaker guess/actual answer counts for the whole
+ * group. Drew's ruling: the commissioner ticks exactly one member
+ * (`isGroupTiebreaker`); if none is ticked (or, defensively, more than one
+ * is — the UI is meant to prevent that but this stays fail-safe either way),
+ * fall back to the highest-`weekNumber` member. Always returns a week for a
+ * non-empty input; the caller checks `isGroupTiebreakerAmbiguous()`
+ * separately to decide whether to warn about the fallback.
+ */
+export function getGroupTiebreakerWeek(groupWeeks) {
+  if (!groupWeeks || !groupWeeks.length) return null;
+  const flagged = groupWeeks.filter(w => w.isGroupTiebreaker === true);
+  if (flagged.length === 1) return flagged[0];
+  return [...groupWeeks].sort((a, b) => (b.weekNumber ?? 0) - (a.weekNumber ?? 0))[0] || null;
+}
+
+/** True when the group has no single, unambiguous tiebreaker-of-record. */
+export function isGroupTiebreakerAmbiguous(groupWeeks) {
+  if (!groupWeeks || groupWeeks.length <= 1) return false;
+  const flagged = groupWeeks.filter(w => w.isGroupTiebreaker === true);
+  return flagged.length !== 1;
 }
 
 // ─── ESPN MULTI-SPORT ENDPOINTS ──────────────────────────────────────────────
@@ -593,6 +656,60 @@ export function formatWeekLabel(week) {
   }
   if (week.startDate) return `${weekPart} — ${fmtDate(week.startDate)}`;
   return weekPart;
+}
+
+/**
+ * UN-117 — the same label, split into its two meaningful parts.
+ *
+ * Drew: "I dont like how it has week, then on the same line half the date
+ * range and a line below the other half. Would look cleaner to have the Week
+ * Name and Number on one line and the date range on another line below it."
+ *
+ * The single-line `formatWeekLabel()` above is deliberately LEFT ALONE. It has
+ * ~20 call sites — <option> text, CSV cells, confirm() dialogs, email subjects,
+ * the obligations table — where a line break is either meaningless or actively
+ * wrong. Changing it to satisfy two display surfaces would have broken all of
+ * them. This returns the parts and lets the caller decide the layout.
+ *
+ * `name` is always present. `dates` is '' for demo weeks and for weeks with no
+ * dates on file, so callers can render the second line conditionally rather
+ * than emitting an empty element that still claims vertical space.
+ */
+export function formatWeekLabelParts(week) {
+  if (!week) return { name: '', dates: '' };
+  const name = week.roundLabel
+    ? `Week ${week.roundLabel}`
+    : (week.label?.startsWith('📋') || week.label?.startsWith('Historical')
+        ? week.label
+        : `Week ${week.weekNumber}`);
+
+  if (week.dataSourceMode === 'demo') return { name, dates: '' };
+  if (week.startDate && week.endDate && week.startDate !== week.endDate) {
+    return { name, dates: `${fmtDate(week.startDate)}–${fmtDate(week.endDate)}` };
+  }
+  if (week.startDate) return { name, dates: fmtDate(week.startDate) };
+  return { name, dates: '' };
+}
+
+/**
+ * UN-118/UN-125 — one label for a whole competitive-week GROUP, for surfaces
+ * (Weekly History) that must show ONE row per group rather than one per
+ * scheduling record. A singleton group (`memberWeeks.length <= 1`) returns
+ * `formatWeekLabel()`'s OWN string, unchanged — every existing single-week
+ * caller's output is untouched by this function existing at all.
+ */
+export function formatWeekGroupLabel(memberWeeks) {
+  if (!memberWeeks || !memberWeeks.length) return '';
+  if (memberWeeks.length === 1) return formatWeekLabel(memberWeeks[0]);
+  const sorted = [...memberWeeks].sort((a, b) => (a.weekNumber ?? 0) - (b.weekNumber ?? 0));
+  const labels = sorted.map(w => w.roundLabel ? `Week ${w.roundLabel}` : `Week ${w.weekNumber}`);
+  const unique = [...new Set(labels)];
+  // Members sharing one plain label (e.g. two parts both left roundLabel
+  // blank, same weekNumber) collapse to "Week N (2 parts)" rather than
+  // repeating the identical string, which would read as a mistake, not a
+  // grouping. Members with genuinely distinct labels (e.g. custom round
+  // labels "1.1"/"1.2", or a bowl + a CFP round) are listed out.
+  return unique.length === 1 ? `${unique[0]} (${sorted.length} parts)` : labels.join(' + ');
 }
 
 function fmtDate(ds) {
@@ -854,6 +971,20 @@ export const OBLIGATION_STATUS_DISPLAY = {
 };
 export function obligationStatusDisplay(status) {
   return OBLIGATION_STATUS_DISPLAY[status] || OBLIGATION_STATUS_DISPLAY.unpaid;
+}
+
+/**
+ * UN-126 — one predicate so every surface (Weekly History, the Players-tab
+ * ledger, storage.js's getActiveObligations(), the Data-tab Obligation
+ * Corrections tool) agrees about what "voided" means, same discipline as
+ * obligationStatusDisplay() above. `voided` is independent of `status` —
+ * paid/unpaid/pending/waived describe the DEBT's payment state; voided
+ * describes whether the RECORD itself still counts at all (it was a
+ * bookkeeping duplicate, or got folded into another record by a merge).
+ * Old rows lack the field entirely and read as active (CONVENTIONS #10).
+ */
+export function isObligationActive(ob) {
+  return !!ob && ob.voided !== true;
 }
 
 /**

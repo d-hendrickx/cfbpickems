@@ -115,6 +115,10 @@ export function renderWeekRecapCardHTML(prev) {
     const w = getWeeks().find(x => x.weekId === r.weekId);
     return w && w.season === season && w.status === 'final' && w.showInHistory !== false && w.weekNumber <= prev.weekNumber;
   });
+  // UN-118/UN-125 — DELIBERATELY NOT widened for grouping. Drew's explicit
+  // scope ruling held the SCRIBE recap card (this file) until real
+  // split-week data exists to test against — the 2-arg call is the
+  // documented fail-safe fallback (scoring.js). See DEVELOPMENT_LEDGER.md §6.
   const standings = calculateSeasonStandings(s.players, seasonResults);
   if (standings?.length) {
     const top = standings[0];
@@ -176,6 +180,8 @@ export function renderSeasonSummaryHTML(currentWeek) {
     const players = getPlayers().filter(p => p.active !== false);
     const priorIds = new Set(priorWeeks.map(w => w.weekId));
     const priorResults = getWeeklyResults().filter(r => priorIds.has(r.weekId));
+    // UN-118/UN-125 — DELIBERATELY NOT widened; see the note above in
+    // renderWeekRecapCardHTML(). Same held scope, same fail-safe fallback.
     const standings = calculateSeasonStandings(players, priorResults);
     const priorSeason = priorWeeks[0].season;
     if (standings?.length) {

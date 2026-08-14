@@ -4,14 +4,67 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.17.5';
-export const APP_VERSION_DATE = '2026-08-08';
+export const APP_VERSION = 'v0.17.7';
+export const APP_VERSION_DATE = '2026-08-14';
+
+/**
+ * UN-124 — "What's new" card content, hand-maintained per release. NOT
+ * ledger-derived (docs/ never deploys) and NOT feedback-derived (feedback
+ * records incoming reports, not confirmed fixes) — update this by hand
+ * alongside APP_VERSION when shipping. Rendered as the LAST card on the
+ * Picks tab in EVERY render branch — see renderWhatsNewCardHTML() below and
+ * both call sites in renderPicksPage(). If both lists are empty for a
+ * release, the card renders nothing (never an empty shell).
+ */
+const WHATS_NEW = {
+  version: APP_VERSION,
+  added: [
+    "Nobody's picks are visible while the week is open — even after you submit your own — so there's no more peeking before kickoff.",
+    'Week headers now put the week name and the date range on their own lines, so long ranges stop getting cut off.',
+    'Compact view: chat and reactions moved inline, so more of the slate fits on screen.',
+    "Chat: right-click (or press-and-hold) a message to react or reply — hovering isn't the trigger anymore.",
+    'Chat: reaction names show only when you tap the reaction, instead of always being on display.',
+    'Chat: reply, react, pin and edit now work in the game-by-game chat bubbles too, not just the main room.',
+    'A week that runs across two slates (like Week 1 Part 1 and Part 2) now counts as ONE week — one winner, one loser, one prize.',
+  ],
+  fixed: [
+    "A bug where a player's picks could vanish — fixed, and guarded against coming back.",
+    "Chat notifications you'd already cleared could reappear on a different tab — fixed.",
+    'Live games could still render blind when they should have been visible — fixed.',
+    'A split week used to hand out two prizes for one real week. It no longer does.',
+    'The weekly recap email listed every debt as "(unknown)" — it now names who owes what.',
+  ],
+};
+
+/**
+ * UN-124 — collapsed-by-default "what's new" card. Takes an optional data
+ * object (defaults to WHATS_NEW) so it's directly unit-testable without
+ * touching the module-level constant. Renders NOTHING when both lists are
+ * empty. No dismiss / "seen it" flag — settings.* is one shared league-wide
+ * blob, so one player dismissing it would hide it for everyone (Drew's
+ * explicit call).
+ */
+export function renderWhatsNewCardHTML(data = WHATS_NEW) {
+  const added = data?.added || [];
+  const fixed = data?.fixed || [];
+  if (!added.length && !fixed.length) return '';
+  const group = (label, items) => !items.length ? '' : `
+          <div class="text-xs text-muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:8px">${label}</div>
+          <ul class="rules-list">${items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>`;
+  return `
+    <div class="card mb-md">
+      <details>
+        <summary style="cursor:pointer;font-weight:600;font-size:.85rem">🆕 What's new${data?.version ? ` in ${escHtml(data.version)}` : ''}</summary>
+        <div>${group('New', added)}${group('Fixed', fixed)}</div>
+      </details>
+    </div>`;
+}
 
 
 import {
   WEEK_STATUS, GAME_STATUS, PICK_RESULT, TIME_WINDOW, TIME_ZONES, DEFAULT_TZ,
   ALMA_MATERS, DEFAULT_RULES, DATA_QUALITY, DATA_SOURCE_MODE,
-  createPlayer, createGame, createPick, createWeek, formatWeekLabel,
+  createPlayer, createGame, createPick, createWeek, formatWeekLabel, formatWeekLabelParts,
   formatGameTime, formatVenueDisplay, formatSpread, getPlayerInitials,
   sourceModeLabelOf, ALMA_MATER_DISPLAY, getAlmaMaterMatch,
   formatTeamName, getTeamDisplay, gameDataReadiness,
@@ -20,7 +73,9 @@ import {
   HISTORICAL_DEMO_WEEK, HISTORICAL_DEMO_GAMES, REAL_WEEK_1_2026,
   SITE_PIN,
   getAutoLockOffsetMinutes, getAutoLiveEnabled, getAutoFinalizeEnabled,
-  obligationRole, obligationNextStatus, obligationStatusDisplay,
+  obligationRole, obligationNextStatus, obligationStatusDisplay, isObligationActive,
+  getEffectiveGroupId, weeksInGroup, getGroupTiebreakerWeek,
+  isGroupTiebreakerAmbiguous, formatWeekGroupLabel,
 } from './data-model.js';
 
 import {
@@ -31,12 +86,12 @@ import {
   getPlayers, getPlayer, savePlayer, addPlayer,
   verifyPlayerPin, setPlayerPin, getPlayerPin,
   getCurrentWeek, getWeek, getWeeks, saveWeek, deleteWeek,
-  getActiveWeekId, setActiveWeekId, getEffectiveWeekStatus,
+  getActiveWeekId, setActiveWeekId, getEffectiveWeekStatus, arePicksPublic,
   getGames, getGame, saveGame, deleteGame, saveAllGamesForWeek, clearSlateForWeek,
   getAvailableGames, saveAvailableGames, clearAvailableGames,
   getPicks, getPick, saveAllPicks, hasPlayerSubmitted,
   getWeeklyResults, saveAllWeeklyResults,
-  getObligations, saveObligation, saveAllObligations, createObligation,
+  getObligations, getActiveObligations, saveObligation, saveAllObligations, createObligation,
   getNickname, setNickname, getDisplayNamePlain,
   getGameLockOverrides, setGameLockOverride, clearAllLockOverrides,
   getTiebreakerGuess, setTiebreakerGuess, getTiebreakerGuesses,
@@ -65,7 +120,7 @@ import {
 } from './data-provider.js';
 
 import {
-  calculateWeeklyResults, calculateSeasonStandings,
+  calculateWeeklyResults, calculateSeasonStandings, calculateGroupWeeklyResults,
   evaluatePick, getPickStatusLabel, getPickStatusClass,
   calculateAtsWinner, calculateAlmaMaterTotal,
   computeEffectiveLockAt, computeEffectiveLiveAt, computeFirstKickoff, computeLastKickoff,
@@ -298,18 +353,63 @@ function setupNav() {
   document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.tab)));
 }
 
-/** v0.17.0 — THE PICK REVEAL RITUAL. When the current week's effective status
- *  crosses into locked, one system event posts everyone's picks to the room
- *  simultaneously. Local ledger prevents outbox spam; the deterministic id
- *  (sys_reveal_<weekId>) makes it exactly-once across all six clients. */
-function checkPickRevealDue() {
-  const week = getCurrentWeek(); if (!week || week.dataSourceMode==='demo') return;
-  const eff = getEffectiveWeekStatus(week);
-  if (!['locked','live','final'].includes(eff) && week.status!=='final') return;
+/** v0.17.0 — THE PICK REVEAL RITUAL. One system event posts everyone's picks
+ *  to the room simultaneously. Local ledger prevents outbox spam; the
+ *  deterministic id (sys_reveal_<weekId>) makes it exactly-once across all six
+ *  clients.
+ *
+ *  UN-116, 2026-08-12 — this used to fire at LOCK. Drew chose to keep the
+ *  dashboard blind until live/final and move the reveal to match, rather than
+ *  loosen the dashboard to lock. Both now ask arePicksPublic(), so the room and
+ *  the dashboard cannot disagree about when picks become public.
+ *
+ *  This writes into an append-only log under a deterministic id, so the text is
+ *  permanent once emitted — see AD-09/AD-11 and RG-13. Weeks already revealed
+ *  under the old threshold keep their event; nothing is re-emitted.
+ *
+ *  RG (2026-08-13) — this used to consider getCurrentWeek() and nothing else,
+ *  so the moment the commissioner activated week N+1, week N's reveal could
+ *  never fire on any device. The ritual was lost silently, permanently, the
+ *  same shape as the lost Extra Point.
+ *
+ *  THE SCAN IS BOUNDED, AND THE BOUND IS THE WHOLE SAFETY ARGUMENT. Looking at
+ *  every public week not in this device's ledger would, on any device with a
+ *  fresh ledger — a new phone, a cleared cache, a new player — backfill the
+ *  room with a reveal for every historical week that never got one, permanent
+ *  and un-take-back-able, in front of six real people. Two independent bounds
+ *  stop that:
+ *
+ *    1. RECENCY. Only weeks that ENDED within REVEAL_LOOKBACK_DAYS are ever
+ *       candidates. The ritual is about the week being played right now; a week
+ *       that finished last month is history, not a pending announcement. A week
+ *       with no endDate fails CLOSED — an undated week cannot be shown to be
+ *       recent, and the cost of guessing wrong is a permanent post.
+ *    2. ONE PER INVOCATION. Even if the recency test were somehow wrong, a
+ *       single nav tap can post at most one message rather than a season's
+ *       worth. This runs on every navigation, so a genuine backlog of two still
+ *       drains within seconds.
+ *
+ *  Both are asserted in loadtest.mjs [49], where the acceptance gate is a store
+ *  full of old public weeks with full slates plus an empty ledger emitting
+ *  EXACTLY ZERO events. */
+const REVEAL_LOOKBACK_DAYS = 3;
+
+export function checkPickRevealDue() {
   const key = 'cfbp_reveal_emitted';
   let done = [];
   try { done = JSON.parse(localStorage.getItem(key) || '[]'); } catch {}
-  if (done.includes(week.weekId)) return;
+  const cutoff = Date.now() - REVEAL_LOOKBACK_DAYS * 86400000;
+  const due = getWeeks().filter(w => {
+    if (!w || w.dataSourceMode === 'demo') return false;
+    if (done.includes(w.weekId)) return false;
+    if (!arePicksPublic(w)) return false;                 // the blind rule still gates the ritual
+    // Same endDate parse the SCRIBE digest uses (`week.endDate + 'T23:59:59'`).
+    // A missing or unparseable date yields NaN, which fails this test — closed.
+    const ends = w.endDate ? new Date(w.endDate + 'T23:59:59').getTime() : NaN;
+    return Number.isFinite(ends) && ends >= cutoff;
+  }).sort((a, b) => (b.weekNumber || 0) - (a.weekNumber || 0));
+  if (!due.length) return;
+  const week = due[0];
   emitPickRevealEvent(week);
   done.push(week.weekId);
   try { localStorage.setItem(key, JSON.stringify(done.slice(-20))); } catch {}
@@ -374,9 +474,17 @@ function refreshHeader() {
   const el   = document.getElementById('header-meta');
   renderHeaderIdentity();
   if (!el) return;
-  el.innerHTML = week
-    ? `<strong>${escHtml(formatWeekLabel(week))}</strong><span class="badge badge-${week.status} ml-sm">${week.status.toUpperCase()}</span>`
-    : '<strong>CFB Pickems</strong>';
+  // UN-117 — name and dates each own a line; the status badge rides with the
+  // name so a wrapped date range can never orphan it onto a third line.
+  if (week) {
+    const wl = formatWeekLabelParts(week);
+    el.innerHTML = `<span class="week-heading week-heading-inline">
+      <span class="week-heading-name"><strong>${escHtml(wl.name)}</strong><span class="badge badge-${week.status} ml-sm">${week.status.toUpperCase()}</span></span>
+      ${wl.dates ? `<span class="week-heading-dates">${escHtml(wl.dates)}</span>` : ''}
+    </span>`;
+  } else {
+    el.innerHTML = '<strong>CFB Pickems</strong>';
+  }
 }
 
 // ─── HEADER IDENTITY (UN-106) ─────────────────────────────────────────────────
@@ -493,14 +601,38 @@ function renderThemeToggle() {
 
 // ─── PICK PERMISSION ──────────────────────────────────────────────────────────
 
-function canPlayerSubmitPicks(week, playerId) {
+/**
+ * Exported for the harness, the same reason `canViewOtherPicks()` below is:
+ * these two predicates are the two halves of UN-116's need — you may see the
+ * field only once you can no longer act on what you see — and they have to be
+ * asserted together or one can silently drift away from the other.
+ */
+export function canPlayerSubmitPicks(week, playerId) {
   if (!week)     return { allowed:false, reason:'No active week.' };
   if (!playerId) return { allowed:false, reason:'Not logged in.' };
   const eff = getEffectiveWeekStatus(week);
   if (eff==='draft')  return { allowed:false, reason:"Commissioner hasn't opened the week yet." };
-  if (eff==='locked') return { allowed:false, reason:'Week is locked — no new picks accepted.' };
+  // RG (2026-08-13) — the SECOND HALF of the defect below, identical mechanism.
+  // With Auto-Open At set and Auto-Lock left blank, getEffectiveWeekStatus()
+  // reports 'open' for a week the app advanced to LOCKED, so this branch never
+  // fired and the commissioner's explicit lock was silently inert: picks stayed
+  // submittable for the whole lock window (auto-lock → each game's kickoff),
+  // with per-game isGamePickable() the only remaining brake. Not a leak —
+  // arePicksPublic() is correctly false on a locked week — but the lock is the
+  // commissioner's control over the slate, not advice. Same fail-closed shape:
+  // consult week.status alongside eff, and only ever DENY.
+  if (eff==='locked' || week.status==='locked') return { allowed:false, reason:'Week is locked — no new picks accepted.' };
   if (eff==='final')  return { allowed:false, reason:'Week is finalized.' };
-  if (eff==='live')   return { allowed:false, reason:'Games are in progress — picks closed.' };
+  // RG (2026-08-12) — `week.status` is consulted alongside `eff` for the same
+  // reason arePicksPublic() does it: getEffectiveWeekStatus() tests
+  // picksOpenAt/picksLockAt BEFORE week.status and has no 'live' branch, so on
+  // a week with Auto-Open At set and Auto-Lock left blank it reports 'open' for
+  // a week the app itself advanced to LIVE — and the eff==='live' line below
+  // could never fire. Picks stayed submittable after kickoff, and once the
+  // blind-rule fix unblinded that same window a player could have read the
+  // whole field and then changed a pick on a game that had not kicked off yet.
+  // Fail-closed: this only ever DENIES, and only once the week is really live.
+  if (eff==='live' || week.status==='live') return { allowed:false, reason:'Games are in progress — picks closed.' };
   return { allowed:true, reason:'' };
 }
 
@@ -513,21 +645,33 @@ function isGamePickable(game) {
 }
 
 /**
- * Whether the given viewer is allowed to see OTHER players' picks/tiebreakers
- * for this week. True when (a) the viewer is admin, (b) the week is live/final
- * (everything is public), or (c) the viewer has already submitted their own
- * picks (blind-picks rule is satisfied for them). Used by tiebreaker cells
- * which need to hide other people's guesses with *** until the viewer earns
- * the right to see them.
+ * Whether THE CURRENT SESSION is allowed to see OTHER players' picks,
+ * tiebreaker guesses and Extra Point guesses for this week. Admin always;
+ * otherwise only once `arePicksPublic()` says so (live or final).
+ *
+ * Takes no viewer id ON PURPOSE. It used to accept a `viewerPlayerId` that the
+ * body never read — every answer came from getSession() — and once this became
+ * an exported function that vestigial parameter was a trap: it advertises
+ * per-viewer semantics this function does not have, so a caller could pass some
+ * other player's id and be handed the CURRENT user's answer without noticing.
+ * Removed 2026-08-13 rather than documented, because the signature is what a
+ * caller reads.
+ *
+ * UN-116, 2026-08-12 — the `hasPlayerSubmitted()` branch that used to be here
+ * was the defect. Submitting was treated as EARNING the right to see everyone
+ * else, but submitting does not end your ability to act on what you see:
+ * "Player picks are editable while the slate is open" is a locked decision, and
+ * the submit view ships an "Edit My Picks" button. So a player could submit,
+ * read the other five players' entire slate, then quietly change their own.
+ * With a weekly cash prize on the line that is not a cosmetic bug.
+ *
+ * Visibility must key off a state the viewer cannot undo. It now does.
  */
-function canViewOtherPicks(week, viewerPlayerId) {
+export function canViewOtherPicks(week) {
   if (!week) return false;
   const sess = getSession();
   if (sess.isAdmin) return true;
-  const eff = getEffectiveWeekStatus(week);
-  if (eff === 'live' || eff === 'final') return true;
-  if (!viewerPlayerId) return false;
-  return hasPlayerSubmitted(week.weekId, viewerPlayerId);
+  return arePicksPublic(week);
 }
 
 // ─── PICKS PAGE ───────────────────────────────────────────────────────────────
@@ -541,6 +685,9 @@ function renderPicksPage() {
   const viewWeek = state.picksWeekId ? getWeek(state.picksWeekId) : null;
   if (viewWeek && currentWeek && viewWeek.weekId !== currentWeek.weekId) {
     renderHistoricalPicksView(c, viewWeek, currentWeek);
+    // UN-124 — last card in EVERY state, including the historical-week branch
+    // (this branch returns early, so it needs its own append).
+    c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());
     return;
   }
   state.picksWeekId = null;
@@ -556,6 +703,10 @@ function renderPicksPage() {
   if (!playerActivelyInPicks) {
     c.insertAdjacentHTML('beforeend', renderPicksFooterHTML(currentWeek));
   }
+  // UN-124 — last card on the Picks tab in EVERY state: signed-out (login
+  // screen), signed-in mid-form, submitted, and locked-week. Unconditional —
+  // unlike the footer above, this must reach a player who stays logged in.
+  c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());
 }
 
 /** Weeks a player may browse on the Picks tab: current week + anything locked/live/final. Demo weeks are commissioner-only. */
@@ -600,8 +751,7 @@ function bindPicksWeekNav() {
  *  weeks are public just like the dashboard. */
 function renderHistoricalPicksView(c, week, currentWeek) {
   const session = getSession();
-  const eff = getEffectiveWeekStatus(week);
-  const isPublic = eff === 'live' || eff === 'final' || week.status === 'final';
+  const isPublic = arePicksPublic(week);
   const games = getGames(week.weekId).sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
   const myId = session.playerId && session.playerVerified ? session.playerId : null;
 
@@ -897,8 +1047,11 @@ function renderWeekBanner(week) {
   return `<div class="week-banner${isDemoWeek?' week-banner-demo':''} mb-md">
     <div class="week-banner-icon">${isDemoWeek?'📋':'📋'}</div>
     <div class="week-banner-body">
-      <div class="week-banner-title">${escHtml(formatWeekLabel(week))}
-        ${isDemoWeek?'<span class="demo-label">DEMO DATA</span>':''}</div>
+      <div class="week-banner-title week-heading">${escHtml(formatWeekLabelParts(week).name)}
+        ${isDemoWeek?'<span class="demo-label">DEMO DATA</span>':''}${
+        formatWeekLabelParts(week).dates
+          ? `<span class="week-heading-dates">${escHtml(formatWeekLabelParts(week).dates)}</span>`
+          : ''}</div>
       <div class="week-banner-blurb">${escHtml(week.blurb)}</div>
     </div>
   </div>`;
@@ -1386,8 +1539,7 @@ function renderDashboardInner() {
     return renderDashboardInner();
   }
 
-  const eff = getEffectiveWeekStatus(week);
-  const isPublic = eff === 'live' || eff === 'final';
+  const isPublic = arePicksPublic(week);
 
   // Only gate on submission when the week is still open/locked (blind picks rule).
   // Live and final weeks are always visible — no login or submission required.
@@ -1417,7 +1569,11 @@ function renderDashboardInner() {
   </div>`:'';
 
   c.innerHTML=`
-    <div class="section-header"><h2>${escHtml(formatWeekLabel(week))}</h2>
+    <div class="section-header">
+      <h2 class="week-heading">${escHtml(formatWeekLabelParts(week).name)}${
+        formatWeekLabelParts(week).dates
+          ? `<span class="week-heading-dates">${escHtml(formatWeekLabelParts(week).dates)}</span>`
+          : ''}</h2>
       <div class="subtitle">Dashboard · <span class="badge badge-${week.status}">${week.status}</span></div>
     </div>
     ${weekSelector}
@@ -1435,6 +1591,13 @@ function renderDashboardInner() {
           <button class="layout-toggle-btn${getSettings().dashboardLayout==='compact'?' active':''}" data-layout="compact" title="Mobile-friendly stacked view">Compact</button>
         </div>
       </div>
+      ${/* DI-116f — players are used to seeing everyone's picks the moment they
+            submitted. Without a word of explanation the new blind cells read as
+            a bug, and the commissioner fields the question. Shown only while
+            the picks are still hidden, and never to an admin (who sees all). */''}
+      ${(!arePicksPublic(week) && !session.isAdmin)
+        ? `<p class="blind-note"><span class="blind-note-icon">🙈</span><span>Other players' picks stay hidden until the games kick off — that way nobody can peek and then change their own. Check back at kickoff to compare.</span></p>`
+        : ''}
       ${(getSettings().dashboardLayout==='compact')
         ? `<div class="dashboard-compact">${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`
         : `<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
@@ -1449,31 +1612,7 @@ function renderDashboardInner() {
       <table class="leaderboard-table">
         <thead><tr><th>#</th><th>Player</th><th>✅</th><th>❌</th><th>Tiebreaker</th></tr></thead>
         <tbody>
-          ${weeklyResults.map(r=>{
-            const name=getDisplayNamePlain(week.weekId,r.playerId,players);
-            // Tiebreaker privacy: only reveal another player's guess once the viewer is allowed
-            // to see all picks (week is live/final, OR viewer has submitted their own).
-            const canSeeOthers = canViewOtherPicks(week, session.playerId);
-            const isSelf = session.playerId === r.playerId;
-            const submitted = r.tiebreakerGuess !== null && r.tiebreakerGuess !== undefined;
-            let tbDisp;
-            if (!submitted) {
-              tbDisp = '—';                                      // hasn't submitted
-            } else if (!canSeeOthers && !isSelf) {
-              tbDisp = '<span class="tb-hidden" title="Visible once you submit your picks">***</span>'; // hidden from this viewer
-            } else if (actualTB !== null) {
-              tbDisp = `${r.tiebreakerGuess} (Δ${r.tiebreakerDelta})`;
-            } else {
-              tbDisp = String(r.tiebreakerGuess);
-            }
-            return`<tr class="${r.isWinner?'winner-row':r.isLoser?'loser-row':''}">
-              <td class="rank-cell rank-${r.rank}">${r.rank}</td>
-              <td class="player-name-cell">${escHtml(name)}${r.isWinner?' 🏆':r.isLoser?' 💀':''}${r.wonByTiebreaker?' <span class="text-xs text-muted">(TB)</span>':''}</td>
-              <td class="result-win">${r.correctPicks}</td>
-              <td class="result-loss">${r.incorrectPicks}</td>
-              <td class="text-muted text-sm">${tbDisp}</td>
-            </tr>`;
-          }).join('')}
+          ${renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB)}
         </tbody>
       </table>
     </div>
@@ -1662,11 +1801,82 @@ function reorderPlayerColumn(sourceId, targetId) {
   renderDashboard();
 }
 
-function renderDashboardTable(players,games,allPicks,weeklyResults,weekId,actualTB) {
+/* The dashboard's "This Week Score Summary" rows.
+   Exported, and extracted from renderDashboardInner()'s template, for exactly
+   the reason renderDashboardTable() below is: the blind rule is only
+   meaningfully tested against the markup a player is actually served, and the
+   surrounding renderer needs a real DOM to drive. Pure HTML, no side effects. */
+export function renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB) {
+  const session = getSession();
+  // Hoisted out of the row loop — it never depended on the row, and the
+  // suppression below is a property of the WEEK, not of any one player.
+  const canSeeOthers = canViewOtherPicks(week);
+  // UN-116 (2026-08-13) — RANK IS NOT A PERSONAL STAT, IT IS THE FIELD.
+  // This template blinded correctPicks / incorrectPicks / tiebreaker and
+  // stopped there, so a locked week with at least one final game rendered "—"
+  // in every count column while the row above still read "1 🏆" and carried a
+  // winner-row tint. Relative standing IS the thing the blind rule protects:
+  // a finishing position is derived entirely from how the other five did, so
+  // it leaks their results whether or not the digits beside it are masked.
+  // Suppressed for every row, not just the rivals' — a viewer who sees "1" on
+  // their own line while the rest are blank has learned the standing anyway.
+  // Their own counts and their own tiebreaker still render below; those are
+  // genuinely theirs.
+  // UN-118/UN-125 — a >1-member competitive-week group whose members are NOT
+  // ALL final yet hasn't settled who the group's real winner is. THIS part's
+  // own rank/isWinner/isLoser (computed from only its own games) is not the
+  // competitive rank in that state, so it's suppressed the same way the
+  // ordinary blind rule suppresses standing — but the player's OWN counts and
+  // tiebreaker (governed by `blind`/`canSeeOthers` alone, below) stay visible
+  // either way, since those are genuinely theirs regardless of grouping.
+  const groupWeeks = weeksInGroup(getWeeks(), week);
+  const groupPending = groupWeeks.length > 1 && !groupWeeks.every(w => w.status === 'final');
+  const hideStanding = !canSeeOthers || groupPending;
+  const groupNoteRow = groupPending
+    ? `<tr><td colspan="5"><p class="blind-note"><span class="blind-note-icon">🧩</span><span>This is one part of a multi-part week — rank finalizes once every part (${escHtml(formatWeekGroupLabel(groupWeeks))}) is final.</span></p></td></tr>`
+    : '';
+  return groupNoteRow + (weeklyResults || []).map(r => {
+    const name = getDisplayNamePlain(week.weekId, r.playerId, players);
+    // UN-116 — tiebreaker guesses are a submission like any other and
+    // are blinded on the same rule as the picks themselves.
+    const isSelf = session.playerId === r.playerId;
+    const blind = !canSeeOthers && !isSelf;
+    const submitted = r.tiebreakerGuess !== null && r.tiebreakerGuess !== undefined;
+    let tbDisp;
+    if (blind) {
+      tbDisp = '<span class="tb-hidden" title="Visible once the games kick off">***</span>';
+    } else if (!submitted) {
+      tbDisp = '—';                                      // hasn't submitted
+    } else if (actualTB !== null) {
+      tbDisp = `${r.tiebreakerGuess} (Δ${r.tiebreakerDelta})`;
+    } else {
+      tbDisp = String(r.tiebreakerGuess);
+    }
+    return `<tr class="${hideStanding ? '' : (r.isWinner?'winner-row':r.isLoser?'loser-row':'')}">
+      ${hideStanding
+        ? '<td class="rank-cell">—</td>'
+        : `<td class="rank-cell rank-${r.rank}">${r.rank}</td>`}
+      <td class="player-name-cell">${escHtml(name)}${hideStanding ? '' : (r.isWinner?' 🏆':r.isLoser?' 💀':'')}${(!hideStanding && r.wonByTiebreaker)?' <span class="text-xs text-muted">(TB)</span>':''}</td>
+      <td class="result-win">${blind ? '—' : r.correctPicks}</td>
+      <td class="result-loss">${blind ? '—' : r.incorrectPicks}</td>
+      <td class="text-muted text-sm">${tbDisp}</td>
+    </tr>`;
+  }).join('');
+}
+
+/* Exported for UN-116's regression suite (same rationale as
+   buildObligationsCsvRows): this returns pure HTML, and the blind rule is only
+   meaningfully tested by asserting on the markup a player would actually be
+   served. A predicate test alone would not have caught the original defect —
+   canViewOtherPicks existed and worked; this function simply never called it. */
+export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId,actualTB) {
   const session = getSession();
   const week    = getWeek(weekId);
-  const eff     = getEffectiveWeekStatus(week);
-  const isPublic = eff === 'live' || eff === 'final';
+  const isPublic = arePicksPublic(week);
+  // UN-116 — same two values the compact view and the score summary use, so
+  // all three surfaces blind on one rule instead of three near-copies.
+  const viewerId    = session.playerVerified ? session.playerId : null;
+  const canSeeOthers = canViewOtherPicks(week);
 
   // If not public, not admin, and player hasn't submitted — show prompt not data
   if (!isPublic && !session.isAdmin) {
@@ -1732,6 +1942,16 @@ function renderDashboardTable(players,games,allPicks,weeklyResults,weekId,actual
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
     const pickCells=submitted.map(player=>{
+      // UN-116 — THE LEAK. This matrix had no blind check at all: the compact
+      // view hid other players' chips correctly while the standard view, the
+      // default, printed every selection in full. A player only had to submit
+      // (or, before the canViewOtherPicks fix, just be logged in on a live
+      // dashboard) to read the whole league's slate while still able to edit
+      // their own. Blind cells render for everyone but the viewer until the
+      // week is public.
+      if(!canSeeOthers && player.playerId!==viewerId){
+        return`<td class="pick-cell pick-cell-blind" title="Hidden until the games kick off">•••</td>`;
+      }
       const pick=allPicks.find(pk=>pk.gameId===game.gameId&&pk.playerId===player.playerId);
       if(!pick)return'<td class="pick-cell">—</td>';
       const result=evaluatePick(pick,game);
@@ -2085,8 +2305,14 @@ function bindCommentBubbleHandlers() {
  *    one visual system, not two.
  *  - Picked-team text under each chip uses a short form (last word of the
  *    school name) to keep the chip narrow but still readable.
+ *
+ * Exported for UN-119's regression suite (same rationale as
+ * renderDashboardTable, above): this returns pure HTML, and "the chat bubble
+ * no longer costs a full row" is only meaningfully tested by asserting on the
+ * markup actually served, not on a source-text regex — a regex can't tell a
+ * working relocation from one that silently reverted.
  */
-function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId, actualTB) {
+export function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId, actualTB) {
   const session = getSession();
   const picks = allPicks;
   const submittedRaw = players.filter(p => picks.some(pk => pk.playerId === p.playerId));
@@ -2106,7 +2332,7 @@ function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId,
   // who hasn't earned the right to see picks yet. The viewer ALWAYS sees their
   // own chip. Once the week is live/final, everything is visible to everyone.
   const week = getWeeks().find(w => w.weekId === weekId);
-  const canSeeOthers = week ? canViewOtherPicks(week, session.playerId) : false;
+  const canSeeOthers = week ? canViewOtherPicks(week) : false;
 
   const gameCards = sortedGames.map(game => {
     const sv = game.lockedSpread !== null ? game.lockedSpread : game.spread;
@@ -2133,7 +2359,7 @@ function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId,
       // their own pick, render an opaque "•••" chip. The chip still shows
       // initials so they can see WHO has submitted, just not WHAT they picked.
       if (!isSelf && !canSeeOthers) {
-        return `<div class="dc-chip dc-chip-blind" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)}: hidden until you submit"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">•••</span></div>`;
+        return `<div class="dc-chip dc-chip-blind" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)}: picks hidden until the games kick off"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">•••</span></div>`;
       }
       const result = evaluatePick(pick, game);
       const pickedSide = pick.selectedTeam === game.homeTeam ? 'home' : pick.selectedTeam === game.awayTeam ? 'away' : null;
@@ -2154,14 +2380,27 @@ function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId,
     const espn = game.espnEventId
       ? ` · <a class="espn-link" href="https://www.espn.com/${game.isManual && game.espnSport ? escHtml(game.espnSport) : 'college-football'}/game/_/gameId/${encodeURIComponent(game.espnEventId)}" target="_blank" rel="noopener noreferrer">ESPN ↗</a>`
       : '';
+    // UN-119 (DI-119a): the chat indicator and the reaction strip both move
+    // OFF their own block-level rows and INLINE into .dc-meta, next to the
+    // ESPN link — that pair of rows, present on every card regardless of
+    // whether either had anything to show, was the measured cost driver
+    // (root driver: gameChatBubbleHTML's button carries a min-height:40px
+    // pill in its base CSS; the `.dc-meta .chat-bubble-btn` override below
+    // strips that back to icon-only for THIS layout only). The markup these
+    // two helpers return is untouched — chat-ui.js is not part of this
+    // change — only where it lands. .dc-meta is display:flex;flex-wrap:wrap,
+    // so the reaction strip only pushes onto its own line on the minority of
+    // cards that actually have reactions; empty/icon-only content stays on
+    // the first line. The standard matrix (renderDashboardTable) still calls
+    // both at the bottom of the game-info cell, unchanged.
+    const chatInd = gameChatBubbleHTML(game.gameId);
+    const reactionInd = renderReactionStrip(weekId, game.gameId, players);
     return `<div class="dc-game">
       <div class="dc-game-head">
         <div class="dc-matchup">${escHtml(matchupBare(game))} ${renderGameBadges(game)}</div>
-        <div class="dc-meta"><span class="spread-badge-sm">${escHtml(spreadStr)}</span>${statusInfo}${espn}</div>
+        <div class="dc-meta"><span class="spread-badge-sm">${escHtml(spreadStr)}</span>${statusInfo}${espn}${chatInd}${reactionInd}</div>
       </div>
       <div class="dc-chips">${chips}</div>
-      ${renderReactionStrip(weekId, game.gameId, players)}
-      ${gameChatBubbleHTML(game.gameId)}
     </div>`;
   }).join('');
 
@@ -2170,16 +2409,57 @@ function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId,
 
 // ─── LEADERBOARD / STANDINGS ──────────────────────────────────────────────────
 
-function renderLeaderboard() {
+/* Exported for loadtest.mjs — UN-118/UN-125's Weekly History collapse (one
+   row per competitive-week group) is only meaningfully tested against the
+   markup a commissioner/player actually sees, same rationale as every other
+   render function this file already exports for the harness. */
+export function renderLeaderboard() {
   const c=document.getElementById('page-leaderboard'); if(!c)return;
   const players=getPlayers().filter(p=>p.active);
   // v0.17.0 — demo weeks never count toward standings, weekly history, or debts
-  const visibleWeekIds=new Set(getWeeks().filter(w=>w.showInHistory!==false&&w.dataSourceMode!=='demo').map(w=>w.weekId));
+  const allWeeksRaw=getWeeks(); // unfiltered — group membership must see every week, incl. drafts, to know a group's TRUE size
+  const visibleWeekIds=new Set(allWeeksRaw.filter(w=>w.showInHistory!==false&&w.dataSourceMode!=='demo').map(w=>w.weekId));
   const allResults=getWeeklyResults().filter(r=>visibleWeekIds.has(r.weekId));
-  const standings=calculateSeasonStandings(players,allResults);
+  // UN-118/UN-125 — a multi-part group must count as ONE weekly win/loss, not
+  // one per scheduling record. `weeks` is optional and fails safe (see
+  // scoring.js) — passing it here is what makes the fix fire for Standings.
+  const standings=calculateSeasonStandings(players,allResults,allWeeksRaw);
   const weeks=getWeeks().filter(w=>w.status!==WEEK_STATUS.DRAFT&&w.dataSourceMode!=='demo').sort((a,b)=>a.weekNumber-b.weekNumber);
   const settings=getSettings();
   const obligations=getObligations();
+
+  // Weekly History collapses to ONE ROW PER COMPETITIVE-WEEK GROUP, not one
+  // per scheduling record — a split slate/bowl/CFP week must read as the one
+  // week the league actually competed over. `memberWeeks` is resolved against
+  // the FULL unfiltered week list (a not-yet-opened sibling still counts as
+  // "not every member final yet"), even though only weeks in the visible
+  // `weeks` list get their own row.
+  const seenGroupIds=new Set();
+  const groupRows=[];
+  for (const w of weeks) {
+    const gid=getEffectiveGroupId(w);
+    if (seenGroupIds.has(gid)) continue;
+    seenGroupIds.add(gid);
+    const memberWeeks=weeksInGroup(allWeeksRaw, w);
+    let winner=null, loser=null;
+    if (memberWeeks.length<=1) {
+      const wRes=allResults.filter(r=>r.weekId===w.weekId);
+      winner=wRes.find(r=>r.isWinner)||null; loser=wRes.find(r=>r.isLoser)||null;
+    } else if (memberWeeks.every(m=>m.status==='final')) {
+      // Only once every member has independently finalized do we know the
+      // group's real winner — same gate finalizeWeek() uses for the
+      // obligation itself (DI-126d). Recomputed fresh from pooled picks/games
+      // rather than trusted from either part's own (per-part, pre-grouping)
+      // stored isWinner flag.
+      const groupPicks=memberWeeks.flatMap(m=>getPicks(m.weekId));
+      const groupGames=memberWeeks.flatMap(m=>getGames(m.weekId));
+      const groupResults=calculateGroupWeeklyResults(memberWeeks,players,groupPicks,groupGames);
+      winner=groupResults.find(r=>r.isWinner)||null; loser=groupResults.find(r=>r.isLoser)||null;
+    }
+    // memberWeeks.length>1 && not every member final yet → winner/loser stay
+    // null — the row reads "in progress," same as any other unfinalized week.
+    groupRows.push({ gid, label:formatWeekGroupLabel(memberWeeks.length>1?memberWeeks:[w]), winner, loser });
+  }
 
   c.innerHTML=`
     <div class="section-header"><h2>Standings</h2><div class="subtitle">Season ${settings.season}</div></div>
@@ -2212,24 +2492,34 @@ function renderLeaderboard() {
     </div>
 
     <div class="admin-section-title">Weekly History</div>
-    ${weeks.length?`<div class="dashboard-scroll mb-md">
+    ${groupRows.length?`<div class="dashboard-scroll mb-md">
       <table class="dashboard-table">
         <thead><tr><th>Week</th><th>🏆 Winner</th><th>💀 Loser</th><th>Status</th></tr></thead>
         <tbody>
-          ${weeks.map(w=>{
-            const wRes=allResults.filter(r=>r.weekId===w.weekId).sort((a,b)=>b.correctPicks-a.correctPicks);
-            const winner=wRes.find(r=>r.isWinner); const loser=wRes.find(r=>r.isLoser);
-            const ob=obligations.find(o=>o.weekId===w.weekId);
+          ${groupRows.map(({gid,label,winner,loser})=>{
+            // UN-126 — presence of an obligation for this gid no longer
+            // implies it's the settled answer. If more than one ACTIVE
+            // (non-voided) 'weekly' obligation exists for this gid, or any
+            // of them is flagged needsReview, this row shows a review
+            // warning instead of silently picking one and rendering it as
+            // if the league had already agreed — the exact defect this
+            // closes (a stale singleton obligation sitting next to a
+            // freshly pooled winner, disagreeing with what's on screen).
+            const gobs = obligations.filter(o=>o.weekId===gid && o.type==='weekly' && isObligationActive(o));
+            const conflicted = gobs.length > 1 || gobs.some(o=>o.needsReview);
+            const ob = !conflicted && gobs.length === 1 ? gobs[0] : null;
             return`<tr>
-              <td style="white-space:nowrap;font-size:.82rem">${escHtml(formatWeekLabel(w))}</td>
+              <td style="white-space:nowrap;font-size:.82rem">${escHtml(label)}</td>
               <td class="player-name-cell">${winner?escHtml(winner.displayName):'—'}${winner?.wonByTiebreaker?' (TB)':''}</td>
               <td class="player-name-cell">${loser?escHtml(loser.displayName):'—'}</td>
               <td>
-                ${ob ? obligationActionsHTML(ob.status, ob, getSession(), {
-                    payerName: getPlayer(ob.payerPlayerId)?.displayName || '?',
-                    recipientName: getPlayer(ob.recipientPlayerId)?.displayName || '?',
-                    obClass: 'ob-action',
-                  }) : '<span class="text-muted text-xs">—</span>'}
+                ${conflicted
+                  ? '<span class="badge badge-loss" title="An existing obligation record disagrees with the computed outcome — the commissioner needs to merge or void one in Data → Obligation Corrections">⚠️ Needs review</span>'
+                  : ob ? obligationActionsHTML(ob.status, ob, getSession(), {
+                      payerName: getPlayer(ob.payerPlayerId)?.displayName || '?',
+                      recipientName: getPlayer(ob.recipientPlayerId)?.displayName || '?',
+                      obClass: 'ob-action',
+                    }) : '<span class="text-muted text-xs">—</span>'}
               </td>
             </tr>`;
           }).join('')}
@@ -2377,6 +2667,36 @@ function renderCommPage() {
                 <input class="form-input" id="week-espn-num" type="number" placeholder="1" value="${escHtml(String(week.espnWeekNumber||''))}" />
               </div>
             </div>
+            ${(() => {
+              // UN-118/UN-125 — multi-part week grouping (DI-126b). A week
+              // RECORD is a scheduling unit; the group is the COMPETITIVE
+              // week players actually compete over and win a prize for. Use
+              // this when one real week's games can't share a lock time (a
+              // split slate, bowls, CFP).
+              const groupWeeksNow = weeksInGroup(allWeeks, week);
+              const otherMembers = groupWeeksNow.filter(w => w.weekId !== week.weekId);
+              const currentPartnerId = otherMembers[0]?.weekId || '';
+              const partnerOptions = allWeeks.filter(w =>
+                w.weekId !== week.weekId && w.season === week.season && w.dataSourceMode !== 'demo');
+              return `
+            <div class="form-group">
+              <label class="form-label">Part of the Same Competitive Week As <span class="text-muted text-xs">(optional — splits/bowls/CFP)</span></label>
+              <select class="form-select" id="week-group-partner">
+                <option value="">— Not grouped —</option>
+                ${partnerOptions.map(w=>`<option value="${w.weekId}"${w.weekId===currentPartnerId?' selected':''}>${escHtml(formatWeekLabel(w))}</option>`).join('')}
+              </select>
+              <p class="text-muted text-xs mt-sm">Both parts still lock and score independently — this only tells Standings, Weekly History and the weekly prize to treat them as ONE competitive week instead of two.</p>
+            </div>
+            ${otherMembers.length ? `
+            <div class="form-group">
+              <div class="text-xs text-muted mb-xs">This group: ${groupWeeksNow.map(w=>escHtml(formatWeekLabel(w))).join(' · ')}</div>
+              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" id="week-group-tiebreaker" ${week.isGroupTiebreaker?'checked':''} />
+                <span class="form-label" style="margin:0">This part's tiebreaker breaks ties for the whole group</span>
+              </label>
+              ${isGroupTiebreakerAmbiguous(groupWeeksNow) ? `<p class="warning-box mt-sm">⚠️ No part of this group is marked as the tiebreaker of record — falling back to the highest week number (${escHtml(formatWeekLabel(getGroupTiebreakerWeek(groupWeeksNow)))}). Tick the box on exactly one part to make this explicit.</p>` : ''}
+            </div>` : ''}`;
+            })()}
             <div class="form-group">
               <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                 <input type="checkbox" id="week-show-history" ${week.showInHistory!==false?'checked':''} />
@@ -2587,6 +2907,17 @@ function renderCommPage() {
           <p class="text-muted text-xs mt-sm">Full backup preserves every week, pick, result, and player. CSV bundle exports each table as its own download.</p>
         </div>
       </div>`);
+
+    // Feedback review + CSV (UN-122/123) — directly after Export Data, same
+    // tab (RG-10). NOT part of exportFullCsvBundle — Drew was offered that
+    // and did not select it.
+    sections.push(renderFeedbackAdminSectionHTML());
+
+    // Obligation Corrections (UN-126, Part 2) — merge / void, directly after
+    // Feedback, same tab (RG-10). The Players-tab Obligations card (above)
+    // stays the day-to-day paid/unpaid ledger; this is the audit/correction
+    // tool for duplicate or disputed records.
+    sections.push(renderObligationCorrectionsAdminSectionHTML());
 
     // Tiebreaker
     if (week) {
@@ -3512,13 +3843,25 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
       label:`Week ${week.weekNumber+1}`,status:'draft',lockedAt:null,finalizedAt:null,
       actualTiebreakerValue:null,tiebreakerFinalized:false,blurb:'',recap:'',
       picksOpenAt:null,picksLockAt:null,
+      // UN-118/UN-125 (DI-126b) — a duplicate is a NEW, unrelated week by
+      // default. Without this, duplicating Part 1 to make a later, unrelated
+      // week would silently inherit its group.
+      groupId:null, isGroupTiebreaker:false,
       createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
     };
     saveWeek(newW); setActiveWeekId(newW.weekId);
     showToast(`✅ Week ${newW.weekNumber} created`,'success'); renderCommPage();
   });
   document.getElementById('delete-week-btn')?.addEventListener('click', ()=>{
-    if(!week||!confirm(`Delete "${formatWeekLabel(week)}"?`))return;
+    if(!week)return;
+    // UN-118/UN-125 (DI-126b) — deleting one part of a group does not delete
+    // or ungroup the others; the confirm names them so the commissioner isn't
+    // surprised later by a group that's missing a part.
+    const otherGroupMembers = weeksInGroup(getWeeks(), week).filter(w=>w.weekId!==week.weekId);
+    const groupNote = otherGroupMembers.length
+      ? ` This week is grouped with ${otherGroupMembers.map(w=>formatWeekLabel(w)).join(', ')} as one competitive week — deleting it does not delete or ungroup them.`
+      : '';
+    if(!confirm(`Delete "${formatWeekLabel(week)}"?${groupNote}`))return;
     deleteWeek(week.weekId);
     const remaining=getWeeks();
     if(remaining.length)setActiveWeekId(remaining[0].weekId);
@@ -3529,10 +3872,8 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
   document.querySelectorAll('.week-status-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const to=btn.dataset.to; if(!week)return;
-      const upd={...week,status:to};
-      if(to==='locked'){getGames(week.weekId).forEach(g=>saveGame({...g,lockedSpread:g.spread}));upd.lockedAt=new Date().toISOString();}
-      if(to==='final'){upd.finalizedAt=new Date().toISOString();finalizeWeek(week);}
-      saveWeek(upd); refreshHeader(); showToast(`Week: ${to}`,'success'); renderCommPage();
+      applyWeekStatusChange(week,to);
+      refreshHeader(); showToast(`Week: ${to}`,'success'); renderCommPage();
     });
   });
 
@@ -3552,11 +3893,62 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
     const autoLockOffsetMinutes = Number.isFinite(autoLockOffsetRaw) && autoLockOffsetRaw >= 0 ? autoLockOffsetRaw : 30;
     const autoLiveEnabled = document.getElementById('auto-live-enabled')?.checked !== false;
     const autoFinalizeEnabled = document.getElementById('auto-final-enabled')?.checked !== false;
-    saveWeek({...week,dataSourceMode:mode,startDate,endDate,roundLabel,espnWeekNumber,showInHistory,
+
+    // ── UN-118/UN-125 — multi-part week grouping (DI-126a/b) ────────────────
+    const partnerId = document.getElementById('week-group-partner')?.value || '';
+    const wantsTiebreaker = document.getElementById('week-group-tiebreaker')?.checked === true;
+    let groupId = week.groupId || null;
+    if (!partnerId) {
+      // DI-126a — clearing one member's field removes only THAT member; any
+      // other existing members stay grouped with each other, untouched.
+      groupId = null;
+    } else {
+      const partnerWeek = getWeek(partnerId);
+      if (!partnerWeek) {
+        showToast('⚠️ Selected partner week no longer exists — grouping not saved.', 'error');
+      } else {
+        const partnerIsDemo = partnerWeek.dataSourceMode === 'demo';
+        const currentIsDemo = mode === 'demo';
+        if (partnerIsDemo !== currentIsDemo) {
+          // Drew's ruling (DI-126d) — grouping a demo week with a real week
+          // is rejected outright, not merged.
+          showToast('⚠️ Cannot group a demo week with a real week — grouping not saved.', 'error');
+        } else {
+          // DI-126a canonicalization — the group's id is always an EXISTING
+          // canonical id if the partner already has one (so joining a
+          // 3rd+ member finds the true founder, not the immediate partner),
+          // otherwise the partner's own weekId becomes the new founder.
+          groupId = partnerWeek.groupId || partnerWeek.weekId;
+        }
+      }
+    }
+    const isGroupTiebreaker = !!groupId && wantsTiebreaker;
+
+    const upd = {...week,dataSourceMode:mode,startDate,endDate,roundLabel,espnWeekNumber,showInHistory,
       picksOpenAt:openRaw?new Date(openRaw).toISOString():null,
       picksLockAt:lockRaw?new Date(lockRaw).toISOString():null,
       autoLockOffsetMinutes, autoLiveEnabled, autoFinalizeEnabled,
-    });
+      groupId, isGroupTiebreaker,
+    };
+    saveWeek(upd);
+
+    // Canonicalize + propagate to every OTHER current member of the
+    // resulting group (DI-126a canonicalization; DI-126d — showInHistory and
+    // dataSourceMode propagate to every member atomically). Runs whenever
+    // this week is (still) grouped, not only at join time, so a LATER edit
+    // to mode/showInHistory can't leave the group disagreeing with itself.
+    if (groupId) {
+      weeksInGroup(getWeeks(), upd)
+        .filter(w => w.weekId !== upd.weekId)
+        .forEach(w => {
+          const wUpd = { ...w, groupId, dataSourceMode: mode, showInHistory };
+          // Exactly one tiebreaker-of-record per group — this save flagging
+          // THIS week un-flags every other current member.
+          if (isGroupTiebreaker) wUpd.isGroupTiebreaker = false;
+          saveWeek(wUpd);
+        });
+    }
+
     refreshHeader(); showToast('Week settings saved ✅','success'); renderCommPage();
   });
 
@@ -3565,7 +3957,11 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
     if(!week)return;
     const upd = { ...week, status: WEEK_STATUS.FINAL, finalizedAt: new Date().toISOString(), pendingFinalization: false };
     saveWeek(upd);
-    finalizeWeek(week);
+    // Hand finalizeWeek the PERSISTED week, not the pre-transition snapshot —
+    // same invariant as applyWeekStatusChange(). The save already came first
+    // here, so this path was never broken; passing `week` was a latent trap of
+    // exactly the shape that cost the Week-tab button its Extra Point reveal.
+    finalizeWeek(upd);
     refreshHeader();
     showToast('Week finalized — standings locked ✅','success');
     renderCommPage();
@@ -3770,6 +4166,7 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
   document.getElementById('export-standings-csv-btn')?.addEventListener('click', exportStandingsCSV);
   document.getElementById('export-weekly-results-csv-btn')?.addEventListener('click', exportAllWeeklyResultsCSV);
   document.getElementById('export-obligations-csv-btn')?.addEventListener('click', exportObligationsCSV);
+  document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
   document.getElementById('export-full-json-btn')?.addEventListener('click', exportFullBackupJSON);
   document.getElementById('export-full-csv-bundle-btn')?.addEventListener('click', exportFullCsvBundle);
 
@@ -4122,6 +4519,30 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
     });
   });
 
+  // UN-126 (Part 2) — Obligation Corrections: merge / void, Data tab. The
+  // merge button stays disabled until 2+ rows are checked; each checkbox
+  // change recomputes the count in its own label so the commissioner always
+  // sees exactly how many are selected before merging.
+  {
+    const mergeBtn = document.getElementById('obcorr-merge-btn');
+    const checks = () => Array.from(document.querySelectorAll('.obcorr-check'));
+    const refreshMergeBtn = () => {
+      if (!mergeBtn) return;
+      const n = checks().filter(c => c.checked).length;
+      mergeBtn.textContent = `🔗 Merge Selected (${n})`;
+      mergeBtn.disabled = n < 2;
+    };
+    checks().forEach(c => c.addEventListener('change', refreshMergeBtn));
+    refreshMergeBtn();
+    mergeBtn?.addEventListener('click', () => {
+      const ids = checks().filter(c => c.checked).map(c => c.dataset.obId);
+      showMergeObligationsModal(ids);
+    });
+    document.querySelectorAll('.obcorr-void-btn').forEach(btn => {
+      btn.addEventListener('click', () => handleVoidObligation(btn.dataset.obId));
+    });
+  }
+
   // Chat retention (UN-88) — synced setting, OFF by default (CONVENTIONS #10).
   document.getElementById('chat-retention-toggle')?.addEventListener('change', e => {
     saveSetting('chatRetentionDays', e.target.checked ? 7 : 0);
@@ -4435,8 +4856,14 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
  *
  * Plain text only — mailto: URLs and many mail clients mangle HTML. Easy to
  * read in any mail client and easy to copy/paste anywhere else.
+ *
+ * Exported for loadtest.mjs — same precedent as buildObligationsCsvRows /
+ * buildFeedbackCsvRows: the digest body is asserted on as RENDERED TEXT, not
+ * by pattern-matching this function's source (RG-12's lesson). Pure apart
+ * from the storage reads below; no DOM, no mailto side effect (the caller
+ * owns that).
  */
-function buildWeeklySummary(week) {
+export function buildWeeklySummary(week) {
   if (!week) return '';
   const players = getPlayers().filter(p => p.active);
   const picks = getPicks(week.weekId);
@@ -4470,18 +4897,42 @@ function buildWeeklySummary(week) {
     lines.push(`💀 Weekly loser: ${lName}`);
   }
 
-  // Obligations for this week, if any are configured
-  const obligations = getObligations().filter(o => o.weekId === week.weekId);
+  // Obligations for this week, if any are configured.
+  //
+  // ACTIVE only. A voided record — or one merged away into another — is not a
+  // live debt, and this text goes to the whole league; storage.js's own note on
+  // getActiveObligations() calls it "the read every 'what does someone actually
+  // owe' surface should use". The raw getObligations() stays the audit read
+  // (CSV export, Data-tab corrections tool), not the email.
+  //
+  // Field names mirror renderObligationsAdmin()'s on-screen ledger exactly —
+  // payerPlayerId owes recipientPlayerId, `note` (manual entries) falling back
+  // to `amountOrPrize` — so the email and the app can never name a different
+  // person or a different prize for the same record.
+  //
+  // Names resolve against ALL players, not the active-only `players` above: an
+  // obligation outlives a player leaving the league, and a departed payer must
+  // still be named, not rendered as "(unknown)".
+  const obligations = getActiveObligations(week.weekId);
   if (obligations.length) {
+    const allPlayers = getPlayers();
     lines.push('');
     lines.push('━━━ Obligations ━━━');
     obligations.forEach(o => {
-      const pName = players.find(p => p.playerId === o.playerId)?.displayName || '(unknown)';
-      lines.push(`  ${pName}: ${o.description || o.kind}${o.status ? ` [${o.status}]` : ''}`);
+      const payer = allPlayers.find(p => p.playerId === o.payerPlayerId)?.displayName || '(unknown)';
+      const recip = allPlayers.find(p => p.playerId === o.recipientPlayerId)?.displayName || '(unknown)';
+      const what = o.note || o.amountOrPrize || '';
+      lines.push(`  ${payer} owes ${recip}${what ? `: ${what}` : ''}${o.status ? ` [${o.status}]` : ''}`);
     });
   }
 
   // Season standings to date
+  // UN-118/UN-125 — DELIBERATELY NOT widened for grouping. Drew's explicit
+  // scope ruling held the mailto digest rewrite (this function) until real
+  // split-week data exists to test against; the 2-arg call is the documented
+  // fail-safe fallback (scoring.js), so this mailto digest will keep showing
+  // a split week as two separate weekly wins/losses until that follow-up
+  // ships. See DEVELOPMENT_LEDGER.md §6.
   const allResults = getWeeklyResults();
   const standings = calculateSeasonStandings(players, allResults);
   if (standings.length) {
@@ -4599,6 +5050,11 @@ function obligationActionsHTML(status, ob, sess, { payerName, recipientName, obC
  *  this is the actual permission boundary (existing pattern in this file). */
 function handleObligationAction(obId, action) {
   const ob = getObligations().find(o => o.obligationId === obId); if (!ob) return;
+  // UN-126 — a voided/merged-away obligation is no longer a live debt; the
+  // UI never renders an action button for one (see renderObligationsAdmin /
+  // renderLeaderboard), but this is the actual permission boundary, same
+  // reasoning as the role re-derivation two lines down.
+  if (!isObligationActive(ob)) { showToast('This obligation was voided — see Data → Obligation Corrections', 'error'); return; }
   const sess = getSession();
   const role = obligationRole(sess, ob);
   const next = obligationNextStatus(ob.status, role, action);
@@ -4763,19 +5219,27 @@ function bindSeason2025Sections(c) {
   });
 }
 
-function renderObligationsAdmin() {
-  const obs=currentSeasonObligations(); const players=getPlayers(); const settings=getSettings();
+export function renderObligationsAdmin() {
+  // UN-126 — `all` keeps the pre-existing (non-demo, non-2K25) universe for
+  // the demo-count math below; `obs` is the OPERABLE list this card lists
+  // and lets a commissioner mark/confirm/deny/undo against — a voided or
+  // merged-away obligation is no longer a live debt (isObligationActive) and
+  // moves to the Data-tab Obligation Corrections card instead, where it's
+  // still fully visible for audit.
+  const all=currentSeasonObligations(); const obs=all.filter(isObligationActive);
+  const players=getPlayers(); const settings=getSettings();
   const sess = getSession();
-  const demoCount = getObligations().length - obs.length - getObligations().filter(o=>String(o.obligationId).startsWith('ob_2025_')).length;
+  const demoCount = getObligations().length - all.length - getObligations().filter(o=>String(o.obligationId).startsWith('ob_2025_')).length;
   const purge = demoCount>0 ? `<div class="info-box mb-sm">🧹 ${demoCount} demo-week obligation${demoCount>1?'s':''} hidden. <button class="btn btn-ghost btn-sm" id="ob-purge-demo">Purge permanently</button></div>` : '';
   if(!obs.length)return purge+'<p class="text-muted text-sm">No obligations this season — the slate is clean until Week 1 finalizes.</p>';
   return purge + obs.map(ob=>{
     const payer=players.find(p=>p.playerId===ob.payerPlayerId);
     const recip=players.find(p=>p.playerId===ob.recipientPlayerId);
     const w=getWeek(ob.weekId);
+    const reviewFlag = ob.needsReview ? ' <span class="badge badge-loss" title="A freshly computed outcome disagrees with this record — resolve in Data → Obligation Corrections">⚠️ Needs review</span>' : '';
     return`<div class="flex-between" style="padding:8px 0;border-bottom:1px solid var(--border)">
       <div>
-        <div class="text-sm"><strong>${escHtml(payer?.displayName||'?')}</strong> owes <strong>${escHtml(recip?.displayName||'?')}</strong></div>
+        <div class="text-sm"><strong>${escHtml(payer?.displayName||'?')}</strong> owes <strong>${escHtml(recip?.displayName||'?')}</strong>${reviewFlag}</div>
         <div class="text-xs text-muted">${escHtml(ob.weekId ? formatWeekLabel(w) : (ob.weekLabel||'manual'))} · ${escHtml(ob.note||ob.amountOrPrize||settings.weeklyPrize)}</div>
       </div>
       <div class="flex gap-sm" style="align-items:center">
@@ -4786,6 +5250,192 @@ function renderObligationsAdmin() {
       </div>
     </div>`;
   }).join('');
+}
+
+// ─── UN-126 (Part 2) — OBLIGATION CORRECTIONS: merge / void ────────────────
+// Commissioner-only, Data-tab tool. Two capabilities, both requiring an
+// explicit confirmation step that names exactly what will change, and
+// neither one ever hard-deletes a record (CLAUDE.md — an obligation is a
+// real debt between real people):
+//   VOID  — one obligation stops counting toward what anyone owes but stays
+//           on screen and in the CSV export, tagged as voided.
+//   MERGE — two or more obligations collapse into ONE (the commissioner
+//           picks which record is correct); the others are voided with a
+//           pointer to what absorbed them, and the survivor records what it
+//           absorbed. This is the tool that resolves what
+//           reconcileWeeklyObligation() surfaces above, AND the manual fix
+//           for the pre-UN-118 split-week duplicates that already exist in
+//           storage (two different weekIds, never auto-flagged, because
+//           they predate grouping entirely).
+
+/**
+ * Void a single obligation WITHOUT deleting it. Exported for loadtest.mjs —
+ * pure storage mutation, no DOM/confirm/prompt inside, same shape as
+ * mergeObligationsById below.
+ *
+ * Voiding IS the commissioner's resolution of a Part-1 conflict, so it also
+ * clears `needsReview` on every OTHER active obligation sharing this
+ * weekId — the survivor of a resolved conflict shouldn't keep nagging for
+ * review once a human has acted on its sibling.
+ */
+export function voidObligationById(obId, reason = null) {
+  const ob = getObligations().find(o => o.obligationId === obId);
+  if (!ob) return false;
+  const now = new Date().toISOString();
+  saveObligation({ ...ob, voided: true, voidedAt: now, voidReason: reason || null, needsReview: false });
+  getObligations()
+    .filter(o => o.weekId === ob.weekId && o.obligationId !== ob.obligationId && isObligationActive(o) && o.needsReview)
+    .forEach(o => saveObligation({ ...o, needsReview: false }));
+  return true;
+}
+
+/**
+ * Merge 2+ obligations into ONE. `keepId` survives EXACTLY as it was —
+ * status/amount/payer/recipient untouched, because the commissioner is the
+ * one asserting it's the correct record, not this function inventing a
+ * value. Everything in `otherIds` (that isn't already voided) is voided with
+ * `mergedInto` pointing at the survivor; the survivor's `mergedFrom` records
+ * every id it absorbed — "record what it absorbed," never destroy the
+ * history of what was owed. Applied via saveAllObligations() as one rewrite
+ * so the whole set changes atomically rather than racing itself across
+ * several sequential saveObligation() calls. Exported for loadtest.mjs.
+ */
+export function mergeObligationsById(keepId, otherIds = []) {
+  const all = getObligations();
+  const keep = all.find(o => o.obligationId === keepId);
+  if (!keep) return false;
+  const now = new Date().toISOString();
+  const absorbed = [];
+  const voided = all.map(o => {
+    if (o.obligationId !== keepId && otherIds.includes(o.obligationId) && isObligationActive(o)) {
+      absorbed.push(o.obligationId);
+      return { ...o, voided: true, voidedAt: now, mergedInto: keepId, needsReview: false };
+    }
+    return o;
+  });
+  if (!absorbed.length) return false;              // nothing eligible — no-op, not a partial write
+  const next = voided.map(o => o.obligationId === keepId
+    ? { ...o, needsReview: false, mergedFrom: [...(o.mergedFrom || []), ...absorbed] }
+    : o);
+  saveAllObligations(next);
+  return true;
+}
+
+/** DOM handler for the single-row 🚫 Void button — confirmation names
+ *  exactly what will change, per the design constraint. */
+function handleVoidObligation(obId) {
+  const ob = getObligations().find(o => o.obligationId === obId); if (!ob) return;
+  if (!isObligationActive(ob)) { showToast('Already voided', 'warning'); return; }
+  const payer = getPlayer(ob.payerPlayerId)?.displayName || '?';
+  const recip = getPlayer(ob.recipientPlayerId)?.displayName || '?';
+  const w = getWeek(ob.weekId);
+  const wl = ob.weekId ? (formatWeekLabel(w) || ob.weekId) : (ob.weekLabel || 'manual');
+  const ok = confirm(`Void this obligation?\n\n${payer} owes ${recip} — ${wl} — ${ob.amountOrPrize || ''}\n\nIt will stop counting toward what anyone owes, but stays visible here and in the Obligations CSV as VOIDED. Nothing is deleted.`);
+  if (!ok) return;
+  const reason = prompt('Optional note on why this is being voided (blank to skip):');
+  voidObligationById(obId, (reason || '').trim() || null);
+  showToast('🚫 Obligation voided', 'success');
+  renderCommPage();
+}
+
+/** Modal for the multi-row 🔗 Merge Selected button. Shows every selected
+ *  obligation and lets the commissioner pick which ONE survives — the
+ *  confirm() that follows names the exact keep/void split before anything
+ *  is written, per the design constraint. */
+function showMergeObligationsModal(ids) {
+  const obs = ids.map(id => getObligations().find(o => o.obligationId === id)).filter(Boolean);
+  if (obs.length < 2) { showToast('Select at least two obligations to merge', 'error'); return; }
+  const label = ob => {
+    const payer = getPlayer(ob.payerPlayerId)?.displayName || '?';
+    const recip = getPlayer(ob.recipientPlayerId)?.displayName || '?';
+    const w = getWeek(ob.weekId);
+    const wl = ob.weekId ? (formatWeekLabel(w) || ob.weekId) : (ob.weekLabel || 'manual');
+    return `${payer} owes ${recip} — ${wl} — ${ob.amountOrPrize || ''}`;
+  };
+  const ov = document.createElement('div'); ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Merge ${obs.length} Obligations</h3><button class="modal-close" id="mg-c">✕</button></div>
+    <p class="text-muted text-sm mb-sm">Pick the ONE record that's correct. The others are voided and recorded as absorbed into it — nothing is deleted.</p>
+    ${obs.map((ob, i) => `
+      <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-bottom:1px solid var(--border)">
+        <input type="radio" name="mg-keep" value="${escHtml(ob.obligationId)}" ${i === 0 ? 'checked' : ''} style="margin-top:3px" />
+        <span class="text-sm">${escHtml(label(ob))}</span>
+      </label>`).join('')}
+    <button class="btn btn-primary btn-block mt-md" id="mg-confirm">Merge — Keep Selected, Void the Rest</button>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#mg-c')?.addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  ov.querySelector('#mg-confirm')?.addEventListener('click', () => {
+    const keepId = ov.querySelector('input[name="mg-keep"]:checked')?.value;
+    if (!keepId) { showToast('Pick which record to keep', 'error'); return; }
+    const otherIds = obs.map(o => o.obligationId).filter(id => id !== keepId);
+    const keepLabel = label(obs.find(o => o.obligationId === keepId));
+    const ok = confirm(`Merge ${obs.length} obligations into ONE?\n\nKEEPING: ${keepLabel}\n\nVOIDING (recorded as absorbed): ${otherIds.length} other record${otherIds.length > 1 ? 's' : ''}.\n\nVoided records stay visible in the ledger and CSV — nothing is deleted.`);
+    if (!ok) return;
+    mergeObligationsById(keepId, otherIds);
+    ov.remove();
+    showToast('🔗 Obligations merged', 'success');
+    renderCommPage();
+  });
+}
+
+/**
+ * The Data-tab card body: EVERY current-season obligation (not just active
+ * ones — voided/merged rows stay visible here too, badge-flagged, so the
+ * audit trail is on screen and not just in the CSV). `entries` is an
+ * optional injection point for loadtest.mjs, same pattern as
+ * renderFeedbackAdmin's optional argument — the production call site reads
+ * live storage.
+ */
+export function renderObligationCorrectionsAdmin(entries = currentSeasonObligations()) {
+  if (!entries.length) return '<p class="text-muted text-sm">No obligations this season yet.</p>';
+  const players = getPlayers();
+  const nameOf = id => players.find(p => p.playerId === id)?.displayName || '?';
+  const sorted = entries.slice().sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  const reviewCount = sorted.filter(o => o.needsReview && isObligationActive(o)).length;
+  const banner = reviewCount
+    ? `<div class="info-box mb-sm" style="border-color:var(--maroon)">⚠️ ${reviewCount} obligation${reviewCount > 1 ? 's' : ''} need review — a freshly computed outcome disagrees with an existing record. Merge or void below to resolve.</div>`
+    : '';
+  return banner + sorted.map(ob => {
+    const w = getWeek(ob.weekId);
+    const wl = ob.weekId ? (formatWeekLabel(w) || ob.weekId) : (ob.weekLabel || 'manual');
+    let stateBadge = '';
+    if (ob.voided && ob.mergedInto) stateBadge = ` <span class="badge badge-final" title="${escHtml(ob.voidReason || '')}">🔗 Merged</span>`;
+    else if (ob.voided) stateBadge = ` <span class="badge badge-final" title="${escHtml(ob.voidReason || '')}">🚫 Voided</span>`;
+    else if (ob.needsReview) stateBadge = ' <span class="badge badge-loss">⚠️ Needs review</span>';
+    const checkbox = ob.voided ? '' : `<input type="checkbox" class="obcorr-check" data-ob-id="${escHtml(ob.obligationId)}" style="margin-top:4px" />`;
+    const voidBtn = ob.voided ? '' : `<button class="btn btn-ghost btn-sm obcorr-void-btn" data-ob-id="${escHtml(ob.obligationId)}">🚫 Void</button>`;
+    return `<div class="flex gap-sm" style="padding:8px 0;border-bottom:1px solid var(--border);align-items:flex-start">
+      ${checkbox}
+      <div style="flex:1">
+        <div class="text-sm"><strong>${escHtml(nameOf(ob.payerPlayerId))}</strong> owes <strong>${escHtml(nameOf(ob.recipientPlayerId))}</strong>${stateBadge}</div>
+        <div class="text-xs text-muted">${escHtml(wl)} · ${escHtml(ob.note || ob.amountOrPrize || '')} · ${escHtml(ob.status)}</div>
+        ${ob.mergedInto ? `<div class="text-xs text-muted">→ merged into ${escHtml(ob.mergedInto)}</div>` : ''}
+        ${(ob.mergedFrom && ob.mergedFrom.length) ? `<div class="text-xs text-muted">absorbed: ${escHtml(ob.mergedFrom.join(', '))}</div>` : ''}
+      </div>
+      ${voidBtn}
+    </div>`;
+  }).join('');
+}
+
+/**
+ * The whole Data-tab card, INCLUDING its data-comm-tab="data" wrapper
+ * (RG-10) — exported as its own HTML-returning function so loadtest.mjs can
+ * assert the wrapper is actually present in rendered markup, same pattern
+ * renderFeedbackAdminSectionHTML() set yesterday.
+ */
+export function renderObligationCorrectionsAdminSectionHTML() {
+  return `
+    <div class="admin-section" data-comm-tab="data">
+      <div class="admin-section-title">🔀 Obligation Corrections</div>
+      <div class="card">
+        <p class="text-muted text-xs mb-sm">Merge duplicate prizes into one, or void one outright. Nothing is ever deleted — voided and merged records stay visible here and in the Obligations CSV.</p>
+        <div class="obcorr-list">${renderObligationCorrectionsAdmin()}</div>
+        <div class="divider"></div>
+        <button class="btn btn-secondary btn-sm" id="obcorr-merge-btn" disabled>🔗 Merge Selected (0)</button>
+      </div>
+    </div>`;
 }
 
 /** v0.17.0 — the 2K25 carryover ledger. Paid-state lives in settings.ob2025
@@ -5342,6 +5992,13 @@ function renderRulesPage() {
         <label class="form-label" style="font-size:.7rem">Description</label>
         <textarea class="form-input" id="fb-body" rows="3" placeholder="What's the request, bug, or idea?"></textarea>
       </div>
+      <div class="form-group" style="margin-bottom:8px">
+        <label class="form-label" style="font-size:.7rem">Type</label>
+        <div class="pick-buttons" id="fb-kind-group" style="margin-top:6px">
+          <button type="button" class="pick-btn" data-fb-kind="bug">🐛 Something's broken</button>
+          <button type="button" class="pick-btn" data-fb-kind="feature">💡 New idea</button>
+        </div>
+      </div>
       <div class="flex gap-sm flex-wrap">
         <button class="btn btn-primary btn-sm" id="fb-submit-btn">📨 Send to Commissioner</button>
         <span class="text-muted text-xs" id="fb-status"></span>
@@ -5354,6 +6011,21 @@ function renderRulesPage() {
 
   // Wire feedback handler (Priority 13)
   document.getElementById('fb-submit-btn')?.addEventListener('click', submitFeedback);
+  bindFeedbackKindToggle();
+}
+
+/**
+ * UN-122 — bug/feature radio toggle for the feedback form. Same exclusivity
+ * pattern as bindPickButtons()/the login player-tile grid: exactly one of the
+ * two buttons carries .selected at a time, never both, never zero once
+ * clicked (radio behavior, per Drew's ruling — not independent checkboxes).
+ */
+function bindFeedbackKindToggle() {
+  document.querySelectorAll('#fb-kind-group .pick-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('#fb-kind-group .pick-btn').forEach(b => b.classList.toggle('selected', b === btn));
+    });
+  });
 }
 
 /**
@@ -5382,9 +6054,18 @@ function submitFeedback() {
   const body = (document.getElementById('fb-body')?.value || '').trim();
   const status = document.getElementById('fb-status');
   if (!body) { showToast('Please describe the request or issue first','error'); return; }
+  // UN-122 (Drew's ruling) — submission is BLOCKED until Bug/New idea is
+  // chosen; never silently default to 'unspecified' at entry time. That
+  // label is reserved for LEGACY rows that predate this field existing
+  // (CONVENTIONS #10 — default-when-missing on READ, not a write-time guess).
+  const kindBtn = document.querySelector('#fb-kind-group .pick-btn.selected');
+  const kind = kindBtn?.dataset.fbKind || null;
+  if (!kind) { showToast('Please choose Bug or New idea first','error'); return; }
   const entry = {
     id: 'fb_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
     name: name || '(anonymous)',
+    kind,                                          // UN-122: 'bug' | 'feature'
+    weekId: getCurrentWeek()?.weekId ?? null,       // UN-123 (DI-123a)
     body,
     submittedAt: new Date().toISOString(),
     appVersion: APP_VERSION,
@@ -5407,7 +6088,80 @@ function submitFeedback() {
     ? '✅ Saved + opening mail client'
     : '✅ Saved. (No Commissioner email set yet — ask them to add one in Comm → Security.)';
   document.getElementById('fb-body').value = '';
+  document.querySelectorAll('#fb-kind-group .pick-btn').forEach(b => b.classList.remove('selected'));
   showToast('Thanks! Feedback recorded.','success');
+}
+
+/**
+ * UN-122/123 — plain-text label for a feedback entry's stored `kind`. Legacy
+ * rows submitted before UN-122 shipped have no `kind` field at all — default
+ * to 'Unspecified' rather than throwing (CONVENTIONS #10).
+ */
+function feedbackKindLabel(kind) {
+  return kind === 'bug' ? 'Bug' : kind === 'feature' ? 'Feature' : 'Unspecified';
+}
+
+/** Themed badge for the on-screen admin list — reuses .badge-loss/.badge-win
+ *  exactly as they already read elsewhere (loss=red for "something's wrong",
+ *  win=green for "new idea"); .badge-draft (the existing neutral badge) for
+ *  legacy rows with no kind on record. */
+function feedbackKindBadgeHTML(kind) {
+  if (kind === 'bug') return '<span class="badge badge-loss">🐛 Bug</span>';
+  if (kind === 'feature') return '<span class="badge badge-win">💡 Idea</span>';
+  return '<span class="badge badge-draft">❔ Unspecified</span>';
+}
+
+/**
+ * UN-123 — commissioner Data-tab review list, newest first. Row pattern
+ * mirrors renderObligationsAdmin(). Accepts an optional entries array so
+ * loadtest.mjs can exercise legacy-row defaulting directly, without seeding
+ * storage; the production call site (renderFeedbackAdminSectionHTML) uses no
+ * argument and reads live storage.
+ */
+export function renderFeedbackAdmin(entries = getFeedback()) {
+  const sorted = entries.slice().sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
+  if (!sorted.length) return '<p class="text-muted text-sm">No feedback submitted yet.</p>';
+  return sorted.map(e => {
+    const w = e.weekId ? getWeek(e.weekId) : null;
+    const weekLabel = e.weekId ? (formatWeekLabel(w) || e.weekId) : '—';
+    // Guarded for VALIDITY, not just presence: a legacy or hand-edited row with
+    // an unparseable timestamp used to print the literal "Invalid Date" here.
+    // Falls back to the same em-dash a missing timestamp already produced.
+    const submitted = e.submittedAt ? new Date(e.submittedAt) : null;
+    const date = (submitted && !Number.isNaN(submitted.getTime()))
+      ? submitted.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+      : '—';
+    // Truncate ONLY here (display). The CSV export never truncates — Drew's
+    // stated purpose is feeding the full text to a coding agent months later.
+    const preview = e.body && e.body.length > 240 ? e.body.slice(0, 240) + '…' : (e.body || '');
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
+      <div class="text-sm"><strong>${escHtml(e.name || '(anonymous)')}</strong> ${feedbackKindBadgeHTML(e.kind)}
+        <span class="text-xs text-muted"> · ${escHtml(weekLabel)} · ${escHtml(date)} · v${escHtml(e.appVersion || '?')}</span></div>
+      <div class="text-xs text-secondary" style="margin-top:4px;white-space:pre-wrap">${escHtml(preview)}</div>
+    </div>`;
+  }).join('');
+}
+
+/**
+ * UN-123 — the whole Data-tab feedback card, INCLUDING its
+ * data-comm-tab="data" wrapper (RG-10: an untagged admin-section renders on
+ * all five tabs). Exported as its own HTML-returning function — not just
+ * referenced inline from renderCommPanel — so loadtest.mjs can assert the
+ * wrapper is actually present in rendered markup, not merely mentioned
+ * somewhere in source (the anti-pattern that let RG-12 recur).
+ */
+export function renderFeedbackAdminSectionHTML() {
+  return `
+    <div class="admin-section" data-comm-tab="data">
+      <div class="admin-section-title">🗣 Feedback &amp; Bug Reports</div>
+      <div class="card">
+        <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
+          <p class="text-muted text-xs" style="margin:0">Everything submitted from the Rules tab's feedback box, newest first.</p>
+          <button class="btn btn-secondary btn-sm" id="export-feedback-csv-btn">📥 Feedback CSV</button>
+        </div>
+        <div class="feedback-admin-list">${renderFeedbackAdmin()}</div>
+      </div>
+    </div>`;
 }
 
 // ─── v0.16.0 COMMISSIONER EXTRAS (Extra Point + Chat / SCRIBE) ────────────────
@@ -5627,7 +6381,98 @@ function renderCommExtrasV16(week, games) {
 
 // ─── FINALIZATION ─────────────────────────────────────────────────────────────
 
-function finalizeWeek(week) {
+/**
+ * The commissioner's Week-tab status buttons (draft/open/locked/live/final).
+ *
+ * Extracted from the `.week-status-btn` click handler so the ORDER OF
+ * OPERATIONS is reachable from the harness — the handler itself is bound
+ * inside renderCommPage() and can't be driven without a real DOM, which is why
+ * the drop described below went unnoticed. Everything DOM-facing
+ * (refreshHeader/showToast/renderCommPage) stays in the handler; this owns the
+ * state transition and nothing else.
+ *
+ * RG (2026-08-12) — THE TRANSITION IS PERSISTED BEFORE ANY SIDE EFFECT RUNS.
+ * This used to call finalizeWeek(week) — the pre-transition snapshot — and only
+ * then saveWeek(upd). finalizeWeek's chat emitters read the week's status back
+ * out of storage, so on the ordinary locked→final press the DI-116e blind-rule
+ * guard in emitExtraPointEvent() saw a week still marked 'locked' and returned
+ * early. That event carries a deterministic id (sys_ep_<weekId>) with
+ * server-side dedupe, so it never re-emitted: the week's Extra Point reveal was
+ * gone for good, silently.
+ *
+ * Saving first and then handing finalizeWeek the PERSISTED week (`upd`, not
+ * `week`) means the caller's object and storage can no longer disagree, so it
+ * no longer matters which of the two a downstream guard consults. The guard
+ * itself is untouched and still refuses an open or locked week — see
+ * loadtest.mjs [39].
+ */
+export function applyWeekStatusChange(week, to) {
+  if(!week||!to)return null;
+  const upd={...week,status:to};
+  if(to==='locked'){getGames(week.weekId).forEach(g=>saveGame({...g,lockedSpread:g.spread}));upd.lockedAt=new Date().toISOString();}
+  if(to==='final'){upd.finalizedAt=new Date().toISOString();}
+  saveWeek(upd);
+  if(to==='final')finalizeWeek(upd);
+  return upd;
+}
+
+/**
+ * UN-126 (Part 1) — THE FIX. Presence of a 'weekly' obligation for this
+ * weekId/gid no longer means "already settled." That was the defect: a week
+ * finalizing ALONE creates a singleton obligation keyed to its own weekId;
+ * if it's LATER grouped with a still-open partner and the group then
+ * finalizes, the group's canonical id (`getEffectiveGroupId`) can equal that
+ * SAME weekId, so the old code found the singleton, read presence as
+ * settled, and created nothing. Weekly History then showed the freshly
+ * POOLED winner while the obligation record still named the stale SOLO
+ * one — display and money disagreeing, silently.
+ *
+ * Now every ACTIVE (non-voided — see getActiveObligations) 'weekly'
+ * obligation already on record for this weekId/gid is compared against the
+ * freshly computed payer/recipient:
+ *   - none exist                       → create it. The ordinary first-time path.
+ *   - one matches exactly              → no-op. Idempotent re-finalize — the
+ *     commissioner can go in any direction for corrections (RG-30 territory),
+ *     and re-pressing FINAL on an unchanged outcome must not mint a second
+ *     prize for it.
+ *   - one or more exist and NONE match → THE CONFLICT. Never silently
+ *     accepted (every existing record is left exactly as it was, never read
+ *     as if it settled the fresh outcome) and never silently overwritten
+ *     (no existing record is ever mutated to the new numbers or deleted) —
+ *     instead a NEW obligation is created for the correct, freshly computed
+ *     outcome, and it PLUS every active record already on file for this
+ *     weekId are flagged `needsReview:true` so a human resolves it via the
+ *     Data-tab "Obligation Corrections" tool (merge or void — see
+ *     mergeObligationsById / voidObligationById below). Idempotent against
+ *     the identical conflicting outcome recurring: won't mint a second
+ *     flagged duplicate for an outcome that's already been surfaced.
+ */
+function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, prize) {
+  const existing = getActiveObligations(weekId).filter(o => o.type === 'weekly');
+  const matching = existing.find(o => o.payerPlayerId === payerPlayerId && o.recipientPlayerId === recipientPlayerId);
+  if (matching) return;                     // already correctly on record — nothing to do
+  if (!existing.length) {
+    saveObligation(createObligation(weekId, payerPlayerId, recipientPlayerId, prize));
+    return;
+  }
+  const alreadyFlagged = existing.some(o =>
+    o.needsReview && o.payerPlayerId === payerPlayerId && o.recipientPlayerId === recipientPlayerId);
+  if (alreadyFlagged) return;
+  const fresh = createObligation(weekId, payerPlayerId, recipientPlayerId, prize);
+  fresh.needsReview = true;
+  fresh.reviewNote = 'Computed outcome differs from an existing obligation for this week — resolve in Commissioner → Data → Obligation Corrections.';
+  saveObligation(fresh);
+  existing.forEach(o => {
+    if (!o.needsReview) {
+      saveObligation({ ...o, needsReview: true, reviewNote: 'A newly computed outcome for this week disagrees with this record — resolve in Commissioner → Data → Obligation Corrections.' });
+    }
+  });
+}
+
+/* Exported for loadtest.mjs — driven directly (via applyWeekStatusChange) to
+   verify the UN-118/UN-125 obligation gate end-to-end, the same rationale
+   RG-30's own [39] suite already exports/drives this function through. */
+export function finalizeWeek(week) {
   const players=getPlayers().filter(p=>p.active);
   const picks=getPicks(week.weekId);
   const games=getGames(week.weekId);
@@ -5656,16 +6501,40 @@ function finalizeWeek(week) {
     }
   } catch(e){ console.warn('[finalizeWeek] chat events', e); }
   const settings=getSettings();
-  const winner=results.find(r=>r.isWinner);
-  const loser=results.find(r=>r.isLoser);
-  if(winner&&loser){
-    const existing=getObligations(week.weekId);
-    if(!existing.find(o=>o.type==='weekly'))
-      // v0.17.0 — demo weeks NEVER generate real obligations
-      if (week.dataSourceMode !== 'demo') {
-        saveObligation(createObligation(week.weekId,loser.playerId,winner.playerId,settings.weeklyPrize));
-      }
+
+  // ── UN-118/UN-125 — multi-part week grouping (DI-126d) ────────────────────
+  // A week RECORD is a scheduling unit; a COMPETITIVE week is what players
+  // actually win the prize for. Singleton groups (`groupWeeks.length<=1`,
+  // still the overwhelming common case — includes EVERY week that predates
+  // this feature, since old records lack `groupId` entirely) fall through to
+  // the exact obligation logic that shipped before grouping existed, byte
+  // for byte. A >1-member group only ever creates ONE obligation, and only
+  // once every member has independently reached 'final' — a part finalizing
+  // alone still saves ITS OWN weekly-result row and fires ITS OWN chat
+  // events (both already ran above, unconditionally), it just creates no
+  // obligation yet.
+  const groupWeeks = weeksInGroup(getWeeks(), week);
+  if (groupWeeks.length <= 1) {
+    const winner=results.find(r=>r.isWinner);
+    const loser=results.find(r=>r.isLoser);
+    // v0.17.0 — demo weeks NEVER generate real obligations
+    if(winner&&loser&&week.dataSourceMode !== 'demo'){
+      reconcileWeeklyObligation(week.weekId, loser.playerId, winner.playerId, settings.weeklyPrize);
+    }
+  } else if (groupWeeks.every(w => w.status === 'final')) {
+    const gid = getEffectiveGroupId(week);
+    const groupPicks = groupWeeks.flatMap(w => getPicks(w.weekId));
+    const groupGames = groupWeeks.flatMap(w => getGames(w.weekId));
+    const groupResults = calculateGroupWeeklyResults(groupWeeks, players, groupPicks, groupGames);
+    const gWinner = groupResults.find(r=>r.isWinner);
+    const gLoser  = groupResults.find(r=>r.isLoser);
+    if (gWinner && gLoser && week.dataSourceMode !== 'demo') {
+      reconcileWeeklyObligation(gid, gLoser.playerId, gWinner.playerId, settings.weeklyPrize);
+    }
   }
+  // groupWeeks.length>1 && not every member final yet ⇒ no obligation. The
+  // NEXT member to finalize re-runs this same check and creates the one
+  // obligation once the group is complete.
 }
 
 // ─── AUTO REFRESH ─────────────────────────────────────────────────────────────
@@ -5979,9 +6848,12 @@ function exportPlayersCSV() {
 /** League-wide — season standings */
 function exportStandingsCSV() {
   const players=getPlayers().filter(p=>p.active);
-  const visibleWeekIds=new Set(getWeeks().filter(w=>w.showInHistory!==false).map(w=>w.weekId));
+  const allWeeksRaw=getWeeks();
+  const visibleWeekIds=new Set(allWeeksRaw.filter(w=>w.showInHistory!==false).map(w=>w.weekId));
   const allResults=getWeeklyResults().filter(r=>visibleWeekIds.has(r.weekId));
-  const standings=calculateSeasonStandings(players,allResults);
+  // UN-118/UN-125 — the audit export must match what Standings shows on
+  // screen: one weekly win/loss per competitive-week group, not per record.
+  const standings=calculateSeasonStandings(players,allResults,allWeeksRaw);
   const rows=[['Rank','Player','Total Correct','Total Incorrect','Total No Decision','Weekly Wins','Weekly Losses','Win %']];
   for(const s of standings){
     rows.push([s.currentRank,s.displayName,s.totalCorrect,s.totalIncorrect,s.totalND,s.weeklyWins,s.weeklyLosses,s.winPct]);
@@ -5994,11 +6866,18 @@ function exportStandingsCSV() {
 function exportAllWeeklyResultsCSV() {
   const allResults=getWeeklyResults();
   const weeksById=Object.fromEntries(getWeeks().map(w=>[w.weekId,w]));
-  const rows=[['Week','Show in History','Player','Rank','Correct (weighted)','Incorrect (weighted)','Correct (raw)','Incorrect (raw)','No Decisions','Tiebreaker Guess','Tiebreaker Delta','Winner','Loser','Won by Tiebreaker']];
+  // UN-118/UN-125 (DI-126e) — this export is the audit trail, so it keeps
+  // ONE ROW PER MEMBER (per-part granularity is preserved, never collapsed
+  // here) and adds a 'Group' column carrying the canonical group id, so an
+  // auditor can see which rows belong to the same competitive week by
+  // matching that column — the same "raw id alongside the label" pattern
+  // DI-125's Week column already established.
+  const rows=[['Week','Group','Show in History','Player','Rank','Correct (weighted)','Incorrect (weighted)','Correct (raw)','Incorrect (raw)','No Decisions','Tiebreaker Guess','Tiebreaker Delta','Winner','Loser','Won by Tiebreaker']];
   for(const r of allResults){
     const w=weeksById[r.weekId];
     rows.push([
       w?formatWeekLabel(w):r.weekId,
+      w?getEffectiveGroupId(w):'',
       w?(w.showInHistory!==false?'yes':'no'):'',
       r.displayName, r.rank,
       r.correctPicks, r.incorrectPicks,
@@ -6019,14 +6898,22 @@ function exportAllWeeklyResultsCSV() {
  * — this is the commissioner's audit trail, and 'pending' must read distinct
  * from 'unpaid'/'paid' or the approval feature's whole point (an in-flight
  * claim is not yet settled) is invisible to the export.
+ *
+ * UN-126 — five more columns so a voided or merged record's state is
+ * VISIBLE in the export (design constraint: excluded from what players see,
+ * but the audit trail in the CSV must stay complete). Legacy rows that
+ * predate this ship with none of the five fields — every accessor below
+ * defaults to '' rather than 'undefined' or throwing (CONVENTIONS #10).
  */
 export function buildObligationsCsvRows(obs, playersById, weeksById) {
-  const rows=[['Obligation ID','Type','Week','Payer','Recipient','Amount/Prize','Status','Created','Paid At']];
+  const rows=[['Obligation ID','Type','Week','Payer','Recipient','Amount/Prize','Status','Created','Paid At','Needs Review','Voided','Void Reason','Merged Into','Merged From']];
   for(const o of obs){
     const w=weeksById[o.weekId];
     rows.push([o.obligationId,o.type,w?formatWeekLabel(w):o.weekId,
       playersById[o.payerPlayerId]||o.payerPlayerId, playersById[o.recipientPlayerId]||o.recipientPlayerId,
-      o.amountOrPrize||'', o.status, o.createdAt||'', o.paidAt||'']);
+      o.amountOrPrize||'', o.status, o.createdAt||'', o.paidAt||'',
+      o.needsReview?'yes':'', o.voided?'yes':'', o.voidReason||'',
+      o.mergedInto||'', (o.mergedFrom&&o.mergedFrom.length)?o.mergedFrom.join('; '):'']);
   }
   return rows;
 }
@@ -6038,6 +6925,50 @@ function exportObligationsCSV() {
   const rows = buildObligationsCsvRows(obs, players, weeks);
   downloadFile(toCsv(rows), `obligations.csv`);
   showToast('📥 Obligations CSV exported','success');
+}
+
+/**
+ * UN-123 — pure row-builder for the feedback CSV export, same precedent as
+ * buildObligationsCsvRows above: exported so loadtest.mjs can assert on it
+ * without a DOM. Per Drew's stated purpose — feeding this into a coding
+ * agent months later — the Description column is NEVER truncated here; only
+ * the on-screen list (renderFeedbackAdmin) truncates for display. Legacy
+ * entries (no `kind`/`weekId`) default rather than throw (CONVENTIONS #10).
+ *
+ * WEEK IS TWO COLUMNS (Drew, 2026-08-12): "The week column should include both
+ * the formatted label and the raw weekID that way there is no discrepancy."
+ * The first shipped version emitted only the raw id here while the on-screen
+ * list resolved it to a label, so the two surfaces disagreed about the same
+ * record. Two columns rather than one packed cell: the raw id stays a clean
+ * join/filter key for a spreadsheet or a coding agent, and the label stays
+ * readable, without anyone having to parse "Week 1 Part 1 (wk_2026_01a)".
+ *
+ * `weeksById` is optional so the builder stays pure and callable with no
+ * arguments in a test; an unknown or absent week yields '—' for the label and
+ * the raw id is still emitted, so a row is never silently unattributable.
+ */
+export function buildFeedbackCsvRows(entries, weeksById = null) {
+  const rows = [['Feedback ID', 'Date', 'Name', 'Type', 'Week', 'Week ID', 'App Version', 'Description']];
+  for (const e of entries) {
+    const wk = e.weekId && weeksById ? weeksById[e.weekId] : null;
+    rows.push([
+      e.id || '',
+      e.submittedAt || '',
+      e.name || '',
+      feedbackKindLabel(e.kind),
+      wk ? formatWeekLabel(wk) : '—',
+      e.weekId || '',
+      e.appVersion || '',
+      e.body || '',
+    ]);
+  }
+  return rows;
+}
+
+function exportFeedbackCSV() {
+  const rows = buildFeedbackCsvRows(getFeedback(), Object.fromEntries(getWeeks().map(w => [w.weekId, w])));
+  downloadFile(toCsv(rows), `feedback.csv`);
+  showToast('📥 Feedback CSV exported','success');
 }
 
 /** Full backup — single JSON file */

@@ -431,7 +431,7 @@ assert(ordersHits.length === 0,
 // schools plus USC's long-form name, emit the reveal, read the event body back
 // out of the fold, and require the picked teams to be distinguishable.
 const RW = {
-  weekId: 'rg_reveal_wk', weekNumber: 99, season: 2026, status: 'locked',
+  weekId: 'rg_reveal_wk', weekNumber: 99, season: 2026, status: 'live',
   dataSourceMode: 'demo', startDate: '2026-09-05', endDate: '2026-09-05',
 };
 storage.saveWeek(RW);
@@ -443,8 +443,33 @@ storage.saveAllPicks([
   { pickId: 'rg_pk2', weekId: RW.weekId, gameId: 'rg_g2', playerId: 'rg_p1', selectedTeam: 'Arkansas State' },
 ]);
 
-assert(storage.getEffectiveWeekStatus(storage.getWeek(RW.weekId)) === 'locked',
-  'reveal fixture week is LOCKED (the blind rule permits the reveal)');
+// UN-116 — the reveal now fires at LIVE, not at lock. Drew chose to keep the
+// dashboard blind until kickoff and move the ritual to match, rather than
+// loosen the dashboard, so the room never publishes what the dashboard hides.
+// The negative case is asserted FIRST, against a locked week, because that is
+// the direction that leaks: a reveal event is written under a deterministic id
+// into an append-only log, so an early emit is permanent and uncorrectable.
+{
+  const LOCKED_RW = { ...RW, weekId: 'rg_reveal_locked', status: 'locked' };
+  storage.saveWeek(LOCKED_RW);
+  storage.saveGame({ weekId: LOCKED_RW.weekId, gameId: 'rg_lg1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'scheduled' });
+  storage.saveAllPicks([
+    ...storage.getPicks(),
+    { pickId: 'rg_lpk1', weekId: LOCKED_RW.weekId, gameId: 'rg_lg1', playerId: 'rg_p1', selectedTeam: 'Ohio State' },
+  ]);
+  assert(storage.getEffectiveWeekStatus(storage.getWeek(LOCKED_RW.weekId)) === 'locked',
+    'fixture check: the negative-case week really is LOCKED');
+  assert(storage.arePicksPublic(storage.getWeek(LOCKED_RW.weekId)) === false,
+    'a LOCKED week is NOT public — picks stay blind through the lock window (UN-116)');
+  chatUi.emitPickRevealEvent(storage.getWeek(LOCKED_RW.weekId));
+  assert(!getMessage(`sys_reveal_${LOCKED_RW.weekId}`),
+    'the reveal ritual REFUSES to fire on a locked week — it would permanently publish every pick before kickoff');
+}
+
+assert(storage.getEffectiveWeekStatus(storage.getWeek(RW.weekId)) === 'live',
+  'reveal fixture week is LIVE (the blind rule permits the reveal)');
+assert(storage.arePicksPublic(storage.getWeek(RW.weekId)) === true,
+  'a LIVE week IS public — this is the moment the picks are revealed everywhere at once');
 
 chatUi.emitPickRevealEvent(storage.getWeek(RW.weekId));
 const revealMsg = getMessage(`sys_reveal_${RW.weekId}`);
@@ -1344,27 +1369,19 @@ assert(/data-react-open="\$\{esc\(m\.id\)\}"/.test(chatUiSrc),
   'each message renders a + react-open control targeting that specific message');
 assert(/toggleMessageReactPicker/.test(chatUiSrc), 'the + opens a dedicated per-message react picker (not the retired composer picker)');
 
-const hoverNoneBlock23 = (cssSrc.match(/@media \(hover:none\)\{[\s\S]*?\}\}/) || [''])[0];
-assert(hoverNoneBlock23.length > 0, '@media (hover:none) rule for .chat-actions visibility still exists');
-assert(!/\.chat-actions\{opacity:\.75\}/.test(hoverNoneBlock23),
-  '.chat-actions is NOT permanently opacity:.75 on touch devices (the "too busy" defect this batch fixes)');
-assert(/\.chat-msg\.chat-actions-revealed \.chat-actions\{display:flex\}/.test(hoverNoneBlock23),
-  'touch reveal restores .chat-actions via display:flex (UN-113 mechanism — see below)');
+// UN-120 (2026-08-12) SUPERSEDES this suite's original hover-mechanism
+// assertions — the desktop hover reveal and its `@media(hover:none)` touch
+// split are DELETED outright per the amended design input, not tuned. The
+// full behavioral coverage for the replacement (right-click / long-press /
+// swipe, all sharing ONE `.chat-actions-revealed` class) lives in its own
+// suite, below. What survives here is the part UN-120 does NOT touch: the
+// UN-113/RG-20/RG-21 hard constraint that hidden means display:none, never
+// opacity — asserted against the real function's failure mode, not its name.
 const baseActionsRule23 = (cssSrc.match(/^\.chat-actions\{[^}]*\}/m) || [''])[0];
-// UN-113 (message density) — caught the ROOT CAUSE of "only 4-5 messages fit
-// on a screen": the old opacity:0/pointer-events:none hidden state was still
-// display:flex, so the hidden .chat-act (40px) row reserved ~42px of
-// INVISIBLE layout height on EVERY message. Asserting the DISPLAY mechanism,
-// not just that something is hidden (Testing Protocol step 12 — a computed
-// constraint, not source presence of an unrelated property) is the whole
-// point of this guard: opacity:0 alone would pass an "is it hidden" check
-// while still reserving the height that caused the bug.
 assert(/display:\s*none/.test(baseActionsRule23),
-  '.chat-actions base rule hides via display:none — NOT opacity:0 — so it reserves zero layout height (UN-113 root cause fix)');
+  '.chat-actions base rule hides via display:none — NOT opacity:0 — so it reserves zero layout height (UN-113 root cause fix, still enforced after UN-120\'s positioning change)');
 assert(!/opacity:\s*0/.test(baseActionsRule23) && !/pointer-events:\s*none/.test(baseActionsRule23),
   '.chat-actions no longer needs opacity:0/pointer-events:none — display:none already makes it both invisible and untappable, with no separate height-reserving hidden state');
-assert(/\.chat-msg:hover \.chat-actions,\.chat-msg:focus-within \.chat-actions\{display:flex\}/.test(cssSrc),
-  'desktop hover-reveal restores .chat-actions via display:flex (same mechanism as the touch reveal, so both are governed by one property, not a drifting opacity/pointer-events pair)');
 
 // Computed-constraint, not source presence (Testing Protocol step 12) — parse
 // the ACTUAL declared px values, the same technique already proven on
@@ -2273,6 +2290,3492 @@ assert(capAt > -1 && resetAt > -1 && capAt < resetAt,
   'the capture happens before resetToDemo(), not after');
 assert(/catch\s*\{[\s\S]{0,400}saveSetting\('chatEpochSeq',\s*_prevEpochSeq\)/.test(resetHandlerSrc),
   'a failed chat clear RESTORES the prior epoch instead of leaving it at 0');
+
+// ── 31. RG-24 — a synced SETTINGS field must not be reverted by another ──────
+//        device's unrelated settings write (the UN-112 epoch field failure).
+//
+// `cfbp_settings` is ONE seam key holding ~17 independent fields, and
+// `saveSetting()` is a read-modify-write of the whole blob. AD-04's
+// last-write-wins and AD-08's stale-mirror rebase are both KEY-granular, so a
+// device whose mirror predates another device's change pushes its entire stale
+// view of all 17 fields — silently reverting the 16 it never touched. That is
+// how a cleared chat came back days later: chatEpochSeq went back to 0.
+//
+// This drives the REAL backend.js hydrate/flushPush against a stubbed Sheet,
+// through the REAL storage.js seam and the REAL chat.js accessor. It is built
+// to FAIL against the pre-fix tree (confirmed: 6 failures, "got 0").
+console.log('\n[31] RG-24 — one device\'s settings write must not revert another device\'s field…');
+const _fetch31 = globalThis.fetch;
+const _mode31  = storage.getBackendMode();
+const backend31 = mods['backend'];
+
+let SHEET31 = {};
+globalThis.fetch = async (url, opts) => {
+  const req = JSON.parse(opts.body);
+  if (req.action === 'getAll') return { ok: true, json: async () => ({ ok: true, data: JSON.parse(JSON.stringify(SHEET31)) }) };
+  if (req.action === 'setMany') { Object.entries(req.entries).forEach(([k, v]) => { SHEET31[k] = v; }); return { ok: true, json: async () => ({ ok: true }) }; }
+  throw new Error('unexpected action ' + req.action);
+};
+
+// A settings blob as it exists on a device whose mirror predates the change.
+const PRE31 = {
+  almaMaters: [], weeklyGameCount: 10, candidateGameCount: 25,
+  weeklyPrize: 'x', seasonPrize: 'y', adminPasswordHash: 'z',
+  storageMode: 'local', season: '2026', customRules: null,
+  autoRefreshInterval: 60, timezone: 'CT', chatRetentionDays: 0,
+  chatEpochSeq: 0, chatEpochSetAt: null, chatEnabled: true,
+  randomizePicksEnabled: false,
+};
+
+/** Put device B on a stale pre-change mirror while the Sheet already carries
+ *  the change another device made. Mirrors app.js's boot order exactly:
+ *  primeFromMirror() → setBackendMode('googleSheets') → …stale window… */
+function bootStale31(sheetSettings) {
+  SHEET31 = {
+    cfbp_settings: JSON.parse(JSON.stringify(sheetSettings)),
+    cfbp_players: [{ id: 'p1', displayName: 'Drew' }],
+    cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
+  };
+  localStorage.setItem('cfbp_sheet_mirror', JSON.stringify({
+    at: '2026-08-05T00:00:00.000Z',
+    data: {
+      cfbp_settings: JSON.parse(JSON.stringify(PRE31)),
+      cfbp_players: [{ id: 'p1', displayName: 'Drew' }],
+      cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
+    },
+  }));
+  backend31.setBackendConfig('https://example.test/exec', 'tok');
+  backend31.primeFromMirror();
+  storage.setBackendMode('googleSheets');
+}
+
+// 31a — the reported bug, end to end, with the ACTUAL boot-time trigger.
+// app.js seeds `dashboardLayout` at boot on any viewport <600px whose settings
+// blob lacks it — a settings write issued BEFORE hydrate, with zero user input.
+const CLEARED31 = { ...PRE31, chatEpochSeq: 66, chatEpochSetAt: '2026-08-12T03:34:02.931Z' };
+bootStale31(CLEARED31);
+assert(backend31.isMirrorStale() === true, 'fixture check: the mirror is stale (writes are HELD, AD-08) before hydrate lands');
+storage.saveSetting('dashboardLayout', 'compact');
+await backend31.hydrate();
+assert(chat.getChatEpochSeq() === 66,
+  `after hydrate, a device that wrote an UNRELATED settings field still reads the cleared epoch — got ${chat.getChatEpochSeq()}`);
+await backend31.flushPush();
+assert(SHEET31.cfbp_settings.chatEpochSeq === 66,
+  `the Sheet's chatEpochSeq survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.chatEpochSeq)} (0 = the cleared chat comes back on every device)`);
+assert(SHEET31.cfbp_settings.chatEpochSetAt === '2026-08-12T03:34:02.931Z',
+  `chatEpochSetAt survives too — got ${JSON.stringify(SHEET31.cfbp_settings.chatEpochSetAt)}`);
+assert(SHEET31.cfbp_settings.dashboardLayout === 'compact',
+  'the writing device\'s OWN intent still reaches the Sheet — the held write is rebased, not discarded (AD-08 unchanged)');
+
+// 31b — the two other synced settings named as sharing this failure mode.
+// chatEnabled is the commissioner's emergency chat kill switch: a silent
+// revert turns chat back ON for the whole league.
+bootStale31({ ...PRE31, chatEnabled: false });
+storage.saveSetting('dashboardLayout', 'compact');
+await backend31.hydrate();
+await backend31.flushPush();
+assert(SHEET31.cfbp_settings.chatEnabled === false,
+  `chatEnabled (the emergency kill switch) survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.chatEnabled)}`);
+
+bootStale31({ ...PRE31, randomizePicksEnabled: true });
+storage.saveSetting('timezone', 'ET');
+await backend31.hydrate();
+await backend31.flushPush();
+assert(SHEET31.cfbp_settings.randomizePicksEnabled === true,
+  `randomizePicksEnabled survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.randomizePicksEnabled)}`);
+assert(SHEET31.cfbp_settings.timezone === 'ET',
+  'and the writing device\'s own field still lands');
+
+// 31c — a WHOLE-BLOB write (resetToDemo) must still replace the whole blob.
+// The field-scoped rebase must not turn a deliberate factory reset into a
+// one-field patch.
+bootStale31({ ...PRE31, chatEpochSeq: 66, weeklyGameCount: 12 });
+storage.saveSettings({ ...dm.DEFAULT_SETTINGS });
+await backend31.hydrate();
+await backend31.flushPush();
+assert(SHEET31.cfbp_settings.weeklyGameCount === dm.DEFAULT_SETTINGS.weeklyGameCount &&
+       SHEET31.cfbp_settings.chatEpochSeq === 0,
+  'a whole-blob write (saveSettings / resetToDemo) still replaces every field — field-scoping never downgrades an explicit full-blob write');
+
+// 31d — non-object keys are untouched by any of this.
+bootStale31(PRE31);
+storage.saveAllPicks([{ id: 'k1', weekId: 'w1', playerId: 'p1' }]);
+await backend31.hydrate();
+await backend31.flushPush();
+assert(Array.isArray(SHEET31.cfbp_picks) && SHEET31.cfbp_picks.length === 1,
+  'array-valued keys (picks) still rebase and push whole — field-scoping applies only where a field list was declared');
+
+// 31e — source-level: the seam must DECLARE the changed field rather than let
+// the backend guess it by diffing (a diff cannot tell a real edit from
+// getSettings()'s DEFAULT_SETTINGS spread materializing an absent field).
+const storageSrc31 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
+assert(/export function saveSetting\(k,\s*v\)\s*\{[^}]*save\(KEYS\.SETTINGS,\s*s,\s*\[k\]\)/.test(storageSrc31),
+  'saveSetting() names the single field it changed when writing the blob (no diff heuristic in backend.js)');
+
+// restore harness state
+storage.setBackendMode(_mode31);
+backend31.clearBackendConfig();
+backend31.clearMirror();
+globalThis.fetch = _fetch31;
+chat._resetForTest();
+
+// ── 32. RG-25 / RG-26 — ONE notification acknowledgement, and a toast that ───
+//        does not survive navigation onto the chat tab.
+//
+// Two device-local surfaces announce the same new message: the floating toast
+// (every tab except chat + dashboard) and the dashboard teaser. They carried
+// TWO independent dismissal states — the toast's was a DOM node, the teaser's
+// was `cfbp_chat_teaser_dismiss_seq` — so dismissing one never informed the
+// other (RG-25). Separately, showToast() evaluates its chat-page suppression
+// once, at CREATION; nothing re-evaluated it on navigation, so a toast raised
+// on another tab sat over the chat feed (RG-26).
+//
+// Browser-reproduced at 390x844 before the fix; these assertions drive the
+// real functions and the real shared watermark.
+console.log('\n[32] RG-25/RG-26 — one acknowledgement across both notification surfaces…');
+const chatUi32 = mods['chat-ui'];
+chat._resetForTest();
+storage.saveSetting('chatEnabled', true);
+storage.saveSetting('chatEpochSeq', 0);
+storage.saveSetting('chatRetentionDays', 0);
+localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+localStorage.removeItem('cfbp_chat_lastseen2');
+storage.setSession('p2', false, true);          // viewer is p2; p1 is the poster
+
+// Explicit, spaced timestamps — NOT Date.now() twice. chat.js's orderKey()
+// is `ts * 1e7 + seq`, which for a real epoch ms exceeds Number.MAX_SAFE_INTEGER,
+// so the seq tiebreaker is lost to float precision and two messages in the
+// SAME millisecond order by insertion. That made this fixture flaky. (Flagged
+// to Drew as a separate latent finding — not this batch's bug.)
+const T32 = 1786500000000;
+chat.ingest([ev({ id: 'n1', seq: 701, ts: T32, body: 'first ping', author: 'p1' })]);
+
+assert(typeof chatUi32._notifAckSeq === 'function' && typeof chatUi32._ackNotif === 'function',
+  'chat-ui exports the shared notification-acknowledgement accessors (one concept, one state — AD-20 applied to a UI state)');
+
+const teaserBefore32 = chatUi32.dashboardChatTeaserHTML();
+assert(/first ping/.test(teaserBefore32),
+  'fixture check: the dashboard teaser announces the new message before anything is dismissed');
+
+// THE BUG: this is exactly what the toast's ✕ handler now calls. Before the
+// fix the toast dismissal wrote nothing shared, so the teaser kept announcing
+// the same message on the next tab.
+chatUi32._ackNotif?.(701);
+assert(chatUi32._notifAckSeq?.() === 701,
+  `dismissing a toast records the acknowledgement in the SHARED watermark — got ${chatUi32._notifAckSeq?.()}`);
+assert(chatUi32.dashboardChatTeaserHTML() === '',
+  'after the toast is dismissed, the dashboard teaser no longer announces that same message (the reported bug: "dismiss it in one tab, it is still present in another")');
+
+// Monotonic — a dismissal never rewinds (RG-14's lesson, same file family).
+chatUi32._ackNotif?.(300);
+assert(chatUi32._notifAckSeq?.() === 701,
+  'the acknowledgement watermark is monotonic — a lower seq never rewinds it');
+
+// Genuinely newer activity still gets announced (UN-93's requirement survives).
+chat.ingest([ev({ id: 'n2', seq: 702, ts: T32 + 60000, body: 'second ping', author: 'p1' })]);
+assert(/second ping/.test(chatUi32.dashboardChatTeaserHTML()),
+  'a strictly newer message still reappears — the shared watermark suppresses only what was acknowledged (UN-93 unchanged)');
+
+// The other direction: the toast must not re-announce something already
+// acknowledged on the teaser.
+const uiSrc32 = stripComments(chatUiSrc);
+
+// ── BEHAVIOURAL, not textual ────────────────────────────────────────────────
+// These assertions used to match the source: `chat-toast-dismiss[\s\S]{0,200}?
+// acknowledge\(\)`. That matches the handler's NAME, not its effect. Verified
+// 2026-08-12 — gutting `acknowledge()` to a bare `advance()` (the shared
+// watermark never written, i.e. Drew's exact reported bug restored) passed the
+// full suite 552/552. RG-12 recurred for precisely this reason: a recorded
+// protection that no test could distinguish from its own absence.
+//
+// Everything below drives the REAL showToast/drainToast through a DOM harness
+// and asserts observable state. Confirmed to fail against a gutted handler.
+const _realST = globalThis.setTimeout, _realCT = globalThis.clearTimeout;
+const _realDoc = globalThis.document;
+let TIMERS32 = [];
+function mkEl32(tag = 'div') {
+  const L = {};
+  return {
+    tagName: tag, id: '', className: '', dataset: {}, style: {},
+    _html: '', _removed: false, _children: [], _dismissBtn: null,
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    set innerHTML(v) { this._html = v; },
+    get innerHTML() { return this._html; },
+    addEventListener(t, fn) { (L[t] ||= []).push(fn); },
+    removeEventListener() {},
+    appendChild(c) { this._children.push(c); return c; },
+    remove() { this._removed = true; DOC32.body._children = DOC32.body._children.filter(x => x !== this); },
+    querySelector(sel) {
+      if (sel === '.chat-toast-dismiss' && /chat-toast-dismiss/.test(this._html)) {
+        return (this._dismissBtn ||= mkEl32('button'));
+      }
+      return null;
+    },
+    querySelectorAll: () => [], closest: () => null,
+    _fire(t) { (L[t] || []).forEach(fn => fn({ stopPropagation() {} })); },
+    _has(t) { return (L[t] || []).length > 0; },
+  };
+}
+const DOC32 = {
+  body: mkEl32('body'),
+  createElement: t => mkEl32(t),
+  // Only #page-chat.active / #page-dashboard.active / .nav-item are queried;
+  // all must miss so the toast is NOT suppressed on this fixture page.
+  querySelector: () => null, querySelectorAll: () => [],
+  getElementById: id => DOC32.body._children.find(c => c.id === id && !c._removed) || null,
+  addEventListener() {}, removeEventListener() {}, hidden: false,
+};
+globalThis.document = DOC32;
+globalThis.setTimeout = (fn, ms) => { TIMERS32.push({ fn, ms, dead: false }); return TIMERS32.length - 1; };
+globalThis.clearTimeout = id => { if (TIMERS32[id]) TIMERS32[id].dead = true; };
+const liveToast32 = () => DOC32.getElementById('chat-toast');
+
+/** Fixture hygiene: earlier suites can leave U.toastShowing true, which makes
+ *  showToast() queue silently instead of mounting. Uses the dedicated reset
+ *  seam, NOT _clearToastsForChatPage() — resetting state with the function
+ *  under test would make a mutation crash the fixture instead of failing the
+ *  assertion that names the defect. */
+function reset32() {
+  chatUi32._resetToastsForTest();
+  DOC32.getElementById('chat-toast')?.remove();
+  localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+  TIMERS32 = [];
+}
+
+try {
+  // 32a — the ✕ handler must write the SHARED watermark, not just drop the node.
+  reset32();
+  assert(chatUi32._toastQueueDepth() === 0 && chatUi32._notifAckSeq() === 0,
+    'fixture check: toast queue drained and the shared watermark re-zeroed before the behavioural cases');
+  chatUi32._showToastForTest({ author: 'p1', body: 'toast me', seq: 810 });
+  const t1 = liveToast32();
+  assert(!!t1 && /toast me/.test(t1.innerHTML),
+    'fixture check: showToast() actually mounted a toast node into the DOM harness');
+  assert(t1?.dataset.seq === '810',
+    `the on-screen toast carries its seq so the chat-page clear can acknowledge it — got ${t1?.dataset.seq}`);
+  const dismiss1 = t1.querySelector('.chat-toast-dismiss');
+  assert(!!dismiss1 && dismiss1._has('click'), 'the toast renders a ✕ with a click handler bound');
+  dismiss1._fire('click');
+  assert(chatUi32._notifAckSeq() === 810,
+    `clicking the toast's ✕ writes the SHARED acknowledgement watermark — got ${chatUi32._notifAckSeq()} (0 = the reported bug: dismissed here, still showing on the other tab)`);
+  assert(t1._removed === true, 'the ✕ also removes the toast node');
+
+  // 32b — the same message must not be re-announced by the ambient teaser.
+  assert(chatUi32.dashboardChatTeaserHTML() === '',
+    'after a real ✕ dismissal the dashboard teaser stops announcing that message (cross-surface, the reported bug)');
+
+  // 32c — tapping the toast BODY acknowledges too (both gestures, one state).
+  reset32();
+  chatUi32._showToastForTest({ author: 'p1', body: 'tap through', seq: 820 });
+  liveToast32()?._fire('click');
+  assert(chatUi32._notifAckSeq() === 820,
+    `tapping the toast body to open the room acknowledges as well — got ${chatUi32._notifAckSeq()}`);
+
+  // 32d — a toast that merely TIMES OUT must NOT acknowledge (UN-93). The
+  // ambient teaser exists to catch exactly the message you never saw.
+  reset32();
+  chatUi32._showToastForTest({ author: 'p1', body: 'unseen', seq: 830 });
+  const auto = TIMERS32.find(t => t.ms === 6000);
+  assert(!!auto, 'fixture check: the default 6s auto-dismiss timer was scheduled');
+  auto.fn();
+  assert(chatUi32._notifAckSeq() === 0,
+    `an auto-dismissed toast leaves the watermark alone so the ambient teaser still shows it — got ${chatUi32._notifAckSeq()} (UN-93)`);
+
+  // 32e — showToast() consults the shared watermark before queueing, so a
+  // teaser ✕ silences the toast for that same message.
+  reset32();
+  chatUi32._ackNotif(900);
+  const depthBefore32 = chatUi32._toastQueueDepth();
+  chatUi32._showToastForTest({ author: 'p1', body: 'already acked', seq: 850 });
+  assert(chatUi32._toastQueueDepth() === depthBefore32 && !liveToast32(),
+    'a message at or below the shared watermark never raises a toast — one acknowledgement silences both surfaces');
+
+  // RG-26 — a toast raised elsewhere must not survive onto the chat tab, and
+  // opening the room counts as reading it.
+  assert(typeof chatUi32._clearToastsForChatPage === 'function',
+    'chat-ui exposes the chat-tab toast clear used when the room opens');
+  reset32();
+  chatUi32._showToastForTest({ author: 'p1', body: 'raised on standings', seq: 860 });
+  const carried = liveToast32();
+  assert(!!carried, 'fixture check: a toast is on screen before navigating to chat');
+  chatUi32._clearToastsForChatPage();
+  assert(carried._removed === true,
+    'opening the chat room removes the carried-over toast node (RG-26: it used to sit at top:14px over the feed)');
+  assert(chatUi32._notifAckSeq() === 860,
+    `opening the room ACKNOWLEDGES the carried-over toast — reading the room is reading the message — got ${chatUi32._notifAckSeq()}`);
+  assert(chatUi32._toastQueueDepth() === 0,
+    'everything queued behind it is cleared in the same pass, not drained one-by-one over the feed');
+} finally {
+  globalThis.setTimeout = _realST;
+  globalThis.clearTimeout = _realCT;
+  globalThis.document = _realDoc;
+}
+
+// Ordering inside renderChatPage() stays a structural check — it asserts a
+// RELATIONSHIP between two calls (bounce before clear), which has no observable
+// state to sample. Kept deliberately, and noted as structural.
+const renderChatFn32 = (uiSrc32.match(/export function renderChatPage\(\) \{[\s\S]*?\n\}/) || [''])[0];
+assert(renderChatFn32.length > 0, 'renderChatPage() body located');
+const disabledIdx32 = renderChatFn32.indexOf('redirectChatDisabled()');
+const clearIdx32 = renderChatFn32.indexOf('_clearToastsForChatPage()');
+assert(disabledIdx32 > -1 && clearIdx32 > -1 && disabledIdx32 < clearIdx32,
+  'renderChatPage() clears any carried-over toast AFTER the chat-disabled bounce (a redirect away from chat must not swallow the notification) [structural]');
+
+storage.setSession(null, false, false);
+localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+chat._resetForTest();
+
+// ── 33. RG-12 RECURRENCE — the three data-loss defenses ─────────────────────
+// On 2026-08-12 Drew reported: two players' picks vanished and the week reverted
+// to DRAFT days after they were made. Investigation found RG-12's BOTH recorded
+// defenses were ABSENT from the code despite the ledger recording them as
+// shipped in v0.17.1. The original cascade ran again against live data.
+//
+// These assertions exist so that can never be true again silently. If any of
+// them fails, STOP — user picks are at risk.
+console.log('\n[33] RG-12 recurrence — data-loss defenses…');
+
+const storeSrc = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
+const backSrc  = await readFile(new URL('./js/backend.js', import.meta.url), 'utf8');
+
+// (a) ensureSeedData must refuse user-mutable keys in sheets mode.
+assert(/USER_MUTABLE_KEYS/.test(storeSrc), 'storage.js declares USER_MUTABLE_KEYS');
+assert(/confirmEmpty/.test(storeSrc), 'ensureSeedData gates user-data seeding on confirmEmpty (RG-12 defense a)');
+const seedFn = (storeSrc.match(/export function ensureSeedData[\s\S]*?\n\}/) || [''])[0];
+assert(/googleSheets/.test(seedFn), 'the seed guard checks backend mode, not just the flag');
+assert(!/if\(!load\(KEYS\.PICKS\)\)\s*save\(KEYS\.PICKS/.test(storeSrc),
+  'the unconditional PICKS seed — the literal RG-12 mechanism — is gone');
+assert(!/if\(!load\(KEYS\.WEEKS\)\)\s*save\(KEYS\.WEEKS/.test(storeSrc),
+  'the unconditional WEEKS seed (a DRAFT template) is gone');
+
+// BEHAVIOURAL — not source presence. An earlier draft of this section asserted
+// that the guard's TEXT existed; reverting the guard left every assertion green.
+// That is the exact failure that produced this bug: the ledger recorded a
+// defense that was not in the code. These drive the real functions instead.
+const st = mods['storage'];
+
+// (a-behaviour) In sheets mode, ensureSeedData must REFUSE every user-mutable
+// key, and must actually create nothing.
+//
+// Run in a SUBPROCESS with a clean module graph. A cache-busted import of
+// storage.js is not enough — it still resolves the ALREADY-LOADED backend.js,
+// whose populated _cache from earlier suites makes load() truthy, so seed()
+// short-circuits on "already present" and never reaches the guard. Testing the
+// guard against dirty state is how you get an assertion that passes for the
+// wrong reason, which is the exact class of mistake that produced this bug.
+{
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const probe = `
+    globalThis.localStorage={_d:{},getItem(k){return k in this._d?this._d[k]:null},
+      setItem(k,v){this._d[k]=String(v)},removeItem(k){delete this._d[k]},clear(){this._d={}}};
+    (async()=>{
+      const st = await import('./js/storage.js');
+      const warned=[]; const rw=console.warn; console.warn=(...a)=>warned.push(a.join(' '));
+      st.setBackendMode('googleSheets');
+      st.ensureSeedData();
+      const sheetsWeeks = (st.getWeeks()||[]).length;
+      st.ensureSeedData({confirmEmpty:true});
+      const confirmedWeeks = (st.getWeeks()||[]).length;
+      console.warn = rw;
+      const localWarned=[]; console.warn=(...a)=>localWarned.push(a.join(' '));
+      globalThis.localStorage.clear();
+      st.setBackendMode('local');
+      st.ensureSeedData();
+      const localWeeks = (st.getWeeks()||[]).length;
+      console.warn = rw;
+      process.stdout.write(JSON.stringify({
+        refusedWeeks: warned.some(w=>/REFUSING/.test(w)&&/cfbp_weeks/.test(w)),
+        refusedPicks: warned.some(w=>/REFUSING/.test(w)&&/cfbp_picks/.test(w)),
+        namesRG12:    warned.some(w=>/RG-12/.test(w)),
+        sheetsWeeks, confirmedWeeks, localWeeks,
+        localRefused: localWarned.some(w=>/REFUSING/.test(w)),
+      }));
+    })();`;
+  let probeOut = {};
+  try {
+    probeOut = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', probe],
+      { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }));
+  } catch (e) { probeOut = { error: String(e.message || e) }; }
+
+  assert(probeOut.refusedWeeks === true,
+    `sheets-mode seeding REFUSES cfbp_weeks — the DRAFT-template mechanism${probeOut.error ? ' — ' + probeOut.error : ''}`);
+  assert(probeOut.refusedPicks === true, 'sheets-mode seeding REFUSES cfbp_picks — the pick-destroying mechanism');
+  assert(probeOut.namesRG12 === true, 'the refusal names RG-12 so the next reader finds the history');
+  assert(probeOut.sheetsWeeks === 0,
+    `and NOTHING is actually seeded in sheets mode (got ${probeOut.sheetsWeeks} weeks)`);
+  assert(probeOut.confirmedWeeks > 0, 'confirmEmpty:true still seeds a genuinely new Sheet');
+  assert(probeOut.localWeeks > 0 && probeOut.localRefused === false,
+    'local mode seeds normally and refuses nothing — forks/offline unaffected');
+}
+
+// (b-behaviour) hydrate() must THROW rather than adopt an empty remote when the
+// mirror still holds league data — and must leave the mirror INTACT.
+//
+// Subprocess again, and for a specific reason: an earlier draft asserted only
+// "hydrate throws", which passed even with the guard reverted, because an
+// unconfigured backend throws from the call layer anyway. A test that passes
+// for the wrong reason is worse than no test. This one configures the backend,
+// stubs the network to return an empty payload, and checks the ERROR TEXT and
+// that the mirror survived.
+{
+  const { execFileSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const probeB = `
+    globalThis.localStorage={_d:{},getItem(k){return k in this._d?this._d[k]:null},
+      setItem(k,v){this._d[k]=String(v)},removeItem(k){delete this._d[k]},clear(){this._d={}}};
+    (async()=>{
+      const be = await import('./js/backend.js');
+      be.setBackendConfig('https://example.invalid/exec','tok');
+      // Seed the mirror with real league data, the way a live device holds it.
+      be.cacheSet('cfbp_players', [{playerId:'p1'}]);
+      be.cacheSet('cfbp_weeks',   [{weekId:'w1',status:'open'}]);
+      be.cacheSet('cfbp_picks',   [{pickId:'k1',playerId:'p1'}]);
+      // Remote comes back EMPTY — cold start / dropped body / partial read.
+      globalThis.fetch = async () => ({ ok:true, json: async () => ({ ok:true, data:{} }) });
+      let threw=false, msg='';
+      try { await be.hydrate(); } catch(e){ threw=true; msg=String(e.message||e); }
+      const picksSurvived = (be.cacheGet('cfbp_picks')||[]).length;
+      const weeksSurvived = (be.cacheGet('cfbp_weeks')||[]).length;
+      process.stdout.write(JSON.stringify({ threw, msg, picksSurvived, weeksSurvived }));
+    })();`;
+  let pb = {};
+  try {
+    pb = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', probeB],
+      { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }));
+  } catch (e) { pb = { error: String(e.message || e) }; }
+
+  assert(pb.threw === true,
+    `hydrate() REFUSES an empty remote while the mirror holds league data${pb.error ? ' — ' + pb.error : ''}`);
+  assert(/Sync refused/.test(pb.msg || ''),
+    `the refusal is the RG-12 guard, not an incidental error — got: ${(pb.msg || '').slice(0, 80)}`);
+  assert(/preserved/.test(pb.msg || ''),
+    'the error tells the user their data was preserved (AD-06 loud-fail)');
+  assert(pb.picksSurvived === 1 && pb.weeksSurvived === 1,
+    `the mirror is INTACT after refusal — picks ${pb.picksSurvived}, weeks ${pb.weeksSurvived} (expected 1, 1)`);
+}
+
+// (c) A stale held write must not shrink user data.
+const hydrateFn = (backSrc.match(/export async function hydrate[\s\S]*?\n\}/) || [''])[0];
+assert(hydrateFn.length > 0, 'hydrate() source located for structural checks');
+const refuseAt = hydrateFn.indexOf('Sync refused');
+const clearAt = hydrateFn.indexOf('_cache.clear()');
+assert(refuseAt > -1 && clearAt > -1 && refuseAt < clearAt,
+  'the refusal happens BEFORE _cache.clear() — the mirror is never wiped first');
+
+{
+  const be = mods['backend'];
+
+  // The predicate itself. This export is load-bearing: when it was absent the
+  // block below fell through to matching the guard's SOURCE TEXT, which cannot
+  // distinguish a working guard from a gutted one. Verified 2026-08-12 —
+  // replacing the guard body with `_cache.set(k, v)` passed 552/552.
+  assert(typeof be._shrinksForTest === 'function',
+    'backend exports the shrink predicate so defense (c) is tested by BEHAVIOUR, not by source text');
+  assert(be._shrinksForTest([1], [1, 2, 3]) === true, 'shrink detected: 1 item over 3');
+  assert(be._shrinksForTest([1, 2, 3, 4], [1, 2]) === false, 'growth allowed: 4 items over 2');
+  assert(be._shrinksForTest([], [1]) === true, 'emptying is shrinking');
+  assert(be._shrinksForTest({ a: 1 }, { a: 1, b: 2 }) === true, 'shrink detected on objects too (tb/ep guesses are keyed maps)');
+}
+
+// (c) END TO END — the predicate existing proves nothing unless hydrate() acts
+// on it. This is the closest reproduction of what Drew actually reported: the
+// picks were made, and days later a device holding a pre-picks mirror put its
+// obsolete-but-perfectly-valid view back. Defenses (a) and (b) both guard an
+// empty REMOTE and neither one catches this.
+{
+  const be = mods['backend'];
+  const _fetch33 = globalThis.fetch;
+  const _mode33 = storage.getBackendMode();
+  let SHEET33 = {};
+  globalThis.fetch = async (url, opts) => {
+    const req = JSON.parse(opts.body);
+    if (req.action === 'getAll') return { ok: true, json: async () => ({ ok: true, data: JSON.parse(JSON.stringify(SHEET33)) }) };
+    if (req.action === 'setMany') { Object.entries(req.entries).forEach(([k, v]) => { SHEET33[k] = v; }); return { ok: true, json: async () => ({ ok: true }) }; }
+    throw new Error('unexpected action ' + req.action);
+  };
+  try {
+    const SIX = [1, 2, 3, 4, 5, 6].map(n => ({ pickId: 'k' + n, playerId: 'p' + n, gameId: 'g' + n, selection: 'home' }));
+    const ONE = [{ pickId: 'k1', playerId: 'p1', gameId: 'g1', selection: 'home' }];
+    SHEET33 = {
+      cfbp_players: [{ playerId: 'p1' }, { playerId: 'p2' }],
+      cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
+      cfbp_picks: JSON.parse(JSON.stringify(SIX)),
+    };
+    // This device booted on a mirror from BEFORE five of those picks existed.
+    localStorage.setItem('cfbp_sheet_mirror', JSON.stringify({
+      at: '2026-08-05T00:00:00.000Z',
+      data: {
+        cfbp_players: [{ playerId: 'p1' }],
+        cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
+        cfbp_picks: JSON.parse(JSON.stringify(ONE)),
+      },
+    }));
+    be.setBackendConfig('https://example.test/exec', 'tok');
+    be.primeFromMirror();
+    storage.setBackendMode('googleSheets');
+    assert(be.isMirrorStale() === true, 'fixture check: the mirror is stale, so the write is HELD and rebased at hydrate (AD-08)');
+
+    // The stale device writes its obsolete view — well-formed, populated, and
+    // indistinguishable from a legitimate edit.
+    be.cacheSet('cfbp_picks', JSON.parse(JSON.stringify(ONE)));
+    await be.hydrate();
+
+    assert((be.cacheGet('cfbp_picks') || []).length === 6,
+      `hydrate() DROPS a held write that would shrink picks 6 -> 1 — got ${(be.cacheGet('cfbp_picks') || []).length} (1 = five players' picks destroyed, the reported bug)`);
+    await be.flushPush();
+    assert((SHEET33.cfbp_picks || []).length === 6,
+      `the dropped write is un-dirtied, so flushPush cannot push the shrunken view to the Sheet either — got ${(SHEET33.cfbp_picks || []).length}`);
+
+    // The guard must not become a write-blocker: ADDING a pick still syncs.
+    const SEVEN = [...SIX, { pickId: 'k7', playerId: 'p7', gameId: 'g7', selection: 'away' }];
+    be.cacheSet('cfbp_picks', JSON.parse(JSON.stringify(SEVEN)));
+    await be.flushPush();
+    assert((SHEET33.cfbp_picks || []).length === 7,
+      `a held write that GROWS user data is still applied — the guard blocks shrinkage only, never normal picking — got ${(SHEET33.cfbp_picks || []).length}`);
+  } finally {
+    globalThis.fetch = _fetch33;
+    storage.setBackendMode(_mode33);
+    be.clearBackendConfig();
+    localStorage.removeItem('cfbp_sheet_mirror');
+  }
+}
+
+// ── 34. UN-116 — THE BLIND RULE ─────────────────────────────────────────────
+// Drew, 2026-08-12: "If you can still edit, you shouldnt be able to see anyone
+// else picks or submissions (tie breakers, extra point, etc). Only time you
+// should see other people's picks are live and final, when you cant edit other
+// picks."
+//
+// The original defect was NOT a broken predicate. canViewOtherPicks() existed
+// and worked; the standard dashboard matrix — the DEFAULT view — simply never
+// called it, while the compact view did. So these assertions run against the
+// rendered markup a player would actually be served, not against the predicate
+// alone. A predicate-only test would have passed against the shipped bug.
+console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
+{
+  const app34 = mods['app'];
+  const W = id => storage.getWeek(id);
+
+  // 34a — the threshold itself, across every week status.
+  const mk = (status, extra = {}) => ({ weekId: 'un116_' + status, weekNumber: 1, season: 2026, status, dataSourceMode: 'demo', startDate: '2026-09-05', endDate: '2026-09-06', ...extra });
+  assert(storage.arePicksPublic(mk('draft')) === false, 'draft week: picks are NOT public');
+  assert(storage.arePicksPublic(mk('open')) === false, 'open week: picks are NOT public');
+  assert(storage.arePicksPublic(mk('locked')) === false,
+    'LOCKED week: picks are NOT public — this is the case Drew changed, and the one the reveal ritual used to fire on');
+  assert(storage.arePicksPublic(mk('live')) === true, 'live week: picks ARE public');
+  assert(storage.arePicksPublic(mk('final')) === true, 'final week: picks ARE public');
+  assert(storage.arePicksPublic(null) === false, 'a missing week is never public (no crash, no leak)');
+
+  // 34b — fixture: an OPEN week, two players, both submitted.
+  const OW = mk('open', { weekId: 'un116_wk', picksOpenAt: '2026-09-01T00:00:00Z' });
+  storage.saveWeek(OW);
+  storage.saveGame({ weekId: OW.weekId, gameId: 'un116_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'scheduled', spread: -3 });
+  storage.addPlayer({ playerId: 'un116_me',    displayName: 'Me',    active: true });
+  storage.addPlayer({ playerId: 'un116_rival', displayName: 'Rival', active: true });
+  const PICKS34 = [
+    { pickId: 'un116_pk1', weekId: OW.weekId, gameId: 'un116_g1', playerId: 'un116_me',    selectedTeam: 'Ohio State' },
+    { pickId: 'un116_pk2', weekId: OW.weekId, gameId: 'un116_g1', playerId: 'un116_rival', selectedTeam: 'Texas' },
+  ];
+  storage.saveAllPicks([...storage.getPicks(), ...PICKS34]);
+
+  // 34c — THE REGRESSION. A player who has submitted must still not see others.
+  // This is the exact branch that was removed: visibility used to be granted by
+  // hasPlayerSubmitted(), but submitting does not end your ability to edit —
+  // "Player picks are editable while the slate is open" is a locked decision —
+  // so a player could submit, read the field, and then change their own picks.
+  storage.setSession('un116_me', false, true);
+  assert(storage.getEffectiveWeekStatus(W(OW.weekId)) === 'open', 'fixture check: the week is OPEN and still editable');
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === false,
+    'a player who HAS SUBMITTED still cannot see other players while the week is open (submitting is undoable; visibility must not be)');
+
+  const players34 = [
+    { playerId: 'un116_me', displayName: 'Me', active: true },
+    { playerId: 'un116_rival', displayName: 'Rival', active: true },
+  ];
+  const games34 = storage.getGames(OW.weekId);
+  const results34 = players34.map((p, i) => ({ playerId: p.playerId, rank: i + 1, correctPicks: 1, incorrectPicks: 0, tiebreakerGuess: 40 + i, tiebreakerDelta: 0 }));
+  const html34 = app34.renderDashboardTable(players34, games34, PICKS34, results34, OW.weekId, null);
+
+  assert(/pick-cell-blind/.test(html34),
+    'THE LEAK: the standard matrix renders blind cells while the week is open (it previously had no blind check at all)');
+  // Inspect ONLY the pick cells. Both team names legitimately appear in the
+  // game-info matchup label, so a whole-document search would be a false
+  // positive — the question is what the PICK columns disclose.
+  const cells34 = html34.match(/<td class="pick-cell[\s\S]*?<\/td>/g) || [];
+  assert(cells34.length === 2, `fixture check: one pick cell per submitted player (got ${cells34.length})`);
+  const blind34 = cells34.filter(c => /pick-cell-blind/.test(c));
+  assert(blind34.length === 1,
+    `exactly one cell is blinded — the rival's, not the viewer's own (got ${blind34.length})`);
+  assert(!/Texas/.test(blind34.join('')),
+    "the rival's actual selection is absent from the served markup — blinded server-side, not merely hidden with CSS");
+  assert(/Ohio State/.test(cells34.filter(c => !/pick-cell-blind/.test(c)).join('')),
+    "the viewer's OWN pick is still shown in full — the blind rule hides others, not yourself");
+
+  // 34d — at kickoff everything opens at once, on every surface.
+  storage.saveWeek({ ...OW, status: 'live' });
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === true, 'once LIVE, other players are visible');
+  const htmlLive34 = app34.renderDashboardTable(players34, games34, PICKS34, results34, OW.weekId, null);
+  assert(!/pick-cell-blind/.test(htmlLive34) && /Texas/.test(htmlLive34),
+    "at kickoff the rival's pick is revealed in the matrix — no blind cells remain");
+
+  // 34e — the commissioner is unaffected (existing admin-sees-all precedent).
+  storage.saveWeek({ ...OW, status: 'open' });
+  storage.setSession('un116_me', true, true);
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === true,
+    'the commissioner still sees everything regardless of week status (unchanged)');
+  const htmlAdmin34 = app34.renderDashboardTable(players34, games34, PICKS34, results34, OW.weekId, null);
+  assert(!/pick-cell-blind/.test(htmlAdmin34) && /Texas/.test(htmlAdmin34),
+    'the commissioner matrix is never blinded');
+
+  // 34f — an anonymous viewer gets nothing either.
+  storage.setSession(null, false, false);
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === false,
+    'a signed-out viewer cannot see picks on an open week');
+
+  storage.saveWeek({ ...OW, status: 'open' });
+  storage.setSession(null, false, false);
+}
+
+// ── 35. UN-117 — week nomenclature splits into two deliberate lines ─────────
+console.log('\n[35] UN-117 — week name and date range each own a line…');
+{
+  const { formatWeekLabel, formatWeekLabelParts } = mods['data-model'];
+  const wk = { weekId: 'un117', weekNumber: 1, season: 2026, startDate: '2026-09-05', endDate: '2026-09-12' };
+
+  const parts = formatWeekLabelParts(wk);
+  assert(parts.name === 'Week 1', `name line carries the week name only — got "${parts.name}"`);
+  assert(!/\d{1,2}\/|Sep|—/.test(parts.name), 'the name line contains no date fragment (the reported defect was half the range riding along)');
+  assert(parts.dates.length > 0 && parts.dates === formatWeekLabel(wk).split(' — ')[1],
+    `the date line carries the WHOLE range, never half of it — got "${parts.dates}"`);
+
+  // roundLabel is how Drew names multi-part weeks ("1 Part 1"). It belongs on
+  // the NAME line, not squeezed in with the dates.
+  const rl = formatWeekLabelParts({ ...wk, roundLabel: '1 Part 1' });
+  assert(rl.name === 'Week 1 Part 1', `a custom roundLabel stays on the name line — got "${rl.name}"`);
+  assert(rl.dates.length > 0, 'a custom-named week still gets its date line');
+
+  // Absent data must yield an EMPTY string, so the caller can omit the element
+  // entirely rather than render a blank line that still claims height.
+  assert(formatWeekLabelParts({ ...wk, dataSourceMode: 'demo' }).dates === '', 'a demo week has no date line');
+  assert(formatWeekLabelParts({ weekNumber: 3 }).dates === '', 'a week with no dates on file has no date line');
+  assert(formatWeekLabelParts(null).name === '' && formatWeekLabelParts(null).dates === '', 'a missing week yields empty parts, not a crash');
+
+  // The single-line label is load-bearing for ~20 other call sites (CSV cells,
+  // <option> text, confirm() dialogs, email subjects). It must NOT have changed.
+  assert(formatWeekLabel(wk) === 'Week 1 — ' + parts.dates,
+    `formatWeekLabel() is untouched — CSV, dropdowns and dialogs still get one line — got "${formatWeekLabel(wk)}"`);
+
+  // The two surfaces Drew named must actually use the split helper.
+  assert(/week-heading-dates/.test(appJsSrc) && (appJsSrc.match(/formatWeekLabelParts\(/g) || []).length >= 3,
+    'the header, the dashboard heading and the picks banner all render the split parts [structural]');
+  assert(/\.week-heading-dates\{[^}]*display:block/.test(cssSrc.replace(/\s+/g, '')) || /\.week-heading-dates\{[^}]*display:block/.test(cssSrc),
+    'the date line is block-level — that is what forces the break rather than leaving it to container width');
+  assert(/\.week-heading-dates\{[^}]*white-space:nowrap/.test(cssSrc),
+    'the date RANGE itself never splits across lines — the specific thing Drew reported');
+}
+
+// ── 36. UN-119 — compact view density: chat + reactions inline in .dc-meta ──
+// DI-119a: the chat indicator and the reaction strip move OFF their own
+// block-level rows (below .dc-chips) and INLINE into .dc-meta, next to the
+// ESPN link. Asserted against the REAL markup renderDashboardCompact() (now
+// exported for this reason) returns, not a source-text regex — a regex
+// cannot tell a working relocation from one that silently reverted, and that
+// exact gap is why RG-12-class regressions recur (see suite [33]'s header).
+console.log('\n[36] UN-119 — compact view density: chat + reactions move inline into .dc-meta…');
+{
+  const app36 = mods['app'];
+  const chat36 = mods['chat'];
+
+  // 36a — CSS shape: the compact-scoped chat button carries no in-flow
+  // min-height (that WAS the measured cost driver), and both new invisible
+  // hit-area overlays (DI-119a's chat icon, DI-119b's .reaction-add-btn-mini)
+  // still clear the 40px tap-target floor (CONVENTIONS #17) even though the
+  // visible glyphs stayed tiny — this codebase has shipped sub-40px targets
+  // twice already (the emoji picker at 22px, .chat-pill at 28px).
+  const dcChatRule = (cssSrc.match(/\.dc-meta \.chat-bubble-btn\{[^}]*\}/) || [''])[0];
+  assert(dcChatRule.length > 0, 'fixture check: .dc-meta .chat-bubble-btn override exists in styles.css');
+  assert(!/min-height:\s*40px/.test(dcChatRule),
+    'the compact chat button no longer reserves an in-flow 40px min-height');
+  const dcChatBefore = (cssSrc.match(/\.dc-meta \.chat-bubble-btn::before\{[^}]*\}/) || [''])[0];
+  assert(/position:\s*absolute/.test(dcChatBefore),
+    'DI-119a: the tap-target overlay is position:absolute (out of flow) — an in-flow expansion would re-inflate the row this change shrinks');
+  // HEIGHT IS NOT THE FREE AXIS EITHER — AMENDED 2026-08-13 (RG).
+  // The retired claim here was "a 40px overlay costs nothing in flow", and it
+  // is true of FLOW and false of HIT TESTING. The visible box is ~14.5px, so a
+  // flat 40px overlay hangs ~12.75px past each edge, while only
+  // .dc-game-head's 8px margin-bottom separates it from .dc-chips — whose
+  // chips carry draggable="true". .chat-bubble-btn is position:relative, so
+  // this ::before paints in the positioned layer ABOVE the static .dc-chips
+  // and won the hit test over the top of the chip row.
+  // Amended to the same remedy already accepted on the width axis: tile
+  // against the gap that actually exists rather than assert a number that does
+  // not fit. Full computed relation is asserted in [51].
+  assert(!/height:\s*40px/.test(dcChatBefore),
+    "DI-119a (amended): the overlay is NOT a literal 40px tall — that overhung .dc-game-head's 8px margin into the draggable .dc-chip row");
+  assert(/height:\s*calc\(100% \+ 16px\)/.test(dcChatBefore),
+    `DI-119a (amended): the chat icon's hit-area extends 8px per side — flush with the chip row, never into it — got "${(dcChatBefore.match(/height:[^;]*/) || [])[0]}"`);
+  // WIDTH is NOT free. .dc-meta sets gap:6px, so a literal 40px-wide overlay
+  // would overlap its neighbour's by ~17px, and the reaction strip — the next
+  // flex child, painted later — would capture taps aimed at the chat icon.
+  // Two overlapping hit zones are a worse defect than two narrow ones: the
+  // user taps what they are looking at and something else opens. The overlays
+  // must therefore TILE: extend by at most half the gap per side.
+  assert(/width:\s*calc\(100% \+ 6px\)/.test(dcChatBefore),
+    `DI-119a (amended): the chat icon's hit-area tiles with the 6px gap instead of overlapping its neighbour — got "${(dcChatBefore.match(/width:[^;]*/) || [])[0]}"`);
+  assert(!/width:\s*40px/.test(dcChatBefore),
+    'the overlay is NOT a literal 40px wide — that is unsatisfiable for two controls 6px apart and causes mis-taps');
+
+  const miniVisible = (cssSrc.match(/\.reaction-add-btn-mini\{[^}]*\}/) || [''])[0];
+  assert(/width:\s*18px/.test(miniVisible) && /height:\s*18px/.test(miniVisible),
+    "DI-119b: .reaction-add-btn-mini's VISIBLE box is still 18x18 — the fix must not grow the glyph");
+  const miniBefore = (cssSrc.match(/\.reaction-add-btn-mini::before\{[^}]*\}/) || [''])[0];
+  // Same amendment as DI-119a above (2026-08-13, RG): 40px on an 18px box
+  // overhangs 11px per side, past the 8px available before the draggable chip
+  // row. Tiles at 8px per side instead. Computed relation in [51].
+  assert(!/height:\s*40px/.test(miniBefore),
+    "DI-119b (amended): the \"+\" overlay is NOT a literal 40px tall — that reached past .dc-game-head's margin into the draggable .dc-chip row");
+  assert(/height:\s*calc\(100% \+ 16px\)/.test(miniBefore),
+    `DI-119b (amended): the "+" hit-area extends 8px per side — got "${(miniBefore.match(/height:[^;]*/) || [])[0]}"`);
+  // .reaction-strip sets gap:4px and this button sits beside the reaction
+  // chips, so the same tiling rule applies against them.
+  assert(/width:\s*calc\(100% \+ 4px\)/.test(miniBefore),
+    `DI-119b (amended): the "+" hit-area tiles with .reaction-strip's 4px gap rather than overlapping the adjacent reaction chips — got "${(miniBefore.match(/width:[^;]*/) || [])[0]}"`);
+
+  // 36b — fixture: an OPEN week, two players, one game (with an ESPN id so
+  // the ordering claim — "next to the ESPN link" — is actually exercised),
+  // both submitted, chat enabled.
+  chat36._resetForTest();
+  storage.saveSetting('chatEnabled', true);
+  localStorage.removeItem('cfbp_chat_lastseen2');
+  const CW = { weekId: 'un119_wk', weekNumber: 1, season: 2026, status: 'open', dataSourceMode: 'demo', startDate: '2026-09-05', endDate: '2026-09-06', picksOpenAt: '2026-09-01T00:00:00Z' };
+  storage.saveWeek(CW);
+  storage.saveGame({ weekId: CW.weekId, gameId: 'un119_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'scheduled', spread: -3, espnEventId: 'un119_espn1' });
+  storage.addPlayer({ playerId: 'un119_me', displayName: 'Me', active: true });
+  storage.addPlayer({ playerId: 'un119_rival', displayName: 'Rival', active: true });
+  const PICKS36 = [
+    { pickId: 'un119_pk1', weekId: CW.weekId, gameId: 'un119_g1', playerId: 'un119_me', selectedTeam: 'Ohio State' },
+    { pickId: 'un119_pk2', weekId: CW.weekId, gameId: 'un119_g1', playerId: 'un119_rival', selectedTeam: 'Texas' },
+  ];
+  storage.saveAllPicks([...storage.getPicks(), ...PICKS36]);
+  storage.setSession('un119_me', false, true);
+
+  const players36 = [
+    { playerId: 'un119_me', displayName: 'Me', active: true },
+    { playerId: 'un119_rival', displayName: 'Rival', active: true },
+  ];
+  const games36 = storage.getGames(CW.weekId);
+  const results36 = players36.map((p, i) => ({ playerId: p.playerId, rank: i + 1, correctPicks: 0, incorrectPicks: 0, tiebreakerGuess: 40 + i, tiebreakerDelta: 0 }));
+
+  const html36 = app36.renderDashboardCompact(players36, games36, PICKS36, results36, CW.weekId, null);
+
+  // 36c — THE RELOCATION. Both indicators live inside .dc-meta now, and
+  // NEITHER renders as a sibling block after .dc-chips (the old, expensive
+  // placement). .dc-meta's own content has no nested <div>s (spans/a/button
+  // only), so a non-greedy match is safe; for the "not after .dc-chips" claim
+  // we use string position rather than a nested-<div>-unsafe regex split,
+  // since .dc-chips legitimately contains nested <div class="dc-chip"> children.
+  const metaBlock = (html36.match(/<div class="dc-meta">[\s\S]*?<\/div>/) || [''])[0];
+  assert(metaBlock.length > 0, 'fixture check: .dc-meta renders');
+  assert(/chat-bubble-btn/.test(metaBlock), 'DI-119a: the chat indicator renders INSIDE .dc-meta');
+  assert(/reaction-strip/.test(metaBlock), 'DI-119a: the reaction strip renders INSIDE .dc-meta');
+  assert(/espn-link/.test(metaBlock), 'fixture check: the ESPN link is present in .dc-meta (so "next to" is a real claim, not vacuous)');
+
+  const idxEspn = html36.indexOf('espn-link');
+  const idxChips = html36.indexOf('<div class="dc-chips">');
+  const idxChatBtn = html36.indexOf('chat-bubble-btn');
+  const idxReactStrip = html36.indexOf('reaction-strip');
+  assert(idxEspn > -1 && idxChips > -1 && idxChatBtn > -1 && idxReactStrip > -1,
+    'fixture check: all four landmarks are present in the rendered card');
+  assert(idxEspn < idxChatBtn,
+    'DI-119a: the chat indicator sits AFTER the ESPN link ("next to the ESPN link")');
+  assert(idxChatBtn < idxChips && idxReactStrip < idxChips,
+    'THE RELOCATION: both the chat indicator and the reaction strip appear BEFORE .dc-chips opens — i.e. inside .dc-game-head/.dc-meta, not as their own rows below the chips (the pre-UN-119 placement)');
+
+  // 36d — a zero-message game still renders the control (discoverable), but
+  // its VISIBLE content is icon-only — no "no messages yet" sentence. The
+  // sentence legitimately still lives in title/aria-label (accessibility,
+  // chat-ui.js's existing, unchanged behavior); only the button's own inner
+  // text is asserted here, so this cannot be satisfied by an attribute alone.
+  const chatBtnInner = (html36.match(/<button type="button" class="chat-bubble-btn[^>]*>([\s\S]*?)<\/button>/) || [])[1];
+  assert(chatBtnInner !== undefined, 'fixture check: the chat button renders with inner content captured');
+  assert(/chat-bubble-empty/.test(html36), 'no messages yet on this game → the empty state renders inline in .dc-meta');
+  assert((chatBtnInner || '').trim() === '💬',
+    `DI-119a: the empty state's VISIBLE content is icon-only, no sentence — got ${JSON.stringify(chatBtnInner)}`);
+
+  // 36e — read and unread states also still work from this new location,
+  // reusing chat-ui.js's gameChatBubbleHTML() markup verbatim (no fork).
+  chat36.ingest([ev({ id: 'u119_m1', seq: 1, ts: 1000, body: 'thread starter', author: 'un119_rival', gameTag: 'un119_g1' })]);
+  chat36.markSeen('all');
+  const html36read = app36.renderDashboardCompact(players36, games36, PICKS36, results36, CW.weekId, null);
+  assert(/chat-bubble-read/.test(html36read), 'a read thread renders the dim/read state inline in .dc-meta');
+
+  chat36.ingest([ev({ id: 'u119_m2', seq: 2, ts: 2000, body: 'reply', author: 'un119_rival', gameTag: 'un119_g1' })]);
+  const html36unread = app36.renderDashboardCompact(players36, games36, PICKS36, results36, CW.weekId, null);
+  assert(/chat-bubble-unread/.test(html36unread), 'an unread thread renders the accent state inline in .dc-meta');
+  assert(/chat-bubble-count">1</.test(html36unread), 'the unread count badge is present (1), reused verbatim from chat-ui.js');
+
+  // 36f — CONSTRAINT: UN-116 shipped an hour before this change and touches
+  // the same renderer's sibling. The compact view's blind rule must still
+  // hold — this relocation must not have disturbed canViewOtherPicks()/
+  // arePicksPublic() or duplicated their logic.
+  assert(/dc-chip-blind/.test(html36unread), 'CONSTRAINT (UN-116): the compact view still blinds the rival\'s pick on an OPEN week');
+  const chipsOnly36 = html36unread.slice(html36unread.indexOf('<div class="dc-chips">'));
+  assert(!/Texas/.test(chipsOnly36), "CONSTRAINT (UN-116): the rival's actual selection is absent from the served chip markup while blind");
+
+  storage.saveWeek({ ...CW, status: 'live' });
+  const html36live = app36.renderDashboardCompact(players36, games36, PICKS36, results36, CW.weekId, null);
+  assert(!/dc-chip-blind/.test(html36live) && /Texas/.test(html36live),
+    'CONSTRAINT (UN-116): once live, the compact view reveals picks — governed by the same predicate, not bypassed by this change');
+
+  // 36g — the standard matrix (renderDashboardTable) is untouched: it still
+  // renders the chat bubble and reaction strip at the bottom of the
+  // game-info cell, in their pre-UN-119 (full-size, own-row) form.
+  storage.saveWeek({ ...CW, status: 'open' });
+  const htmlMatrix36 = app36.renderDashboardTable(players36, games36, PICKS36, results36, CW.weekId, null);
+  assert(/game-info-cell/.test(htmlMatrix36) && /chat-bubble-btn/.test(htmlMatrix36) && /reaction-strip/.test(htmlMatrix36),
+    'the matrix still renders both indicators in the game-info cell — DI-119a scoped this change to renderDashboardCompact only');
+  const cellMatrix36 = (htmlMatrix36.match(/<td class="game-info-cell">[\s\S]*?<\/td>/) || [''])[0];
+  assert(/chat-bubble-btn/.test(cellMatrix36) && /reaction-strip/.test(cellMatrix36),
+    'both indicators are specifically inside the matrix\'s game-info-cell, not merely present somewhere in the row');
+
+  storage.saveWeek({ ...CW, status: 'open' });
+  storage.clearSession();
+  localStorage.removeItem('cfbp_chat_lastseen2');
+}
+
+// ── 37. UN-120 + UN-121 — right-click/swipe reveal replaces hover; reaction ──
+//       names fold into the SAME reveal state as .chat-actions ─────────────
+console.log('\n[37a] UN-120 (DI-120a) — hover is GONE; .chat-actions is a positioned, opaque popover…');
+{
+  // The rule is deleted OUTRIGHT (not tuned with a hover-intent delay, which
+  // was proposed and REJECTED — Drew: "hovering with a cursor doesn't work.
+  // It should be right click"). Assert the EXACT selector is absent, not
+  // merely that some hover text exists elsewhere in the file (there is
+  // unrelated `title`/hover copy on the dashboard bubble, §[14]).
+  assert(!/\.chat-msg:hover\s*\.chat-actions/.test(cssSrc),
+    'DI-120a: `.chat-msg:hover .chat-actions` is deleted from styles.css, not tuned with a delay');
+  assert(!/@media\s*\(hover:none\)\{[^}]*\.chat-actions-revealed/.test(cssSrc),
+    'the old @media(hover:none) split for the touch reveal is gone — one unconditional rule now covers both gestures');
+
+  const actionsRule37 = (cssSrc.match(/^\.chat-actions\{[^}]*\}/m) || [''])[0];
+  assert(actionsRule37.length > 0, 'fixture check: .chat-actions base rule located');
+  assert(/display:\s*none/.test(actionsRule37),
+    'UN-113/RG-20/RG-21 HARD CONSTRAINT still holds: hidden means display:none (zero layout height), unchanged by the reposition [structural]');
+  assert(/position:\s*absolute/.test(actionsRule37) && !/position:\s*relative/.test(actionsRule37),
+    'DI-120a: .chat-actions is taken OUT OF DOCUMENT FLOW — position:absolute, not the old position:relative [structural]');
+  assert(/background:\s*var\(--bg-card\)/.test(actionsRule37) && /box-shadow:\s*var\(--shadow-card\)/.test(actionsRule37),
+    'DI-120a: an opaque card background + shadow, so the popover reads over the message it now overlaps [structural]');
+  const bubbleColRule37 = (cssSrc.match(/\.chat-bubble-col\{[^}]*\}/) || [''])[0];
+  assert(/position:\s*relative/.test(bubbleColRule37),
+    'DI-120a: .chat-bubble-col is the positioning context .chat-actions anchors to, so revealing it cannot shift sibling messages [structural]');
+
+  // ONE reveal mechanism drives BOTH .chat-actions (UN-120) and
+  // .chat-reaction-names (UN-121/DI-121a) — same class, unconditional (no
+  // hover-capability gate, since right-click has no such signal).
+  assert(/\.chat-msg\.chat-actions-revealed \.chat-actions\{display:flex\}/.test(cssSrc),
+    'the reveal class restores .chat-actions via display:flex, with no @media(hover:none) wrapper around it any more');
+  assert(/\.chat-msg\.chat-actions-revealed \.chat-reaction-names\{display:block\}/.test(cssSrc),
+    'DI-121a: the SAME reveal class also restores .chat-reaction-names — one gesture reveals both, not a second one (the RG-21 mistake this avoids)');
+
+  const namesRule37 = (cssSrc.match(/^\.chat-reaction-names\{[^}]*\}/m) || [''])[0];
+  assert(/display:\s*none/.test(namesRule37),
+    'DI-121a: .chat-reaction-names is display:none by default — no longer always-visible duplication of the pill row above it');
+}
+
+console.log('\n[37b] revealMessageActions()/dismissRevealedActions() — only ONE message revealed at a time…');
+{
+  assert(typeof chatUi._revealMessageActions === 'function' && typeof chatUi._dismissRevealedActions === 'function' && typeof chatUi._revealedMsgIdForTest === 'function',
+    'chat-ui.js exports test-only accessors for the shared reveal state');
+  const targets37b = {};
+  const realQS37b = document.querySelector;
+  // DI-125a: production now scopes this query by container id
+  // (`#chat-scroll .chat-msg[data-mid="…"]`) — the optional `#id ` prefix
+  // here tolerates that without changing what this suite is actually about
+  // (single-container "only one revealed at a time"); §[47] covers the
+  // cross-container scoping itself.
+  document.querySelector = sel => {
+    const m = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets37b[m[1]] || null) : null;
+  };
+  function fakeMsg(mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets37b[mid] = el;
+    return el;
+  }
+  const msgA = fakeMsg('reveal_a');
+  const msgB = fakeMsg('reveal_b');
+  chatUi._revealMessageActions('reveal_a');
+  assert(msgA._classes.has('chat-actions-revealed') && chatUi._revealedMsgIdForTest() === 'reveal_a',
+    'revealing message A adds the class and updates the shared state');
+  chatUi._revealMessageActions('reveal_b');
+  assert(!msgA._classes.has('chat-actions-revealed') && msgB._classes.has('chat-actions-revealed') && chatUi._revealedMsgIdForTest() === 'reveal_b',
+    'DI-120a: revealing message B removes A\'s class first — only ONE message is ever revealed at a time');
+  chatUi._dismissRevealedActions();
+  assert(!msgB._classes.has('chat-actions-revealed') && chatUi._revealedMsgIdForTest() === null,
+    'dismissing clears the class and the shared state');
+  document.querySelector = realQS37b;
+}
+
+console.log('\n[37c] DI-120a — desktop right-click (contextmenu) reveals/toggles/switches…');
+{
+  assert(typeof chatUi._bindMessageActionsContextMenu === 'function',
+    'chat-ui.js exports _bindMessageActionsContextMenu (test-only) for behavioral coverage');
+  function makeFakeRoot37() {
+    const handlers = {};
+    return { addEventListener(type, fn) { handlers[type] = fn; }, _fire: (type, e) => handlers[type]?.(e) };
+  }
+  function fakeMsgEl37(mid) {
+    const classes = new Set();
+    return { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+  }
+  const targets37c = {};
+  const realQS37c = document.querySelector;
+  // DI-125a: tolerate the optional `#id ` container prefix production now emits.
+  document.querySelector = sel => {
+    const m = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets37c[m[1]] || null) : null;
+  };
+  const targetFor37 = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+
+  const root37c = makeFakeRoot37();
+  const msgC1 = fakeMsgEl37('ctx_1'); targets37c['ctx_1'] = msgC1;
+  const msgC2 = fakeMsgEl37('ctx_2'); targets37c['ctx_2'] = msgC2;
+  chatUi._bindMessageActionsContextMenu(root37c);
+
+  let defaultPrevented = false;
+  root37c._fire('contextmenu', { target: targetFor37(msgC1), preventDefault: () => { defaultPrevented = true; } });
+  assert(msgC1._classes.has('chat-actions-revealed'), 'right-clicking a message reveals its .chat-actions');
+  assert(defaultPrevented, 'DI-120a: preventDefault() is called so the native browser context menu does not also open');
+
+  root37c._fire('contextmenu', { target: targetFor37(msgC2), preventDefault: () => {} });
+  assert(!msgC1._classes.has('chat-actions-revealed') && msgC2._classes.has('chat-actions-revealed'),
+    'DI-120a: right-clicking a DIFFERENT message hides the first — "only one message revealed at a time"');
+
+  root37c._fire('contextmenu', { target: targetFor37(msgC2), preventDefault: () => {} });
+  assert(!msgC2._classes.has('chat-actions-revealed'),
+    'right-clicking the SAME already-revealed message a second time closes it (toggle)');
+
+  // Right-clicking outside any message (e.g. empty scroll-area padding) must
+  // not throw and must not reveal anything.
+  let threwOnEmptyTarget = false;
+  try { root37c._fire('contextmenu', { target: { closest: () => null }, preventDefault: () => {} }); }
+  catch { threwOnEmptyTarget = true; }
+  assert(!threwOnEmptyTarget, 'right-clicking outside any .chat-msg does not throw');
+
+  document.querySelector = realQS37c;
+}
+
+console.log('\n[37d] DI-120b — axis-locked swipe: left→right opens reply, right→left opens the react picker…');
+{
+  assert(typeof chatUi._bindMessageSwipe === 'function' && typeof chatUi._replyTarget === 'function',
+    'chat-ui.js exports _bindMessageSwipe and _replyTarget (test-only)');
+
+  function makeFakeRoot37d() {
+    const handlers = {};
+    return { addEventListener(type, fn) { handlers[type] = fn; }, _fire: (type, e) => handlers[type]?.(e) };
+  }
+  const targetFor37d = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+  const msgEl37d = mid => ({ dataset: { mid } });
+
+  // 37d-i — left → right (positive dx) opens reply, reusing openReplyFor —
+  // the SAME state the ↩ button's click handler sets (U.replyTo).
+  storage.setSession(null, false, false);   // ensure no stale session bleeds into the react-picker case below
+  const rootReply = makeFakeRoot37d();
+  chatUi._bindMessageSwipe(rootReply);
+  rootReply._fire('touchstart', { touches: [{ clientX: 100, clientY: 100 }], target: targetFor37d(msgEl37d('swipe_reply_msg')) });
+  rootReply._fire('touchmove', { touches: [{ clientX: 100 + 45, clientY: 102 }] });   // +45px right, negligible vertical
+  assert(chatUi._replyTarget() === 'swipe_reply_msg',
+    'DI-120b: a left-to-right swipe past ~40px opens reply for that message (openReplyFor, same as the ↩ button)');
+
+  // 37d-ii — right → left (negative dx) opens the reaction picker, reusing
+  // openReactPickerFor → revealMessageActions() + the REAL toggleMessageReactPicker().
+  storage.addPlayer(dm.createPlayer('Swipe37Tester', '', '3701', '', 'SW'));
+  const swipePlayers = storage.getPlayers();
+  const swipePlayer = swipePlayers[swipePlayers.length - 1];
+  storage.setSession(swipePlayer.playerId, false, true);
+
+  const targets37d = {};
+  const buttons37d = {};
+  const realQS37d = document.querySelector;
+  const realGEBI37d = document.getElementById;
+  const realCreateEl37d = document.createElement;
+  // DI-125a: tolerate the optional `#id ` container prefix production now emits.
+  document.querySelector = sel => {
+    const btnM = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\] \[data-react-open\]$/.exec(sel || '');
+    if (btnM) return buttons37d[btnM[1]] || null;
+    const msgM = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    if (msgM) return targets37d[msgM[1]] || null;
+    return null;
+  };
+  document.getElementById = id => (id === 'chat-react-picker' ? null : null);
+  document.createElement = () => ({
+    dataset: {}, classList: { add() {}, remove() {} }, style: {},
+    appendChild() {}, remove() {}, addEventListener() {}, removeEventListener() {},
+    querySelectorAll() { return []; },
+    set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html || ''; },
+  });
+
+  function fakeMsg37d(mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets37d[mid] = el;
+    return el;
+  }
+  const appended = [];
+  const reactBtn37d = { closest: () => null, appendChild: node => appended.push(node) };
+  fakeMsg37d('swipe_react_msg');
+  buttons37d['swipe_react_msg'] = reactBtn37d;
+
+  const rootReact = makeFakeRoot37d();
+  chatUi._bindMessageSwipe(rootReact);
+  rootReact._fire('touchstart', { touches: [{ clientX: 200, clientY: 100 }], target: targetFor37d(msgEl37d('swipe_react_msg')) });
+  rootReact._fire('touchmove', { touches: [{ clientX: 200 - 45, clientY: 101 }] });   // -45px, right-to-left
+
+  assert(targets37d['swipe_react_msg']._classes.has('chat-actions-revealed'),
+    'DI-120b: a right-to-left swipe reveals .chat-actions first (required for the nested picker to render/anchor at all)');
+  assert(appended.length === 1 && appended[0]?.className === 'reaction-picker',
+    'DI-120b: the SAME toggleMessageReactPicker() the + button calls actually ran end-to-end — a real .reaction-picker node was appended into the message\'s own react-open button');
+
+  document.querySelector = realQS37d;
+  document.getElementById = realGEBI37d;
+  document.createElement = realCreateEl37d;
+  storage.clearSession();
+}
+
+console.log('\n[37e] DI-120b — dead zone: a vertical drag never commits a swipe; a short horizontal move (<40px) never commits either…');
+{
+  function makeFakeRoot37e() {
+    const handlers = {};
+    return { addEventListener(type, fn) { handlers[type] = fn; }, _fire: (type, e) => handlers[type]?.(e) };
+  }
+  const targetFor37e = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+  storage.clearSession();   // no session — openReactPickerFor's own me() guard would also block it, so this isolates the AXIS logic itself
+
+  // Vertical drag that LATER also drifts far enough horizontally to look
+  // like a swipe, IF axis-lock were not actually enforced. Two touchmove
+  // events, deliberately: the FIRST establishes the axis (dy=60 dominates
+  // dx=5, past the 8px dead zone, so axis locks to 'y'); the SECOND grows dx
+  // to 45px (past SWIPE_THRESHOLD_PX) while axis stays locked. A weaker
+  // fixture (small dx throughout) would pass even with axis-locking removed
+  // entirely, since dx alone would never reach the 40px commit line — this
+  // one specifically exercises the lock, not just the commit threshold.
+  const rootVert = makeFakeRoot37e();
+  chatUi._bindMessageSwipe(rootVert);
+  rootVert._fire('touchstart', { touches: [{ clientX: 150, clientY: 150 }], target: targetFor37e({ dataset: { mid: 'vert_msg' } }) });
+  rootVert._fire('touchmove', { touches: [{ clientX: 155, clientY: 210 }] });    // dx=5, dy=60 — axis locks 'y' here
+  rootVert._fire('touchmove', { touches: [{ clientX: 195, clientY: 240 }] });    // dx=45 (past the 40px commit line), dy=90 — axis must STAY 'y'
+  assert(chatUi._replyTarget() !== 'vert_msg',
+    'DI-120b: once axis locks to "y", a later dx crossing the 40px commit line does not retroactively open reply — the lock, not just the threshold, is enforced');
+
+  // Short horizontal move: 20px right — under SWIPE_THRESHOLD_PX (40) — must not commit.
+  const rootShort = makeFakeRoot37e();
+  chatUi._bindMessageSwipe(rootShort);
+  rootShort._fire('touchstart', { touches: [{ clientX: 50, clientY: 50 }], target: targetFor37e({ dataset: { mid: 'short_msg' } }) });
+  rootShort._fire('touchmove', { touches: [{ clientX: 70, clientY: 51 }] });   // 20px right, under the 40px commit line
+  assert(chatUi._replyTarget() !== 'short_msg', 'a horizontal move under ~40px does not commit a swipe (DI-120b\'s stated threshold)');
+}
+
+console.log('\n[37f] DI-120b — a committing swipe cancels a PENDING long-press for the same touch…');
+{
+  // Both real binders on ONE shared root, in PRODUCTION registration order
+  // (long-press first, then swipe — bindChatPageEvents, chat-ui.js), so this
+  // exercises the actual cross-binder cancellation, not two isolated stories
+  // that merely assume it works.
+  function makeFakeMultiRoot37f() {
+    const handlers = {};
+    return {
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      _fire(type, e) { (handlers[type] || []).forEach(fn => fn(e)); },
+    };
+  }
+  const targets37f = {};
+  const realQS37f = document.querySelector;
+  // DI-125a: tolerate the optional `#id ` container prefix production now emits.
+  document.querySelector = sel => {
+    const m = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets37f[m[1]] || null) : null;
+  };
+  function fakeMsg37f(mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets37f[mid] = el;
+    return el;
+  }
+  const targetFor37f = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+
+  const root37f = makeFakeMultiRoot37f();
+  const msg37f = fakeMsg37f('combo_msg');
+  chatUi._bindMessageActionsLongPress(root37f);   // registered FIRST, same as bindChatPageEvents
+  chatUi._bindMessageSwipe(root37f);              // registered SECOND
+
+  storage.clearSession();   // the react-picker half of the swipe path is a no-op without a session; isolates the cancellation claim
+  root37f._fire('touchstart', { touches: [{ clientX: 100, clientY: 100 }], target: targetFor37f(msg37f) });
+  root37f._fire('touchmove', { touches: [{ clientX: 145, clientY: 101 }] });   // +45px right — crosses the swipe commit line well inside 350ms
+  await new Promise(r => setTimeout(r, 400));   // past LONG_PRESS_MS even if cancellation had failed
+  assert(!msg37f._classes.has('chat-actions-revealed'),
+    'DI-120b HARD REQUIREMENT: once a swipe commits, the pending long-press for that SAME touch never reveals .chat-actions, even after 350ms elapses');
+
+  document.querySelector = realQS37f;
+}
+
+console.log('\n[37g] DI-120a — Escape, click-elsewhere, and scroll all dismiss a revealed message…');
+{
+  assert(typeof chatUi._wireRevealCloser === 'function' && typeof chatUi._onChatScrollEvent === 'function',
+    'chat-ui.js exports _wireRevealCloser and _onChatScrollEvent (test-only)');
+
+  const targets37g = {};
+  const realQS37g = document.querySelector;
+  // DI-125a: tolerate the optional `#id ` container prefix production now emits.
+  document.querySelector = sel => {
+    const m = /^(?:#[\w-]+ )?\.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets37g[m[1]] || null) : null;
+  };
+  function fakeMsg37g(mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets37g[mid] = el;
+    return el;
+  }
+
+  const capturedDoc = {};
+  const realAddEL = document.addEventListener;
+  document.addEventListener = (type, fn) => { (capturedDoc[type] ||= []).push(fn); };
+  chatUi._wireRevealCloser();
+  document.addEventListener = realAddEL;
+  assert(Array.isArray(capturedDoc.click) && capturedDoc.click.length > 0, 'fixture check: wireRevealCloser() registered a document click handler');
+  assert(Array.isArray(capturedDoc.keydown) && capturedDoc.keydown.length > 0, 'DI-120a: wireRevealCloser() also registers a document keydown handler for Escape');
+
+  // Escape dismisses.
+  const msgEsc = fakeMsg37g('esc_msg');
+  chatUi._revealMessageActions('esc_msg');
+  capturedDoc.keydown[0]({ key: 'Tab' });
+  assert(msgEsc._classes.has('chat-actions-revealed'), 'a non-Escape key does not dismiss');
+  capturedDoc.keydown[0]({ key: 'Escape' });
+  assert(!msgEsc._classes.has('chat-actions-revealed'), 'DI-120a: pressing Escape dismisses the revealed message');
+
+  // Click elsewhere dismisses; a click INSIDE the revealed message does not.
+  const msgClick = fakeMsg37g('click_msg');
+  chatUi._revealMessageActions('click_msg');
+  capturedDoc.click[0]({ target: { closest: sel => (sel === `.chat-msg[data-mid="click_msg"]` ? {} : null) } });
+  assert(msgClick._classes.has('chat-actions-revealed'), 'a click INSIDE the revealed message does not dismiss it');
+  capturedDoc.click[0]({ target: { closest: () => null } });
+  assert(!msgClick._classes.has('chat-actions-revealed'), 'DI-120a: a click OUTSIDE the revealed message dismisses it');
+
+  // Scrolling dismisses (onChatScrollEvent — wired per-render on the real
+  // #chat-scroll, since that element is replaced on every re-render).
+  const msgScroll = fakeMsg37g('scroll_msg');
+  chatUi._revealMessageActions('scroll_msg');
+  // scrollHeight - scrollTop - clientHeight = 1000-200-500 = 300, well past
+  // the 120px "near bottom" cutoff — i.e. NOT near the bottom yet.
+  const fakeScrollEl = { scrollHeight: 1000, scrollTop: 200, clientHeight: 500 };
+  const fakeJumpEl = { style: {} };
+  chatUi._onChatScrollEvent(fakeScrollEl, fakeJumpEl);
+  assert(!msgScroll._classes.has('chat-actions-revealed'), 'DI-120a: scrolling the message list dismisses the revealed message');
+  // Bonus (pre-existing, previously untested) coverage: the jump-to-latest
+  // button's own show/hide logic, now routed through the same function,
+  // still works — not near the bottom (300px of remaining scroll > 120px cutoff).
+  assert(fakeJumpEl.style.display === 'block', 'fixture check: onChatScrollEvent still drives the jump-to-latest button\'s visibility unchanged');
+  chatUi._onChatScrollEvent({ scrollHeight: 1000, scrollTop: 900, clientHeight: 500 }, fakeJumpEl);   // 1000-900-500 = -400 < 120 → near bottom
+  assert(fakeJumpEl.style.display === 'none', 'fixture check: near the bottom, the jump-to-latest button hides, unchanged by this refactor');
+
+  document.querySelector = realQS37g;
+}
+
+console.log('\n[37h] DI-121a CONSTRAINT — the reaction pill\'s own tap-to-vote is untouched, and independent of reveal state…');
+{
+  // _reactionsHTML (§[28]) is the REAL render function. Confirm its pill
+  // markup (data-react / data-target, tap-to-toggle-my-own-vote) carries no
+  // reference to the reveal class or any reveal-gesture attribute — the pill
+  // is generated the SAME way regardless of whether the message is currently
+  // revealed, so the two gestures structurally cannot collide.
+  const pillMsg37h = { id: 'pill_msg', reactions: { '🔥': ['p1', 'p2'] } };
+  const pillHTML37h = chatUi._reactionsHTML(pillMsg37h, 'p1');
+  assert(/data-react="🔥"/.test(pillHTML37h) && /data-target="pill_msg"/.test(pillHTML37h),
+    'the reaction pill still carries its own data-react/data-target tap-to-toggle attributes, unchanged by UN-120/UN-121');
+  assert(!/chat-actions-revealed/.test(pillHTML37h) && !/data-react-open/.test(pillHTML37h) && !/data-reply/.test(pillHTML37h),
+    'the pill markup itself is generated independently of the reveal mechanism — reveal is a different gesture on a different element, per DI-121a');
+  assert(/class="chat-react-pill me"/.test(pillHTML37h),
+    'fixture check: the pill still marks the viewer\'s OWN reaction (the exact tap target whose behavior must stay a plain tap)');
+}
+
+console.log('\n[37i] RG-21 recurrence guard — the density gain this batch is supposed to protect must not be silently cancelled again…');
+{
+  // Both newly-hidden-by-default elements (.chat-actions, .chat-reaction-names)
+  // reserve ZERO layout height while hidden (display:none on both, §[37a]) —
+  // the structural precondition for a real density gain on reacted messages,
+  // the exact class of message RG-21 found cancelled to a wash (4.58→4.60/screen).
+  // A PIXEL-PER-SCREEN measurement (like RG-21's) requires an actual layout
+  // engine — this harness has none (DOM stubs only) — so this suite proves the
+  // STRUCTURAL precondition and stops there; see the handoff report for the
+  // explicit statement that the real number needs a browser pass. [structural]
+  const actionsRule37i = (cssSrc.match(/^\.chat-actions\{[^}]*\}/m) || [''])[0];
+  const namesRule37i = (cssSrc.match(/^\.chat-reaction-names\{[^}]*\}/m) || [''])[0];
+  assert(/display:\s*none/.test(actionsRule37i) && /display:\s*none/.test(namesRule37i),
+    'both elements this batch newly gates start display:none — neither can reserve invisible layout height while hidden [structural]');
+  // The UN-114/RG-21 fix itself: the pill's OWN box has no tall min-height
+  // (absent entirely, same as it shipped — a missing declaration reads as 0
+  // here, same convention §[28] uses), while the hit target lives on the
+  // separate, invisible ::after overlay at >=40px. Neither half regressed.
+  const pillRule37i = (cssSrc.match(/\.chat-react-pill\{[^}]*\}/) || [''])[0];
+  const pillOwnMinH37i = Number((pillRule37i.match(/min-height:\s*(\d+)px/) || [])[1] || 0);
+  assert(pillOwnMinH37i < 30, `the pill's own visible box stays compact (no tall min-height regressed in) — got ${pillOwnMinH37i}px [structural]`);
+  const pillHitRule37i = (cssSrc.match(/\.chat-react-pill::after\{[^}]*\}/) || [''])[0];
+  const pillHitH37i = Number((pillHitRule37i.match(/height:\s*(\d+)px/) || [])[1] || 0);
+  assert(pillHitH37i >= 40, `the UN-114/RG-21 invisible ::after hit overlay is still >=40px, untouched by this batch — got ${pillHitH37i}px [structural]`);
+}
+
+// ── 38. RG — a LIVE week must be public even with the Week-tab dates set ─────
+// The reported defect: with "Auto-Lock At (override)" filled in — an ordinary
+// commissioner configuration (app.js #picks-open-at / #picks-lock-at) — the
+// ENTIRE live window rendered blind. Matrix •••, compact chips •••,
+// tiebreakers ***, correct/incorrect —, chat pick chips suppressed, the reveal
+// ritual never fired, and the explanatory note told players "check back at
+// kickoff" after kickoff. It only unblinded on manual finalize.
+//
+// Mechanism: getEffectiveWeekStatus() consults picksLockAt/picksOpenAt BEFORE
+// falling through to week.status and has no 'live' branch at all, so a week the
+// app itself auto-advanced to LIVE (tickAutoTransition, LOCKED→LIVE at first
+// kickoff) reported back as 'locked' or 'open'.
+//
+// WHY [34] MISSED IT: every fixture in the UN-116 suite is built by an mk()
+// that sets NO date fields — the one week shape in which the two code paths
+// agree. These fixtures set them, with ELAPSED values computed from now() so
+// the suite cannot quietly stop reproducing the bug as the season moves on.
+console.log('\n[38] RG — a LIVE week stays public with Auto-Open / Auto-Lock set…');
+{
+  const app38 = mods['app'];
+  const ago38 = h => new Date(Date.now() - h * 3600e3).toISOString();
+  const OPEN_AT_38 = ago38(96);   // Auto-Open At — elapsed four days ago
+  const LOCK_AT_38 = ago38(2);    // Auto-Lock At — elapsed; first kickoff has passed
+  const DATES_38 = [
+    ['no date fields',                   {}],
+    ['picksOpenAt set (Auto-Open At)',   { picksOpenAt: OPEN_AT_38 }],
+    ['picksLockAt set (Auto-Lock)',      { picksLockAt: LOCK_AT_38 }],
+    ['BOTH date fields set',             { picksOpenAt: OPEN_AT_38, picksLockAt: LOCK_AT_38 }],
+  ];
+  const mk38 = (status, extra = {}) => ({
+    weekId: 'rg38_' + status, weekNumber: 1, season: 2026, status, dataSourceMode: 'demo',
+    startDate: '2026-09-05', endDate: '2026-09-06', ...extra,
+  });
+
+  // 38a — THE REGRESSION. All four configurations of a LIVE week, not just the
+  // one with empty dates. week.status === 'live' is the authoritative,
+  // automatically-maintained "first game has kicked off" signal; nothing the
+  // commissioner types into a datetime field may override it.
+  for (const [label, dates] of DATES_38) {
+    assert(storage.arePicksPublic(mk38('live', dates)) === true,
+      `LIVE week with ${label}: picks ARE public — kickoff has happened, the blind window is over`);
+  }
+  // 38b — FINAL is unaffected (it already had an explicit week.status clause).
+  for (const [label, dates] of DATES_38) {
+    assert(storage.arePicksPublic(mk38('final', dates)) === true,
+      `FINAL week with ${label}: picks ARE public (unchanged)`);
+  }
+  // 38c — the blind side must NOT loosen. This is the direction that leaks, so
+  // it is asserted across the same four date configurations.
+  for (const [label, dates] of DATES_38) {
+    assert(storage.arePicksPublic(mk38('draft', dates)) === false, `DRAFT week with ${label}: still blind`);
+    assert(storage.arePicksPublic(mk38('open', dates)) === false, `OPEN week with ${label}: still blind — picks are still editable`);
+    assert(storage.arePicksPublic(mk38('locked', dates)) === false, `LOCKED week with ${label}: still blind (UN-116 threshold is live/final, never lock)`);
+  }
+  assert(storage.arePicksPublic(null) === false, 'a missing week is never public (unchanged)');
+
+  // 38d — the surface a player actually sees. A predicate-only test would have
+  // passed against the shipped UN-116 defect ([34]'s header explains why), so
+  // assert the served dashboard markup for the exact week shape Drew runs:
+  // LIVE, with both date fields filled in.
+  const LW38 = mk38('live', { weekId: 'rg38_wk', picksOpenAt: OPEN_AT_38, picksLockAt: LOCK_AT_38 });
+  storage.saveWeek(LW38);
+  storage.saveGame({ weekId: LW38.weekId, gameId: 'rg38_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'scheduled', spread: -3 });
+  storage.addPlayer({ playerId: 'rg38_me', displayName: 'Me', active: true });
+  storage.addPlayer({ playerId: 'rg38_rival', displayName: 'Rival', active: true });
+  const PICKS38 = [
+    { pickId: 'rg38_pk1', weekId: LW38.weekId, gameId: 'rg38_g1', playerId: 'rg38_me', selectedTeam: 'Ohio State' },
+    { pickId: 'rg38_pk2', weekId: LW38.weekId, gameId: 'rg38_g1', playerId: 'rg38_rival', selectedTeam: 'Texas' },
+  ];
+  storage.saveAllPicks([...storage.getPicks(), ...PICKS38]);
+  const players38 = [
+    { playerId: 'rg38_me', displayName: 'Me', active: true },
+    { playerId: 'rg38_rival', displayName: 'Rival', active: true },
+  ];
+  const results38 = players38.map((p, i) => ({ playerId: p.playerId, rank: i + 1, correctPicks: 1, incorrectPicks: 0, tiebreakerGuess: 40 + i, tiebreakerDelta: 0 }));
+
+  storage.setSession('rg38_me', false, true);   // an ordinary player, not the commissioner
+  assert(app38.canViewOtherPicks(storage.getWeek(LW38.weekId)) === true,
+    'a player CAN see the other five during the live window of a date-configured week');
+  const html38 = app38.renderDashboardTable(players38, storage.getGames(LW38.weekId), PICKS38, results38, LW38.weekId, null);
+  const cells38 = (html38.match(/<td class="pick-cell[\s\S]*?<\/td>/g) || []);
+  assert(cells38.length === 2, `fixture check: one pick cell per player (got ${cells38.length})`);
+  assert(!/pick-cell-blind/.test(html38),
+    'THE DEFECT: no blind cells survive in the live matrix — the whole week used to render ••• until manual finalize');
+  assert(/Texas/.test(cells38.join('')),
+    "the rival's actual selection is present in the live matrix, not masked");
+
+  // 38e — same fixture, week rewound to OPEN. The fix must not have turned the
+  // date fields into a general unblinding: this must still be blind.
+  storage.saveWeek({ ...LW38, status: 'open' });
+  assert(app38.canViewOtherPicks(storage.getWeek(LW38.weekId)) === false,
+    'rewound to OPEN with the same elapsed date fields, the rival is blind again');
+  const htmlOpen38 = app38.renderDashboardTable(players38, storage.getGames(LW38.weekId), PICKS38, results38, LW38.weekId, null);
+  const blindCells38 = (htmlOpen38.match(/<td class="pick-cell[\s\S]*?<\/td>/g) || []).filter(c => /pick-cell-blind/.test(c));
+  assert(blindCells38.length === 1,
+    `exactly the rival's cell is blinded on the OPEN week (got ${blindCells38.length}) — the blind rule is intact`);
+  assert(!/Texas/.test(blindCells38.join('')),
+    "on the OPEN week the rival's selection is absent from the served markup");
+
+  // 38f — THE OTHER HALF OF THE SAME NEED. Drew, 2026-08-12: "Only time you
+  // should see other people's picks are live and final, WHEN YOU CANT EDIT
+  // other picks." Unblinding the live window above satisfies the first clause;
+  // this asserts the second, which the identical root cause had broken.
+  //
+  // In the Auto-Open-only configuration (Auto-Lock left blank — its documented
+  // default, "blank = auto-derive") getEffectiveWeekStatus() reports 'open' for
+  // a week the app already advanced to LIVE, so canPlayerSubmitPicks()'s
+  // eff==='live' branch — which exists and plainly intends to deny — never
+  // fires. A player could read the whole field and still change a pick on a
+  // game that had not kicked off yet. That is precisely the exploit UN-116 was
+  // built to close, and unblinding without this would have re-opened it.
+  const LIVE_OPENONLY_38 = mk38('live', { weekId: 'rg38_openonly', picksOpenAt: OPEN_AT_38 });
+  assert(storage.arePicksPublic(LIVE_OPENONLY_38) === true,
+    'fixture check: this LIVE week is public (Auto-Open set, Auto-Lock blank)');
+  assert(app38.canPlayerSubmitPicks(LIVE_OPENONLY_38, 'rg38_me').allowed === false,
+    'a LIVE week refuses picks even with only Auto-Open At set — nobody may see the field AND still edit');
+  for (const [label, dates] of DATES_38) {
+    assert(app38.canPlayerSubmitPicks(mk38('live', dates), 'rg38_me').allowed === false,
+      `LIVE week with ${label}: picks are closed — visibility and editability flip at the same instant`);
+  }
+  // The locked architectural decision is untouched: while the slate is genuinely
+  // OPEN, picks stay editable. This is the assertion that would catch an
+  // over-broad "just deny everything" fix.
+  assert(app38.canPlayerSubmitPicks(mk38('open', { picksOpenAt: OPEN_AT_38 }), 'rg38_me').allowed === true,
+    'an OPEN week still accepts picks — "player picks are editable while the slate is open" is a locked decision');
+  assert(app38.canPlayerSubmitPicks(mk38('draft'), 'rg38_me').allowed === false, 'a DRAFT week accepts no picks (unchanged)');
+  assert(app38.canPlayerSubmitPicks(mk38('final'), 'rg38_me').allowed === false, 'a FINAL week accepts no picks (unchanged)');
+  assert(app38.canPlayerSubmitPicks(null, 'rg38_me').allowed === false, 'no week, no picks (unchanged)');
+  assert(app38.canPlayerSubmitPicks(mk38('open'), null).allowed === false, 'signed out, no picks (unchanged)');
+
+  // 38g — THE SECOND HALF OF THE SAME DEFECT. The 'live' fix above consulted
+  // week.status for 'live' and stopped there; 'locked' has the identical shape.
+  // On a week with Auto-Open At set and Auto-Lock left blank,
+  // getEffectiveWeekStatus() reports 'open' for a week the app itself advanced
+  // to LOCKED (tickAutoTransition, 30 min pre-kickoff), so the eff==='locked'
+  // branch never fires and the commissioner's explicit lock does NOTHING —
+  // picks stay submittable through the entire lock window, with only each
+  // game's own kickoff (isGamePickable) left as a brake.
+  //
+  // Not an information leak — arePicksPublic() is correctly false on a locked
+  // week — but the lock is the commissioner's control over the slate and it was
+  // silently inert. Asserted as a pair so the asymmetry is on the record.
+  const LOCKED_OPENONLY_38 = mk38('locked', { weekId: 'rg38_lockedopenonly', picksOpenAt: OPEN_AT_38 });
+  assert(storage.getEffectiveWeekStatus(LOCKED_OPENONLY_38) === 'open',
+    "fixture check: getEffectiveWeekStatus() reports 'open' for this LOCKED week — the blind spot both halves of this defect hid in");
+  assert(storage.arePicksPublic(LOCKED_OPENONLY_38) === false,
+    'fixture check: the locked week is still blind — this half is an inert lock, not a leak');
+  assert(app38.canPlayerSubmitPicks(LOCKED_OPENONLY_38, 'rg38_me').allowed === false,
+    'a LOCKED week refuses picks even with only Auto-Open At set — the commissioner lock is not advisory');
+
+  // 38h — EXHAUSTIVE over statuses × date-configurations. Both halves of this
+  // defect hid in the SAME blind spot: a week.status the eff-branch chain could
+  // not express, paired with a date field that made getEffectiveWeekStatus()
+  // report something else. Enumerating every cell is the only shape that stops
+  // a third one hiding there.
+  //
+  // Expectations are DECLARED, never derived by calling getEffectiveWeekStatus()
+  // — a table computed from the implementation agrees with any bug it contains.
+  //
+  // Exactly one state accepts picks: a week the commissioner has OPEN whose
+  // Auto-Lock time has not elapsed. LOCK_AT_38 is two hours in the past, so any
+  // configuration carrying it closes the slate — that is what the field is for,
+  // and it is the assertion that would catch an over-broad "deny everything" fix
+  // in the other direction.
+  const SUBMIT_MATRIX_38 = {
+    //          no dates | openAt only | lockAt only | both
+    draft:  [false, false, false, false],
+    open:   [true,  true,  false, false],
+    locked: [false, false, false, false],
+    live:   [false, false, false, false],
+    final:  [false, false, false, false],
+  };
+  for (const [status, expected] of Object.entries(SUBMIT_MATRIX_38)) {
+    assert(expected.length === DATES_38.length,
+      `matrix check: ${status} row covers all ${DATES_38.length} date configurations`);
+    DATES_38.forEach(([label, dates], i) => {
+      const got = app38.canPlayerSubmitPicks(mk38(status, dates), 'rg38_me').allowed;
+      assert(got === expected[i],
+        `${status.toUpperCase()} week with ${label}: picks ${expected[i] ? 'ACCEPTED' : 'refused'} (got ${got ? 'ACCEPTED' : 'refused'})`);
+    });
+  }
+  assert(Object.keys(SUBMIT_MATRIX_38).length === 5,
+    'matrix check: all five week statuses are enumerated — draft/open/locked/live/final');
+
+  storage.saveWeek({ ...LW38, status: 'live' });
+  storage.setSession(null, false, false);
+}
+
+// ── 39. RG — locked→final must still post the Extra Point reveal ─────────────
+// DI-116e added a blind-rule guard to emitExtraPointEvent() that re-reads the
+// week from storage. The Week-tab status button ran finalizeWeek(week) BEFORE
+// saveWeek(upd), so the guard saw a week still marked 'locked' and returned
+// early. The event carries a deterministic id (sys_ep_<weekId>) with
+// server-side dedupe, so a skipped post NEVER re-emits — that week's Extra
+// Point reveal was lost permanently, silently, on the most ordinary
+// commissioner action there is.
+//
+// Driven through applyWeekStatusChange() — the real handler body, extracted so
+// the ORDER OF OPERATIONS is reachable here. Asserting on the emitted chat
+// event, never on the source text of the call site.
+console.log('\n[39] RG — the ordinary locked→final commissioner action still posts the Extra Point…');
+{
+  const app39 = mods['app'];
+  const mkWeek39 = (weekId, status) => ({
+    weekId, weekNumber: 7, season: 2026, status, dataSourceMode: 'demo',
+    startDate: '2026-09-05', endDate: '2026-09-06', extraPointActual: 52,
+  });
+  const seed39 = (weekId, status) => {
+    const w = mkWeek39(weekId, status);
+    storage.saveWeek(w);
+    storage.saveGame({ weekId, gameId: weekId + '_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
+    storage.setExtraPointGuess(weekId, 'rg38_me', 48);
+    storage.setExtraPointGuess(weekId, 'rg38_rival', 55);
+    return storage.getWeek(weekId);
+  };
+
+  // 39a — THE REGRESSION. A LOCKED week, commissioner presses FINAL.
+  const W39 = seed39('rg39_locked', 'locked');
+  assert(storage.getWeek(W39.weekId).status === 'locked', 'fixture check: the week in storage is LOCKED when the button is pressed');
+  assert(!getMessage(`sys_ep_${W39.weekId}`), 'fixture check: nothing posted yet');
+  app39.applyWeekStatusChange(W39, 'final');
+  assert(storage.getWeek(W39.weekId).status === 'final', 'the transition itself persisted');
+  const ep39 = getMessage(`sys_ep_${W39.weekId}`);
+  assert(!!ep39,
+    'THE DEFECT: locked→final posts the Extra Point reveal — the guard must not be defeatable by the caller saving after it runs');
+  assert(/Extra Point/.test(ep39?.body || '') && /52/.test(ep39?.body || ''),
+    'the posted event carries the actual yardage and both entries, not an empty shell');
+
+  // 39b — the same transition from LIVE, which already worked. Still works.
+  const WL39 = seed39('rg39_live', 'live');
+  app39.applyWeekStatusChange(WL39, 'final');
+  assert(!!getMessage(`sys_ep_${WL39.weekId}`), 'live→final posts the Extra Point (unchanged)');
+
+  // 39c — THE GUARD ITSELF MUST SURVIVE (Defect 3: it had zero coverage — the
+  // reviewer deleted it and the suite stayed green at 670/670). It exists
+  // because a commissioner could otherwise publish the whole field's Extra
+  // Point guesses into the public room while the slate was still open and every
+  // player could still change their own entry. Fixing the ordering above must
+  // not have amounted to deleting it.
+  const WO39 = seed39('rg39_open', 'open');
+  const graded39 = mods['extra-point'].gradeWeekExtraPoint(WO39, storage.getPlayers().filter(p => p.active));
+  assert(!!graded39, 'fixture check: the open week grades — so the post below is blocked by the blind rule and nothing else');
+  chatUi.emitExtraPointEvent(WO39.weekId, graded39);
+  assert(!getMessage(`sys_ep_${WO39.weekId}`),
+    'BLIND RULE: an OPEN week never publishes the field\'s Extra Point guesses (permanent once emitted — deterministic id, no take-backs)');
+  const WK39 = seed39('rg39_lockedonly', 'locked');
+  chatUi.emitExtraPointEvent(WK39.weekId, graded39);
+  assert(!getMessage(`sys_ep_${WK39.weekId}`),
+    'BLIND RULE: a LOCKED week never publishes them either (UN-116 threshold is live/final, never lock)');
+  // …and through the real handler, which is the path a commissioner actually
+  // takes. open→locked runs no finalization, so nothing may be published.
+  const WP39 = seed39('rg39_openbtn', 'open');
+  app39.applyWeekStatusChange(WP39, 'locked');
+  assert(!getMessage(`sys_ep_${WP39.weekId}`),
+    'BLIND RULE: pressing LOCKED on an open week publishes no Extra Point — only finalization does');
+  // A LIVE week does publish, which is what proves the three assertions above
+  // are measuring the blind rule rather than a permanently dead emitter.
+  const WV39 = seed39('rg39_livedirect', 'live');
+  chatUi.emitExtraPointEvent(WV39.weekId, graded39);
+  assert(!!getMessage(`sys_ep_${WV39.weekId}`),
+    'fixture check: the same call on a LIVE week DOES publish — the guard is a live gate, not a dead code path');
+}
+
+// ── 40. RG — the ⚡ chat pick chip carries the blind rule, and is covered ─────
+// The reviewer deleted pickChip()'s arePicksPublic() guard and the full suite
+// stayed green at 670/670: the harness never rendered a chat message at all, so
+// the busiest surface in the app had zero coverage of the rule. If that guard
+// silently reverted, every message in the room would advertise its author's
+// pick while the week was still open and editable.
+//
+// Asserted against the markup messageHTML() actually returns — not pickChip in
+// isolation, and never by matching a name in the source, which is the exact
+// anti-pattern that let RG-12 recur.
+console.log('\n[40] RG — chat ⚡ pick chip obeys the blind rule (rendered markup)…');
+{
+  const W40 = { weekId: 'rg40_wk', weekNumber: 3, season: 2026, status: 'open', dataSourceMode: 'demo', startDate: '2026-09-05', endDate: '2026-09-06' };
+  storage.saveWeek(W40);
+  storage.saveGame({ weekId: W40.weekId, gameId: 'rg40_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: '2026-09-05T16:00:00Z', status: 'scheduled', spread: -3 });
+  storage.addPlayer({ playerId: 'rg40_me', displayName: 'Me', active: true });
+  storage.addPlayer({ playerId: 'rg40_rival', displayName: 'Rival', active: true });
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'rg40_pk1', weekId: W40.weekId, gameId: 'rg40_g1', playerId: 'rg40_me', selectedTeam: 'Ohio State' },
+    { pickId: 'rg40_pk2', weekId: W40.weekId, gameId: 'rg40_g1', playerId: 'rg40_rival', selectedTeam: 'Texas' },
+  ]);
+  const msg40 = author => ({ id: 'rg40_m_' + author, seq: 1, ts: Date.now(), type: 'message', author, body: 'lock it in', gameTag: 'rg40_g1' });
+  // The chip is the ONLY thing under test. The matchup chip next to it
+  // legitimately names both teams, so scope every assertion to the chip's own
+  // markup — a whole-document search would be a false positive either way.
+  const chipOf = html => (html.match(/<span class="pick-chip[\s\S]*?<\/span>/g) || []).join('');
+
+  // 40a — OPEN. Nothing about anyone's selection may appear.
+  const openMine40  = mods['chat-ui']._messageHTMLForTest(msg40('rg40_me'), 'rg40_me', false);
+  const openRival40 = mods['chat-ui']._messageHTMLForTest(msg40('rg40_rival'), 'rg40_me', false);
+  assert(chipOf(openRival40) === '',
+    'THE LEAK: on an OPEN week a rival\'s message renders NO ⚡ pick chip — the room may not publish what the dashboard hides');
+  assert(!/⚡/.test(openRival40),
+    'the ⚡ glyph itself is absent from the served markup — blinded server-side, not hidden with CSS');
+  assert(chipOf(openMine40) === '',
+    'the viewer\'s own message carries no chip either while the week is open (the chip is week-gated, not author-gated)');
+  assert(/chat-author/.test(openRival40) && /lock it in/.test(openRival40),
+    'fixture check: the message itself still renders — only the chip is withheld');
+
+  // 40b — LIVE. The chip appears, for the rival, naming the rival's team.
+  storage.saveWeek({ ...W40, status: 'live' });
+  const liveRival40 = mods['chat-ui']._messageHTMLForTest(msg40('rg40_rival'), 'rg40_me', false);
+  const liveChip40 = chipOf(liveRival40);
+  assert(liveChip40 !== '' && /⚡/.test(liveChip40),
+    'once LIVE the ⚡ chip renders — the chip is genuinely wired into messageHTML(), not dead code');
+  assert(/Texas|TEX/.test(liveChip40),
+    `the chip names the rival's actual pick — got "${liveChip40.replace(/<[^>]*>/g, '').trim()}"`);
+  assert(/Rival picked Texas/.test(liveRival40),
+    'the chip\'s title attribute attributes the pick to its author');
+
+  // 40c — the same LIVE week with the commissioner's date fields set. This is
+  // suite [38]'s defect measured on the chat surface: the chip vanished for the
+  // entire live window whenever Auto-Lock was configured.
+  storage.saveWeek({ ...W40, status: 'live', picksOpenAt: new Date(Date.now() - 96 * 3600e3).toISOString(), picksLockAt: new Date(Date.now() - 2 * 3600e3).toISOString() });
+  assert(chipOf(mods['chat-ui']._messageHTMLForTest(msg40('rg40_rival'), 'rg40_me', false)) !== '',
+    'the ⚡ chip still renders on a LIVE week whose Auto-Open/Auto-Lock fields are filled in');
+
+  // 40d — and it closes again. A chip that could never be withheld would pass
+  // 40b/40c while leaking permanently.
+  storage.saveWeek({ ...W40, status: 'locked' });
+  assert(chipOf(mods['chat-ui']._messageHTMLForTest(msg40('rg40_rival'), 'rg40_me', false)) === '',
+    'rewound to LOCKED the chip is withheld again — the guard is live, not a one-way door');
+}
+
+// ── 41. UN-122 — bug/feature classification: exclusive toggle, submit gating ─
+// The feedback form's markup only exists once inserted into a real browser
+// DOM; this harness's document.getElementById always returns null (see the
+// stubs at the top of this file), so submitFeedback()/bindFeedbackKindToggle()
+// can't be driven end-to-end here — the same constraint suite [30] hit for
+// click-handler ordering. Assert on the real source instead: markup shape,
+// the exclusivity mechanism, and the ORDER of the gating check relative to
+// the data write.
+console.log('\n[41] UN-122 — bug/feature classification: exclusive toggle, submit gating…');
+{
+  // 41a — markup: exactly two mutually exclusive .pick-btn toggles, placed
+  // between the Description textarea and the button row, reusing the
+  // existing .pick-buttons/.pick-btn pattern (Drew's ruling: TWO EXCLUSIVE
+  // TOGGLES, not checkboxes, not a dropdown — zero new CSS).
+  const cardBlock41 = (appJsSrc.match(/<div class="card feedback-card">[\s\S]*?<div class="app-version-footer"/) || [''])[0];
+  assert(cardBlock41.length > 0, 'feedback-card block located for structural assertions');
+  const bodyIdx41 = cardBlock41.indexOf('id="fb-body"');
+  const groupIdx41 = cardBlock41.indexOf('id="fb-kind-group"');
+  const submitIdx41 = cardBlock41.indexOf('id="fb-submit-btn"');
+  assert(bodyIdx41 > -1 && groupIdx41 > -1 && submitIdx41 > -1 && bodyIdx41 < groupIdx41 && groupIdx41 < submitIdx41,
+    'the kind toggle sits between the Description textarea and the submit button row');
+  assert(/class="pick-buttons" id="fb-kind-group"/.test(cardBlock41),
+    'the toggle container reuses .pick-buttons (the existing 2-up grid) — zero new CSS for the control itself');
+  const kindButtons41 = [...cardBlock41.matchAll(/<button type="button" class="pick-btn" data-fb-kind="(bug|feature)">/g)].map(m => m[1]);
+  assert(kindButtons41.length === 2 && kindButtons41.includes('bug') && kindButtons41.includes('feature'),
+    `exactly two .pick-btn toggles, data-fb-kind="bug" and "feature" (got ${JSON.stringify(kindButtons41)})`);
+
+  // 41b — exclusivity: bindFeedbackKindToggle() clears .selected off every
+  // sibling before applying it to the clicked one — radio behavior, never
+  // both, never independent checkboxes. Same one-line mechanism as
+  // bindPickButtons()/the login player-tile grid elsewhere in this file.
+  const toggleFnSrc41 = (appJsSrc.match(/function bindFeedbackKindToggle\(\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(toggleFnSrc41.length > 0, 'bindFeedbackKindToggle() located');
+  assert(/classList\.toggle\('selected',\s*b === btn\)/.test(toggleFnSrc41),
+    'clicking one toggle clears .selected off both and applies it only to the clicked one');
+
+  // 41c — submission is BLOCKED until a kind is chosen (Drew's ruling): the
+  // missing-kind guard must run BEFORE appendFeedback(entry), so an
+  // unclassified entry is never written — only toasted.
+  const submitFnSrc41 = (appJsSrc.match(/function submitFeedback\(\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(submitFnSrc41.length > 0, 'submitFeedback() located');
+  const kindCheckIdx41 = submitFnSrc41.indexOf('if (!kind) { showToast(');
+  const appendIdx41 = submitFnSrc41.indexOf('appendFeedback(entry)');
+  assert(kindCheckIdx41 > -1 && appendIdx41 > -1 && kindCheckIdx41 < appendIdx41,
+    'the missing-kind guard runs BEFORE appendFeedback() — an unclassified submission is never written');
+  assert(/document\.querySelector\('#fb-kind-group \.pick-btn\.selected'\)/.test(submitFnSrc41),
+    'the chosen kind is read from the DOM at submit time');
+  assert(!/kind:\s*kind\s*\|\|\s*'unspecified'/.test(submitFnSrc41),
+    "submission never silently writes kind:'unspecified' — that label is reserved for reading LEGACY rows, not writing new ones");
+
+  // 41d — the written entry carries both new fields (UN-122 kind, DI-123a
+  // weekId), gated by the same kind check proven above.
+  assert(/weekId:\s*getCurrentWeek\(\)\?\.weekId\s*\?\?\s*null/.test(submitFnSrc41),
+    'DI-123a — entry.weekId is getCurrentWeek()?.weekId ?? null, exactly as approved');
+  assert(/^\s*kind,/m.test(submitFnSrc41), 'the written entry carries the chosen kind');
+}
+
+// ── 42. UN-122/123 — renderFeedbackAdmin(): legacy rows default, never throw ─
+console.log('\n[42] UN-122/123 — renderFeedbackAdmin(): legacy rows default, never throw…');
+{
+  const app42 = mods['app'];
+
+  // 42a — a LEGACY entry: no kind, no weekId, no appVersion — exactly the
+  // shape of every row already sitting in cfbp_feedback today (the pipeline
+  // was write-only until this batch — CONVENTIONS #10 default-when-missing).
+  const legacy42 = { id: 'fb_legacy', name: 'Kevin', body: 'the dashboard was blank on my phone', submittedAt: '2026-07-01T12:00:00.000Z' };
+  let html42, threw42 = false;
+  try { html42 = app42.renderFeedbackAdmin([legacy42]); } catch (e) { threw42 = true; console.error(e); }
+  assert(!threw42, 'renderFeedbackAdmin() does not throw on a legacy row missing kind/weekId/appVersion');
+  assert(/Unspecified/.test(html42), 'a legacy row with no kind renders the Unspecified badge, not a guess');
+  assert(/—/.test(html42), 'a legacy row with no weekId renders — (em dash), not a blank or a thrown error');
+  assert(/Kevin/.test(html42) && /the dashboard was blank on my phone/.test(html42),
+    "the legacy row's real name and body still render");
+
+  // 42b — a modern entry with both fields set renders the matching badge and
+  // an actual resolvable week label instead of the dash.
+  storage.saveWeek({ weekId: 'fb42_wk', weekNumber: 4, season: 2026, status: 'open', dataSourceMode: 'demo', startDate: '2026-09-19', endDate: '2026-09-20' });
+  const modern42 = { id: 'fb_modern', name: 'Brayden', kind: 'bug', weekId: 'fb42_wk', body: 'picks page froze', submittedAt: '2026-09-19T09:00:00.000Z', appVersion: 'v0.17.6' };
+  const html42b = app42.renderFeedbackAdmin([modern42]);
+  assert(/🐛 Bug/.test(html42b), 'kind:"bug" renders the Bug badge');
+  assert(/Week 4/.test(html42b), "a resolvable weekId renders the week's real label, not the raw id or a dash");
+  assert(!/—/.test(html42b), 'a row WITH a resolvable weekId does not fall back to the dash');
+
+  // 42c — a "feature" kind renders the Idea badge; an empty list renders the
+  // documented empty state, never an empty shell.
+  const html42c = app42.renderFeedbackAdmin([{ id: 'fb_f', name: 'Koby', kind: 'feature', weekId: null, body: 'add dark mode', submittedAt: '2026-09-19T09:05:00.000Z' }]);
+  assert(/💡 Idea/.test(html42c), 'kind:"feature" renders the Idea badge');
+  assert(app42.renderFeedbackAdmin([]) === '<p class="text-muted text-sm">No feedback submitted yet.</p>',
+    'an empty feedback list renders the documented empty state exactly');
+}
+
+// ── 43. UN-123 — commissioner Data-tab feedback card: wrapper + wiring ───────
+console.log('\n[43] UN-123 — commissioner Data-tab feedback card: wrapper, wiring, CSV button…');
+{
+  const app43 = mods['app'];
+  storage.clearFeedback();
+
+  // 43a — RG-10: an untagged admin-section renders on ALL FIVE commissioner
+  // tabs. Verified against the string the function ACTUALLY RETURNS when
+  // called — not a mention of the attribute elsewhere in source.
+  const sectionEmpty43 = app43.renderFeedbackAdminSectionHTML();
+  assert(/^\s*<div class="admin-section" data-comm-tab="data">/.test(sectionEmpty43),
+    'renderFeedbackAdminSectionHTML() actually returns markup wrapped in <div class="admin-section" data-comm-tab="data">');
+  assert(/No feedback submitted yet\./.test(sectionEmpty43), 'empty store renders the documented empty state inside the wrapper');
+  assert(/id="export-feedback-csv-btn"/.test(sectionEmpty43), 'the CSV export button is present in the rendered card');
+
+  // 43b — with entries in storage, the rendered card reflects them.
+  // renderFeedbackAdminSectionHTML() calls renderFeedbackAdmin() with NO
+  // argument — the production shape, reading live storage (distinct from
+  // suite [42]'s explicit-array calls).
+  storage.appendFeedback({ id: 'fb43', name: 'Jacob', kind: 'bug', weekId: null, body: 'chat scroll jumps', submittedAt: '2026-08-01T00:00:00.000Z', appVersion: 'v0.17.5' });
+  const sectionFull43 = app43.renderFeedbackAdminSectionHTML();
+  assert(/Jacob/.test(sectionFull43) && /chat scroll jumps/.test(sectionFull43),
+    'renderFeedbackAdminSectionHTML() with no argument reads live storage — the shape renderCommPanel actually calls');
+  storage.clearFeedback();
+
+  // 43c — wired into renderCommPanel directly after the Export Data section,
+  // same tab, per the design input's explicit placement. Position-in-source
+  // check (same technique suite [30] uses for click-handler ordering) since
+  // the full comm panel can't render against this harness's DOM stub
+  // (document.getElementById returns null).
+  const exportDataIdx43 = appJsSrc.indexOf('<div class="admin-section-title">📤 Export Data</div>');
+  const feedbackPushIdx43 = appJsSrc.indexOf('sections.push(renderFeedbackAdminSectionHTML());');
+  const tiebreakerIdx43 = appJsSrc.indexOf('// Tiebreaker');
+  assert(exportDataIdx43 > -1 && feedbackPushIdx43 > -1 && tiebreakerIdx43 > -1 &&
+    exportDataIdx43 < feedbackPushIdx43 && feedbackPushIdx43 < tiebreakerIdx43,
+    'the feedback section is pushed directly after Export Data, before the next section, as specified');
+
+  // 43d — NOT part of exportFullCsvBundle() — Drew was offered that and did
+  // not select it.
+  const bundleFnSrc43 = (appJsSrc.match(/function exportFullCsvBundle\(\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(bundleFnSrc43.length > 0, 'exportFullCsvBundle() located');
+  assert(!/exportFeedbackCSV/.test(bundleFnSrc43),
+    'feedback is NOT part of exportFullCsvBundle() — Drew was offered that and did not select it');
+
+  // 43e — the export button is actually wired to its click handler.
+  assert(appJsSrc.includes("getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);"),
+    'export-feedback-csv-btn is wired to exportFeedbackCSV inside bindCommEventListeners()');
+}
+
+// ── 44. UN-123 — buildFeedbackCsvRows(): columns, no truncation, defaults ────
+console.log('\n[44] UN-123 — buildFeedbackCsvRows(): full column shape, no truncation, legacy defaults…');
+{
+  const { buildFeedbackCsvRows } = mods['app'];
+
+  // 44a — column header, exact order per the design input.
+  const header44 = buildFeedbackCsvRows([])[0];
+  assert(JSON.stringify(header44) === JSON.stringify(['Feedback ID', 'Date', 'Name', 'Type', 'Week', 'Week ID', 'App Version', 'Description']),
+    `header row matches the eight approved columns exactly, in order (got ${JSON.stringify(header44)})`);
+
+  // 44b — a description containing BOTH a comma and a quote survives in the
+  // row UNCHANGED — CSV-cell escaping is toCsv()/csvCell()'s job downstream
+  // (the same established pattern every other export in this file uses);
+  // this builder must not pre-mangle the text.
+  const tricky44 = 'Broken, on iPhone: tapping "Submit" does nothing.';
+  const rows44 = buildFeedbackCsvRows([{ id: 'fb1', submittedAt: '2026-08-01T00:00:00.000Z', name: 'Drew', kind: 'bug', weekId: 'w1', appVersion: 'v0.17.5', body: tricky44 }]);
+  assert(rows44[1][7] === tricky44, 'the comma-and-quote description survives byte-for-byte in the Description column');
+
+  // 44b-ii — Drew, 2026-08-12: "The week column should include both the
+  // formatted label and the raw weekID that way there is no discrepancy."
+  // The first shipped version emitted only the raw id here while the on-screen
+  // list showed a label, so the two surfaces disagreed about the same record.
+  const weeks44 = { w1: { weekId: 'w1', weekNumber: 1, season: 2026, startDate: '2026-09-05', endDate: '2026-09-06' } };
+  const labelled44 = buildFeedbackCsvRows(
+    [{ id: 'fb1', name: 'Drew', kind: 'bug', weekId: 'w1', body: 'x' }], weeks44)[1];
+  assert(labelled44[4] === mods['data-model'].formatWeekLabel(weeks44.w1),
+    `the Week column carries the SAME formatted label the on-screen list shows — no discrepancy between surfaces (got "${labelled44[4]}")`);
+  assert(labelled44[5] === 'w1',
+    `the Week ID column carries the raw id, so it stays a clean join/filter key (got "${labelled44[5]}")`);
+  assert(labelled44[4] !== labelled44[5],
+    'the two week columns are genuinely different values, not the id duplicated into both');
+
+  // An unknown or unresolvable week must still emit the raw id — a row is
+  // never left silently unattributable.
+  const orphan44 = buildFeedbackCsvRows([{ id: 'fb9', weekId: 'gone', body: 'x' }], weeks44)[1];
+  assert(orphan44[4] === '—' && orphan44[5] === 'gone',
+    `an unresolvable weekId still emits the raw id with an em-dash label (got ${JSON.stringify([orphan44[4], orphan44[5]])})`);
+
+  // 44c — Drew's stated purpose is feeding this into a coding agent months
+  // later: the CSV must NEVER truncate, even past the on-screen list's
+  // 240-char cutoff (renderFeedbackAdmin, suite [42]).
+  const long44 = 'x'.repeat(500);
+  const rowsLong44 = buildFeedbackCsvRows([{ id: 'fb2', submittedAt: '', name: '', kind: 'feature', weekId: null, appVersion: '', body: long44 }]);
+  assert(rowsLong44[1][7].length === 500, `a 500-char description is not truncated in the CSV (got length ${rowsLong44[1][7].length})`);
+  assert(rowsLong44[1][7] === long44, 'and is byte-for-byte identical, not just the right length');
+
+  // 44d — Type column maps kind → the plain-text label, and a LEGACY entry
+  // (no id/kind/weekId/appVersion/name — everything but body/submittedAt)
+  // never throws and defaults every column instead — CONVENTIONS #10.
+  let rowsLegacy44, threw44 = false;
+  try { rowsLegacy44 = buildFeedbackCsvRows([{ body: 'old row from before this shipped', submittedAt: '2026-06-01T00:00:00.000Z' }]); }
+  catch (e) { threw44 = true; console.error(e); }
+  assert(!threw44, 'buildFeedbackCsvRows() does not throw on a legacy row missing id/kind/weekId/appVersion/name');
+  assert(JSON.stringify(rowsLegacy44[1]) === JSON.stringify(['', '2026-06-01T00:00:00.000Z', '', 'Unspecified', '—', '', '', 'old row from before this shipped']),
+    `legacy row defaults every missing column instead of throwing (got ${JSON.stringify(rowsLegacy44[1])})`);
+
+  // 44e — kind mapping is exhaustive and distinct.
+  const typesCol44 = buildFeedbackCsvRows([
+    { id: 'a', kind: 'bug', body: '' }, { id: 'b', kind: 'feature', body: '' }, { id: 'c', kind: undefined, body: '' },
+  ]).slice(1).map(r => r[3]);
+  assert(JSON.stringify(typesCol44) === JSON.stringify(['Bug', 'Feature', 'Unspecified']),
+    `Type column maps kind exhaustively and distinctly (got ${JSON.stringify(typesCol44)})`);
+}
+
+// ── 45. UN-124 — "What's new": collapsed by default, nothing when empty ──────
+console.log('\n[45] UN-124 — "What\'s new": collapsed by default, renders nothing when empty, last card everywhere…');
+{
+  const app45 = mods['app'];
+
+  // 45a — THE REQUIRED GUARD: both lists empty → render nothing, never an
+  // empty shell (a bare <details> with no content is exactly the "always
+  // there, always disappointing" outcome the design input rules out).
+  assert(app45.renderWhatsNewCardHTML({ version: 'v9.9.9', added: [], fixed: [] }) === '',
+    'both lists empty renders the empty string — no card, no shell');
+  assert(app45.renderWhatsNewCardHTML({ version: 'v9.9.9', added: [], fixed: undefined }) === '',
+    'missing fixed[] (not just empty) still renders nothing — defensive against a malformed release entry');
+
+  // 45b — populated: collapsed by default (bare <details>, no `open`
+  // attribute — same precedent as the 2025 season record), both groups
+  // render when both are populated, and the summary names the release.
+  const html45 = app45.renderWhatsNewCardHTML({ version: 'v0.17.6', added: ['Thing one'], fixed: ['Bug one'] });
+  assert(/<details>/.test(html45) && !/<details open>/.test(html45), 'collapsed by default — no `open` attribute (2025-record precedent)');
+  assert(/<summary/.test(html45) && /What's new in v0\.17\.6/.test(html45), 'the summary names the release');
+  assert(/Thing one/.test(html45) && /Bug one/.test(html45), 'both New and Fixed items render when both lists are populated');
+
+  // 45c — escaping: defense in depth even though this content is hand-authored.
+  const htmlXss45 = app45.renderWhatsNewCardHTML({ version: 'v1', added: ['<script>x</script>'], fixed: [] });
+  assert(!/<script>x<\/script>/.test(htmlXss45) && /&lt;script&gt;/.test(htmlXss45),
+    'list items are escaped, not injected raw');
+
+  // 45d — only ONE group renders when only one list is populated (no empty
+  // "Fixed" heading with nothing under it).
+  const onlyAdded45 = app45.renderWhatsNewCardHTML({ version: 'v1', added: ['Thing'], fixed: [] });
+  assert(/Thing/.test(onlyAdded45) && !/>Fixed</.test(onlyAdded45), 'an empty Fixed[] renders no Fixed heading at all');
+
+  // 45e — the real, hand-maintained release content actually populates for
+  // the current version and doesn't collapse to nothing by accident.
+  assert(app45.APP_VERSION && app45.renderWhatsNewCardHTML().length > 0,
+    'the default WHATS_NEW (no argument) renders non-empty for the current release');
+
+  // 45f — LAST CARD IN EVERY STATE. The DOM stub can't drive renderPicksPage()
+  // end-to-end (document.getElementById returns null), so — same technique
+  // as suite [30] — assert on the real function body: renderWhatsNewCardHTML()
+  // is appended unconditionally as the FINAL statement of BOTH branches: the
+  // historical-week branch (which otherwise returns early) and the
+  // current-week branch (after the footer's conditional, which is NOT
+  // unconditional — that asymmetry is exactly the bug DI-124 guards against).
+  const picksPageSrc45 = (appJsSrc.match(/function renderPicksPage\(\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(picksPageSrc45.length > 0, 'renderPicksPage() located');
+  const histCallIdx45 = picksPageSrc45.indexOf('renderHistoricalPicksView(c, viewWeek, currentWeek);');
+  const histWhatsNewIdx45 = picksPageSrc45.indexOf("c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());");
+  const histReturnIdx45 = picksPageSrc45.indexOf('return;', histCallIdx45);
+  assert(histCallIdx45 > -1 && histWhatsNewIdx45 > -1 && histReturnIdx45 > -1 &&
+    histCallIdx45 < histWhatsNewIdx45 && histWhatsNewIdx45 < histReturnIdx45,
+    "the historical-week branch appends the What's New card BEFORE its early return — it would otherwise never reach it");
+
+  const footerIfIdx45 = picksPageSrc45.indexOf('if (!playerActivelyInPicks)');
+  const footerCallIdx45 = picksPageSrc45.indexOf('renderPicksFooterHTML(currentWeek));');
+  const secondWhatsNewIdx45 = picksPageSrc45.lastIndexOf("c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());");
+  assert(footerIfIdx45 > -1 && footerCallIdx45 > -1 && secondWhatsNewIdx45 > histWhatsNewIdx45,
+    "a SECOND, distinct What's New call exists for the current-week branch (not reusing the historical one)");
+  // The critical property: the second call is OUTSIDE the
+  // `if (!playerActivelyInPicks) { ... }` block — it must run whether or not
+  // that block ran, so a player who stays logged in (and never sees the
+  // footer) still reaches it. Captures the FULL block body (up to its own
+  // closing brace), not a fixed-width window past the footer call — a
+  // narrower window would miss a call re-inserted anywhere else inside the
+  // same block.
+  const ifBlockEndIdx45 = picksPageSrc45.indexOf('\n  }', footerIfIdx45);
+  assert(ifBlockEndIdx45 > -1 && ifBlockEndIdx45 > footerCallIdx45, "the conditional's closing brace located");
+  const ifBlockSrc45 = picksPageSrc45.slice(footerIfIdx45, ifBlockEndIdx45);
+  assert(!/renderWhatsNewCardHTML/.test(ifBlockSrc45),
+    "the What's New call is OUTSIDE the playerActivelyInPicks conditional — unconditional, unlike the recap footer");
+  assert(secondWhatsNewIdx45 > footerCallIdx45,
+    "the current-week What's New call comes AFTER the conditional footer block — genuinely last");
+}
+
+// ── 46. RG-10 — every commissioner card must declare its tab ────────────────
+// RG-10: an `.admin-section` WITHOUT a `data-comm-tab` attribute renders on all
+// five commissioner tabs at once. Individual features have each been asserting
+// their own card in isolation, which protects the card that happens to have a
+// test and nothing else. This is the general form: it catches the NEXT card
+// somebody adds without the attribute, which is how RG-10 happened the first
+// time. Structural by necessity — the comm panel is assembled from template
+// strings and the harness has no layout engine.
+console.log('\n[46] RG-10 — no untagged commissioner card can render on all five tabs…');
+{
+  // The guard is a LINT, so it is only worth what it catches. Expressed as a
+  // named detector and driven by fixtures below, because a bare regex asserted
+  // only against a currently-clean source proves nothing: it passes just as
+  // happily when it has stopped matching anything at all.
+  const untaggedAdminSections = src => {
+    const out = [];
+    const open = /<(div|section)\b[^>]*>/gi;
+    let m;
+    while ((m = open.exec(src))) {
+      const tag = m[0];
+      const cls = /class\s*=\s*"([^"]*)"/i.exec(tag) || /class\s*=\s*'([^']*)'/i.exec(tag);
+      if (!cls) continue;
+      // Exact class TOKEN, not a substring: `admin-section-title`,
+      // `admin-section-collapsed` and `admin-section-title-toggle` all exist in
+      // this file and are not cards. A \badmin-section\b regex matches every
+      // one of them (the hyphen is a word boundary) and would fire constantly.
+      if (!cls[1].split(/\s+/).includes('admin-section')) continue;
+      if (!/\bdata-comm-tab\s*=/i.test(tag)) out.push(tag);
+    }
+    return out;
+  };
+
+  // MUST BE CAUGHT. Every one of these renders on all five tabs. The first is
+  // the only form the original guard recognised; the rest slipped straight
+  // past it while the suite stayed green.
+  const MUST_CATCH_46 = [
+    ['the exact original form',            '<div class="admin-section">'],
+    ['a second class alongside it',        '<div class="admin-section mb-md">'],
+    ['the card class listed second',       '<div class="mb-md admin-section">'],
+    ['single-quoted attributes',           "<div class='admin-section'>"],
+    ['a <section> instead of a <div>',     '<section class="admin-section">'],
+    ['single-quoted <section>, 2 classes', "<section class='admin-section mb-md'>"],
+    ['whitespace around the attribute',    '<div  class = "admin-section" >'],
+    ['other attributes but no tab',        '<div id="x" class="admin-section" role="group">'],
+  ];
+  for (const [label, frag] of MUST_CATCH_46) {
+    assert(untaggedAdminSections(frag).length === 1,
+      `RG-10 guard catches an untagged card written as: ${label} — ${frag}`);
+  }
+
+  // MUST NOT BE CAUGHT — otherwise the guard is noise and gets disabled.
+  const MUST_PASS_46 = [
+    ['tagged, double quotes',   '<div class="admin-section" data-comm-tab="week">'],
+    ['tagged, class second',    '<div class="mb-md admin-section" data-comm-tab="data">'],
+    ['tagged, single quotes',   "<section class='admin-section mb-md' data-comm-tab='players'>"],
+    ['tagged, attribute first', '<div data-comm-tab="settings" class="admin-section">'],
+    ['a title, not a card',     '<div class="admin-section-title">'],
+    ['a collapsed-state class', '<div class="admin-section-collapsed">'],
+    ['an unrelated card',       '<div class="card mb-md">'],
+  ];
+  for (const [label, frag] of MUST_PASS_46) {
+    assert(untaggedAdminSections(frag).length === 0,
+      `RG-10 guard does NOT false-positive on: ${label} — ${frag}`);
+  }
+
+  // …and now the real file.
+  const untagged = untaggedAdminSections(appJsSrc);
+  const tagged = (appJsSrc.match(/class="admin-section"[^>]*data-comm-tab=/g) || []).length;
+  assert(tagged > 0, `fixture check: the comm panel still assembles tagged .admin-section cards (found ${tagged}) — guards the vacuous-pass failure mode`);
+  assert(untagged.length === 0,
+    `RG-10: every .admin-section declares a data-comm-tab — found ${untagged.length} untagged${untagged.length ? ': ' + JSON.stringify(untagged) : ''}, each of which would render on ALL FIVE tabs [structural]`);
+}
+
+// ── 47. DI-125 — the per-game bottom sheet gets the SAME reveal gestures and
+//       action-button wiring as the main feed ───────────────────────────────
+// UN-120/UN-121 (§[37]) covered ONLY the main chat feed. renderSheetMessages()
+// shares messageHTML() with it (so it always rendered .chat-actions/
+// .chat-reaction-names markup) but never wired ANY reveal gesture and only
+// ever wired [data-react]/[data-retry] of the six action buttons — the other
+// five rendered dead on every platform since the sheet shipped. This suite
+// exercises the REAL production functions end to end (real chat.js storage,
+// real messageHTML() markup, real handler side effects) — never a
+// re-implementation, never a name-match against source.
+console.log('\n[47] DI-125 — per-game sheet: reveal gestures + previously-dead action buttons…');
+
+/** Extracts every data-* attribute off an opening tag into a camelCased
+ *  dataset object — shared by every fake sheet-host below. */
+function parseDataset47(tag) {
+  const ds = {};
+  const re = /data-([\w-]+)="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(tag))) ds[m[1].replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = m[2];
+  return ds;
+}
+/**
+ * A fake `#chat-sheet-scroll`: settable/readable innerHTML (captures what
+ * renderSheetMessages() actually renders), a real-ish addEventListener that
+ * ACCUMULATES listeners per type (so a double-bind is behaviorally
+ * detectable, not silently coalesced), and a querySelectorAll that finds
+ * matching buttons by scanning the captured markup for their data-*
+ * attribute — never a synthetic button the test invents itself.
+ */
+function makeFakeSheetHost47() {
+  let html = '';
+  const listeners = {};
+  // CACHED by (selector-attr + full dataset), invalidated whenever innerHTML
+  // is (re)assigned — production code queries buttons ONCE, inside
+  // renderSheetMessages(), to attach listeners; this test then queries the
+  // SAME markup separately to fire a click. Without caching, each
+  // querySelectorAll() call would mint brand-new, disconnected fake elements
+  // and the test would be clicking an object nothing was ever wired to —
+  // the cache is what makes "the same button production wired" and "the
+  // button this test clicks" the same object, exactly as a real DOM element
+  // queried twice is the same node until the markup is replaced.
+  let elCache = new Map();
+  return {
+    id: 'chat-sheet-scroll',
+    set innerHTML(v) { html = v; elCache = new Map(); },
+    get innerHTML() { return html; },
+    scrollTop: 0, get scrollHeight() { return 100; },
+    addEventListener(type, fn) { (listeners[type] ||= []).push(fn); },
+    _fire(type, e) { (listeners[type] || []).forEach(fn => fn(e)); },
+    _listenerCount(type) { return (listeners[type] || []).length; },
+    querySelectorAll(sel) {
+      const attr = sel.replace(/^\[|\]$/g, '').split('=')[0];
+      const tagRe = new RegExp(`<[a-zA-Z]+ [^>]*\\b${attr}="[^"]*"[^>]*>`, 'g');
+      const out = [];
+      let m;
+      while ((m = tagRe.exec(html))) {
+        const ds = parseDataset47(m[0]);
+        const key = attr + ':' + JSON.stringify(ds);
+        if (!elCache.has(key)) {
+          elCache.set(key, {
+            dataset: ds, closest: () => null,
+            appendChild(node) { this._appendedPicker = node; },
+            _handlers: {}, addEventListener(t, fn) { this._handlers[t] = fn; },
+            _click() { this._handlers.click?.({ stopPropagation() {} }); },
+          });
+        }
+        out.push(elCache.get(key));
+      }
+      return out;
+    },
+  };
+}
+const fakePickerCreator47 = () => ({
+  dataset: {}, classList: { add() {}, remove() {} }, style: {},
+  appendChild() {}, remove() {}, addEventListener() {}, removeEventListener() {},
+  querySelectorAll() { return []; },
+  set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html || ''; },
+});
+
+console.log('\n[47a] DI-125a — reveal state is scoped by CONTAINER, not just message id…');
+{
+  // Simulates the confirmed real scenario: #page-chat is never torn down on
+  // navigation (only hidden via the .active class — navigateTo(), app.js),
+  // so a message tagged to a game can be rendered in BOTH #chat-scroll
+  // (stale, hidden) and #chat-sheet-scroll (the open sheet for that same
+  // game) AT ONCE, with the SAME data-mid. Revealing in one must not
+  // silently touch the wrong copy, and must dismiss the other.
+  const targets47a = {};   // keyed "rootId|mid"
+  const realQS47a = document.querySelector;
+  document.querySelector = sel => {
+    const m = /^#([\w-]+) \.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets47a[`${m[1]}|${m[2]}`] || null) : null;
+  };
+  function fakeMsg47a(rootId, mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets47a[`${rootId}|${mid}`] = el;
+    return el;
+  }
+  const mainCopy = fakeMsg47a('chat-scroll', 'shared_mid');
+  const sheetCopy = fakeMsg47a('chat-sheet-scroll', 'shared_mid');
+
+  chatUi._revealMessageActions('shared_mid', 'chat-scroll');
+  assert(mainCopy._classes.has('chat-actions-revealed') && !sheetCopy._classes.has('chat-actions-revealed'),
+    'revealing in the main feed touches ONLY the main feed\'s copy');
+  assert(chatUi._revealedRootIdForTest() === 'chat-scroll', 'fixture check: reveal state records the main feed\'s container id');
+
+  chatUi._revealMessageActions('shared_mid', 'chat-sheet-scroll');
+  assert(!mainCopy._classes.has('chat-actions-revealed') && sheetCopy._classes.has('chat-actions-revealed'),
+    'DI-125a: revealing the SAME message id in the SHEET dismisses the main feed\'s copy and reveals the sheet\'s own — scoping by mid alone would have left the wrong copy revealed (or left BOTH revealed)');
+  assert(chatUi._revealedRootIdForTest() === 'chat-sheet-scroll', 'reveal state now records the SHEET as the active container');
+
+  chatUi._dismissRevealedActions();
+  assert(!sheetCopy._classes.has('chat-actions-revealed') && chatUi._revealedRootIdForTest() === null,
+    'dismissing clears both the class and the container-scoped state');
+  document.querySelector = realQS47a;
+}
+
+console.log('\n[47b] DI-125a — long-press, right-click, and the swipe react-path all derive the SHEET\'s scope from the container itself, with no extra argument at any call site…');
+{
+  const targets47b = {};
+  const buttons47b = {};
+  const realQS47b = document.querySelector;
+  document.querySelector = sel => {
+    const btnM = /^#([\w-]+) \.chat-msg\[data-mid="([^"]+)"\] \[data-react-open\]$/.exec(sel || '');
+    if (btnM) return buttons47b[`${btnM[1]}|${btnM[2]}`] || null;
+    const m = /^#([\w-]+) \.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets47b[`${m[1]}|${m[2]}`] || null) : null;
+  };
+  function fakeMsg47b(rootId, mid) {
+    const classes = new Set();
+    const el = { dataset: { mid }, classList: { add: c => classes.add(c), remove: c => classes.delete(c), contains: c => classes.has(c) }, _classes: classes };
+    targets47b[`${rootId}|${mid}`] = el;
+    return el;
+  }
+  function makeFakeRoot47b(id) {
+    const handlers = {};
+    return { id, addEventListener(type, fn) { handlers[type] = fn; }, _fire: (type, e) => handlers[type]?.(e) };
+  }
+  const targetFor47b = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+
+  // Long-press — SAME single-argument call shape as the main feed's, only
+  // the root's OWN id differs.
+  const lpRoot = makeFakeRoot47b('chat-sheet-scroll');
+  const lpMsg = fakeMsg47b('chat-sheet-scroll', 'lp_sheet_msg');
+  chatUi._bindMessageActionsLongPress(lpRoot);
+  lpRoot._fire('touchstart', { touches: [{ clientX: 10, clientY: 10 }], target: targetFor47b(lpMsg) });
+  await new Promise(r => setTimeout(r, 400));
+  assert(lpMsg._classes.has('chat-actions-revealed') && chatUi._revealedRootIdForTest() === 'chat-sheet-scroll',
+    'a long-press bound to #chat-sheet-scroll reveals WITHIN that container, not the main feed\'s');
+
+  // Right-click.
+  const ctxRoot = makeFakeRoot47b('chat-sheet-scroll');
+  const ctxMsg = fakeMsg47b('chat-sheet-scroll', 'ctx_sheet_msg');
+  chatUi._bindMessageActionsContextMenu(ctxRoot);
+  ctxRoot._fire('contextmenu', { target: targetFor47b(ctxMsg), preventDefault: () => {} });
+  assert(ctxMsg._classes.has('chat-actions-revealed') && chatUi._revealedRootIdForTest() === 'chat-sheet-scroll',
+    'right-click bound to #chat-sheet-scroll reveals WITHIN that container');
+
+  // Swipe (right-to-left react path) — proves openReactPickerFor() resolves
+  // the CORRECT surface/render function from the root itself.
+  storage.clearSession();
+  storage.addPlayer(dm.createPlayer('Sheet47Swiper', '', '4711', '', 'SS'));
+  const swipePlayers47 = storage.getPlayers();
+  const swipePlayer47 = swipePlayers47[swipePlayers47.length - 1];
+  storage.setSession(swipePlayer47.playerId, false, true);
+  const reactBtn47b = { closest: () => null, appendChild: () => {} };
+  buttons47b['chat-sheet-scroll|swipe_sheet_msg'] = reactBtn47b;
+  fakeMsg47b('chat-sheet-scroll', 'swipe_sheet_msg');
+  const realGEBI47b = document.getElementById;
+  const realCreateEl47b = document.createElement;
+  document.getElementById = id => (id === 'chat-react-picker' ? null : null);
+  document.createElement = fakePickerCreator47;
+  const swipeRoot = makeFakeRoot47b('chat-sheet-scroll');
+  chatUi._bindMessageSwipe(swipeRoot);
+  swipeRoot._fire('touchstart', { touches: [{ clientX: 200, clientY: 100 }], target: targetFor47b({ dataset: { mid: 'swipe_sheet_msg' } }) });
+  swipeRoot._fire('touchmove', { touches: [{ clientX: 200 - 45, clientY: 101 }] });   // right-to-left
+  assert(chatUi._revealedRootIdForTest() === 'chat-sheet-scroll',
+    'a right-to-left swipe bound to #chat-sheet-scroll reveals WITHIN that container (openReactPickerFor derived "sheet" from root.id, not a hardcoded default)');
+
+  document.getElementById = realGEBI47b;
+  document.createElement = realCreateEl47b;
+  document.querySelector = realQS47b;
+  chatUi._dismissRevealedActions();
+  storage.clearSession();
+}
+
+console.log('\n[47c] DI-125b — renderSheetMessages() (the REAL function) now wires the six previously-dead action buttons…');
+{
+  chat._resetForTest();                              // clean slate — earlier sections left messages in S.items
+  storage.clearSession();
+
+  // A FINAL game my tester picked wrong ATS, with a pre-kickoff message — the
+  // shape calloutEligible() requires, so [data-callout] renders too (not just
+  // the three that need less setup). kickoff is deliberately placed shortly
+  // AFTER `ts` (both near "now") rather than realistically in the past, so
+  // the SAME fixture also satisfies canEdit's 5-minute window — two gates
+  // that don't otherwise share a timeframe requirement.
+  const now47 = Date.now();
+  const W47 = { weekId: 'di125_wk', weekNumber: 4, season: 2026, status: 'final', dataSourceMode: 'demo', startDate: '2026-01-01', endDate: '2026-01-02' };
+  storage.saveWeek(W47);
+  storage.saveGame({
+    weekId: W47.weekId, gameId: 'di125_g1', homeTeam: 'Sheet Home', awayTeam: 'Sheet Away',
+    kickoff: new Date(now47 + 3600000).toISOString(), status: 'final', spread: -7, homeScore: 10, awayScore: 20,
+  });
+  storage.addPlayer(dm.createPlayer('Sheet47Actor', '', '4722', '', 'SA'));
+  const actors47 = storage.getPlayers();
+  const actor47 = actors47[actors47.length - 1];
+  storage.setSession(actor47.playerId, false, true);
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'di125_pk1', weekId: W47.weekId, gameId: 'di125_g1', playerId: actor47.playerId, selectedTeam: 'Sheet Home' },
+  ]);
+  chat.ingest([ev({
+    id: 'di125_target_msg', seq: 1, ts: now47 - 60000, type: 'message',
+    author: actor47.playerId, gameTag: 'di125_g1', body: 'Home covers easy',
+  })]);
+
+  const host47c = makeFakeSheetHost47();
+  const realGEBI47c = document.getElementById;
+  const realCreateEl47c = document.createElement;
+  document.getElementById = id => (id === 'chat-sheet-scroll' ? host47c : (id === 'chat-react-picker' ? null : null));
+  document.createElement = fakePickerCreator47;
+
+  chatUi._renderSheetMessagesForTest('di125_g1');
+
+  assert(/data-reply="di125_target_msg"/.test(host47c.innerHTML), 'fixture check: the rendered sheet markup carries [data-reply] for the seeded message');
+  assert(/data-pin="di125_target_msg"/.test(host47c.innerHTML), 'fixture check: …and [data-pin]');
+  assert(/data-callout="di125_target_msg"/.test(host47c.innerHTML), 'fixture check: calloutEligible() is true for this fixture, so [data-callout] renders');
+
+  // [data-reply] — clicking it now sets U.sheetReplyTo (DI-125b), previously
+  // rendered with NO click listener at all.
+  const replyBtns47 = host47c.querySelectorAll('[data-reply]');
+  assert(replyBtns47.length === 1, 'DI-125b: [data-reply] is wired — was dead in the sheet before this batch');
+  replyBtns47[0]._click();
+  assert(chatUi._sheetReplyTarget() === 'di125_target_msg', 'clicking the sheet\'s ↩ button opens a reply scoped to the SHEET\'s own reply state');
+
+  // [data-react-open] — clicking it opens the SAME real reaction picker the
+  // main feed's + button opens.
+  const openBtns47 = host47c.querySelectorAll('[data-react-open]');
+  assert(openBtns47.length === 1, 'DI-125b: [data-react-open] is wired');
+  openBtns47[0]._click();
+  assert(openBtns47[0]._appendedPicker?.className === 'reaction-picker',
+    'clicking the sheet\'s ➕ button appends a REAL .reaction-picker node (real toggleMessageReactPicker(), not a stub)');
+
+  // [data-pin] — clicking it actually pins the REAL message.
+  const pinBtns47 = host47c.querySelectorAll('[data-pin]');
+  assert(pinBtns47.length === 1, 'DI-125b: [data-pin] is wired');
+  pinBtns47[0]._click();
+  assert(chat.getMessage('di125_target_msg')?.pinned === true, 'clicking the sheet\'s 📌 button actually pins the message (real pinMessage(), real storage)');
+
+  // [data-callout] — clicking it posts a REAL quote event, same shape the
+  // main feed's 📎 button posts.
+  const beforeCount47 = chat.getMessages({ tag: 'all' }).length;
+  const calloutBtns47 = host47c.querySelectorAll('[data-callout]');
+  assert(calloutBtns47.length === 1, 'DI-125b: [data-callout] is wired');
+  calloutBtns47[0]._click();
+  const afterCallout47 = chat.getMessages({ tag: 'all' });
+  assert(afterCallout47.length === beforeCount47 + 1 && /Prior statement, for the record/.test(afterCallout47[afterCallout47.length - 1].body),
+    'clicking the sheet\'s 📎 button posts the SAME real callout event the main feed\'s button uses');
+
+  // [data-edit] — clicking it actually edits the REAL message. (The 📎
+  // callout above posted a SECOND message, also authored by this session and
+  // also inside its own edit window — genuinely also edit/del-eligible, so
+  // this targets the SPECIFIC button for the message under test rather than
+  // assuming it is the only match.)
+  const realPrompt47 = globalThis.prompt;
+  globalThis.prompt = () => 'Edited from the sheet';
+  const editBtns47 = host47c.querySelectorAll('[data-edit]');
+  const editBtnTarget47 = editBtns47.find(b => b.dataset.edit === 'di125_target_msg');
+  assert(!!editBtnTarget47, 'DI-125b: [data-edit] is wired (message is mine and inside the 5-minute window)');
+  editBtnTarget47._click();
+  assert(chat.getMessage('di125_target_msg')?.body === 'Edited from the sheet', 'clicking the sheet\'s ✏️ button actually edits the message (real editMessage())');
+  globalThis.prompt = realPrompt47;
+
+  // [data-del] — LAST: deleting removes the whole .chat-actions block from
+  // future renders (messageHTML() renders a tombstone instead), so every
+  // other action button must be exercised before this one.
+  const delBtns47 = host47c.querySelectorAll('[data-del]');
+  const delBtnTarget47 = delBtns47.find(b => b.dataset.del === 'di125_target_msg');
+  assert(!!delBtnTarget47, 'DI-125b: [data-del] is wired');
+  delBtnTarget47._click();
+  assert(chat.getMessage('di125_target_msg')?.deleted === true, 'clicking the sheet\'s 🗑 button actually withdraws the message (real deleteMessage())');
+
+  document.getElementById = realGEBI47c;
+  document.createElement = realCreateEl47c;
+  storage.clearSession();
+}
+
+console.log('\n[47d] DI-125a/DI-121a — .chat-reaction-names is reachable in the sheet once revealed…');
+{
+  chat._resetForTest();
+  storage.clearSession();
+  storage.addPlayer(dm.createPlayer('Sheet47Reactor', '', '4733', '', 'SR'));
+  const reactors47 = storage.getPlayers();
+  const reactor47 = reactors47[reactors47.length - 1];
+  storage.setSession(reactor47.playerId, false, true);
+  chat.ingest([ev({ id: 'di125_names_msg', seq: 1, ts: Date.now(), type: 'message', author: reactor47.playerId, gameTag: 'di125_names_g', body: 'reacted-to message' })]);
+  chat.toggleReact('di125_names_msg', '🔥', reactor47.playerId);
+
+  const html47d = chatUi._messageHTMLForTest(chat.getMessage('di125_names_msg'), reactor47.playerId, false);
+  assert(/class="chat-reaction-names"/.test(html47d),
+    'fixture check: the SAME messageHTML() the sheet renders produces .chat-reaction-names for a reacted message (hidden by CSS default, §[37a] — not absent from markup)');
+
+  // The CSS rule that reveals it is unconditional (§[37a]:
+  // `.chat-msg.chat-actions-revealed .chat-reaction-names{display:block}` has
+  // no container qualifier), so once the sheet's OWN reveal mechanism works
+  // (proven in [47a]/[47b]), .chat-reaction-names necessarily becomes
+  // reachable there too — asserted here end to end on a fresh sheet-scoped
+  // reveal, not re-derived from the two separate facts.
+  const targets47d = {};
+  const realQS47d = document.querySelector;
+  document.querySelector = sel => {
+    const m = /^#([\w-]+) \.chat-msg\[data-mid="([^"]+)"\]$/.exec(sel || '');
+    return m ? (targets47d[`${m[1]}|${m[2]}`] || null) : null;
+  };
+  const classes47d = new Set();
+  targets47d['chat-sheet-scroll|di125_names_msg'] = { dataset: { mid: 'di125_names_msg' }, classList: { add: c => classes47d.add(c), remove: c => classes47d.delete(c), contains: c => classes47d.has(c) } };
+  chatUi._revealMessageActions('di125_names_msg', 'chat-sheet-scroll');
+  assert(classes47d.has('chat-actions-revealed'),
+    'DI-125a: the sheet\'s reveal mechanism adds the SAME class .chat-reaction-names\'s visibility is gated on — no sheet-specific gate exists to miss');
+  chatUi._dismissRevealedActions();
+  document.querySelector = realQS47d;
+  storage.clearSession();
+}
+
+console.log('\n[47e] DI-125b — U.sheetReplyTo and U.replyTo are ISOLATED: a reply started in one surface never appears in the other…');
+{
+  function makeFakeRoot47e(id) {
+    const handlers = {};
+    return { id, addEventListener(type, fn) { handlers[type] = fn; }, _fire: (type, e) => handlers[type]?.(e) };
+  }
+  const targetFor47e = el => ({ closest: sel => (sel === '.chat-msg' ? el : null) });
+  const realGEBI47e = document.getElementById;
+  document.getElementById = () => null;   // no real #chat-input/#chat-sheet-composer to touch — isolates the STATE write itself
+
+  const mainReplyBefore47e = chatUi._replyTarget();
+  const sheetRoot47e = makeFakeRoot47e('chat-sheet-scroll');
+  chatUi._bindMessageSwipe(sheetRoot47e);
+  sheetRoot47e._fire('touchstart', { touches: [{ clientX: 100, clientY: 100 }], target: targetFor47e({ dataset: { mid: 'isolation_sheet_reply' } }) });
+  sheetRoot47e._fire('touchmove', { touches: [{ clientX: 145, clientY: 101 }] });   // left-to-right
+  assert(chatUi._sheetReplyTarget() === 'isolation_sheet_reply', 'a left-to-right swipe in the SHEET sets U.sheetReplyTo');
+  assert(chatUi._replyTarget() === mainReplyBefore47e,
+    'DI-125b: …and leaves U.replyTo (the main feed\'s OWN reply state) completely untouched');
+
+  const mainRoot47e = makeFakeRoot47e('chat-scroll');
+  chatUi._bindMessageSwipe(mainRoot47e);
+  mainRoot47e._fire('touchstart', { touches: [{ clientX: 100, clientY: 100 }], target: targetFor47e({ dataset: { mid: 'isolation_main_reply' } }) });
+  mainRoot47e._fire('touchmove', { touches: [{ clientX: 145, clientY: 101 }] });
+  assert(chatUi._replyTarget() === 'isolation_main_reply', 'a left-to-right swipe in the MAIN FEED sets U.replyTo');
+  assert(chatUi._sheetReplyTarget() === 'isolation_sheet_reply',
+    'DI-125b: …and leaves U.sheetReplyTo exactly as the sheet left it — no cross-contamination in either direction');
+
+  document.getElementById = realGEBI47e;
+}
+
+console.log('\n[47f] DI-125c — [data-react] (tap-to-vote) in the sheet is UNCHANGED: a plain tap, independent of the reveal mechanism…');
+{
+  chat._resetForTest();
+  storage.clearSession();
+  storage.addPlayer(dm.createPlayer('Sheet47Other', '', '4745', '', 'SO'));
+  storage.addPlayer(dm.createPlayer('Sheet47Voter', '', '4744', '', 'SV'));
+  const players47f = storage.getPlayers();
+  const other47f = players47f[players47f.length - 2];
+  const voter47 = players47f[players47f.length - 1];
+  storage.setSession(voter47.playerId, false, true);
+  chat.ingest([ev({ id: 'di125_vote_msg', seq: 1, ts: Date.now(), type: 'message', author: voter47.playerId, gameTag: 'di125_vote_g', body: 'vote on me' })]);
+  // Seeded by a DIFFERENT player, not the voter under test — a real toggle
+  // back-and-forth by the SAME author, both writes purely local/unsynced (no
+  // seq yet), hits chat.js's order-independence tie-break at applyTo()
+  // (identical `stamp` for both local writes — a pre-existing fold property,
+  // unrelated to this batch); seeding from someone else and having the
+  // TESTED player react FRESH avoids that tie entirely and still exercises
+  // the exact same real toggleReact() call the pill's handler makes.
+  chat.toggleReact('di125_vote_msg', '👍', other47f.playerId);
+
+  const host47f = makeFakeSheetHost47();
+  const realGEBI47f = document.getElementById;
+  document.getElementById = id => (id === 'chat-sheet-scroll' ? host47f : null);
+  chatUi._renderSheetMessagesForTest('di125_vote_g');
+
+  const pillBtns47f = host47f.querySelectorAll('[data-react]');
+  assert(pillBtns47f.length === 1 && pillBtns47f[0].dataset.react === '👍' && pillBtns47f[0].dataset.target === 'di125_vote_msg',
+    'fixture check: the reaction pill still carries its own data-react/data-target attributes, unchanged in the sheet');
+  chatUi._dismissRevealedActions();   // start from a known "nothing revealed" baseline
+  pillBtns47f[0]._click();
+  assert((chat.getMessage('di125_vote_msg')?.reactions?.['👍'] || []).includes(voter47.playerId) === true,
+    'DI-125c: tapping the pill in the sheet still calls the REAL toggleReact() directly (the voter\'s own react is now recorded) — a plain tap, no long-press/right-click/swipe involved');
+  assert(chatUi._revealedRootIdForTest() === null,
+    'DI-125c: …and it never touches the reveal mechanism — tapping the pill does not reveal .chat-actions/.chat-reaction-names as a side effect');
+
+  document.getElementById = realGEBI47f;
+  storage.clearSession();
+}
+
+console.log('\n[47g] DI-125a — scrolling the sheet dismisses a revealed message (bindSheetScrollDismiss, new — #chat-sheet-scroll persists across renders, unlike #chat-scroll)…');
+{
+  chat._resetForTest();
+  storage.clearSession();
+  chat.ingest([ev({ id: 'di125_scroll_msg', seq: 1, ts: Date.now(), type: 'message', author: 'p1', gameTag: 'di125_scroll_g', body: 'scroll me away' })]);
+
+  const host47g = makeFakeSheetHost47();
+  const realGEBI47g = document.getElementById;
+  document.getElementById = id => (id === 'chat-sheet-scroll' ? host47g : null);
+  chatUi._renderSheetMessagesForTest('di125_scroll_g');
+
+  chatUi._revealMessageActions('di125_scroll_msg', 'chat-sheet-scroll');
+  assert(chatUi._revealedRootIdForTest() === 'chat-sheet-scroll', 'fixture check: a message is revealed in the sheet before scrolling');
+  host47g._fire('scroll', {});
+  assert(chatUi._revealedRootIdForTest() === null,
+    'DI-125a: firing a scroll event on #chat-sheet-scroll dismisses the revealed message — the third closer now reaches the sheet (Escape/click-elsewhere were already container-agnostic via wireRevealCloser)');
+
+  // #chat-sheet-scroll is the SAME node across repeat renderSheetMessages()
+  // calls (unlike #chat-scroll, fresh every renderChatPage()) — a second pass
+  // (e.g. a poll tick while the sheet stays open) must not stack a second
+  // 'scroll' listener.
+  chatUi._renderSheetMessagesForTest('di125_scroll_g');
+  assert(host47g._listenerCount('scroll') === 1,
+    'bindSheetScrollDismiss\'s own guard keeps exactly ONE scroll listener across repeat renders, not one per render');
+
+  document.getElementById = realGEBI47g;
+  storage.clearSession();
+}
+
+console.log('\n[47h] RG-17a/d — the sheet\'s own stacking context and overflow, traced structurally…');
+{
+  // #chat-sheet-wrap establishes ITS OWN stacking context (position:fixed +
+  // an explicit z-index) far above .bottom-nav's — unlike the historical
+  // RG-17(d) defect (a picker landing BEHIND .bottom-nav in the MAIN feed,
+  // where nothing between it and <body> created a competing context),
+  // nothing rendered inside the sheet can land behind the nav regardless of
+  // its OWN (much lower) z-index values. [structural — no layout engine here]
+  const wrapRule47h = (cssSrc.match(/#chat-sheet-wrap\{[^}]*\}/) || [''])[0];
+  const navRule47h = (cssSrc.match(/\.bottom-nav\{[^}]*\}/) || [''])[0];
+  const wrapZ47h = Number((wrapRule47h.match(/z-index:\s*(\d+)/) || [])[1] || 0);
+  const navZ47h = Number((navRule47h.match(/z-index:\s*(\d+)/) || [])[1] || 0);
+  assert(/position:\s*fixed/.test(wrapRule47h) && wrapZ47h > 0,
+    'fixture check: #chat-sheet-wrap is position:fixed with an explicit z-index — it establishes its own stacking context [structural]');
+  assert(wrapZ47h > navZ47h,
+    `#chat-sheet-wrap's z-index (${wrapZ47h}) exceeds .bottom-nav's (${navZ47h}) — everything painted inside the sheet stacks above the nav by construction, regardless of .chat-actions'/.reaction-picker's OWN far lower z-index values [structural]`);
+
+  // .chat-sheet itself declares NO overflow — it cannot clip a popover that
+  // escapes .chat-bubble-col's box; only its scrolling child can.
+  const sheetRule47h = (cssSrc.match(/\.chat-sheet\{[^}]*\}/) || [''])[0];
+  assert(!/overflow/.test(sheetRule47h),
+    'fixture check: .chat-sheet sets no overflow of its own — only #chat-sheet-scroll (its scrolling child) can clip a popover [structural]');
+
+  // #chat-sheet-scroll DOES clip (overflow-y:auto) — the SAME mechanism as
+  // #chat-scroll in the main feed, not a new one, and .chat-actions opens
+  // upward with no sheet-specific variant. See the handoff report for why the
+  // sheet's much smaller minimum height makes the pre-existing "popover
+  // clipped near the top of the scroll area" edge case easier to trigger
+  // there than in the main feed — flagged for a browser check, not silently
+  // redesigned here.
+  const sheetScrollRule47h = (cssSrc.match(/\.chat-sheet-scroll\{[^}]*\}/) || [''])[0];
+  assert(/overflow-y:\s*auto/.test(sheetScrollRule47h),
+    'fixture check: #chat-sheet-scroll clips via overflow-y:auto — the SAME mechanism .chat-actions\' upward-opening popover already coexists with in the main feed [structural]');
+  const actionsRule47h = (cssSrc.match(/^\.chat-actions\{[^}]*\}/m) || [''])[0];
+  assert(/bottom:\s*calc\(100% \+ 4px\)/.test(actionsRule47h),
+    'fixture check: .chat-actions opens UPWARD unconditionally — no sheet-specific positioning variant exists to drift from the main feed\'s [structural]');
+}
+
+// ── 48. AD-10 — the fold must stay order-independent at REAL timestamps ──────
+// orderKey() packed the sort key as `ts * 1e7 + seq`, a single float. At a real
+// epoch (~1.786e12) `ts * 1e7` is ~1.786e19, where the double's ulp is 2048 —
+// so any seq below ~1024 is annihilated by the addition and contributes
+// NOTHING. Messages sharing a ts therefore collapse to one identical key, and
+// Array.prototype.sort (stable since ES2019) falls back to insertion order,
+// which is the order events happened to arrive on THAT device.
+//
+// WHY THE EXISTING SHUFFLE SUITE ([2]) IS BLIND TO THIS: its fixture uses
+// ts: 1000..6000, where ts * 1e7 ≤ 6e10 is exactly representable and every seq
+// survives. The suite proves order-independence in the one magnitude regime
+// where the bug cannot exist. Asserted below, explicitly, so the gap is on the
+// record rather than rediscovered.
+//
+// CONCRETE TRIGGER: finalizeWeek() (app.js) emits emitWeekFinalEvent + one
+// emitGameFinalEvent per game + emitExtraPointEvent in ONE synchronous tick,
+// all stamped `_localTs: Date.now()` (chat.js sendEvent). Six devices, six
+// different renderings of week finalization.
+console.log('\n[48] AD-10 — fold order is stable at Date.now()-magnitude timestamps…');
+{
+  const chat48 = mods['chat'];
+  // Real magnitude, taken live so the fixture can never quietly drift into a
+  // regime where the bug stops reproducing (same discipline as [38]'s dates).
+  const NOW48 = Date.now();
+
+  // ROOT-CAUSE FIXTURE CHECKS — the arithmetic itself, before any folding.
+  assert(NOW48 * 1e7 + 1 === NOW48 * 1e7,
+    `root cause: at ts=${NOW48}, ts*1e7 + 1 === ts*1e7 — seq is annihilated by float precision (ulp ≈ ${(NOW48 * 1e7 + 4096) - NOW48 * 1e7})`);
+  assert(NOW48 * 1e7 + 1023 === NOW48 * 1e7,
+    'root cause: even seq=1023 vanishes — the whole realistic seq range collapses into the ts');
+  assert(6000 * 1e7 + 1 !== 6000 * 1e7,
+    "test-gap check: at suite [2]'s fixture magnitude (ts ≤ 6000) seq survives exactly — which is precisely why the existing shuffle suite could never see this");
+
+  // The finalizeWeek burst, modelled event-for-event: every one of these is
+  // emitted in a single synchronous tick and therefore carries ONE ts. Two
+  // human messages share that tick too, so the reader-facing preview path
+  // (latestNotifying) is exercised on the same tie.
+  const sameTs48 = [
+    { id: 'sys_weekfinal_w48', seq: 101, ts: NOW48, type: 'system',  author: 'system', notify: false, gameTag: '',    body: '📊 Week 1 final' },
+    { id: 'sys_final_g1',      seq: 102, ts: NOW48, type: 'system',  author: 'system', notify: false, gameTag: 'g1',  body: 'FINAL: g1' },
+    { id: 'sys_final_g2',      seq: 103, ts: NOW48, type: 'system',  author: 'system', notify: false, gameTag: 'g2',  body: 'FINAL: g2' },
+    { id: 'sys_final_g3',      seq: 104, ts: NOW48, type: 'system',  author: 'system', notify: false, gameTag: 'g3',  body: 'FINAL: g3' },
+    { id: 'sys_ep_w48',        seq: 105, ts: NOW48, type: 'system',  author: 'system', notify: false, gameTag: '',    body: '🎯 Extra Point' },
+    { id: 'msg48_a',           seq: 106, ts: NOW48, type: 'message', author: 'p2',     notify: true,  gameTag: '',    body: 'first of the tie' },
+    { id: 'msg48_b',           seq: 107, ts: NOW48, type: 'message', author: 'p2',     notify: true,  gameTag: '',    body: 'LAST of the tie — this is the preview' },
+  ];
+  // Bracketing messages at distinct, earlier/later real timestamps: the fix must
+  // not disturb ordering that was already correct.
+  const LOG48 = [
+    { id: 'msg48_before', seq: 100, ts: NOW48 - 60000, type: 'message', author: 'p3', notify: true, gameTag: '', body: 'an hour of chatter earlier' },
+    ...sameTs48,
+    { id: 'msg48_after',  seq: 108, ts: NOW48 + 60000, type: 'message', author: 'p3', notify: true, gameTag: '', body: 'someone replies a minute later' },
+  ];
+  const EXPECTED_ORDER_48 = [
+    'msg48_before',
+    'sys_weekfinal_w48', 'sys_final_g1', 'sys_final_g2', 'sys_final_g3', 'sys_ep_w48',
+    'msg48_a', 'msg48_b',
+    'msg48_after',
+  ].join(',');
+
+  assert(chat48.getChatEpochSeq() === 0,
+    'fixture check: no chat epoch watermark is set — nothing in this fixture is hidden from the fold');
+
+  // Deterministic LCG shuffle: a failure here is reproducible, unlike Math.random.
+  let rngState48 = 0x2545f491;
+  const rnd48 = () => ((rngState48 = (rngState48 * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const foldOnce48 = evs => { chat48._resetForTest(); chat48.ingest(evs); return chat48._foldedSnapshot(); };
+  const orderOnce48 = evs => { chat48._resetForTest(); chat48.ingest(evs); return chat48.getMessages({ tag: 'all' }).map(m => m.id).join(','); };
+
+  const folds48 = new Set();
+  const orders48 = new Set();
+  for (let i = 0; i < 12; i++) {
+    const shuffled = [...LOG48];
+    for (let j = shuffled.length - 1; j > 0; j--) {
+      const k = Math.floor(rnd48() * (j + 1));
+      [shuffled[j], shuffled[k]] = [shuffled[k], shuffled[j]];
+    }
+    folds48.add(foldOnce48(shuffled));
+    orders48.add(orderOnce48(shuffled));
+  }
+  assert(folds48.size === 1,
+    `THE DEFECT: 12 shuffles of the same event log fold byte-identically (got ${folds48.size} distinct folds — one per arrival order means six devices render week-finalization differently)`);
+  assert(orders48.size === 1,
+    `12 shuffles yield ONE message order (got ${orders48.size} distinct orders)`);
+  assert(orderOnce48(LOG48) === EXPECTED_ORDER_48,
+    `and that one order is ts-then-seq ascending, not merely self-consistent — got ${orderOnce48(LOG48)}`);
+
+  // Also assert against the WORST arrival order — exactly reversed. A fold that
+  // silently depends on insertion order fails hardest here.
+  assert(orderOnce48([...LOG48].reverse()) === EXPECTED_ORDER_48,
+    'ingesting the log in fully REVERSED arrival order produces the identical message order');
+
+  // The reader-facing preview path. latestNotifying() backs the dashboard chat
+  // teaser and uses the same key, so it inherits the same tie: among messages
+  // sharing a ts it must return the HIGHEST seq — the genuinely newest — not
+  // whichever one this device happened to ingest first.
+  chat48._resetForTest();
+  chat48.ingest([...LOG48].reverse());
+  const preview48 = chat48.latestNotifying('p1');
+  assert(preview48 && preview48.id === 'msg48_after',
+    `the dashboard preview is the newest message overall (got ${preview48 && preview48.id})`);
+
+  // Narrow the same question onto the tie itself — drop the later-ts message so
+  // the only candidates left share one ts and differ only by seq. Asserted in
+  // BOTH arrival directions on purpose: `orderKey(m) > orderKey(best)` keeps the
+  // FIRST-ingested member of a tie, so reversed arrival gives the right answer
+  // by accident. Only forward arrival exposes it, and a test that checked one
+  // direction would have shipped this bug twice.
+  const tied48 = LOG48.filter(e => e.id !== 'msg48_after');
+  for (const [dir, evs] of [['forward', tied48], ['reversed', [...tied48].reverse()]]) {
+    chat48._resetForTest();
+    chat48.ingest(evs);
+    const got = chat48.latestNotifying('p1');
+    assert(got && got.id === 'msg48_b',
+      `among same-ts candidates the preview is the highest-seq message on ${dir} arrival (got ${got && got.id})`);
+  }
+
+  chat48._resetForTest();
+
+  // 48b — THE SAME ARITHMETIC, 66 LINES UP. applyTo()'s last-writer-wins stamp
+  // was `(ev.ts||0)*1e7 + (ev.seq||0)` — character-for-character the same
+  // packing, with the same precision loss. Edit / pin / react races between two
+  // events sharing a ts therefore resolved by ARRIVAL ORDER, so two devices
+  // could disagree about whether a message is edited, pinned, or reacted to.
+  // That is the RG-06 order-independence guarantee, broken in the fold itself
+  // rather than in the sort. Found by tracing the pipeline rather than the
+  // reported symptom; fixed in the same change because it is one root cause.
+  const mkTarget48 = (id, seq) => ({ id, seq, ts: NOW48, type: 'message', author: 'p2', notify: true, gameTag: '', body: 'v0' });
+  const LWW_CASES_48 = [
+    {
+      label: 'edit: the HIGHER-seq edit wins, not the last to arrive',
+      evs: [
+        mkTarget48('m48e', 210),
+        { id: 'ed1', seq: 211, ts: NOW48, type: 'edit', targetId: 'm48e', author: 'p2', notify: false, body: 'v1' },
+        { id: 'ed2', seq: 212, ts: NOW48, type: 'edit', targetId: 'm48e', author: 'p2', notify: false, body: 'v2 — the last word' },
+      ],
+      check: c => c.getMessage('m48e').body === 'v2 — the last word',
+      show:  c => c.getMessage('m48e').body,
+    },
+    {
+      label: 'pin: the HIGHER-seq unpin wins, not the last to arrive',
+      evs: [
+        mkTarget48('m48p', 220),
+        { id: 'pn1', seq: 221, ts: NOW48, type: 'pin',   targetId: 'm48p', author: 'p1', notify: false },
+        { id: 'pn2', seq: 222, ts: NOW48, type: 'unpin', targetId: 'm48p', author: 'p1', notify: false },
+      ],
+      check: c => c.getMessage('m48p').pinned === false,
+      show:  c => 'pinned=' + c.getMessage('m48p').pinned,
+    },
+    {
+      label: 'react: the HIGHER-seq unreact wins, not the last to arrive',
+      evs: [
+        mkTarget48('m48r', 230),
+        { id: 'rx1', seq: 231, ts: NOW48, type: 'react',   targetId: 'm48r', author: 'p3', notify: false, meta: { emoji: '🔥' } },
+        { id: 'rx2', seq: 232, ts: NOW48, type: 'unreact', targetId: 'm48r', author: 'p3', notify: false, meta: { emoji: '🔥' } },
+      ],
+      check: c => !(c.getMessage('m48r').reactions['🔥'] || []).length,
+      show:  c => '🔥×' + (c.getMessage('m48r').reactions['🔥'] || []).length,
+    },
+  ];
+  for (const cse of LWW_CASES_48) {
+    for (const [dir, evs] of [['forward', cse.evs], ['reversed', [...cse.evs].reverse()]]) {
+      chat48._resetForTest();
+      chat48.ingest(evs);
+      assert(cse.check(chat48), `${cse.label} — ${dir} arrival (got ${cse.show(chat48)})`);
+    }
+  }
+  chat48._resetForTest();
+}
+
+// ── 49. RG — the reveal ritual is lost once the NEXT week is activated ───────
+// checkPickRevealDue() only ever looked at getCurrentWeek(), and only runs on a
+// nav tap. The moment the commissioner activates week N+1, week N's reveal can
+// never fire on any device — the one guaranteed weekly all-hands moment,
+// silently gone, exactly like RG's lost Extra Point.
+//
+// WIDENING THE SCAN IS THE DANGEROUS PART, AND THE REAL SUBJECT OF THIS SUITE.
+// emitPickRevealEvent() writes an append-only event under a deterministic id
+// (sys_reveal_<weekId>, AD-09/AD-11, RG-13). There are no take-backs. A scan
+// that considered "every public week not in this device's local ledger" would,
+// on any device with a fresh ledger — a new phone, a cleared cache, a new
+// player — BACKFILL the room with a reveal for every historical week that never
+// got one, in front of six real people.
+//
+// So the acceptance gate is not "the reveal fires again". It is: with a store
+// full of old public weeks and an EMPTY ledger, EXACTLY ZERO events are
+// emitted. That is asserted first, and asserted on emitted chat events rather
+// than on the source text of the scan.
+console.log('\n[49] RG — the reveal ritual survives week N+1, and NEVER backfills history…');
+{
+  const app49 = mods['app'];
+  const REVEAL_KEY_49 = 'cfbp_reveal_emitted';
+  const DAY_49 = 86400000;
+  const iso49 = ms => new Date(ms).toISOString().slice(0, 10);
+
+  // Isolate: this suite counts sys_reveal_* events globally, so weeks left
+  // behind by earlier suites would be indistinguishable noise. Last suite in
+  // the file, nothing downstream depends on this store.
+  storage.getWeeks().forEach(w => storage.deleteWeek(w.weekId));
+  assert(storage.getWeeks().length === 0, 'fixture check: the week store is empty before the fixture is built');
+  chat._resetForTest();
+  localStorage.removeItem(REVEAL_KEY_49);
+
+  storage.addPlayer({ playerId: 'rg49_a', displayName: 'Ann', active: true });
+  storage.addPlayer({ playerId: 'rg49_b', displayName: 'Bob', active: true });
+
+  // Every fixture week gets REAL games and REAL picks. Without them
+  // emitPickRevealEvent() returns early on `!games.length` and the
+  // zero-emission assertion below would pass for the wrong reason — it would be
+  // measuring an empty slate, not the bound.
+  const seedWeek49 = (weekId, weekNumber, status, endDaysAgo, extra = {}) => {
+    const end = Date.now() - endDaysAgo * DAY_49;
+    storage.saveWeek({
+      weekId, weekNumber, season: 2026, status, dataSourceMode: 'real',
+      startDate: iso49(end - DAY_49), endDate: iso49(end), ...extra,
+    });
+    storage.saveGame({ weekId, gameId: weekId + '_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
+      kickoff: new Date(end).toISOString(), status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
+    storage.saveAllPicks([...storage.getPicks(),
+      { pickId: weekId + '_pk1', weekId, gameId: weekId + '_g1', playerId: 'rg49_a', selectedTeam: 'Ohio State' },
+      { pickId: weekId + '_pk2', weekId, gameId: weekId + '_g1', playerId: 'rg49_b', selectedTeam: 'Texas' },
+    ]);
+    return storage.getWeek(weekId);
+  };
+  const revealsInRoom49 = () => getMessages({ tag: 'all' }).filter(m => /^sys_reveal_/.test(m.id)).map(m => m.id);
+
+  // ── 49a — THE GATE. Four old, public, non-demo weeks with full slates, none
+  // of which ever got a reveal, and a device whose ledger is empty. The scan
+  // must emit NOTHING.
+  const OLD_49 = [
+    seedWeek49('rg49_old_final_60', 1, 'final', 60),
+    seedWeek49('rg49_old_final_20', 2, 'final', 20),
+    seedWeek49('rg49_old_live_10',  3, 'live',  10),
+    seedWeek49('rg49_old_final_4',  4, 'final',  4),
+  ];
+  OLD_49.forEach(w => assert(storage.arePicksPublic(w) === true,
+    `fixture check: ${w.weekId} is a PUBLIC week with a full slate — an unbounded scan WOULD post it`));
+  assert(JSON.parse(localStorage.getItem(REVEAL_KEY_49) || '[]').length === 0,
+    'fixture check: this device has an EMPTY reveal ledger — the fresh-phone / cleared-cache case');
+
+  // The active week is a DRAFT week N+1 — the exact situation the bug describes.
+  const NEXT_49 = seedWeek49('rg49_next', 6, 'draft', -7);   // ends a week from now
+  storage.setActiveWeekId(NEXT_49.weekId);
+  assert(storage.getCurrentWeek().weekId === NEXT_49.weekId,
+    'fixture check: the commissioner has already activated the NEXT week');
+  assert(storage.arePicksPublic(NEXT_49) === false, 'fixture check: that next week is a draft — not public, nothing to reveal');
+
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 0,
+    `THE GATE — ZERO retroactive emissions: four old public weeks, empty ledger, and the room stays silent (got ${JSON.stringify(revealsInRoom49())})`);
+  // Repeat taps must not accumulate either — the ritual runs on every nav.
+  for (let i = 0; i < 5; i++) app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 0,
+    `THE GATE — still zero after six nav taps (got ${JSON.stringify(revealsInRoom49())})`);
+  assert(JSON.parse(localStorage.getItem(REVEAL_KEY_49) || '[]').length === 0,
+    'and nothing was written to the ledger either — no silent "already done" marks for weeks that were never posted');
+
+  // ── 49b — THE DEFECT. Week N is now genuinely live and ending today, while
+  // week N+1 stays the active week. Its reveal must fire.
+  const CUR_49 = seedWeek49('rg49_current', 5, 'live', 0);
+  assert(storage.getCurrentWeek().weekId === NEXT_49.weekId,
+    'fixture check: getCurrentWeek() STILL returns week N+1 — this is why the old scan could never see week N');
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().includes(`sys_reveal_${CUR_49.weekId}`),
+    'THE DEFECT: the just-live week gets its reveal even though the commissioner has already activated the next week');
+  assert(revealsInRoom49().length === 1,
+    `…and it is the ONLY thing posted — the widened scan did not drag history in with it (got ${JSON.stringify(revealsInRoom49())})`);
+  const body49 = getMessage(`sys_reveal_${CUR_49.weekId}`)?.body || '';
+  assert(/Ann/.test(body49) && /Bob/.test(body49),
+    'the posted reveal carries the actual field, not an empty shell');
+
+  // ── 49c — idempotent. The ritual runs on every nav tap; it posts once.
+  for (let i = 0; i < 5; i++) app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 1,
+    `five more nav taps post nothing further — the device ledger still holds (got ${JSON.stringify(revealsInRoom49())})`);
+
+  // ── 49d — demo weeks are still excluded, and the blind rule still gates the
+  // scan. A LOCKED week is not public, so it must not be revealed early — the
+  // widened scan must not have become a second way around UN-116.
+  const DEMO_49 = seedWeek49('rg49_demo', 7, 'live', 0, { dataSourceMode: 'demo' });
+  const LOCKED_49 = seedWeek49('rg49_locked', 8, 'locked', 0);
+  app49.checkPickRevealDue();
+  app49.checkPickRevealDue();
+  assert(!revealsInRoom49().includes(`sys_reveal_${DEMO_49.weekId}`),
+    'a DEMO week is never revealed to the room (unchanged)');
+  assert(!revealsInRoom49().includes(`sys_reveal_${LOCKED_49.weekId}`),
+    'BLIND RULE: a LOCKED week is not public, so the widened scan never reveals it early');
+  assert(revealsInRoom49().length === 1,
+    `after every tap in this suite, exactly ONE reveal exists in the room (got ${JSON.stringify(revealsInRoom49())})`);
+
+  // ── 49e — the bound is a real edge, not an accident of these fixtures. A week
+  // that went public but ended just outside the lookback window is refused even
+  // with an empty ledger; one just inside it is posted. This is the assertion
+  // that fails if someone later "simplifies" the scan back to unbounded.
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+  const JUST_OUT_49 = seedWeek49('rg49_justout', 9, 'final', 5);
+  app49.checkPickRevealDue();
+  assert(!revealsInRoom49().includes(`sys_reveal_${JUST_OUT_49.weekId}`),
+    'a public week that ended 5 days ago is OUTSIDE the lookback — never posted, even on a device that has never posted anything');
+  const JUST_IN_49 = seedWeek49('rg49_justin', 10, 'final', 1);
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().includes(`sys_reveal_${JUST_IN_49.weekId}`),
+    'a public week that ended yesterday is INSIDE the lookback — posted, so the bound is a window and not a dead scan');
+
+  // ── 49f — fail closed on an undated week. endDate is how recency is judged;
+  // a week without one cannot be shown to be recent, and the cost of guessing
+  // wrong is a permanent post.
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+  storage.saveWeek({ weekId: 'rg49_undated', weekNumber: 11, season: 2026, status: 'final', dataSourceMode: 'real' });
+  storage.saveGame({ weekId: 'rg49_undated', gameId: 'rg49_undated_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: new Date().toISOString(), status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'rg49_undated_pk1', weekId: 'rg49_undated', gameId: 'rg49_undated_g1', playerId: 'rg49_a', selectedTeam: 'Ohio State' }]);
+  assert(storage.arePicksPublic(storage.getWeek('rg49_undated')) === true,
+    'fixture check: the undated week is public with a slate — only the missing endDate stands between it and a post');
+  app49.checkPickRevealDue();
+  assert(!revealsInRoom49().includes('sys_reveal_rg49_undated'),
+    'a week with NO endDate is refused — fail closed, because an undated week cannot be proven recent');
+
+  storage.setActiveWeekId(null);
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+}
+
+// ── 50. UN-116 — the score summary blinded the COUNTS but not the STANDING ───
+// renderDashboardInner()'s "This Week Score Summary" gated correctPicks,
+// incorrectPicks and the tiebreaker behind `blind`, but left r.rank, the
+// winner-row/loser-row class and the 🏆/💀 markers rendering unconditionally.
+// Counts came through as "—" while the row above them still said "1 🏆".
+//
+// Reachable on a LOCKED week with at least one final game — auto-live disabled,
+// or the commissioner simply holding at locked — where the picks are not yet
+// public but results exist. Relative standing is the thing the blind rule is
+// protecting: knowing you are behind is knowing how the field did.
+//
+// Asserted on the markup a player is actually served, never on the predicate —
+// canViewOtherPicks() was already correct here and returned false; the template
+// just never consulted it for these three fields.
+console.log('\n[50] UN-116 — a blinded score summary hides RANK and the 🏆/💀 markers too…');
+{
+  const app50 = mods['app'];
+  const W50 = {
+    weekId: 'rg50_wk', weekNumber: 4, season: 2026, status: 'locked', dataSourceMode: 'demo',
+    startDate: '2026-09-05', endDate: '2026-09-06',
+  };
+  storage.saveWeek(W50);
+  storage.saveGame({ weekId: W50.weekId, gameId: 'rg50_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
+    kickoff: '2026-09-05T16:00:00Z', status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3, atsWinner: 'Ohio State' });
+  ['rg50_me', 'rg50_rival1', 'rg50_rival2'].forEach((id, i) =>
+    storage.addPlayer({ playerId: id, displayName: ['Me', 'Rival One', 'Rival Two'][i], active: true }));
+  const players50 = storage.getPlayers().filter(p => /^rg50_/.test(p.playerId));
+  const results50 = [
+    { playerId: 'rg50_rival1', rank: 1, correctPicks: 5, incorrectPicks: 1, isWinner: true,  wonByTiebreaker: true, tiebreakerGuess: 42, tiebreakerDelta: 2 },
+    { playerId: 'rg50_me',     rank: 2, correctPicks: 3, incorrectPicks: 3,                                        tiebreakerGuess: 50, tiebreakerDelta: 10 },
+    { playerId: 'rg50_rival2', rank: 3, correctPicks: 1, incorrectPicks: 5, isLoser: true,                          tiebreakerGuess: 60, tiebreakerDelta: 20 },
+  ];
+  const rankTexts50 = html => [...html.matchAll(/<td class="rank-cell[^"]*">([\s\S]*?)<\/td>/g)].map(m => m[1].trim());
+
+  // ── 50a — the defect. An ordinary player on the locked week.
+  storage.setSession('rg50_me', false, true);
+  assert(storage.arePicksPublic(W50) === false,
+    'fixture check: a LOCKED week is not public — the blind rule is in force');
+  assert(app50.canViewOtherPicks(W50) === false,
+    'fixture check: the predicate is already correct and says the rivals are blind — only the template disagreed');
+  const blind50 = app50.renderScoreSummaryRowsHTML(W50, results50, players50, 34);
+  assert(rankTexts50(blind50).length === 3, `fixture check: three rows rendered (got ${rankTexts50(blind50).length})`);
+  assert((blind50.match(/result-win">—/g) || []).length === 2,
+    'regression guard: both rivals\' ✅ counts are still blinded (the half that already worked)');
+
+  assert(rankTexts50(blind50).every(t => !/\d/.test(t)),
+    `THE DEFECT: no row prints a finishing position while the week is blind (got ranks ${JSON.stringify(rankTexts50(blind50))})`);
+  assert(!/rank-1|rank-2|rank-3/.test(blind50),
+    'THE DEFECT: the rank-N class is suppressed too — the class encodes the standing just as plainly as the digit does');
+  assert(!/🏆/.test(blind50) && !/💀/.test(blind50),
+    'THE DEFECT: no 🏆 / 💀 marker leaks who won and who lost the week');
+  assert(!/winner-row|loser-row/.test(blind50),
+    'THE DEFECT: no winner-row / loser-row class — the row tint names the winner without a single character of text');
+  assert(!/\(TB\)/.test(blind50),
+    'the "(TB)" marker is suppressed as well — it says someone WON, and how');
+  // The viewer's own line is still their own: this must not have blinded them
+  // out of their own results.
+  assert(/result-win">3</.test(blind50) && /result-loss">3</.test(blind50),
+    "the viewer's OWN ✅/❌ counts still render — the fix hides the field's standing, not the player's own week");
+  assert(/50 \(Δ10\)/.test(blind50), "the viewer's OWN tiebreaker still renders");
+
+  // ── 50b — the same fixture, viewed by the commissioner. This is what proves
+  // the assertions above measure the blind rule and not a permanently dead
+  // template (the failure mode that let the UN-116 guards rot unnoticed).
+  storage.setSession('rg50_me', true, true);
+  const admin50 = app50.renderScoreSummaryRowsHTML(W50, results50, players50, 34);
+  assert(rankTexts50(admin50).join(',') === '1,2,3',
+    `the commissioner still sees every finishing position (got ${JSON.stringify(rankTexts50(admin50))})`);
+  assert(/🏆/.test(admin50) && /💀/.test(admin50), 'the commissioner still sees the 🏆 / 💀 markers');
+  assert(/winner-row/.test(admin50) && /loser-row/.test(admin50), 'the commissioner still sees the winner/loser row tints');
+  assert(/\(TB\)/.test(admin50), 'the commissioner still sees the (TB) marker');
+
+  // ── 50c — and once the week is genuinely public, an ordinary player sees the
+  // standing again. The suppression is a window, not a deletion.
+  storage.setSession('rg50_me', false, true);
+  const WLIVE50 = { ...W50, status: 'live' };
+  storage.saveWeek(WLIVE50);
+  const live50 = app50.renderScoreSummaryRowsHTML(WLIVE50, results50, players50, 34);
+  assert(rankTexts50(live50).join(',') === '1,2,3',
+    `on a LIVE week the player sees the full standing again (got ${JSON.stringify(rankTexts50(live50))})`);
+  assert(/🏆/.test(live50) && /💀/.test(live50), 'on a LIVE week the 🏆 / 💀 markers are back');
+  assert(/winner-row/.test(live50) && /loser-row/.test(live50), 'on a LIVE week the row tints are back');
+  assert(!/result-win">—/.test(live50), 'on a LIVE week the rivals\' counts are back');
+
+  storage.setSession(null, false, false);
+}
+
+// ── 51. UN-119 — the invisible tap-target overlays, VERTICAL axis ────────────
+// The horizontal axis was already fixed and reviewed: two 40px-wide overlays on
+// controls ~23px apart overlapped by ~17px, so `width` became calc(100% + gap)
+// and the overlays now tile edge-to-edge. `height` was left at a flat 40px.
+//
+// The vertical budget is not 40px either. `.dc-meta .chat-bubble-btn` is
+// padding:1px 2px / font-size:.78rem / line-height:1 — a visible box of roughly
+// 14-15px. A 40px overlay centred on it (top:50%, translateY(-50%)) therefore
+// hangs ~12.75px past each edge. Below it, `.dc-game-head` has margin-bottom:8px
+// and then `.dc-chips` — whose `.dc-chip`s are `draggable="true"` for column
+// reorder. The button is position:relative, so its ::before paints in the
+// positioned layer, ABOVE the static `.dc-chips` that follows it in the DOM:
+// the overlay wins the hit test over the top few px of the chip row, and a drag
+// started there opens the chat sheet instead of moving the column.
+//
+// Same principle the reviewer accepted horizontally: tiling beats overlapping.
+// Two overlapping hit zones are a worse defect than one slightly short of the
+// 40px floor, because the user taps what they are looking at and something else
+// happens.
+//
+// STRUCTURAL BY NECESSITY, AND HONESTLY LIMITED. There is no layout engine
+// here. This pins the overlay's extension against the actual margin it must not
+// cross, computed from the CSS rather than matched as a literal. Whether the
+// resulting target feels right under a thumb at 375px is a DEVICE question and
+// is called out as such.
+console.log('\n[51] UN-119 — tap-target overlays extend vertically without crossing into the draggable chip row…');
+{
+  const px51 = s => (s && /(-?\d+(?:\.\d+)?)px/.exec(s) ? Number(/(-?\d+(?:\.\d+)?)px/.exec(s)[1]) : NaN);
+  const rule51 = sel => (cssSrc.match(new RegExp(sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\{[^}]*\\}')) || [''])[0];
+
+  // The gap the overlay must not cross: .dc-game-head's margin-bottom is all
+  // that separates .dc-meta's controls from the draggable chips.
+  const headRule51 = rule51('.dc-game-head');
+  const headGap51 = px51((/margin-bottom:\s*([^;}]+)/.exec(headRule51) || [])[1]);
+  assert(Number.isFinite(headGap51) && headGap51 > 0,
+    `fixture check: .dc-game-head still separates the meta row from .dc-chips with a margin-bottom (got ${headGap51}px)`);
+  assert(/draggable="true"/.test(appJsSrc) && /class="dc-chip /.test(appJsSrc.replace(/dc-chip /g, 'dc-chip ')),
+    'fixture check: the .dc-chip row below is genuinely draggable — an overlay reaching into it steals a real gesture');
+  assert(/\.chat-bubble-btn\{[^}]*position:relative/.test(cssSrc),
+    'fixture check: .chat-bubble-btn is position:relative, so its ::before paints ABOVE the static .dc-chips that follows it [structural]');
+
+  const OVERLAYS_51 = [
+    ['.dc-meta .chat-bubble-btn::before', 6],
+    ['.reaction-add-btn-mini::before',    4],
+  ];
+  for (const [sel, expectedWidthGap] of OVERLAYS_51) {
+    const r = rule51(sel);
+    assert(!!r, `fixture check: ${sel} still exists`);
+    const h = (/height:\s*([^;}]+)/.exec(r) || [])[1];
+    const w = (/width:\s*([^;}]+)/.exec(r) || [])[1];
+
+    // The horizontal fix must survive untouched — it was reviewed and is right.
+    assert(w === `calc(100% + ${expectedWidthGap}px)`,
+      `${sel}: the reviewed horizontal tiling is intact — width stays calc(100% + ${expectedWidthGap}px) (got ${w})`);
+
+    assert(!/^\s*40px\s*$/.test(h || ''),
+      `${sel}: THE DEFECT — height is no longer a flat 40px hanging ~12.75px past a ~14.5px box (got ${h})`);
+    assert(/^calc\(100% \+ \d+(?:\.\d+)?px\)$/.test((h || '').trim()),
+      `${sel}: height extends the REAL box by a fixed amount, the same shape as the width fix (got ${h})`);
+    const grow51 = px51(h);
+    assert(grow51 / 2 <= headGap51,
+      `${sel}: the overlay grows ${grow51}px, i.e. ${grow51 / 2}px per side, which does NOT exceed the ${headGap51}px separating it from the draggable .dc-chip row (this is the whole assertion)`);
+    assert(grow51 / 2 === headGap51,
+      `${sel}: …and it uses that ${headGap51}px in full — tiling right up to the chip row, not leaving target area on the table`);
+  }
+}
+
+// ── 52. renderFeedbackAdmin() — a malformed submittedAt renders "Invalid Date"
+// The date cell guarded `e.submittedAt` for PRESENCE but not VALIDITY, so a
+// legacy or hand-edited feedback row with an unparseable timestamp printed the
+// literal string "Invalid Date" into the commissioner's card. Cosmetic and
+// commissioner-only, but it is the same defensive-coercion-at-a-data-boundary
+// rule the rest of this file follows (CONVENTIONS #7), and the fallback it
+// should use already exists two characters away.
+console.log('\n[52] renderFeedbackAdmin() — an unparseable submittedAt degrades to "—", never "Invalid Date"…');
+{
+  const app52 = mods['app'];
+  const base52 = { feedbackId: 'fb52', playerId: 'rg50_me', kind: 'bug', body: 'something broke', weekId: null };
+  const BAD_52 = [
+    ['an empty-ish garbage string', 'not-a-date'],
+    ['a partial ISO fragment',      '2026-13-45T99:99:99Z'],
+    ['a number-like string',        'NaN'],
+    ['a stray object',              {}],
+  ];
+  for (const [label, ts] of BAD_52) {
+    const html = app52.renderFeedbackAdmin([{ ...base52, submittedAt: ts }]);
+    assert(!/Invalid Date/.test(html),
+      `THE DEFECT: ${label} does not print "Invalid Date" into the commissioner's card`);
+    assert(/something broke/.test(html),
+      `…and the row still renders its content (${label}) — degraded, not dropped`);
+  }
+  // Not an over-broad fix: a good timestamp still formats, and a missing one
+  // still uses the same em-dash it always did.
+  const good52 = app52.renderFeedbackAdmin([{ ...base52, submittedAt: '2026-08-13T15:04:05.000Z' }]);
+  assert(/Aug 13, 2026/.test(good52), `a VALID submittedAt still formats normally — got ${(/>([^<]*2026[^<]*)</.exec(good52) || [])[1]}`);
+  const none52 = app52.renderFeedbackAdmin([{ ...base52, submittedAt: null }]);
+  assert(!/Invalid Date/.test(none52) && /something broke/.test(none52),
+    'a MISSING submittedAt behaves as before (unchanged)');
+}
+
+// ── 53. UN-118/UN-125 — multi-part week grouping: finalizeWeek() gating,
+// Weekly History collapse, and the blind-rule isolation DI-126f requires ───
+//
+// A week RECORD is a scheduling unit (one lock time); a COMPETITIVE week is
+// what players actually compete over and win a prize for. They diverge
+// whenever one real week's games can't share a lock time (a split slate,
+// bowls, CFP). Before this feature, two week records finalized independently
+// for one real competitive week produced TWO weekly-winner obligations
+// (§6 UN-118 interim risk). This suite drives the REAL finalizeWeek() (via
+// applyWeekStatusChange(), the same path the commissioner's Week-tab buttons
+// use) and the REAL renderLeaderboard() end-to-end — never a re-implementation
+// of the gating logic — per Testing Protocol step 16/RG-27.
+console.log('\n[53] UN-118/UN-125 — multi-part week grouping: finalizeWeek() gating, Weekly History collapse, blind-rule isolation…');
+{
+  const app53 = mods['app'];
+
+  // Isolate: finalizeWeek()/calculateSeasonStandings() read ALL ACTIVE
+  // players straight from storage, and this is the LAST suite in the file —
+  // every player `addPlayer()`-ed by an earlier suite is still active and
+  // would otherwise dilute/pollute this fixture's winner determination
+  // (same isolation problem [49] solved by clearing all weeks first).
+  storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
+  storage.addPlayer({ playerId: 'un118_a', displayName: 'Ann', active: true });
+  storage.addPlayer({ playerId: 'un118_b', displayName: 'Bob', active: true });
+
+  const mkGame53 = (weekId, gameId, home, away, homeScore, awayScore) => ({
+    weekId, gameId, homeTeam: home, awayTeam: away,
+    kickoff: '2026-11-01T18:00:00Z', status: 'final',
+    homeScore, awayScore, spread: -3, lockedSpread: -3,
+  });
+
+  // Part 1 (weekNumber 20): Ohio State -3 covers 28-21 (adjusted 25 > 21) —
+  // Ann right, Bob wrong. Part 2 (weekNumber 21): Alabama -3 covers 30-10 —
+  // Ann right again, Bob wrong again. Ann should be the GROUP's sole winner;
+  // Bob the sole loser — never two winners, never two losers.
+  const P1 = { weekId: 'un118_p1', weekNumber: 20, season: 2026, status: 'locked',
+    dataSourceMode: 'manual', startDate: '2026-11-01', endDate: '2026-11-01',
+    groupId: 'un118_p1', isGroupTiebreaker: false, actualTiebreakerValue: 100 };
+  const P2 = { weekId: 'un118_p2', weekNumber: 21, season: 2026, status: 'locked',
+    dataSourceMode: 'manual', startDate: '2026-11-08', endDate: '2026-11-08',
+    groupId: 'un118_p1', isGroupTiebreaker: true, actualTiebreakerValue: 50 };
+  storage.saveWeek(P1); storage.saveWeek(P2);
+  storage.saveGame(mkGame53('un118_p1', 'un118_p1_g1', 'Ohio State', 'Texas', 28, 21));
+  storage.saveGame(mkGame53('un118_p2', 'un118_p2_g1', 'Alabama', 'Georgia', 30, 10));
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'un118_p1_pk_a', weekId: 'un118_p1', gameId: 'un118_p1_g1', playerId: 'un118_a', selectedTeam: 'Ohio State' },
+    { pickId: 'un118_p1_pk_b', weekId: 'un118_p1', gameId: 'un118_p1_g1', playerId: 'un118_b', selectedTeam: 'Texas' },
+    { pickId: 'un118_p2_pk_a', weekId: 'un118_p2', gameId: 'un118_p2_g1', playerId: 'un118_a', selectedTeam: 'Alabama' },
+    { pickId: 'un118_p2_pk_b', weekId: 'un118_p2', gameId: 'un118_p2_g1', playerId: 'un118_b', selectedTeam: 'Georgia' },
+  ]);
+  // Part 1's own tiebreaker guesses are a DIFFERENT question (isGroupTiebreaker
+  // false) and must be ignored entirely — only Part 2's guesses count.
+  storage.setTiebreakerGuess('un118_p1', 'un118_a', 5);
+  storage.setTiebreakerGuess('un118_p1', 'un118_b', 5);
+  storage.setTiebreakerGuess('un118_p2', 'un118_a', 48);
+  storage.setTiebreakerGuess('un118_p2', 'un118_b', 90);
+
+  const weeklyObs53 = () => storage.getObligations().filter(o => o.type === 'weekly' &&
+    (o.weekId === 'un118_p1' || o.weekId === 'un118_p2'));
+
+  // ── 53a — Part 1 finalizes ALONE. Zero obligations; its own weekly-result
+  // rows and its own chat event still fire (unconditionally, per DI-126d).
+  app53.applyWeekStatusChange(storage.getWeek('un118_p1'), 'final');
+  assert(storage.getWeek('un118_p1').status === 'final', 'fixture check: Part 1 persisted as final');
+  assert(storage.getWeeklyResults('un118_p1').length === 2,
+    "Part 1's own per-member weekly-result rows still save even though the group isn't complete");
+  assert(!!getMessage('sys_weekfinal_un118_p1'),
+    "Part 1's own chat week-final event still fires — per-part events are unconditional, not gated on the group");
+  assert(weeklyObs53().length === 0,
+    `THE GATE — Part 1 finalizing ALONE creates ZERO obligations (got ${weeklyObs53().length})`);
+
+  // ── 53b — Weekly History at this checkpoint: ONE row for the group,
+  // reading "in progress" (no winner/loser yet) — NOT a premature win for Ann
+  // off Part 1 alone, and NOT two separate per-part rows.
+  {
+    const realGetById53 = document.getElementById;
+    let lbHtml53 = '';
+    const fakeLB53 = {
+      id: 'page-leaderboard',
+      set innerHTML(v) { lbHtml53 = v; }, get innerHTML() { return lbHtml53; },
+      querySelectorAll() { return []; }, querySelector() { return null; },
+    };
+    document.getElementById = id => (id === 'page-leaderboard' ? fakeLB53 : realGetById53(id));
+    app53.renderLeaderboard();
+    document.getElementById = realGetById53;
+
+    const wh53 = /Weekly History<\/div>[\s\S]*?<table class="dashboard-table">([\s\S]*?)<\/table>/.exec(lbHtml53)?.[1] || '';
+    assert((wh53.match(/Week 20 \+ Week 21/g) || []).length === 1,
+      `THE COLLAPSE: exactly ONE Weekly History row names the group "Week 20 + Week 21" while it's mid-progress (got ${(wh53.match(/Week 20 \+ Week 21/g)||[]).length})`);
+    assert(!/Week 20 — /.test(wh53) && !/Week 21 — /.test(wh53),
+      'the OLD per-part labels ("Week 20 — …" / "Week 21 — …") never appear — this is truly one row, not two rows that happen to sit next to a combined label');
+    assert(!/>Ann/.test(wh53),
+      "THE DEFECT THIS PREVENTS: Ann is NOT credited as winner yet — Part 1's own per-part isWinner must not leak into the group row before Part 2 is final");
+  }
+
+  // ── 53c — Part 2 finalizes. NOW the group is complete: exactly ONE
+  // obligation, group-keyed to the canonical id (Part 1's own weekId, since
+  // it was the founder), naming Ann as the real winner.
+  app53.applyWeekStatusChange(storage.getWeek('un118_p2'), 'final');
+  assert(storage.getWeeklyResults('un118_p2').length === 2, "Part 2's own per-member weekly-result rows saved too");
+  assert(!!getMessage('sys_weekfinal_un118_p2'), "Part 2's own chat week-final event fires too");
+  const obs53 = weeklyObs53();
+  assert(obs53.length === 1,
+    `THE ACCEPTANCE GATE — the group creates EXACTLY ONE obligation once both parts are final (got ${obs53.length})`);
+  assert(obs53[0]?.weekId === 'un118_p1',
+    `the one obligation is keyed to the group's CANONICAL id, not either part's own scoring-only weekId (got ${obs53[0]?.weekId})`);
+  assert(obs53[0]?.recipientPlayerId === 'un118_a' && obs53[0]?.payerPlayerId === 'un118_b',
+    `the obligation names the GROUP's real winner (Ann) and loser (Bob), pooled across both parts (got recipient=${obs53[0]?.recipientPlayerId}, payer=${obs53[0]?.payerPlayerId})`);
+
+  // ── 53d — re-finalize Part 1 again (the commissioner re-pressing an
+  // already-final button, or an auto-transition re-check). STILL exactly one
+  // obligation — idempotent, not a second prize awarded.
+  app53.applyWeekStatusChange(storage.getWeek('un118_p1'), 'final');
+  assert(weeklyObs53().length === 1,
+    `re-finalizing Part 1 again does NOT create a second obligation (got ${weeklyObs53().length})`);
+
+  // ── 53e — Weekly History again, now that the group is complete: still ONE
+  // row, now correctly naming Ann as winner and Bob as loser.
+  {
+    const realGetById53b = document.getElementById;
+    let lbHtml53b = '';
+    const fakeLB53b = {
+      id: 'page-leaderboard',
+      set innerHTML(v) { lbHtml53b = v; }, get innerHTML() { return lbHtml53b; },
+      querySelectorAll() { return []; }, querySelector() { return null; },
+    };
+    document.getElementById = id => (id === 'page-leaderboard' ? fakeLB53b : realGetById53b(id));
+    app53.renderLeaderboard();
+    document.getElementById = realGetById53b;
+
+    const wh53b = /Weekly History<\/div>[\s\S]*?<table class="dashboard-table">([\s\S]*?)<\/table>/.exec(lbHtml53b)?.[1] || '';
+    assert((wh53b.match(/Week 20 \+ Week 21/g) || []).length === 1,
+      'still exactly ONE row for the group once it is complete — finalizing Part 2 did not add a second row');
+    const annRows53 = (wh53b.match(/player-name-cell">Ann/g) || []).length;
+    assert(annRows53 === 1,
+      `Ann is named winner exactly ONCE in Weekly History, never twice (got ${annRows53})`);
+    assert(/player-name-cell">Bob/.test(wh53b), 'Bob is named loser');
+  }
+
+  // ── 53f — DI-126f: grouping must never leak the OTHER part's picks. A
+  // fixture where Part 1 of a (separate) group is LIVE and Part 2 is
+  // OPEN/LOCKED — Part 1 public, Part 2 emphatically NOT. arePicksPublic()/
+  // canPlayerSubmitPicks() stay single-week-scoped by design (no code change
+  // here) — this proves grouping didn't accidentally widen either one.
+  const P3 = { weekId: 'un118_p3', weekNumber: 22, season: 2026, status: 'live',
+    dataSourceMode: 'manual', groupId: 'un118_p3' };
+  const P4 = { weekId: 'un118_p4', weekNumber: 23, season: 2026, status: 'locked',
+    dataSourceMode: 'manual', groupId: 'un118_p3' };
+  const P5 = { weekId: 'un118_p5', weekNumber: 24, season: 2026, status: 'open',
+    dataSourceMode: 'manual', groupId: 'un118_p3' };
+  storage.saveWeek(P3); storage.saveWeek(P4); storage.saveWeek(P5);
+  assert(storage.arePicksPublic(storage.getWeek('un118_p3')) === true,
+    'DI-126f: Part 1 (LIVE) of a group is public, exactly as an ungrouped LIVE week would be');
+  assert(storage.arePicksPublic(storage.getWeek('un118_p4')) === false,
+    'DI-126f: Part 2 (LOCKED) of the SAME group stays blind — grouping never leaks another part\'s picks');
+  assert(storage.arePicksPublic(storage.getWeek('un118_p5')) === false,
+    'DI-126f: Part 3 (OPEN) of the same group also stays blind');
+}
+
+// ── 54. UN-126 — obligations are never silently "already settled," and the
+// commissioner can merge/void without ever deleting a money record ─────────
+//
+// PART 1 (the defect): a week finalizing ALONE creates a singleton
+// obligation keyed to its own weekId; when it's LATER grouped with a
+// still-open partner, the group's canonical id can equal that same weekId,
+// so presence of the singleton used to read as "already settled" and the
+// group's real (possibly different) outcome was silently dropped. THE FIX:
+// reconcileWeeklyObligation() (app.js, private — driven only through the
+// real finalizeWeek()/applyWeekStatusChange() path, per Testing Protocol
+// step 16/RG-27) never accepts a mismatched existing record silently and
+// never overwrites it — it creates the fresh correct record AND flags every
+// active record for that weekId `needsReview`, for a human to resolve.
+//
+// PART 2 (the tool): voidObligationById() / mergeObligationsById() resolve
+// what Part 1 surfaces (and the pre-UN-118 duplicates that already exist)
+// WITHOUT ever deleting a record — voided/merged rows stay visible on
+// screen (renderObligationCorrectionsAdmin/renderObligationsAdmin) and in
+// the CSV export (buildObligationsCsvRows), tagged with their state.
+console.log('\n[54] UN-126 — obligation settled-ness fix (Part 1) + merge/void tool (Part 2)…');
+{
+  const app54 = mods['app'];
+
+  // Isolate players — this is the LAST suite in the file; every player
+  // added by an earlier suite (including suite 53's Ann/Bob) is still
+  // active and would dilute this fixture's winner determination (same
+  // isolation problem suite 53 itself solved).
+  storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
+  storage.addPlayer({ playerId: 'un126_x', displayName: 'Xena', active: true });
+  storage.addPlayer({ playerId: 'un126_y', displayName: 'Yusuf', active: true });
+
+  const mkGame54 = (weekId, gameId, home, away, homeScore, awayScore) => ({
+    weekId, gameId, homeTeam: home, awayTeam: away,
+    kickoff: '2026-11-15T18:00:00Z', status: 'final',
+    homeScore, awayScore, spread: -3, lockedSpread: -3,
+  });
+
+  // ── 54a — THE DEFECT SCENARIO, driven end-to-end through the REAL
+  // finalizeWeek()/applyWeekStatusChange() and renderLeaderboard(). ─────────
+  //
+  // M1 finalizes ALONE first (ungrouped — its effective group id is its own
+  // weekId). One game; Xena covers, Yusuf doesn't — Xena wins M1 solo.
+  const M1 = { weekId: 'un126_m1', weekNumber: 30, season: 2026, status: 'locked',
+    dataSourceMode: 'manual', startDate: '2026-11-15', endDate: '2026-11-15' };
+  storage.saveWeek(M1);
+  storage.saveGame(mkGame54('un126_m1', 'un126_m1_g1', 'Home1', 'Away1', 28, 21)); // Home1 covers -3
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'un126_m1_pk_x', weekId: 'un126_m1', gameId: 'un126_m1_g1', playerId: 'un126_x', selectedTeam: 'Home1' },
+    { pickId: 'un126_m1_pk_y', weekId: 'un126_m1', gameId: 'un126_m1_g1', playerId: 'un126_y', selectedTeam: 'Away1' },
+  ]);
+  app54.applyWeekStatusChange(storage.getWeek('un126_m1'), 'final');
+
+  const weeklyObs54 = wid => storage.getObligations().filter(o => o.type === 'weekly' && o.weekId === wid);
+  const activeWeeklyObs54 = wid => storage.getActiveObligations(wid).filter(o => o.type === 'weekly');
+
+  assert(weeklyObs54('un126_m1').length === 1, 'fixture check: M1 finalizing alone creates its own singleton obligation');
+  const singleton54 = weeklyObs54('un126_m1')[0];
+  assert(singleton54.payerPlayerId === 'un126_y' && singleton54.recipientPlayerId === 'un126_x',
+    'fixture check: the singleton correctly names Yusuf (loser) owing Xena (winner) off M1 alone');
+  assert(singleton54.needsReview === false, 'a freshly created, unconflicted obligation is NOT flagged for review');
+
+  // M2 is LATER grouped onto M1 (groupId points at M1's own weekId — the
+  // exact shape that made the old code's presence-check collide). Three
+  // games, all won by Yusuf, enough to flip the POOLED outcome so Yusuf
+  // becomes the group's real winner and Xena the real loser — the opposite
+  // of what the M1-alone singleton recorded.
+  const M2 = { weekId: 'un126_m2', weekNumber: 31, season: 2026, status: 'locked',
+    dataSourceMode: 'manual', groupId: 'un126_m1', isGroupTiebreaker: true, actualTiebreakerValue: 50,
+    startDate: '2026-11-22', endDate: '2026-11-22' };
+  storage.saveWeek(M2);
+  ['a', 'b', 'c'].forEach((s, i) => {
+    storage.saveGame(mkGame54('un126_m2', `un126_m2_g${s}`, `H2${s}`, `A2${s}`, 10, 24)); // away covers every time
+    storage.saveAllPicks([...storage.getPicks(),
+      { pickId: `un126_m2_pk_x${i}`, weekId: 'un126_m2', gameId: `un126_m2_g${s}`, playerId: 'un126_x', selectedTeam: `H2${s}` },  // wrong every time
+      { pickId: `un126_m2_pk_y${i}`, weekId: 'un126_m2', gameId: `un126_m2_g${s}`, playerId: 'un126_y', selectedTeam: `A2${s}` },  // right every time
+    ]);
+  });
+  storage.setTiebreakerGuess('un126_m2', 'un126_x', 48);
+  storage.setTiebreakerGuess('un126_m2', 'un126_y', 52);
+
+  app54.applyWeekStatusChange(storage.getWeek('un126_m2'), 'final');
+
+  // THE GATE — the stale singleton is left EXACTLY as it was (never
+  // silently overwritten) and a fresh, correctly-computed record now also
+  // exists (never silently accepted/ignored) — both flagged for a human.
+  const afterGroup54 = activeWeeklyObs54('un126_m1');
+  assert(afterGroup54.length === 2,
+    `THE FIX — a conflicting group outcome creates a SECOND record rather than silently doing nothing (got ${afterGroup54.length} active obligations for the gid)`);
+  const stale54 = afterGroup54.find(o => o.payerPlayerId === 'un126_y' && o.recipientPlayerId === 'un126_x');
+  const fresh54 = afterGroup54.find(o => o.payerPlayerId === 'un126_x' && o.recipientPlayerId === 'un126_y');
+  assert(!!stale54, 'the ORIGINAL (stale) obligation is still on record, untouched, not deleted');
+  assert(stale54.obligationId === singleton54.obligationId && stale54.createdAt === singleton54.createdAt,
+    'the stale record is the SAME record (same id, same createdAt) — never overwritten in place');
+  assert(!!fresh54, 'a NEW obligation exists naming the freshly computed (correct, pooled) winner/loser — never silently dropped');
+  assert(stale54.needsReview === true && fresh54.needsReview === true,
+    'BOTH the stale and the fresh record are flagged needsReview — surfaced, not silently resolved either way');
+
+  // Weekly History (what every player sees on Standings) shows a review
+  // warning instead of confidently rendering either payer as if settled —
+  // the exact "display and money disagree, silently" defect this closes.
+  {
+    const realGetById54 = document.getElementById;
+    let lbHtml54 = '';
+    const fakeLB54 = {
+      id: 'page-leaderboard',
+      set innerHTML(v) { lbHtml54 = v; }, get innerHTML() { return lbHtml54; },
+      querySelectorAll() { return []; }, querySelector() { return null; },
+    };
+    document.getElementById = id => (id === 'page-leaderboard' ? fakeLB54 : realGetById54(id));
+    app54.renderLeaderboard();
+    document.getElementById = realGetById54;
+
+    const wh54 = /Weekly History<\/div>[\s\S]*?<table class="dashboard-table">([\s\S]*?)<\/table>/.exec(lbHtml54)?.[1] || '';
+    assert(/Needs review/.test(wh54),
+      'Weekly History renders the ⚠️ Needs review warning for the conflicted group row');
+    assert(!/Mark Paid|Confirm Paid/.test(wh54),
+      'Weekly History does NOT render a normal payment action while the row is conflicted — it would name a payer that may be wrong');
+  }
+
+  // ── 54b — Part 2 resolves it: void the stale record. ─────────────────────
+  const voidOk54 = app54.voidObligationById(stale54.obligationId, 'pre-grouping singleton — superseded by the pooled group outcome');
+  assert(voidOk54 === true, 'voidObligationById() reports success');
+  const staleAfterVoid54 = storage.getObligations().find(o => o.obligationId === stale54.obligationId);
+  assert(staleAfterVoid54.voided === true && !!staleAfterVoid54.voidedAt,
+    'the voided record is flagged voided:true with a timestamp');
+  assert(staleAfterVoid54.voidReason === 'pre-grouping singleton — superseded by the pooled group outcome',
+    'the void reason is recorded');
+  assert(staleAfterVoid54.needsReview === false, "voiding clears the voided record's own needsReview flag");
+  assert(storage.getObligations().some(o => o.obligationId === stale54.obligationId),
+    'THE RECORD STILL EXISTS — void never deletes (CLAUDE.md: an obligation is a real debt between real people)');
+
+  const freshAfterVoid54 = storage.getObligations().find(o => o.obligationId === fresh54.obligationId);
+  assert(freshAfterVoid54.needsReview === false,
+    "voiding the stale sibling also clears needsReview on the surviving active record — the conflict is resolved, it shouldn't keep nagging");
+
+  assert(activeWeeklyObs54('un126_m1').length === 1 && activeWeeklyObs54('un126_m1')[0].obligationId === fresh54.obligationId,
+    'exactly one ACTIVE weekly obligation remains for the gid — the correct one');
+
+  // Re-finalizing M1 again (idempotent re-press) after resolution does NOT
+  // mint a third obligation — the survivor already matches the computed
+  // outcome exactly.
+  app54.applyWeekStatusChange(storage.getWeek('un126_m1'), 'final');
+  assert(activeWeeklyObs54('un126_m1').length === 1,
+    `re-finalizing again after resolution does not create a third obligation (got ${activeWeeklyObs54('un126_m1').length})`);
+
+  // Weekly History now renders normally — the row is no longer conflicted.
+  {
+    const realGetById54b = document.getElementById;
+    let lbHtml54b = '';
+    const fakeLB54b = {
+      id: 'page-leaderboard',
+      set innerHTML(v) { lbHtml54b = v; }, get innerHTML() { return lbHtml54b; },
+      querySelectorAll() { return []; }, querySelector() { return null; },
+    };
+    document.getElementById = id => (id === 'page-leaderboard' ? fakeLB54b : realGetById54b(id));
+    app54.renderLeaderboard();
+    document.getElementById = realGetById54b;
+    const wh54b = /Weekly History<\/div>[\s\S]*?<table class="dashboard-table">([\s\S]*?)<\/table>/.exec(lbHtml54b)?.[1] || '';
+    assert(!/Needs review/.test(wh54b), 'once resolved, the review warning is gone from Weekly History');
+    // No admin/player session is active in this harness (getSession() default
+    // is a bystander), so no ACTION button renders either way — but the
+    // ordinary status badge (obligationActionsHTML's badge half) proves the
+    // row fell through to the normal, non-conflicted render path.
+    assert(/Unpaid/.test(wh54b), 'the row now renders the normal Unpaid status badge for the surviving obligation, not a conflict warning');
+  }
+
+  // ── 54c — buildObligationsCsvRows(): voided state is VISIBLE in the CSV,
+  // even though it's excluded from what players see on screen. ────────────
+  {
+    const playersById54 = Object.fromEntries(storage.getPlayers().map(p => [p.playerId, p.displayName]));
+    const weeksById54 = Object.fromEntries(storage.getWeeks().map(w => [w.weekId, w]));
+    const header54 = app54.buildObligationsCsvRows([], {}, {})[0];
+    assert(JSON.stringify(header54) === JSON.stringify(['Obligation ID', 'Type', 'Week', 'Payer', 'Recipient', 'Amount/Prize', 'Status', 'Created', 'Paid At', 'Needs Review', 'Voided', 'Void Reason', 'Merged Into', 'Merged From']),
+      `header row carries the five new audit columns in order (got ${JSON.stringify(header54)})`);
+    const rows54 = app54.buildObligationsCsvRows([staleAfterVoid54], playersById54, weeksById54);
+    const row54 = rows54[1];
+    assert(row54[9] === '', `Needs Review column is empty for a resolved (voided) record (got "${row54[9]}")`);
+    assert(row54[10] === 'yes', `Voided column reads "yes" for a voided record (got "${row54[10]}")`);
+    assert(row54[11] === 'pre-grouping singleton — superseded by the pooled group outcome', 'Void Reason column carries the recorded reason');
+    assert(row54[3] === 'Yusuf' && row54[4] === 'Xena', 'the voided row still names its real payer/recipient — visible, not scrubbed');
+  }
+  // needsReview was cleared by the void above, so re-check it independently
+  // against a still-flagged fixture (freshAfterVoid54 was cleared too) —
+  // build one on the spot rather than reuse a since-resolved record.
+  {
+    const flagged54 = { ...storage.createObligation('un126_zz', 'un126_x', 'un126_y', '$5'), needsReview: true };
+    const row = app54.buildObligationsCsvRows([flagged54], {}, {})[1];
+    assert(row[9] === 'yes', 'Needs Review column reads "yes" for a flagged-but-unresolved record');
+  }
+
+  // ── 54d — mergeObligationsById(): records what it absorbed, excludes the
+  // absorbed records from tallies, never deletes anything. Modelled on
+  // Drew's stated pre-UN-118 case: two DIFFERENT week records for one real
+  // competitive week, each independently finalized before grouping existed
+  // — never auto-flagged (different weekIds), resolved by hand. ───────────
+  storage.saveObligation(storage.createObligation('un126_preA', 'un126_y', 'un126_x', '1 drink'));
+  storage.saveObligation(storage.createObligation('un126_preB', 'un126_y', 'un126_x', '1 drink'));
+  storage.saveObligation(storage.createObligation('un126_preC', 'un126_y', 'un126_x', '1 drink'));
+  const obA54 = storage.getObligations().find(o => o.weekId === 'un126_preA');
+  const obB54 = storage.getObligations().find(o => o.weekId === 'un126_preB');
+  const obC54 = storage.getObligations().find(o => o.weekId === 'un126_preC');
+  const totalBeforeMerge54 = storage.getObligations().length;
+
+  const mergeOk54 = app54.mergeObligationsById(obA54.obligationId, [obB54.obligationId]);
+  assert(mergeOk54 === true, 'mergeObligationsById() reports success');
+  assert(storage.getObligations().length === totalBeforeMerge54,
+    'merging changes zero record COUNT — nothing is deleted, only flagged');
+  const obAAfter1 = storage.getObligations().find(o => o.obligationId === obA54.obligationId);
+  const obBAfter = storage.getObligations().find(o => o.obligationId === obB54.obligationId);
+  assert(JSON.stringify(obAAfter1.mergedFrom) === JSON.stringify([obB54.obligationId]),
+    `the survivor's mergedFrom records exactly what it absorbed (got ${JSON.stringify(obAAfter1.mergedFrom)})`);
+  assert(obBAfter.voided === true && obBAfter.mergedInto === obA54.obligationId,
+    'the absorbed record is voided with mergedInto pointing at the survivor');
+  assert(obAAfter1.payerPlayerId === obA54.payerPlayerId && obAAfter1.amountOrPrize === obA54.amountOrPrize,
+    "the survivor's own payer/recipient/amount are UNTOUCHED — merge never invents a value, the commissioner's pick stands as-is");
+
+  // A second merge onto the SAME survivor accumulates rather than overwrites.
+  app54.mergeObligationsById(obA54.obligationId, [obC54.obligationId]);
+  const obAAfter2 = storage.getObligations().find(o => o.obligationId === obA54.obligationId);
+  assert(JSON.stringify(obAAfter2.mergedFrom.slice().sort()) === JSON.stringify([obB54.obligationId, obC54.obligationId].sort()),
+    `a SECOND merge accumulates onto mergedFrom rather than replacing it (got ${JSON.stringify(obAAfter2.mergedFrom)})`);
+
+  assert(activeWeeklyObs54 && storage.getActiveObligations().some(o => o.obligationId === obA54.obligationId),
+    'the survivor stays ACTIVE (counts toward what is owed)');
+  assert(!storage.getActiveObligations().some(o => o.obligationId === obB54.obligationId) &&
+         !storage.getActiveObligations().some(o => o.obligationId === obC54.obligationId),
+    'both absorbed records are EXCLUDED from getActiveObligations() — they no longer count toward what anyone owes');
+
+  {
+    const rowsA54 = app54.buildObligationsCsvRows([obAAfter2], {}, {});
+    assert(rowsA54[1][13] === [obB54.obligationId, obC54.obligationId].join('; ') ||
+           rowsA54[1][13] === [obC54.obligationId, obB54.obligationId].join('; '),
+      'Merged From column lists both absorbed ids, semicolon-joined, in the CSV export');
+    const rowsB54 = app54.buildObligationsCsvRows([obBAfter], {}, {});
+    assert(rowsB54[1][12] === obA54.obligationId, 'Merged Into column names the survivor for an absorbed row');
+  }
+
+  // Merging fewer than 2 (or an already-voided id) is a documented no-op —
+  // never a partial/garbage write.
+  assert(app54.mergeObligationsById(obA54.obligationId, []) === false,
+    'mergeObligationsById() with no otherIds is a no-op, not a silent success');
+  assert(app54.mergeObligationsById(obA54.obligationId, [obB54.obligationId]) === false,
+    'mergeObligationsById() where the only other id is ALREADY voided is a no-op — it will not re-absorb or double-flag');
+
+  // ── 54e — legacy obligation rows (predate every UN-126 field) default
+  // safely and never throw, across every surface that reads them
+  // (CONVENTIONS #10). ──────────────────────────────────────────────────────
+  const legacy54 = {
+    obligationId: 'ob_legacy_un126', type: 'weekly', weekId: 'un126_legacy_wk',
+    payerPlayerId: 'un126_y', recipientPlayerId: 'un126_x',
+    amountOrPrize: '1 drink', status: 'unpaid',
+    createdAt: '2026-01-01T00:00:00.000Z', paidAt: null,
+    // deliberately NO needsReview / voided / voidedAt / voidReason / mergedInto / mergedFrom
+  };
+  storage.saveObligation(legacy54);
+
+  assert(dm.isObligationActive(legacy54) === true, 'isObligationActive() reads a legacy row (no `voided` field at all) as ACTIVE');
+  assert(storage.getActiveObligations('un126_legacy_wk').some(o => o.obligationId === 'ob_legacy_un126'),
+    'getActiveObligations() includes a legacy row with no voided field');
+
+  let threw54a = false, corrHtml54;
+  try { corrHtml54 = app54.renderObligationCorrectionsAdmin([legacy54]); } catch (e) { threw54a = true; console.error(e); }
+  assert(!threw54a, 'renderObligationCorrectionsAdmin() does not throw on a legacy row missing every UN-126 field');
+  assert(!/Voided|Merged|Needs review/.test(corrHtml54), 'a legacy row with no flags renders with NO state badge');
+  assert(/obcorr-check.*ob_legacy_un126|ob_legacy_un126.*obcorr-check/s.test(corrHtml54) || /data-ob-id="ob_legacy_un126"/.test(corrHtml54),
+    'a legacy row still renders a checkbox/void control — it is a normal active obligation, not something broken');
+
+  let threw54b = false, admHtml54;
+  try { admHtml54 = app54.renderObligationsAdmin(); } catch (e) { threw54b = true; console.error(e); }
+  assert(!threw54b, 'renderObligationsAdmin() does not throw with a legacy row (missing needsReview/voided) present in live storage');
+
+  let threw54c = false, csv54;
+  try { csv54 = app54.buildObligationsCsvRows([legacy54], {}, {}); } catch (e) { threw54c = true; console.error(e); }
+  assert(!threw54c, 'buildObligationsCsvRows() does not throw on a legacy row');
+  assert(JSON.stringify(csv54[1].slice(9)) === JSON.stringify(['', '', '', '', '']),
+    `all five new CSV columns default to '' for a legacy row (got ${JSON.stringify(csv54?.[1]?.slice(9))})`);
+
+  let threw54d = false;
+  try { app54.voidObligationById('ob_legacy_un126', 'test'); } catch (e) { threw54d = true; console.error(e); }
+  assert(!threw54d, 'voidObligationById() does not throw on a legacy-shaped record');
+  assert(storage.getObligations().find(o => o.obligationId === 'ob_legacy_un126').voided === true,
+    'voiding a legacy record still works correctly despite its missing fields');
+
+  const legacy54b = { ...legacy54, obligationId: 'ob_legacy_un126_b' };
+  storage.saveObligation(legacy54b);
+  let threw54e = false;
+  try { app54.mergeObligationsById('ob_legacy_un126_b', [legacy54.obligationId]) } catch (e) { threw54e = true; console.error(e); }
+  // legacy54 was already voided by the void test just above, so this is
+  // also exercising the "already voided, not re-absorbed" no-op path —
+  // deliberately reusing it rather than adding a third near-identical fixture.
+  assert(!threw54e, 'mergeObligationsById() does not throw when the surviving record is legacy-shaped (no pre-existing mergedFrom array)');
+
+  // ── 54f — RG-10 + wiring: the Data-tab card, mirroring suite 43's pattern
+  // for the feedback card. ──────────────────────────────────────────────────
+  const corrSection54 = app54.renderObligationCorrectionsAdminSectionHTML();
+  assert(/^\s*<div class="admin-section" data-comm-tab="data">/.test(corrSection54),
+    'renderObligationCorrectionsAdminSectionHTML() returns markup wrapped in <div class="admin-section" data-comm-tab="data">');
+  assert(/id="obcorr-merge-btn"/.test(corrSection54), 'the Merge Selected button is present, disabled by default (0 selected)');
+  assert(/obcorr-merge-btn"[^>]*disabled/.test(corrSection54), 'the merge button starts disabled — nothing is selected yet');
+
+  const feedbackPushIdx54 = appJsSrc.indexOf('sections.push(renderFeedbackAdminSectionHTML());');
+  const corrPushIdx54 = appJsSrc.indexOf('sections.push(renderObligationCorrectionsAdminSectionHTML());');
+  const tiebreakerIdx54 = appJsSrc.indexOf('// Tiebreaker');
+  assert(feedbackPushIdx54 > -1 && corrPushIdx54 > -1 && tiebreakerIdx54 > -1 &&
+    feedbackPushIdx54 < corrPushIdx54 && corrPushIdx54 < tiebreakerIdx54,
+    'Obligation Corrections is pushed directly after Feedback, before the next section, same tab (RG-10)');
+  assert(appJsSrc.includes("mergeBtn?.addEventListener('click', () => {"),
+    'the merge button is wired inside bindCommEventListeners()');
+  assert(appJsSrc.includes(".obcorr-void-btn").length !== 0 &&
+    /obcorr-void-btn.*addEventListener\('click', \(\) => handleVoidObligation/.test(appJsSrc.replace(/\n/g, ' ')),
+    'each row\'s void button is wired to handleVoidObligation()');
+}
+
+// ── 55. RG — the emailed weekly digest's Obligations block ───────────────────
+// Two defects in the SAME six lines of buildWeeklySummary(), both found while
+// tracing getObligations() call sites:
+//   (a) it read o.playerId / o.description / o.kind — three fields that have
+//       never existed on an obligation record. The real fields are
+//       payerPlayerId / recipientPlayerId / amountOrPrize (+ note on manual
+//       entries). Every line rendered "  (unknown): undefined [unpaid]".
+//   (b) it read the RAW getObligations(), so a voided record, or one merged
+//       away into another, was emailed to the whole league as a live debt.
+//       storage.js's own doc comment says getActiveObligations() is "the read
+//       every 'what does someone actually owe' surface should use".
+//
+// Asserted against the RENDERED digest text returned by the real
+// buildWeeklySummary(), never by matching app.js source — a source match would
+// have passed against the broken code just as happily.
+console.log('\n[55] RG — emailed weekly digest: obligations name real people, and only ACTIVE ones ship…');
+{
+  const app55 = mods['app'];
+
+  // Isolate players — suite 54 left Xena/Yusuf active, and any active player
+  // dilutes the picks/standings sections (and could smuggle in an unrelated
+  // "(unknown)" that would make the assertions below lie).
+  storage.getPlayers().forEach(p => { if (p.active) storage.savePlayer({ ...p, active: false }); });
+  storage.addPlayer({ playerId: 'dg_w', displayName: 'Wanda', active: true });
+  storage.addPlayer({ playerId: 'dg_l', displayName: 'Leo', active: true });
+
+  const WK55 = { weekId: 'dg_wk', weekNumber: 60, season: 2026, status: 'final',
+    dataSourceMode: 'manual', startDate: '2026-11-29', endDate: '2026-11-29',
+    actualTiebreakerValue: 50 };
+  storage.saveWeek(WK55);
+  storage.saveGame({ weekId: 'dg_wk', gameId: 'dg_g1', homeTeam: 'Homer', awayTeam: 'Awaymore',
+    kickoff: '2026-11-29T18:00:00Z', status: 'final', homeScore: 28, awayScore: 21,
+    spread: -3, lockedSpread: -3 });
+  storage.saveAllPicks([...storage.getPicks(),
+    { pickId: 'dg_pk_w', weekId: 'dg_wk', gameId: 'dg_g1', playerId: 'dg_w', selectedTeam: 'Homer' },
+    { pickId: 'dg_pk_l', weekId: 'dg_wk', gameId: 'dg_g1', playerId: 'dg_l', selectedTeam: 'Awaymore' },
+  ]);
+  storage.setTiebreakerGuess('dg_wk', 'dg_w', 48);
+  storage.setTiebreakerGuess('dg_wk', 'dg_l', 55);
+
+  // THE LIVE DEBT — Leo owes Wanda. This is the one, and the only one, an
+  // email to the league is allowed to name.
+  const live55 = {
+    obligationId: 'dg_ob_live', type: 'weekly', weekId: 'dg_wk',
+    payerPlayerId: 'dg_l', recipientPlayerId: 'dg_w',
+    amountOrPrize: 'a tall boy', status: 'unpaid',
+    createdAt: '2026-11-30T00:00:00.000Z', paidAt: null,
+    needsReview: false, reviewNote: null,
+    voided: false, voidedAt: null, voidReason: null, mergedInto: null, mergedFrom: [] };
+  // A VOIDED duplicate — the commissioner already struck it. Distinctive
+  // payload so its presence in the text is unmistakable.
+  const voided55 = { ...live55, obligationId: 'dg_ob_voided',
+    payerPlayerId: 'dg_w', recipientPlayerId: 'dg_l', amountOrPrize: 'VOIDEDPRIZE',
+    voided: true, voidedAt: '2026-11-30T01:00:00.000Z', voidReason: 'bookkeeping duplicate' };
+  // A MERGED-AWAY record — absorbed into dg_ob_live, so it is not its own debt.
+  const merged55 = { ...live55, obligationId: 'dg_ob_merged',
+    amountOrPrize: 'MERGEDPRIZE', voided: true, voidedAt: '2026-11-30T02:00:00.000Z',
+    voidReason: 'merged', mergedInto: 'dg_ob_live' };
+  [live55, voided55, merged55].forEach(o => storage.saveObligation(o));
+
+  const digest55 = app55.buildWeeklySummary(storage.getWeek('dg_wk'));
+  const obBlock55 = /━━━ Obligations ━━━\n([\s\S]*?)(?:\n\n|$)/.exec(digest55)?.[1] ?? '';
+  const obLines55 = obBlock55.split('\n').filter(l => l.trim());
+
+  assert(obBlock55.length > 0, 'fixture check: the digest actually renders an Obligations block for this week');
+
+  // (a) — the field-name defect. These are the two strings the broken code
+  // produced, verbatim.
+  assert(!/\(unknown\)/.test(obBlock55),
+    `no obligation line renders "(unknown)" for a player who exists (block was: ${JSON.stringify(obBlock55)})`);
+  assert(!/undefined/.test(obBlock55),
+    `no obligation line renders the literal "undefined" for its prize (block was: ${JSON.stringify(obBlock55)})`);
+  assert(!/undefined|\(unknown\)/.test(digest55),
+    'and neither string appears anywhere else in the whole digest either');
+  assert(/Leo/.test(obBlock55), 'the obligation line names the PAYER by display name (Leo)');
+  assert(/Wanda/.test(obBlock55), 'the obligation line names the RECIPIENT by display name (Wanda) — an email that says who owes but not whom is unusable');
+  assert(/a tall boy/.test(obBlock55), 'the obligation line renders amountOrPrize ("a tall boy"), the field that actually holds the prize');
+  assert(/\[unpaid\]/.test(obBlock55), 'the payment status is still rendered, unchanged');
+
+  // (b) — the accessor defect. Each is a CONJUNCTION with the live prize
+  // actually rendering: "no VOIDEDPRIZE in the text" would otherwise pass
+  // vacuously against an implementation that renders no prize at all — which
+  // is exactly what the broken code did.
+  assert(/a tall boy/.test(obBlock55) && !/VOIDEDPRIZE/.test(digest55),
+    'a VOIDED obligation is not emailed to the league as though it were still owed (while the live one IS)');
+  assert(/a tall boy/.test(obBlock55) && !/MERGEDPRIZE/.test(digest55),
+    'an obligation MERGED AWAY into another is not emailed as a second, separate debt (while the live one IS)');
+  assert(obLines55.length === 1,
+    `exactly ONE obligation line ships for this week — the live one (got ${obLines55.length}: ${JSON.stringify(obLines55)})`);
+
+  // Legacy rows (predate every UN-126 field) must still ship — absence of
+  // `voided` means ACTIVE, not hidden (CONVENTIONS #10).
+  storage.saveObligation({ obligationId: 'dg_ob_legacy', type: 'weekly', weekId: 'dg_wk',
+    payerPlayerId: 'dg_w', recipientPlayerId: 'dg_l', amountOrPrize: 'LEGACYPRIZE',
+    status: 'paid', createdAt: '2026-01-01T00:00:00.000Z', paidAt: null });
+  const digestLegacy55 = app55.buildWeeklySummary(storage.getWeek('dg_wk'));
+  assert(/LEGACYPRIZE/.test(digestLegacy55),
+    'a legacy obligation with NO voided field at all still ships — missing means active, never hidden');
+  assert(!/undefined|\(unknown\)/.test(digestLegacy55),
+    'and a legacy row renders no "(unknown)"/"undefined" either');
+
+  // A departed player is still named. An obligation outlives someone leaving
+  // the league, and "(unknown) owes Wanda" in an email is the same defect in a
+  // different costume.
+  storage.addPlayer({ playerId: 'dg_gone', displayName: 'Gus', active: false });
+  storage.saveObligation({ ...live55, obligationId: 'dg_ob_gone',
+    payerPlayerId: 'dg_gone', recipientPlayerId: 'dg_w', amountOrPrize: 'GONEPRIZE' });
+  const digestGone55 = app55.buildWeeklySummary(storage.getWeek('dg_wk'));
+  assert(/Gus owes Wanda/.test(digestGone55),
+    `an INACTIVE (departed) player is still named as the payer, not "(unknown)" (got ${JSON.stringify(digestGone55.split('\n').filter(l => /GONEPRIZE/.test(l)))})`);
+
+  // A week with nothing owed renders no Obligations header at all — the
+  // pre-existing behaviour, preserved.
+  const WK55b = { ...WK55, weekId: 'dg_wk_clean', weekNumber: 61 };
+  storage.saveWeek(WK55b);
+  assert(!/━━━ Obligations ━━━/.test(app55.buildWeeklySummary(storage.getWeek('dg_wk_clean'))),
+    'a week with no obligations still renders no Obligations section (unchanged)');
+
+  // And a week whose ONLY obligations are voided also renders no section —
+  // better than an empty header implying something is owed.
+  const WK55c = { ...WK55, weekId: 'dg_wk_allvoid', weekNumber: 62 };
+  storage.saveWeek(WK55c);
+  storage.saveObligation({ ...voided55, obligationId: 'dg_ob_allvoid', weekId: 'dg_wk_allvoid',
+    amountOrPrize: 'ALLVOIDPRIZE' });
+  const digestAllVoid55 = app55.buildWeeklySummary(storage.getWeek('dg_wk_allvoid'));
+  assert(!/ALLVOIDPRIZE/.test(digestAllVoid55) && !/━━━ Obligations ━━━/.test(digestAllVoid55),
+    'a week whose only obligation is voided renders no Obligations section at all, not an empty one');
+}
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

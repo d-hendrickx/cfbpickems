@@ -3,7 +3,10 @@
  * No-decision scoring, tiebreaker-aware rankings, season stats by correct picks.
  */
 
-import { PICK_RESULT, GAME_STATUS, getAlmaMaterMatch, getAutoLockOffsetMinutes } from './data-model.js';
+import {
+  PICK_RESULT, GAME_STATUS, getAlmaMaterMatch, getAutoLockOffsetMinutes,
+  getEffectiveGroupId, weeksInGroup, getGroupTiebreakerWeek,
+} from './data-model.js';
 import { getTiebreakerGuess } from './storage.js';
 
 // ─── AUTO-TRANSITION COMPUTE HELPERS ─────────────────────────────────────────
@@ -87,6 +90,41 @@ export function gameMultiplier(game) {
   return m;
 }
 
+/**
+ * The ranking tail shared by `calculateWeeklyResults()` and
+ * `calculateGroupWeeklyResults()` (UN-118/UN-125). Sorts `rows` by
+ * correctPicks desc, tiebreakerDelta asc (nulls last), assigns `rank`, and —
+ * only when `anyFinal` is true and there's more than one row — sets
+ * isWinner/isLoser/wonByTiebreaker on the first/last row after sorting.
+ *
+ * Mutates and returns `rows` (same contract `calculateWeeklyResults()` always
+ * had: it built `results` via `.map()` then sorted/annotated those SAME
+ * objects in place). Extracted verbatim — zero behaviour change — so a
+ * single-week caller passing its own `games.some(FINAL)` reproduces today's
+ * results exactly, and a pooled-group caller can reuse the identical
+ * winner/loser logic on POOLED totals instead of re-deriving it.
+ */
+export function rankWeeklyResults(rows, anyFinal) {
+  rows.sort((a,b)=>{
+    const d=b.correctPicks-a.correctPicks; if(d!==0) return d;
+    if(a.tiebreakerDelta===null&&b.tiebreakerDelta===null) return 0;
+    if(a.tiebreakerDelta===null) return 1;
+    if(b.tiebreakerDelta===null) return -1;
+    return a.tiebreakerDelta-b.tiebreakerDelta;
+  });
+
+  rows.forEach((r,i)=>{ r.rank=i+1; });
+  if(anyFinal&&rows.length>1){
+    rows[0].isWinner=true;
+    if(rows[1]&&rows[0].correctPicks===rows[1].correctPicks) rows[0].wonByTiebreaker=true;
+    rows[rows.length-1].isLoser=true;
+    const last=rows[rows.length-1];
+    const sl=rows[rows.length-2];
+    if(sl&&last.correctPicks===sl.correctPicks) last.wonByTiebreaker=true;
+  }
+  return rows;
+}
+
 export function calculateWeeklyResults(weekId, players, picks, games, actualTiebreaker=null) {
   const results = players.map(player => {
     const pp = picks.filter(p=>p.weekId===weekId&&p.playerId===player.playerId);
@@ -122,25 +160,71 @@ export function calculateWeeklyResults(weekId, players, picks, games, actualTieb
     };
   });
 
-  results.sort((a,b)=>{
-    const d=b.correctPicks-a.correctPicks; if(d!==0) return d;
-    if(a.tiebreakerDelta===null&&b.tiebreakerDelta===null) return 0;
-    if(a.tiebreakerDelta===null) return 1;
-    if(b.tiebreakerDelta===null) return -1;
-    return a.tiebreakerDelta-b.tiebreakerDelta;
+  const anyFinal=games.some(g=>g.status===GAME_STATUS.FINAL);
+  return rankWeeklyResults(results, anyFinal);
+}
+
+/**
+ * UN-118/UN-125 — the POOLED equivalent of `calculateWeeklyResults()` for a
+ * multi-part competitive week (`groupWeeks.length > 1`). Pools raw picks and
+ * games across every member week, runs the identical per-game weighted/raw
+ * tally loop, then calls `rankWeeklyResults()` ONCE on the pooled totals —
+ * so rank/isWinner/isLoser/wonByTiebreaker are computed exactly once at the
+ * GROUP level, never derived by combining two independent per-part rankings.
+ *
+ * correctPicks/incorrectPicks/correctCount/incorrectCount are additive, so
+ * pooling raw picks and summing per-part totals are mathematically
+ * identical — what is NOT additive is rank/isWinner/isLoser, which is why
+ * this function exists rather than a simple sum of two
+ * `calculateWeeklyResults()` calls.
+ *
+ * The tiebreaker resolves through the ONE group member returned by
+ * `getGroupTiebreakerWeek()` — every OTHER member's tiebreaker guess for
+ * their own week's (different) tiebreaker question is ignored entirely, by
+ * construction, since `getTiebreakerGuess()` is only ever called for that one
+ * week's id. No storage schema change: this reads the exact same
+ * `cfbp_tb_guesses` accessor every singleton week already uses.
+ *
+ * `weekId` on each returned row is the group's canonical id
+ * (`getEffectiveGroupId`) — a real, resolvable weekId, so callers (obligation
+ * creation, CSV export, Weekly History) don't need a second concept of "group
+ * key" vs "week key."
+ */
+export function calculateGroupWeeklyResults(groupWeeks, players, allPicks, allGames) {
+  const weeks = groupWeeks || [];
+  const gid = weeks.length ? getEffectiveGroupId(weeks[0]) : null;
+  const memberWeekIds = new Set(weeks.map(w=>w.weekId));
+  const tbWeek = getGroupTiebreakerWeek(weeks);
+  const actualTiebreaker = tbWeek ? (tbWeek.actualTiebreakerValue ?? null) : null;
+
+  const results = (players||[]).map(player => {
+    const pp = (allPicks||[]).filter(p=>memberWeekIds.has(p.weekId)&&p.playerId===player.playerId);
+    let correct=0, incorrect=0, correctCount=0, incorrectCount=0, noDecisions=0, pending=0;
+    for (const pick of pp) {
+      const game=(allGames||[]).find(g=>g.gameId===pick.gameId);
+      if(!game) continue;
+      const r=evaluatePick(pick,game);
+      const mult = gameMultiplier(game);
+      if(r===PICK_RESULT.WIN)            { correct += mult;   correctCount++; }
+      else if(r===PICK_RESULT.LOSS)      { incorrect += mult; incorrectCount++; }
+      else if(r===PICK_RESULT.NO_DECISION) noDecisions++;
+      else pending++;
+    }
+    const tbGuess = tbWeek ? getTiebreakerGuess(tbWeek.weekId, player.playerId) : null;
+    const tbDelta = (actualTiebreaker!==null&&tbGuess!==null) ? Math.abs(tbGuess-actualTiebreaker) : null;
+    return {
+      resultId:`wr_${gid}_${player.playerId}`,
+      weekId: gid, playerId:player.playerId, displayName:player.displayName,
+      correctPicks:correct, incorrectPicks:incorrect,
+      correctCount, incorrectCount,
+      noDecisions, pending,
+      tiebreakerGuess:tbGuess, tiebreakerDelta:tbDelta,
+      rank:0, isWinner:false, isLoser:false, wonByTiebreaker:false,
+    };
   });
 
-  results.forEach((r,i)=>{ r.rank=i+1; });
-  const anyFinal=games.some(g=>g.status===GAME_STATUS.FINAL);
-  if(anyFinal&&results.length>1){
-    results[0].isWinner=true;
-    if(results[1]&&results[0].correctPicks===results[1].correctPicks) results[0].wonByTiebreaker=true;
-    results[results.length-1].isLoser=true;
-    const last=results[results.length-1];
-    const sl=results[results.length-2];
-    if(sl&&last.correctPicks===sl.correctPicks) last.wonByTiebreaker=true;
-  }
-  return results;
+  const anyFinal=(allGames||[]).some(g=>memberWeekIds.has(g.weekId)&&g.status===GAME_STATUS.FINAL);
+  return rankWeeklyResults(results, anyFinal);
 }
 
 export function calculateAlmaMaterTotal(games, almaMaters, calcMode='selectedSlateOnly') {
@@ -161,10 +245,69 @@ export function calculateAlmaMaterTotal(games, almaMaters, calcMode='selectedSla
   return total;
 }
 
-export function calculateSeasonStandings(players, allWeeklyResults) {
+/**
+ * UN-118/UN-125 — `weeks` is OPTIONAL and OFF by default. Omitting it
+ * reproduces today's behaviour exactly (fails safe): every weekly-result row
+ * counts its own isWinner/isLoser toward weeklyWins/weeklyLosses, which is
+ * what double-counts a split week into two winners. Callers that have NOT
+ * been updated for grouping keep working unmodified.
+ *
+ * When `weeks` IS supplied, any weekly-result row whose week record belongs
+ * to a >1-member group is pulled OUT of the per-row tally and replaced by a
+ * single pooled result per group, computed the same way
+ * `calculateGroupWeeklyResults()` does — but from the ALREADY-COMPUTED
+ * per-part rows in `allWeeklyResults` (this function never sees raw
+ * picks/games), which is valid because correctPicks is additive across
+ * parts. A group only contributes a win/loss once EVERY member is actually
+ * present in `allWeeklyResults` (i.e. finalized) — mirrors finalizeWeek()'s
+ * own "not every member final ⇒ no obligation yet" gate (DI-126d), applied
+ * here to the win/loss tally instead of the obligation.
+ */
+export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) {
+  const weekById = weeks ? new Map(weeks.map(w=>[w.weekId,w])) : null;
+
+  // Map<playerId, {wins,losses}> — populated once, up front, from every
+  // >1-member group whose members are ALL represented in allWeeklyResults.
+  let groupWinLoss = null;
+  if (weekById) {
+    const resultWeekIds = new Set(allWeeklyResults.map(r=>r.weekId));
+    const seenGroups = new Set();
+    groupWinLoss = new Map(players.map(p=>[p.playerId,{wins:0,losses:0}]));
+    for (const weekId of resultWeekIds) {
+      const w = weekById.get(weekId);
+      if (!w) continue; // result row for a week not in `weeks` — leave it to the per-row path
+      const gid = getEffectiveGroupId(w);
+      if (seenGroups.has(gid)) continue;
+      seenGroups.add(gid);
+      const memberWeeks = weeksInGroup(weeks, w);
+      if (memberWeeks.length <= 1) continue; // singleton — unaffected, per-row path handles it
+      if (!memberWeeks.every(m => resultWeekIds.has(m.weekId))) continue; // not every member final yet
+      const tbWeek = getGroupTiebreakerWeek(memberWeeks);
+      const pooled = players.map(player => {
+        const rows = memberWeeks
+          .map(m => allWeeklyResults.find(r=>r.weekId===m.weekId&&r.playerId===player.playerId))
+          .filter(Boolean);
+        const correctPicks = rows.reduce((s,r)=>s+(r.correctPicks||0),0);
+        const tbRow = tbWeek ? rows.find(r=>r.weekId===tbWeek.weekId) : null;
+        return {
+          playerId: player.playerId, correctPicks,
+          tiebreakerDelta: tbRow ? (tbRow.tiebreakerDelta ?? null) : null,
+          rank:0, isWinner:false, isLoser:false, wonByTiebreaker:false,
+        };
+      });
+      rankWeeklyResults(pooled, true);
+      const gWinner = pooled.find(r=>r.isWinner);
+      const gLoser  = pooled.find(r=>r.isLoser);
+      if (gWinner) groupWinLoss.get(gWinner.playerId).wins++;
+      if (gLoser)  groupWinLoss.get(gLoser.playerId).losses++;
+    }
+  }
+
   const standings=players.map(player=>{
     const pr=allWeeklyResults.filter(r=>r.playerId===player.playerId);
     // WEIGHTED totals drive ranking. These are the numbers players compare on.
+    // Additive across group members by construction — grouping never changes
+    // a season total, only how many DISCRETE weekly wins/losses it produced.
     const totalCorrect=pr.reduce((s,r)=>s+(r.correctPicks||0),0);
     const totalIncorrect=pr.reduce((s,r)=>s+(r.incorrectPicks||0),0);
     // RAW counts preserved for the season audit tooling. They fall back to the
@@ -173,8 +316,20 @@ export function calculateSeasonStandings(players, allWeeklyResults) {
     const totalCorrectCount=pr.reduce((s,r)=>s+(r.correctCount ?? r.correctPicks ?? 0),0);
     const totalIncorrectCount=pr.reduce((s,r)=>s+(r.incorrectCount ?? r.incorrectPicks ?? 0),0);
     const totalND=pr.reduce((s,r)=>s+(r.noDecisions||0),0);
-    const weeklyWins=pr.filter(r=>r.isWinner).length;
-    const weeklyLosses=pr.filter(r=>r.isLoser).length;
+    let weeklyWins, weeklyLosses;
+    if (weekById) {
+      const soloRows = pr.filter(r => {
+        const w = weekById.get(r.weekId);
+        if (!w) return true; // unknown week record — fall back to the old per-row behaviour for this row
+        return weeksInGroup(weeks, w).length <= 1;
+      });
+      const g = groupWinLoss.get(player.playerId) || {wins:0,losses:0};
+      weeklyWins = soloRows.filter(r=>r.isWinner).length + g.wins;
+      weeklyLosses = soloRows.filter(r=>r.isLoser).length + g.losses;
+    } else {
+      weeklyWins=pr.filter(r=>r.isWinner).length;
+      weeklyLosses=pr.filter(r=>r.isLoser).length;
+    }
     const totalGames=totalCorrectCount+totalIncorrectCount+totalND;
     // Win % uses raw counts — otherwise a 2x game skews the ratio in a
     // misleading way ("83% win rate" when they got 5 of 6 raw games right

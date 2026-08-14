@@ -85,6 +85,21 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .page-section{display:none}.page-section.active{display:block}
 .section-header{padding:20px 0 12px;border-bottom:2px solid var(--maroon-tint);margin-bottom:16px}
 .section-header h2{color:var(--maroon)}.section-header .subtitle{color:var(--text-muted);font-size:.875rem;margin-top:2px}
+/* UN-117 — week nomenclature on two deliberate lines.
+   Drew: the single-line label wrapped wherever it ran out of room, so "Week 1
+   — Sep 5" would keep the name and half the date range together and orphan the
+   rest onto the next line. The break is now a structural decision, not an
+   accident of container width: the week NAME owns line one, the DATE RANGE
+   owns line two, and the range itself never splits (white-space:nowrap).
+   A block-level child inside an inline heading is what forces the break, so
+   this works without changing any font sizes. */
+.week-heading{display:block}
+.week-heading-dates{display:block;white-space:nowrap;font-family:'Inter',system-ui,sans-serif;font-weight:400;font-size:.72em;letter-spacing:.02em;color:var(--text-muted);margin-top:2px;line-height:1.3}
+/* The app header is a tight horizontal strip — the same two lines, but the
+   name and its status badge stay on one row. */
+.week-heading-inline{display:inline-block;vertical-align:middle;line-height:1.25}
+.week-heading-inline .week-heading-name{display:block;white-space:nowrap}
+.week-heading-inline .week-heading-dates{font-size:.68rem;margin-top:1px}
 /* Header */
 /* UN-98: on the installed app, viewport-fit=cover + a translucent status bar
    (index.html) make safe-area insets non-zero and draw the app UNDER the
@@ -302,9 +317,19 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .pick-cell{text-align:center;font-weight:600;font-size:.78rem;white-space:nowrap;font-family:'Oswald',sans-serif}
 .pick-cell.result-win{background:rgba(26,122,63,.1)}.pick-cell.result-loss{background:rgba(185,28,28,.08)}
 .pick-cell.result-nd{background:rgba(122,106,90,.08)}.pick-cell.result-live{background:rgba(220,38,38,.06)}
+/* UN-116 blind matrix cell — deliberately the same visual vocabulary as
+   .dc-chip-blind in the compact view, so both dashboards say "hidden" the
+   same way. Monospace ••• keeps the column width stable when the real picks
+   appear at kickoff. */
+.pick-cell-blind{background:var(--bg-input);color:var(--text-muted);opacity:.85;font-family:'Courier New',monospace;letter-spacing:.1em;font-weight:400}
+/* The explanatory note that replaces a silent change in behaviour (DI-116f). */
+.blind-note{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:8px 10px;background:var(--bg-input);border-left:3px solid var(--maroon-tint);border-radius:6px;font-size:.76rem;color:var(--text-secondary);line-height:1.4}
+.blind-note-icon{flex:none;font-size:.9rem}
 /* Commissioner */
 .admin-section{margin-bottom:24px}
 .admin-section-title{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--maroon);margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--maroon-tint)}
+/* UN-123 — feedback review list, commissioner Data tab */
+.feedback-admin-list{max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 .game-admin-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 14px;margin-bottom:10px;box-shadow:var(--shadow-card)}
 .game-admin-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .game-admin-matchup{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;flex:1;color:var(--text-primary)}
@@ -828,6 +853,70 @@ label[for="week-show-history"],label:has(#week-show-history){
   .dc-chip-live-covering,.dc-chip-live-trailing{animation:none}
 }
 
+/* UN-119 (DI-119a) — compact-view density. The chat indicator and the
+   reaction strip are now inline children of .dc-meta (js/app.js,
+   renderDashboardCompact) instead of their own block-level rows below
+   .dc-chips. Root driver (Drew): the chat bubble carried its base CSS's
+   min-height:40px pill on EVERY card, whether or not the thread had a single
+   message — that was the dominant per-card vertical cost, not the reactions
+   row (which already collapsed to near-zero height when empty).
+   Scoped to `.dc-meta` — NOT a global `.chat-bubble-btn` change — so the
+   standard matrix (renderDashboardTable), which still renders this same
+   button at the bottom of the game-info cell as its own full-size pill, is
+   completely unaffected. Three state classes (chat-bubble-empty/-read/
+   -unread) and the chat-bubble-count badge are reused verbatim from
+   chat-ui.js's gameChatBubbleHTML() — only their PRESENTATION changes here. */
+.dc-meta .chat-bubble-btn{background:none;border:none;padding:1px 2px;
+  min-height:0;box-sizing:border-box;font-size:.78rem;line-height:1;gap:2px}
+/* Icon-only, but the tap target must still clear the 40px floor
+   (CONVENTIONS #17) — this codebase has shipped sub-40px targets twice
+   already (the emoji picker at 22px, .chat-pill at 28px), both came back as
+   defects. Real padding/min-height would satisfy 40px too, but — as already
+   discovered and reviewed on .chat-react-pill below — padding is IN FLOW and
+   would reserve that height on every card, re-inflating the exact row this
+   change exists to shrink. Instead: an invisible ::before, taken OUT of flow
+   via position:absolute (the button is already position:relative in its
+   base rule), centered on the icon and sized to 40x40 regardless of how
+   small the visible glyph is. Same technique as .chat-react-pill's ::after. */
+/* Height is the free axis here — .dc-meta's other children are ~18px, so a
+   40px-tall overlay costs nothing in flow. WIDTH is not free: .dc-meta sets
+   gap:6px, so two 40px-wide overlays centred on controls ~23px apart overlap
+   by ~17px, and the reaction strip paints LATER (it is the next flex child),
+   so it would capture taps aimed at the right half of the chat icon. Two
+   overlapping hit zones are a worse defect than two slightly narrow ones —
+   the user taps the thing they are looking at and something else opens.
+   calc(100% + 6px) extends each overlay by exactly half the gap per side, so
+   the two tile edge-to-edge and never overlap. Deviates from the DI's literal
+   ">=40x40", which is unsatisfiable for two controls 6px apart. */
+/* HEIGHT IS NOT FREE EITHER — the original note above was wrong about that.
+   The visible box here is ~14.5px (padding:1px 2px, font-size:.78rem,
+   line-height:1), so a flat 40px overlay hangs ~12.75px past each edge. Below
+   it sits .dc-game-head's 8px margin-bottom and then .dc-chips, whose chips are
+   draggable="true" for column reorder — and .chat-bubble-btn is
+   position:relative, so this ::before paints in the positioned layer, ABOVE the
+   static .dc-chips that follows it in the DOM. The overlay therefore won the
+   hit test over the top ~5px of the chip row: a drag begun there opened the
+   chat sheet instead of moving the column.
+   Same remedy as the width axis — extend by exactly the gap that exists rather
+   than a number that doesn't fit. calc(100% + 16px) is 8px per side: flush with
+   the chip row below, and inside .dc-game's 10px top padding above. */
+.dc-meta .chat-bubble-btn::before{content:'';position:absolute;top:50%;left:50%;
+  width:calc(100% + 6px);height:calc(100% + 16px);transform:translate(-50%,-50%)}
+.dc-meta .chat-bubble-count{font-size:.6rem}
+/* empty → icon only, low opacity, no visible sentence (gameChatBubbleHTML
+   never renders one — the "no messages yet" text is title/aria-label only) */
+.dc-meta .chat-bubble-empty{color:var(--text-muted);opacity:.4}
+/* has messages, zero unread → dim icon */
+.dc-meta .chat-bubble-read{color:var(--text-muted);opacity:.7}
+/* has unread → accent-coloured icon + the existing count badge */
+.dc-meta .chat-bubble-unread{color:var(--maroon);font-weight:700}
+.dc-meta .chat-bubble-unread .chat-bubble-count{color:var(--maroon)}
+/* Reactions: unchanged behaviour, just relocated. margin-top:6px (and the
+   -empty variant's 2px) existed to space the strip below .dc-chips as its
+   own row; inline inside .dc-meta (align-items:center) that same margin
+   would just shove the strip out of vertical alignment with its siblings. */
+.dc-meta .reaction-strip,.dc-meta .reaction-strip-empty{margin-top:0}
+
 /* ── v14: Emoji reactions on dashboard games ──────────────────────────────── */
 .reaction-strip{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:6px;position:relative}
 .reaction-chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:12px;
@@ -873,8 +962,20 @@ label[for="week-show-history"],label:has(#week-show-history){
 .reaction-add-btn{display:inline-flex;align-items:center;justify-content:center;
   line-height:1;padding-bottom:1px /* nudge "+" off the bottom border */}
 .reaction-strip-empty{margin-top:2px}
-.reaction-add-btn-mini{width:18px;height:18px;font-size:.78rem;opacity:.55;border-style:dotted;border-width:1px}
+.reaction-add-btn-mini{width:18px;height:18px;font-size:.78rem;opacity:.55;border-style:dotted;border-width:1px;position:relative}
 .reaction-add-btn-mini:hover{opacity:1}
+/* UN-119 (DI-119b): 18x18 is well under the 40px tap-target floor
+   (CONVENTIONS #17) — the same defect class as the emoji picker (22px) and
+   .chat-pill (28px), both of which came back as regressions after shipping.
+   Fixed without touching the VISIBLE 18x18 box (Priority 5's near-zero-height
+   empty-reactions affordance is the whole point of this variant) — same
+   invisible-::before-out-of-flow technique as .dc-meta .chat-bubble-btn and
+   .chat-react-pill's ::after, above. */
+/* Height: same correction as .dc-meta .chat-bubble-btn::before above — a flat
+   40px on an 18px box overhangs 11px per side, past the 8px that separates
+   .dc-game-head from the draggable .dc-chip row. 8px per side instead. */
+.reaction-add-btn-mini::before{content:'';position:absolute;top:50%;left:50%;
+  width:calc(100% + 4px);height:calc(100% + 16px);transform:translate(-50%,-50%)}
 
 /* Picker — wrap on small viewports, scroll inside if it overflows. The palette
    doubled in size (Priority 9) so this matters now. */
@@ -1447,7 +1548,9 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-avatar{flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:var(--maroon-tint);color:var(--maroon);display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;margin-top:2px}
 .chat-avatar-scribe{background:#1C1410;color:#F3EFEA}
 .chat-avatar-mine{background:var(--maroon);color:#fff}
-.chat-bubble-col{flex:1;min-width:0}
+/* UN-120: position:relative anchors .chat-actions (now position:absolute,
+   out of document flow) to THIS message's column, not the page. */
+.chat-bubble-col{flex:1;min-width:0;position:relative}
 .chat-meta{display:flex;gap:6px;align-items:center;font-size:.68rem;color:var(--text-muted);flex-wrap:wrap}
 .chat-author{font-weight:700;color:var(--text-secondary)}
 .chat-scribe .chat-author{color:#1C1410;letter-spacing:.04em}
@@ -1483,32 +1586,41 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-react-pill::after{content:'';position:absolute;left:0;right:0;top:50%;
   transform:translateY(-50%);height:40px}
 .chat-react-pill.me{border-color:var(--maroon);background:var(--maroon-pale)}
-/* UN-114 — "who reacted with what," always visible (never a `title` tooltip,
-   which doesn't fire on touch). Same scale as .chat-time/.chat-meta. */
-.chat-reaction-names{font-size:.66rem;color:var(--text-muted);margin-top:2px}
-/* position:relative anchors the UN-103 per-message react picker
-   (.reaction-picker), appended as a child of .chat-actions. */
-/* v0.17.4 (caught in review): opacity:0 alone left a 40px-tall strip of LIVE
-   controls under every message on touch. 🏛 pin and 📎 callout fire with no
-   confirmation, so a stray tap could publish someone's message to the Hall of
-   Records. Hidden must mean untappable.
-   UN-113 (message density): opacity:0 ALSO left `display:flex` in force, so
-   the hidden `.chat-act`(40px) row still reserved ~42px of INVISIBLE layout
-   height on every message — measured root cause of "only 4-5 fit on a
-   screen." `display:none` removes both the visibility AND the layout claim
-   in one property; `pointer-events:none` becomes redundant (a display:none
-   element already can't be hit-tested) but is harmless to leave off. Do NOT
-   reintroduce opacity-only hiding here. */
-.chat-actions{display:none;gap:4px;margin-top:2px;position:relative}
-/* Desktop — UNCHANGED by UN-103 (Drew: "desktop needs zero changes"). Matches
-   Slack/Discord convention already. */
-.chat-msg:hover .chat-actions,.chat-msg:focus-within .chat-actions{display:flex}
-/* UN-103: touch previously left this permanently semi-visible
-   (opacity:.75 on every message, every screen) — "too busy" (Drew). Touch now
-   starts hidden like desktop and reveals ONE message's actions via a
-   long-press (bindMessageActionsLongPress, chat-ui.js), which adds
-   .chat-actions-revealed to that message only. */
-@media (hover:none){.chat-msg.chat-actions-revealed .chat-actions{display:flex}}
+/* UN-121 (amends UN-114) — "who reacted with what" is no longer always
+   visible: it duplicated the pill row directly beneath it. Hidden by
+   default, revealed by the SAME gesture/state as .chat-actions below
+   (.chat-actions-revealed on the parent .chat-msg) — one reveal, not a
+   second gesture (that was the RG-21 mistake: two changes to one component,
+   verified in isolation, that cancelled each other on composition). Copy
+   itself (escaped, no truncation, no `title` tooltip — tooltips don't fire
+   on touch) is UNCHANGED from UN-114; only visibility is gated now. */
+.chat-reaction-names{display:none;font-size:.66rem;color:var(--text-muted);margin-top:2px}
+/* UN-120 — replaces hover (jumpy: brushing the cursor toward the menu swept
+   over every message on the way and reacted to each one, Drew's report)
+   with a deliberate right-click (desktop, contextmenu in chat-ui.js) /
+   long-press (touch, unchanged from UN-103) reveal. Taken OUT OF DOCUMENT
+   FLOW — position:absolute anchored to .chat-bubble-col (position:relative,
+   above) — so revealing it can never shift the messages below it, which an
+   in-flow reveal always would. Opens UPWARD (bottom:100%) over the message
+   ABOVE, reusing the exact "open upward, clear what's below" shape that
+   already fixed RG-17(d) for the nested .chat-msg .reaction-picker — hence
+   the opaque card background + shadow, so it reads legibly over whatever
+   bubble it now overlaps instead of the transparent backdrop it had when it
+   was in-flow.
+   HARD CONSTRAINT (UN-113/RG-20/RG-21): hidden state stays `display:none` —
+   NOT opacity/visibility — so it claims zero layout height AND is untappable
+   with one property. Going out-of-flow does not touch this; do not regress
+   it back to opacity while changing the positioning. */
+.chat-actions{display:none;gap:4px;position:absolute;left:0;bottom:calc(100% + 4px);
+  background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+  padding:3px;box-shadow:var(--shadow-card);z-index:20}
+/* ONE reveal mechanism drives BOTH .chat-actions and .chat-reaction-names —
+   desktop right-click and touch long-press both add this one class
+   (revealMessageActions(), chat-ui.js) to the message. No hover, no
+   @media(hover:none) split — right-click has no "hover capability" signal to
+   gate on, and gating would recreate two mechanisms that can drift again. */
+.chat-msg.chat-actions-revealed .chat-actions{display:flex}
+.chat-msg.chat-actions-revealed .chat-reaction-names{display:block}
 /* CONVENTIONS #17 — was padding:2px 4px, well under the 40px tap-target
    floor. Bumped now that this row is reachable by touch at all. */
 .chat-act{background:none;border:none;font-size:.85rem;cursor:pointer;border-radius:8px;padding:0;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}

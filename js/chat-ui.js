@@ -34,6 +34,38 @@
  * the empty-room state (guarded at §[7a]) and the Rules FAQ in app.js
  * (guarded at §[23h]).
  *
+ * UN-120/UN-121 (2026-08-12) — the desktop `:hover` reveal for `.chat-actions`
+ * is DELETED (Drew: mousing toward the menu brushed every message on the way
+ * and reacted to each one) and replaced by a deliberate right-click
+ * (contextmenu). Touch keeps its long-press (UN-103, unchanged) and gains an
+ * axis-locked swipe for the two most common actions (reply / react). UN-121
+ * folds `.chat-reaction-names` (previously always-visible, duplicating the
+ * pill row directly above it) into this SAME reveal state, one gesture for
+ * both, per RG-21's lesson about two changes to one component composing
+ * badly when verified only in isolation.
+ *
+ * DI-125 (2026-08-13, same day) — closes the gap UN-120/121 left in the
+ * per-game bottom sheet (`#chat-sheet-scroll`, `openGameChatSheet()`):
+ * `renderSheetMessages()` shares `messageHTML()` with the main feed, so it
+ * always rendered `.chat-actions`/`.chat-reaction-names` markup, but never
+ * wired the gestures OR five of the six action buttons — only `[data-react]`
+ * (tap-to-vote) and `[data-retry]` worked there. Drew's decision: wire the
+ * SAME gestures/handlers into the sheet rather than special-case it. The
+ * reveal state (`_revealedMsgId`) is a SINGLE module-level value shared by
+ * both surfaces, so `revealMessageActions()`/`dismissRevealedActions()` are
+ * now scoped by container id (`_revealedRootId`) — required because a
+ * message can legitimately render in BOTH `#chat-scroll` and
+ * `#chat-sheet-scroll` at once (the main chat page is never torn down on
+ * navigation, only hidden — see the handoff report). `bindMessageSwipe`/
+ * `bindMessageActionsLongPress`/`bindMessageActionsContextMenu` all keep
+ * their exact `(root)` signature; they derive the container id from `root.id`
+ * internally, so no caller needed to change shape. `openReplyFor()` and
+ * `openReactPickerFor()` gain a `surface` ('main'|'sheet') parameter for the
+ * one thing that's genuinely different per surface — which composer/render
+ * function reacts — reusing every other line of logic. Reply in the sheet
+ * gets its OWN `U.sheetReplyTo` (not `U.replyTo`) so a reply started in one
+ * surface can never leak into the other's composer.
+ *
  * All state lives in chat.js; this module renders and forwards intents.
  */
 
@@ -49,7 +81,7 @@ import {
 import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
 import {
   getSession, getPlayers, getPlayer, getCurrentWeek, getGames, getWeeks,
-  getPicks, getEffectiveWeekStatus,
+  getPicks, getEffectiveWeekStatus, arePicksPublic,
   getAccent, setAccent, getAccentFor, getChatNick, setChatNick, getChatNickFor,
   getNotifPrefs, setNotifPrefs,
 } from './storage.js';
@@ -73,6 +105,10 @@ const U = {
   composerTag: '',          // resolved tag chip (removable)
   tagStripped: false,       // user explicitly removed the chip this compose
   sheetGameId: null,
+  sheetReplyTo: null,       // DI-125b — the sheet's OWN reply target; deliberately
+                            // separate from U.replyTo (the main feed's) so a reply
+                            // started in one surface can never leak into the other's
+                            // composer (see the module docstring's DI-125 note).
   markTimer: null,
   toastQueue: [],
   toastShowing: false,
@@ -199,14 +235,15 @@ function dashboardPageActive() {
 }
 
 // ── Pick indicator (Drew: visual context in game threads) ─────────────────────
-// BLIND RULE: only shown once the week is locked/live/final — never leaks a
-// selection while picks are open.
+// BLIND RULE: only shown once the week's picks are public — never leaks a
+// selection while they can still be edited. UN-116 moved this from locked to
+// live/final along with every other surface; arePicksPublic() is the single
+// rule, so this chip cannot drift away from the dashboard again.
 function pickChip(authorId, gameTag) {
   if (!gameTag || authorId === 'scribe' || authorId === 'system') return '';
   const found = gameById(gameTag);
   if (!found) return '';
-  const eff = getEffectiveWeekStatus(found.week);
-  if (!['locked', 'live', 'final'].includes(eff) && found.week.status !== 'final') return '';
+  if (!arePicksPublic(found.week)) return '';
   const pick = getPicks(found.week.weekId, authorId).find(p => p.gameId === gameTag);
   if (!pick) return '';
   let cls = 'pick-chip';
@@ -295,8 +332,59 @@ export function _toastWouldSuppress(force = false) {
 function showToast(msg, { force = false } = {}) {
   if (!force && !getNotifPrefs().toasts) return;
   if (_toastWouldSuppress(force)) return;
+  // RG-25 — the player already acknowledged this message on the OTHER surface
+  // (dashboard teaser ✕, or by opening the room). One acknowledgement, both
+  // surfaces. Forced system announcements carry no seq and are never gated.
+  if (!force && typeof msg?.seq === 'number' && msg.seq <= _notifAckSeq()) return;
   U.toastQueue.push(msg);
   if (!U.toastShowing) drainToast();
+}
+
+/**
+ * Test-only seams (same convention as `_toastWouldSuppress` / `_ackNotif`).
+ *
+ * RG-25 and RG-26 must be driven through the REAL toast — its ✕ handler, its
+ * auto-dismiss timer, and the chat-page clear — never a re-implementation.
+ * Verified 2026-08-12: the previous assertions matched `acknowledge()` by NAME
+ * in the source, so replacing its body with a bare `advance()` (the shared
+ * watermark never written — exactly the bug Drew reported) passed a full green
+ * 552/552 suite. Both of these exist so that mutation goes red instead.
+ */
+export function _showToastForTest(msg, opts) { return showToast(msg, opts); }
+export function _toastQueueDepth() { return U.toastQueue.length; }
+/**
+ * Reset the toast machinery WITHOUT writing the acknowledgement watermark.
+ * Deliberately separate from `_clearToastsForChatPage()`: a fixture that reset
+ * state by calling the function under test would be partly self-referential,
+ * and a mutation to that function would crash the fixture instead of failing
+ * the assertion that names the actual defect.
+ */
+export function _resetToastsForTest() { U.toastQueue.length = 0; U.toastShowing = false; }
+
+/**
+ * RG-26 — showToast() evaluates its chat-page suppression exactly ONCE, when
+ * the toast is created. Nothing re-evaluated it on navigation, so a toast
+ * raised on Standings/Rules/Picks/Comm survived navigateTo('chat') and sat at
+ * top:14px over the chat feed — and with the shipped "Until dismissed"
+ * duration pref (0, no auto-remove timer) it stayed there for good. Opening
+ * the room IS reading the message, so the on-screen toast AND everything
+ * queued behind it are cleared and acknowledged in one go.
+ *
+ * Idempotent — renderChatPage() also runs on every poll while chat is open,
+ * where there is nothing queued (showToast suppresses on this page) and this
+ * is a no-op.
+ */
+export function _clearToastsForChatPage() {
+  const seqs = U.toastQueue.map(m => m?.seq).filter(s => typeof s === 'number');
+  const el = typeof document !== 'undefined' ? document.getElementById('chat-toast') : null;
+  if (el) {
+    const s = Number(el.dataset?.seq);
+    if (Number.isFinite(s) && s > 0) seqs.push(s);
+    el.remove();
+  }
+  U.toastQueue.length = 0;
+  U.toastShowing = false;
+  if (seqs.length) setTeaserDismissedSeq(Math.max(...seqs));
 }
 /**
  * UN-102c: "stays for" duration is player-configurable (3s / 6s default /
@@ -318,10 +406,19 @@ function drainToast() {
   el.innerHTML = `<span class="chat-toast-avatar" style="${accentOf(msg.author) ? `background:${accentOf(msg.author)};color:#fff` : ''}">${esc(initialsOf(msg.author))}</span>
     <span class="chat-toast-body"><strong>${esc(nameOf(msg.author))}</strong> ${esc((msg.body || '').slice(0, 80))}</span>
     <button type="button" class="chat-toast-dismiss" aria-label="Dismiss">✕</button>`;
+  // RG-26 — carried on the node so _clearToastsForChatPage() can acknowledge
+  // the message that is currently on screen, not just the ones still queued.
+  if (typeof msg?.seq === 'number') el.dataset.seq = String(msg.seq);
   let autoTimer = null;
   const advance = () => { clearTimeout(autoTimer); el.remove(); U.toastShowing = false; setTimeout(drainToast, 250); };
-  el.querySelector?.('.chat-toast-dismiss')?.addEventListener('click', e => { e.stopPropagation(); advance(); });
-  el.addEventListener('click', () => { advance(); navToChat(); });
+  // RG-25 — an EXPLICIT dismissal (✕, or tapping through to the room) records
+  // the shared acknowledgement so the dashboard teaser does not re-announce
+  // the same message on the next tab. A toast that merely TIMES OUT calls
+  // advance() only: the ambient teaser exists precisely to catch what you
+  // missed (UN-93), so an unseen timeout must not silence it.
+  const acknowledge = () => { if (typeof msg?.seq === 'number') setTeaserDismissedSeq(msg.seq); advance(); };
+  el.querySelector?.('.chat-toast-dismiss')?.addEventListener('click', e => { e.stopPropagation(); acknowledge(); });
+  el.addEventListener('click', () => { acknowledge(); navToChat(); });
   document.body.appendChild(el);
   const prefMs = getNotifPrefs().toastDuration;
   const ms = Number.isFinite(prefMs) ? prefMs : 6000;
@@ -566,6 +663,22 @@ function messageHTML(m, self, showNewDivider) {
   </div>`;
 }
 
+/**
+ * Test-only seam (same convention as `_reactionsHTML` / `_showToastForTest`).
+ *
+ * WHY THIS EXPORT EXISTS: `pickChip()` — the ⚡ chip beside every chat author's
+ * name — is module-private and reachable only from here. It carries the BLIND
+ * RULE for the surface the six players read most: every message in the room
+ * would otherwise advertise its author's selection while the week is still
+ * open and editable. Verified 2026-08-12 (reviewer BLOCK): deleting pickChip's
+ * `arePicksPublic()` guard left the whole suite green at 670/670, because
+ * nothing in the harness rendered a message at all. Exercising the REAL
+ * `messageHTML()` — rather than pickChip in isolation or a regex over this
+ * file — is what makes that mutation go red, and it also covers the wiring
+ * (a chip that stopped being called would be just as invisible a leak).
+ */
+export const _messageHTMLForTest = messageHTML;
+
 /** Ambient coalescing: consecutive gamereacts by one author within 5 min render
  *  as a single attributed line (attribution is the whole point in a 6-man room). */
 function coalesceStream(list) {
@@ -646,6 +759,11 @@ export function renderChatPage() {
   // onChat re-render, resumeChatAfterLogin() — bounces rather than rendering
   // a page whose polling has already been stopped.
   if (!isChatEnabled()) { redirectChatDisabled(); return; }
+  // RG-26 — a toast raised on another tab survives navigation; the room is now
+  // on screen, so it is redundant ("you can already see the chat feed", Drew).
+  // AFTER the disabled-bounce above: a redirect away from chat must never
+  // swallow a notification the player has not actually seen.
+  _clearToastsForChatPage();
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const self = me();
   const st = chatStatus();
@@ -916,6 +1034,63 @@ function bindFilterButtons(root) {
   }));
 }
 
+/**
+ * DI-125b — the six per-message action buttons ([data-reply], [data-react-
+ * open], [data-pin], [data-edit], [data-del], [data-callout]), wired ONCE
+ * here and reused by BOTH the main feed (bindChatPage, `host = #page-chat`)
+ * and the sheet (renderSheetMessages, `host = #chat-sheet-scroll`) — not
+ * forked into two near-identical copies. `renderFn` is the surface's own
+ * refresh (renderChatPage vs renderSheetMessages); `surface` ('main'|'sheet')
+ * is threaded only into the two handlers whose TARGET depends on which
+ * composer should react (openReplyFor, toggleMessageReactPicker's post-pick
+ * refresh via openReactPickerFor). Every handler body below is otherwise
+ * byte-identical to what shipped in bindChatPage() before this batch — moved,
+ * not rewritten.
+ *
+ * [data-react] (tap-to-vote) and [data-retry] are DELIBERATELY excluded —
+ * DI-125c requires the reaction pill's plain tap stay untouched, and retry
+ * was already correctly wired in both surfaces before this batch existed.
+ */
+function bindMessageActionButtons(host, renderFn, surface) {
+  host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
+  host?.querySelectorAll('[data-react-open]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    if (!me()) return;
+    toggleMessageReactPicker(b, b.dataset.reactOpen, renderFn);
+  }));
+  host?.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => {
+    const self = me(); if (!self) return;
+    const msg = getMessage(b.dataset.pin);
+    pinMessage(b.dataset.pin, self, !msg?.pinned);
+    renderFn();
+  }));
+  host?.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
+    const self = me(); if (!self) return;
+    const msg = getMessage(b.dataset.edit); if (!msg) return;
+    const next = prompt('Edit message (5-minute window):', msg.body);
+    if (next !== null && next.trim() && next !== msg.body) { editMessage(msg.id, next.trim(), self); renderFn(); }
+  }));
+  host?.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
+    const self = me(); if (!self) return;
+    if (confirm('Withdraw this message? A tombstone will remain — SCRIBE keeps the receipts.')) {
+      deleteMessage(b.dataset.del, self); renderFn();
+    }
+  }));
+  host?.querySelectorAll('[data-callout]').forEach(b => b.addEventListener('click', () => {
+    const self = me(); if (!self) return;
+    const msg = getMessage(b.dataset.callout); if (!msg) return;
+    sendEvent({
+      type: 'message', author: self, gameTag: msg.gameTag, notify: true,
+      body: 'Prior statement, for the record:',
+      meta: { mentions: [msg.author], quote: { id: msg.id, author: msg.author, body: msg.body.slice(0, 160) } },
+    });
+    renderFn();
+  }));
+}
+// Test-only alias (see chat.js's `_resetForTest` convention) — exercises the
+// REAL shared wiring both surfaces use, not a re-implementation.
+export const _bindMessageActionButtons = bindMessageActionButtons;
+
 function bindChatPage() {
   const c = document.getElementById('page-chat'); if (!c) return;
   bindFilterButtons(c);
@@ -934,11 +1109,7 @@ function bindChatPage() {
 
   const scroll = document.getElementById('chat-scroll');
   const jump = document.getElementById('chat-jump');
-  scroll?.addEventListener('scroll', () => {
-    if (!jump) return;
-    const nearBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
-    jump.style.display = nearBottom ? 'none' : 'block';
-  });
+  scroll?.addEventListener('scroll', () => onChatScrollEvent(scroll, jump));
   jump?.addEventListener('click', () => { if (scroll) scroll.scrollTop = scroll.scrollHeight; });
 
   c.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => {
@@ -951,46 +1122,22 @@ function bindChatPage() {
     toggleReact(b.dataset.target, b.dataset.react, self);
     renderChatPage();
   }));
-  c.querySelectorAll('[data-react-open]').forEach(b => b.addEventListener('click', e => {
-    e.stopPropagation();
-    if (!me()) return;
-    toggleMessageReactPicker(b, b.dataset.reactOpen);
-  }));
+  // UN-120: long-press (touch, UNCHANGED) + right-click (desktop, replaces
+  // hover) + axis-locked swipe (touch, supplements long-press) — all three
+  // delegated on the same scroll container so they survive every re-render.
+  // DI-125a: the SAME three binders are also delegated on #chat-sheet-scroll
+  // — see renderSheetMessages(), below.
   bindMessageActionsLongPress(document.getElementById('chat-scroll'));
-  c.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => {
-    U.replyTo = b.dataset.reply; U.tagStripped = false;
-    renderChatPage();
-    document.getElementById('chat-input')?.focus();
-  }));
-  c.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => {
-    const self = me(); if (!self) return;
-    const msg = getMessage(b.dataset.pin);
-    pinMessage(b.dataset.pin, self, !msg?.pinned);
-    renderChatPage();
-  }));
-  c.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
-    const self = me(); if (!self) return;
-    const msg = getMessage(b.dataset.edit); if (!msg) return;
-    const next = prompt('Edit message (5-minute window):', msg.body);
-    if (next !== null && next.trim() && next !== msg.body) { editMessage(msg.id, next.trim(), self); renderChatPage(); }
-  }));
-  c.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
-    const self = me(); if (!self) return;
-    if (confirm('Withdraw this message? A tombstone will remain — SCRIBE keeps the receipts.')) {
-      deleteMessage(b.dataset.del, self); renderChatPage();
-    }
-  }));
+  bindMessageActionsContextMenu(document.getElementById('chat-scroll'));
+  bindMessageSwipe(document.getElementById('chat-scroll'));
+  // DI-125b: [data-reply]/[data-react-open]/[data-pin]/[data-edit]/[data-del]/
+  // [data-callout] are wired by the ONE shared helper both surfaces use — see
+  // bindMessageActionButtons(), below. [data-react] (above) and [data-retry]
+  // (below) stay separate: DI-125c requires the reaction pill's tap-to-vote
+  // untouched, and [data-retry] was already correctly wired in both surfaces
+  // before this batch, so neither needed to move.
+  bindMessageActionButtons(c, renderChatPage, 'main');
   c.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => { retryFailed(b.dataset.retry); renderChatPage(); }));
-  c.querySelectorAll('[data-callout]').forEach(b => b.addEventListener('click', () => {
-    const self = me(); if (!self) return;
-    const msg = getMessage(b.dataset.callout); if (!msg) return;
-    sendEvent({
-      type: 'message', author: self, gameTag: msg.gameTag, notify: true,
-      body: 'Prior statement, for the record:',
-      meta: { mentions: [msg.author], quote: { id: msg.id, author: msg.author, body: msg.body.slice(0, 160) } },
-    });
-    renderChatPage();
-  }));
 
   // composer
   const input = document.getElementById('chat-input');
@@ -1018,12 +1165,19 @@ function bindChatPage() {
  * reaction picker and the old composer picker both used: 5×3 desktop / 7×3
  * mobile, 42-44px targets) rather than inventing a second layout — the
  * v0.15.1 picker shipped at ~22×22px and had to be rebuilt once already.
- * Anchored to the MESSAGE (`.chat-actions`, position:relative in CSS), not
- * the composer foot — this is a react on that message, not text insertion.
+ * Anchored to the MESSAGE (`.chat-actions`, position:absolute in CSS as of
+ * UN-120 — still a valid containing block for this nested absolute child),
+ * not the composer foot — this is a react on that message, not text
+ * insertion.
  * On select, calls the SAME `toggleReact()` the always-visible quick-react
  * buttons used, then closes.
+ *
+ * `renderFn` (DI-125b) — which surface refreshes after a pick: defaults to
+ * `renderChatPage` (the main feed's own click handler never passes a third
+ * arg, so it is unchanged); the sheet passes `renderSheetMessages` so its own
+ * message list — not the main feed's — updates.
  */
-function toggleMessageReactPicker(anchorEl, mid) {
+function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
   const existing = document.getElementById('chat-react-picker');
   const reopening = existing?.dataset?.mid === mid;
   existing?.remove();
@@ -1040,7 +1194,7 @@ function toggleMessageReactPicker(anchorEl, mid) {
     ev.stopPropagation();
     toggleReact(mid, opt.dataset.emoji, self);
     picker.remove();
-    renderChatPage();
+    renderFn();
   }));
   setTimeout(() => {
     const closer = ev => {
@@ -1053,74 +1207,118 @@ function toggleMessageReactPicker(anchorEl, mid) {
   }, 0);
 }
 
-// ── UN-103: touch-only long-press to reveal one message's .chat-actions ──────
+// ── UN-120: ONE reveal mechanism, TWO desktop/touch gestures ─────────────────
 /**
- * `.chat-actions` was permanently semi-visible on every touch device
- * (`@media(hover:none){.chat-actions{opacity:.75}}`) — "too busy" (Drew).
- * Desktop's `:hover` reveal (styles.css) is untouched; this ONLY covers
- * touch, where there's no hover to reveal on.
+ * Desktop right-click (contextmenu) and touch long-press both reveal the
+ * SAME thing on the SAME message: `.chat-actions` AND, since UN-121 folds
+ * into this same state, `.chat-reaction-names` — governed by one class,
+ * `.chat-actions-revealed` on `.chat-msg` (styles.css). Only one message may
+ * be revealed at a time; revealing a second dismisses the first (enforced by
+ * revealMessageActions() below, shared by every gesture that reveals).
  *
- * Reuses the TIMER + THRESHOLD + cancel-on-move SHAPE proven in app.js's
- * `bindColumnReorderHandlers` (350ms / 8px — the exact numbers already
- * separating "long-press intent" from "scroll intent" elsewhere in this
- * app), delegated on the scroll container so it survives every re-render
- * without rebinding — same reasoning as `bindFilterButtons`. Deliberately
- * does NOT reuse the drag/drop-target half of that function: a message
- * long-press reveals actions in place, it never moves anything.
+ * REPLACES hover entirely — not tuned with a hover-intent delay, which was
+ * proposed and REJECTED by Drew: "The hover feature is what makes the text
+ * appear jumpy... Just hovering with a cursor doesn't work. It should be
+ * right click." Desktop: bindMessageActionsContextMenu, below. Touch:
+ * bindMessageActionsLongPress (UN-103, UNCHANGED — it covers up to 6
+ * actions, more than a 2-direction swipe can address), SUPPLEMENTED, not
+ * replaced, by bindMessageSwipe (DI-120b) for the two most common actions.
+ *
+ * Long-press reuses the TIMER + THRESHOLD + cancel-on-move SHAPE proven in
+ * app.js's `bindColumnReorderHandlers` (350ms / 8px — the exact numbers
+ * already separating "long-press intent" from "scroll intent" elsewhere in
+ * this app). Its pending-timer state now lives at MODULE scope (it was the
+ * function's own closure pre-UN-120) so bindMessageSwipe can cancel a
+ * pending long-press the instant a gesture commits to a swipe — the two must
+ * never both fire for one touch. All three binders are delegated on the
+ * scroll container so they survive every re-render without rebinding — same
+ * reasoning as `bindFilterButtons`.
  */
 const LONG_PRESS_MS = 350;
 const LONG_PRESS_THRESHOLD_PX = 8;
+const SWIPE_THRESHOLD_PX = 40;
 let _revealedMsgId = null;
+// DI-125a — WHICH container the revealed message lives in ('chat-scroll' or
+// 'chat-sheet-scroll'). #page-chat is never torn down on navigation (only
+// hidden via the .active class), so a message tagged to a game can be
+// rendered in it AND, independently, in that game's bottom sheet at the same
+// time. Scoping by container id — not just by mid — is what keeps "only one
+// message revealed, app-wide" correct in that case: revealing the SAME mid in
+// a DIFFERENT container still dismisses the previous one, and the DOM lookup
+// itself is scoped so it can never touch the wrong copy. See loadtest §[47]
+// for the specific cross-container regression this guards.
+let _revealedRootId = null;
+let _lpTimer = null, _lpStart = null, _lpTargetMid = null;
 
-function revealMessageActions(mid) {
-  if (_revealedMsgId && _revealedMsgId !== mid) {
-    document.querySelector(`.chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
+function revealMessageActions(mid, rootId = 'chat-scroll') {
+  if (_revealedMsgId && (_revealedMsgId !== mid || _revealedRootId !== rootId)) {
+    document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
   }
   _revealedMsgId = mid;
-  document.querySelector(`.chat-msg[data-mid="${mid}"]`)?.classList.add('chat-actions-revealed');
+  _revealedRootId = rootId;
+  document.querySelector(`#${rootId} .chat-msg[data-mid="${mid}"]`)?.classList.add('chat-actions-revealed');
 }
 function dismissRevealedActions() {
   if (!_revealedMsgId) return;
-  document.querySelector(`.chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
+  document.querySelector(`#${_revealedRootId} .chat-msg[data-mid="${_revealedMsgId}"]`)?.classList.remove('chat-actions-revealed');
   _revealedMsgId = null;
+  _revealedRootId = null;
+}
+// Test-only (see `_resetForTest` convention) — direct behavioral coverage of
+// "only one message revealed at a time" and of the Escape/click-elsewhere/
+// scroll closers, without re-simulating a full gesture for every case.
+export const _revealMessageActions = revealMessageActions;
+export const _dismissRevealedActions = dismissRevealedActions;
+export function _revealedRootIdForTest() { return _revealedRootId; }
+export function _revealedMsgIdForTest() { return _revealedMsgId; }
+
+/** Cancels a pending long-press (if any) without revealing anything —
+ *  called by bindMessageSwipe the instant a gesture commits to a swipe, so a
+ *  swipe can never ALSO reveal via long-press for the same touch. */
+function cancelPendingLongPress() {
+  if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null; }
+  _lpStart = null;
 }
 
 function bindMessageActionsLongPress(root) {
   if (!root || root._longPressWired) return;
   root._longPressWired = true;
-  let timer = null, start = null, targetMid = null;
+  // DI-125a — derived from the CONTAINER itself (a real #chat-scroll or
+  // #chat-sheet-scroll node always carries its own id), not a second
+  // parameter every caller would have to remember to pass. Falls back to
+  // 'chat-scroll' for the pre-existing test fixtures that pass an id-less
+  // fake root — preserving their exact prior behavior.
+  const rootId = root.id || 'chat-scroll';
   root.addEventListener('touchstart', e => {
     if (e.touches?.length !== 1) return;
     const msgEl = e.target.closest?.('.chat-msg');
     if (!msgEl) return;
     const t = e.touches[0];
-    start = { x: t.clientX, y: t.clientY };
-    targetMid = msgEl.dataset.mid;
-    timer = setTimeout(() => {
-      timer = null;
-      if (targetMid) {
-        revealMessageActions(targetMid);
+    _lpStart = { x: t.clientX, y: t.clientY };
+    _lpTargetMid = msgEl.dataset.mid;
+    _lpTimer = setTimeout(() => {
+      _lpTimer = null;
+      if (_lpTargetMid) {
+        revealMessageActions(_lpTargetMid, rootId);
         if (navigator.vibrate) try { navigator.vibrate(12); } catch {}
       }
     }, LONG_PRESS_MS);
   }, { passive: true });
   root.addEventListener('touchmove', e => {
-    // No timer pending (already fired, or never started here) — nothing to cancel.
-    if (!timer || !start) return;
+    // No timer pending (already fired, cancelled by a swipe, or never
+    // started here) — nothing to cancel.
+    if (!_lpTimer || !_lpStart) return;
     const t = e.touches?.[0];
     if (!t) return;
-    const dx = Math.abs(t.clientX - start.x);
-    const dy = Math.abs(t.clientY - start.y);
-    // A finger swiping to SCROLL crosses this threshold well before 350ms;
-    // a finger holding still to summon actions never does. Cancel the timer
-    // so scrolling over a message never reveals its actions.
-    if (dx + dy > LONG_PRESS_THRESHOLD_PX) {
-      clearTimeout(timer);
-      timer = null;
-      start = null;
-    }
+    const dx = Math.abs(t.clientX - _lpStart.x);
+    const dy = Math.abs(t.clientY - _lpStart.y);
+    // A finger swiping to SCROLL (or starting a swipe — see bindMessageSwipe
+    // below) crosses this threshold well before 350ms; a finger holding
+    // still to summon actions never does. Cancel the timer so scrolling — or
+    // the start of a swipe — over a message never also reveals its actions.
+    if (dx + dy > LONG_PRESS_THRESHOLD_PX) cancelPendingLongPress();
   }, { passive: true });
-  const clearPress = () => { clearTimeout(timer); timer = null; start = null; };
+  const clearPress = () => cancelPendingLongPress();
   root.addEventListener('touchend', clearPress);
   root.addEventListener('touchcancel', clearPress);
 }
@@ -1128,8 +1326,150 @@ function bindMessageActionsLongPress(root) {
 // REAL bind function's real closures/timing rather than a re-implementation.
 export const _bindMessageActionsLongPress = bindMessageActionsLongPress;
 
-// Dismiss on tap-elsewhere — same document-level closer SHAPE as the reaction
-// pickers above (bind once; a click outside the revealed message clears it).
+/**
+ * UN-120 (DI-120a) — desktop reveal. Replaces `.chat-msg:hover .chat-actions`
+ * outright (styles.css) rather than tuning it — Drew explicitly rejected a
+ * hover-intent delay; hovering itself, not its timing, was the jumpiness.
+ * preventDefault() stops the native browser context menu from also opening.
+ * Right-clicking an already-revealed message closes it (a second gesture on
+ * the same target toggles rather than being a no-op); right-clicking a
+ * DIFFERENT message hides the first — enforced by revealMessageActions()
+ * itself, the same single-`_revealedMsgId` state the touch long-press
+ * already used, so "only one message revealed at a time" cannot drift
+ * between the two gestures.
+ */
+function bindMessageActionsContextMenu(root) {
+  if (!root || root._ctxMenuWired) return;
+  root._ctxMenuWired = true;
+  const rootId = root.id || 'chat-scroll';   // DI-125a — see bindMessageActionsLongPress
+  root.addEventListener('contextmenu', e => {
+    const msgEl = e.target.closest?.('.chat-msg');
+    if (!msgEl) return;
+    e.preventDefault?.();
+    const mid = msgEl.dataset.mid;
+    // DI-125a: the toggle-closes-itself case must also match on CONTAINER,
+    // not just mid — otherwise right-clicking a message in the sheet that
+    // happens to share an id with an ALREADY-revealed copy in the (hidden)
+    // main feed would silently dismiss the wrong one instead of revealing
+    // the one actually under the cursor.
+    if (_revealedMsgId === mid && _revealedRootId === rootId) dismissRevealedActions();
+    else revealMessageActions(mid, rootId);
+  });
+}
+export const _bindMessageActionsContextMenu = bindMessageActionsContextMenu;
+
+/**
+ * UN-120 (DI-120b) — axis-locked swipe, SUPPLEMENTING long-press (which
+ * stays exactly as it is, above — it covers up to 6 actions; a 2-direction
+ * swipe can only cover 2). Reuses the long-press's own dead zone
+ * (LONG_PRESS_THRESHOLD_PX, 8px) to pick an axis, then commits once the
+ * horizontal delta reaches SWIPE_THRESHOLD_PX (~40px). A swipe is only ever
+ * detected WHILE a long-press for the same touch could still fire: crossing
+ * the 8px dead zone already cancels the pending long-press via its own
+ * touchmove handler (registered first, so it always runs first on a shared
+ * touchmove event) well before 40px is reached; committing here also
+ * explicitly cancels it, so cancellation holds regardless of listener
+ * registration order.
+ *   Left → Right = open reply (openReplyFor — the SAME function the ↩
+ *     button's click handler calls).
+ *   Right → Left = open the reaction picker (openReactPickerFor — reveals
+ *     .chat-actions, then calls the SAME toggleMessageReactPicker() the +
+ *     button's click handler calls).
+ * The dead zone before an axis commits is what keeps this from stealing
+ * vertical scroll — a vertical drag is classified 'y' at 8px, and the 'x'
+ * branch below never runs for it.
+ */
+function bindMessageSwipe(root) {
+  if (!root || root._swipeWired) return;
+  root._swipeWired = true;
+  const surface = surfaceForRoot(root);   // DI-125a — see surfaceForRoot()
+  let start = null, targetMid = null, axis = null, committed = false;
+  root.addEventListener('touchstart', e => {
+    if (e.touches?.length !== 1) return;
+    const msgEl = e.target.closest?.('.chat-msg');
+    if (!msgEl) return;
+    const t = e.touches[0];
+    start = { x: t.clientX, y: t.clientY };
+    targetMid = msgEl.dataset.mid;
+    axis = null;
+    committed = false;
+  }, { passive: true });
+  root.addEventListener('touchmove', e => {
+    if (!start || committed || !targetMid) return;
+    const t = e.touches?.[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (axis === null && (Math.abs(dx) > LONG_PRESS_THRESHOLD_PX || Math.abs(dy) > LONG_PRESS_THRESHOLD_PX)) {
+      axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    }
+    if (axis === 'x' && Math.abs(dx) >= SWIPE_THRESHOLD_PX) {
+      committed = true;
+      cancelPendingLongPress();
+      if (dx > 0) openReplyFor(targetMid, surface); else openReactPickerFor(targetMid, surface);
+    }
+  }, { passive: true });
+  const clear = () => { start = null; targetMid = null; axis = null; committed = false; };
+  root.addEventListener('touchend', clear);
+  root.addEventListener('touchcancel', clear);
+}
+export const _bindMessageSwipe = bindMessageSwipe;
+
+/**
+ * DI-125a — the ONE thing that legitimately differs between the main feed and
+ * the sheet: which composer/render function a gesture or button should drive.
+ * Derived from the bound container's own id (a real `#chat-scroll` or
+ * `#chat-sheet-scroll` node), not a second parameter every binder call site
+ * would have to remember to thread through. Unset/unknown ids (incl. the
+ * pre-existing test fixtures, which pass id-less fake roots) fall through to
+ * 'main' — the exact prior behavior.
+ */
+function surfaceForRoot(root) {
+  return root?.id === 'chat-sheet-scroll' ? 'sheet' : 'main';
+}
+
+/** Shared by the ↩ button's click handler AND the left-to-right swipe, in
+ *  BOTH surfaces (DI-120b / DI-125b: "reuse the existing data-reply handler
+ *  path"). `surface` picks which reply state/composer/render function reacts
+ *  — U.replyTo/#chat-input/renderChatPage() for the main feed, U.sheetReplyTo/
+ *  #chat-sheet-input/renderSheetComposer() for the sheet — deliberately
+ *  SEPARATE reply-target fields (see the module docstring's DI-125 note) so a
+ *  reply started in one surface can never leak into the other's composer. */
+function openReplyFor(mid, surface = 'main') {
+  if (surface === 'sheet') {
+    U.sheetReplyTo = mid;
+    renderSheetComposer();
+    document.getElementById('chat-sheet-input')?.focus();
+    return;
+  }
+  U.replyTo = mid; U.tagStripped = false;
+  renderChatPage();
+  document.getElementById('chat-input')?.focus();
+}
+export function _replyTarget() { return U.replyTo; }
+export function _sheetReplyTarget() { return U.sheetReplyTo; }
+
+/** Shared by the + button's click handler AND the right-to-left swipe, in
+ *  BOTH surfaces (DI-120b / DI-125b: "reuse the existing data-react-open /
+ *  toggleMessageReactPicker path"). Reveals .chat-actions first, SCOPED to
+ *  the right container (DI-125a) — the picker is appended as ITS child and
+ *  anchors to it (styles.css), which requires it to be display:flex, not
+ *  display:none, to render/position at all. */
+function openReactPickerFor(mid, surface = 'main') {
+  if (!me()) return;
+  const rootId = surface === 'sheet' ? 'chat-sheet-scroll' : 'chat-scroll';
+  revealMessageActions(mid, rootId);
+  const btn = document.querySelector(`#${rootId} .chat-msg[data-mid="${mid}"] [data-react-open]`);
+  if (btn) toggleMessageReactPicker(btn, mid, surface === 'sheet' ? renderSheetMessages : renderChatPage);
+}
+
+// Dismiss on tap-elsewhere, Escape, or scrolling — the three closer paths
+// DI-120a names for the new right-click reveal ("clicking elsewhere,
+// pressing Escape, or scrolling dismisses it"). Click/Escape are wired once
+// on `document` (never replaced by a re-render, unlike #chat-scroll itself);
+// scrolling is wired per-render inside bindChatPageEvents via
+// onChatScrollEvent, below, because #chat-scroll IS replaced on every
+// re-render and a listener bound to a detached node would go stale.
 let _revealCloserWired = false;
 function wireRevealCloser() {
   if (_revealCloserWired || typeof document === 'undefined') return;
@@ -1139,7 +1479,23 @@ function wireRevealCloser() {
     if (e.target.closest?.(`.chat-msg[data-mid="${_revealedMsgId}"]`)) return;
     dismissRevealedActions();
   });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') dismissRevealedActions();
+  });
 }
+export const _wireRevealCloser = wireRevealCloser;
+
+/** Pure: what the .chat-scroll 'scroll' listener does, minus the DOM lookup
+ *  for the container itself — factored out so it is testable without a live
+ *  scroll container (DI-120a: scrolling is one of the three named ways to
+ *  dismiss a revealed message's actions). */
+function onChatScrollEvent(scrollEl, jumpEl) {
+  if (_revealedMsgId) dismissRevealedActions();
+  if (!jumpEl || !scrollEl) return;
+  const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120;
+  jumpEl.style.display = nearBottom ? 'none' : 'block';
+}
+export const _onChatScrollEvent = onChatScrollEvent;
 
 function maybeMentionMenu(input) {
   const menu = document.getElementById('chat-mention-menu');
@@ -1234,9 +1590,64 @@ export function gameChatBubbleHTML(gameId) {
     title="${esc(text)}" aria-label="${esc(text)}">💬${countHTML}</button>`;
 }
 
+/**
+ * DI-125b — the sheet's own reply banner + composer, same shape as the main
+ * feed's (`.chat-replying`, reused verbatim from styles.css) but reading
+ * `U.sheetReplyTo` instead of `U.replyTo`. A separate function (not inlined
+ * into `openGameChatSheet()`'s one-time template) because it needs to
+ * re-render on its own — starting/cancelling a reply must update the
+ * composer WITHOUT re-fetching and redrawing the whole message list.
+ */
+function sheetComposerHTML() {
+  if (!me()) return '';
+  const replyMsg = U.sheetReplyTo ? getMessage(U.sheetReplyTo) : null;
+  return `<div class="chat-composer" id="chat-sheet-composer">
+    ${replyMsg ? `<div class="chat-replying">↩ replying to <strong>${esc(nameOf(replyMsg.author))}</strong>: ${esc(replyMsg.body.slice(0, 60))}
+      <button id="chat-sheet-cancel-reply">✕</button></div>` : ''}
+    <div class="chat-composer-row">
+      <textarea class="chat-input" id="chat-sheet-input" rows="1" maxlength="1000" placeholder="Message this game's thread…"></textarea>
+      <button class="chat-send-btn" id="chat-sheet-send">➤</button>
+    </div>
+  </div>`;
+}
+
+function sendSheetMessage() {
+  const gameId = U.sheetGameId;
+  if (!gameId) return;
+  const inp = document.getElementById('chat-sheet-input');
+  const body = (inp?.value || '').trim();
+  const self = me();
+  if (!body || !self) return;
+  sendMessage({ body, gameTag: gameId, replyTo: U.sheetReplyTo || '', author: self, mentions: extractMentions(body) });
+  try { scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag: gameId }); } catch {}
+  if (inp) inp.value = '';
+  U.sheetReplyTo = null;
+  renderSheetComposer();
+  renderSheetMessages();
+}
+
+function bindSheetComposer() {
+  document.getElementById('chat-sheet-send')?.addEventListener('click', sendSheetMessage);
+  document.getElementById('chat-sheet-input')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width:700px)').matches) { e.preventDefault(); sendSheetMessage(); }
+  });
+  document.getElementById('chat-sheet-cancel-reply')?.addEventListener('click', () => { U.sheetReplyTo = null; renderSheetComposer(); });
+}
+
+/** Composer-only refresh (DI-125b) — same outerHTML-swap-then-rebind shape as
+ *  renderPillsOnly() uses for the pills row, chosen for the same reason:
+ *  starting/cancelling a reply shouldn't re-fetch or redraw the message list. */
+function renderSheetComposer() {
+  const host = document.getElementById('chat-sheet-composer');
+  if (!host) return;
+  host.outerHTML = sheetComposerHTML();
+  bindSheetComposer();
+}
+
 export function openGameChatSheet(gameId) {
   if (!isChatEnabled()) { redirectChatDisabled(); return; }
   U.sheetGameId = gameId;
+  U.sheetReplyTo = null;
   document.getElementById('chat-sheet-wrap')?.remove();
   const found = gameById(gameId);
   const wrap = document.createElement('div');
@@ -1261,14 +1672,11 @@ export function openGameChatSheet(gameId) {
       </div>
       ${firstUse ? '<div class="chat-sheet-hint" id="chat-sheet-hint">Posts here also appear in the main room, tagged to this game. <button id="chat-sheet-hint-ok">Got it</button></div>' : ''}
       <div class="chat-scroll chat-sheet-scroll" id="chat-sheet-scroll"></div>
-      ${me() ? `<div class="chat-composer">
-        <div class="chat-composer-row">
-          <textarea class="chat-input" id="chat-sheet-input" rows="1" maxlength="1000" placeholder="Message this game's thread…"></textarea>
-          <button class="chat-send-btn" id="chat-sheet-send">➤</button>
-        </div></div>` : ''}
+      ${sheetComposerHTML()}
     </div>`;
   document.body.appendChild(wrap);
   renderSheetMessages();
+  bindSheetComposer();
   wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', closeSheet);
   document.getElementById('chat-sheet-close')?.addEventListener('click', closeSheet);
   document.getElementById('chat-sheet-hint-ok')?.addEventListener('click', () => {
@@ -1276,24 +1684,37 @@ export function openGameChatSheet(gameId) {
     document.getElementById('chat-sheet-hint')?.remove();
   });
   document.getElementById('chat-sheet-open-main')?.addEventListener('click', () => { closeSheet(); U.filter = gameId; navToChat(); });
-  const send = () => {
-    const inp = document.getElementById('chat-sheet-input');
-    const body = (inp?.value || '').trim();
-    const self = me();
-    if (!body || !self) return;
-    sendMessage({ body, gameTag: gameId, author: self, mentions: extractMentions(body) });
-    try { scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag: gameId }); } catch {}
-    if (inp) inp.value = '';
-    renderSheetMessages();
-  };
-  document.getElementById('chat-sheet-send')?.addEventListener('click', send);
-  document.getElementById('chat-sheet-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width:700px)').matches) { e.preventDefault(); send(); }
-  });
   markSeen(gameId);
   updateChatBadges();
 }
-function closeSheet() { U.sheetGameId = null; document.getElementById('chat-sheet-wrap')?.remove(); }
+function closeSheet() {
+  // DI-125a: the message currently revealed (if any) is about to have its DOM
+  // removed if it belongs to THIS sheet — dismiss it explicitly rather than
+  // leaving `_revealedRootId` pointed at a container that no longer exists.
+  if (_revealedRootId === 'chat-sheet-scroll') dismissRevealedActions();
+  U.sheetGameId = null;
+  U.sheetReplyTo = null;
+  document.getElementById('chat-sheet-wrap')?.remove();
+}
+
+/**
+ * DI-125a — scrolling the sheet dismisses a revealed message, same as
+ * onChatScrollEvent already does for #chat-scroll (bindChatPage, above). This
+ * needs its OWN idempotent guard, unlike #chat-scroll's inline listener: DOM
+ * `scroll` events do not bubble, so the listener must be bound directly to
+ * the scrolling element, and — unlike #chat-scroll, which is a fresh node on
+ * every renderChatPage() — #chat-sheet-scroll is the SAME node across every
+ * renderSheetMessages() call (only its innerHTML is replaced), so binding
+ * without a guard would stack a new listener on every poll. There is no
+ * "jump to latest" button in the sheet; onChatScrollEvent already no-ops
+ * that half when passed `null`.
+ */
+function bindSheetScrollDismiss(root) {
+  if (!root || root._scrollDismissWired) return;
+  root._scrollDismissWired = true;
+  root.addEventListener('scroll', () => onChatScrollEvent(root, null));
+}
+
 function renderSheetMessages() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const host = document.getElementById('chat-sheet-scroll');
@@ -1310,6 +1731,31 @@ function renderSheetMessages() {
     if (!self) return; toggleReact(b.dataset.target, b.dataset.react, self); renderSheetMessages();
   }));
   host.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => { retryFailed(b.dataset.retry); renderSheetMessages(); }));
+  // DI-125a/b — the SAME reveal gestures and the SAME action-button wiring
+  // the main feed uses, delegated on THIS container. `host` persists across
+  // repeat renderSheetMessages() calls, so the three gesture binders' own
+  // `_xWired` guards (and bindSheetScrollDismiss's matching one) make every
+  // call after the first a no-op; the per-message action buttons are
+  // re-bound every call because those specific elements ARE destroyed and
+  // recreated by the innerHTML swap above (same reason [data-react]/
+  // [data-retry], just above, were already re-bound every call before this
+  // batch).
+  bindMessageActionsLongPress(host);
+  bindMessageActionsContextMenu(host);
+  bindMessageSwipe(host);
+  bindSheetScrollDismiss(host);
+  bindMessageActionButtons(host, renderSheetMessages, 'sheet');
+}
+/**
+ * Test-only (same convention as `_messageHTMLForTest`/`_showToastForTest` —
+ * thin setup + delegate to the REAL function) — so loadtest can drive the
+ * ACTUAL `renderSheetMessages()`, including its DI-125 wiring, without also
+ * having to simulate `openGameChatSheet()`'s unrelated chrome (header,
+ * backdrop, first-use hint) just to reach it.
+ */
+export function _renderSheetMessagesForTest(gameId) {
+  U.sheetGameId = gameId;
+  renderSheetMessages();
 }
 
 // ── Dashboard teaser: dismissible + ambient, no quick-reply (items D+E) ──────
@@ -1326,9 +1772,28 @@ function teaserDismissedSeq() {
   const n = Number(lsGet(TEASER_DISMISS_KEY));
   return Number.isFinite(n) ? n : -1;   // -1 = never dismissed
 }
+/**
+ * RG-25 — this watermark is now the ONE "I have acknowledged notifications
+ * through seq N" state for this device, shared by BOTH surfaces that announce
+ * a new message: the floating toast and this teaser. They previously kept two
+ * independent dismissal states for one concept (the toast's was a DOM node
+ * that vanished with the tab; the teaser's was this key), so dismissing the
+ * toast on Standings left the very same message announced again by the teaser
+ * on Dashboard. Same shape as AD-20 — two representations of one concept
+ * drift — applied to a UI state instead of a lookup table.
+ *
+ * MONOTONIC. Nothing in this app legitimately rewinds a cursor (RG-14); with
+ * two writers instead of one, an out-of-order write could otherwise
+ * un-dismiss something the player already dealt with.
+ */
 function setTeaserDismissedSeq(seq) {
-  lsSet(TEASER_DISMISS_KEY, String(Number(seq) || 0));
+  lsSet(TEASER_DISMISS_KEY, String(Math.max(Number(seq) || 0, teaserDismissedSeq())));
 }
+// Test-only accessors (underscore-prefixed per this file's convention — see
+// _toastWouldSuppress, _reactionsHTML) so loadtest drives the real shared
+// state rather than a re-implementation of it.
+export function _notifAckSeq() { return teaserDismissedSeq(); }
+export function _ackNotif(seq) { setTeaserDismissedSeq(seq); }
 
 /**
  * Item D+E — read-only ambient indicator, no quick-reply input (E), and
@@ -1397,8 +1862,10 @@ export function emitPicksLockedEvent(weekId, playerId, count, total) {
  *  picks simultaneously. The one guaranteed weekly all-hands moment. */
 export function emitPickRevealEvent(week) {
   if (!week) return;
-  const eff = getEffectiveWeekStatus(week);
-  if (!['locked', 'live', 'final'].includes(eff) && week.status !== 'final') return;   // never pre-lock
+  // UN-116 — was 'never pre-lock'; now never before the picks are public at
+  // all. Drew chose to move the ritual to kickoff rather than loosen the
+  // dashboard to lock, so the room never publishes what the dashboard hides.
+  if (!arePicksPublic(week)) return;
   const games = getGames(week.weekId).sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff));
   if (!games.length) return;
   const players = getPlayers().filter(p => p.active);
@@ -1464,6 +1931,11 @@ export function emitGameFinalEvent(game, atsWinner, winnerIds = [], loserIds = [
 }
 
 export function emitExtraPointEvent(weekId, graded) {
+  // DI-116e — this posts every player's Extra Point guess into the public room.
+  // Nothing stopped a commissioner firing it while the slate was still open,
+  // which would have published the whole field's guesses to players who could
+  // still change their own. Same rule as every other reveal surface.
+  if (!arePicksPublic(getWeeks().find(w => w.weekId === weekId))) return;
   const lines = graded.rows.map(r => {
     const label = { blackjack: '🂡 BLACKJACK', win: '✅ win', 'push-win': '✅ shared win', bust: '💥 bust', alive: 'under', 'no-entry': '—' }[r.outcome] || r.outcome;
     return `${r.displayName}: ${r.guess == null ? 'no entry' : r.guess + ' yd'} ${label}`;

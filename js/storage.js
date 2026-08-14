@@ -15,6 +15,7 @@ import {
   DEFAULT_SETTINGS, DEMO_PLAYERS, DEMO_WEEK, DEMO_GAMES, DEMO_PICKS,
   REAL_WEEK_1_2026, REAL_WEEK_1_2026_KNOWN_GAMES,
   SITE_PIN, SITE_PIN_KEY,
+  isObligationActive,
 } from './data-model.js';
 
 import { cacheGet, cacheSet, isBackendReady } from './backend.js';
@@ -67,9 +68,19 @@ function load(k) {
   try { const r=localStorage.getItem(k); return r?JSON.parse(r):null; }
   catch(e){ console.error('[Storage]',k,e); return null; }
 }
-function save(k,v) {
+/**
+ * @param {string}    k
+ * @param {*}         v
+ * @param {string[]=} fields  For a key whose value is a plain OBJECT holding
+ *   several independent fields (today: cfbp_settings), the caller may declare
+ *   exactly which field(s) it changed. The backend rebases only those fields
+ *   onto the fresh snapshot after hydrate instead of re-applying the whole
+ *   stale object. Omit it and behaviour is exactly as before: whole-value
+ *   write. See RG-24 / the AD-08 note in backend.js cacheSet().
+ */
+function save(k,v,fields) {
   if (useSheets(k)) {
-    try { cacheSet(k, v); return true; } catch (e) { console.error('[Storage:sheets] save', k, e); return false; }
+    try { cacheSet(k, v, fields); return true; } catch (e) { console.error('[Storage:sheets] save', k, e); return false; }
   }
   try { localStorage.setItem(k,JSON.stringify(v)); return true; }
   catch(e){ console.error('[Storage] save',k,e); return false; }
@@ -82,28 +93,66 @@ export function initStorage() {
 }
 
 /**
- * Seed default data for any missing keys. Idempotent — only fills gaps, never
- * overwrites. Safe to call in local mode (at startup) and in sheets mode
- * (after hydrate, to seed a brand-new empty Sheet).
+ * Keys whose contents are USER DATA — created by players and the commissioner,
+ * irreplaceable if destroyed. Seeding any of these over live data is how RG-12
+ * (and its 2026-08-12 recurrence) wiped real picks off every device.
+ *
+ * The rule: in googleSheets mode these are NEVER seeded automatically. An empty
+ * read is indistinguishable from a failed hydrate, a cold start, or a transient
+ * 200-with-empty-body — and guessing wrong destroys the season.
  */
-export function ensureSeedData() {
-  if(!load(KEYS.SETTINGS))    save(KEYS.SETTINGS,   DEFAULT_SETTINGS);
-  if(!load(KEYS.PLAYERS))     save(KEYS.PLAYERS,    DEMO_PLAYERS);
-  if(!load(KEYS.WEEKS))       save(KEYS.WEEKS,      [REAL_WEEK_1_2026, DEMO_WEEK]);
-  if(!load(KEYS.GAMES))       save(KEYS.GAMES,      REAL_WEEK_1_2026_KNOWN_GAMES);
-  if(!load(KEYS.AVAIL_GAMES)) save(KEYS.AVAIL_GAMES,{});
-  if(!load(KEYS.PICKS))       save(KEYS.PICKS,      DEMO_PICKS);
-  if(!load(KEYS.RESULTS))     save(KEYS.RESULTS,    []);
-  if(!load(KEYS.OBLIGATIONS)) save(KEYS.OBLIGATIONS,[]);
-  if(!load(KEYS.NICKNAMES))   save(KEYS.NICKNAMES,  {});
-  if(!load(KEYS.LOCK_OVR))    save(KEYS.LOCK_OVR,   {});
-  if(!load(KEYS.TB_GUESSES))  save(KEYS.TB_GUESSES, {});
-  if(!load(KEYS.EP_GUESSES))  save(KEYS.EP_GUESSES, {});
-  if(!load(KEYS.REJECTED_SUGG)) save(KEYS.REJECTED_SUGG, {});
-  if(!load(KEYS.REACTIONS))   save(KEYS.REACTIONS,   {});
-  if(!load(KEYS.FEEDBACK))    save(KEYS.FEEDBACK,    []);
-  if(!load(KEYS.COMMENTS))    save(KEYS.COMMENTS,    []);
-  if(!load(KEYS.ACTIVE_WEEK)) save(KEYS.ACTIVE_WEEK, REAL_WEEK_1_2026.weekId);
+export const USER_MUTABLE_KEYS = [
+  KEYS.PLAYERS, KEYS.WEEKS, KEYS.GAMES, KEYS.PICKS, KEYS.RESULTS,
+  KEYS.OBLIGATIONS, KEYS.TB_GUESSES, KEYS.EP_GUESSES, KEYS.ACTIVE_WEEK,
+  KEYS.NICKNAMES, KEYS.LOCK_OVR,
+];
+
+/**
+ * Seed default data for any missing keys. Idempotent — only fills gaps.
+ *
+ * RG-12 DEFENSE (a), rebuilt 2026-08-12. The ledger recorded this guard as
+ * shipped in v0.17.1; it was NOT in the code, and its absence let the exact
+ * original cascade run again and destroy live picks. Do not remove it, and do
+ * not "simplify" it away — verify against `USER_MUTABLE_KEYS` before touching.
+ *
+ * In googleSheets mode, user-mutable keys are seeded ONLY when the caller
+ * passes `{ confirmEmpty: true }` — which the boot path must never do. A human
+ * confirming "yes, this Sheet really is brand new" is the only acceptable
+ * source of that flag.
+ */
+export function ensureSeedData(opts = {}) {
+  const sheets = getBackendMode() === 'googleSheets';
+  const maySeedUserData = !sheets || opts.confirmEmpty === true;
+
+  const seed = (key, value) => {
+    if (load(key)) return;                                    // already present
+    if (!maySeedUserData && USER_MUTABLE_KEYS.includes(key)) {
+      // Refuse, loudly. An empty user-data key in sheets mode means hydrate
+      // did not deliver it — NOT that the league has no data.
+      console.warn('[Storage] REFUSING to seed user-mutable key in sheets mode:', key,
+        '— an empty read is not proof the Sheet is empty (RG-12).');
+      return;
+    }
+    save(key, value);
+  };
+
+  seed(KEYS.SETTINGS,     DEFAULT_SETTINGS);
+  seed(KEYS.PLAYERS,      DEMO_PLAYERS);
+  seed(KEYS.WEEKS,        [REAL_WEEK_1_2026, DEMO_WEEK]);
+  seed(KEYS.GAMES,        REAL_WEEK_1_2026_KNOWN_GAMES);
+  seed(KEYS.AVAIL_GAMES,  {});
+  seed(KEYS.PICKS,        DEMO_PICKS);
+  seed(KEYS.RESULTS,      []);
+  seed(KEYS.OBLIGATIONS,  []);
+  seed(KEYS.NICKNAMES,    {});
+  seed(KEYS.LOCK_OVR,     {});
+  seed(KEYS.TB_GUESSES,   {});
+  seed(KEYS.EP_GUESSES,   {});
+  seed(KEYS.REJECTED_SUGG,{});
+  seed(KEYS.REACTIONS,    {});
+  seed(KEYS.FEEDBACK,     []);
+  seed(KEYS.COMMENTS,     []);
+  seed(KEYS.ACTIVE_WEEK,  REAL_WEEK_1_2026.weekId);
 }
 
 export function resetToDemo() {
@@ -131,7 +180,21 @@ export function resetToDemo() {
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
 
 export function getSettings() { return{...DEFAULT_SETTINGS,...(load(KEYS.SETTINGS)||{})}; }
-export function saveSetting(k,v){ const s=getSettings();s[k]=v;save(KEYS.SETTINGS,s); }
+/**
+ * Change ONE setting. This is a read-modify-write of the whole `cfbp_settings`
+ * blob — ~17 independent fields under a single seam key — so it must tell the
+ * backend which field it actually meant (RG-24). Without that, a device whose
+ * mirror predates another device's change pushes its stale view of the other
+ * 16 fields and silently reverts them; that is how a cleared chat came back
+ * (chatEpochSeq → 0) and it applies identically to chatEnabled and
+ * randomizePicksEnabled. The field list is DECLARED here rather than diffed in
+ * backend.js on purpose: a diff cannot distinguish a real edit from
+ * getSettings()'s DEFAULT_SETTINGS spread materializing a field the stored
+ * blob never had.
+ */
+export function saveSetting(k,v){ const s=getSettings();s[k]=v;save(KEYS.SETTINGS,s,[k]); }
+/** Replace the ENTIRE settings blob (factory reset / import). Deliberately
+ *  declares no field list — every field is intended. */
 export function saveSettings(s){ save(KEYS.SETTINGS,s); }
 
 // ─── TIMEZONE + THEME (per-player when logged in, per-device otherwise) ───────
@@ -355,6 +418,53 @@ export function getEffectiveWeekStatus(week){
   if(week.picksLockAt&&now>=new Date(week.picksLockAt))return'locked';
   if(week.picksOpenAt&&now>=new Date(week.picksOpenAt))return'open';
   return week.status;
+}
+
+/**
+ * UN-116 — THE ONE MOMENT OF TRUTH for revealing other players' selections.
+ *
+ * Every surface that could expose a pick, tiebreaker or Extra Point guess that
+ * is not the viewer's own asks THIS function and nothing else: the dashboard
+ * matrix, the compact chips, the score summary, the chat pick chips (⚡), the
+ * reveal ritual, and the Extra Point post-to-chat. Before this existed the
+ * threshold was written out longhand at nine call sites and had already
+ * drifted — the compact view blinded correctly while the standard matrix had
+ * no check at all, so submitting your picks revealed everyone else's while you
+ * could still go back and edit your own.
+ *
+ * The threshold is LIVE or FINAL — deliberately NOT 'locked'. Drew, 2026-08-12:
+ * picks stay editable while the slate is open (a locked architectural
+ * decision), so visibility must key off a state nobody can undo, and it must
+ * not open one moment earlier than the games themselves. The chat reveal
+ * ritual was moved off lock to match this rather than the reverse.
+ *
+ * `week.status === 'live'` and `week.status === 'final'` are honoured
+ * explicitly, ahead of the computed effective status.
+ *
+ * RG (2026-08-12) — the 'live' half was missing, and the whole live window
+ * rendered blind for any week whose commissioner had filled in Auto-Open At or
+ * Auto-Lock At (Week tab). getEffectiveWeekStatus() tests those two date fields
+ * BEFORE falling through to week.status and has no 'live' branch at all, so it
+ * reported 'open' or 'locked' for a week the app itself had already advanced to
+ * LIVE. Matrix, compact chips, tiebreakers, chat pick chips and the reveal
+ * ritual all went dark until manual finalize.
+ *
+ * week.status === 'live' is the authoritative signal: tickAutoTransition()
+ * writes it (LOCKED → LIVE) the moment the first game kicks off and persists it
+ * through saveWeek, which is exactly the moment picks become public. A
+ * scheduled open/lock time describes a window that has, by definition, already
+ * closed by then and must not override it.
+ *
+ * This is deliberately scoped to arePicksPublic() rather than teaching
+ * getEffectiveWeekStatus() to return 'live'. That broader change would also
+ * move canPlayerSubmitPicks(), i.e. pick editability — a locked architectural
+ * decision — and is not needed to make the blind rule correct. The residual
+ * (getEffectiveWeekStatus still cannot express 'live') is recorded for Drew.
+ */
+export function arePicksPublic(week){
+  if(!week)return false;
+  const eff=getEffectiveWeekStatus(week);
+  return eff==='live'||eff==='final'||week.status==='live'||week.status==='final';
 }
 
 // ─── SLATE GAMES (selected for this week) ────────────────────────────────────
@@ -641,6 +751,19 @@ export function getObligations(weekId=null){
   const all=load(KEYS.OBLIGATIONS)||[];
   return weekId?all.filter(o=>o.weekId===weekId):all;
 }
+/**
+ * UN-126 — obligations EXCLUDING anything voided (a merge-absorbed record is
+ * voided too — see mergeObligationsById in app.js). This is the read every
+ * "what does someone actually owe" surface should use. getObligations()
+ * itself stays a raw, unfiltered read on purpose — the CSV export and the
+ * Data-tab Obligation Corrections tool both need to see voided/merged rows
+ * so the audit trail stays visible (CLAUDE.md — money records are never
+ * destroyed). Old rows with no `voided` field at all read as active
+ * (CONVENTIONS #10 — `!== true`, not a truthy check, so missing==active).
+ */
+export function getActiveObligations(weekId=null){
+  return getObligations(weekId).filter(isObligationActive);
+}
 export function saveObligation(ob){
   const all=load(KEYS.OBLIGATIONS)||[];
   const idx=all.findIndex(o=>o.obligationId===ob.obligationId);
@@ -654,6 +777,16 @@ export function createObligation(weekId,payerPlayerId,recipientPlayerId,prize,ty
     type,weekId,payerPlayerId,recipientPlayerId,
     amountOrPrize:prize,status:'unpaid',
     createdAt:new Date().toISOString(),paidAt:null,
+    // UN-126 — presence of a record no longer implies it's the settled
+    // answer (Part 1 fix in app.js's reconcileWeeklyObligation), and a
+    // record can be voided or folded into another WITHOUT ever being
+    // deleted (Part 2, commissioner-only, Data tab). Every obligation that
+    // predates this ships with these five fields entirely ABSENT — every
+    // reader below treats absence identically to these defaults
+    // (CONVENTIONS #10 default-when-missing).
+    needsReview:false, reviewNote:null,
+    voided:false, voidedAt:null, voidReason:null,
+    mergedInto:null, mergedFrom:[],
   };
 }
 

@@ -44,6 +44,55 @@ let _ready = false;            // true once hydrated from the Sheet
 let _config = null;            // { url, token }
 let _pushTimer = null;
 const _dirty = new Set();      // keys changed since last push
+
+/**
+ * RG-24 — field-scoped rebase for composite blob keys.
+ *
+ * `_dirty` is KEY-granular, and so is the rebase in hydrate() below. That is
+ * right for keys whose value IS the local intent (picks, weeks, games — the
+ * whole array is authored here). It is wrong for `cfbp_settings`, one key
+ * holding ~17 independent fields: a device whose mirror predates another
+ * device's change writes one field and re-applies its stale view of the other
+ * 16, silently reverting them. That is how UN-112's cleared chat came back —
+ * chatEpochSeq went to 0 — and it applies identically to chatEnabled and
+ * randomizePicksEnabled.
+ *
+ *   key -> Set(field)  the caller declared which fields it changed
+ *   key -> null        a whole-value write is pending; it supersedes fields
+ *   (absent)           nothing pending, or a non-object value
+ *
+ * This makes AD-08's stated promise ("a stale mirror can never overwrite
+ * fresher remote data") true for composite blobs, where it previously was not.
+ * It does NOT change what gets PUSHED — only what a held write is rebased onto.
+ */
+const _dirtyFields = new Map();
+
+/** User data whose loss is unrecoverable — see storage.js USER_MUTABLE_KEYS. */
+const _USER_DATA_KEYS = [
+  'cfbp_players', 'cfbp_weeks', 'cfbp_games', 'cfbp_picks', 'cfbp_results',
+  'cfbp_obligations', 'cfbp_tb_guesses', 'cfbp_ep_guesses',
+];
+function _size(v) {
+  if (Array.isArray(v)) return v.length;
+  if (v && typeof v === 'object') return Object.keys(v).length;
+  return v ? 1 : 0;
+}
+/** True when applying `local` over `remote` would destroy records. */
+function _shrinks(local, remote) { return _size(local) < _size(remote); }
+/**
+ * Test-only seam for RG-12 defense (c).
+ *
+ * This export is LOAD-BEARING, not a convenience. loadtest.mjs's defense-(c)
+ * block used to branch on `typeof be._shrinksForTest === 'function'` and fall
+ * back to matching the guard's SOURCE TEXT when it was absent. The export was
+ * never added, so the fallback is what ran — and a source-text match cannot
+ * tell a working guard from a gutted one. Verified 2026-08-12: replacing the
+ * guard's body with `_cache.set(k, v)` (protection gone, text intact) left the
+ * suite fully green at 552/552. That is RG-12's own failure mode reproduced
+ * inside the commit written to eliminate it. Do not remove this export.
+ */
+export function _shrinksForTest(local, remote) { return _shrinks(local, remote); }
+function _isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
 const _listeners = new Set();  // status change subscribers
 
 // Sync observability — exposed via getSyncStatus() so the UI can render a
@@ -189,14 +238,68 @@ export async function hydrate() {
   emit('syncing');
   try {
     const data = await call('getAll');
+
+    // ── RG-12 DEFENSE (b), rebuilt 2026-08-12 ──────────────────────────────
+    // The ledger recorded this guard as shipped in v0.17.1. It was NOT in the
+    // code, and its absence let live picks be destroyed a second time.
+    //
+    // If the mirror currently holds substantive league data and the remote
+    // returns none of it, that is far more likely a cold start, a transient
+    // 200-with-empty-body, or a partial read than a genuinely emptied Sheet.
+    // Preserve the mirror and fail LOUD (AD-06) rather than adopt the void —
+    // because adopting it means ensureSeedData reseeds a DRAFT template and
+    // flushPush sends it to every device.
+    const fresh = data.data || {};
+    const hadData = k => { const v = _cache.get(k); return Array.isArray(v) ? v.length > 0 : !!v; };
+    const freshHas = k => { const v = fresh[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
+    const mirrorHadLeague = hadData('cfbp_players') || hadData('cfbp_weeks') || hadData('cfbp_picks');
+    const remoteHasLeague = freshHas('cfbp_players') || freshHas('cfbp_weeks') || freshHas('cfbp_picks');
+    if (mirrorHadLeague && !remoteHasLeague) {
+      throw new Error(
+        'Sync refused: the server returned no players, weeks or picks while this device ' +
+        'still holds them. Your local data is preserved and nothing was overwritten. ' +
+        'This is usually a cold start or a dropped response — retry in a moment.'
+      );
+    }
+
     // Capture any local edits made while stale (dirty keys) BEFORE clearing,
     // then re-apply them over the fresh snapshot — user intent wins for keys
     // they touched this session; everything else takes the fresh remote value.
     const localEdits = new Map();
     _dirty.forEach(k => { if (_cache.has(k)) localEdits.set(k, _cache.get(k)); });
     _cache.clear();
-    Object.entries(data.data || {}).forEach(([k, v]) => _cache.set(k, v));
-    localEdits.forEach((v, k) => _cache.set(k, v));
+    Object.entries(fresh).forEach(([k, v]) => _cache.set(k, v));
+    localEdits.forEach((v, k) => {
+      // RG-24 — when the writer declared WHICH fields it changed, graft only
+      // those onto the fresh remote value. Everything else keeps the remote
+      // value, so one device's settings write can no longer revert another's.
+      const fields = _dirtyFields.get(k);
+      const fresh = _cache.get(k);
+      if (fields instanceof Set && _isPlainObject(fresh) && _isPlainObject(v)) {
+        const merged = { ...fresh };
+        fields.forEach(f => {
+          if (f in v) merged[f] = v[f]; else delete merged[f];
+        });
+        _cache.set(k, merged);
+      } else if (_USER_DATA_KEYS.includes(k) && _shrinks(v, _cache.get(k))) {
+        // NEW DEFENSE (c), 2026-08-12. RG-12's two guards both protect against
+        // an empty REMOTE. Neither protects against a stale LOCAL that looks
+        // perfectly valid — a device booting on a mirror from before the picks
+        // were made holds a well-formed, populated, and completely obsolete
+        // WEEKS/PICKS. Re-applying it here and pushing it is indistinguishable
+        // from a legitimate edit, and it destroys everyone's data.
+        //
+        // A held write may ADD to user data. It may never make it smaller.
+        // Deletions are rare, recoverable, and can be redone; silent mass loss
+        // is neither. Keep the fresher remote and drop the stale local.
+        console.warn('[backend] DROPPED a stale held write that would have shrunk', k,
+          `(local ${_size(v)} -> remote ${_size(_cache.get(k))}). Remote kept.`);
+        _dirty.delete(k);
+        _dirtyFields.delete(k);
+      } else {
+        _cache.set(k, v);
+      }
+    });
     _ready = true;
     _stale = false;
     _lastSyncAt = new Date().toISOString();
@@ -231,7 +334,25 @@ export async function seedFromLocal(localSnapshot, force = false) {
 export function cacheGet(key) {
   return _cache.has(key) ? _cache.get(key) : null;
 }
-export function cacheSet(key, value) {
+/**
+ * @param {string}    key
+ * @param {*}         value
+ * @param {string[]=} fields  RG-24 — for a plain-object value, the fields the
+ *   caller actually changed. Omitted (every caller but saveSetting) = a
+ *   whole-value write, identical to the previous behaviour. A whole-value
+ *   write already pending for a key is never downgraded to a field patch.
+ */
+export function cacheSet(key, value, fields) {
+  if (_dirtyFields.get(key) === null) {
+    // a whole-value write (e.g. resetToDemo) is already queued for this key —
+    // it wins; a later field write cannot narrow it back down.
+  } else if (Array.isArray(fields) && fields.length && _isPlainObject(value)) {
+    const set = _dirtyFields.get(key) || new Set();
+    fields.forEach(f => set.add(f));
+    _dirtyFields.set(key, set);
+  } else {
+    _dirtyFields.set(key, null);
+  }
   _cache.set(key, value);
   _dirty.add(key);
   schedulePush();
@@ -255,7 +376,12 @@ export async function flushPush() {
   if (!c || !c.url) return { pushed: 0, skipped: true };
   const entries = {};
   _dirty.forEach(k => { entries[k] = _cache.has(k) ? _cache.get(k) : null; });
+  // RG-24 — the field list describes writes that have NOT yet reached the
+  // Sheet. Keep a copy so a failed push can restore it along with _dirty;
+  // losing it would silently downgrade the retry's rebase to whole-value.
+  const sentFields = new Map(_dirtyFields);
   _dirty.clear();
+  _dirtyFields.clear();
   emit('syncing');
   try {
     await call('setMany', { entries });
@@ -266,7 +392,10 @@ export async function flushPush() {
     return { pushed: Object.keys(entries).length };
   } catch (err) {
     // Re-mark dirty so a later push retries
-    Object.keys(entries).forEach(k => _dirty.add(k));
+    Object.keys(entries).forEach(k => {
+      _dirty.add(k);
+      if (!_dirtyFields.has(k) && sentFields.has(k)) _dirtyFields.set(k, sentFields.get(k));
+    });
     _lastError = String(err.message || err);
     emit('error', { error: _lastError });
     throw err;
