@@ -16,6 +16,7 @@ import {
   REAL_WEEK_1_2026, REAL_WEEK_1_2026_KNOWN_GAMES,
   SITE_PIN, SITE_PIN_KEY,
   isObligationActive,
+  DEFAULT_TZ,
 } from './data-model.js';
 
 import { cacheGet, cacheSet, isBackendReady } from './backend.js';
@@ -204,9 +205,17 @@ export function saveSettings(s){ save(KEYS.SETTINGS,s); }
 // the league is connected to a shared backend, every player's choices follow
 // THEM across devices instead of being clobbered by whoever logged in last.
 //
-// When nobody is logged in (front gate, anonymous viewer), the device-level
-// fallback in `settings.timezone` / `settings.theme` is used, so the app
-// still has a reasonable default before the user picks a player.
+// UN-127 (2026-08-27, Drew, applied to timezone this same day): signed out,
+// BOTH preferences resolve to a fixed league default now — neither one reads
+// a device-level `settings.*` fallback any more. That fallback used to let
+// whichever anonymous person touched the control last repaint/re-zone the
+// app for the next anonymous person on the same shared device. The controls
+// that used to write those fallbacks are hidden while signed out (app.js
+// renderThemeToggle/renderTzToggle), so `settings.theme` / `settings.timezone`
+// can no longer drift away from their defaults going forward; any leftover
+// values from before this change are simply unread, not deleted
+// (CONVENTIONS #10). Signed in is unchanged for both: preferences live on the
+// player record and follow them across devices.
 
 function _playerPref(key) {
   const sess = getSession();
@@ -228,11 +237,20 @@ function _setPlayerPref(key, value) {
 }
 
 export function getTimezone() {
-  return _playerPref('tz') || getSettings().timezone || 'PT';
+  // Signed out, TZ is ALWAYS the league default (DEFAULT_TZ) — the
+  // settings.timezone device-level fallback is deliberately no longer
+  // consulted here. See the block comment above this section.
+  return _playerPref('tz') || DEFAULT_TZ;
 }
 export function setTimezone(tzKey) {
-  // If a player is logged in, persist on their record; otherwise device default.
-  if (!_setPlayerPref('tz', tzKey)) saveSetting('timezone', tzKey);
+  // Only a SIGNED-IN player can persist a timezone choice now. No device-
+  // level fallback write any more — _setPlayerPref() itself already returns
+  // false and no-ops when nobody is logged in, so this silently does nothing
+  // for an anonymous caller rather than reintroducing the shared-device
+  // fallback. The control that called this while signed out has been removed
+  // (app.js renderTzToggle), so in practice this path isn't reachable while
+  // signed out — this is defense in depth, not the only gate.
+  _setPlayerPref('tz', tzKey);
 }
 
 // ── v0.17.0 chat identity + notification prefs (per-player, follow the person) ──
@@ -259,10 +277,27 @@ export function getChatNickFor(playerId) {
 export function getTheme() {
   // v0.17.0 — league default is the school-agnostic neutral palette; players
   // opt into school themes per their own preference.
-  return _playerPref('theme') || getSettings().theme || 'neutral';
+  //
+  // UN-127 (2026-08-27, Drew): signed OUT, theme is ALWAYS 'neutral' — the
+  // settings.theme device-level fallback is deliberately no longer consulted
+  // here. It used to let whichever anonymous person touched the dropdown
+  // last repaint the app for the next anonymous person on the same shared
+  // device ("too much flipping" with multiple people not logged in). The
+  // control that wrote settings.theme is now hidden while signed out
+  // (app.js renderThemeToggle) so this field can no longer drift away from
+  // 'neutral' going forward; old values left over from before this change
+  // are simply unread, not deleted (CONVENTIONS #10).
+  return _playerPref('theme') || 'neutral';
 }
 export function setTheme(themeKey) {
-  if (!_setPlayerPref('theme', themeKey)) saveSetting('theme', themeKey);
+  // UN-127: only a SIGNED-IN player can persist a theme choice. No device-
+  // level fallback write anymore — _setPlayerPref() itself already returns
+  // false and no-ops when nobody is logged in, so this silently does nothing
+  // for an anonymous caller rather than reintroducing the shared-device
+  // fallback. The UI control that used to call this while signed out has
+  // been removed (app.js renderThemeToggle), so in practice this path is not
+  // reachable while signed out — this is defense in depth, not the only gate.
+  _setPlayerPref('theme', themeKey);
 }
 
 // ─── FETCH PROOF ──────────────────────────────────────────────────────────────
@@ -304,11 +339,49 @@ export function clearSession(){ localStorage.removeItem(KEYS.SESSION); }
 
 // ─── PLAYER AUTH ──────────────────────────────────────────────────────────────
 
-export function verifyPlayerPin(playerId,pin){
+/**
+ * Does this player have a USABLE PIN on file?
+ *
+ * One definition, used by both verifyPlayerPin() below and the login-failure
+ * copy in app.js, so "has a PIN" cannot mean two different things in the gate
+ * and in the message explaining the gate.
+ *
+ * A hash is usable only if it is a non-empty string. `btoa()` never returns
+ * whitespace and never returns '', so anything else — a number a Sheets cell
+ * deserialised to, a null, a mangled object, a cleared cell — is not a hash.
+ */
+export function hasPlayerPin(playerId){
   const p=getPlayer(playerId);
-  if(!p)return false;
-  if(!p.pinHash)return true;
-  return p.pinHash===btoa(String(pin));
+  return !!p && typeof p.pinHash==='string' && p.pinHash.trim()!=='';
+}
+/**
+ * RG-40, 2026-08-26 — THIS FAILED OPEN. The shipped line was:
+ *
+ *     if(!p.pinHash)return true;      // ANY pin passes
+ *
+ * A missing hash was read as "this player hasn't set a PIN yet, so don't gate
+ * them." That is an authentication bypass wearing a convenience default, and it
+ * was harmless only for as long as no real account ever lost its hash.
+ *
+ * RG-39 made it live-exploitable: a stale mirror re-applied over the Sheet
+ * stripped `email` and `pinHash` from every player and pushed the result
+ * league-wide. Those accounts did not have their PINs "reset" — they stopped
+ * having a PIN check at all, and anyone past the shared site PIN could sign in
+ * as anybody and edit their picks.
+ *
+ * Drew's ruling: FAIL CLOSED. No hash, no login. The recovery path is the
+ * commissioner, who authenticates against `settings.adminPasswordHash` — a
+ * different mechanism that touches no player record — and re-issues the PIN
+ * from Commissioner → Players → Reset PIN. Deliberately NO self-service
+ * recovery: a backdoor that restores access without a credential is the same
+ * defect with a friendlier name.
+ *
+ * The player is told which of the two failures happened; see
+ * loginFailureMessage() in app.js. Asserted in loadtest [56].
+ */
+export function verifyPlayerPin(playerId,pin){
+  if(!hasPlayerPin(playerId))return false;
+  return getPlayer(playerId).pinHash===btoa(String(pin));
 }
 export function setPlayerPin(playerId,pin){
   const p=getPlayer(playerId); if(!p)return;

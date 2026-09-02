@@ -49,18 +49,52 @@ export function computeEffectiveLiveAt(week, games) {
   return computeFirstKickoff(games);
 }
 
+/**
+ * Coerce a stored score or spread to a finite number, or null when the value
+ * cannot decide anything. Same defensive-coercion pattern as
+ * `gameMultiplier()` below (CONVENTIONS #7) — but this one falls back to NULL,
+ * not to a safe default, because there is no safe default for "who covered."
+ *
+ * Why this exists: `calculateAtsWinner()` previously guarded only `=== null`.
+ * An ABSENT key, `undefined`, `NaN`, `''` or any non-number reached the
+ * arithmetic, made `diff` NaN, and then fell through both `Math.abs(NaN) <
+ * 0.01` (false) and `NaN > 0` (false) to the else branch — silently returning
+ * `awayTeam`. That is a real, money-deciding cover fabricated out of data that
+ * cannot decide anything, always landing on the same side, and app.js persists
+ * the result into `game.atsWinner`, after which `evaluatePick()` prefers the
+ * stored value forever. Every other reader of these fields in the app uses a
+ * loose `!= null` (chat-ui.js:822/1656/1989, app.js:4358); this was the one
+ * strict-equality reader, and it is the one that decides who owes whom money.
+ * Numeric strings coerce (a value that round-tripped through a text field
+ * still describes the same game); everything else is refused.
+ */
+function finiteOrNull(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 export function calculateAtsWinner(game) {
   const { homeScore, awayScore, lockedSpread, spread, homeTeam, awayTeam, status } = game;
   if (status !== GAME_STATUS.FINAL) return null;
-  if (homeScore===null||awayScore===null) return null;
+  const hs = finiteOrNull(homeScore);
+  const as_ = finiteOrNull(awayScore);
+  if (hs === null || as_ === null) return null;
   // Prefer lockedSpread (the spread the week was scored against) but fall back
   // to live spread when nothing was locked — otherwise final games with scores
   // but never-locked weeks show as PENDING forever. The spread convention is
   // HOME perspective: negative = home favored, positive = away favored.
-  const sv = lockedSpread !== null && lockedSpread !== undefined ? lockedSpread : spread;
-  if (sv === null || sv === undefined) return null;
-  const adjusted = homeScore + sv;
-  const diff = adjusted - awayScore;
+  // NOTE the precedence is on USABILITY, not presence: a locked line of 0 (a
+  // locked PK) still governs, while a locked line that is blank or unparseable
+  // is not a locked line at all and yields to the same fallback as null.
+  const locked = finiteOrNull(lockedSpread);
+  const sv = locked !== null ? locked : finiteOrNull(spread);
+  if (sv === null) return null;
+  const adjusted = hs + sv;
+  const diff = adjusted - as_;
   if (Math.abs(diff) < 0.01) return 'no_decision';
   return diff > 0 ? homeTeam : awayTeam;
 }

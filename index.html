@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=17-7" />
+  <link rel="stylesheet" href="css/styles.css?v=17-8" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -60,18 +60,47 @@
   })();
 </script>
 
-<!-- Inline theme bootstrap — runs before the module loads so users on a non-default
-     theme don't see a flash of the wrong palette. Reads settings.theme directly.
-     v0.17.4: default corrected 'aggie' -> 'neutral'. This bootstrap disagreed with
-     storage.js getTheme() and app.js applyTheme(), which have both defaulted to
-     'neutral' since v0.17.0 (UN-65, school palettes are opt-in) — so a fresh device
-     flashed Aggie maroon for one frame before JS corrected it. Keep this literal in
-     sync with getTheme()'s fallback; it cannot import. -->
+<!-- Inline theme bootstrap — runs before the module loads so a player on a school
+     theme doesn't see a flash of the wrong palette. It cannot import, so it must
+     reimplement storage.js getTheme() literally. KEEP THE TWO IN SYNC.
+
+     v0.17.4: default corrected 'aggie' -> 'neutral' — this block had disagreed
+     with getTheme() since v0.17.0 and flashed Aggie maroon on a fresh device.
+
+     2026-08-27: it went out of sync a SECOND time, the same way. The signed-out
+     theme lock changed getTheme() to ignore the device-level settings.theme
+     fallback entirely, but this block still read it — so a shared device with a
+     leftover settings.theme flashed that stale palette before JS repainted it
+     neutral. Exactly the defect the block exists to prevent, reintroduced by a
+     change that updated two of the three places encoding "what theme is this".
+
+     getTheme() is now: the SIGNED-IN player's preferences.theme, else 'neutral'.
+     There is no device-level fallback any more. Anonymous is always neutral —
+     Drew's ruling, and a full removal, not an overridable default. -->
 <script>
   (function () {
     try {
-      var s = JSON.parse(localStorage.getItem('cfbp_settings') || '{}');
-      var key = (s && s.theme) || 'neutral';
+      var sess = JSON.parse(localStorage.getItem('cfbp_session') || 'null');
+      var pid  = sess && sess.playerId;
+      var key  = 'neutral';                       // signed out: always neutral
+      if (pid) {
+        // Players live in localStorage in local mode, and in the backend
+        // snapshot mirror in googleSheets mode. Check both — the mirror is
+        // what a returning player's device actually holds at first paint.
+        var players = JSON.parse(localStorage.getItem('cfbp_players') || 'null');
+        if (!players) {
+          var mirror = JSON.parse(localStorage.getItem('cfbp_sheet_mirror') || 'null');
+          players = mirror && mirror.data && mirror.data.cfbp_players;
+        }
+        if (players && players.length) {
+          for (var i = 0; i < players.length; i++) {
+            if (players[i] && players[i].playerId === pid) {
+              key = (players[i].preferences && players[i].preferences.theme) || 'neutral';
+              break;
+            }
+          }
+        }
+      }
       document.body.classList.add('theme-' + key);
     } catch (e) { /* fall back to default styles */ }
   })();
@@ -84,9 +113,21 @@
       <!-- UN-108: #header-meta is the LEFT slot now (was inside .header-right,
            right-aligned, the bottom item of a 5-row vertical tower). Moved out
            to balance the header against the identity/sync/tz/theme cluster on
-           the right. Keeps its id — refreshHeader() (js/app.js) targets it by
-           id, so no JS change was needed. -->
-      <div class="header-meta" id="header-meta"><strong>Loading…</strong></div>
+           the right.
+           UN-127 (change 1, 2026-08-27): #header-meta is now a flex ROW that
+           holds two things — the two-line week block (its own nested element,
+           #header-meta-week) and the feedback shortcut button, injected once
+           by setupHeaderFeedbackButton() (js/app.js) at boot and appended as
+           a SIBLING of the week block, never inside it. refreshHeader() was
+           re-pointed to write only #header-meta-week's innerHTML — it used to
+           target #header-meta directly, which would have wiped the injected
+           button on every week/tab refresh. The week block's own internal
+           structure (name+badge line, date-range line) is completely
+           untouched by this — the button rides beside it, not below it, so
+           UN-117's two-line guarantee still holds structurally: it never
+           becomes a third stacked line, because flex ROW (not column) can
+           only place items side by side. -->
+      <div class="header-meta" id="header-meta"><span id="header-meta-week"><strong>Loading…</strong></span></div>
       <div class="header-right">
         <!-- UN-106: identity is the most actionable header state, so it renders
              first. Empty + hidden until renderHeaderIdentity() (js/app.js) reads
@@ -155,14 +196,14 @@
 <div id="toast-container"></div>
 
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=17-7"></script>
+<script type="module" src="js/app.js?v=17-8"></script>
 <script>
   // Service worker registration + auto-update.
   // When a new SW takes over (e.g. v10 replacing v9), force a one-time reload
   // so the user sees the new code instead of the cached v9 shell.
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js?v=17-7')
+      navigator.serviceWorker.register('service-worker.js?v=17-8')
         .then(reg => {
           console.log('[SW] registered:', reg.scope);
           // If there's already a waiting worker, tell it to activate now.

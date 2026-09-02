@@ -609,6 +609,15 @@ function calloutEligible(m) {
   if (!m.gameTag || m.type !== 'message' || m.deleted) return false;
   const found = gameById(m.gameTag);
   if (!found || found.game.status !== GAME_STATUS.FINAL) return false;
+  // RG-46 — found by the structural scan in loadtest [64], not by a bug report.
+  // This gated on the GAME being final and never on the WEEK, so on a week left
+  // OPEN with picksLockAt in the future (the same reachable window as RG-45)
+  // the 📎 rendered across the room. Its PRESENCE is the disclosure: the button
+  // only appears when the author's pick LOST ATS, and in a two-outcome game
+  // "not the covering team" identifies the pick exactly. messageHTML() renders
+  // it for every viewer, so this was the whole league reading each other's
+  // picks off finished games while still able to submit their own.
+  if (!arePicksPublic(found.week)) return false;
   const ats = found.game.atsWinner ?? calculateAtsWinner(found.game);
   if (!ats || ats === 'no_decision') return false;
   const pick = getPicks(found.week.weekId, m.author).find(p => p.gameId === m.gameTag);
@@ -1904,6 +1913,27 @@ export function emitKickoffEvent(game) {
 }
 
 export function emitGameFinalEvent(game, atsWinner, winnerIds = [], loserIds = []) {
+  // RG-45 — the THIRD sibling in this block, and the only one that asked
+  // nothing. This posts full per-game pick attribution BY NAME ("— right:
+  // Brayden, Kevin; wrong: Koby, Jacob") into the public room, while
+  // emitPickRevealEvent and emitExtraPointEvent above/below both gate on
+  // arePicksPublic().
+  //
+  // Reachable without anyone doing anything unusual: a week left OPEN with
+  // picksLockAt still in the future while ESPN marks its games final.
+  // canPlayerSubmitPicks() returns allowed on exactly that state, and
+  // doRefreshScores() — the 60-second auto-refresh loop, no human in the
+  // loop — fires this on the scheduled→final transition.
+  //
+  // Gates the WHOLE event, not just the `who` half, and that is deliberate.
+  // The id is deterministic (sys_final_<gameId>) into an append-only log
+  // (AD-26): a redacted post would consume the id, and finalizeWeek()'s later
+  // re-emit of the complete event would dedupe away — losing the right/wrong
+  // roster permanently. Blocking the post leaves the id unconsumed, so the
+  // full event still arrives the moment the week is public. The SCRIBE callout
+  // below is covered by the same return, correctly — it quotes a player who
+  // lost this game ATS, which discloses that player's pick.
+  if (!arePicksPublic(getWeeks().find(w => w.weekId === game?.weekId))) return;
   const cover = atsWinner === 'no_decision' ? 'Push — no decision'
     : `${atsWinner} covers ✅`;
   const who = atsWinner === 'no_decision' ? ''

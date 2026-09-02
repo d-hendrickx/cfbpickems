@@ -2921,12 +2921,269 @@ console.log('\n[34] UN-116 — others\' picks stay blind until kickoff…');
 
   // 34e — the commissioner is unaffected (existing admin-sees-all precedent).
   storage.saveWeek({ ...OW, status: 'open' });
+  // RG-37 — THESE TWO ASSERTIONS USED TO SAY THE OPPOSITE, and that is why the
+  // leak shipped. They asserted 'the commissioner still sees everything
+  // regardless of week status (unchanged)' and 'the commissioner matrix is
+  // never blinded'. Both passed. Both were WRONG. A test that asserts the
+  // defective behaviour does not merely fail to catch the bug — it DEFENDS it:
+  // the change that fixes the bug turns the test red, which reads as a
+  // regression. Mutation testing cannot help, because the mutation IS the fix.
+  // Drew found it in production on the live site.
   storage.setSession('un116_me', true, true);
-  assert(app34.canViewOtherPicks(W(OW.weekId)) === true,
-    'the commissioner still sees everything regardless of week status (unchanged)');
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === false,
+    'a commissioner who can still submit their own picks is blinded like anyone else — being admin is not a licence to peek at a slate you are still playing');
   const htmlAdmin34 = app34.renderDashboardTable(players34, games34, PICKS34, results34, OW.weekId, null);
-  assert(!/pick-cell-blind/.test(htmlAdmin34) && /Texas/.test(htmlAdmin34),
-    'the commissioner matrix is never blinded');
+  const adminCells34 = htmlAdmin34.match(/<td class="pick-cell[\s\S]*?<\/td>/g) || [];
+  assert(adminCells34.some(c => /pick-cell-blind/.test(c)) && !/Texas/.test(adminCells34.filter(c => /pick-cell-blind/.test(c)).join('')),
+    "the commissioner's own matrix blinds the rival column while the week is still open");
+
+  // The bypass survives for a commissioner with NO STAKE — one who cannot
+  // submit here. That is the legitimate case: verifying picks landed, chasing
+  // a missing entry. Asserted so a later 'simplification' cannot quietly
+  // restore blanket admin-sees-all.
+  storage.saveWeek({ ...OW, status: 'locked' });
+  assert(app34.canPlayerSubmitPicks(W(OW.weekId), 'un116_me').allowed === false,
+    'fixture check: the commissioner cannot submit on a locked week');
+  assert(app34.canViewOtherPicks(W(OW.weekId)) === true,
+    'a commissioner who can NO LONGER act still sees everything — the bypass narrows, it does not disappear');
+  storage.saveWeek({ ...OW, status: 'open' });
+
+  // 34g — THE INVARIANT, stated directly instead of inferred from two separate
+  // predicates. This is the assertion that would have caught RG-37 on day one,
+  // and it is deliberately exhaustive over BOTH roles because the whole defect
+  // was a role nobody thought to sweep.
+  {
+    const PAST = '2026-08-01T00:00:00Z', FUT = '2026-12-01T00:00:00Z';
+    const dateCfgs = [
+      ['none', {}], ['open@past', { picksOpenAt: PAST }], ['lock@past', { picksLockAt: PAST }],
+      ['open@past+lock@fut', { picksOpenAt: PAST, picksLockAt: FUT }],
+      ['both@past', { picksOpenAt: PAST, picksLockAt: PAST }],
+    ];
+    const violations = [];
+    for (const isAdmin of [false, true]) {
+      storage.setSession('un116_me', isAdmin, true);
+      for (const st of ['draft', 'open', 'locked', 'live', 'final']) {
+        for (const [lbl, d] of dateCfgs) {
+          const wid = `inv_${isAdmin ? 'a' : 'p'}_${st}_${lbl.replace(/\W/g, '')}`;
+          storage.saveWeek({ weekId: wid, weekNumber: 1, season: 2026, status: st, ...d });
+          const w = W(wid);
+          if (app34.canPlayerSubmitPicks(w, 'un116_me').allowed && app34.canViewOtherPicks(w)) {
+            violations.push(`${isAdmin ? 'admin' : 'player'}/${st}/${lbl}`);
+          }
+        }
+      }
+    }
+    storage.setSession(null, false, false);
+    assert(violations.length === 0,
+      `THE INVARIANT — across 5 statuses x 5 date configs x 2 roles, nobody can ever submit their own picks AND see someone else's at once (violations: ${violations.join(', ') || 'none'})`);
+  }
+
+  // 34h — RG-37, THE SURFACE SWEEP. [34g] above is a PREDICATE invariant, and a
+  // predicate invariant is not enough here — that is the precise shape of the
+  // original UN-116 defect, where canViewOtherPicks() was correct and returned
+  // false while the standard matrix simply never called it. A green [34g] is
+  // compatible with a wide-open template.
+  //
+  // So this asserts the same rule on the MARKUP A VIEWER IS ACTUALLY SERVED,
+  // across every surface that can print another player's submission and both
+  // roles. The rule is Drew's, verbatim: "I shouldnt be able to see everyone
+  // elses picks while I can still submit OR edit mine."
+  //
+  // Whether the viewer can act is not assumed — it is read from
+  // canPlayerSubmitPicks() per state, so the sweep stays correct if the status
+  // rules ever move. States where nobody can act are skipped, not asserted, so
+  // this can never be satisfied by blinding everything forever.
+  {
+    const RIVAL_TB_34 = 4177;   // a value that appears nowhere else in the fixture
+    const MY_TB_34    = 12;     // the viewer's OWN guess — must survive every blind
+    const TB_ACTUAL_34 = 100;   // graded state, so the Δ column is swept as well
+    // Surface 4 below reads the guesses out of STORAGE (getTiebreakerGuess),
+    // not out of the weekly-results rows, so the fixture has to exist in both
+    // places or every assertion against that card passes vacuously.
+    storage.setTiebreakerGuess(OW.weekId, 'un116_me',    MY_TB_34);
+    storage.setTiebreakerGuess(OW.weekId, 'un116_rival', RIVAL_TB_34);
+    assert(storage.getTiebreakerGuess(OW.weekId, 'un116_rival') === RIVAL_TB_34,
+      'fixture check: the rival really has a tiebreaker guess on file — otherwise the tiebreaker leak assertions below prove nothing');
+    const results34h = [
+      { playerId: 'un116_me',    rank: 1, correctPicks: 1, incorrectPicks: 0, tiebreakerGuess: 12, tiebreakerDelta: 0 },
+      { playerId: 'un116_rival', rank: 2, correctPicks: 0, incorrectPicks: 1, tiebreakerGuess: RIVAL_TB_34, tiebreakerDelta: 0 },
+    ];
+    let swept = 0, skipped = 0;
+    const leaks = [];
+    for (const isAdmin of [false, true]) {
+      const role = isAdmin ? 'commissioner' : 'player';
+      for (const st of ['draft', 'open', 'locked', 'live', 'final']) {
+        storage.saveWeek({ ...OW, status: st });
+        storage.setSession('un116_me', isAdmin, true);
+        const wk = W(OW.weekId);
+        if (!app34.canPlayerSubmitPicks(wk, 'un116_me').allowed) { skipped++; continue; }
+        swept++;
+
+        // Surface 1 — the standard matrix. The viewer picked Ohio State and the
+        // rival picked Texas, so "Texas" inside ANY pick cell is the rival's
+        // selection disclosed. (The matchup label legitimately carries both team
+        // names, which is why only the cells are inspected.)
+        const std = app34.renderDashboardTable(players34, games34, PICKS34, results34h, OW.weekId, null);
+        const stdCells = std.match(/<td class="pick-cell[\s\S]*?<\/td>/g) || [];
+        if (/Texas/.test(stdCells.join(''))) leaks.push(`${role}/${st}/standard-matrix`);
+        if (!stdCells.some(c => /pick-cell-blind/.test(c))) leaks.push(`${role}/${st}/standard-matrix-not-blinded`);
+
+        // Surface 2 — the compact view. Chips are keyed by data-player-id, and
+        // the leak would arrive either as chip text or as the title tooltip
+        // ("Rival picked Texas"), so the whole chip is inspected.
+        const cmp = app34.renderDashboardCompact(players34, games34, PICKS34, results34h, OW.weekId, null);
+        const rivalChips = (cmp.match(/<div class="dc-chip[\s\S]*?<\/div>\s*<\/div>|<div class="dc-chip[^>]*>[\s\S]*?<\/div><\/div>/g) || [])
+          .concat(cmp.match(/<div class="dc-chip[^>]*data-player-id="un116_rival"[\s\S]*?(?=<div class="dc-chip|$)/g) || [])
+          .filter(ch => /data-player-id="un116_rival"/.test(ch));
+        if (!rivalChips.length) leaks.push(`${role}/${st}/compact-no-rival-chip-found`);
+        if (/Texas|TEX/.test(rivalChips.join(''))) leaks.push(`${role}/${st}/compact-chip`);
+        if (!/dc-chip-blind/.test(rivalChips.join(''))) leaks.push(`${role}/${st}/compact-chip-not-blinded`);
+
+        // Surface 3 — the score summary, which carries the rival's TIEBREAKER
+        // GUESS. A tiebreaker is a submission like any other; UN-116 blinds it
+        // on the same rule, and a numeric guess is exactly as exploitable.
+        const sum = app34.renderScoreSummaryRowsHTML(W(OW.weekId), results34h, players34, null);
+        if (sum.includes(String(RIVAL_TB_34))) leaks.push(`${role}/${st}/score-summary-tiebreaker`);
+
+        // Surface 4 — THE COMMISSIONER PANEL'S TIEBREAKER CARD (Week tab).
+        // RG-43, the FIFTH recurrence of this class. This card consulted
+        // NEITHER canViewOtherPicks() NOR arePicksPublic(); it was gated only
+        // by sitting inside the commissioner panel — precisely the assumption
+        // RG-37 and RG-40 were raised to destroy, because Drew is commissioner
+        // AND player. Surface 3 above blinds 4177 on this identical fixture
+        // and this card printed it, on the tab used for the ordinary weekly
+        // act of setting the tiebreaker question. A tiebreaker decides the
+        // weekly cash prize whenever records tie, so a rival's number is worth
+        // exactly as much as a rival's pick.
+        //
+        // The Δ column is swept alongside the guess: |guess − actual|
+        // discloses the guess up to a sign, and `actualTiebreakerValue` is a
+        // plain commissioner-entered number with no status gate on its input,
+        // so an OPEN week can carry one. Blinding the guess and printing the
+        // delta would be the same leak through a second door.
+        for (const [tlbl, actual] of [['ungraded', null], ['graded', TB_ACTUAL_34]]) {
+          const tbCard = app34.renderTiebreakerGuessesAdmin(
+            { ...W(OW.weekId), actualTiebreakerValue: actual }, players34, actual);
+          const where4 = `${role}/${st}/${tlbl}`;
+          if (new RegExp(`\\b${RIVAL_TB_34}\\b`).test(tbCard)) leaks.push(`${where4}/tiebreaker-admin-guess`);
+          if (actual !== null && new RegExp(`\\b${Math.abs(RIVAL_TB_34 - actual)}\\b`).test(tbCard))
+            leaks.push(`${where4}/tiebreaker-admin-delta`);
+          // …and the viewer's OWN guess must survive. A fix that blanked the
+          // whole card would satisfy every leak check above and destroy the
+          // feature — the same trap [34i] guards against on the Extra Point.
+          if (!new RegExp(`\\b${MY_TB_34}\\b`).test(tbCard)) leaks.push(`${where4}/tiebreaker-own-guess-hidden`);
+        }
+      }
+    }
+    storage.setSession(null, false, false);
+    storage.saveWeek({ ...OW, status: 'open' });
+    assert(swept >= 2 && skipped >= 1,
+      `fixture check: the sweep actually reached actionable states for both roles and skipped the un-actionable ones (swept ${swept}, skipped ${skipped}) — a sweep that asserted nothing would otherwise pass silently`);
+    assert(leaks.length === 0,
+      `THE SURFACE SWEEP — on every surface that can print a rival's submission, nothing is disclosed while the viewer can still submit or edit (leaks: ${leaks.join(', ') || 'none'})`);
+
+    // The other half of the rule for Surface 4, stated explicitly so "blind the
+    // tiebreaker card forever" can never satisfy the sweep above: once the
+    // viewer can no longer act, the commissioner sees the whole field again —
+    // which is the entire reason the card exists.
+    storage.saveWeek({ ...OW, status: 'live' });
+    storage.setSession('un116_me', true, true);
+    const tbLive34 = app34.renderTiebreakerGuessesAdmin(
+      { ...W(OW.weekId), actualTiebreakerValue: TB_ACTUAL_34 }, players34, TB_ACTUAL_34);
+    assert(new RegExp(`\\b${RIVAL_TB_34}\\b`).test(tbLive34) && new RegExp(`\\b${MY_TB_34}\\b`).test(tbLive34),
+      'once the games are LIVE the commissioner sees every tiebreaker guess again — the gate narrows the disclosure, it does not remove the card');
+    assert(new RegExp(`Δ${Math.abs(RIVAL_TB_34 - TB_ACTUAL_34)}`).test(tbLive34),
+      'and the Δ column still grades in full once it is allowed to');
+    storage.saveWeek({ ...OW, status: 'open' });
+    storage.setSession(null, false, false);
+  }
+
+  // 34i — RG-40, THE EXTRA POINT. The SAME defect as RG-37, one surface over.
+  // The commissioner panel's "Guesses on file" block printed every active
+  // player's Extra Point guess in plaintext, gated only on `session.isAdmin`,
+  // with no blind check at all. Drew is BOTH commissioner and player, so on an
+  // OPEN week he read all five rivals' guesses while his own was still
+  // editable. Extra Point is blackjack: knowing the field is decisive in a way
+  // knowing a single ATS pick is not — you can sit one yard under the leader.
+  //
+  // Asserted the way [34g]/[34h] are, and for the same reason: as the
+  // INVARIANT over the whole state space, on the MARKUP ACTUALLY SERVED, for
+  // both roles. A predicate-only assertion would not have caught this —
+  // canViewOtherPicks() was already correct and returned false; this surface
+  // simply never called it, which is the identical shape to the original
+  // UN-116 defect in the standard matrix.
+  //
+  // renderCommExtraPointCardHTML() exists as an exported, DOM-free function
+  // for exactly this: renderCommExtrasV16() early-returns under the harness's
+  // `getElementById: () => null` stub, so the only way to assert on what the
+  // card DISCLOSES — rather than on the presence of a gate in source, which is
+  // the RG-27 false-coverage anti-pattern — is to render it and read it.
+  {
+    const MY_EP_34 = 41, RIVAL_EP_34 = 63;   // values that appear nowhere else in the fixture
+    storage.setExtraPointGuess(OW.weekId, 'un116_me',    MY_EP_34);
+    storage.setExtraPointGuess(OW.weekId, 'un116_rival', RIVAL_EP_34);
+    assert(storage.getExtraPointGuess(OW.weekId, 'un116_rival') === RIVAL_EP_34,
+      'fixture check: the rival really has an Extra Point guess on file — otherwise every leak assertion below passes vacuously');
+
+    const PAST34i = '2026-08-01T00:00:00Z', FUT34i = '2026-12-01T00:00:00Z';
+    const dateCfgs34i = [
+      ['none', {}], ['open@past', { picksOpenAt: PAST34i }], ['lock@past', { picksLockAt: PAST34i }],
+      ['open@past+lock@fut', { picksOpenAt: PAST34i, picksLockAt: FUT34i }],
+      ['both@past', { picksOpenAt: PAST34i, picksLockAt: PAST34i }],
+    ];
+    // Graded-preview state is swept too. `extraPointActual` is a plain
+    // commissioner-entered number with no status gate on the input, so a week
+    // that is still open CAN carry one — and the graded preview prints every
+    // player's guess beside their outcome. Same card, same data, same rule.
+    const gradedCfgs34i = [['ungraded', null], ['graded', 55]];
+    let swept34i = 0, skipped34i = 0;
+    const leaks34i = [];
+    for (const isAdmin of [false, true]) {
+      const role34i = isAdmin ? 'commissioner' : 'player';
+      for (const st of ['draft', 'open', 'locked', 'live', 'final']) {
+        for (const [lbl, d] of dateCfgs34i) {
+          for (const [glbl, actual] of gradedCfgs34i) {
+            storage.saveWeek({ ...OW, status: st, picksOpenAt: undefined, picksLockAt: undefined,
+                               extraPointActual: actual, ...d });
+            storage.setSession('un116_me', isAdmin, true);
+            const wk = W(OW.weekId);
+            const where = `${role34i}/${st}/${lbl}/${glbl}`;
+            // Whether the viewer can still act is READ, never assumed, so the
+            // sweep stays correct if the status rules move. States where
+            // nobody can act are skipped rather than asserted, so this can
+            // never be satisfied by blinding the card forever.
+            if (!app34.canPlayerSubmitPicks(wk, 'un116_me').allowed) { skipped34i++; continue; }
+            swept34i++;
+            const card = app34.renderCommExtraPointCardHTML(wk);
+            if (new RegExp(`\\b${RIVAL_EP_34}\\b`).test(card)) leaks34i.push(`${where}/rival-guess`);
+            // …and the viewer's OWN guess must survive. A fix that blinded the
+            // whole block would satisfy the leak check and break the feature.
+            if (!new RegExp(`\\b${MY_EP_34}\\b`).test(card)) leaks34i.push(`${where}/own-guess-hidden`);
+          }
+        }
+      }
+    }
+    assert(swept34i >= 2 && skipped34i >= 1,
+      `fixture check: the Extra Point sweep reached actionable states for both roles and skipped the un-actionable ones (swept ${swept34i}, skipped ${skipped34i})`);
+    assert(leaks34i.length === 0,
+      `THE EXTRA POINT INVARIANT — nobody can submit or edit their own Extra Point guess while the card shows them anyone else's (leaks: ${leaks34i.slice(0, 6).join(', ') || 'none'}${leaks34i.length > 6 ? ` …+${leaks34i.length - 6}` : ''})`);
+
+    // The other half of the rule: once the viewer can no longer act, the field
+    // opens. Asserted explicitly so "blind everything, always" can never pass.
+    storage.saveWeek({ ...OW, status: 'live', picksOpenAt: undefined, picksLockAt: undefined, extraPointActual: null });
+    storage.setSession('un116_me', true, true);
+    const liveCard34i = app34.renderCommExtraPointCardHTML(W(OW.weekId));
+    assert(new RegExp(`\\b${RIVAL_EP_34}\\b`).test(liveCard34i) && new RegExp(`\\b${MY_EP_34}\\b`).test(liveCard34i),
+      "once the games are LIVE the commissioner sees every guess again — the gate narrows the disclosure, it does not remove the feature");
+
+    // And the graded preview still grades in full once it is allowed to.
+    storage.saveWeek({ ...OW, status: 'final', picksOpenAt: undefined, picksLockAt: undefined, extraPointActual: 55 });
+    const finalCard34i = app34.renderCommExtraPointCardHTML(W(OW.weekId));
+    assert(new RegExp(`\\b${RIVAL_EP_34}\\b`).test(finalCard34i) && /BUST|Wins|BLACKJACK|Under/.test(finalCard34i),
+      'on a FINAL week the graded preview renders every entrant and their outcome, unchanged');
+
+    storage.saveWeek({ ...OW, status: 'open', extraPointActual: null });
+  }
 
   // 34f — an anonymous viewer gets nothing either.
   storage.setSession(null, false, false);
@@ -3787,6 +4044,67 @@ console.log('\n[39] RG — the ordinary locked→final commissioner action still
   chatUi.emitExtraPointEvent(WV39.weekId, graded39);
   assert(!!getMessage(`sys_ep_${WV39.weekId}`),
     'fixture check: the same call on a LIVE week DOES publish — the guard is a live gate, not a dead code path');
+
+  // ── 39d — RG-45. THE THIRD SIBLING HAD NO GATE AT ALL.
+  //
+  // emitGameFinalEvent() (chat-ui.js) posts full per-game pick attribution BY
+  // NAME — "— right: Rival; wrong: Me" — into the public room. Its two
+  // siblings in the same block of emitters both gate on arePicksPublic():
+  // emitPickRevealEvent (chat-ui.js:1868) and emitExtraPointEvent (:1938,
+  // asserted in 39c above). This one asked nothing.
+  //
+  // THE REACHABLE HOLE, which is why this is not theoretical: a week left OPEN
+  // with picksLockAt still in the future while ESPN marks its games final.
+  // canPlayerSubmitPicks() returns allowed on exactly that state (asserted
+  // below, read from the predicate rather than assumed), and doRefreshScores()
+  // — the 60-second auto-refresh loop, no human involved — calls this emitter
+  // on the scheduled→final transition. Every player who had not yet picked
+  // would read the field's answers for a game that already finished.
+  //
+  // It cannot be walked back: the event carries a deterministic id
+  // (sys_final_<gameId>) into an append-only log (AD-26). Suppressing only the
+  // attribution half would be WORSE than gating the whole event — the id would
+  // be consumed by the redacted post, and finalizeWeek()'s later re-emit of the
+  // complete one would dedupe away, losing right/wrong permanently. Gating the
+  // whole event leaves the id unconsumed, so the full post still arrives at
+  // finalization.
+  const seedFinal39 = (weekId, status, extra = {}) => {
+    const w = { weekId, weekNumber: 8, season: 2026, status, dataSourceMode: 'demo',
+                startDate: '2026-09-05', endDate: '2026-09-06', ...extra };
+    storage.saveWeek(w);
+    storage.saveGame({ weekId, gameId: weekId + '_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
+      kickoff: '2026-09-05T16:00:00Z', status: 'final', homeScore: 28, awayScore: 21,
+      spread: -3, lockedSpread: -3, atsWinner: 'Ohio State' });
+    return storage.getWeek(weekId);
+  };
+  const FUT39 = '2026-12-01T00:00:00Z';
+  const WGF39 = seedFinal39('rg39_gfopen', 'open', { picksLockAt: FUT39 });
+  assert(app39.canPlayerSubmitPicks(WGF39, 'rg38_me').allowed === true,
+    'fixture check: the hole is REACHABLE — an OPEN week whose Auto-Lock is still in the future accepts picks while its games are already FINAL');
+  assert(storage.arePicksPublic(WGF39) === false,
+    'fixture check: …and that same week is still blind, so nothing may publish who was right');
+  chatUi.emitGameFinalEvent(storage.getGame(WGF39.weekId + '_g1'), 'Ohio State', ['rg38_rival'], ['rg38_me']);
+  const gf39 = getMessage(`sys_final_${WGF39.weekId}_g1`);
+  assert(!gf39,
+    'BLIND RULE: a game going final on a still-OPEN week publishes NO chat event — the per-game right/wrong roster is pick attribution by name, and it is permanent once emitted');
+
+  // The LOCKED week too — the UN-116 threshold is live/final, never lock.
+  const WGL39 = seedFinal39('rg39_gflocked', 'locked');
+  chatUi.emitGameFinalEvent(storage.getGame(WGL39.weekId + '_g1'), 'Ohio State', ['rg38_rival'], ['rg38_me']);
+  assert(!getMessage(`sys_final_${WGL39.weekId}_g1`),
+    'BLIND RULE: a LOCKED week does not publish per-game attribution either (same threshold as every other reveal surface)');
+
+  // …and the other half, so a permanently dead emitter cannot pass: on a LIVE
+  // week the event posts IN FULL, names and all. This is also what proves the
+  // deterministic id was never consumed by the blocked calls above.
+  const WGV39 = seedFinal39('rg39_gflive', 'live');
+  chatUi.emitGameFinalEvent(storage.getGame(WGV39.weekId + '_g1'), 'Ohio State', ['rg38_rival'], ['rg38_me']);
+  const gfLive39 = getMessage(`sys_final_${WGV39.weekId}_g1`);
+  assert(!!gfLive39, 'fixture check: the same call on a LIVE week DOES post — the guard is a gate, not a dead path');
+  assert(/right: Rival/.test(gfLive39?.body || '') && /wrong: Me/.test(gfLive39?.body || ''),
+    'and it posts the FULL right/wrong roster by name once the week is public — the disclosure is deferred, not deleted');
+  assert(/FINAL: Texas 21–28 Ohio State/.test(gfLive39?.body || ''),
+    'the scoreline itself is unchanged — this gate moved WHEN the event posts, not what it says');
 }
 
 // ── 40. RG — the ⚡ chat pick chip carries the blind rule, and is covered ─────
@@ -3851,6 +4169,48 @@ console.log('\n[40] RG — chat ⚡ pick chip obeys the blind rule (rendered mar
   storage.saveWeek({ ...W40, status: 'locked' });
   assert(chipOf(mods['chat-ui']._messageHTMLForTest(msg40('rg40_rival'), 'rg40_me', false)) === '',
     'rewound to LOCKED the chip is withheld again — the guard is live, not a one-way door');
+
+  // ── 40e — RG-46. THE SIXTH RECURRENCE, AND THE FIRST FOUND BY MACHINE.
+  //
+  // Not reported by anybody and not on the list this pass started with: the
+  // structural guard in [64] flagged `calloutEligible()` as a function reading
+  // another player's picks with no blind check, and it was right.
+  //
+  // The 📎 callout button renders next to a message only when its author's
+  // pick LOST that game ATS. Its mere PRESENCE is therefore a one-bit
+  // disclosure of that author's selection — and in a two-outcome game one bit
+  // is the whole pick: seeing 📎 on Koby's pre-kick message tells you he took
+  // the team that did not cover. It is rendered by messageHTML(), so every
+  // player sees it on every message in the room.
+  //
+  // Reachable through the SAME window as RG-45: calloutEligible() gates on the
+  // GAME being final, never on the WEEK, so a week left OPEN with picksLockAt
+  // in the future while ESPN finalizes games renders 📎 markers across the
+  // chat to players who can still submit.
+  const nowC40 = Date.now();
+  storage.saveWeek({ ...W40, status: 'open' });
+  storage.saveGame({ weekId: W40.weekId, gameId: 'rg40_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
+    kickoff: new Date(nowC40 + 3600e3).toISOString(), status: 'final',
+    homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3, atsWinner: 'Ohio State' });
+  const calloutMsg40 = { id: 'rg40_callout', seq: 2, ts: nowC40 - 60000, type: 'message',
+                         author: 'rg40_rival', body: 'Texas covers, book it', gameTag: 'rg40_g1' };
+  const openCallout40 = mods['chat-ui']._messageHTMLForTest(calloutMsg40, 'rg40_me', false);
+  assert(/chat-author/.test(openCallout40) && /Texas covers, book it/.test(openCallout40),
+    'fixture check: the rival\'s message itself renders — only the 📎 marker is in question');
+  assert(!/data-callout/.test(openCallout40),
+    'THE LEAK (RG-46): on a still-OPEN week no 📎 callout button renders on a rival\'s message — its presence alone discloses that the author picked the team that did not cover, which in a two-outcome game IS the pick');
+
+  // The other half: once the week is public the button comes back. Without
+  // this, "delete the button" would pass the assertion above.
+  storage.saveWeek({ ...W40, status: 'live' });
+  const liveCallout40 = mods['chat-ui']._messageHTMLForTest(calloutMsg40, 'rg40_me', false);
+  assert(/data-callout="rg40_callout"/.test(liveCallout40),
+    'once the week is LIVE the 📎 callout renders again — the gate defers the disclosure, it does not remove the feature');
+
+  // Restore the fixture for anything downstream that reuses this week/game.
+  storage.saveWeek({ ...W40, status: 'open' });
+  storage.saveGame({ weekId: W40.weekId, gameId: 'rg40_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
+    kickoff: '2026-09-05T16:00:00Z', status: 'scheduled', spread: -3 });
 }
 
 // ── 41. UN-122 — bug/feature classification: exclusive toggle, submit gating ─
@@ -4857,7 +5217,48 @@ console.log('\n[49] RG — the reveal ritual survives week N+1, and NEVER backfi
   const app49 = mods['app'];
   const REVEAL_KEY_49 = 'cfbp_reveal_emitted';
   const DAY_49 = 86400000;
-  const iso49 = ms => new Date(ms).toISOString().slice(0, 10);
+
+  // RG-38 — THIS FIXTURE USED TO SPEAK A DIFFERENT CALENDAR THAN THE CODE IT
+  // TESTS, and that is the whole reason the gate suite went red on Drew's
+  // machine while reading green in CI-ish conditions.
+  //
+  // `week.endDate` is a LOCAL calendar date — it comes from an <input
+  // type="date"> the commissioner fills in (app.js `#week-end`), and
+  // checkPickRevealDue() reads it back as `new Date(endDate + 'T23:59:59')`,
+  // which JS parses in LOCAL time. The fixture, meanwhile, derived its dates
+  // with `new Date(ms).toISOString().slice(0,10)` — a UTC calendar date.
+  //
+  // West of UTC those two disagree by a full day for the whole local
+  // afternoon/evening. Seeding "4 days ago" at 19:44 Pacific produced the UTC
+  // date 2026-08-23, which is only THREE local calendar days back — legitimately
+  // inside a 3-day lookback. The gate was right; the fixture mislabelled its own
+  // week. Measured: 2.822d old when the fixture claimed 4d.
+  //
+  // Proof it was the clock and not the code: at the exact same commit,
+  //   TZ=UTC                  → 1045 passed, 0 failed
+  //   TZ=America/Los_Angeles  → 1039 passed, 6 failed   (Drew's machine)
+  //   TZ=Pacific/Auckland     → 1044 passed, 1 failed
+  //
+  // Dates are now built by LOCAL calendar arithmetic (new Date(y, m, d - n)),
+  // which is also DST-exact in a way `Date.now() - n*86400000` is not, and every
+  // seeded week asserts its own real age below. A fixture whose age is a
+  // function of the tester's time zone cannot gate anything.
+  const iso49 = d => {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  };
+  /** N local calendar days before today, as a Date at local midnight. */
+  const daysAgo49 = n => {
+    const t = new Date();
+    return new Date(t.getFullYear(), t.getMonth(), t.getDate() - n);
+  };
+  /** How many whole local calendar days back a 'YYYY-MM-DD' string really is. */
+  const ageInDays49 = dateStr => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const t = new Date();
+    return Math.round(
+      (new Date(t.getFullYear(), t.getMonth(), t.getDate()) - new Date(y, m - 1, d)) / DAY_49);
+  };
 
   // Isolate: this suite counts sys_reveal_* events globally, so weeks left
   // behind by earlier suites would be indistinguishable noise. Last suite in
@@ -4875,13 +5276,21 @@ console.log('\n[49] RG — the reveal ritual survives week N+1, and NEVER backfi
   // zero-emission assertion below would pass for the wrong reason — it would be
   // measuring an empty slate, not the bound.
   const seedWeek49 = (weekId, weekNumber, status, endDaysAgo, extra = {}) => {
-    const end = Date.now() - endDaysAgo * DAY_49;
+    const end = daysAgo49(endDaysAgo);
+    const endDate = iso49(end);
+    // The fixture states its own age out loud. If the date arithmetic ever
+    // drifts from the local calendar again — a UTC helper, a DST edge, a
+    // timezone that shifts the boundary — this fails FIRST and names the cause,
+    // instead of the gate assertions failing later and reading like a real
+    // backfill regression.
+    assert(ageInDays49(endDate) === endDaysAgo,
+      `fixture check: ${weekId}'s endDate (${endDate}) really is ${endDaysAgo} LOCAL calendar days old — the same calendar checkPickRevealDue() reads (got ${ageInDays49(endDate)})`);
     storage.saveWeek({
       weekId, weekNumber, season: 2026, status, dataSourceMode: 'real',
-      startDate: iso49(end - DAY_49), endDate: iso49(end), ...extra,
+      startDate: iso49(daysAgo49(endDaysAgo + 1)), endDate, ...extra,
     });
     storage.saveGame({ weekId, gameId: weekId + '_g1', homeTeam: 'Ohio State', awayTeam: 'Texas',
-      kickoff: new Date(end).toISOString(), status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
+      kickoff: end.toISOString(), status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
     storage.saveAllPicks([...storage.getPicks(),
       { pickId: weekId + '_pk1', weekId, gameId: weekId + '_g1', playerId: 'rg49_a', selectedTeam: 'Ohio State' },
       { pickId: weekId + '_pk2', weekId, gameId: weekId + '_g1', playerId: 'rg49_b', selectedTeam: 'Texas' },
@@ -4969,21 +5378,112 @@ console.log('\n[49] RG — the reveal ritual survives week N+1, and NEVER backfi
   assert(revealsInRoom49().includes(`sys_reveal_${JUST_IN_49.weekId}`),
     'a public week that ended yesterday is INSIDE the lookback — posted, so the bound is a window and not a dead scan');
 
-  // ── 49f — fail closed on an undated week. endDate is how recency is judged;
-  // a week without one cannot be shown to be recent, and the cost of guessing
-  // wrong is a permanent post.
+  // ── 49e2 — RG-38: THE EXACT EDGE, which 49e above never probed. 5-days-out
+  // and 1-day-in leave the real boundary — REVEAL_LOOKBACK_DAYS = 3 measured to
+  // local end-of-day, so endDate D-3 is the last accepted day and D-4 the first
+  // refused — untested by three whole days of slack on either side. That slack
+  // is precisely where the UTC/local fixture bug lived undetected, and it is
+  // where an off-by-one in the cutoff would live too. Adjacent days, asserted in
+  // both directions, on a cleared ledger each time so neither result can be an
+  // artefact of the other.
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+  const EDGE_OUT_49 = seedWeek49('rg49_edgeout', 12, 'final', 4);
+  app49.checkPickRevealDue();
+  assert(!revealsInRoom49().includes('sys_reveal_rg49_edgeout'),
+    `THE EDGE — a week whose endDate is 4 local calendar days back (${EDGE_OUT_49.endDate}) is the FIRST day refused (got ${JSON.stringify(revealsInRoom49())})`);
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+  const EDGE_IN_49 = seedWeek49('rg49_edgein', 13, 'final', 3);
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().includes('sys_reveal_rg49_edgein'),
+    `THE EDGE — the very next day in (endDate 3 local calendar days back, ${EDGE_IN_49.endDate}) IS posted, so the boundary sits exactly between D-3 and D-4 and is not drifting`);
+
+  // ── 49f — fail closed on an undated week (AD-26). endDate is how recency is
+  // judged; a week without one cannot be shown to be recent, and the cost of
+  // guessing wrong is a permanent post.
+  //
+  // RG-38 — THIS ASSERTION USED TO PASS WITHOUT TESTING ANYTHING. It ran against
+  // a store still holding every earlier fixture week, and the scan sorts by
+  // weekNumber DESC and posts at most one week per call. Any candidate with a
+  // higher weekNumber consumed the single slot, so the undated week was never
+  // even considered — the assertion was measuring the ONE-PER-INVOCATION cap,
+  // not the fail-closed date guard it names.
+  //
+  // Proven, not assumed: inverting the guard to
+  //   `return !Number.isFinite(ends) || ends >= cutoff;`
+  // — which makes every undated week in the league permanently postable — left
+  // the whole suite GREEN. Exactly the false-coverage shape RG-27 and the primer
+  // warn about, sitting on top of an append-only log with no take-backs.
+  //
+  // The store is now emptied first, so the undated week is the ONLY candidate
+  // and the single slot cannot be stolen. That is asserted too, because an
+  // isolation step that silently stops isolating puts the hole straight back.
+  storage.getWeeks().forEach(w => storage.deleteWeek(w.weekId));
+  storage.setActiveWeekId(null);
   localStorage.removeItem(REVEAL_KEY_49);
   chat._resetForTest();
   storage.saveWeek({ weekId: 'rg49_undated', weekNumber: 11, season: 2026, status: 'final', dataSourceMode: 'real' });
   storage.saveGame({ weekId: 'rg49_undated', gameId: 'rg49_undated_g1', homeTeam: 'Ohio State', awayTeam: 'Texas', kickoff: new Date().toISOString(), status: 'final', homeScore: 28, awayScore: 21, spread: -3, lockedSpread: -3 });
   storage.saveAllPicks([...storage.getPicks(),
     { pickId: 'rg49_undated_pk1', weekId: 'rg49_undated', gameId: 'rg49_undated_g1', playerId: 'rg49_a', selectedTeam: 'Ohio State' }]);
+  assert(storage.getWeeks().length === 1 && storage.getWeeks()[0].weekId === 'rg49_undated',
+    `fixture check: the undated week is the ONLY week in the store, so the one-per-invocation cap cannot stand in for the date guard (got ${storage.getWeeks().length} weeks)`);
   assert(storage.arePicksPublic(storage.getWeek('rg49_undated')) === true,
     'fixture check: the undated week is public with a slate — only the missing endDate stands between it and a post');
+  assert(storage.getWeek('rg49_undated').endDate === undefined,
+    'fixture check: it genuinely has no endDate — the field is absent, not an empty string that might parse differently');
   app49.checkPickRevealDue();
   assert(!revealsInRoom49().includes('sys_reveal_rg49_undated'),
     'a week with NO endDate is refused — fail closed, because an undated week cannot be proven recent');
+  // …and refused REPEATEDLY. A guard that fails closed once but drifts open on a
+  // later nav tap is no guard: this runs on every navigation, all season.
+  for (let i = 0; i < 5; i++) app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 0,
+    `an undated week is still refused after six nav taps — nothing accumulates (got ${JSON.stringify(revealsInRoom49())})`);
+  assert(JSON.parse(localStorage.getItem(REVEAL_KEY_49) || '[]').length === 0,
+    'and it was never marked done either — a refused week stays a candidate if it later gains a date, rather than being silently retired');
 
+  // ── 49g — RG-38: THE SECOND BOUND, which had NO COVERAGE AT ALL. AD-26 requires
+  // two INDEPENDENT bounds on this scan — recency, and at most one post per
+  // invocation — precisely so that an error in either one alone cannot produce a
+  // permanent multi-week backfill in a room with no take-backs. app.js states
+  // "Both are asserted in loadtest.mjs [49]". Only the first one was.
+  //
+  // Proven, not assumed: replacing
+  //   const week = due[0]; emitPickRevealEvent(week); done.push(week.weekId);
+  // with a loop over every due week — deleting the cap outright — left the whole
+  // suite GREEN. The cap survived untested because no fixture had ever placed
+  // two weeks inside the lookback window at the same time, so the cap never had
+  // anything to cap. A guard that is never given work to do cannot be observed
+  // doing it.
+  //
+  // Two genuinely-due weeks, empty ledger. One tap must post exactly one. That
+  // is the difference between a two-week backlog draining over two navigations
+  // and the entire backlog landing in the room at once.
+  storage.getWeeks().forEach(w => storage.deleteWeek(w.weekId));
+  localStorage.removeItem(REVEAL_KEY_49);
+  chat._resetForTest();
+  const CAP_A_49 = seedWeek49('rg49_cap_a', 20, 'final', 1);
+  const CAP_B_49 = seedWeek49('rg49_cap_b', 21, 'final', 1);
+  assert(storage.arePicksPublic(CAP_A_49) && storage.arePicksPublic(CAP_B_49),
+    'fixture check: BOTH backlog weeks are public with full slates');
+  assert(storage.getWeeks().length === 2,
+    `fixture check: exactly two candidate weeks are in the store, both inside the lookback (got ${storage.getWeeks().length})`);
+
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 1,
+    `THE CAP — two weeks are genuinely due, and ONE nav tap posts exactly one of them (got ${JSON.stringify(revealsInRoom49())})`);
+  assert(revealsInRoom49()[0] === 'sys_reveal_rg49_cap_b',
+    `…and it is the most recent week by weekNumber, not an arbitrary one (got ${revealsInRoom49()[0]})`);
+  app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 2,
+    `the second tap drains the second week — a real backlog still clears, the cap throttles it rather than losing it (got ${JSON.stringify(revealsInRoom49())})`);
+  for (let i = 0; i < 5; i++) app49.checkPickRevealDue();
+  assert(revealsInRoom49().length === 2,
+    `and five further taps add nothing — the ledger holds once the backlog is drained (got ${JSON.stringify(revealsInRoom49())})`);
+
+  storage.getWeeks().forEach(w => storage.deleteWeek(w.weekId));
   storage.setActiveWeekId(null);
   localStorage.removeItem(REVEAL_KEY_49);
   chat._resetForTest();
@@ -5053,13 +5553,53 @@ console.log('\n[50] UN-116 — a blinded score summary hides RANK and the 🏆/�
   // ── 50b — the same fixture, viewed by the commissioner. This is what proves
   // the assertions above measure the blind rule and not a permanently dead
   // template (the failure mode that let the UN-116 guards rot unnoticed).
+  //
+  // RG-37 AUDIT NOTE — read the four assertions below carefully before copying
+  // their shape. They pass because this fixture's week is LOCKED, where the
+  // commissioner genuinely cannot submit and so has no stake left to protect.
+  // They are NOT a licence for "the commissioner sees everything": worded that
+  // way, on an OPEN week, they are character-for-character the two assertions
+  // that defended the RG-37 leak into production. Change W50's status to 'open'
+  // and every one of them SHOULD go red. That case is asserted in 50b2 below,
+  // because a control that only ever runs in the permissive state cannot tell
+  // you which of the two things it is measuring.
   storage.setSession('rg50_me', true, true);
+  assert(app50.canPlayerSubmitPicks(W50, 'rg50_me').allowed === false,
+    'fixture check: this week is LOCKED, so the commissioner has no stake left here — that, not the admin flag, is why the four assertions below hold');
   const admin50 = app50.renderScoreSummaryRowsHTML(W50, results50, players50, 34);
   assert(rankTexts50(admin50).join(',') === '1,2,3',
     `the commissioner still sees every finishing position (got ${JSON.stringify(rankTexts50(admin50))})`);
   assert(/🏆/.test(admin50) && /💀/.test(admin50), 'the commissioner still sees the 🏆 / 💀 markers');
   assert(/winner-row/.test(admin50) && /loser-row/.test(admin50), 'the commissioner still sees the winner/loser row tints');
   assert(/\(TB\)/.test(admin50), 'the commissioner still sees the (TB) marker');
+
+  // ── 50b2 — RG-37: THE SAME COMMISSIONER, ON AN OPEN WEEK. The score summary
+  // leaks relative standing — rank, 🏆/💀, the row tint, (TB) — and [50] never
+  // once rendered it for a viewer who could still submit. Drew's rule does not
+  // have a role exemption: "I shouldnt be able to see everyone elses picks
+  // while I can still submit OR edit mine."
+  //
+  // Relative standing is pick data by another name. Knowing you sit 3rd tells
+  // you how the field did, and on an OPEN week you can still act on it.
+  {
+    const WOPEN50 = { ...W50, status: 'open' };
+    storage.saveWeek(WOPEN50);
+    storage.setSession('rg50_me', true, true);
+    assert(app50.canPlayerSubmitPicks(WOPEN50, 'rg50_me').allowed === true,
+      'fixture check: on an OPEN week the commissioner CAN still submit — so the blind rule applies to him too');
+    const adminOpen50 = app50.renderScoreSummaryRowsHTML(WOPEN50, results50, players50, 34);
+    assert(rankTexts50(adminOpen50).join(',') === '—,—,—',
+      `a commissioner who can still edit sees NO finishing positions (got ${JSON.stringify(rankTexts50(adminOpen50))})`);
+    assert(!/🏆/.test(adminOpen50) && !/💀/.test(adminOpen50),
+      'no 🏆 / 💀 markers either — they name the winner and loser without a character of text');
+    assert(!/winner-row|loser-row/.test(adminOpen50),
+      'and no winner-row / loser-row tint — the colour is data (RG-05)');
+    assert(!/\(TB\)/.test(adminOpen50),
+      'and no (TB) marker — it discloses that someone won, and how');
+    assert(/result-win">3</.test(adminOpen50) && /50 \(Δ10\)/.test(adminOpen50),
+      "…while the commissioner's OWN counts and tiebreaker still render — blinded from the field, not from himself");
+    storage.saveWeek(W50);
+  }
 
   // ── 50c — and once the week is genuinely public, an ordinary player sees the
   // standing again. The suppression is a window, not a deletion.
@@ -5169,8 +5709,22 @@ console.log('\n[52] renderFeedbackAdmin() — an unparseable submittedAt degrade
   }
   // Not an over-broad fix: a good timestamp still formats, and a missing one
   // still uses the same em-dash it always did.
-  const good52 = app52.renderFeedbackAdmin([{ ...base52, submittedAt: '2026-08-13T15:04:05.000Z' }]);
-  assert(/Aug 13, 2026/.test(good52), `a VALID submittedAt still formats normally — got ${(/>([^<]*2026[^<]*)</.exec(good52) || [])[1]}`);
+  // RG-38, second instance — this used to hardcode /Aug 13, 2026/. The renderer
+  // formats a UTC instant with toLocaleDateString(), i.e. in the VIEWER's zone,
+  // which is right; the assertion froze one tester's zone, which is not. It went
+  // red for every reader east of about UTC+9, where 15:04Z on the 13th is
+  // already the 14th locally — a correct render failing a test that had quietly
+  // become a timezone assertion. Same root cause as the [49] gate failures:
+  // the test spoke a different calendar than the code. Expectation is now
+  // derived from the same instant, so it still pins the FORMAT ("Mon D, YYYY")
+  // and the right day, in whatever zone the suite runs.
+  const TS_52 = '2026-08-13T15:04:05.000Z';
+  const EXPECT_52 = new Date(TS_52).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const good52 = app52.renderFeedbackAdmin([{ ...base52, submittedAt: TS_52 }]);
+  assert(/^[A-Z][a-z]{2} \d{1,2}, \d{4}$/.test(EXPECT_52),
+    `fixture check: the expected label is a real formatted date, not a fallback (got ${EXPECT_52})`);
+  assert(good52.includes(EXPECT_52),
+    `a VALID submittedAt still formats normally as "${EXPECT_52}" — got ${(/>([^<]*2026[^<]*)</.exec(good52) || [])[1]}`);
   const none52 = app52.renderFeedbackAdmin([{ ...base52, submittedAt: null }]);
   assert(!/Invalid Date/.test(none52) && /something broke/.test(none52),
     'a MISSING submittedAt behaves as before (unchanged)');
@@ -5775,6 +6329,1220 @@ console.log('\n[55] RG — emailed weekly digest: obligations name real people, 
   const digestAllVoid55 = app55.buildWeeklySummary(storage.getWeek('dg_wk_allvoid'));
   assert(!/ALLVOIDPRIZE/.test(digestAllVoid55) && !/━━━ Obligations ━━━/.test(digestAllVoid55),
     'a week whose only obligation is voided renders no Obligations section at all, not an empty one');
+}
+
+// ── 56. RG — verifyPlayerPin() FAILED OPEN on an account with no pinHash ─────
+// Shipped shape:
+//     if (!p.pinHash) return true;      // ANY pin passes
+// A missing hash was read as "this player hasn't set a PIN, so don't gate them"
+// — a reasonable-sounding default that is an authentication bypass. It sat
+// harmless only for as long as no real account ever lost its hash.
+//
+// RG-39 made it live-exploitable: a stale mirror re-applied over the Sheet
+// stripped `email` and `pinHash` from every player and pushed the result
+// league-wide. Those accounts did not get their PINs "reset" — they stopped
+// having a PIN check at all. Anyone past the shared site PIN could sign in as
+// anybody and edit their picks.
+//
+// Drew's ruling, 2026-08-26: FAIL CLOSED. No hash, no login.
+//
+// These assertions are the reproduction made permanent. They are written
+// against verifyPlayerPin()'s RETURN VALUE and the copy the player is actually
+// shown — never against the presence of a guard in source (RG-27).
+console.log('\n[56] Player PIN verification fails CLOSED…');
+{
+  const app56 = mods['app'];
+  const _players56  = storage.getPlayers();
+  const _adminHash56 = storage.getSettings().adminPasswordHash;
+  const _session56   = storage.getSession();
+
+  // Every shape a hash-less record actually occurs in. The RG-39 wipe produced
+  // the first two; the others are the malformed cases a Sheet round-trip, a
+  // hand-edited cell, or a JSON null can hand back. `pinHash: 1234` is what a
+  // Sheets cell containing a bare number deserialises to — a NUMBER, which the
+  // old truthiness test would have accepted as "has a PIN" while the strict
+  // comparison below could never match it.
+  const shapes56 = [
+    ['no pinHash key at all (the RG-39 wipe)',      { playerId: 'pin_wiped', displayName: 'Wiped', active: true }],
+    ['pinHash: "" (a cleared Sheet cell)',          { playerId: 'pin_blank', displayName: 'Blank', active: true, pinHash: '' }],
+    ['pinHash: "   " (whitespace only)',            { playerId: 'pin_ws',    displayName: 'Space', active: true, pinHash: '   ' }],
+    ['pinHash: null',                               { playerId: 'pin_null',  displayName: 'Null',  active: true, pinHash: null }],
+    ['pinHash: 1234 (a number, not base64)',        { playerId: 'pin_num',   displayName: 'Num',   active: true, pinHash: 1234 }],
+    ['pinHash: {} (a mangled object)',              { playerId: 'pin_obj',   displayName: 'Obj',   active: true, pinHash: {} }],
+  ];
+  shapes56.forEach(([, rec]) => storage.addPlayer(rec));
+  storage.addPlayer({ playerId: 'pin_ok', displayName: 'Good', active: true, pinHash: btoa('1111') });
+
+  // (a) THE DEFECT. Every broken shape must reject every attempt, including
+  // the empty string — `btoa('')` is `''`, so a blank hash compared loosely
+  // against a blank entry is a second way in.
+  const attempts56 = ['0000', '9999', 'hunter2', '', '1111', 0, null, undefined];
+  const opens56 = [];
+  for (const [label, rec] of shapes56) {
+    for (const a of attempts56) {
+      if (storage.verifyPlayerPin(rec.playerId, a) === true) opens56.push(`${label} <- ${JSON.stringify(a)}`);
+    }
+  }
+  assert(opens56.length === 0,
+    `NO PIN, NO LOGIN — an account with an absent, empty or malformed pinHash rejects every attempt (accepted: ${opens56.join(' | ') || 'none'})`);
+
+  // (b) …and the gate did not become "reject everything." A real hash still
+  // works, and still rejects a wrong PIN. Without this the fix above could be
+  // `return false`.
+  assert(storage.verifyPlayerPin('pin_ok', '1111') === true,
+    'a player WITH a PIN still logs in with the correct one — fail-closed is not fail-always');
+  assert(storage.verifyPlayerPin('pin_ok', '9999') === false, 'a wrong PIN is still rejected');
+  assert(storage.verifyPlayerPin('pin_ok', '') === false, 'an empty entry against a real hash is rejected');
+  assert(storage.verifyPlayerPin('pin_nobody_at_all', '1111') === false, 'an unknown playerId is rejected (unchanged)');
+
+  // (c) THE PLAYER MUST BE TOLD WHAT HAPPENED. A bare "Incorrect PIN" on an
+  // account whose PIN a deploy destroyed is a support call, and it reads as the
+  // app having eaten their identity — they will swear they typed it right,
+  // because they did. This case gets its own copy.
+  const noPinMsg56  = app56.loginFailureMessage('pin_wiped');
+  const wrongMsg56  = app56.loginFailureMessage('pin_ok');
+  assert(noPinMsg56 !== wrongMsg56,
+    'a hash-less account and a mistyped PIN produce DIFFERENT messages — the whole point is that the player can tell which happened');
+  assert(/no pin/i.test(noPinMsg56) && /commissioner|drew/i.test(noPinMsg56),
+    `the hash-less message says a PIN is not set AND who to ask (got "${noPinMsg56}")`);
+  assert(!/incorrect|wrong/i.test(noPinMsg56),
+    'the hash-less message does not blame the player for typing it wrong — they did not');
+  assert(/incorrect pin/i.test(wrongMsg56),
+    `a genuinely mistyped PIN still says so plainly (got "${wrongMsg56}")`);
+  // Every broken shape routes to the explanatory copy, not just the missing-key
+  // one — otherwise a blank-hash account still gets the misleading message.
+  const mislabelled56 = shapes56.filter(([, rec]) => app56.loginFailureMessage(rec.playerId) !== noPinMsg56)
+    .map(([label]) => label);
+  assert(mislabelled56.length === 0,
+    `every hash-less shape gets the explanatory message, not "Incorrect PIN" (mislabelled: ${mislabelled56.join(' | ') || 'none'})`);
+  assert(app56.loginFailureMessage('pin_nobody_at_all') === wrongMsg56,
+    'an unknown playerId falls back to the generic message — it does not advertise which ids exist');
+
+  // (f) THE CALL SITE. Everything above tests PARTS: a predicate and a string.
+  // Neither proves the login screen uses either one. Before this block,
+  // verifyPlayerPin() had exactly ONE caller in the entire app — the `doLogin`
+  // closure inside bindLoginScreen() — and that caller was unreachable from the
+  // harness, so replacing the check with `if (true)` passed a fully green suite.
+  // An authentication gate whose only coverage is a predicate nobody proves is
+  // called is the RG-27 shape at the worst possible place.
+  //
+  // So this drives the REAL handler through a fixture DOM and asserts on what
+  // the user actually gets: the session that is granted, and the toast that is
+  // shown. It also catches the seam being silently unwired — a `doLogin` that
+  // hardcodes '❌ Incorrect PIN' instead of calling loginFailureMessage() is
+  // invisible to (c) and red here.
+  {
+    const _getEl = document.getElementById, _qsa = document.querySelectorAll;
+    const _create = document.createElement, _body = document.body, _scrollTo = globalThis.scrollTo;
+    const toasts56 = [];
+    let tileClick56 = null, submitClick56 = null;
+    const pinInput56 = { value: '', focus() {}, addEventListener() {} };
+    const fakeTile56 = {
+      dataset: { playerId: null },
+      classList: { add() {}, remove() {}, toggle() {} },
+      addEventListener(ev, fn) { if (ev === 'click') tileClick56 = fn; },
+    };
+    const els56 = {
+      'pin-area':          { style: {} },
+      'selected-name':     { textContent: '' },
+      'pin-input':         pinInput56,
+      'pin-submit-btn':    { addEventListener(ev, fn) { if (ev === 'click') submitClick56 = fn; } },
+      'cancel-player-btn': { addEventListener() {} },
+      'toast-container':   { appendChild(t) { toasts56.push(String(t.innerHTML || '')); } },
+    };
+    document.getElementById   = id => (Object.prototype.hasOwnProperty.call(els56, id) ? els56[id] : null);
+    document.querySelectorAll = sel => (sel === '.player-tile' ? [fakeTile56] : []);
+    document.createElement    = () => ({ className: '', innerHTML: '', style: { cssText: '' }, remove() {} });
+    document.body             = Object.assign([], { add() {}, remove() {} }) && { classList: Object.assign([], { add() {}, remove() {} }) };
+    globalThis.scrollTo       = () => {};
+
+    // Drive the screen exactly as a player does: tap your tile, type, submit.
+    const login56 = (playerId, pin) => {
+      toasts56.length = 0;
+      storage.setSession(null, false, false);
+      fakeTile56.dataset.playerId = playerId;
+      tileClick56 = null; submitClick56 = null;
+      app56.bindLoginScreen();
+      tileClick56();
+      pinInput56.value = pin;
+      submitClick56();
+      return { toast: toasts56.join(' '), session: storage.getSession() };
+    };
+
+    try {
+      const wrong56 = login56('pin_ok', '9999');
+      assert(wrong56.session.playerId !== 'pin_ok' && wrong56.session.playerVerified !== true,
+        'a WRONG PIN at the real login screen grants no session');
+      assert(/incorrect pin/i.test(wrong56.toast),
+        `…and says so (got "${wrong56.toast}")`);
+
+      // THE BYPASS, at the call site. This is the exact thing that was live.
+      const wiped56 = login56('pin_wiped', '0000');
+      assert(wiped56.session.playerId !== 'pin_wiped' && wiped56.session.playerVerified !== true,
+        'THE BYPASS AT THE CALL SITE: an account whose pinHash a deploy destroyed cannot be signed into from the login screen with an arbitrary PIN');
+      assert(/no pin/i.test(wiped56.toast) && /commissioner|drew/i.test(wiped56.toast),
+        `…and that player is TOLD what happened AT THE SCREEN, not merely by a function nothing calls (got "${wiped56.toast}")`);
+
+      // …and the door still opens. Without this, `if (false)` would pass.
+      const good56 = login56('pin_ok', '1111');
+      assert(good56.session.playerId === 'pin_ok' && good56.session.playerVerified === true,
+        'the CORRECT PIN still signs in from the real screen — the gate is closed, not welded shut');
+    } finally {
+      document.getElementById = _getEl; document.querySelectorAll = _qsa;
+      document.createElement = _create; document.body = _body; globalThis.scrollTo = _scrollTo;
+      storage.setSession(null, false, false);
+    }
+  }
+
+  // (d) THE LOCKOUT PROOF. Fail-closed is only safe if the commissioner can
+  // still get in and re-issue PINs. Two independent properties:
+  //
+  //   1. Commissioner credentials do not live on a player record. RG-39 wiped
+  //      fields off `cfbp_players`; if admin auth read anything from there,
+  //      failing closed would have locked Drew out of the one panel that fixes
+  //      it. Asserted at the limit — EVERY player record gone.
+  storage.saveSetting('adminPasswordHash', btoa('lockout_probe_pw'));
+  localStorage.setItem('cfbp_players', '[]');
+  assert(storage.getPlayers().length === 0,
+    'fixture check: every player record is gone — the RG-39 wipe taken to its limit');
+  assert(btoa('lockout_probe_pw') === storage.getSettings().adminPasswordHash,
+    'THE LOCKOUT PROOF: the exact comparison the commissioner login evaluates still succeeds with ZERO player records — admin auth lives in settings, never on a player row');
+
+  //   2. Setting a player's PIN requires no working player PIN. The reset flow
+  //      is reachable from an admin session that has never verified a player
+  //      (playerId null, playerVerified false) — which is what a commissioner
+  //      who cannot log in as themselves actually has.
+  storage.setSession(null, true, false);
+  assert(storage.getSession().isAdmin === true && !storage.getSession().playerVerified,
+    'fixture check: an admin session with NO verified player is a real, reachable state');
+  storage.addPlayer({ playerId: 'pin_locked', displayName: 'Locked Out', active: true });
+  assert(storage.verifyPlayerPin('pin_locked', '4321') === false, 'the account starts locked out, as designed');
+  storage.setPlayerPin('pin_locked', '4321');
+  assert(storage.verifyPlayerPin('pin_locked', '4321') === true,
+    'RECOVERY: with commissioner credentials alone — no player PIN anywhere in the session — a PIN can be set and the account logs in again');
+  assert(storage.verifyPlayerPin('pin_locked', '0000') === false, 'and the newly-set PIN gates correctly');
+
+  // (e) The site PIN is a separate layer and is untouched by any of this.
+  storage.saveSetting('sitePin', '7788');
+  assert(storage.verifySitePin('7788') === true && storage.verifySitePin('7789') === false,
+    'the site PIN gate is unchanged — this fix narrows player auth only');
+
+  // restore
+  storage.saveSetting('sitePin', '');
+  storage.saveSetting('adminPasswordHash', _adminHash56);
+  localStorage.setItem('cfbp_players', JSON.stringify(_players56));
+  storage.setSession(_session56.playerId, _session56.isAdmin, _session56.playerVerified);
+}
+
+// ── 57. UN-127 item 1 (RG-42) — tiebreaker label reads in every theme ───────
+// Brayden reported "Your Tiebreaker Guess" (submitted Picks view) as
+// yellow-on-yellow. Root cause: .tiebreaker-label set color:var(--gold)
+// while its parent .tiebreaker-card sits on background:var(--gold-pale) —
+// and --gold vs --gold-pale is a LOW-CONTRAST PAIR IN EVERY THEME, from
+// 2.48:1 in the default theme down to ~1.05:1 (functionally invisible) in
+// Sooner and Razorback. Drew's follow-up note ("I believe it's theme
+// dependent") describes the visible SEVERITY varying by theme — it does,
+// dramatically — not the defect being confined to one theme; every theme
+// fails WCAG AA (4.5:1) with the old token, confirmed in (c) below.
+//
+// The harness has no layout engine or computed styles — it cannot ask a
+// browser what color actually painted, and cannot catch a browser-only
+// failure mode (font substitution, a higher-specificity rule elsewhere,
+// etc.). What it CAN do, and does below, is recompute the same WCAG
+// relative-luminance contrast ratio a browser would, against the ACTUAL
+// hex values checked into css/styles.css for every theme. That is a real
+// mathematical check on the shipped colors — not a name-match — but it is
+// still labeled [structural]. Real-device confirmation still needed: Drew
+// should eyeball the submitted-picks tiebreaker card on EVERY theme, with
+// Sooner and Razorback (the two worst on paper) the highest priority.
+console.log('\n[57] UN-127 item 1 (RG-42) — tiebreaker label reads in every theme…');
+{
+  function relLum([r, g, b]) {
+    const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+    const [R, G, B] = [f(r), f(g), f(b)];
+    return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+  }
+  function hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const n = parseInt(hex, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function contrastRatio(hexA, hexB) {
+    const L1 = relLum(hexToRgb(hexA)), L2 = relLum(hexToRgb(hexB));
+    const [light, dark] = L1 > L2 ? [L1, L2] : [L2, L1];
+    return (light + 0.05) / (dark + 0.05);
+  }
+  function extractToken(block, name) {
+    if (!block) return null;
+    const m = block.match(new RegExp(`--${name}:\\s*(#[0-9A-Fa-f]{3,6})`));
+    return m ? m[1] : null;
+  }
+
+  // (a) The element is actually WIRED to the new token — not just co-present
+  // with it somewhere unrelated in the file (RG-27 / "presence is not
+  // correctness").
+  const labelRuleMatch = cssSrc.match(/\.tiebreaker-label\{[^}]*\}/);
+  assert(!!labelRuleMatch, '.tiebreaker-label rule exists in styles.css');
+  const labelRule = labelRuleMatch ? labelRuleMatch[0] : '';
+  assert(/color:var\(--gold-text\)/.test(labelRule),
+    '.tiebreaker-label reads its color from --gold-text, not the raw --gold accent token');
+  assert(!/color:var\(--gold\)[;}]/.test(labelRule),
+    '.tiebreaker-label no longer reads color:var(--gold) directly (the broken pairing)');
+
+  // (b)+(c) Every theme, by name, old pairing vs new pairing.
+  const rootBlock = cssSrc.match(/:root\s*\{[^}]*\}/)?.[0] || '';
+  const themeBlocks57 = { 'root/aggie (default)': rootBlock };
+  for (const key of ['sooner', 'trojan', 'irish', 'boilermaker', 'razorback', 'neutral']) {
+    themeBlocks57[key] = cssSrc.match(new RegExp(`body\\.theme-${key}\\s*\\{[^}]*\\}`))?.[0] || '';
+  }
+  const rows57 = Object.entries(themeBlocks57).map(([theme, block]) => {
+    const goldPale = extractToken(block, 'gold-pale') || extractToken(rootBlock, 'gold-pale');
+    const gold     = extractToken(block, 'gold')      || extractToken(rootBlock, 'gold');
+    const goldText = extractToken(block, 'gold-text');
+    return {
+      theme,
+      oldRatio: (gold && goldPale) ? contrastRatio(gold, goldPale) : null,
+      newRatio: (goldText && goldPale) ? contrastRatio(goldText, goldPale) : null,
+      goldText, goldPale,
+    };
+  });
+  console.log('  theme            old(--gold/--gold-pale)   new(--gold-text/--gold-pale)');
+  rows57.forEach(r => console.log(
+    `  ${r.theme.padEnd(16)} ${(r.oldRatio?.toFixed(2) + ':1').padEnd(26)} ${r.newRatio?.toFixed(2)}:1`));
+
+  const missing57 = rows57.filter(r => !r.goldText).map(r => r.theme);
+  assert(missing57.length === 0,
+    `every theme defines its own --gold-text (missing: ${missing57.join(', ') || 'none'})`);
+
+  assert(rows57.every(r => r.oldRatio !== null && r.oldRatio < 4.5),
+    '[structural] confirms the OLD --gold/--gold-pale pairing failed WCAG AA (4.5:1) in EVERY theme, not just the one Brayden happened to report — motivates the token-level fix over a one-theme patch');
+
+  const failing57 = rows57.filter(r => r.newRatio === null || r.newRatio < 4.5).map(r => `${r.theme} (${r.newRatio?.toFixed(2)}:1)`);
+  assert(failing57.length === 0,
+    `[structural] every theme's --gold-text clears 4.5:1 against its OWN --gold-pale after the fix (failing: ${failing57.join(', ') || 'none'}) — proves the fix didn't help one theme at another's expense`);
+
+  const worst57 = rows57.slice().sort((a, b) => (a.oldRatio ?? 99) - (b.oldRatio ?? 99)).slice(0, 2).map(r => r.theme);
+  assert(worst57.includes('sooner') && worst57.includes('razorback'),
+    `Sooner and Razorback are confirmed the two most severely broken themes pre-fix (near-1:1, functionally invisible) — got worst two: ${worst57.join(', ')}`);
+
+  // (d) RG-44 — .rank-badge, the SECOND instance of the identical broken pair,
+  // flagged by (d)'s previous form as a known-unfixed follow-up and now closed.
+  // It renders the "#12 AP" chip in Alma Mater Rankings (app.js
+  // renderAlmaMaterRankings), measured at 1.04:1 in Razorback and 1.05:1 in
+  // Sooner — the same functionally-invisible pairing, on a different element.
+  //
+  // This is NOT asserted by matching the token's NAME. The rule's own two
+  // tokens are EXTRACTED from the shipped CSS and the WCAG ratio recomputed
+  // between them, per theme — so swapping .rank-badge to some third pairing
+  // later gets re-measured rather than silently accepted because the string
+  // "--gold-text" happens to appear.
+  const rankRuleMatch = cssSrc.match(/\.rank-badge\{[^}]*\}/);
+  assert(!!rankRuleMatch, '.rank-badge rule exists in styles.css');
+  const rankRule = rankRuleMatch ? rankRuleMatch[0] : '';
+  const rankFg = (rankRule.match(/color:var\(--([\w-]+)\)/) || [])[1] || null;
+  const rankBg = (rankRule.match(/background:var\(--([\w-]+)\)/) || [])[1] || null;
+  assert(rankFg !== null && rankBg !== null,
+    `.rank-badge declares both its text and background as theme tokens, never hardcoded (CONVENTIONS #13) — got color=--${rankFg}, background=--${rankBg}`);
+  assert(rankFg !== 'gold',
+    '.rank-badge no longer reads color:var(--gold) — that is the pairing RG-42 was raised for, and it is the same defect on a second element');
+
+  const rankRows57 = Object.entries(themeBlocks57).map(([theme, block]) => {
+    const fg = extractToken(block, rankFg) || extractToken(rootBlock, rankFg);
+    const bg = extractToken(block, rankBg) || extractToken(rootBlock, rankBg);
+    const oldFg = extractToken(block, 'gold') || extractToken(rootBlock, 'gold');
+    return {
+      theme,
+      ratio: (fg && bg) ? contrastRatio(fg, bg) : null,
+      oldRatio: (oldFg && bg) ? contrastRatio(oldFg, bg) : null,
+    };
+  });
+  console.log(`  .rank-badge      old(--gold/--${rankBg})          new(--${rankFg}/--${rankBg})`);
+  rankRows57.forEach(r => console.log(
+    `  ${r.theme.padEnd(16)} ${(r.oldRatio?.toFixed(2) + ':1').padEnd(26)} ${r.ratio?.toFixed(2)}:1`));
+
+  const rankWorst57 = rankRows57.slice().sort((a, b) => (a.oldRatio ?? 99) - (b.oldRatio ?? 99)).slice(0, 2);
+  assert(rankWorst57.every(r => (r.oldRatio ?? 99) < 1.1),
+    `[structural] confirms the reported severity: the OLD --gold pairing on .rank-badge measured under 1.1:1 — functionally invisible — in its two worst themes (${rankWorst57.map(r => `${r.theme} ${r.oldRatio?.toFixed(2)}:1`).join(', ')})`);
+
+  const rankFailing57 = rankRows57.filter(r => r.ratio === null || r.ratio < 4.5).map(r => `${r.theme} (${r.ratio?.toFixed(2)}:1)`);
+  assert(rankFailing57.length === 0,
+    `[structural] .rank-badge clears WCAG AA (4.5:1) against its OWN background in every one of the seven themes (failing: ${rankFailing57.join(', ') || 'none'})`);
+}
+
+// ── 58. UN-127 item 2 — bottom-nav positioning: ruled-out mechanisms stay ruled out ──
+// Drew reports the bottom nav detaching and floating to mid-screen when he
+// scrolls UP — never reproduced across 16 desktop configurations, and his
+// report of it on a PLAIN scroll contradicts the primer's standing iOS-
+// soft-keyboard hypothesis.
+//
+// Investigated by reading source, not guessing:
+//   - .bottom-nav is position:fixed;bottom:0. A fixed element detaches from
+//     the VIEWPORT unless an ANCESTOR establishes its own containing block
+//     via transform/filter/backdrop-filter/perspective/will-change/contain.
+//     .bottom-nav's only ancestors (index.html) are html > body >
+//     .page-wrapper. None of those four carry any hijacking property
+//     anywhere in styles.css — checked exhaustively below.
+//   - No scroll listener anywhere in app.js or chat-ui.js references
+//     .bottom-nav or .nav-item; the only scroll listeners in the app drive
+//     an unrelated horizontal overflow-fade cue and chat auto-scroll.
+//
+// CONCLUSION: no code-level mechanism in this app reproduces the report.
+// Per instructions, NOT shipping a speculative CSS change to the nav every
+// player uses on every screen. Most likely mechanism, given no code-level
+// cause and the specific "scroll UP" detail: iOS Safari's dynamic toolbar /
+// visual-viewport resize animation — a WebKit rendering quirk that exists
+// ONLY in an in-browser tab (collapsing/expanding Safari chrome), not in the
+// installed home-screen PWA (manifest.json display:"standalone" has no
+// toolbar to collapse at all). Browser-tab vs. installed-app is the single
+// most useful thing a real device check can resolve; source cannot answer
+// it. [structural] — this suite proves the ruled-out mechanisms STAY ruled
+// out going forward; it cannot observe an actual repaint or confirm/deny
+// the WebKit hypothesis. A real device is still required.
+console.log('\n[58] UN-127 item 2 — bottom-nav positioning: ruled-out mechanisms stay ruled out…');
+{
+  function allRuleBodies(selector) {
+    const escaped = selector.replace(/[.]/g, '\\.');
+    const re = new RegExp(`(^|[^a-zA-Z0-9_-])${escaped}\\s*\\{([^}]*)\\}`, 'g');
+    const out = [];
+    let m; while ((m = re.exec(cssSrc))) out.push(m[2]);
+    return out;
+  }
+  function hasHijackProp(body, prop) {
+    return new RegExp(`(^|[;{])\\s*${prop}\\s*:`).test(body);
+  }
+  const ancestorSelectors58 = ['html', 'body', '.page-wrapper', '.main-content'];
+  const hijackProps58 = ['transform', 'filter', 'backdrop-filter', 'perspective', 'will-change', 'contain'];
+  const offenders58 = [];
+  for (const sel of ancestorSelectors58) {
+    const bodies = allRuleBodies(sel);
+    assert(bodies.length > 0, `sanity: found at least one CSS rule for ${sel} to inspect (found ${bodies.length})`);
+    for (const body of bodies) {
+      for (const prop of hijackProps58) {
+        if (hasHijackProp(body, prop)) offenders58.push(`${sel} { ${prop}: … } — would hijack position:fixed's containing block`);
+      }
+    }
+  }
+  assert(offenders58.length === 0,
+    `no ancestor of .bottom-nav (html/body/.page-wrapper/.main-content) sets transform/filter/backdrop-filter/perspective/will-change/contain anywhere in styles.css (found: ${offenders58.join(' | ') || 'none'})`);
+
+  assert(/\.bottom-nav\{[^}]*position:fixed[^}]*bottom:0/.test(cssSrc),
+    '.bottom-nav is still position:fixed;bottom:0 — unchanged, no speculative repositioning shipped');
+
+  const scrollHandlerBlocks58 = [...appJsSrc.matchAll(/addEventListener\(\s*['"]scroll['"][\s\S]{0,300}/g)].map(m => m[0]);
+  assert(scrollHandlerBlocks58.length > 0, 'sanity: app.js has at least one scroll listener to inspect');
+  assert(scrollHandlerBlocks58.filter(b => /bottom-nav|nav-item/.test(b)).length === 0,
+    'no scroll event listener in app.js references .bottom-nav or .nav-item');
+  const chatUiScrollBlocks58 = [...chatUiSrc.matchAll(/addEventListener\(\s*['"]scroll['"][\s\S]{0,300}/g)].map(m => m[0]);
+  assert(chatUiScrollBlocks58.filter(b => /bottom-nav|nav-item/.test(b)).length === 0,
+    'no scroll event listener in chat-ui.js references .bottom-nav or .nav-item either');
+}
+
+// ── 59. UN-127 item 3 — feedback submission records without forcing an email ──
+// Every previous revision fired mailto: unconditionally on submit. Drew:
+// "You can submit a ticket... dont need to send an email unless urgent...
+// Right now all submissions make you email." Fix: the record IS the
+// submission (already reviewable in the Commissioner panel, UN-123); email
+// is now an explicit, default-OFF checkbox for the urgent case only, and it
+// is ADDITIVE — checking it must never skip recording the entry.
+//
+// Driven through the REAL, exported submitFeedback() against a fixture DOM —
+// not by grepping for the checkbox's existence in source (RG-27) — so a
+// checkbox that renders but is silently ignored by the handler would show up
+// here as a failure, not as coverage.
+console.log('\n[59] UN-127 item 3 — feedback: recorded always, emailed only if asked…');
+{
+  const _getEl59 = document.getElementById, _qs59 = document.querySelector, _qsa59 = document.querySelectorAll;
+  const _create59 = document.createElement, _location59 = globalThis.location;
+  const _feedback59 = storage.getFeedback();
+  const _commEmail59 = storage.getSettings().commissionerEmail;
+
+  const nameEl59   = { value: 'Kevin' };
+  const bodyEl59   = { value: '' };
+  const statusEl59 = { textContent: '' };
+  const emailBox59 = { checked: false };
+  const kindBtn59  = { dataset: { fbKind: 'bug' }, classList: { remove() {} } };
+  const toasts59 = [];
+  const els59 = {
+    'fb-name': nameEl59, 'fb-body': bodyEl59, 'fb-status': statusEl59, 'fb-also-email': emailBox59,
+    'toast-container': { appendChild(t) { toasts59.push(String(t.innerHTML || '')); } },
+  };
+  document.getElementById = id => (Object.prototype.hasOwnProperty.call(els59, id) ? els59[id] : null);
+  document.querySelector = sel => (sel === '#fb-kind-group .pick-btn.selected' ? kindBtn59 : null);
+  document.querySelectorAll = sel => (sel === '#fb-kind-group .pick-btn' ? [kindBtn59] : []);
+  document.createElement = () => ({ className: '', innerHTML: '', style: { cssText: '' }, remove() {} });
+  globalThis.location = { href: '', origin: 'https://irbfootball.com', pathname: '/index.html' };
+  globalThis.window.location = globalThis.location;
+
+  try {
+    storage.saveSetting('commissionerEmail', 'drew@example.com');
+
+    // (a) DEFAULT: box unchecked. Submitting must still record the entry —
+    // and must NOT touch window.location (no mailto attempted at all).
+    emailBox59.checked = false;
+    bodyEl59.value = 'The nav floats when I scroll up';
+    kindBtn59.dataset.fbKind = 'bug';
+    const before59a = storage.getFeedback().length;
+    app.submitFeedback();
+    const after59a = storage.getFeedback();
+    assert(after59a.length === before59a + 1, 'submitting with the email box unchecked still records the entry');
+    assert(after59a[after59a.length - 1].body === 'The nav floats when I scroll up',
+      'the recorded entry carries the actual text the player typed');
+    assert(globalThis.location.href === '', 'DEFAULT (unchecked): no mailto: is attempted — window.location.href is untouched');
+    assert(!/mail client/i.test(statusEl59.textContent),
+      `DEFAULT status copy does not claim to have opened a mail client (got "${statusEl59.textContent}")`);
+    assert(/review panel|commissioner/i.test(statusEl59.textContent),
+      `DEFAULT status copy tells the player it's recorded and reviewed (got "${statusEl59.textContent}")`);
+
+    // (b) EXPLICITLY CHECKED + an email is configured: mailto SHOULD fire —
+    // additively, not instead of recording.
+    emailBox59.checked = true;
+    bodyEl59.value = 'Feature idea: dark mode';
+    kindBtn59.dataset.fbKind = 'feature';
+    globalThis.location.href = '';
+    const before59b = storage.getFeedback().length;
+    app.submitFeedback();
+    assert(storage.getFeedback().length === before59b + 1,
+      'submitting with the box CHECKED still records the entry (email is additive, not instead-of)');
+    assert(/^mailto:drew(%40|@)example\.com/.test(globalThis.location.href),
+      `CHECKED + commissioner email configured: a mailto: to the Commissioner IS attempted (got "${globalThis.location.href}")`);
+    assert(/mail client/i.test(statusEl59.textContent),
+      `CHECKED status copy confirms the mail client opened (got "${statusEl59.textContent}")`);
+    assert(emailBox59.checked === false,
+      'the checkbox resets to its default-OFF state after a submission, so the next one does not silently inherit it');
+
+    // (c) CHECKED but no commissioner email on file: unchanged fallback —
+    // still no mailto attempted (nothing to send to), entry still recorded.
+    storage.saveSetting('commissionerEmail', '');
+    emailBox59.checked = true;
+    bodyEl59.value = 'Another idea';
+    globalThis.location.href = '';
+    app.submitFeedback();
+    assert(globalThis.location.href === '', 'CHECKED but no Commissioner email on file: still no mailto attempted (nothing to send to)');
+    assert(/no commissioner email/i.test(statusEl59.textContent),
+      `and the player is told why (got "${statusEl59.textContent}")`);
+  } finally {
+    document.getElementById = _getEl59; document.querySelector = _qs59; document.querySelectorAll = _qsa59;
+    document.createElement = _create59; globalThis.location = _location59; globalThis.window.location = _location59;
+    storage.saveSetting('commissionerEmail', _commEmail59 || '');
+    localStorage.setItem('cfbp_feedback', JSON.stringify(_feedback59));
+  }
+}
+
+// ── 60. UN-127 item 4 (RELOCATED 2026-08-27, Drew's explicit ruling) — the
+//        header feedback shortcut now lives UNDER THE WEEK (#header-meta),
+//        not .header-right ────────────────────────────────────────────────
+// Drew's original ask was volume ("everyone submits a lot") plus placement:
+// "left side under the week." A first pass put the button in .header-right
+// instead, reasoning UN-117's two-line week-heading guarantee couldn't
+// absorb it without a third stacked line — but that reasoning was never put
+// back to Drew before shipping. It has been now, and his ruling is: put it
+// under the week, as he originally asked; he chose that over keeping it in
+// the header cluster. This suite proves:
+//   (a)+(b) the button now injects into #header-meta — the week's own left
+//       slot — as a SIBLING of the week text, never inside it, and injection
+//       is still idempotent;
+//   (c) it is still never tab-gated (reach is still the whole point);
+//   (d) its click behavior is unchanged — real navigation + scrollIntoView()
+//       + focus(), asserted against actual rendered markup, never by
+//       name-matching the handler;
+//   (e) the two-line guarantee ITSELF — #header-meta is a flex ROW, never
+//       column, never wrapping — so the button is structurally incapable of
+//       becoming a third stacked line, whatever the week text does; and
+//   (f) the actual DECOUPLING mechanism that keeps the injected button from
+//       being wiped out on every subsequent week/tab refresh: refreshHeader()
+//       targets a DIFFERENT element (#header-meta-week) than
+//       setupHeaderFeedbackButton() targets (#header-meta itself) — proven
+//       both in source and behaviorally, by mutating the week-text element
+//       repeatedly and confirming the button survives.
+console.log('\n[60] UN-127 item 4 (relocated) — feedback shortcut moved under the week…');
+{
+  const _getEl60 = document.getElementById, _qs60 = document.querySelector, _qsa60 = document.querySelectorAll;
+  const _create60 = document.createElement, _body60 = document.body;
+
+  function genericFake60() {
+    const listeners = {};
+    return {
+      id: '', className: '', innerHTML: '', textContent: '', value: '', title: '', hidden: false,
+      style: {}, dataset: {},
+      classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; } },
+      addEventListener(ev, fn) { listeners[ev] = fn; },
+      _fire(ev) { listeners[ev]?.(); },
+      removeEventListener(){}, appendChild(){}, remove(){},
+      querySelector(){ return null; }, querySelectorAll(){ return []; },
+      setAttribute(){},
+    };
+  }
+  const headerMetaChildren60 = [];
+  // #header-meta: the real injection host, tracking JS-appended children.
+  // #header-meta-week: a GENUINELY SEPARATE object, mirroring the real
+  // nested markup (index.html) where the week text lives in its own child
+  // element and #header-meta is the outer flex-row host. This separation is
+  // the fixture-level mirror of proof (f) below.
+  const hostEl60 = { id: 'header-meta', appendChild(el) { headerMetaChildren60.push(el); } };
+  const weekSpanEl60 = genericFake60();
+  const identityBtn60 = genericFake60();
+  const pageRulesEl60 = Object.assign(genericFake60(), { id: 'page-rules' });
+  const fbBodySpy60 = Object.assign(genericFake60(), { id: 'fb-body', _focusCalls: 0, focus() { this._focusCalls++; } });
+  const feedbackCardSpy60 = Object.assign(genericFake60(), { _scrollCalls: 0, scrollIntoView() { this._scrollCalls++; } });
+
+  document.body = { classList: { add(){}, remove(){} }, appendChild(){}, innerHTML: '', dataset: {} };
+  document.createElement = () => genericFake60();
+  document.getElementById = id => {
+    if (id === 'page-rules') return pageRulesEl60;
+    if (id === 'fb-body') return fbBodySpy60;
+    if (id === 'header-identity') return identityBtn60;
+    if (id === 'header-meta') return hostEl60;
+    if (id === 'header-meta-week') return weekSpanEl60;
+    if (id === 'header-feedback-btn') return headerMetaChildren60.find(el => el.id === 'header-feedback-btn') || null;
+    return genericFake60();   // every other id: harmless throwaway target
+  };
+  document.querySelector = sel => {
+    if (sel === '.feedback-card') return feedbackCardSpy60;
+    return null;
+  };
+  document.querySelectorAll = () => [];
+
+  try {
+    // (a)+(b) Injection target + idempotency: #header-meta, NOT .header-right.
+    app.setupHeaderFeedbackButton();
+    assert(headerMetaChildren60.length === 1, 'setupHeaderFeedbackButton() appends exactly one element to #header-meta — the week\'s own left slot, not .header-right');
+    const btn60 = headerMetaChildren60[0];
+    assert(btn60.id === 'header-feedback-btn', 'the injected element carries id="header-feedback-btn"');
+    assert(/🗣/.test(btn60.innerHTML), 'the button renders the same 🗣 icon already used for feedback elsewhere');
+    assert(!/week-heading/.test(btn60.innerHTML), 'the button carries no week-heading-* class — it is a sibling of the week text, not nested inside it');
+    app.setupHeaderFeedbackButton();
+    app.setupHeaderFeedbackButton();
+    assert(headerMetaChildren60.length === 1,
+      'calling setup again (e.g. a second boot() in the same session) does not append a second button — idempotent');
+
+    // (e) The two-line guarantee itself. #header-meta must be a flex ROW —
+    // never column (which would literally stack the button under the week
+    // text) and never wrapping (which could push the button onto its own
+    // line at narrow widths even in a row layout).
+    const headerMetaRule60 = (cssSrc.match(/\.header-meta\{[^}]*\}/) || [''])[0];
+    assert(/display:\s*flex/.test(headerMetaRule60),
+      `[structural] #header-meta is display:flex — got "${headerMetaRule60}"`);
+    assert(!/flex-direction:\s*column/.test(headerMetaRule60),
+      '[structural] #header-meta is not flex-direction:column — a column layout is exactly what would stack the button under the week text as a third line');
+    assert(!/flex-wrap:\s*wrap\b/.test(headerMetaRule60),
+      '[structural] #header-meta does not wrap its own children onto a new line — row+nowrap is what guarantees the button and the week text always share one row, never stack');
+    // UN-117's own two-line internals (name+badge line, date-range line) are
+    // untouched by this batch — re-confirmed here (suite [35] already proves
+    // this in full) so a regression on THIS specific guarantee fails right
+    // next to the change that could cause it, not three suites away.
+    assert(/\.week-heading-dates\{[^}]*display:block/.test(cssSrc.replace(/\s+/g, '')) || /\.week-heading-dates\{[^}]*display:block/.test(cssSrc),
+      '[structural] the week name/date-range split itself is untouched — still block-level, still forces exactly two lines inside the week text');
+
+    // (f) The decoupling mechanism, proven in TWO parts. First, source: the
+    // function that rewrites the week text (refreshHeader()) must target a
+    // DIFFERENT element than the one this button was appended into.
+    const refreshHeaderBody60 = (appJsSrc.match(/function refreshHeader\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+    assert(refreshHeaderBody60.length > 0, 'refreshHeader() located in js/app.js');
+    assert(/getElementById\('header-meta-week'\)/.test(refreshHeaderBody60),
+      '[structural] refreshHeader() targets #header-meta-week — a DIFFERENT element than #header-meta, which is what actually keeps the injected button alive across every week/tab refresh');
+    assert(!/getElementById\('header-meta'\)/.test(refreshHeaderBody60),
+      '[structural] refreshHeader() no longer targets #header-meta directly — that would wipe the button via innerHTML replacement on the very next refresh');
+    // Second, behavior: mutate #header-meta-week repeatedly, exactly the way
+    // refreshHeader() does on every tab switch / week change, and confirm
+    // the button (tracked on the SEPARATE #header-meta host object) survives.
+    for (let i = 0; i < 5; i++) { weekSpanEl60.innerHTML = `<span class="week-heading week-heading-inline">refresh ${i}</span>`; }
+    assert(headerMetaChildren60.length === 1 && !!document.getElementById('header-feedback-btn'),
+      'simulating 5 week-text refreshes (mutating #header-meta-week directly) leaves the injected button untouched');
+
+    // (c) Never tab-gated, unlike tz-toggle/theme-toggle — checked against
+    // the actual CSS, not just "we didn't add a rule" by assumption.
+    const gatedWithFeedback60 = /#tz-toggle\s*,\s*#theme-toggle\s*,?\s*#header-feedback-btn/.test(cssSrc);
+    const ownDisplayNone60 = /#header-feedback-btn\s*\{[^}]*display:\s*none/.test(cssSrc);
+    assert(!gatedWithFeedback60 && !ownDisplayNone60,
+      '[structural] .header-feedback-btn is not folded into the tz/theme tab-gating rule and has no display:none of its own — it shows on every tab the header renders on');
+
+    // (d) Click behavior, driven through the REAL listener captured on the
+    // REAL button object — never re-derived, never asserted by handler name.
+    // First, force state.currentTab away from 'rules' via the header
+    // identity chip's own real (also-exported) click binding, so the click
+    // below is DEFINITELY exercising the "navigate to Rules" branch and not
+    // silently no-op'ing because we happened to already be there. Wrapped in
+    // try/catch: navigateTo('picks') sets state.currentTab BEFORE it renders
+    // the picks page, and this suite's fixture DOM has no reason to support
+    // that unrelated page — only the state flip matters here.
+    app.setupHeaderIdentity();
+    try { identityBtn60._fire('click'); } catch {}
+
+    document.body.dataset.tab = '';   // fresh — prove THIS click sets it
+    pageRulesEl60.innerHTML = '';     // fresh — prove THIS click renders it
+    btn60._fire('click');
+
+    assert(document.body.dataset.tab === 'rules',
+      'clicking the header shortcut from a non-Rules tab navigates to Rules (document.body.dataset.tab, the real observable effect of the real navigateTo())');
+    assert(/class="[^"]*\bfeedback-card\b[^"]*"/.test(pageRulesEl60.innerHTML) && /id="fb-body"/.test(pageRulesEl60.innerHTML),
+      'the Rules tab that actually renders contains the real feedback form (not a stub) — confirms the click lands somewhere the query/focus calls below can find');
+    assert(feedbackCardSpy60._scrollCalls >= 1,
+      'the click handler calls scrollIntoView() on the feedback card so the player does not have to hunt for it');
+    assert(fbBodySpy60._focusCalls >= 1,
+      'the click handler focuses the description field so a player can start typing immediately');
+
+    // Clicking again while ALREADY on Rules must not blow away whatever the
+    // player has typed — i.e. it must not force a second navigate/re-render.
+    const rulesHtmlBefore60 = pageRulesEl60.innerHTML;
+    pageRulesEl60.innerHTML = rulesHtmlBefore60 + '<!-- player is mid-draft, do not touch -->';
+    btn60._fire('click');
+    assert(pageRulesEl60.innerHTML.includes('do not touch'),
+      'clicking the shortcut again while ALREADY on Rules does not re-render the tab (an in-progress feedback draft is not silently wiped)');
+    assert(feedbackCardSpy60._scrollCalls >= 2 && fbBodySpy60._focusCalls >= 2,
+      '…but still scrolls/focuses again — a habitual second tap still lands the player on the form');
+  } finally {
+    document.getElementById = _getEl60; document.querySelector = _qs60; document.querySelectorAll = _qsa60;
+    document.createElement = _create60; document.body = _body60;
+  }
+}
+
+// ── 61. UN-127 item 5 — theme is signed-in-only; signed out is always neutral ──
+// Drew: "Take away the ability to change the theme when not logged in, will
+// be too much flipping if multiple people arent logged in. Make the default
+// neutral when not logged in." Two independent claims, both asserted against
+// the REAL getTheme()/setTheme() (storage.js) and renderThemeToggle()
+// (app.js) — not against whether the word "neutral" appears near a session
+// check in source:
+//   (1) signed out, getTheme() is ALWAYS 'neutral', regardless of any
+//       leftover settings.theme value from before this fix, or any leftover
+//       player preference that isn't THIS player's (there is no player);
+//   (2) signed out, the switching control itself disappears — not merely
+//       disabled-looking, actually empty — and calling setTheme() while
+//       signed out must not silently repaint the device fallback for the
+//       next anonymous viewer (the exact mechanism Drew reported);
+//   (3) signed IN, unchanged: the picker renders, and the choice is written
+//       to THIS player's own preferences.theme, still following them across
+//       devices exactly as before.
+console.log('\n[61] UN-127 item 5 — theme is signed-in-only; neutral by default when signed out…');
+{
+  const _getEl61 = document.getElementById;
+  const _players61 = storage.getPlayers();
+  const _settings61Theme = storage.getSettings().theme;
+  const _session61 = storage.getSession();
+
+  const containerEl61 = { innerHTML: '', querySelector(sel) {
+    if (sel === '#theme-select' && /<select/.test(this.innerHTML)) {
+      return { addEventListener() {} };
+    }
+    return null;
+  } };
+  document.getElementById = id => (id === 'theme-toggle' ? containerEl61 : null);
+
+  try {
+    storage.setSession(null, false, false);   // signed OUT
+
+    // (1) A stale device-level settings.theme (leftover from before this fix,
+    // or hand-edited) must NOT leak through while signed out.
+    storage.saveSetting('theme', 'sooner');
+    assert(storage.getTheme() === 'neutral',
+      'signed OUT, getTheme() is "neutral" even though settings.theme still holds a stale "sooner" — the device fallback is no longer consulted');
+
+    // (2) The control disappears entirely — not disabled, GONE.
+    app.renderThemeToggle();
+    assert(containerEl61.innerHTML === '',
+      `signed OUT, #theme-toggle renders EMPTY — no picker to flip (got "${containerEl61.innerHTML}")`);
+
+    // setTheme() while signed out must not write the shared device fallback
+    // — the exact mechanism that let one anonymous viewer repaint the app
+    // for the next. (Defense in depth: the control that called this is
+    // already gone per (2); this proves the seam itself is also closed.)
+    storage.saveSetting('theme', 'neutral');
+    storage.setTheme('trojan');
+    assert(storage.getSettings().theme === 'neutral',
+      'calling setTheme() while signed out does not overwrite the device-level settings.theme fallback — no more "whoever touched it last" repainting the app for the next anonymous viewer');
+    assert(storage.getTheme() === 'neutral', '…and getTheme() is still neutral immediately after that call');
+
+    // (3) Signed IN: unchanged behavior — picker renders, choice follows
+    // THIS player via preferences.theme, and is unaffected by whatever
+    // settings.theme still holds.
+    storage.addPlayer({ playerId: 'theme_p1', displayName: 'Koby', active: true });
+    storage.setSession('theme_p1', false, true);   // signed IN as Koby, PIN-verified
+    app.renderThemeToggle();
+    assert(/<select/.test(containerEl61.innerHTML) && /id="theme-select"/.test(containerEl61.innerHTML),
+      'signed IN, the theme picker DOES render');
+    storage.setTheme('irish');
+    assert(storage.getTheme() === 'irish', 'signed IN, setTheme() takes effect immediately for this player');
+    const p61 = storage.getPlayers().find(p => p.playerId === 'theme_p1');
+    assert(p61?.preferences?.theme === 'irish',
+      "the choice is written to THIS PLAYER's own preferences.theme (not settings.theme) — the CLAUDE.md architecture bullet 4 pattern, so it follows them cross-device");
+    assert(storage.getSettings().theme === 'neutral',
+      'the device-level settings.theme fallback is untouched by a signed-in choice — confirms items (2)/(3) share one seam, not two');
+
+    // Logging back out must return to neutral immediately, regardless of
+    // what this player (or anyone) just chose.
+    storage.setSession(null, false, false);
+    assert(storage.getTheme() === 'neutral',
+      "logging out returns to neutral immediately — Koby's 'irish' choice does not leak to the next anonymous viewer on the same device");
+  } finally {
+    document.getElementById = _getEl61;
+    storage.saveSetting('theme', _settings61Theme || '');
+    localStorage.setItem('cfbp_players', JSON.stringify(_players61));
+    storage.setSession(_session61.playerId, _session61.isAdmin, _session61.playerVerified);
+  }
+}
+
+// ── 62. UN-127 (change 2, 2026-08-27) — timezone locked the same way as ─────
+//        theme was (suite [61]) ─────────────────────────────────────────────
+// Drew's ruling: "yes, lock it." getTimezone()/setTimezone() (storage.js)
+// used to keep reading/writing the device-level settings.timezone fallback
+// while signed out — the identical shared-device problem the theme lock just
+// fixed for theme (one anonymous viewer's choice repainting/re-zoning the
+// app for the next). Same pattern applied here: signed out reads the league
+// default (DEFAULT_TZ) and writes nothing; signed in is unchanged, still
+// player.preferences.tz, still follows the player across devices.
+// renderTzToggle() (js/app.js) is hidden while signed out, exactly as
+// renderThemeToggle() already is — verified against the REAL exported
+// functions, never by name-matching.
+//
+// Pre-paint check (explicitly asked for in the task): unlike theme,
+// index.html carries NO early-render encoding of timezone anywhere. A grep
+// across index.html and every js/*.js module for "timezone"/"getTimezone"/
+// "DEFAULT_TZ" turns up only storage.js (the seam itself), app.js (the
+// toggle + two read call sites), and data-model.js/data-provider.js (the
+// TIME_ZONES table and an unrelated comment) — nothing in index.html's
+// inline bootstrap ever touched a timezone value. There is no third place
+// for suite [63]'s guard to have a timezone equivalent of.
+console.log('\n[62] UN-127 change 2 — timezone is signed-in-only; league default when signed out…');
+{
+  const _getEl62 = document.getElementById;
+  const _players62 = storage.getPlayers();
+  const _settings62Tz = storage.getSettings().timezone;
+  const _session62 = storage.getSession();
+  const { DEFAULT_TZ } = mods['data-model'];
+
+  const containerEl62 = { innerHTML: '', querySelectorAll() { return []; } };
+  document.getElementById = id => (id === 'tz-toggle' ? containerEl62 : null);
+
+  try {
+    storage.setSession(null, false, false);   // signed OUT
+
+    // (1) A stale device-level settings.timezone (leftover from before this
+    // fix, or hand-edited) must NOT leak through while signed out.
+    storage.saveSetting('timezone', 'ET');
+    assert(storage.getTimezone() === DEFAULT_TZ,
+      `signed OUT, getTimezone() is the league default ("${DEFAULT_TZ}") even though settings.timezone still holds a stale "ET" — the device fallback is no longer consulted`);
+
+    // (2) The control disappears entirely — not disabled, GONE.
+    app.renderTzToggle();
+    assert(containerEl62.innerHTML === '',
+      `signed OUT, #tz-toggle renders EMPTY — no pills to flip (got "${containerEl62.innerHTML}")`);
+
+    // setTimezone() while signed out must not write the shared device
+    // fallback — the exact mechanism that let one anonymous viewer re-zone
+    // the app for the next. (Defense in depth: the control that called this
+    // is already gone per (2); this proves the seam itself is also closed.)
+    storage.saveSetting('timezone', DEFAULT_TZ);
+    storage.setTimezone('ET');
+    assert(storage.getSettings().timezone === DEFAULT_TZ,
+      'calling setTimezone() while signed out does not overwrite the device-level settings.timezone fallback — no more "whoever touched it last" re-zoning the app for the next anonymous viewer');
+    assert(storage.getTimezone() === DEFAULT_TZ, '…and getTimezone() is still the league default immediately after that call');
+
+    // (3) Signed IN: unchanged behavior — pills render, choice follows THIS
+    // player via preferences.tz, and is unaffected by whatever
+    // settings.timezone still holds.
+    storage.addPlayer({ playerId: 'tz_p1', displayName: 'Jacob', active: true });
+    storage.setSession('tz_p1', false, true);   // signed IN as Jacob, PIN-verified
+    app.renderTzToggle();
+    const { TIME_ZONES: TIME_ZONES_62 } = mods['data-model'];
+    assert(/class="tz-btn/.test(containerEl62.innerHTML)
+      && TIME_ZONES_62.every(tz => containerEl62.innerHTML.includes(`data-tz="${tz.key}"`)),
+      'signed IN, the timezone pills DO render — one real button per TIME_ZONES entry');
+    storage.setTimezone('CT');
+    assert(storage.getTimezone() === 'CT', 'signed IN, setTimezone() takes effect immediately for this player');
+    const p62 = storage.getPlayers().find(p => p.playerId === 'tz_p1');
+    assert(p62?.preferences?.tz === 'CT',
+      "the choice is written to THIS PLAYER's own preferences.tz (not settings.timezone) — the same architecture pattern as theme — so it follows them cross-device");
+    assert(storage.getSettings().timezone === DEFAULT_TZ,
+      'the device-level settings.timezone fallback is untouched by a signed-in choice — confirms (2)/(3) share one seam, not two');
+
+    // Logging back out must return to the league default immediately,
+    // regardless of what this player (or anyone) just chose.
+    storage.setSession(null, false, false);
+    assert(storage.getTimezone() === DEFAULT_TZ,
+      "logging out returns to the league default immediately — Jacob's 'CT' choice does not leak to the next anonymous viewer on the same device");
+  } finally {
+    document.getElementById = _getEl62;
+    storage.saveSetting('timezone', _settings62Tz ?? DEFAULT_TZ);
+    localStorage.setItem('cfbp_players', JSON.stringify(_players62));
+    storage.setSession(_session62.playerId, _session62.isAdmin, _session62.playerVerified);
+  }
+}
+
+// Source-level confirmation that the lock is the SAME shape as theme's,
+// checked against the real storage.js text — getTimezone() must not read
+// settings.timezone, getTheme() must not read settings.theme, and both must
+// resolve through _playerPref() with a hardcoded league-default fallback.
+{
+  const getTimezoneBody62 = (storageSrc31.match(/export function getTimezone\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(getTimezoneBody62.length > 0, 'getTimezone() located in js/storage.js');
+  assert(!/getSettings\(\)\.timezone/.test(getTimezoneBody62),
+    '[structural] getTimezone() no longer reads the settings.timezone device-level fallback — matches the shape of the getTheme() fix');
+  assert(/_playerPref\('tz'\)\s*\|\|\s*DEFAULT_TZ/.test(getTimezoneBody62),
+    '[structural] getTimezone() resolves to _playerPref(\'tz\') || DEFAULT_TZ — a player preference or the hardcoded league default, nothing else');
+
+  const setTimezoneBody62 = (storageSrc31.match(/export function setTimezone\(tzKey\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(setTimezoneBody62.length > 0, 'setTimezone() located in js/storage.js');
+  assert(!/saveSetting\('timezone'/.test(setTimezoneBody62),
+    '[structural] setTimezone() no longer writes the settings.timezone device-level fallback under any branch');
+
+  const renderTzToggleBody62 = (appJsSrc.match(/export function renderTzToggle\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(renderTzToggleBody62.length > 0, 'renderTzToggle() located in js/app.js');
+  assert(/if\s*\(!getSession\(\)\?\.playerId\)\s*\{\s*container\.innerHTML\s*=\s*'';?\s*return;?\s*\}/.test(renderTzToggleBody62.replace(/\s+/g,' ')),
+    '[structural] renderTzToggle() hides the control while signed out with the identical shape as renderThemeToggle()');
+}
+
+// ── 63. UN-127 (change 3, 2026-08-27) — a guard so the theme bootstrap ──────
+//        cannot drift a THIRD time ───────────────────────────────────────────
+// index.html carries an inline pre-paint script that reimplements getTheme()
+// literally, because it runs before the module loads and cannot import. It
+// has now gone out of sync with the real getTheme() TWICE — v0.17.4 (flashed
+// Aggie maroon, wrong default) and again today (kept reading the
+// settings.theme device fallback after getTheme() stopped consulting it,
+// so a shared device with a leftover settings.theme flashed a stale palette
+// before JS repainted it neutral). The script's own comment says "keep this
+// literal in sync"; a comment has now failed twice.
+//
+// [structural] this suite asserts a PROPERTY the bootstrap must not have —
+// "this code does not read settings.theme" — rather than re-deriving its
+// exact literal text, so a future edit is free to reshape the script as long
+// as it keeps not doing the one thing that broke twice. What it CANNOT
+// prove, and what only a real browser can: that the inline script actually
+// executes before first paint with zero visible flash on a real device/
+// profile with a leftover settings.theme value — this is a static-source
+// property check, not a rendered-pixel check.
+console.log('\n[63] UN-127 change 3 — theme bootstrap cannot silently reintroduce settings.theme…');
+{
+  // Isolate the SPECIFIC <script> block (index.html has more than one inline
+  // <script> before the module loads — the reveal-page PIN bypass is
+  // another). Matched by content, not position, so this stays correct if a
+  // script gets reordered.
+  const scriptBlocks63 = [...indexHtmlSrc.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+  const themeBootScript63 = scriptBlocks63.find(s => /theme-'\s*\+\s*key/.test(s)) || '';
+  assert(themeBootScript63.length > 0, 'the inline theme-bootstrap <script> block is located in index.html');
+
+  // The property that broke twice: it must NOT read the settings blob at
+  // all. cfbp_settings is the ONLY localStorage key settings.theme could
+  // ever come from — asserting its absence is stronger and more durable
+  // than asserting the literal substring "settings.theme" is absent (which
+  // a surrounding HTML COMMENT can innocently contain even when the CODE is
+  // correct, as it does above this very script).
+  assert(!/cfbp_settings/.test(themeBootScript63),
+    '[structural] the theme bootstrap script does not read cfbp_settings (the ONLY source of a settings.theme device-level fallback) anywhere in its executable code');
+
+  // What it MUST do instead: resolve through the session + player
+  // preferences chain, with a 'neutral' fallback at both ends (no player
+  // found, or no theme set for that player) — the literal shape of
+  // getTheme() = _playerPref('theme') || 'neutral'.
+  assert(/cfbp_session/.test(themeBootScript63) && /playerId/.test(themeBootScript63),
+    '[structural] the bootstrap resolves the SESSION first, the same starting point as getTheme()/_playerPref()');
+  assert(/cfbp_players/.test(themeBootScript63) && /preferences/.test(themeBootScript63) && /\.theme/.test(themeBootScript63),
+    '[structural] the bootstrap reads the theme off the signed-in PLAYER\'s preferences, not a device-level blob');
+  assert((themeBootScript63.match(/'neutral'/g) || []).length >= 2,
+    "[structural] 'neutral' is the fallback in BOTH places — no session/player found, AND a found player with no theme preference set — matching getTheme()'s single fallback value");
+
+  // Cross-check against the REAL getTheme() (storage.js), not just the
+  // bootstrap's own internal consistency — the two must actually agree on
+  // what "the fallback" is.
+  const getThemeBody63 = (storageSrc31.match(/export function getTheme\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(/_playerPref\('theme'\)\s*\|\|\s*'neutral'/.test(getThemeBody63),
+    '[structural] getTheme() itself resolves to _playerPref(\'theme\') || \'neutral\' — the canonical shape this bootstrap must mirror, confirmed independently of the bootstrap\'s own text');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 64. [structural] THE BLIND RULE HAS ONE DEFINITION, AND EVERY SURFACE ASKS IT
+//
+//     WHY THIS EXISTS. The blind rule has now drifted FIVE times: the standard
+//     dashboard matrix (UN-116), `pickChip`, `emitExtraPointEvent`, the Extra
+//     Point admin card (RG-40), and the commissioner Tiebreaker card (RG-43).
+//     Four of the five were found only because a human went looking by hand.
+//
+//     Every one of the behavioural suites above ([34], [39], [40], [50]) is a
+//     per-surface assertion, and a per-surface assertion can only ever cover
+//     the surfaces someone thought to enumerate. The rule is enforced by
+//     call-site discipline across nine-plus surfaces with NO mechanical
+//     guarantee — which is not a rule, it is a habit. A sixth surface added
+//     next month is green by default under every existing test in this file.
+//
+//     So this suite inverts the burden, exactly as gradetest [6] does for the
+//     ATS comparison. It is DENY-BY-DEFAULT: any top-level function in app.js
+//     or chat-ui.js that reads getPicks / getTiebreakerGuess /
+//     getExtraPointGuess for a playerId that is not demonstrably the session's
+//     own must EITHER consult canViewOtherPicks()/arePicksPublic(), or appear
+//     on a named, justified list below. A new leak is a test failure the day
+//     it is written, with no new test needed.
+//
+//     gradetest [6] scans app.js only — its one weakness. This scans BOTH
+//     app.js and chat-ui.js, which is where three of the five recurrences
+//     lived (`pickChip`, `emitExtraPointEvent`, `emitGameFinalEvent`).
+//
+//     WHAT A GREEN RESULT MEANS. "Absent," never "my regex didn't match" —
+//     the canaries at the bottom feed the scanner synthetic leaks of every
+//     shape this codebase has actually produced (direct, no-playerId,
+//     indirect-through-a-local, and gate-only-in-a-comment) and require it to
+//     catch each one, plus legal shapes it must NOT flag.
+//
+//     WHAT IT DOES NOT COVER, stated plainly so nobody mistakes green here for
+//     total coverage:
+//       - Functions handed already-fetched picks as a PARAMETER rather than
+//         reading an accessor (renderDashboardTable, renderDashboardCompact,
+//         renderScoreSummaryRowsHTML). They cannot be found by an accessor
+//         scan; they are covered behaviourally by [34h]'s surface sweep, and
+//         the two suites are complements, not substitutes.
+//       - Whether a gate is CORRECT. This proves the predicate is consulted;
+//         [34]/[39]/[40]/[50] prove it is consulted correctly. A function that
+//         calls arePicksPublic() and ignores the answer passes here.
+//       - Files other than app.js and chat-ui.js.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[64] [structural] every surface reading another player\'s submission consults the blind rule…');
+{
+  // ── The three accessors that can return a submission, and the two predicates
+  //    that are the ONLY sanctioned way to decide whether it may be shown.
+  const ACCESSORS = ['getPicks', 'getTiebreakerGuess', 'getExtraPointGuess'];
+  const GATE = /\b(?:canViewOtherPicks|arePicksPublic)\s*\(/;
+  // Expressions that ARE the session's own id. A read scoped to one of these
+  // discloses nothing about anybody else and needs no gate.
+  const OWN = /^(?:me\(\)|getSession\(\)\.playerId|session\.playerId|sess\.playerId|s\?\.playerId|(?:session|sess)\.playerId\s*&&[\s\S]*)$/;
+
+  /** Blank out comments, preserving line/column structure so offsets stay
+   *  meaningful. Prose describing the rule can then never satisfy the scan —
+   *  canary C4 below proves it. */
+  const blankComments = s => s
+    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:'"\\/])\/\/[^\n]*/g, (m, p) => p + ' '.repeat(m.length - p.length));
+
+  /** Split a file into TOP-LEVEL function regions. Every declaration in these
+   *  two files sits at column 0, so a region runs from one declaration to the
+   *  next; nested helpers and event handlers fold into their enclosing
+   *  top-level function, which is how a reviewer reads them too. */
+  function regionsOf(src) {
+    const lines = blankComments(src).split('\n');
+    const decls = [];
+    lines.forEach((l, i) => {
+      const m = l.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)/);
+      if (m) decls.push({ name: m[1], line: i });
+    });
+    return decls.map((d, i) => ({
+      name: d.name,
+      body: lines.slice(d.line, i + 1 < decls.length ? decls[i + 1].line : lines.length).join('\n'),
+    }));
+  }
+
+  /** The argument list of `name(...)`, split at top-level commas. */
+  function callArgs(body, name) {
+    const out = [];
+    const re = new RegExp(String.raw`\b${name}\s*\(`, 'g');
+    let m;
+    while ((m = re.exec(body))) {
+      let depth = 1, i = m.index + m[0].length, start = i, args = [];
+      for (; i < body.length && depth > 0; i++) {
+        const c = body[i];
+        if ('([{'.includes(c)) depth++;
+        else if (')]}'.includes(c)) { depth--; if (depth === 0) break; }
+        else if (c === ',' && depth === 1) { args.push(body.slice(start, i).trim()); start = i + 1; }
+      }
+      args.push(body.slice(start, i).trim());
+      out.push(args.filter(a => a.length));
+    }
+    return out;
+  }
+
+  /** Is this argument text the session's own player id? Follows ONE level of
+   *  indirection through a local binding in the same region, the same depth
+   *  gradetest [6] follows — `const self = me(); … getPicks(w, self)` is the
+   *  real shape in chat-ui.js and must stay legal. */
+  function isOwn(arg, body, depth = 0) {
+    if (!arg) return false;
+    if (OWN.test(arg)) return true;
+    if (!/^[A-Za-z_$][\w$]*$/.test(arg) || depth > 0) return false;
+    const binds = [...body.matchAll(new RegExp(String.raw`(?:const|let|var)\s+${arg}\s*=(?!=)\s*([^;\n]*)`, 'g'))]
+      .map(b => b[1].trim().replace(/;$/, ''));
+    if (!binds.length) return false;
+    return binds.every(b => isOwn(b.split('?')[0].trim(), body, depth + 1) || isOwn(b, body, depth + 1));
+  }
+
+  /** Every region that reads ANOTHER player's submission — i.e. at least one
+   *  accessor call whose player argument is missing (returns the whole
+   *  league) or is not demonstrably the viewer's own. */
+  function disclosingRegions(src) {
+    return regionsOf(src).filter(r =>
+      ACCESSORS.some(a => callArgs(r.body, a).some(args => !isOwn(args[1], r.body))));
+  }
+
+  // ── THE NAMED LISTS. Deny-by-default: a function reaching the scan must be
+  //    gated, or appear here by name with a reason. Widening a regex is not an
+  //    option — the only way past the scan is to write the name down.
+  //
+  //    EXEMPT — genuinely no disclosure to another player.
+  const EXEMPT = {
+    // Scoring internals: read the whole league's picks to COMPUTE an aggregate
+    // (ranks, W–L, obligations). They disclose no selection to anybody.
+    finalizeWeek:
+      'scoring internal — reads the slate to compute weekly results and obligations for a week being finalized; renders nothing',
+    renderLeaderboard:
+      'scoring internal — pooled group picks are read only inside `memberWeeks.every(m => m.status === "final")`, a STRICTER condition than arePicksPublic(), and yield a winner/loser aggregate',
+    // Aggregate count, no attribution.
+    scribeLiveGameCheck:
+      'aggregate only — uses `.length` as a "was this game widely picked" threshold on an already-LIVE game; names no player and prints no selection',
+    // Self-directed exports. The bright line for this bucket is that the
+    // artifact goes to the commissioner's OWN device — his disk or his
+    // clipboard — and is not published to anybody else. buildWeeklySummary is
+    // NOT in this bucket for exactly that reason; see TRACKED below.
+    exportWeekPicksCSV:
+      'self-export — commissioner-initiated CSV download to their own device',
+    exportWeekResultsCSV:
+      'self-export — commissioner-initiated CSV download to their own device',
+    exportWeekDashboardCSV:
+      'self-export — commissioner-initiated CSV download to their own device',
+    renderCommExtrasV16:
+      'self-export — the 📋 chat-digest button copies a SCRIBE feed to the commissioner\'s own clipboard; same class as the CSV exports above, and it renders nothing on screen',
+    // The disclosure boundary lives one call downstream, and that call gates.
+    doRefreshScores:
+      'the winner/loser id lists it builds are handed straight to emitGameFinalEvent(), which gates on arePicksPublic() (RG-45) — this function itself renders and publishes nothing',
+  };
+
+  //    TRACKED — CONFIRMED TO DISCLOSE, deliberately NOT fixed in this pass.
+  //    This bucket is not an excuse; it is a debt register, and the assertion
+  //    below PINS each entry as still-ungated so that the day someone fixes
+  //    one, this list is forced to be updated rather than quietly rotting.
+  //    Precedent: [57](d) tracked .rank-badge exactly this way, and that is
+  //    why it was found and closed as RG-44.
+  const TRACKED = {
+    buildWeeklySummary:
+      'LEAK, NOT A FIX FOR TONIGHT — the recap it builds prints every player\'s rank, W–L and TIEBREAKER GUESS by name, and the "Send" button BCCs it to every active player with no week-status gate anywhere. Reachable by a commissioner pressing Send on an open week. NOT gated here because the right behaviour is a commissioner-workflow decision (block the send? warn and confirm? render the email blinded?), which is user-experience\'s call, not a bugfix. FLAGGED TO DREW.',
+  };
+
+  const FILES64 = { 'app.js': appJsSrc, 'chat-ui.js': chatUiSrc };
+
+  const offenders64 = [];
+  const gatedNames64 = [];
+  const seen64 = [];
+  for (const [file, src] of Object.entries(FILES64)) {
+    for (const r of disclosingRegions(src)) {
+      seen64.push(r.name);
+      if (GATE.test(r.body)) { gatedNames64.push(`${file}:${r.name}`); continue; }
+      if (Object.prototype.hasOwnProperty.call(EXEMPT, r.name)) continue;
+      if (Object.prototype.hasOwnProperty.call(TRACKED, r.name)) continue;
+      offenders64.push(`${file}:${r.name}`);
+    }
+  }
+
+  console.log(`  scanned ${Object.keys(FILES64).length} files · ${seen64.length} functions read another player's submission · ${gatedNames64.length} gated · ${Object.keys(EXEMPT).length} exempt · ${Object.keys(TRACKED).length} tracked`);
+  console.log(`  gated: ${gatedNames64.join(', ')}`);
+
+  assert(offenders64.length === 0,
+    `THE STRUCTURAL GUARD — every function in app.js/chat-ui.js that reads another player's submission either consults canViewOtherPicks()/arePicksPublic() or is named on the exemption list with a reason (unaccounted for: ${offenders64.join(', ') || 'none'})`);
+
+  // The gated set must not silently SHRINK. If a surface that used to ask the
+  // predicate stops asking it and gets added to EXEMPT instead, the count moves
+  // and this fails — the exemption list cannot be used to launder a regression.
+  assert(gatedNames64.length >= 6,
+    `all 6 disclosing surfaces that are supposed to consult the blind rule still do (got ${gatedNames64.length}) — pinned so the exemption list can never be used to launder a gate that was removed`);
+
+  // ── LIST HYGIENE. A stale entry is worse than no entry: it is a standing
+  //    permission attached to a name, ready to cover whatever is written under
+  //    that name next. Every entry must correspond to a function that the scan
+  //    actually reaches AND that is actually ungated right now.
+  const staleExempt64 = Object.keys(EXEMPT).filter(n => !seen64.includes(n));
+  assert(staleExempt64.length === 0,
+    `every EXEMPT entry names a function the scan actually reaches — a renamed or gated function must be removed from the list, not left as a standing permission (stale: ${staleExempt64.join(', ') || 'none'})`);
+  const staleTracked64 = Object.keys(TRACKED).filter(n => !seen64.includes(n));
+  assert(staleTracked64.length === 0,
+    `every TRACKED entry still names a real disclosing function (stale: ${staleTracked64.join(', ') || 'none'})`);
+  const reasonless64 = [...Object.entries(EXEMPT), ...Object.entries(TRACKED)].filter(([, why]) => !why || why.length < 40).map(([n]) => n);
+  assert(reasonless64.length === 0,
+    `every exemption carries a written reason, not just a name (reasonless: ${reasonless64.join(', ') || 'none'})`);
+
+  // Each TRACKED entry is PINNED as still-leaking. Fixing one turns this red,
+  // which is the point: the debt register cannot silently rot.
+  const fixedTracked64 = Object.keys(TRACKED).filter(n => {
+    for (const src of Object.values(FILES64)) {
+      const r = disclosingRegions(src).find(x => x.name === n);
+      if (r && GATE.test(r.body)) return true;
+    }
+    return false;
+  });
+  assert(fixedTracked64.length === 0,
+    `[debt register] every TRACKED surface is confirmed STILL UNGATED — if one now gates, delete it from TRACKED (newly gated: ${fixedTracked64.join(', ') || 'none'})`);
+
+  // ── CANARIES. A green scan must mean "absent", never "unmatchable". Each
+  //    canary is a shape this codebase has actually produced.
+  const scanText = src => disclosingRegions(src).filter(r => !GATE.test(r.body)).map(r => r.name);
+
+  // C1 — the direct shape: iterate players, print each one's guess, no gate.
+  //      This is RG-40 and RG-43, verbatim in structure.
+  const C1 = `
+function leakDirect(week, players) {
+  return players.map(p => escHtml(p.displayName) + ': ' + getTiebreakerGuess(week.weekId, p.playerId)).join('');
+}
+`;
+  assert(scanText(C1).includes('leakDirect'),
+    'canary C1: the direct shape — another player\'s guess read per-player with no gate — is caught');
+
+  // C2 — no playerId argument at all, which returns the WHOLE league. Easy to
+  //      miss by eye because nothing in the call names another player.
+  const C2 = `
+function leakWholeLeague(week) {
+  return getPicks(week.weekId).map(p => p.playerId + ' picked ' + p.selectedTeam).join('');
+}
+`;
+  assert(scanText(C2).includes('leakWholeLeague'),
+    'canary C2: an accessor called with NO player argument — returning every player\'s picks — is caught');
+
+  // C3 — indirect: the id arrives through a local bound to someone else.
+  const C3 = `
+function leakIndirect(week, m) {
+  const who = m.author;
+  const picks = getPicks(week.weekId, who);
+  return picks.length ? 'they picked ' + picks[0].selectedTeam : '';
+}
+`;
+  assert(scanText(C3).includes('leakIndirect'),
+    'canary C3: an INDIRECT read — another player\'s id via a local — is caught (the shape a "getPicks(w, p.playerId)" regex would miss)');
+
+  // C4 — the gate exists only in a COMMENT. This is the RG-27 false-coverage
+  //      shape: a scan that reads prose would pass a surface that does nothing.
+  const C4 = `
+function leakCommentOnly(week, players) {
+  // This surface respects arePicksPublic() and calls canViewOtherPicks(week).
+  /* canViewOtherPicks(week) */
+  return players.map(p => getExtraPointGuess(week.weekId, p.playerId)).join();
+}
+`;
+  assert(scanText(C4).includes('leakCommentOnly'),
+    'canary C4: a function whose ONLY mention of the predicate is in a comment is still caught — prose does not satisfy the scan');
+
+  // C5 — legal shapes that must NOT be flagged, or the guard blocks correct
+  //      code and gets deleted by the next author.
+  const C5 = `
+function okGated(week, players) {
+  const canSeeOthers = canViewOtherPicks(week);
+  return players.map(p => canSeeOthers ? getPicks(week.weekId, p.playerId) : '•••').join();
+}
+function okOwnDirect(week) {
+  const session = getSession();
+  return getPicks(week.weekId, session.playerId).length;
+}
+function okOwnIndirect(week) {
+  const self = me();
+  return getTiebreakerGuess(week.weekId, self);
+}
+`;
+  const flaggedC5 = scanText(C5);
+  assert(!flaggedC5.includes('okGated'),
+    'canary C5a: a properly gated surface is NOT flagged');
+  assert(!flaggedC5.includes('okOwnDirect'),
+    'canary C5b: reading YOUR OWN submission via session.playerId is NOT flagged — no gate is required to show a player their own picks');
+  assert(!flaggedC5.includes('okOwnIndirect'),
+    'canary C5c: reading your own via `const self = me()` is NOT flagged — one level of indirection is followed, the real chat-ui.js shape');
+
+  // C6 — the scanner sees the REAL files, not an empty parse. If regionsOf()
+  //      or callArgs() silently returned nothing, every assertion above would
+  //      pass vacuously; this is the check that makes green mean something.
+  assert(seen64.length >= 15,
+    `fixture check: the scan actually parsed both real files and found ${seen64.length} disclosing functions — a broken parser would report 0 and pass everything above`);
+  assert(seen64.includes('renderDashboardInner') && seen64.includes('pickChip') && seen64.includes('emitPickRevealEvent'),
+    'fixture check: the scan reaches the three surfaces that have historically leaked (the standard matrix, the chat pick chip, the reveal ritual) — proof it is looking where the defects have actually been');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.17.7';
-export const APP_VERSION_DATE = '2026-08-14';
+export const APP_VERSION = 'v0.17.8';
+export const APP_VERSION_DATE = '2026-09-01';
 
 /**
  * UN-124 — "What's new" card content, hand-maintained per release. NOT
@@ -26,6 +26,8 @@ const WHATS_NEW = {
     'Chat: reaction names show only when you tap the reaction, instead of always being on display.',
     'Chat: reply, react, pin and edit now work in the game-by-game chat bubbles too, not just the main room.',
     'A week that runs across two slates (like Week 1 Part 1 and Part 2) now counts as ONE week — one winner, one loser, one prize.',
+    'Report an issue from anywhere — there is now a shortcut next to the week in the header, and submitting no longer forces you to send an email.',
+    'Signed out, the app always looks the same. The theme and time-zone pickers now belong to your account, so nobody can change them for the next person on a shared phone.',
   ],
   fixed: [
     "A bug where a player's picks could vanish — fixed, and guarded against coming back.",
@@ -33,6 +35,10 @@ const WHATS_NEW = {
     'Live games could still render blind when they should have been visible — fixed.',
     'A split week used to hand out two prizes for one real week. It no longer does.',
     'The weekly recap email listed every debt as "(unknown)" — it now names who owes what.',
+    "The blind rule is properly closed. Picks, tiebreaker guesses and Extra Point entries stay hidden from EVERYONE who can still submit or edit — including the commissioner. Five separate places were leaking; all five are fixed, and there is now an automatic check that fails the build if a sixth ever appears.",
+    'Against-the-spread results are graded one way now. Four different score-entry buttons each had their own copy of the math, and one of them could record the wrong team as covering. They all use the same code.',
+    'Player emails and PINs could be wiped by an out-of-date device and pushed to everyone. Fixed, and a missing PIN no longer lets an account be opened without one.',
+    'The tiebreaker text was unreadable on several themes — gold on gold. Readable everywhere now.',
   ],
 };
 
@@ -84,7 +90,7 @@ import {
   getSettings, saveSetting,
   getSession, setSession, clearSession,
   getPlayers, getPlayer, savePlayer, addPlayer,
-  verifyPlayerPin, setPlayerPin, getPlayerPin,
+  verifyPlayerPin, hasPlayerPin, setPlayerPin, getPlayerPin,
   getCurrentWeek, getWeek, getWeeks, saveWeek, deleteWeek,
   getActiveWeekId, setActiveWeekId, getEffectiveWeekStatus, arePicksPublic,
   getGames, getGame, saveGame, deleteGame, saveAllGamesForWeek, clearSlateForWeek,
@@ -209,7 +215,7 @@ async function boot() {
     updateSyncBadge('syncing');
   }
 
-  setupNav(); setupHeaderIdentity(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(getTheme()); setupAutoRefresh();
+  setupNav(); setupHeaderIdentity(); setupHeaderFeedbackButton(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(getTheme()); setupAutoRefresh();
   // Item A — independent of the score auto-refresh interval (which the
   // commissioner can set to "Off"), so the mid-session chat-off watch always
   // runs regardless of that other setting.
@@ -471,7 +477,11 @@ function navigateTo(tab) {
 
 function refreshHeader() {
   const week = getCurrentWeek();
-  const el   = document.getElementById('header-meta');
+  // UN-127 (change 1): #header-meta-week, NOT #header-meta itself. #header-meta
+  // is now the flex-row host for BOTH the week block and the feedback button
+  // (setupHeaderFeedbackButton(), appended once at boot) — writing innerHTML
+  // on #header-meta directly would wipe that button on every refresh.
+  const el   = document.getElementById('header-meta-week');
   renderHeaderIdentity();
   if (!el) return;
   // UN-117 — name and dates each own a line; the status badge rides with the
@@ -528,15 +538,94 @@ export function renderHeaderIdentity() {
 
 /** One-time click binding — the header identity chip always routes to Picks,
  *  logged in or out (UN-106). Bound once at boot alongside setupNav(). */
-function setupHeaderIdentity() {
+export function setupHeaderIdentity() {
   document.getElementById('header-identity')?.addEventListener('click', () => navigateTo('picks'));
+}
+
+/**
+ * UN-127 (item 4, 2026-08-27; RELOCATED same day on Drew's explicit ruling):
+ * a quiet, always-reachable shortcut to the feedback form. Drew's stated
+ * goal is VOLUME — "everyone submits a lot" — so this needs to work from
+ * every tab, not just Rules. His original suggestion was "left side under
+ * the week." A first pass put this in .header-right instead, reasoning that
+ * the #header-meta slot was pinned by UN-117 to exactly two lines (name+
+ * badge, then dates) and a third stacked line there would undo that
+ * guarantee — but that reasoning was never put back to Drew before shipping.
+ * It has been now, and his ruling is: put it under the week, as he asked.
+ *
+ * "Under the week" does NOT mean a third stacked line, which really would
+ * break UN-117 — it means back in the #header-meta block Drew pointed at,
+ * placed so the two-line guarantee survives. #header-meta is now
+ * `display:flex` (row, not column): the week block (#header-meta-week,
+ * refreshHeader()) and this button are ROW siblings, not stacked. A flex row
+ * can only place items side by side, so this button structurally cannot
+ * become a third line no matter how the week name/date text reformats. The
+ * week block's own two-line internal structure is completely untouched.
+ *
+ * Tap target: reuses .header-feedback-btn/.header-feedback-icon UNCHANGED
+ * from the .header-right version — an invisible padded wrapper (40x40,
+ * border-box) around the visible 26px icon, the same "pad the wrapper"
+ * technique as .header-identity right next to it. This is IN-FLOW padding,
+ * not an out-of-flow ::before overlay: unlike the repeated-per-card
+ * .dc-meta .chat-bubble-btn case (where 40px of in-flow padding would have
+ * re-inflated height on every dashboard card), this button exists exactly
+ * once, and .header-right's own .header-identity chip already forces the
+ * whole header row to >=40px tall — so the padded wrapper costs nothing
+ * additional in header height, and there's no neighbour for an overlay to
+ * steal taps from in the first place.
+ *
+ * Unlike tz-toggle/theme-toggle it is NEVER tab-gated (display:none per
+ * tab) — reach is the whole point — so it shows on every tab where the
+ * header renders at all. The one tab it can't reach is Chat, which already
+ * hides the ENTIRE header (UN-110, unrelated to this change) — the bottom
+ * nav is still one tap away there, same as today.
+ *
+ * Injected via JS rather than added to index.html: #header-meta already
+ * exists as a static container and every other header control (tz, theme)
+ * already fills itself in this same way, so this follows the existing
+ * pattern rather than a new one.
+ */
+export function setupHeaderFeedbackButton() {
+  const host = document.getElementById('header-meta');
+  if (!host || document.getElementById('header-feedback-btn')) return;   // idempotent
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'header-feedback-btn';
+  btn.className = 'header-feedback-btn';
+  btn.title = 'Submit a bug or feature idea';
+  btn.setAttribute('aria-label', 'Submit feedback');
+  btn.innerHTML = '<span class="header-feedback-icon">🗣</span>';
+  host.appendChild(btn);
+  btn.addEventListener('click', () => {
+    // Don't blow away an in-progress draft if the player is already on
+    // Rules and taps this out of habit — only navigate if we actually need
+    // to (renderRulesPage() rebuilds the whole tab's innerHTML, which would
+    // otherwise silently clear whatever they'd already typed).
+    if (state.currentTab !== 'rules') navigateTo('rules');
+    document.querySelector('.feedback-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    document.getElementById('fb-body')?.focus();
+  });
 }
 
 // ─── TIMEZONE TOGGLE ──────────────────────────────────────────────────────────
 
-function renderTzToggle() {
+/**
+ * UN-127 (change 2, 2026-08-27): timezone is now a SIGNED-IN-ONLY control,
+ * the identical lock renderThemeToggle() already applies to theme. Signed
+ * out, the container renders empty — no pills to flip. getTimezone()
+ * (storage.js) already forces the league default (DEFAULT_TZ) while signed
+ * out independent of this; this function only controls whether the
+ * SWITCHING affordance is reachable. Signed in, unchanged: the pills still
+ * write to the player's own preferences.tz (storage.js setTimezone ->
+ * _setPlayerPref), so the choice still follows that player across devices.
+ *
+ * Exported for the same reason renderThemeToggle() is: the harness needs to
+ * drive the REAL signed-in/signed-out gate, not a name-matched stand-in.
+ */
+export function renderTzToggle() {
   const container = document.getElementById('tz-toggle');
   if (!container) return;
+  if (!getSession()?.playerId) { container.innerHTML = ''; return; }
   const current = getTimezone();
   container.innerHTML = TIME_ZONES.map(tz =>
     `<button class="tz-btn${tz.key === current ? ' active' : ''}" data-tz="${tz.key}">${tz.key}</button>`
@@ -583,9 +672,23 @@ function resyncPlayerPreferences() {
   renderHeaderIdentity();
 }
 
-function renderThemeToggle() {
+/**
+ * UN-127 (item 5, 2026-08-27): the theme picker is a SIGNED-IN-ONLY control
+ * now. Signed out, the container renders empty — no dropdown, nothing to
+ * flip. Drew's stated reason: a shared/anonymous device (nobody logged in)
+ * would otherwise let any one of six people repaint the app for the next
+ * anonymous viewer, and with multiple people passing a phone/laptop around
+ * pregame that was "too much flipping." getTheme() (storage.js) already
+ * forces 'neutral' while signed out independent of this — this function only
+ * controls whether the SWITCHING affordance is reachable. Signed in,
+ * unchanged: the dropdown still writes to the player's own preferences.theme
+ * (storage.js setTheme -> _setPlayerPref), so it still follows that player
+ * across devices exactly as before.
+ */
+export function renderThemeToggle() {
   const container = document.getElementById('theme-toggle');
   if (!container) return;
+  if (!getSession()?.playerId) { container.innerHTML = ''; return; }
   const current = getTheme();
   // Compact dropdown so 7+ themes don't bloat the header.
   container.innerHTML = `
@@ -669,9 +772,31 @@ function isGamePickable(game) {
  */
 export function canViewOtherPicks(week) {
   if (!week) return false;
+  if (arePicksPublic(week)) return true;
+
+  // RG-37 — THE ADMIN BYPASS WAS THE LEAK, and it shipped in v0.17.7 because
+  // nobody ever questioned it. Drew, 2026-08-26, seeing it live:
+  //   "I shouldnt be able to see everyone elses picks while I can still submit
+  //    OR edit mine. It needs to be completely blinded until the games are live."
+  //
+  // He is BOTH the commissioner and a player. `if (sess.isAdmin) return true`
+  // handed him the entire field's picks while his own were still editable —
+  // precisely the exploit UN-116 was built to close, left wide open for the one
+  // person who could most easily use it.
+  //
+  // The bypass now requires the viewer to have NO STAKE in this week: a
+  // commissioner who cannot submit or edit here still sees everything (needed
+  // to verify picks landed, chase a missing entry, debug). One who CAN still
+  // act is blinded like anybody else. A pure commissioner account with no
+  // playerId gets `allowed:false` from canPlayerSubmitPicks and keeps the
+  // bypass, so non-playing co-commissioners are unaffected.
+  //
+  // The invariant, asserted directly in loadtest [34g] across every status ×
+  // date-field combination for BOTH roles: you may never be able to submit
+  // your own picks and see someone else's at the same time.
   const sess = getSession();
-  if (sess.isAdmin) return true;
-  return arePicksPublic(week);
+  if (sess.isAdmin && !canPlayerSubmitPicks(week, sess.playerId).allowed) return true;
+  return false;
 }
 
 // ─── PICKS PAGE ───────────────────────────────────────────────────────────────
@@ -954,7 +1079,52 @@ function renderLoginScreen(week) {
     </div>`;
 }
 
-function bindLoginScreen() {
+/**
+ * Copy for a rejected PIN entry.
+ *
+ * RG-40 — verifyPlayerPin() now fails CLOSED, so an account whose `pinHash` a
+ * deploy destroyed (RG-39) rejects every PIN its owner types. Telling that
+ * player "❌ Incorrect PIN" is wrong twice over: it is inaccurate — they typed
+ * it correctly — and it reads as the app having eaten their identity. They will
+ * try the same four digits five times and then call Drew. So the two failures
+ * get two messages: one says you mistyped it, the other says there is nothing
+ * to type yet and names who can fix it.
+ *
+ * It deliberately does NOT say "your PIN was erased." From the player's side
+ * the two cases (never set, since erased) are indistinguishable and the action
+ * is identical, and an app announcing that it lost their credentials is
+ * alarming out of proportion to a 30-second fix.
+ *
+ * An unknown playerId falls through to the generic message rather than the
+ * explanatory one, so this never becomes a way to enumerate which ids exist.
+ *
+ * Exported as its own function — rather than inlined at the one call site in
+ * bindLoginScreen() — because bindLoginScreen() only exists inside a live DOM
+ * and cannot be reached from the harness, and the alternative (asserting the
+ * string appears somewhere in app.js) is the RG-27 anti-pattern. Asserted in
+ * loadtest [56].
+ */
+export function loginFailureMessage(playerId) {
+  if (playerId && getPlayer(playerId) && !hasPlayerPin(playerId)) {
+    return '🔑 No PIN is set for this account yet — ask Drew to set one in the Commissioner panel.';
+  }
+  return '❌ Incorrect PIN';
+}
+
+/**
+ * RG-40 — EXPORTED SO THE GATE ITSELF CAN BE TESTED, not just its parts.
+ *
+ * Until this export existed, `verifyPlayerPin()` had exactly one caller in the
+ * whole app — the `doLogin` closure below — and that caller was unreachable
+ * from the harness, so NOTHING asserted that the login screen consults the PIN
+ * at all. Replacing the check with `if (true)` passed a fully green suite.
+ * That is the RG-27 shape at the worst possible place: an authentication gate
+ * whose only coverage is of a predicate nobody proves is called.
+ *
+ * loadtest [56f] now drives this function through a fixture DOM and asserts on
+ * the SESSION it grants and the TOAST it shows.
+ */
+export function bindLoginScreen() {
   let selectedId = null;
   document.querySelectorAll('.player-tile').forEach(tile => {
     tile.addEventListener('click', () => {
@@ -992,7 +1162,7 @@ function bindLoginScreen() {
       // bounce them back to the thread they were reading (doc 1.2).
       try { resumeChatAfterLogin(); } catch {}
     } else {
-      showToast('❌ Incorrect PIN','error');
+      showToast(loginFailureMessage(selectedId),'error');
       const pi=document.getElementById('pin-input'); if(pi){pi.value='';pi.focus();}
     }
   };
@@ -1593,9 +1763,17 @@ function renderDashboardInner() {
       </div>
       ${/* DI-116f — players are used to seeing everyone's picks the moment they
             submitted. Without a word of explanation the new blind cells read as
-            a bug, and the commissioner fields the question. Shown only while
-            the picks are still hidden, and never to an admin (who sees all). */''}
-      ${(!arePicksPublic(week) && !session.isAdmin)
+            a bug, and the commissioner fields the question.
+            RG-37 — this used to read `!arePicksPublic(week) && !session.isAdmin`,
+            a near-copy of the blind rule rather than the rule itself. That was
+            harmless while admins saw everything; the moment a commissioner who
+            can still edit is blinded, it left HIM staring at ••• cells with the
+            one sentence explaining them deliberately suppressed — the fix
+            looking exactly like the bug it fixed. Now gated on the SAME
+            predicate that draws the cells, so the note and the blinding cannot
+            disagree. For a non-admin the two conditions are identical, so no
+            player-facing behaviour changes. */''}
+      ${!canViewOtherPicks(week)
         ? `<p class="blind-note"><span class="blind-note-icon">🙈</span><span>Other players' picks stay hidden until the games kick off — that way nobody can peek and then change their own. Check back at kickoff to compare.</span></p>`
         : ''}
       ${(getSettings().dashboardLayout==='compact')
@@ -2935,7 +3113,7 @@ function renderCommPage() {
               </div>
             </div>
             <button class="btn btn-primary btn-sm" id="save-tb-btn">Save Tiebreaker</button>
-            ${renderTiebreakerGuessesAdmin(week.weekId,players,week.actualTiebreakerValue)}
+            ${renderTiebreakerGuessesAdmin(week,players,week.actualTiebreakerValue)}
           </div>
         </div>`);
     }
@@ -3830,7 +4008,13 @@ function wireCollapsibleSections(container) {
 
 // ─── COMMISSIONER EVENT LISTENERS ─────────────────────────────────────────────
 
-function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks) {
+/* Exported for gradetest.mjs — the commissioner's score-entry handlers (the
+   batch grid, "Set Final", "Finalize All", and the game modal's Save) are
+   bound here and nowhere else, so this is the only seam from which they can be
+   driven the way a browser drives them: bind, then fire the click. Same
+   rationale as `finalizeWeek`'s export below. Binding is side-effect-free —
+   it only attaches listeners — so importing this costs a test nothing. */
+export function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks) {
 
   // Week manager
   document.getElementById('active-week-selector')?.addEventListener('change', e => {
@@ -4203,10 +4387,15 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
     const as_=parseInt(document.getElementById('demo-away-score')?.value)||0;
     let actualWinner=null;
     if(hs>as_)actualWinner=g.homeTeam;else if(as_>hs)actualWinner=g.awayTeam;
-    const sv=g.lockedSpread!==null?g.lockedSpread:g.spread;
-    let atsWinner=null;
-    if(sv!==null){const adj=hs+sv;if(Math.abs(adj-as_)<0.01)atsWinner='no_decision';else atsWinner=adj>as_?g.homeTeam:g.awayTeam;}
-    saveGame({...g,status:'final',homeScore:hs,awayScore:as_,actualWinner,atsWinner,dataSource:'manual',lastUpdated:new Date().toISOString()});
+    // Build the game AS IT WILL BE SAVED, then let calculateAtsWinner() grade
+    // that. The scores here came out of DOM inputs and aren't on `g` yet, which
+    // is why the candidate is assembled first. Never re-derive the cover
+    // locally: lockedSpread precedence, the undefined/blank/non-numeric cases,
+    // non-final status, missing scores and pushes are all its job (AD-03).
+    const next={...g,status:'final',homeScore:hs,awayScore:as_,actualWinner,
+      dataSource:'manual',lastUpdated:new Date().toISOString()};
+    next.atsWinner=calculateAtsWinner(next);
+    saveGame(next);
     showToast(`FINAL: ${td(g,'home')} ${hs} – ${td(g,'away')} ${as_}`,'success'); renderCommPage();
   });
   document.getElementById('demo-set-scheduled')?.addEventListener('click',()=>{
@@ -4242,15 +4431,12 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
         else                                  next.actualWinner = null; // tie
         promoted++;
       }
-      // Compute ATS (if we have a spread on file)
-      const sv = g.lockedSpread !== null ? g.lockedSpread : g.spread;
-      if (sv !== null) {
-        const adj = next.homeScore + sv;
-        next.atsWinner = Math.abs(adj - next.awayScore) < 0.01
-          ? 'no_decision'
-          : (adj > next.awayScore ? g.homeTeam : g.awayTeam);
-        atsComputed++;
-      }
+      // Compute ATS from the promoted game, always. `calculateAtsWinner()`
+      // returns null when nothing can decide the cover — no usable line, no
+      // scores, not final — so this ALSO clears a stale answer on a game whose
+      // spread was later removed, which the old local copy silently kept.
+      next.atsWinner = calculateAtsWinner(next);
+      if (next.atsWinner !== null) atsComputed++;
       next.dataSource = 'manual';
       next.lastUpdated = new Date().toISOString();
       saveGame(next);
@@ -4290,21 +4476,25 @@ function bindCommEventListeners(week, games, availGames, suggested, settings, al
       // still correctly resets the game.
       if (status === 'scheduled' && (hs !== null || as_ !== null)) status = 'live';
 
-      let actualWinner=null, atsWinner=null;
+      let actualWinner=null;
       if(status==='final'&&hs!==null&&as_!==null){
         if(hs>as_)actualWinner=g.homeTeam;else if(as_>hs)actualWinner=g.awayTeam;
-        const sv=g.lockedSpread!==null?g.lockedSpread:g.spread;
-        if(sv!==null){const adj=hs+sv;atsWinner=Math.abs(adj-as_)<0.01?'no_decision':adj>as_?g.homeTeam:g.awayTeam;}
       }
-      saveGame({...g,
+      // Assemble the row exactly as it will be stored — the scores were just
+      // read out of the grid's inputs and aren't on `g` yet — then grade THAT
+      // with the one shared implementation. calculateAtsWinner() already
+      // returns null for a non-final status, so no `status==='final'?` wrapper
+      // is needed and none should be added back (AD-03: one rule, one copy).
+      const next={...g,
         status,
         homeScore: status==='scheduled'?null:hs,
         awayScore: status==='scheduled'?null:as_,
         actualWinner: status==='final'?actualWinner:null,
-        atsWinner: status==='final'?atsWinner:null,
         dataSource:'manual',  // protect simulated state from ESPN auto-refresh
         lastUpdated:new Date().toISOString(),
-      });
+      };
+      next.atsWinner=calculateAtsWinner(next);
+      saveGame(next);
       applied++;
     });
     showToast(`💾 Applied changes to ${applied} games`,'success'); renderCommPage();
@@ -4977,17 +5167,61 @@ function renderDataProofPanel(proof, ps, week, games) {
   ${ps.lastScoreRefresh?`<div class="proof-label mt-sm">Last score refresh: <span class="proof-value">${new Date(ps.lastScoreRefresh).toLocaleString()}</span></div>`:''}`;
 }
 
-function renderTiebreakerGuessesAdmin(weekId, players, actualTB) {
+/**
+ * The commissioner panel's "Submitted guesses" block on the Tiebreaker card,
+ * Week tab (RG-10).
+ *
+ * WHY THIS IS EXPORTED: it is the test seam for the blind rule on this surface,
+ * the same reason `renderCommExtraPointCardHTML()` is. `renderCommPage()` opens
+ * with `document.getElementById('page-commissioner')`, which is null under the
+ * loadtest DOM stub, so the whole panel early-returns and nothing it builds can
+ * be asserted on. The only other way to test what this card DISCLOSES would be
+ * to grep app.js for the gate — the RG-27 false-coverage anti-pattern, a test
+ * that stays green when the guard is reverted. Pure: takes a week, returns a
+ * string. Asserted on its rendered markup in loadtest [34h], Surface 4.
+ *
+ * RG-43 — THE FIFTH RECURRENCE OF THE BLIND-RULE LEAK, and the third of the
+ * five to hide inside the commissioner panel. This block consulted NEITHER
+ * canViewOtherPicks() NOR arePicksPublic(). Its only gate was being rendered
+ * inside the panel — exactly the assumption RG-37 and RG-40 were raised to
+ * destroy, because Drew is BOTH commissioner and player. On an OPEN week, with
+ * his own guess still editable, the Week tab he uses to set the tiebreaker
+ * question printed `Submitted guesses: Drew: 12 | Brayden: 4177`, while the
+ * score summary blinded 4177 on the identical data. A tiebreaker decides the
+ * weekly cash prize whenever records tie, so a rival's number is worth as much
+ * as a rival's pick.
+ *
+ * It asks canViewOtherPicks() — the SAME predicate the dashboard, the compact
+ * view, the score summary and the Extra Point card ask. Not a copy of its
+ * logic: nine drifted longhand copies of this rule is what produced the
+ * original leak (UN-116), and a surface with its own idea of "public" is the
+ * next RG row.
+ *
+ * The Δ is blinded with the guess, not separately: |guess − actual| discloses
+ * the guess up to a sign, and `actualTiebreakerValue` has no status gate on its
+ * input, so an OPEN week can already carry one. The viewer's own guess (and own
+ * Δ) stays visible — the commissioner is a player too and needs to see what he
+ * entered.
+ */
+export function renderTiebreakerGuessesAdmin(week, players, actualTB) {
+  if(!week)return'';
+  const weekId=week.weekId;
+  const canSeeOthers=canViewOtherPicks(week);
+  const myId=getSession().playerId;
   const guesses=players.filter(p=>p.active).map(p=>{
     const g=getTiebreakerGuess(weekId,p.playerId);
     const d=actualTB!==null&&g!==null?Math.abs(g-actualTB):null;
-    return{player:p,guess:g,delta:d};
+    return{player:p,guess:g,delta:d,blind:!canSeeOthers&&p.playerId!==myId};
   }).filter(x=>x.guess!==null);
   if(!guesses.length)return'<p class="text-muted text-xs mt-md">No tiebreaker guesses yet.</p>';
+  const blindNote=canSeeOthers?'':
+    '<p class="text-muted text-xs" style="margin:4px 0 0">Other players\' guesses stay hidden until kickoff — yours is still editable.</p>';
   return`<div class="divider"></div><div class="text-xs text-muted mb-sm">Submitted guesses:</div>
     <div class="flex gap-sm flex-wrap">
-      ${guesses.map(x=>`<span class="badge badge-final">${escHtml(x.player.displayName)}: ${x.guess}${x.delta!==null?` (Δ${x.delta})`:''}</span>`).join('')}
-    </div>`;
+      ${guesses.map(x=>x.blind
+        ?`<span class="badge badge-final tb-guess-blind">${escHtml(x.player.displayName)}: <span title="Hidden until the games kick off">•••</span></span>`
+        :`<span class="badge badge-final">${escHtml(x.player.displayName)}: ${x.guess}${x.delta!==null?` (Δ${x.delta})`:''}</span>`).join('')}
+    </div>${blindNote}`;
 }
 
 function currentSeasonObligations() {
@@ -5815,15 +6049,16 @@ function showGameModal(game, week, onSave) {
     const tw=getTimeWindow(kickoff);
     let actualWinner=null;
     if(status==='final'&&hs!==null&&as_!==null){if(hs>as_)actualWinner=ht;else if(as_>hs)actualWinner=at;}
-    let atsWinner = game?.atsWinner ?? null;
-    if (status === 'final' && hs !== null && as_ !== null && spread !== null) {
-      const adj = hs + spread;
-      const diff = adj - as_;
-      if (Math.abs(diff) < 0.01) atsWinner = 'no_decision';
-      else atsWinner = diff > 0 ? ht : at;
-    } else if (status !== 'final') {
-      atsWinner = null;
-    }
+    // Grade the game AS THE MODAL WILL SAVE IT — new teams, new scores, new
+    // status, new live line — but carrying forward the EXISTING lockedSpread,
+    // which this modal never edits. That matters: `calculateAtsWinner()` gives
+    // the locked line precedence, so re-saving a settled game after the line
+    // moved cannot rescore it. This site used to grade off `spread` directly,
+    // which is exactly the mid-week rescoring lockedSpread exists to prevent.
+    // A cleared spread now yields null instead of leaving the old cover behind.
+    const candidate = { ...(game || {}),
+      homeTeam: ht, awayTeam: at, homeScore: hs, awayScore: as_, status, spread };
+    const atsWinner = calculateAtsWinner(candidate);
     onSave({homeTeam:ht,awayTeam:at,homeMascot:hMasc,awayMascot:aMasc,
       kickoff,spread,favorite:fav,venue,
       homeConference:hconf,awayConference:aconf,homeRank:hr,awayRank:ar,
@@ -5980,10 +6215,16 @@ function renderRulesPage() {
       <p class="text-secondary text-sm">Open in Safari → Share → <strong>Add to Home Screen</strong>.</p>
     </div>
 
-    <!-- Priority 13: low-profile feedback / feature-request form -->
+    <!-- Priority 13: low-profile feedback / feature-request form.
+         UN-127 (item 3, 2026-08-27): submitting used to ALWAYS fire a mailto:
+         — the record itself now syncs through the storage seam and is
+         reviewable in the Commissioner panel (UN-123), so email is no longer
+         required to "count." The checkbox below is the explicit, opt-IN,
+         defaulted-OFF escape hatch for the genuinely urgent case; it does not
+         remove the ability to email, it just stops forcing it every time. -->
     <div class="card feedback-card">
       <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
-      <p class="text-muted text-xs mb-sm">Quick way to send the Commissioner an idea or a bug. Auto-fills your name, the date, and the app version.</p>
+      <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
       <div class="form-group" style="margin-bottom:8px">
         <label class="form-label" style="font-size:.7rem">Your name</label>
         <input class="form-input" id="fb-name" type="text" value="${escHtml(getCurrentPlayerName())}" />
@@ -5999,8 +6240,14 @@ function renderRulesPage() {
           <button type="button" class="pick-btn" data-fb-kind="feature">💡 New idea</button>
         </div>
       </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="flex gap-sm" style="align-items:center;cursor:pointer;font-size:.78rem;color:var(--text-secondary)">
+          <input type="checkbox" id="fb-also-email" />
+          <span>📧 Also email this to the Commissioner <span class="text-muted">— for urgent issues only</span></span>
+        </label>
+      </div>
       <div class="flex gap-sm flex-wrap">
-        <button class="btn btn-primary btn-sm" id="fb-submit-btn">📨 Send to Commissioner</button>
+        <button class="btn btn-primary btn-sm" id="fb-submit-btn">📨 Submit Feedback</button>
         <span class="text-muted text-xs" id="fb-status"></span>
       </div>
     </div>
@@ -6041,15 +6288,18 @@ function getCurrentPlayerName() {
 
 /**
  * Send a feedback / feature-request submission.
- * - Always opens the user's mail client (mailto:) to the Commissioner email
- *   if one is configured in settings.commissionerEmail, otherwise a generic
- *   subject line they can paste anywhere.
- * - Additionally writes the entry to a `cfbp_feedback` list which syncs to
- *   the Google Sheet automatically (via the storage seam) when cloud sync
- *   is enabled — that's the "separate sheet" the priority asked for, without
- *   us needing a second API.
+ * - ALWAYS writes the entry to the `cfbp_feedback` list, which syncs to the
+ *   Google Sheet automatically (via the storage seam) when cloud sync is
+ *   enabled, and is reviewable in the Commissioner panel (UN-123). Recording
+ *   the entry IS the submission — nothing further is required for it to
+ *   "count."
+ * - UN-127 (item 3, 2026-08-27): the mail client only opens if the player
+ *   explicitly checks "Also email this to the Commissioner" (#fb-also-email,
+ *   defaulted OFF — every previous revision fired mailto: unconditionally,
+ *   which is exactly what Drew's feedback asked to stop). Email is not
+ *   removed as a capability, only made opt-in for the urgent case.
  */
-function submitFeedback() {
+export function submitFeedback() {
   const name = (document.getElementById('fb-name')?.value || '').trim();
   const body = (document.getElementById('fb-body')?.value || '').trim();
   const status = document.getElementById('fb-status');
@@ -6061,6 +6311,7 @@ function submitFeedback() {
   const kindBtn = document.querySelector('#fb-kind-group .pick-btn.selected');
   const kind = kindBtn?.dataset.fbKind || null;
   if (!kind) { showToast('Please choose Bug or New idea first','error'); return; }
+  const alsoEmail = !!document.getElementById('fb-also-email')?.checked;
   const entry = {
     id: 'fb_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
     name: name || '(anonymous)',
@@ -6071,24 +6322,30 @@ function submitFeedback() {
     appVersion: APP_VERSION,
     siteUrl: typeof window !== 'undefined' ? (window.location.origin + window.location.pathname) : '',
   };
-  // Append to local store — auto-syncs to Sheet when cloud sync is on
+  // Append to local store — auto-syncs to Sheet when cloud sync is on.
+  // This is the whole submission; everything below is the OPTIONAL email.
   appendFeedback(entry);
-  // Open mail client to the commissioner
   const commEmail = (getSettings().commissionerEmail || '').trim();
-  const subject = `CFB Pickems feedback — ${entry.name}`;
-  const mailBody =
-    `Submitted: ${new Date(entry.submittedAt).toLocaleString()}\n` +
-    `App version: ${APP_VERSION}\n` +
-    `From: ${entry.name}\n` +
-    `Site: ${entry.siteUrl}\n\n` +
-    `${entry.body}\n`;
-  const mailto = `mailto:${encodeURIComponent(commEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailBody)}`;
-  if (commEmail) window.location.href = mailto;
-  if (status) status.textContent = commEmail
-    ? '✅ Saved + opening mail client'
-    : '✅ Saved. (No Commissioner email set yet — ask them to add one in Comm → Security.)';
+  if (alsoEmail && commEmail) {
+    const subject = `CFB Pickems feedback — ${entry.name}`;
+    const mailBody =
+      `Submitted: ${new Date(entry.submittedAt).toLocaleString()}\n` +
+      `App version: ${APP_VERSION}\n` +
+      `From: ${entry.name}\n` +
+      `Site: ${entry.siteUrl}\n\n` +
+      `${entry.body}\n`;
+    const mailto = `mailto:${encodeURIComponent(commEmail)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(mailBody)}`;
+    window.location.href = mailto;
+  }
+  if (status) status.textContent = !alsoEmail
+    ? '✅ Saved — the Commissioner will see it in the review panel.'
+    : commEmail
+      ? '✅ Saved + opening mail client'
+      : '✅ Saved. (No Commissioner email set yet — ask them to add one in Comm → Security.)';
   document.getElementById('fb-body').value = '';
   document.querySelectorAll('#fb-kind-group .pick-btn').forEach(b => b.classList.remove('selected'));
+  const emailBox = document.getElementById('fb-also-email');
+  if (emailBox) emailBox.checked = false;   // reset to the default-OFF state for the next submission
   showToast('Thanks! Feedback recorded.','success');
 }
 
@@ -6166,28 +6423,70 @@ export function renderFeedbackAdminSectionHTML() {
 
 // ─── v0.16.0 COMMISSIONER EXTRAS (Extra Point + Chat / SCRIBE) ────────────────
 
-function renderCommExtrasV16(week, games) {
-  // v0.17.0 FIX — these cards previously appended UNWRAPPED to the page
-  // container, so they showed on EVERY comm tab and after the demo panel.
-  // Now: Extra Point lives in the Week tab (inserted BEFORE Demo Simulation,
-  // which stays last per league preference); Chat & SCRIBE lives in Settings.
-  const c = document.getElementById('page-commissioner'); if (!c || !week) return;
-  const session = getSession();
-  if (!session.isAdmin) return;
-
+/**
+ * The commissioner panel's Ischemic Extra Point card, INCLUDING its
+ * data-comm-tab="week" wrapper (RG-10).
+ *
+ * WHY THIS IS EXPORTED, and why it is a separate function at all: it is the
+ * test seam for the blind rule on this surface. `renderCommExtrasV16()` starts
+ * with `document.getElementById('page-commissioner')`, which returns null under
+ * the loadtest DOM stub, so the whole function early-returns and nothing it
+ * builds can be asserted on. The only remaining way to test what this card
+ * DISCLOSES would be to grep app.js for the gate — which is precisely the
+ * RG-27 false-coverage anti-pattern that let RG-12 recur: a test that passes
+ * when the guard is reverted. Same reason `renderDashboardTable()` and
+ * `renderFeedbackAdminSectionHTML()` are exported. Pure: string in, string out,
+ * no DOM. Asserted in loadtest [34i].
+ */
+export function renderCommExtraPointCardHTML(week) {
+  if (!week) return '';
+  // RG-40 — THE SAME LEAK AS RG-37, ONE SURFACE OVER. This block printed every
+  // active player's Extra Point guess in plaintext, gated only on
+  // `session.isAdmin`, with no blind check at all. Drew is BOTH commissioner
+  // and player: on an OPEN week he read all five rivals' guesses while his own
+  // was still editable. Extra Point is blackjack — knowing the field is more
+  // decisive than knowing a single ATS pick, because you can sit one yard under
+  // whoever is highest and take the whole table.
+  //
+  // It asks canViewOtherPicks() — the SAME predicate the dashboard, the compact
+  // view and the score summary ask. Not a copy of its logic. Nine drifted
+  // longhand copies of the blind rule is what produced the original leak
+  // (UN-116), and the entire point of arePicksPublic()/canViewOtherPicks() is
+  // that this rule has exactly one definition. A second surface with its own
+  // idea of "public" is the next RG row.
+  //
+  // Own guess stays visible: the commissioner is a player too and needs to see
+  // what he entered. Only rivals blind, and only while someone can still act.
+  const canSeeOthers = canViewOtherPicks(week);
+  const myId = getSession().playerId;
   const detect = week.extraPointDetect;
-  const graded = week.extraPointActual != null ? gradeWeekExtraPoint(week, getPlayers().filter(p=>p.active)) : null;
+  // The graded preview prints every entrant's guess beside their outcome, so it
+  // is the same disclosure through a second door. `extraPointActual` is a plain
+  // commissioner-entered number with no status gate on its input, so a week
+  // that is still open CAN carry one. Suppressed on the same rule — which also
+  // removes the "Post result to chat" button, correctly: a chat post is a
+  // deterministic-id event that can never be retracted (AD-26), and posting
+  // results for a week nobody is allowed to see yet is the worst version of
+  // this bug, not a lesser one.
+  const graded = (canSeeOthers && week.extraPointActual != null)
+    ? gradeWeekExtraPoint(week, getPlayers().filter(p=>p.active))
+    : null;
   const guesses = getPlayers().filter(p=>p.active).map(p => {
+    if (!canSeeOthers && p.playerId !== myId) {
+      return `<span class="ep-admin-guess ep-admin-guess-blind">${escHtml(p.displayName)}: <strong title="Hidden until the games kick off">•••</strong></span>`;
+    }
     const g = getExtraPointGuess(week.weekId, p.playerId);
     return `<span class="ep-admin-guess">${escHtml(p.displayName)}: <strong>${g == null ? '—' : g + ' yd'}</strong></span>`;
   }).join(' ');
+  const blindNote = canSeeOthers ? '' :
+    '<p class="text-muted text-xs" style="margin:4px 0 0">Other players\' guesses stay hidden until kickoff — yours is still editable.</p>';
 
-  const epHTML = `
+  return `
     <div class="admin-section" data-comm-tab="week">
     <div class="card mb-md" id="comm-ep-card">
       <h3 style="color:var(--maroon)">🎯 Ischemic Extra Point — ${escHtml(formatWeekLabel(week))}</h3>
       <p class="text-muted text-xs">Longest made FG on the slate, blackjack rules. Detect pulls per-game scoring plays from ESPN; you can always override manually.</p>
-      <div class="mb-sm"><label class="form-label" style="font-size:.7rem">Guesses on file</label><div class="ep-admin-guesses">${guesses || '<span class="text-muted">none yet</span>'}</div></div>
+      <div class="mb-sm"><label class="form-label" style="font-size:.7rem">Guesses on file</label><div class="ep-admin-guesses">${guesses || '<span class="text-muted">none yet</span>'}</div>${blindNote}</div>
       <div class="flex gap-sm flex-wrap mb-sm">
         <button class="btn btn-secondary btn-sm" id="ep-detect-btn">🛰 Detect Longest FG (ESPN)</button>
         <span class="text-muted text-xs" id="ep-detect-status">${detect ? escHtml(`${detect.yards} yd — ${detect.text || ''} (${detect.matchup || ''})`) : ''}</span>
@@ -6204,6 +6503,18 @@ function renderCommExtrasV16(week, games) {
       <div id="ep-graded-preview">${graded ? renderExtraPointResultsHTML(week, graded, escHtml) : ''}</div>
     </div>
     </div>`;
+}
+
+function renderCommExtrasV16(week, games) {
+  // v0.17.0 FIX — these cards previously appended UNWRAPPED to the page
+  // container, so they showed on EVERY comm tab and after the demo panel.
+  // Now: Extra Point lives in the Week tab (inserted BEFORE Demo Simulation,
+  // which stays last per league preference); Chat & SCRIBE lives in Settings.
+  const c = document.getElementById('page-commissioner'); if (!c || !week) return;
+  const session = getSession();
+  if (!session.isAdmin) return;
+
+  const epHTML = renderCommExtraPointCardHTML(week);
   // Insert the Extra Point card BEFORE the Demo Simulation section so the demo
   // panel remains the LAST item in the Week tab.
   const demoSection = [...c.querySelectorAll('.admin-section[data-comm-tab="week"]')]

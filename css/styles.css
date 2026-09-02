@@ -5,6 +5,15 @@
   --maroon:#500000;--maroon-mid:#6B0000;--maroon-light:#8C1515;
   --maroon-pale:#FAF0F0;--maroon-tint:#F3E0E0;
   --gold:#C09B3A;--gold-light:#E8C96A;--gold-pale:#FDF8EC;
+  /* v0.17.8 (RG-42/UN-127): --gold is a decorative accent (borders, badges,
+     background washes) and in several themes is too light to read as TEXT
+     against --gold-pale — in Sooner/Razorback it is functionally invisible
+     (<1.1:1 contrast). --gold-text is a same-hue, darkened variant reserved
+     for text that sits on a --gold-pale surface. Every theme below defines
+     its own so contrast stays >=4.5:1 (WCAG AA) without hardcoding a color
+     at any call site. Do not use --gold-text for borders/backgrounds — use
+     --gold for those, same as before. */
+  --gold-text:#896F29;
   --bg:#F7F4EF;--bg-card:#FFFFFF;--bg-card-alt:#FAFAF8;--bg-input:#F5F2EE;
   --border:#E4DDD5;--border-strong:#CCC0B0;
   --text-primary:#1C1410;--text-secondary:#5C4E43;--text-muted:#9A8A7A;
@@ -31,6 +40,7 @@ body.theme-sooner {
   --maroon:#841617;--maroon-mid:#9C1F20;--maroon-light:#B83A3B;
   --maroon-pale:#FDF1F1;--maroon-tint:#F5DCDC;
   --gold:#FDF9D8;--gold-light:#FFFCE6;--gold-pale:#FFFEF5;
+  --gold-text:#837507;
   --shadow-card:0 1px 4px rgba(132,22,23,.05),0 4px 16px rgba(132,22,23,.06);
   --shadow-btn:0 2px 8px rgba(132,22,23,.18);
 }
@@ -38,6 +48,7 @@ body.theme-trojan {
   --maroon:#990000;--maroon-mid:#B30000;--maroon-light:#D62828;
   --maroon-pale:#FDEFEF;--maroon-tint:#F8D8D8;
   --gold:#FFCC00;--gold-light:#FFDB4D;--gold-pale:#FFF7D6;
+  --gold-text:#8A6E00;
   --shadow-card:0 1px 4px rgba(153,0,0,.05),0 4px 16px rgba(153,0,0,.06);
   --shadow-btn:0 2px 8px rgba(153,0,0,.18);
 }
@@ -45,6 +56,7 @@ body.theme-irish {
   --maroon:#0C2340;--maroon-mid:#163255;--maroon-light:#23477A;
   --maroon-pale:#EEF2F8;--maroon-tint:#D8E2F0;
   --gold:#C99700;--gold-light:#E0B12E;--gold-pale:#FBF3D8;
+  --gold-text:#8C6900;
   --shadow-card:0 1px 4px rgba(12,35,64,.06),0 4px 16px rgba(12,35,64,.08);
   --shadow-btn:0 2px 8px rgba(12,35,64,.22);
 }
@@ -52,6 +64,7 @@ body.theme-boilermaker {
   --maroon:#1C1410;--maroon-mid:#2A1F18;--maroon-light:#3F2F22;
   --maroon-pale:#F3EFEA;--maroon-tint:#E0D6CB;
   --gold:#CEB888;--gold-light:#E0CFA8;--gold-pale:#F8F2E2;
+  --gold-text:#826A36;
   --shadow-card:0 1px 4px rgba(28,20,16,.07),0 4px 16px rgba(28,20,16,.09);
   --shadow-btn:0 2px 8px rgba(28,20,16,.22);
 }
@@ -59,6 +72,7 @@ body.theme-razorback {
   --maroon:#9D2235;--maroon-mid:#B22842;--maroon-light:#C84057;
   --maroon-pale:#FDEFF1;--maroon-tint:#F6D6DC;
   --gold:#FFFFFF;--gold-light:#F5F5F5;--gold-pale:#FAFAFA;
+  --gold-text:#A85E5E;
   --shadow-card:0 1px 4px rgba(157,34,53,.05),0 4px 16px rgba(157,34,53,.07);
   --shadow-btn:0 2px 8px rgba(157,34,53,.2);
 }
@@ -66,6 +80,7 @@ body.theme-neutral {
   --maroon:#334155;--maroon-mid:#475569;--maroon-light:#64748B;
   --maroon-pale:#F1F5F9;--maroon-tint:#E2E8F0;
   --gold:#0891B2;--gold-light:#22D3EE;--gold-pale:#ECFEFF;
+  --gold-text:#077D9A;
   --bg:#F8FAFC;--bg-card:#FFFFFF;--bg-card-alt:#F1F5F9;--bg-input:#F1F5F9;
   --border:#E2E8F0;--border-strong:#CBD5E1;
   --shadow-card:0 1px 4px rgba(51,65,85,.05),0 4px 16px rgba(51,65,85,.07);
@@ -109,8 +124,23 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .app-header{background:var(--maroon);border-bottom:3px solid var(--gold);position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(80,0,0,.25);padding-top:env(safe-area-inset-top,0px)}
 .app-header-inner{max-width:var(--max-width);margin:0 auto;padding:12px var(--page-pad);display:flex;align-items:center;justify-content:space-between;gap:12px}
 /* UN-108: header-meta is the LEFT slot (week label + status badge) now that
-   UN-109 removed the app-logo block that used to occupy it. */
-.header-meta{text-align:left;font-size:.75rem;color:rgba(255,255,255,.75);line-height:1.4}
+   UN-109 removed the app-logo block that used to occupy it.
+   UN-127 (change 1): now a flex ROW, not a plain block — it holds the
+   two-line week text (#header-meta-week) AND the feedback shortcut button
+   (js/app.js setupHeaderFeedbackButton) as ROW siblings. Row, never column:
+   a flex row can only place its children side by side, so no matter what the
+   week text does, the button cannot become a third STACKED line — the
+   structural guarantee UN-117 needs. align-items:center keeps the two-line
+   text block vertically centered against the button's 40px tap target. */
+.header-meta{display:flex;align-items:center;gap:4px;text-align:left;font-size:.75rem;color:rgba(255,255,255,.75);line-height:1.4}
+/* The week-text block must never be squeezed narrower than its own content —
+   both its lines are white-space:nowrap by design (UN-117), so a shrunk box
+   would just overflow its own edges into the button next to it rather than
+   wrap. flex-shrink:0 keeps it at its natural width; if the row genuinely
+   runs out of room the button (also flex-shrink:0, immediately below) or the
+   already-wrapping .header-right cluster absorb the squeeze instead — see
+   the comment on setupHeaderFeedbackButton() for the full reasoning. */
+.header-meta #header-meta-week{flex-shrink:0}
 .header-meta strong{color:#fff;display:block;font-size:.82rem;font-family:'Oswald',sans-serif}
 /* Nav */
 .bottom-nav{position:fixed;bottom:0;left:0;right:0;height:var(--nav-height);background:#fff;border-top:1px solid var(--border);display:flex;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -236,7 +266,7 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .week-status-msg{font-size:.9rem;color:var(--text-secondary);line-height:1.4}
 /* Tiebreaker */
 .tiebreaker-card{background:var(--gold-pale);border:1px solid rgba(192,155,58,.3);border-left:4px solid var(--gold);border-radius:var(--card-radius);padding:16px;margin:16px 0}
-.tiebreaker-label{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gold);margin-bottom:6px}
+.tiebreaker-label{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gold-text);margin-bottom:6px}
 .tiebreaker-question{font-size:.95rem;color:var(--text-primary);font-weight:500;line-height:1.4}
 .tiebreaker-submitted{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
 .tiebreaker-value{font-family:'Oswald',sans-serif;font-size:1.6rem;font-weight:700;color:var(--maroon)}
@@ -436,6 +466,25 @@ body[data-tab="chat"] .app-header{display:none}
 .header-identity-pill{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.4);color:#fff;
   font-family:'Oswald',sans-serif;font-size:.72rem;font-weight:700;letter-spacing:.03em;
   padding:4px 12px;border-radius:20px}
+
+/* UN-127 (item 4, relocated same day per Drew's ruling — see the doc comment
+   on setupHeaderFeedbackButton() in js/app.js for the full history): quiet
+   feedback-form shortcut, injected into #header-meta at boot (app.js
+   setupHeaderFeedbackButton), as a flex ROW sibling of the week text — never
+   a stacked line. Same "pad the wrapper" tap target technique as
+   .header-identity in .header-right — a >=40x40 clickable area around a
+   visibly small 26px circle, so it reads as one quiet icon without actually
+   violating CONVENTIONS #17. flex-shrink:0 so the icon itself is never the
+   thing that gets squeezed if the row runs tight. */
+.header-feedback-btn{display:inline-flex;align-items:center;justify-content:center;
+  background:none;border:none;cursor:pointer;padding:8px 4px;min-height:40px;min-width:40px;
+  flex-shrink:0;-webkit-tap-highlight-color:transparent}
+.header-feedback-icon{display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.15);
+  border:1px solid rgba(255,255,255,.3);font-size:.85rem;line-height:1}
+.header-feedback-btn:hover .header-feedback-icon,
+.header-feedback-btn:active .header-feedback-icon{background:rgba(255,255,255,.28)}
+
 .tz-toggle{display:flex;gap:2px}
 .tz-btn{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.7);font-family:'Oswald',sans-serif;font-size:.62rem;font-weight:700;letter-spacing:.04em;padding:3px 7px;border-radius:6px;cursor:pointer;transition:all .15s}
 .tz-btn.active,.tz-btn:hover{background:var(--gold);color:#1C1410;border-color:var(--gold)}
@@ -464,7 +513,14 @@ body[data-tab="chat"] .app-header{display:none}
 .alma-rank-school{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:600;color:var(--text-primary);min-width:120px}
 .alma-rank-player{flex:1;color:var(--text-muted)}
 .alma-rank-value{text-align:right}
-.rank-badge{background:var(--gold-pale);color:var(--gold);border:1px solid rgba(192,155,58,.3);font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:700;padding:2px 9px;border-radius:20px}
+/* RG-44 — the SECOND instance of RG-42's broken pairing: --gold text on a
+   --gold-pale surface, here the "#12 AP" chip in Alma Mater Rankings. Measured
+   1.04:1 in Razorback and 1.05:1 in Sooner, i.e. functionally invisible, and
+   under 4.5:1 in all seven themes. Reads --gold-text, the same darkened
+   same-hue variant RG-42 introduced for exactly this surface pairing; the
+   background and the decorative border stay on --gold. Asserted per theme in
+   loadtest [57](d) by recomputing the ratio from this rule's own two tokens. */
+.rank-badge{background:var(--gold-pale);color:var(--gold-text);border:1px solid rgba(192,155,58,.3);font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:700;padding:2px 9px;border-radius:20px}
 
 /* Available games + suggested slate */
 .suggested-slate-box{background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:var(--card-radius);padding:14px;margin-bottom:12px}
@@ -1449,6 +1505,11 @@ label[for="week-show-history"],label:has(#week-show-history){
 .ep-house{margin-top:8px;font-size:.8rem;font-style:italic;color:var(--text-secondary)}
 .ep-admin-guesses{display:flex;flex-wrap:wrap;gap:6px}
 .ep-admin-guess{font-size:.75rem;background:var(--bg-input);border-radius:6px;padding:3px 8px}
+/* RG-40 — a rival's guess blinded while the viewer can still edit their own.
+   Same monospace "•••" idiom as .pick-cell-blind so one blind rule reads as one
+   thing across every surface. Presentation only: the value is absent from the
+   markup, not hidden with CSS. */
+.ep-admin-guess-blind strong{color:var(--text-muted);font-family:'Courier New',monospace;letter-spacing:.1em;font-weight:400}
 
 /* ── FAQ lifecycle + permissions ── */
 .faq-lifecycle{display:flex;flex-direction:column;gap:10px;margin-top:6px}

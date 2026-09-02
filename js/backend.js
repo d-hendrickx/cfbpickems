@@ -93,6 +93,65 @@ function _shrinks(local, remote) { return _size(local) < _size(remote); }
  */
 export function _shrinksForTest(local, remote) { return _shrinks(local, remote); }
 function _isPlainObject(v) { return !!v && typeof v === 'object' && !Array.isArray(v); }
+
+/**
+ * RG-39 DEFENSE (d), 2026-08-26 — FIELD-LEVEL staleness, not just record-level.
+ *
+ * Drew, after a deploy: "all the emails for the players went away and the pins
+ * reset. We need to make sure that if we input personal information it stays,
+ * and if we update security information it stays."
+ *
+ * Defense (c) above asks `_shrinks()`, and `_size()` counts RECORDS. A device
+ * booting on a mirror from before the commissioner typed anyone's email holds
+ * six players — the same six, in the same order, all well-formed — that merely
+ * lack `email` and `pinHash`. Six is not fewer than six, so (c) does not fire,
+ * the stale array is re-applied wholesale, and flushPush sends it to the Sheet.
+ * Every player's contact and login data, gone league-wide, from ONE ordinary tap
+ * during the 10–20s Apps Script cold start while the app is already interactive.
+ *
+ * `pinHash` makes it worse than it sounds: a wiped hash does not reset a PIN, it
+ * removes the credential. Until RG-40 (2026-08-26) verifyPlayerPin() returned
+ * TRUE when the field was absent, so such an account accepted any PIN at all;
+ * it now fails closed, so the same wipe locks the player out until the
+ * commissioner re-issues. Neither outcome is acceptable — this defense is what
+ * prevents the wipe.
+ *
+ * Same principle (c) already states — "a held write may ADD to user data, it may
+ * never make it smaller" — measured at the resolution the data actually lives
+ * at. Per record, matched on a stable id: a field the local copy does not have
+ * is taken from the fresher remote; a field it DOES have wins, so a genuine edit
+ * is never reverted. Nested preference objects merge the same way rather than
+ * replacing wholesale, so one device's theme change cannot drop another's tz.
+ *
+ * Deliberately scoped to `cfbp_players` — the only key holding authentication
+ * and contact data, and the only one with a reported failure and a reproduction
+ * (synctest.mjs [1]). Picks/games/weeks have their own field semantics and no
+ * evidence of this failure; widening this without a reproduction would be
+ * exactly the speculative change this defense exists to prevent.
+ */
+const _FIELD_REBASE_ID = { cfbp_players: 'playerId' };
+function _isBlank(v) { return v === undefined || v === null || v === ''; }
+function _rebaseRecords(local, remote, idField) {
+  if (!Array.isArray(local) || !Array.isArray(remote)) return local;
+  const byId = new Map();
+  remote.forEach(r => { if (_isPlainObject(r) && r[idField] != null) byId.set(r[idField], r); });
+  return local.map(l => {
+    if (!_isPlainObject(l) || l[idField] == null) return l;
+    const r = byId.get(l[idField]);
+    if (!r) return l;                                  // local-only record: keep as-is
+    const merged = { ...l };
+    for (const f of Object.keys(r)) {
+      const lv = merged[f], rv = r[f];
+      if (_isBlank(rv)) continue;                      // nothing to restore; never invent a field
+      if (_isBlank(lv)) { merged[f] = rv; continue; }  // local dropped it -> take the remote's
+      // Both populated. A genuine local edit wins. For a nested prefs object,
+      // merge key-by-key so a local write of one preference cannot blank the rest.
+      if (_isPlainObject(lv) && _isPlainObject(rv)) merged[f] = { ...rv, ...lv };
+    }
+    return merged;
+  });
+}
+
 const _listeners = new Set();  // status change subscribers
 
 // Sync observability — exposed via getSyncStatus() so the UI can render a
@@ -296,6 +355,9 @@ export async function hydrate() {
           `(local ${_size(v)} -> remote ${_size(_cache.get(k))}). Remote kept.`);
         _dirty.delete(k);
         _dirtyFields.delete(k);
+      } else if (_FIELD_REBASE_ID[k]) {
+        // RG-39 DEFENSE (d) — same record count, missing FIELDS. See above.
+        _cache.set(k, _rebaseRecords(v, _cache.get(k), _FIELD_REBASE_ID[k]));
       } else {
         _cache.set(k, v);
       }
