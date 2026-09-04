@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.17.8';
-export const APP_VERSION_DATE = '2026-09-01';
+export const APP_VERSION = 'v0.17.9';
+export const APP_VERSION_DATE = '2026-09-04';
 
 /**
  * UN-124 — "What's new" card content, hand-maintained per release. NOT
@@ -120,9 +120,10 @@ import {
 import {
   buildEspnUrl,
   fetchByDateRange, fetchCurrentCFBGames,
-  refreshScoresByEventIds, scoreCandidateGames,
+  refreshScoresByEventIds, scoreCandidateGames, buildSuggestedSlate,
   getProviderState, getLastFetchUrl,
   getTimeWindow,
+  fetchEspnTeamsList,
 } from './data-provider.js';
 
 import {
@@ -162,7 +163,7 @@ import {
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 
-const state = {
+export const state = {
   currentTab: 'picks',
   draftPicks: {}, draftTiebreaker: null,
   editingPicks: false, // true while a logged-in player is updating their already-submitted picks
@@ -172,15 +173,57 @@ const state = {
   // Active tab within the Commissioner panel (week / games / players / settings / data)
   commTab: 'week',
   lastFetchResult: null,
+  recalcAllResult: null, // DI-H — set by #recalc-all-weeks-btn, read by renderRecalculateFinalizedWeeksAdminSectionHTML()
   // Available-games filter (commissioner panel). Persists within a session.
   availFilter: {
     groupBy: 'date',      // 'date' | 'day' | 'conference' | 'region' | 'rank' | 'none'
     conference: '',       // exact conference name filter, '' = any
     rank: 'any',          // 'any' | 'ranked' | 'unranked'
     almaOnly: false,      // only games involving an alma mater
+    nationalTV: false,    // DI-3 — only games on national TV (g.nationalTV === true)
+    tightOnly: false,     // DI-3 — only tight matchups (|spread| <= 7)
     search: '',           // free-text team/school search
   },
 };
+
+/**
+ * RG-51 (adjacent finding) — reset the ENTIRE pick draft. ONE function, because
+ * six hand-written copies of this reset is what caused the defect.
+ *
+ * NUMBERING: this was labelled RG-49 until 2026-09-02, colliding with the
+ * SEPARATE seam-level persistence defect that persisttest.mjs documents as
+ * RG-49. Two different defects, one number, in shipped source — a verbatim
+ * recurrence of the RG-40/RG-41 mislabeling the v0.17.8 ledger row already
+ * records. Renumbered on reviewer's finding before the ledger row was written,
+ * so the ledger does not inherit the collision. RG-49 = the persistence defect
+ * (persisttest.mjs), RG-50 = score orientation (orienttest.mjs), RG-51 = this.
+ *
+ * `state.draftExtraPoint` arrived in v0.16.0 and was added to exactly ONE of the
+ * seven teardown sites — the submit path. The other six each cleared a different
+ * subset — at the pre-fix line numbers: 929 nothing, 951 picks only, 988 and
+ * 1148 picks+tiebreaker, 1196 nothing, 1202 picks+tiebreaker — so on a shared
+ * device player A's typed Extra Point guess
+ * survived the logout and PRE-FILLED player B's input. B read a rival's number
+ * while the week was still OPEN — RG-37's class — and if B submitted, A's
+ * number was recorded as B's entry.
+ *
+ * Extra Point does NOT feed the standings (Drew, 2026-09-01: "the only thing
+ * that affects the standings is the performance in the picks and the
+ * tiebreaker"). The leak still matters, and the mis-attribution still matters:
+ * it is a live blackjack side bet, so seeing the field lets you sit one yard
+ * under the leader, and a guess recorded against the wrong player is wrong data
+ * regardless of what it feeds.
+ *
+ * Every session change in the picks flow calls this and nothing else touches
+ * the draft fields directly, so a SEVENTH draft field cannot be forgotten by
+ * five of six call sites again. Asserted structurally in persisttest [7],
+ * with canaries on both matchers (CONVENTIONS #21).
+ */
+function clearPickDraft() {
+  state.draftPicks = {};
+  state.draftTiebreaker = null;
+  state.draftExtraPoint = null;
+}
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 
@@ -926,7 +969,7 @@ function renderPicksPageCurrent() {
   }
 
   const player = getPlayer(session.playerId);
-  if (!player) { clearSession(); resyncPlayerPreferences(); renderPicksPage(); return; }
+  if (!player) { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); return; }
 
   const games       = week ? getGames(week.weekId).sort((a,b) => new Date(a.kickoff)-new Date(b.kickoff)) : [];
   const submitted   = week ? hasPlayerSubmitted(week.weekId, session.playerId) : false;
@@ -948,7 +991,7 @@ function renderPicksPageCurrent() {
         </div>
       </div>
       <button class="btn btn-ghost btn-sm mt-md" id="logout-btn">Log Out / Switch Player</button>`;
-    document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); state.draftPicks={}; resyncPlayerPreferences(); renderPicksPage(); });
+    document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
     return;
   }
 
@@ -985,7 +1028,7 @@ function renderPicksPageCurrent() {
       <button class="btn btn-primary" id="submit-picks-btn" disabled>${state.editingPicks?'Update Picks':'Submit All Picks'}</button>
     </div>`;
 
-  document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); state.draftPicks={}; state.draftTiebreaker=null; resyncPlayerPreferences(); renderPicksPage(); });
+  document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
   document.getElementById('tb-input')?.addEventListener('input', e => {
     state.draftTiebreaker = e.target.value !== '' ? parseFloat(e.target.value) : null;
     updateSubmitEnabled(games, week);
@@ -1145,7 +1188,7 @@ export function bindLoginScreen() {
     if (!selectedId) return;
     const pin = document.getElementById('pin-input')?.value||'';
     if (verifyPlayerPin(selectedId, pin)) {
-      setSession(selectedId, false, true); state.draftPicks={}; state.draftTiebreaker=null;
+      setSession(selectedId, false, true); clearPickDraft();
       // Per-player preferences: re-resolve theme + TZ for the newly-logged-in
       // player (they may differ from device default or previous player).
       resyncPlayerPreferences();
@@ -1193,14 +1236,13 @@ function renderSubmittedView(c, week, games, session, displayName) {
       ${canEdit?'<button class="btn btn-secondary mr-sm" id="edit-picks-btn">✏️ Edit My Picks</button>':''}
       <button class="btn btn-primary" id="go-dash-btn">View Dashboard</button>
     </div>`;
-  document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); resyncPlayerPreferences(); renderPicksPage(); });
+  document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
   document.getElementById('go-dash-btn')?.addEventListener('click', () => navigateTo('dashboard'));
   document.getElementById('edit-picks-btn')?.addEventListener('click', () => {
     // Enter edit mode. The picks-page render will pre-fill draftPicks from
     // existing picks and show the editable UI with an explanatory banner.
     state.editingPicks = true;
-    state.draftPicks = {};      // cleared so the prefill block sees a fresh slate
-    state.draftTiebreaker = null;
+    clearPickDraft();           // cleared so the prefill block sees a fresh slate
     renderPicksPage();
     window.scrollTo({ top: 0 });   // UN-115 (DI-115b): same driver as login — the form replaces the submitted view
   });
@@ -1303,12 +1345,39 @@ function renderLockCountdownHTML(week, games, { compact = false } = {}) {
   </div>`;
 }
 
+/**
+ * The calendar day a kickoff falls on, pinned to CENTRAL — the same league
+ * convention getTimeWindow() uses for hour-of-day bucketing, so a game's day
+ * label and its window label can never disagree about which day it is.
+ *
+ * Deliberately NOT routed through dayOfWeekOf(): that helper pins no timezone
+ * and inherits the browser's, which would let two players on two coasts see
+ * the same slate split across different days. (dayOfWeekOf()'s missing pin is
+ * a known separate defect and is untouched here.)
+ *
+ * The slate builder's closing anchor uses America/Los_Angeles instead, on
+ * Drew's 2026-09-03 ruling. That is scoped to SELECTION of a late Saturday
+ * game and must not leak here: this is DISPLAY grouping, which stays Central
+ * like every other display surface.
+ */
+function centralDayParts(isoTime) {
+  const d = new Date(isoTime);
+  try {
+    return {
+      key:  new Intl.DateTimeFormat('en-CA', { timeZone:'America/Chicago', year:'numeric', month:'2-digit', day:'2-digit' }).format(d),
+      name: new Intl.DateTimeFormat('en-US', { timeZone:'America/Chicago', weekday:'long' }).format(d),
+    };
+  } catch {
+    return { key: String(isoTime || '').slice(0,10), name: '' };
+  }
+}
+
 function renderGamesList(games, week) {
   const c = document.getElementById('games-list'); if (!c) return;
-  const windows = [
-    {key:'morning',label:'🌅 Morning'},{key:'afternoon',label:'☀️ Afternoon'},
-    {key:'evening',label:'🌆 Evening'},{key:'late',label:'🌙 Late Night'},
-  ];
+  const WINDOW_LABEL = {
+    morning:'🌅 Morning', afternoon:'☀️ Afternoon',
+    evening:'🌆 Evening', late:'🌙 Late Night',
+  };
 
   // Separate games that aren't ready to be picked (no teams / no date) so players
   // never see filler data. They're surfaced as a small notice instead.
@@ -1318,12 +1387,45 @@ function renderGamesList(games, week) {
     (gameDataReadiness(g).level === 'incomplete' ? pending : ready).push(g);
   }
 
+  // RG — "friday evening games are at the bottom after saturday morning games"
+  // (Drew, 2026-09-03). This loop used to iterate the FOUR TIME WINDOWS on the
+  // outside and filter `ready` on the inside, which made hour-of-day the
+  // primary sort key and discarded the calendar day entirely: every morning
+  // game on the slate rendered above every evening game, so a Friday 7:00 PM
+  // kickoff sat BELOW a Saturday 11:00 AM one, and a Sunday game landed second.
+  // The caller's chronological sort (renderPicksPage) was correct and was
+  // simply thrown away here — the defect was never in a comparator.
+  //
+  // Invisible for a full season because every slate was a single Saturday, and
+  // within ONE day window order IS chronological. The slate builder (3f18c2a)
+  // deliberately pulls Thursday/Friday/Sunday games in, which made it visible.
+  //
+  // Inverted: games are emitted in kickoff order and a header is written
+  // whenever the (day, window) pair changes. Order is therefore the kickoff
+  // order BY CONSTRUCTION and can no longer be re-derived from the grouping.
+  // A single-day slate produces byte-identical output to the old code.
+  const ordered = ready.slice().sort((a,b) => new Date(a.kickoff||0) - new Date(b.kickoff||0));
+  // The day name is only added once the slate actually spans more than one
+  // Central day. Without it a multi-day slate would repeat a bare "🌆 Evening"
+  // header three times with nothing to distinguish them; with it, a single
+  // Saturday keeps exactly the labels it has always had.
+  const multiDay = new Set(ordered.map(g => centralDayParts(g.kickoff).key)).size > 1;
+
   let html='';
-  for (const{key,label}of windows) {
-    const wg=ready.filter(g=>g.timeWindow===key);
-    if(!wg.length)continue;
-    html+=`<div class="time-window-label">${label}</div>`;
-    for(const game of wg) html+=renderGameCard(game,state.draftPicks[game.gameId],PICK_RESULT.PENDING,!isGamePickable(game),false);
+  let lastKey=null;
+  for (const game of ordered) {
+    const day = centralDayParts(game.kickoff);
+    const key = `${day.key}|${game.timeWindow}`;
+    if (key !== lastKey) {
+      // Label source stays the STORED game.timeWindow, not a fresh
+      // getTimeWindow(game.kickoff). The two disagree on the demo fixtures
+      // (authored against Eastern), so recomputing here would silently
+      // relabel demo weeks — a change outside this bug. Flagged separately.
+      const wl = WINDOW_LABEL[game.timeWindow] || WINDOW_LABEL.afternoon;
+      html += `<div class="time-window-label">${multiDay && day.name ? `${escHtml(day.name)} · ${wl}` : wl}</div>`;
+      lastKey = key;
+    }
+    html += renderGameCard(game,state.draftPicks[game.gameId],PICK_RESULT.PENDING,!isGamePickable(game),false);
   }
 
   if (pending.length) {
@@ -1336,7 +1438,10 @@ function renderGamesList(games, week) {
   c.innerHTML = html || '<p class="text-muted text-center mt-lg">No games on the slate yet.</p>';
 }
 
-function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
+// DI-7 — this is the SHARED player-facing card (Picks page + Dashboard). It
+// intentionally gets NO national-TV badge — a deliberate scope boundary, not
+// an oversight. Do not mirror the alma badge's footprint here.
+export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
   const sv = game.lockedSpread!==null ? game.lockedSpread : game.spread;
   // For final games with no spread: show "Final" label; TBD only for future unset games.
   // The provenance ("ESPN · DraftKings" vs "Manual") was confusing players on the
@@ -1370,9 +1475,9 @@ function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
 
   const liveScore = (game.status===GAME_STATUS.LIVE||game.status===GAME_STATUS.FINAL) && game.homeScore!==null
     ? `<div class="live-score">
-        <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
-        <div class="score-status">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
         <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${game.awayScore}</div>
+        <div class="score-status">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
+        <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
       </div>` : '';
 
   let atsInfo = '';
@@ -1555,7 +1660,7 @@ function submitPicks(week, games) {
     emitPicksLockedEvent(week.weekId, session.playerId, totalPicks, games.length);
   } catch {}
   const wasEditing = state.editingPicks;
-  state.draftPicks={}; state.draftTiebreaker=null; state.draftExtraPoint=null; state.editingPicks=false;
+  clearPickDraft(); state.editingPicks=false;
   showToast(syncBroken
     ? '✅ Picks saved locally. ⚠️ Sync still off — picks not yet shared.'
     : (wasEditing ? '✅ Picks updated!' : '✅ Picks submitted! Good luck!'),'success');
@@ -1564,11 +1669,159 @@ function submitPicks(week, games) {
 
 // ─── ALMA MATER WATCH ─────────────────────────────────────────────────────────
 
-function renderAlmaMaterWatch(weekId, games) {
+/**
+ * THE alma-mater roster — one derived list, not a stored/editable setting.
+ * Drew's ruling, 2026-09-04, correcting the two-list build (8ae64f4/
+ * 55f8908), verbatim: "the roster of alma maters (such as alma mater watch
+ * and those filtered in the slate builder) should only be comprised of
+ * schools claimed as alma maters by a player. If a player changes their
+ * claimed alma mater, this should also change everything else related to
+ * alma maters."
+ *
+ * The distinct, non-empty set of ACTIVE players' `player.almaMater` values,
+ * deduped case-insensitively (defensive coercion, CONVENTIONS #7; the
+ * player-edit field always writes whatever casing was typed, so this stays
+ * defensive at the boundary). EVERY alma-mater consumer in this file reads
+ * this ONE function — Alma Mater Watch, Alma Mater Rankings, the ⭐
+ * `isAlmaMaterGame` flag (both parse-time via `fetchByDateRange` and the
+ * manual Game Modal), the slate builder's Tier 1 guarantee, the Rules tab
+ * list, and `calculateAlmaMaterTotal()`'s Auto-Calc. There is no separate
+ * "configured roster" — an "unclaimed school in the roster" is not a
+ * concept this model has. Two consequences, both intentional: (1) Texas
+ * A&M, claimed by both Drew and Kihoon, contributes/renders once, not
+ * twice. (2) A school no active player claims does not appear ANYWHERE —
+ * not Watch, not Rankings, not the ⭐ flag, not Tier 1, not the Rules tab —
+ * even if it's in the ALMA_MATERS catalog. An inactive player's school is
+ * excluded entirely, matching every other `getPlayers().filter(p=>p.active)`
+ * site in this file. Changing a player's claim (edit or activate/deactivate)
+ * calls `recomputeAlmaMaterFlags(claimedAlmaMaters())` immediately after
+ * `savePlayer()` at both call sites below, so the ⭐ flag on open/upcoming
+ * weeks reflects the new claim without a re-import.
+ */
+export function claimedAlmaMaters() {
+  const seen = new Set();
+  const out = [];
+  for (const p of getPlayers().filter(p => p.active)) {
+    const alma = (p.almaMater || '').trim();
+    if (!alma) continue;
+    const key = alma.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(alma);
+  }
+  return out;
+}
+
+/**
+ * `game.isAlmaMaterGame` is computed once, at ESPN-parse time (or in the
+ * Game Modal on manual add/edit) — a player claiming/unclaiming a school
+ * does NOT retroactively touch it on its own. Called right after a
+ * player-edit save or an active/inactive toggle (both change what
+ * `claimedAlmaMaters()` returns) so the CURRENT/upcoming slate reflects the
+ * new claim immediately rather than requiring a re-import. Scoped to
+ * DRAFT/OPEN weeks ONLY — skips
+ * LOCKED, LIVE, *and* FINAL (reviewer finding, 2026-09-0x: the code
+ * previously skipped only FINAL, which meant it silently rewrote LOCKED and
+ * LIVE weeks too, contradicting its own card copy and toasts, which have
+ * always said "open/upcoming"). This matters beyond wording: players submit
+ * tiebreaker guesses while a week is OPEN, against whatever alma-mater
+ * slate exists at that moment; editing the roster after LOCK would silently
+ * change the correct answer to a question already asked, and any FINAL
+ * week's already-used Auto-Calc must never move retroactively either
+ * (CONVENTIONS #25's spirit). Returns the number of games actually
+ * changed, for the toast.
+ *
+ * F1 (2026-09-04, clearing the reviewer BLOCK) — the SLATE
+ * (getGames/saveAllGamesForWeek, KEYS.GAMES) is not the only place a game's
+ * ⭐ flag lives. The commissioner's Available-Games POOL
+ * (getAvailableGames/saveAvailableGames, KEYS.AVAIL_GAMES) is a genuinely
+ * SEPARATE storage key that the slate builder reads directly —
+ * renderCommPage() builds `candidatePool` from `getAvailableGames(week.
+ * weekId)`, never from the slate (js/app.js's renderCommPage, ~line 2992).
+ * Before this fix, a claim change re-flagged the slate but never the pool,
+ * so the suggested-slate Tier 1 guarantee — and the ⭐ "Alma mater games
+ * only" filter pill / pool-row ⭐ badges, which read the SAME pool objects
+ * (filterAndGroupAvailableGames(), renderAvailableGamesList()) — kept
+ * scoring/showing the OLD claim until the next ESPN re-fetch replaced the
+ * pool wholesale. Reproduced verbatim from the design input: fetch
+ * candidates, change Kevin to Notre Dame, and the suggested slate still
+ * shows Purdue. Now both keys are recomputed for the same DRAFT/OPEN weeks,
+ * under the SAME status gate, folded into the ONE `changedGames` count the
+ * toast already reports.
+ */
+export function recomputeAlmaMaterFlags(almaMaters) {
+  let changedGames = 0;
+  const reflag = g => {
+    const isAlma = !!(getAlmaMaterMatch(g.homeTeam, almaMaters) || getAlmaMaterMatch(g.awayTeam, almaMaters));
+    return isAlma === g.isAlmaMaterGame ? null : { ...g, isAlmaMaterGame: isAlma };
+  };
+  for (const w of getWeeks()) {
+    if (w.status === WEEK_STATUS.LOCKED || w.status === WEEK_STATUS.LIVE || w.status === WEEK_STATUS.FINAL) continue;
+
+    const games = getGames(w.weekId);
+    if (games.length) {
+      let weekChanged = false;
+      const updated = games.map(g => {
+        const r = reflag(g);
+        if (!r) return g;
+        weekChanged = true; changedGames++;
+        return r;
+      });
+      if (weekChanged) saveAllGamesForWeek(w.weekId, updated);
+    }
+
+    const avail = getAvailableGames(w.weekId);
+    if (avail.length) {
+      let poolChanged = false;
+      const updatedAvail = avail.map(g => {
+        const r = reflag(g);
+        if (!r) return g;
+        poolChanged = true; changedGames++;
+        return r;
+      });
+      if (poolChanged) saveAvailableGames(w.weekId, updatedAvail);
+    }
+  }
+  return changedGames;
+}
+
+/**
+ * F4 (2026-09-04, clearing the reviewer BLOCK) — which alma-mater roster the
+ * tiebreaker Auto-Calc (`calculateAlmaMaterTotal()`, scoring.js) should sum
+ * against. Mirrors `game.lockedSpread`'s shape one level up: a DRAFT/OPEN
+ * week has nothing frozen yet, so the LIVE roster is correct (matches every
+ * other alma-mater consumer today). Once a week reaches LOCKED — the same
+ * instant `applyWeekStatusChange()`/`tickAutoTransition()`'s auto-lock leg
+ * snapshot `week.lockedAlmaMaters` — the Auto-Calc must read THAT snapshot
+ * instead, so a claim edit or player deactivation after lock cannot
+ * silently move the tiebreaker's correct answer out from under picks
+ * players already submitted against it (before this fix, the Auto-Calc
+ * always called `claimedAlmaMaters()` live, with no week-status gate at
+ * all).
+ *
+ * A LOCKED/LIVE/FINAL week that carries NO snapshot — any week that locked
+ * before this shipped, since old Sheet rows lack the field entirely
+ * (absent, not null) — falls back to the LIVE roster rather than throwing
+ * or treating "no snapshot" as "zero schools claimed." This is a real,
+ * accepted gap for already-locked weeks (their Auto-Calc can still drift
+ * with a post-lock claim edit, exactly as before this fix), scoped
+ * narrowly to weeks that predate the migration; every week locked from now
+ * on is fully frozen.
+ */
+export function almaMatersForAutoCalc(week) {
+  const isFrozenStatus = week?.status === WEEK_STATUS.LOCKED
+    || week?.status === WEEK_STATUS.LIVE
+    || week?.status === WEEK_STATUS.FINAL;
+  if (isFrozenStatus && Array.isArray(week?.lockedAlmaMaters)) return week.lockedAlmaMaters;
+  return claimedAlmaMaters();
+}
+
+export function renderAlmaMaterWatch(weekId, games) {
   const slateGames = games || getGames(weekId);
-  const rows = ALMA_MATERS.map(alma => {
+  const almaMaters = claimedAlmaMaters();
+  const rows = almaMaters.map(alma => {
     const game = slateGames.find(g =>
-      getAlmaMaterMatch(g.homeTeam) === alma || getAlmaMaterMatch(g.awayTeam) === alma
+      getAlmaMaterMatch(g.homeTeam, almaMaters) === alma || getAlmaMaterMatch(g.awayTeam, almaMaters) === alma
     );
     if (!game) {
     return `<div class="alma-watch-row">
@@ -1577,7 +1830,7 @@ function renderAlmaMaterWatch(weekId, games) {
       </div>`;
     }
     // Use precise matching to decide which side is the alma mater (avoid Arkansas/Arkansas State false positives)
-    const isHome  = getAlmaMaterMatch(game.homeTeam) === alma;
+    const isHome  = getAlmaMaterMatch(game.homeTeam, almaMaters) === alma;
     const opp     = isHome ? teamSchool(game,'away') : teamSchool(game,'home');
     const myRank  = isHome ? game.homeRank : game.awayRank;
     const oppRank = isHome ? game.awayRank : game.homeRank;
@@ -2113,9 +2366,9 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     const kickoffStr = fmtTime(game.kickoff, game);
     let stateIndicator = '';
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
-      stateIndicator = `<span class="status-pill status-pill-final">FINAL ${game.homeScore}–${game.awayScore}</span>`;
+      stateIndicator = `<span class="status-pill status-pill-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
-      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot"></span>LIVE ${game.homeScore}–${game.awayScore}</span>`;
+      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot"></span>LIVE ${game.awayScore}–${game.homeScore}</span>`;
     }
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -2520,9 +2773,9 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
     const kickoffStr = fmtTime(game.kickoff, game);
     let stateIndicator = '';
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
-      stateIndicator = `<span class="dc-status dc-final">FINAL ${game.homeScore}–${game.awayScore}</span>`;
+      stateIndicator = `<span class="dc-status dc-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
-      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot"></span>${game.homeScore}–${game.awayScore}</span>`;
+      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot"></span>${game.awayScore}–${game.homeScore}</span>`;
     }
     const statusInfo = `<span class="dc-status dc-scheduled">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -2723,20 +2976,28 @@ export function renderLeaderboard() {
   });
 }
 
-function renderAlmaMaterRankings() {
+export function renderAlmaMaterRankings() {
   // Pull rankings from the most recent fetched games that include alma mater teams
   const allGames = getGames();
-  const rows = ALMA_MATERS.map(alma => {
+  const almaMaters = claimedAlmaMaters();
+  const rows = almaMaters.map(alma => {
     const game = [...allGames].reverse().find(g =>
-      getAlmaMaterMatch(g.homeTeam) === alma || getAlmaMaterMatch(g.awayTeam) === alma
+      getAlmaMaterMatch(g.homeTeam, almaMaters) === alma || getAlmaMaterMatch(g.awayTeam, almaMaters) === alma
     );
     let rank = null;
     if (game) {
-      if (getAlmaMaterMatch(game.homeTeam) === alma) rank = game.homeRank;
+      if (getAlmaMaterMatch(game.homeTeam, almaMaters) === alma) rank = game.homeRank;
       else rank = game.awayRank;
     }
     const rankStr = rank ? `<span class="rank-badge">#${rank} AP</span>` : '<span class="text-muted text-xs">Unranked</span>';
-    const player  = getPlayers().find(p => p.almaMater === alma);
+    // F5 (2026-09-04) — was `p.almaMater === alma`: case-sensitive AND not
+    // filtered to active, unlike claimedAlmaMaters() (which produced `alma`
+    // in the first place) and the Settings-tab card's claimantsOf(). Could
+    // attribute a school to a DEACTIVATED player (a stale byline next to a
+    // school someone else, or nobody, actively claims) or fail to show a
+    // real claimant purely over casing. Same shape as claimantsOf() below —
+    // all three now agree.
+    const player  = getPlayers().find(p => p.active && (p.almaMater || '').trim().toLowerCase() === alma.toLowerCase());
     const almaDisplay = ALMA_MATER_DISPLAY[alma] || alma;
     return `<div class="alma-rank-row">
       <span class="alma-rank-school">${escHtml(almaDisplay)}</span>
@@ -2745,6 +3006,43 @@ function renderAlmaMaterRankings() {
     </div>`;
   });
   return rows.join('');
+}
+
+/**
+ * Commissioner Settings-tab card — READ-ONLY summary of the derived alma-
+ * mater roster (Drew, 2026-09-04, correcting the 8ae64f4/55f8908 two-list
+ * build: "the roster of alma maters... should only be comprised of schools
+ * claimed as alma maters by a player. If a player changes their claimed
+ * alma mater, this should also change everything else related to alma
+ * maters"). There is no add/remove here anymore — `claimedAlmaMaters()` is
+ * DERIVED from `player.almaMater` across active players, so this card can
+ * only show it, not edit it. Each school is listed with the active
+ * player(s) claiming it; to change one, the pointer text sends the
+ * commissioner to Players → Edit, the one place a claim actually changes.
+ * Extracted as its own exported function (2026-09-04, alongside the
+ * two-list fix) so it's directly testable without invoking the whole
+ * renderCommPage() dependency closure, matching renderAlmaMaterWatch()/
+ * renderAlmaMaterRankings() above. `data-comm-tab="settings"` preserved
+ * (RG-10 — a card missing that attribute renders on all five tabs).
+ */
+export function renderAlmaMaterSettingsCard() {
+  const almaMaters = claimedAlmaMaters();
+  const activePlayers = getPlayers().filter(p => p.active);
+  const claimantsOf = am => activePlayers.filter(p => (p.almaMater || '').trim().toLowerCase() === am.toLowerCase());
+  return `
+      <div class="admin-section" data-comm-tab="settings">
+        <div class="admin-section-title">⭐ Alma Maters</div>
+        <div class="card">
+          <p class="text-muted text-xs mb-md">Derived from what each active player has set as their alma mater — not a separately-editable list. Drives Alma Mater Watch, Alma Mater Rankings, the ⭐ flag, guaranteed slate inclusion, the Rules tab list, and the tiebreaker's Auto-Calc, all from the same roster below. To add, remove, or change a school, edit the claiming player under Players → Edit — the change re-checks every game already on an open/upcoming week's slate immediately (no re-import needed). Weeks that are LOCKED, LIVE, or already FINAL are left untouched, so a tiebreaker answer players already submitted against — or an already-final Auto-Calc — never quietly changes.</p>
+          <div id="alma-mater-list">
+            ${almaMaters.length ? almaMaters.map(am => `
+            <div class="flex gap-sm mb-sm" style="align-items:center">
+              <span class="font-display" style="flex:1;font-size:.9rem">${escHtml(am)}</span>
+              <span class="text-muted text-xs">${escHtml(claimantsOf(am).map(p => p.displayName).join(', '))}</span>
+            </div>`).join('') : '<p class="text-muted text-xs">No active player has claimed a school yet — set one under Players → Edit.</p>'}
+          </div>
+        </div>
+      </div>`;
 }
 
 // ─── COMMISSIONER PAGE ────────────────────────────────────────────────────────
@@ -2758,17 +3056,32 @@ function renderCommPage() {
   try {
     const week       = getCurrentWeek();
     const games      = week ? getGames(week.weekId) : [];
+    // DI-E — the tie preview needs the current slate's picks. Gated on
+    // arePicksPublic(week) (blind rule — loadtest.mjs [64]): both call sites
+    // that use `picks` only ever render once the week has reached 'live'
+    // (renderWeekStatusButtons: 'final' is reachable only from 'live'; the
+    // pendingFinalization banner only appears once every game is FINAL,
+    // which itself requires 'live'), so this is always true in practice —
+    // made explicit and load-bearing rather than left implicit.
+    const picks      = week && arePicksPublic(week) ? getPicks(week.weekId) : [];
     const availGames = week ? getAvailableGames(week.weekId) : [];
     const players    = getPlayers();
     const settings   = getSettings();
     const allWeeks   = getWeeks().sort((a,b)=>b.weekNumber-a.weekNumber);
     const proof      = getFetchProof();
     const ps         = getProviderState();
-    const suggestedRaw = availGames.length>0 ? scoreCandidateGames(availGames,week?.weekId||'',20) : [];
-    // Drop any suggestions the Commissioner has dismissed for this week, then cap at 10.
-    const suggested = week
-      ? suggestedRaw.filter(g => !isSuggestionRejected(week.weekId, g)).slice(0,10)
-      : suggestedRaw.slice(0,10);
+    // Drop any suggestions the Commissioner has dismissed for this week
+    // BEFORE scoring/tiering — a dismissed game shouldn't be reconsidered for
+    // ANY tier (including a forced alma/anchor slot), so the pool it never
+    // sees is the pool it can't force its way back into.
+    const candidatePool = week ? availGames.filter(g => !isSuggestionRejected(week.weekId, g)) : availGames;
+    const scoredCandidates = candidatePool.length>0 ? scoreCandidateGames(candidatePool, week?.weekId||'') : [];
+    const builtSlate = buildSuggestedSlate(scoredCandidates, 10);
+    const suggested  = builtSlate.slate;      // primary 10, chronological (DI-1)
+    const shortlist  = builtSlate.shortlist;  // next 10 by score (DI-4)
+    const almaCount  = builtSlate.almaCount;
+    const morningAnchorFilled = builtSlate.morningAnchorFilled;
+    const closingAnchorFilled = builtSlate.closingAnchorFilled;
     const rejectedCount = week ? getRejectedSuggestions(week.weekId).length : 0;
 
     const sections = [];
@@ -2948,6 +3261,9 @@ function renderCommPage() {
             ${week.pendingFinalization ? `
               <div class="pending-final-banner">
                 <div><strong>⏰ All games are final.</strong> Ready to close this week and lock standings?</div>
+                ${weekHasUnresolvedTie(week, players.filter(p=>p.active), picks, games) ? `
+                  <div class="warning-box mt-sm">⚠️ This week has a tie in correct picks and no tiebreaker entered. The winner/loser will be decided arbitrarily until you enter one — do that on this tab, then Confirm Finalization.</div>
+                ` : ''}
                 <div class="flex gap-sm mt-sm">
                   <button class="btn btn-primary btn-sm" id="confirm-finalize-btn">✅ Confirm Finalization</button>
                   <button class="btn btn-ghost btn-sm" id="dismiss-pending-btn">Not yet</button>
@@ -3030,7 +3346,7 @@ function renderCommPage() {
               <button class="btn btn-ghost btn-sm" id="clear-pool-btn">🗑 Clear Pool</button>
               ${rejectedCount>0?`<button class="btn btn-ghost btn-sm" id="restore-rejected-btn">↩ Restore ${rejectedCount} dismissed</button>`:''}
             </div>
-            ${renderSuggestedSlatePreview(suggested,games,week)}
+            ${renderSuggestedSlatePreview({suggested, shortlist, almaCount, morningAnchorFilled, closingAnchorFilled}, games, week)}
             <div class="card-title mb-sm mt-md">All Available Games</div>
             ${renderAvailFilterBar(availGames)}
             <div id="avail-groups-list">${renderAvailableGroups(availGames, games, week)}</div>
@@ -3090,6 +3406,12 @@ function renderCommPage() {
     // tab (RG-10). NOT part of exportFullCsvBundle — Drew was offered that
     // and did not select it.
     sections.push(renderFeedbackAdminSectionHTML());
+
+    // DI-H (2026-09-02) — the one-time (though PERMANENTLY available)
+    // retroactive recompute. Placed directly ABOVE Obligation Corrections so
+    // anything it flags via DI-D's finalizeWeek() → reconcileWeeklyObligation()
+    // path appears in the very next card.
+    sections.push(renderRecalculateFinalizedWeeksAdminSectionHTML());
 
     // Obligation Corrections (UN-126, Part 2) — merge / void, directly after
     // Feedback, same tab (RG-10). The Players-tab Obligations card (above)
@@ -3292,6 +3614,10 @@ function renderCommPage() {
           <button class="btn btn-secondary btn-sm" id="save-refresh-btn">Save</button>
         </div>
       </div>`);
+
+    // Alma Maters — READ-ONLY summary card. See renderAlmaMaterSettingsCard()'s
+    // docstring above (2026-09-04) for the model this reflects.
+    sections.push(renderAlmaMaterSettingsCard());
 
     // Randomize Picks shortcut (UN-107) — default OFF (CONVENTIONS #10:
     // existing settings blobs lack this field and must read as false, not
@@ -3525,7 +3851,7 @@ function renderCommPage() {
       });
     });
     wireCollapsibleSections(c);
-    bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks);
+    bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist);
     renderCommExtrasV16(week, games);   // v0.16.0 — Extra Point + Chat/SCRIBE admin
     initScrollFades(c);   // UN-105a — batch-grid-scroll wrapper (Demo Simulation)
 
@@ -3566,30 +3892,69 @@ function renderDemoBatchGrid(games) {
   </div>`;
 }
 
-function renderSuggestedSlatePreview(suggested, currentSlate, week) {
+/**
+ * Renders one `.suggested-game-row`. `dismissable` distinguishes the primary
+ * 10 (add-suggested-btn + reject-suggested-btn, unchanged) from the DI-4
+ * shortlist (add-shortlist-btn only, NO dismiss control — these are
+ * optional swap-ins, not primary suggestions the Commissioner needs to
+ * actively reject). Both blocks reuse the same identity-based on-slate check
+ * so a game already on the slate always shows "✓ On Slate" instead of a
+ * button that would otherwise insert a duplicate slate row.
+ */
+function renderSuggestedGameRow(game, i, currentSlate, dismissable) {
+  const onSlate = currentSlate.some(g => g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
+  const spreadStr = game.spread!==null ? fmtSpread(game.spread,game.favorite,game) : 'TBD';
+  const sKey = suggestionKeyOf(game);
+  return `<div class="suggested-game-row${onSlate?' on-slate':''}">
+    <span class="suggested-num">${i+1}</span>
+    <span class="suggested-matchup">${escHtml(matchup(game))}</span>
+    <span class="suggested-spread text-muted text-xs">${spreadStr}</span>
+    <span class="suggested-time text-muted text-xs">${fmtTime(game.kickoff,game)}</span>
+    <div class="flex gap-sm flex-center">
+      ${(game.suggestionReasons||[]).map(r=>`<span class="candidate-reason">${escHtml(r)}</span>`).join('')}
+      ${onSlate
+        ? `<span class="badge badge-open">✓ On Slate</span>`
+        : `<button class="btn btn-primary btn-sm ${dismissable?'add-suggested-btn':'add-shortlist-btn'}" data-idx="${i}">+ Add</button>`}
+      ${dismissable && !onSlate
+        ? `<button class="btn btn-ghost btn-sm reject-suggested-btn" data-key="${escHtml(sKey)}" data-idx="${i}" title="Dismiss this suggestion">✕</button>`
+        : ''}
+    </div>
+  </div>`;
+}
+
+export function renderSuggestedSlatePreview({suggested, shortlist, almaCount, morningAnchorFilled, closingAnchorFilled}, currentSlate, week) {
   if (!suggested.length) return '';
+
+  // DI-6 — budget visibility, directly above the game list (placement is
+  // specified as not optional; buried below the fold defeats the purpose).
+  // TARGET_SLATE_SIZE is the product's fixed "10-game slate" decision — a UI
+  // constant, unrelated to how many schools are in the (now commissioner-
+  // configurable, incoming change) alma-mater list. almaCount can exceed it
+  // once that list is edited past 10 entries; Drew's ruling is "ALL" is
+  // absolute, so the slate is never truncated to force a round 10 — the
+  // banner just has to say so legibly instead of reading "12 of 10".
+  const TARGET_SLATE_SIZE = 10;
+  const budgetBanner = almaCount >= 1
+    ? (almaCount > TARGET_SLATE_SIZE
+        ? `<div class="suggested-budget-banner">🔒 ${almaCount} alma mater games this week — slate expanded</div>`
+        : `<div class="suggested-budget-banner">🔒 ${almaCount} of ${TARGET_SLATE_SIZE} slots reserved for alma mater games this week</div>`)
+    : '';
+  // An anchor with genuinely nothing to fill it (as opposed to already being
+  // covered by a Tier-1 alma game) gets an explicit muted note rather than
+  // silently having no game in that slot.
+  const anchorNotes = [
+    !morningAnchorFilled ? `<div class="text-muted text-xs suggested-anchor-note">No Saturday morning games this week — opening slot not filled automatically.</div>` : '',
+    !closingAnchorFilled ? `<div class="text-muted text-xs suggested-anchor-note">No Saturday games this week — closing slot not filled automatically.</div>` : '',
+  ].join('');
+
   return `<div class="suggested-slate-box">
     <div class="card-title mb-sm">⭐ Suggested 10-Game Slate <span class="text-muted text-xs">(✕ to dismiss a suggestion)</span></div>
-    ${suggested.map((game, i) => {
-      const onSlate = currentSlate.some(g => g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
-      const spreadStr = game.spread!==null ? fmtSpread(game.spread,game.favorite,game) : 'TBD';
-      const sKey = suggestionKeyOf(game);
-      return `<div class="suggested-game-row${onSlate?' on-slate':''}">
-        <span class="suggested-num">${i+1}</span>
-        <span class="suggested-matchup">${escHtml(matchup(game))}</span>
-        <span class="suggested-spread text-muted text-xs">${spreadStr}</span>
-        <span class="suggested-time text-muted text-xs">${fmtTime(game.kickoff,game)}</span>
-        <div class="flex gap-sm flex-center">
-          ${(game.suggestionReasons||[]).map(r=>`<span class="candidate-reason">${r}</span>`).join('')}
-          ${onSlate
-            ? `<span class="badge badge-open">✓ On Slate</span>`
-            : `<button class="btn btn-primary btn-sm add-suggested-btn" data-idx="${i}">+ Add</button>`}
-          ${onSlate
-            ? ''
-            : `<button class="btn btn-ghost btn-sm reject-suggested-btn" data-key="${escHtml(sKey)}" data-idx="${i}" title="Dismiss this suggestion">✕</button>`}
-        </div>
-      </div>`;
-    }).join('')}
+    ${budgetBanner}${anchorNotes}
+    ${suggested.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, true)).join('')}
+    ${(shortlist||[]).length ? `
+    <div class="card-title mb-sm mt-md">📋 Next Best — tap + to swap in</div>
+    ${shortlist.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, false)).join('')}
+    ` : ''}
   </div>`;
 }
 
@@ -3631,7 +3996,7 @@ function shortDateOf(iso) {
  * Apply state.availFilter to a list of available games, returning a list of
  * { groupLabel, games[] } buckets (single bucket "All" when groupBy === 'none').
  */
-function filterAndGroupAvailableGames(availGames) {
+export function filterAndGroupAvailableGames(availGames) {
   const f = state.availFilter;
   const search = (f.search || '').trim().toLowerCase();
 
@@ -3643,6 +4008,9 @@ function filterAndGroupAvailableGames(availGames) {
     if (f.rank === 'unranked' && (g.homeRank || g.awayRank)) return false;
     // Alma mater only
     if (f.almaOnly && !g.isAlmaMaterGame) return false;
+    // DI-3 — same pattern as almaOnly, one more independent chip
+    if (f.nationalTV && g.nationalTV !== true) return false;
+    if (f.tightOnly && !(g.spread !== null && Math.abs(g.spread) <= 7)) return false;
     // Free-text search (school names, mascots, conferences)
     if (search) {
       const hay = [g.homeTeam, g.awayTeam, g.homeMascot, g.awayMascot, g.homeConference, g.awayConference]
@@ -3693,7 +4061,7 @@ function filterAndGroupAvailableGames(availGames) {
   return { buckets: entries, total: list.length, totalUnfiltered: availGames.length };
 }
 
-function renderAvailFilterBar(availGames) {
+export function renderAvailFilterBar(availGames) {
   const f = state.availFilter;
   // Build conference options from what's actually in the pool — sorted, deduped.
   const confs = [...new Set(
@@ -3731,6 +4099,14 @@ function renderAvailFilterBar(availGames) {
       <label class="avail-chip-label">
         <input type="checkbox" id="avail-alma-only" ${f.almaOnly?'checked':''} />
         ⭐ Alma mater games only
+      </label>
+      <label class="avail-chip-label">
+        <input type="checkbox" id="avail-national-tv" ${f.nationalTV?'checked':''} />
+        📺 On National TV
+      </label>
+      <label class="avail-chip-label">
+        <input type="checkbox" id="avail-tight-only" ${f.tightOnly?'checked':''} />
+        🎯 Tight matchups only (spread ≤ 7)
       </label>
       <button class="btn btn-ghost btn-sm" id="avail-reset-filters">Reset filters</button>
     </div>
@@ -3788,7 +4164,7 @@ function bindAvailGroupHandlers(week, currentSlate) {
   });
 }
 
-function renderAvailableGamesList(availGames, currentSlate, week) {
+export function renderAvailableGamesList(availGames, currentSlate, week) {
   return availGames.map(game => {
     const onSlate = currentSlate.some(g => g.espnEventId&&g.espnEventId===game.espnEventId || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
     const spreadStr = game.spread!==null ? `${fmtSpread(game.spread,game.favorite,game)} ${game.spreadSource==='espn'?'(ESPN)':'(Manual)'}` : '⚠️ TBD';
@@ -3798,9 +4174,20 @@ function renderAvailableGamesList(availGames, currentSlate, week) {
       homeRank:game.homeRank, awayRank:game.awayRank,
       homeConference:game.homeConference, awayConference:game.awayConference,
       kickoff:game.kickoff, timeWindow:game.timeWindow,
+      // Same DI-7 gap as nationalTV below: createGame() defaults these to
+      // false/false, which is the "neither confirmed nor date-only" state that
+      // renders as "Time TBD". Omit them and every game added from this list
+      // shows Time TBD forever, however correct the parser is.
+      kickoffConfirmed:game.kickoffConfirmed, kickoffDateOnly:game.kickoffDateOnly,
       spread:game.spread, favorite:game.favorite,
       spreadSource:game.spreadSource||null, oddsProvider:game.oddsProvider||null,
       espnEventId:game.espnEventId, isAlmaMaterGame:game.isAlmaMaterGame,
+      // DI-7 — this hand-built payload does NOT spread the whole game object
+      // (unlike "Apply Suggested 10" / "Add suggested individually", which
+      // carry these fields free). Miss this and a game added from Available
+      // Games silently loses its TV tag while the same game added from the
+      // suggested card keeps it.
+      nationalTV:game.nationalTV, broadcastNetwork:game.broadcastNetwork||null,
       homeScore:game.homeScore, awayScore:game.awayScore,
       status:game.status, actualWinner:game.actualWinner,
       dataQuality:game.dataQuality||'partial',
@@ -3817,6 +4204,7 @@ function renderAvailableGamesList(availGames, currentSlate, week) {
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge ml-sm">⭐</span>':''}
+          ${game.nationalTV?`<span class="national-tv-badge ml-sm">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
         </div>
         ${onSlate
           ? `<div class="flex gap-sm flex-center">
@@ -3835,7 +4223,7 @@ function renderAvailableGamesList(availGames, currentSlate, week) {
   }).join('');
 }
 
-function renderAdminGamesList(games, week, overrides) {
+export function renderAdminGamesList(games, week, overrides) {
   if (!games.length) return `<div class="info-box">No games on the slate. Fetch ESPN data and add games above, or add manually.</div>`;
   return games.sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff)).map(game => {
     const mu = overrides[game.gameId]==='unlocked';
@@ -3857,6 +4245,7 @@ function renderAdminGamesList(games, week, overrides) {
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge">⭐</span>':''}
+          ${game.nationalTV?`<span class="national-tv-badge">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${renderSourceBadge(game)}
         </div>
         <div class="flex gap-sm">
@@ -3870,7 +4259,7 @@ function renderAdminGamesList(games, week, overrides) {
         <span>Spread: <strong style="color:${sv!==null?'inherit':'var(--text-muted)'}">${spreadStr}</strong>
           <em class="text-muted text-xs">${game.spreadSource==='espn'?'ESPN':'Manual'}</em></span>
         <span class="badge badge-${game.status}">${game.status}</span>
-        ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${game.homeScore}–${game.awayScore}</span>`:''}
+        ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${game.awayScore}–${game.homeScore}</span>`:''}
         ${game.espnEventId?`<code style="font-size:.65rem">ESPN:${game.espnEventId}</code>`:''}
         ${mu?'<span class="badge badge-open">🔓 Unlocked</span>':''}
       </div>
@@ -4014,7 +4403,12 @@ function wireCollapsibleSections(container) {
    driven the way a browser drives them: bind, then fire the click. Same
    rationale as `finalizeWeek`'s export below. Binding is side-effect-free —
    it only attaches listeners — so importing this costs a test nothing. */
-export function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks) {
+// `shortlist` is appended LAST, not inserted after `suggested`, and defaults
+// to [] — gradetest.mjs and ranktest.mjs both call this with the pre-DI-4
+// 6-arg shape; inserting a required positional param in the middle would
+// silently misalign every arg after it in both files (settings ending up as
+// allWeeks, allWeeks as undefined) without either file failing loudly.
+export function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist = []) {
 
   // Week manager
   document.getElementById('active-week-selector')?.addEventListener('change', e => {
@@ -4056,6 +4450,18 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.querySelectorAll('.week-status-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const to=btn.dataset.to; if(!week)return;
+      // DI-E (2026-09-02) — the manual Finalize button (the only other path
+      // that reaches 'final', alongside the auto pendingFinalization banner
+      // above) had ZERO confirmation before this. Same native confirm()
+      // pattern as remove-game-btn/clear-slate-btn, gated on the same
+      // narrow tie condition as the auto banner. arePicksPublic(week) is
+      // always true here in practice — 'final' is reachable only from
+      // 'live' (renderWeekStatusButtons) — but made explicit (blind rule,
+      // loadtest.mjs [64]) rather than left implicit, and it genuinely
+      // short-circuits the getPicks() read below when it is not.
+      if(to==='final' && arePicksPublic(week) && weekHasUnresolvedTie(week, getPlayers().filter(p=>p.active), getPicks(week.weekId), getGames(week.weekId))){
+        if(!confirm("This week has a tie in correct picks and no tiebreaker value entered — the winner/loser will be assigned arbitrarily. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later — entering the tiebreaker afterward recalculates automatically (OK)."))return;
+      }
       applyWeekStatusChange(week,to);
       refreshHeader(); showToast(`Week: ${to}`,'success'); renderCommPage();
     });
@@ -4184,7 +4590,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const rangeLabel = endDate && endDate!==startDate ? `${startDate} to ${endDate}` : startDate;
     showToast(`⏳ Fetching ESPN games for ${rangeLabel}…`,'warning');
     // Pass season for context only — dates are source of truth
-    const result=await fetchByDateRange({startDate,endDate:endDate||startDate,season:week.season});
+    const result=await fetchByDateRange({startDate,endDate:endDate||startDate,season:week.season,almaMaters:claimedAlmaMaters()});
     state.lastFetchResult=result;
     if(result.qualityReport)saveFetchProof(result.qualityReport);
     if(result.error||!result.games?.length){
@@ -4233,6 +4639,20 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     });
   });
 
+  // DI-4 — shortlist "+ Add": identical add behaviour to add-suggested-btn,
+  // sourced from `shortlist` instead of `suggested`. Adding does NOT remove
+  // anything automatically — Drew bumps a game he's swapping out via the
+  // existing ✕ Remove in the built slate; no new removal mechanism here.
+  document.querySelectorAll('.add-shortlist-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      if(!week)return;
+      const idx=parseInt(btn.dataset.idx);
+      const game=(shortlist||[])[idx]; if(!game)return;
+      saveGame(createGame(week.weekId,{...game,weekId:week.weekId}));
+      showToast(`✅ ${td(game,'home')} vs ${td(game,'away')} added`,'success'); renderCommPage();
+    });
+  });
+
   // Dismiss (reject) a suggested game so it stops reappearing
   document.querySelectorAll('.reject-suggested-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
@@ -4251,11 +4671,17 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     showToast('Dismissed suggestions restored','success'); renderCommPage();
   });
 
-  // Add from available pool
-  bindAvailGroupHandlers(week, games);
-
-  // Remove an on-slate game directly from the Available Games list
-  // (Handled inside bindAvailGroupHandlers — kept here as a no-op stub for safety.)
+  // NOTE: bindAvailGroupHandlers(week, games) used to be called here AND
+  // again below ("Wire add/remove buttons inside the initial render of the
+  // groups") — an exact duplicate call with identical arguments and nothing
+  // rendered in between. That double-bound every .add-avail-game-btn /
+  // .avail-remove-btn element, so a single click fired its handler TWICE —
+  // silently saving two duplicate slate entries per "+ Add" click from
+  // Available Games. Pre-existing (present at 93e5f6c, before this batch),
+  // found incidentally while verifying DI-7's add-path in slatetest.mjs
+  // [11]. Removed here rather than left in, since it's a one-line duplicate
+  // call directly in the code this batch already touches — flagged to
+  // reviewer/design-matrix-pm as an incidental fix, not a DI-1..8 item.
 
   // Clear pool
   document.getElementById('clear-pool-btn')?.addEventListener('click', ()=>{
@@ -4285,6 +4711,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('avail-alma-only')?.addEventListener('change', e => {
     state.availFilter.almaOnly = !!e.target.checked; reRenderAvail();
   });
+  // DI-3 — same wiring pattern as avail-alma-only, mirrored not invented.
+  document.getElementById('avail-national-tv')?.addEventListener('change', e => {
+    state.availFilter.nationalTV = !!e.target.checked; reRenderAvail();
+  });
+  document.getElementById('avail-tight-only')?.addEventListener('change', e => {
+    state.availFilter.tightOnly = !!e.target.checked; reRenderAvail();
+  });
   // Debounce the search input — re-render after 200 ms of inactivity
   let searchTimer = null;
   const searchEl = document.getElementById('avail-search');
@@ -4300,7 +4733,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     }, 200);
   });
   const resetFilters = () => {
-    state.availFilter = { groupBy: 'date', conference: '', rank: 'any', almaOnly: false, search: '' };
+    state.availFilter = { groupBy: 'date', conference: '', rank: 'any', almaOnly: false, nationalTV: false, tightOnly: false, search: '' };
     renderCommPage(); // full re-render to refresh the filter bar inputs
   };
   document.getElementById('avail-reset-filters')?.addEventListener('click', resetFilters);
@@ -4353,6 +4786,36 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
   document.getElementById('export-full-json-btn')?.addEventListener('click', exportFullBackupJSON);
   document.getElementById('export-full-csv-bundle-btn')?.addEventListener('click', exportFullCsvBundle);
+
+  // DI-H (2026-09-02) — one-time (permanently available) retroactive
+  // recompute. Loop over every already-final, non-demo week and re-run the
+  // real finalizeWeek() — the exact same function DI-D calls, so a week that
+  // finalized before its tiebreaker was entered self-corrects the same way.
+  document.getElementById('recalc-all-weeks-btn')?.addEventListener('click', ()=>{
+    if(!confirm("Recalculate every finalized week's results? This can change who's recorded as a week's winner or loser and may flag obligations for review below. Nothing is deleted — flagged records stay visible and correctable."))return;
+    const finalWeeks=getWeeks().filter(w=>w.status==='final'&&w.dataSourceMode!=='demo');
+    const changes=[];
+    for(const w of finalWeeks){
+      const before=getWeeklyResults(w.weekId);
+      finalizeWeek(w);
+      const after=getWeeklyResults(w.weekId);
+      if(!weekOutcomeChanged(before,after))continue;
+      const bw=before.find(r=>r.isWinner)?.displayName??'—', bl=before.find(r=>r.isLoser)?.displayName??'—';
+      const aw=after.find(r=>r.isWinner)?.displayName??'—', al=after.find(r=>r.isLoser)?.displayName??'—';
+      const parts=[];
+      if(bw!==aw)parts.push(`winner changed from ${bw} to ${aw}`);
+      if(bl!==al)parts.push(`loser changed from ${bl} to ${al}`);
+      changes.push(`${formatWeekLabel(w)}: ${parts.join('; ')}.`);
+    }
+    state.recalcAllResult={changes};
+    const n=finalWeeks.length;
+    if(changes.length===0){
+      showToast(`🔁 Recalculated ${n} week${n===1?'':'s'} — no changes.`,'success');
+    } else {
+      showToast(`🔁 Recalculated ${n} week${n===1?'':'s'} — ${changes.length} result${changes.length===1?'':'s'} changed.`,'warning');
+    }
+    renderCommPage();
+  });
 
   // ── Demo simulation ──
   const demoGameSel = document.getElementById('demo-game-select');
@@ -4558,12 +5021,54 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const q=document.getElementById('tb-question')?.value||'';
     const aRaw=document.getElementById('tb-actual')?.value;
     const actual=aRaw!==''&&aRaw!==undefined?parseFloat(aRaw):null;
-    saveWeek({...week,tiebreakerQuestion:q,actualTiebreakerValue:actual,tiebreakerFinalized:actual!==null});
-    showToast('Tiebreaker saved ✅','success'); renderCommPage();
+    const upd={...week,tiebreakerQuestion:q,actualTiebreakerValue:actual,tiebreakerFinalized:actual!==null};
+    saveWeek(upd);
+    // DI-D (2026-09-02) — THE LOAD-BEARING INPUT. A tiebreaker entered or
+    // edited AFTER the week already finalized must actually take effect
+    // instead of freezing at whatever was true when the week finalized. Hand
+    // finalizeWeek the PERSISTED object (`upd`, not the pre-save `week`) —
+    // same invariant applyWeekStatusChange() already documents (~6758): the
+    // caller's object and storage can no longer disagree once saveWeek() ran
+    // first, so it no longer matters which of the two a downstream guard
+    // reads. One call recomputes calculateWeeklyResults() with the fresh
+    // actualTiebreakerValue and re-persists via saveAllWeeklyResults() —
+    // fixing Season Summary, Weekly History, CSV, and any WEEKLY recap/
+    // notification text at once, since they all read that one WEEKLY-RESULT
+    // snapshot (getWeeklyResults(weekId)). NOTE what this does NOT, by
+    // itself, guarantee: agreement with SCRIBE's/the mailto digest's
+    // SEASON-LEVEL leader identity. recap.js and this file's own broadcast/
+    // digest paths call calculateSeasonStandings() via its documented 2-arg
+    // fallback (no `weeks`), which is grouping-UNaware and can name a
+    // different season leader than the (grouping-aware) Standings page for a
+    // multi-part week — a separate, deferred item, not something this
+    // recompute touches. It also re-runs reconcileWeeklyObligation() (where
+    // UN-126's needsReview fires on a mismatch), and re-emits chat events
+    // (deterministic id, server deduped — no duplicate spam). If the week is
+    // not final, behavior is unchanged from before this input.
+    let msg='Tiebreaker saved ✅';
+    if(upd.status===WEEK_STATUS.FINAL){
+      const before=getWeeklyResults(upd.weekId);
+      finalizeWeek(upd);
+      const after=getWeeklyResults(upd.weekId);
+      msg='🎯 Tiebreaker saved — week results recalculated ✅';
+      if(weekOutcomeChanged(before,after)){
+        msg+=' ⚠️ Recorded outcome changed — check Weekly History and Obligation Corrections.';
+      }
+    }
+    showToast(msg,'success'); renderCommPage();
   });
   document.getElementById('auto-calc-tb-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    const total=calculateAlmaMaterTotal(getGames(week.weekId),ALMA_MATERS,week.tiebreakerCalculationMode||'selectedSlateOnly');
+    // Drew's ruling (2026-09-04): the auto-calc sums CLAIMED schools (an
+    // active player has that alma mater) — same claimedAlmaMaters() list
+    // every other alma-mater consumer in this file reads. See its docstring
+    // above; there is no separate "configured roster" anymore.
+    // F4 (2026-09-04) — for LOCKED/LIVE/FINAL weeks, almaMatersForAutoCalc()
+    // substitutes the roster FROZEN at lock (week.lockedAlmaMaters) instead
+    // of the live claimedAlmaMaters(), so a claim edit after lock can't
+    // silently move this number. See its docstring for the fallback story
+    // on a week locked before this shipped.
+    const total=calculateAlmaMaterTotal(getGames(week.weekId),almaMatersForAutoCalc(week),week.tiebreakerCalculationMode||'selectedSlateOnly');
     if(total===null){showToast('⚠️ No final alma mater scores yet.','warning');return;}
     const inp=document.getElementById('tb-actual'); if(inp)inp.value=total;
     showToast(`Auto-calculated: ${total} pts`,'success');
@@ -4590,7 +5095,15 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.querySelectorAll('.toggle-player-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const p=getPlayer(btn.dataset.playerId); if(!p)return;
-      savePlayer({...p,active:!p.active}); showToast(`${p.displayName} ${p.active?'deactivated':'activated'}`,'success'); renderCommPage();
+      savePlayer({...p,active:!p.active});
+      // Activating/deactivating a player changes who counts toward
+      // claimedAlmaMaters() (it filters to ACTIVE players only) — the same
+      // ripple the player-edit save does, so a deactivated player's claimed
+      // school stops driving the ⭐ flag on open/upcoming weeks immediately
+      // rather than going stale until the next unrelated claim edit.
+      const changed=recomputeAlmaMaterFlags(claimedAlmaMaters());
+      showToast(`${p.displayName} ${p.active?'deactivated':'activated'}${changed?` — ${changed} game${changed===1?'':'s'} in open/upcoming weeks re-flagged`:''}`,'success');
+      renderCommPage();
     });
   });
   document.querySelectorAll('.reset-pin-btn').forEach(btn=>{
@@ -4769,6 +5282,12 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     saveSetting('autoRefreshInterval',val); setupAutoRefresh();
     showToast('Refresh interval saved','success');
   });
+
+  // Alma Maters — no add/remove handlers here anymore. The roster is
+  // derived (claimedAlmaMaters()); the Settings card above is read-only.
+  // Editing/claiming happens on the player, in showEditPlayerModal — see
+  // its #ep-save handler for the recomputeAlmaMaterFlags() ripple, and the
+  // .toggle-player-btn handler above for the activate/deactivate ripple.
 
   // Randomize Picks shortcut (UN-107) — commissioner-controlled, default OFF.
   document.getElementById('randomize-enabled-toggle')?.addEventListener('change', e => {
@@ -5654,6 +6173,39 @@ export function renderObligationCorrectionsAdmin(entries = currentSeasonObligati
 }
 
 /**
+ * DI-H (2026-09-02) — the Data-tab card, INCLUDING its data-comm-tab="data"
+ * wrapper (RG-10), for the one-time-but-permanently-available retroactive
+ * recompute. Exported for the same reason its neighbours below are: a test
+ * seam that asserts the markup itself, string in/string out, no DOM. The
+ * results panel only appears once `state.recalcAllResult` is populated by the
+ * click handler in bindCommEventListeners() — the exact store-in-state-then-
+ * renderCommPage() pattern the rest of this panel already uses (see
+ * `state.lastFetchResult`).
+ *
+ * Button stays PERMANENTLY available (not single-use-then-hidden) — Drew's
+ * ruling: restricting it would reintroduce the same failure the next time a
+ * tiebreaker is entered late.
+ */
+export function renderRecalculateFinalizedWeeksAdminSectionHTML() {
+  const r = state.recalcAllResult;
+  return `
+    <div class="admin-section" data-comm-tab="data">
+      <div class="admin-section-title">🔁 Recalculate Finalized Weeks</div>
+      <div class="card">
+        <p class="text-muted text-xs mb-sm">Re-runs finalize on every already-final week using the currently saved tiebreaker values. Use this to correct any week that finalized before its tiebreaker was entered — including weeks that may already have gotten it wrong.</p>
+        <button class="btn btn-primary btn-block" id="recalc-all-weeks-btn">🔁 Recalculate All Finalized Weeks</button>
+        ${r ? `
+          <div class="info-box mt-sm">
+            ${r.changes.length===0
+              ? 'No results changed.'
+              : r.changes.map(c=>`<div>${escHtml(c)}</div>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+    </div>`;
+}
+
+/**
  * The whole Data-tab card, INCLUDING its data-comm-tab="data" wrapper
  * (RG-10) — exported as its own HTML-returning function so loadtest.mjs can
  * assert the wrapper is actually present in rendered markup, same pattern
@@ -5814,6 +6366,24 @@ function showCreateWeekModal() {
     saveWeek(newW);setActiveWeekId(newW.weekId);
     showToast(`✅ Week ${weekNum} created`,'success');ov.remove();refreshHeader();renderCommPage();
   });
+}
+
+/**
+ * DI-8 — the manual Game Modal has no way to derive nationalTV from a
+ * hand-typed game (there is no broadcast data behind a manual entry). It
+ * recomputes isAlmaMaterGame fresh on every save (line above this function's
+ * call site), but broadcast fields are different: editing an EXISTING
+ * (typically ESPN-sourced) game must CARRY FORWARD whatever nationalTV /
+ * broadcastNetwork it already has rather than reset to false/null on every
+ * edit; a brand-new manual entry gets the safe default. Extracted as its own
+ * function so the rule is directly unit-testable without driving the full
+ * modal UI.
+ */
+export function carryForwardBroadcastFields(existingGame) {
+  return {
+    nationalTV: existingGame ? !!existingGame.nationalTV : false,
+    broadcastNetwork: existingGame ? (existingGame.broadcastNetwork || null) : null,
+  };
 }
 
 function showGameModal(game, week, onSave) {
@@ -6045,7 +6615,7 @@ function showGameModal(game, week, onSave) {
     const hs=game?(document.getElementById('m-hs')?.value!==''?parseFloat(document.getElementById('m-hs')?.value):null):null;
     const as_=game?(document.getElementById('m-as')?.value!==''?parseFloat(document.getElementById('m-as')?.value):null):null;
     const status=game?document.getElementById('m-status')?.value||'scheduled':'scheduled';
-    const isAlma=!!(getAlmaMaterMatch(ht) || getAlmaMaterMatch(at));
+    const isAlma=!!(getAlmaMaterMatch(ht,claimedAlmaMaters()) || getAlmaMaterMatch(at,claimedAlmaMaters()));
     const tw=getTimeWindow(kickoff);
     let actualWinner=null;
     if(status==='final'&&hs!==null&&as_!==null){if(hs>as_)actualWinner=ht;else if(as_>hs)actualWinner=at;}
@@ -6063,6 +6633,7 @@ function showGameModal(game, week, onSave) {
       kickoff,spread,favorite:fav,venue,
       homeConference:hconf,awayConference:aconf,homeRank:hr,awayRank:ar,
       homeScore:hs,awayScore:as_,status,actualWinner,atsWinner,isAlmaMaterGame:isAlma,
+      ...carryForwardBroadcastFields(game),
       multiplier, isManual, leagueLabel, espnSport, espnEventId,
       timeWindow:tw,spreadSource:'manual',dataQuality:'manual',dataSource:'manual',
       kickoffConfirmed:!!kickoff,
@@ -6071,18 +6642,131 @@ function showGameModal(game, week, onSave) {
   });
 }
 
-function showEditPlayerModal(playerId) {
+/**
+ * The offline/fetch-failure fallback options for the alma-mater dropdown —
+ * just the 6-school ALMA_MATERS catalog, shaped like fetchEspnTeamsList()'s
+ * real return value so buildAlmaMaterOptions() doesn't need two code paths.
+ */
+function almaMaterCatalogFallback() {
+  return ALMA_MATERS.map(am => ({ location: am, displayName: ALMA_MATER_DISPLAY[am] || am }));
+}
+
+/**
+ * The cached ESPN team catalog for the alma-mater dropdown — IN MEMORY, for
+ * the life of the page. Not localStorage, not sessionStorage, and above all
+ * NOT the storage seam.
+ *
+ * RG-55 (2026-09-04, caught by measurement before deploy). This was
+ * originally cached with `saveSetting('espnTeamsCache', …)`. That is wrong
+ * three times over, and the first one is a live data-loss hazard:
+ *
+ *  1. `cfbp_settings` is ONE seam key → ONE Google Sheets cell.
+ *     `backend/Code.gs` writes the whole JSON string into column 2
+ *     (`setValues([[str, now]])` / `appendRow`) with no chunking and no size
+ *     check. Sheets caps a cell at 50,000 characters. The real catalog is
+ *     760 teams and serialized to 88,725 chars — 77% over on its own, and
+ *     the measured blob with the rest of settings in it came to 89,148. That
+ *     blob also carries `adminPasswordHash` and the site PIN, so the first
+ *     commissioner to open the player editor would have pushed a write that
+ *     either failed or truncated the app's own credentials. `saveSetting()`
+ *     is a read-modify-write of the WHOLE blob, so it would then have stayed
+ *     oversized on every later settings edit.
+ *  2. It is identical on every device and re-fetches in about a second.
+ *     Spending shared-Sheet budget to sync it between six phones buys
+ *     nothing.
+ *  3. It is third-party data, never authoritative, and safe to lose.
+ *
+ * Memory rather than localStorage deliberately: CLAUDE.md's "never fetch
+ * localStorage directly" (AD-02) is absolute, and a first exception — even a
+ * defensible one — hands the next generalist a precedent. The only thing
+ * memory costs is one ~1s refetch per page load, and only for a commissioner
+ * who opens the player editor. Within a session the cache still holds, which
+ * is the whole property the modal wanted; almatest §16c proves a second open
+ * makes zero fetch calls.
+ *
+ * Returns `null` (not `[]`) when nothing is cached yet, so the caller can
+ * tell "never fetched" apart from "fetched, zero teams".
+ */
+let _espnTeamsCache = null;   // { teams: [{location, displayName}], fetchedAt } | null
+
+function cachedEspnTeamsList() {
+  return Array.isArray(_espnTeamsCache?.teams) && _espnTeamsCache.teams.length ? _espnTeamsCache.teams : null;
+}
+
+/**
+ * Test-only seam, LOAD-BEARING and genuinely called (unlike
+ * `_unionByIdForTest`, whose false "load-bearing" claim §6 of the ledger
+ * still owes a fix — RG-27/RG-49). `_espnTeamsCache` is module state, so
+ * `localStorage.clear()` no longer resets it between test sections; without
+ * this, every "cold cache, so this open must fetch" precondition in
+ * almatest.mjs would silently become an assumption about section ORDER.
+ * Callers: almatest.mjs §16b, §16c (which contains a canary proving this
+ * function actually empties the cache) and §16f.
+ */
+export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; }
+
+/**
+ * Builds the alma-mater <select>'s <option> list from whichever team source
+ * is available (cached ESPN catalog or the ALMA_MATERS fallback — both
+ * shaped `{ location, displayName }`). VALUE is always `location` — the
+ * SAME field parseAndReport() stores as game.homeTeam/awayTeam, so
+ * getAlmaMaterMatch()'s exact-equality-first path applies to whatever gets
+ * saved (data-model.js). LABEL is `displayName`, which disambiguates the
+ * handful of teams that share an identical `location` (Charlotte,
+ * Roosevelt, Troy — see fetchEspnTeamsList()'s docstring); selecting either
+ * still stores the same string, a known, documented, unresolved-at-the-
+ * data-level collision (see the handoff report).
+ *
+ * ALWAYS includes an empty "— None —" option (alma mater is optional), and
+ * — critically — if `currentValue` doesn't case-insensitively match any
+ * option already being offered (a legacy free-text claim, or ANY claim
+ * while only the 6-school fallback is showing because ESPN is unreachable),
+ * one more option for it verbatim, pre-selected. Without this, opening the
+ * modal to fix an unrelated field (name/email) and hitting Save would
+ * silently blank or change an existing claim the dropdown doesn't happen to
+ * list — the <select> forces SOME value, and browsers default an unmatched
+ * value to the first <option> if nothing is marked selected.
+ */
+function buildAlmaMaterOptions(currentValue, teamsList) {
+  const cur = (currentValue || '').trim();
+  const curLower = cur.toLowerCase();
+  const sorted = [...(teamsList || [])].sort((a, b) => (a.location||'').localeCompare(b.location||''));
+  const hasCurrent = !cur || sorted.some(t => (t.location||'').trim().toLowerCase() === curLower);
+  const opts = [`<option value="">— None —</option>`];
+  if (cur && !hasCurrent) {
+    opts.push(`<option value="${escHtml(cur)}" selected>${escHtml(cur)} (current — not in ESPN list)</option>`);
+  }
+  for (const t of sorted) {
+    const sel = cur && (t.location||'').trim().toLowerCase() === curLower ? ' selected' : '';
+    opts.push(`<option value="${escHtml(t.location)}"${sel}>${escHtml(t.displayName || t.location)}</option>`);
+  }
+  return opts.join('');
+}
+
+export async function showEditPlayerModal(playerId) {
   const player=getPlayer(playerId); if(!player)return;
+  // ESPN-canonical <select>, not free text (Drew's ruling, 2026-09-04 —
+  // verbatim: "One way to protect the correct school naming (eg washington
+  // vs Washington state) would be for you to either pick from an approved
+  // list of schools as a drop down or for commissioner to ask to confirm
+  // which school you mean when you enter it." Then: "Do the dropdown.").
+  // Options come from the cached ESPN team catalog (near-static, fetched at
+  // most once PER PAGE LOAD — the cache is in memory, not the storage seam;
+  // see cachedEspnTeamsList()) or, if nothing is cached yet AND the
+  // background refresh below fails, the 6-school ALMA_MATERS fallback.
+  // A fetch failure NEVER blocks editing a player — Save always has a valid
+  // option list to choose from.
+  const cached = cachedEspnTeamsList();
+  const initialTeamsList = cached || almaMaterCatalogFallback();
   const ov=document.createElement('div');ov.className='modal-overlay centered';
   ov.innerHTML=`<div class="modal">
     <div class="modal-header"><h3>Edit Player</h3><button class="modal-close" id="ep-c">✕</button></div>
     <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" id="ep-name" value="${escHtml(player.displayName)}" /></div>
     <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ep-email" type="email" value="${escHtml(player.email||'')}" /></div>
     <div class="form-group"><label class="form-label">Alma Mater</label>
-      <select class="form-select" id="ep-alma">
-        <option value="">None</option>
-        ${ALMA_MATERS.map(am=>`<option value="${am}"${player.almaMater===am?' selected':''}>${am}</option>`).join('')}
-      </select></div>
+      <select class="form-select" id="ep-alma">${buildAlmaMaterOptions(player.almaMater, initialTeamsList)}</select>
+      <p class="text-muted text-xs mt-sm" id="ep-alma-note">${cached ? `From ESPN's team catalog (${cached.length} schools).` : '⏳ Loading full ESPN school list…'}</p>
+    </div>
     <p class="text-muted text-xs mb-md">Name changes keep all historical picks linked to this player.</p>
     <button class="btn btn-primary btn-block" id="ep-save">Save</button>
   </div>`;
@@ -6092,9 +6776,45 @@ function showEditPlayerModal(playerId) {
   ov.querySelector('#ep-save')?.addEventListener('click',()=>{
     const n=document.getElementById('ep-name')?.value.trim();
     if(!n){showToast('Name required','error');return;}
-    savePlayer({...player,displayName:n,email:document.getElementById('ep-email')?.value.trim()||'',almaMater:document.getElementById('ep-alma')?.value||''});
-    showToast('Updated ✅','success');ov.remove();renderCommPage();
+    const newAlma=document.getElementById('ep-alma')?.value.trim()||'';
+    savePlayer({...player,displayName:n,email:document.getElementById('ep-email')?.value.trim()||'',almaMater:newAlma});
+    // The roster is DERIVED from claims (claimedAlmaMaters()) — a changed
+    // claim must ripple to every open/upcoming week's ⭐ flag immediately,
+    // the same way the old commissioner add/remove buttons used to (Drew,
+    // 2026-09-04's ruling, applied to the one place claims actually change).
+    const changed=recomputeAlmaMaterFlags(claimedAlmaMaters());
+    showToast(`Updated ✅${changed?` — ${changed} game${changed===1?'':'s'} in open/upcoming weeks re-flagged`:''}`,'success');
+    ov.remove();renderCommPage();
   });
+
+  // Background refresh — only when nothing is cached yet. Never blocks the
+  // modal or Save, and never throws out of this function: this isn't the
+  // backend-sync seam AD-06 governs (a shared Sheet six people write picks
+  // to) — it's a public, read-only ESPN catalog with a static fallback
+  // already rendered above, so CONVENTIONS #7's "defensive at the boundary"
+  // applies, not AD-06's loud-fail banner.
+  if (!cached) {
+    try {
+      const fresh = await fetchEspnTeamsList();
+      if (Array.isArray(fresh) && fresh.length) {
+        // In-memory only — never through the storage seam. See
+        // cachedEspnTeamsList() above for why (RG-55).
+        _espnTeamsCache = { teams: fresh, fetchedAt: new Date().toISOString() };
+        // The modal may already be closed/saved by the time this resolves —
+        // guard every DOM touch. sel.value is READ, never reset, so a
+        // selection already made (by a person or a test) survives the
+        // options list being replaced underneath it.
+        const sel = document.getElementById('ep-alma');
+        if (sel) sel.innerHTML = buildAlmaMaterOptions(sel.value || player.almaMater, fresh);
+        const note = document.getElementById('ep-alma-note');
+        if (note) note.textContent = `From ESPN's team catalog (${fresh.length} schools).`;
+      }
+    } catch (err) {
+      console.warn('[app] fetchEspnTeamsList failed, staying on the ALMA_MATERS fallback:', err.message||err);
+      const note = document.getElementById('ep-alma-note');
+      if (note) note.textContent = '⚠️ Could not reach ESPN — showing a short list. You can still save.';
+    }
+  }
 }
 
 function showResetPinModal(playerId, displayName) {
@@ -6125,7 +6845,7 @@ function showResetPinModal(playerId, displayName) {
 
 // ─── RULES PAGE ───────────────────────────────────────────────────────────────
 
-function renderRulesPage() {
+export function renderRulesPage() {
   const c=document.getElementById('page-rules'); if(!c)return;
   const rules=getSettings().customRules||DEFAULT_RULES;
   c.innerHTML=`
@@ -6200,7 +6920,7 @@ function renderRulesPage() {
         <ul class="rules-list">${s.items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>
       </div><div class="divider"></div>`).join('')}
       <div class="rules-section"><h3>⭐ Alma Maters</h3>
-        <ul class="rules-list">${ALMA_MATERS.map(am=>`<li>${am}</li>`).join('')}</ul>
+        <ul class="rules-list">${claimedAlmaMaters().map(am=>`<li>${escHtml(am)}</li>`).join('')}</ul>
       </div>
       <div class="divider"></div>
       <div class="rules-section"><h3>🍺 Debts &amp; Bylaws</h3>
@@ -6693,6 +7413,44 @@ function renderCommExtrasV16(week, games) {
 // ─── FINALIZATION ─────────────────────────────────────────────────────────────
 
 /**
+ * DI-D / DI-H (2026-09-02) — true when a week's recorded winner or loser (by
+ * playerId, never by display name — two different players could theoretically
+ * share a nickname) differs between two `getWeeklyResults(weekId)` snapshots
+ * taken before and after a recompute. Shared so the tiebreaker-save path
+ * (DI-D) and the bulk Data-tab recompute (DI-H) can't drift on what "the
+ * outcome changed" means.
+ */
+function weekOutcomeChanged(before, after) {
+  const bw = before.find(r=>r.isWinner)?.playerId ?? null;
+  const bl = before.find(r=>r.isLoser)?.playerId ?? null;
+  const aw = after.find(r=>r.isWinner)?.playerId ?? null;
+  const al = after.find(r=>r.isLoser)?.playerId ?? null;
+  return bw!==aw || bl!==al;
+}
+
+/**
+ * DI-E (2026-09-02) — true when finalizing `week` RIGHT NOW, with no
+ * tiebreaker on file, would assign the winner or loser arbitrarily: no
+ * `actualTiebreakerValue` AND a real tie exists in a `calculateWeeklyResults`
+ * preview scored with `actualTiebreaker=null` (top two OR bottom two rows
+ * share `correctPicks`). Deliberately narrow, per the design input's own
+ * trigger condition. Read-only preview — scores against the CURRENT slate but
+ * never persists anything (no `saveGame`/`saveWeek`/`saveAllWeeklyResults`
+ * call anywhere in this function), so calling it during a render is free of
+ * side effects. Shared by both of the only two paths that reach 'final'
+ * (renderWeekStatusButtons, ~5810 — 'final' is reachable only from 'live')
+ * so they can't disagree about when to warn.
+ */
+function weekHasUnresolvedTie(week, players, picks, games) {
+  if (!week || week.actualTiebreakerValue!=null) return false;
+  const rows = calculateWeeklyResults(week.weekId, players, picks, games, null);
+  if (rows.length<2) return false;
+  const topTied = rows[0].correctPicks===rows[1].correctPicks;
+  const bottomTied = rows[rows.length-1].correctPicks===rows[rows.length-2].correctPicks;
+  return topTied || bottomTied;
+}
+
+/**
  * The commissioner's Week-tab status buttons (draft/open/locked/live/final).
  *
  * Extracted from the `.week-status-btn` click handler so the ORDER OF
@@ -6720,7 +7478,18 @@ function renderCommExtrasV16(week, games) {
 export function applyWeekStatusChange(week, to) {
   if(!week||!to)return null;
   const upd={...week,status:to};
-  if(to==='locked'){getGames(week.weekId).forEach(g=>saveGame({...g,lockedSpread:g.spread}));upd.lockedAt=new Date().toISOString();}
+  if(to==='locked'){
+    getGames(week.weekId).forEach(g=>saveGame({...g,lockedSpread:g.spread}));
+    upd.lockedAt=new Date().toISOString();
+    // F4 (2026-09-04, clearing the reviewer BLOCK) — mirrors the lockedSpread
+    // freeze immediately above, one level up: snapshot the roster the
+    // tiebreaker Auto-Calc reads at the SAME instant every game's spread
+    // freezes, so a claim edit or player deactivation between LOCK and
+    // finalization can never silently move the correct answer out from
+    // under picks players already submitted against it. See
+    // almaMatersForAutoCalc()'s docstring for the read side.
+    upd.lockedAlmaMaters=claimedAlmaMaters();
+  }
   if(to==='final'){upd.finalizedAt=new Date().toISOString();}
   saveWeek(upd);
   if(to==='final')finalizeWeek(upd);
@@ -6886,8 +7655,15 @@ function setupAutoRefresh() {
  *     (Commissioner sees a confirm prompt and completes the transition manually.)
  *
  * Demo weeks are skipped — those are commissioner-driven simulations.
+ *
+ * Exported (2026-09-04, F4) — same reasoning as applyWeekStatusChange()'s
+ * own export comment: this is the SECOND, independent path a week can reach
+ * LOCKED through (a commissioner pressing the status button goes through
+ * applyWeekStatusChange() instead), so the harness needs to reach it
+ * directly to prove the lockedAlmaMaters freeze below applies on BOTH paths,
+ * not just the manual one.
  */
-function tickAutoTransition() {
+export function tickAutoTransition() {
   try {
     const week = getCurrentWeek();
     if (!week) return;
@@ -6906,6 +7682,11 @@ function tickAutoTransition() {
       if (lockAt && now >= lockAt.getTime()) {
         next.status = WEEK_STATUS.LOCKED;
         next.lockedAt = new Date().toISOString();
+        // F4 (2026-09-04) — same freeze applyWeekStatusChange() does on the
+        // manual lock path; this is the auto-lock path, and it must not
+        // disagree about when the roster stops moving. See
+        // almaMatersForAutoCalc()'s docstring.
+        next.lockedAlmaMaters = claimedAlmaMaters();
         changed = true;
         // Lock the spreads on all games at their current values so late-hour
         // line moves don't rewrite what players were graded against.
@@ -6974,7 +7755,7 @@ async function doRefreshScores(week,games) {
     if(!stored) continue;
     const wasFinal = stored.status===GAME_STATUS.FINAL;
     const wasLive  = stored.status===GAME_STATUS.LIVE;
-    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,lastUpdated:upd.lastUpdated});
+    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated});
     // v0.17.0 — kickoff system event + SCRIBE live observations
     try {
       const fresh0=getGame(upd.gameId);
@@ -7058,10 +7839,10 @@ function exportWeekPicksCSV(week) {
 }
 
 /** Per-week — the slate (games on the slate) */
-function exportWeekSlateCSV(week) {
+export function exportWeekSlateCSV(week) {
   if (!week) { showToast('No week selected','error'); return; }
   const games=getGames(week.weekId);
-  const rows=[['Game ID','ESPN ID','Home','Home Mascot','Away','Away Mascot','Home Conf','Away Conf','Home Rank','Away Rank','Kickoff','Time Window','Spread (home perspective)','Favorite','Locked Spread','Status','Home Score','Away Score','Actual Winner','ATS Winner','Alma Mater','Spread Source','Venue']];
+  const rows=[['Game ID','ESPN ID','Home','Home Mascot','Away','Away Mascot','Home Conf','Away Conf','Home Rank','Away Rank','Kickoff','Time Window','Spread (home perspective)','Favorite','Locked Spread','Status','Home Score','Away Score','Actual Winner','ATS Winner','Alma Mater','National TV','Spread Source','Venue']];
   for(const g of games){
     rows.push([
       g.gameId, g.espnEventId||'',
@@ -7075,6 +7856,7 @@ function exportWeekSlateCSV(week) {
       g.status, g.homeScore??'', g.awayScore??'',
       g.actualWinner||'', g.atsWinner||'',
       g.isAlmaMaterGame?'yes':'no',
+      g.nationalTV?'yes':'no',
       g.spreadSource||'',
       formatVenueDisplay(g)||g.venue||'',
     ]);
