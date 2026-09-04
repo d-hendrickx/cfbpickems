@@ -25,41 +25,6 @@ function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/**
- * Chronological order of two week records within one season.
- *
- * RG — fb_1788306484896_1owwx (2026-09-01). This used to be a bare
- * `a.weekNumber - b.weekNumber`, which treats `weekNumber` as a TOTAL order
- * over a season's weeks. It never was one: `weekNumber` is the CFB week a
- * slate belongs to, and a single CFB week routinely needs more than one week
- * RECORD because one lock time can't cover it (Aug 29–30 and the Thu–Labor
- * Day Sep 3–7 games are both "Week 1"). `createWeek()` has shipped
- * same-weekNumber siblings as a supported shape since v0.17.7 —
- * `formatWeekGroupLabel()` in data-model.js explicitly handles "two parts
- * both left roundLabel blank, same weekNumber".
- *
- * With a tie, `weekNumber < weekNumber` is false in BOTH directions, so
- * Part 1 was invisible to Part 2's recap lookup and the picks page fell
- * through to the Week-1-only Permanent Record card. Ordering falls back to
- * `startDate`, then `createdAt` — both ISO strings, so lexicographic
- * comparison IS chronological comparison and no Date parsing (or timezone,
- * RG-38) is involved. `weekNumber` still dominates, so every week whose
- * numbers differ orders exactly as it did before.
- *
- * Deliberately group-agnostic: it says nothing about `groupId`. Whether a
- * grouped Part 2 should recap its own Part 1 or skip to the previous GROUP is
- * the open design question in DEVELOPMENT_LEDGER §6, and is not settled here.
- */
-function compareWeekOrder(a, b) {
-  const an = Number(a?.weekNumber ?? 0), bn = Number(b?.weekNumber ?? 0);
-  if (an !== bn) return an - bn;
-  const ad = String(a?.startDate || ''), bd = String(b?.startDate || '');
-  if (ad !== bd) return ad < bd ? -1 : 1;
-  const ac = String(a?.createdAt || ''), bc = String(b?.createdAt || '');
-  if (ac !== bc) return ac < bc ? -1 : 1;
-  return 0;
-}
-
 /** Most recent finalized, history-visible week strictly before `week` (same season first). */
 export function findPreviousFinalizedWeek(week) {
   const weeks = getWeeks().filter(w =>
@@ -67,8 +32,8 @@ export function findPreviousFinalizedWeek(week) {
     w.dataSourceMode !== 'demo');   // demo data never drives a recap (v0.17.0)
   if (!weeks.length) return null;
   const sameSeason = weeks
-    .filter(w => w.season === week?.season && (week ? compareWeekOrder(w, week) < 0 : true))
-    .sort((a, b) => compareWeekOrder(b, a));
+    .filter(w => w.season === week?.season && (week ? w.weekNumber < week.weekNumber : true))
+    .sort((a, b) => b.weekNumber - a.weekNumber);
   return sameSeason[0] || null;
 }
 
@@ -148,16 +113,7 @@ export function renderWeekRecapCardHTML(prev) {
   const season = prev.season;
   const seasonResults = getWeeklyResults().filter(r => {
     const w = getWeeks().find(x => x.weekId === r.weekId);
-    // `<= 0` — every week up to AND INCLUDING `prev`. Uses the same ordering
-    // helper as findPreviousFinalizedWeek() rather than a bare
-    // `w.weekNumber <= prev.weekNumber`, which was the identical
-    // total-order-on-weekNumber bug: on a same-weekNumber sibling that
-    // comparison is TRUE IN BOTH DIRECTIONS, so a LATER part's results leaked
-    // into an EARLIER part's chart line and SCRIBE published, under its own
-    // byline, a false claim about who led at a named point in time
-    // ("Season chart after Week 1, Part 1: Kevin leads" while Drew won it
-    // 5-4). Found by reviewer, 2026-09-02, alongside fb_1788306484896_1owwx.
-    return w && w.season === season && w.status === 'final' && w.showInHistory !== false && compareWeekOrder(w, prev) <= 0;
+    return w && w.season === season && w.status === 'final' && w.showInHistory !== false && w.weekNumber <= prev.weekNumber;
   });
   // UN-118/UN-125 — DELIBERATELY NOT widened for grouping. Drew's explicit
   // scope ruling held the SCRIBE recap card (this file) until real

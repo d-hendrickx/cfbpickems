@@ -67,26 +67,10 @@ const _dirty = new Set();      // keys changed since last push
  */
 const _dirtyFields = new Map();
 
-/**
- * User data whose loss is unrecoverable — see storage.js USER_MUTABLE_KEYS.
- *
- * RG-49 — the last two entries read `cfbp_tb_guesses` / `cfbp_ep_guesses` until
- * 2026-09-02. Neither string has ever existed anywhere in the app; storage.js
- * calls those keys `cfbp_tiebreaker_guesses` / `cfbp_extra_point_guesses`. So
- * `_USER_DATA_KEYS.includes(k)` was false for both REAL keys, and defense (c)
- * was INERT for tiebreaker and Extra Point guesses from the day it was written
- * while reading, to any human or any source-text audit, as though it covered
- * them. persisttest [6] is the structural check that every key named in this
- * array is a key storage.js actually defines.
- *
- * Keep key names in the array itself, not in comments inside it: [6] reads the
- * string literals out of this block, so a retired key name mentioned between
- * the brackets will fail that assertion. Failing loud on a comment is the safe
- * direction, but the comment belongs up here regardless.
- */
+/** User data whose loss is unrecoverable — see storage.js USER_MUTABLE_KEYS. */
 const _USER_DATA_KEYS = [
   'cfbp_players', 'cfbp_weeks', 'cfbp_games', 'cfbp_picks', 'cfbp_results',
-  'cfbp_obligations', 'cfbp_tiebreaker_guesses', 'cfbp_extra_point_guesses',
+  'cfbp_obligations', 'cfbp_tb_guesses', 'cfbp_ep_guesses',
 ];
 function _size(v) {
   if (Array.isArray(v)) return v.length;
@@ -167,70 +151,6 @@ function _rebaseRecords(local, remote, idField) {
     return merged;
   });
 }
-
-/**
- * RG-49 — APPEND-ONLY LOGS merge by id; they are never re-applied wholesale.
- *
- * `cfbp_feedback` is a list of immutable rows written by six different people
- * at six different times into ONE seam key. A device booting on a stale mirror
- * holds a well-formed, populated, obsolete copy of the whole list; the default
- * branch in hydrate() re-applies it over the fresher remote and flushPush sends
- * it to the Sheet. Every submission silently deletes the queue behind it —
- * which is how the bug-reporting channel itself became lossy, and therefore why
- * no other report in the queue could be trusted to be complete. Drew, 2026-09-01:
- * "I don't think the feature/bug feedback submitted is always getting saved."
- *
- * `_shrinks` (defense (c)) is NOT the fix for this shape. Dropping the smaller
- * side would throw away the submission the player just made — the same silent
- * loss, arrived at from the other direction. Both halves are pinned by
- * persisttest [3] and [4]. The merge is a UNION keyed on the row id: remote
- * first, then any local row the remote has not seen.
- *
- * Scoped to `cfbp_feedback` on purpose. `cfbp_comments` has the identical shape
- * and the identical exposure, but it also has an ORDINARY, player-reachable
- * delete (`deleteComment`, wired to the per-game comment bubbles), and a union
- * would resurrect a comment someone deleted — the inverse hazard ledger §6
- * already records against `_rebaseRecords()`. That is Drew's decision, not a
- * guess to make here, so it is deliberately left out.
- *
- * Feedback's own delete surface, CHECKED 2026-09-02 rather than assumed:
- *   clearFeedback()  no production call site at all; its only two callers are
- *                    loadtest.mjs fixtures, which run in LOCAL mode and never
- *                    reach this rebase.
- *   resetToDemo()    DOES clear feedback and IS reachable (commissioner Full
- *                    Factory Reset), so this union can undo a factory reset's
- *                    feedback clear if one is run inside the stale window.
- * That residual is accepted on defense (c)'s own stated principle: a deletion is
- * rare, visible, and can simply be redone once synced; silently destroying every
- * player's submissions is neither. The trade only ever runs in that direction.
- *
- * A row with no id is KEPT rather than deduped: it may duplicate on a later
- * hydrate, which is visible and recoverable. Dropping a submission is not.
- */
-const _APPEND_ONLY_ID = { cfbp_feedback: 'id' };
-function _unionById(local, remote, idField) {
-  if (!Array.isArray(local) || !Array.isArray(remote)) return local;
-  const seen = new Set();
-  const out = [];
-  remote.forEach(r => {
-    if (_isPlainObject(r) && r[idField] != null) seen.add(r[idField]);
-    out.push(r);
-  });
-  local.forEach(l => {
-    const id = _isPlainObject(l) ? l[idField] : null;
-    if (id != null && seen.has(id)) return;
-    if (id != null) seen.add(id);
-    out.push(l);
-  });
-  return out;
-}
-/**
- * Test-only seam, LOAD-BEARING for the same reason `_shrinksForTest` is (RG-27):
- * a source-text match cannot tell a working union from a gutted one. Verified by
- * mutation 2026-09-02 — replacing the body with `return local` leaves the name,
- * the export, the call site and this comment intact and destroys the protection.
- */
-export function _unionByIdForTest(local, remote, idField) { return _unionById(local, remote, idField); }
 
 const _listeners = new Set();  // status change subscribers
 
@@ -420,9 +340,6 @@ export async function hydrate() {
           if (f in v) merged[f] = v[f]; else delete merged[f];
         });
         _cache.set(k, merged);
-      } else if (_APPEND_ONLY_ID[k]) {
-        // RG-49 — append-only log: union by id, never wholesale replace.
-        _cache.set(k, _unionById(v, _cache.get(k), _APPEND_ONLY_ID[k]));
       } else if (_USER_DATA_KEYS.includes(k) && _shrinks(v, _cache.get(k))) {
         // NEW DEFENSE (c), 2026-08-12. RG-12's two guards both protect against
         // an empty REMOTE. Neither protects against a stale LOCAL that looks

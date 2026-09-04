@@ -261,53 +261,18 @@ export function calculateGroupWeeklyResults(groupWeeks, players, allPicks, allGa
   return rankWeeklyResults(results, anyFinal);
 }
 
-/**
- * Sums FINAL-game points for every school in `almaMaters` — the list the
- * caller decides matters (app.js's `claimedAlmaMaters()` for the real
- * Auto-Calc button: distinct schools actually CLAIMED by an active player,
- * per Drew's ruling 2026-09-04 — "calculate only the alma maters that are
- * claimed... if one is listed then its added to the auto calc." This
- * function itself is agnostic to WHERE the list came from; it just has to
- * agree with itself about what it is).
- *
- * FIX (regression on commit 8ae64f4): both halves below now resolve
- * against the SAME `almaMaters` list through the SAME precise matcher,
- * `getAlmaMaterMatch()`. Previously the filter half called
- * `getAlmaMaterMatch(team)` with NO second argument, which silently
- * defaults to the hardcoded ALMA_MATERS catalog (data-model.js) regardless
- * of what the caller passed — while the summing half below used a naive
- * `almaMaters.some(am => team.toLowerCase().includes(am.toLowerCase()))`.
- * The two agreed only by coincidence, as long as the caller's list equaled
- * the catalog; the moment the roster became commissioner-editable and
- * diverged from the catalog (Purdue removed, Clemson added), they disagreed
- * silently and produced a wrong total (28 instead of 59 on the Clemson
- * 31 / Oklahoma 28 fixture — see almatotaltest.mjs). Naive substring
- * matching is also replaced by `getAlmaMaterMatch()` so a claimed "Miami"
- * cannot also sum "Miami (OH)"'s score — RG-02's original defect class,
- * reachable again now that the list is commissioner-editable.
- *
- * Returns `null` — never `0` — whenever no FINAL game actually involves a
- * school in `almaMaters`. Before this fix, a game could pass the (wrongly
- * catalog-based) filter half while matching NEITHER side of the (correctly
- * list-based) summing half — e.g. a FINAL Purdue game, on-catalog but
- * off-roster — silently returning 0 (a false "nothing scored" instead of a
- * true "no signal"). Unifying both halves on one list/matcher closes this
- * as a side effect: any game that survives the filter is now GUARANTEED to
- * match at least one side in the summing loop.
- */
 export function calculateAlmaMaterTotal(games, almaMaters, calcMode='selectedSlateOnly') {
-  const list = Array.isArray(almaMaters) ? almaMaters : [];
-  const ag=(games||[]).filter(g=>{
-    const isAlma = !!(getAlmaMaterMatch(g.homeTeam, list) || getAlmaMaterMatch(g.awayTeam, list));
+  const ag=games.filter(g=>{
+    const isAlma = !!(getAlmaMaterMatch(g.homeTeam) || getAlmaMaterMatch(g.awayTeam));
     return calcMode==='selectedSlateOnly'?g.isAlmaMaterGame&&isAlma:isAlma;
   });
   if(!ag.length) return null;
-  const fg=ag.filter(g=>g.status===GAME_STATUS.FINAL&&g.homeScore!==null&&g.awayScore!==null);
+  const fg=ag.filter(g=>g.status===GAME_STATUS.FINAL&&g.homeScore!==null);
   if(!fg.length) return null;
   let total=0;
   for(const g of fg){
-    const hA=!!getAlmaMaterMatch(g.homeTeam, list);
-    const aA=!!getAlmaMaterMatch(g.awayTeam, list);
+    const hA=almaMaters.some(am=>g.homeTeam.toLowerCase().includes(am.toLowerCase()));
+    const aA=almaMaters.some(am=>g.awayTeam.toLowerCase().includes(am.toLowerCase()));
     if(hA) total+=g.homeScore||0;
     if(aA) total+=g.awayScore||0;
   }
@@ -331,24 +296,6 @@ export function calculateAlmaMaterTotal(games, almaMaters, calcMode='selectedSla
  * present in `allWeeklyResults` (i.e. finalized) — mirrors finalizeWeek()'s
  * own "not every member final ⇒ no obligation yet" gate (DI-126d), applied
  * here to the win/loss tally instead of the obligation.
- *
- * DI-A (2026-09-02) — Drew: "The rankings in the standings should be based
- * off of the delta tie breaker in the instance of a tie. Right now Kihoon is
- * listed as last, but Kevin has the L." The final sort below adds ONE middle
- * criterion between totalCorrect and winPct: each player's net WEEKLY
- * win/loss OUTCOME (weeklyWins-weeklyLosses, computed just above). Per
- * Drew's ruling the tiebreaker has NO season aggregate — this function must
- * never read the per-pick tiebreaker delta, a player's raw tiebreaker guess,
- * or a week's actual tiebreaker value, directly, summed, or renamed (see the
- * source-level tripwire in ranktest.mjs [5], which scans this function's own
- * body and therefore deliberately excludes this explanation naming those
- * fields — read that test before ever adding such a read here). The net
- * weekly win/loss criterion works precisely because it crosses into the
- * season view as an already-resolved OUTCOME of rankWeeklyResults() — which
- * itself resolves any intra-week tie using that week's own delta and never
- * lets it leave the week — the same way "games won" does in any standings
- * table. Grouping-safe by construction: weeklyWins/weeklyLosses already fold
- * in UN-118's pooled group win/loss when `weeks` is passed.
  */
 export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) {
   const weekById = weeks ? new Map(weeks.map(w=>[w.weekId,w])) : null;
@@ -430,14 +377,7 @@ export function calculateSeasonStandings(players, allWeeklyResults, weeks=null) 
       currentRank:0, isSeasonLeader:false, isCurrentLastPlace:false,
     };
   });
-  // DI-A — see the function-level comment above for the full rationale and
-  // Drew's ruling this satisfies. Net weekly win/loss is the middle
-  // criterion, ahead of winPct.
-  standings.sort((a,b)=>
-    b.totalCorrect-a.totalCorrect
-    || (b.weeklyWins-b.weeklyLosses)-(a.weeklyWins-a.weeklyLosses)
-    || b.winPct-a.winPct
-  );
+  standings.sort((a,b)=>b.totalCorrect-a.totalCorrect||b.winPct-a.winPct);
   standings.forEach((s,i)=>{s.currentRank=i+1;});
   if(standings.length>1){standings[0].isSeasonLeader=true;standings[standings.length-1].isCurrentLastPlace=true;}
   return standings;

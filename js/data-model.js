@@ -13,37 +13,6 @@
  *  - showInHistory flag on weeks
  */
 
-// CATALOG, not the roster. There is no separately-editable alma-mater list
-// (Drew, 2026-09-04, correcting 8ae64f4/55f8908's two-list build — verbatim:
-// "the roster of alma maters... should only be comprised of schools claimed
-// as alma maters by a player. If a player changes their claimed alma mater,
-// this should also change everything else related to alma maters"). The
-// roster is derived: the distinct, non-empty set of ACTIVE players'
-// `player.almaMater` values (app.js's `claimedAlmaMaters()`) — every
-// consumer (Alma Mater Watch, Rankings, the ⭐ flag, the tiebreaker
-// auto-calc, the slate builder's Tier 1, the Rules tab, ESPN parse-time
-// flagging) reads THAT, never this constant directly.
-//
-// This constant is kept as a CATALOG for two purposes only: (1) precise
-// exact-match/exclude-pattern data (below) for the six schools that have it,
-// so a claimed school among these six can't false-positive against a
-// same-prefix sibling program (Arkansas/Arkansas State, Miami/Miami (OH)),
-// and (2) the OFFLINE FALLBACK options for the player-edit alma-mater
-// dropdown (js/app.js's showEditPlayerModal()) when the live ESPN team
-// catalog can't be fetched — see fetchEspnTeamsList() in data-provider.js
-// and getAlmaMaterMatch()'s docstring below. (Before 2026-09-04 this backed
-// a free-text `<datalist>`; Drew's ruling replaced free text with a
-// canonical ESPN-sourced `<select>` — "One way to protect the correct
-// school naming (eg washington vs Washington state)... Do the dropdown" —
-// so purpose (2) is now specifically the degraded-network path, not the
-// everyday one.) It is intentionally NOT trimmed when no active player
-// currently claims one of these six, so a school re-claimed later still
-// gets exact-match precision.
-// A player may claim ANY school, catalog or not — see getAlmaMaterMatch()'s
-// docstring below for what a non-catalog claim gets (word-boundary bare-name
-// matching only, no exclude-pattern protection, EXCEPT when the claim is an
-// exact match for the team name being tested — see "Exact equality first"
-// below, which covers every claim made through the ESPN-sourced dropdown).
 export const ALMA_MATERS = ['Oklahoma', 'Texas A&M', 'USC', 'Notre Dame', 'Purdue', 'Arkansas'];
 
 // Precise matching patterns — prevents "Arkansas State" from matching "Arkansas" etc.
@@ -63,17 +32,6 @@ export const ALMA_MATER_EXCLUDE_PATTERNS = {
   'Arkansas':  ['Arkansas State', 'Arkansas-Pine Bluff', 'Arkansas-Monticello', 'Arkansas Tech', 'Arkansas-Fort Smith', 'Little Rock', 'Central Arkansas', 'UA Little Rock'],
   'USC':       ['East Carolina', 'USC Upstate', 'South Carolina Upstate'],
   'Purdue':    ['Purdue Fort Wayne', 'Purdue Northwest'],
-  // Not a catalog/ALMA_MATERS school today, but the roster (the CLAIMED set —
-  // app.js `claimedAlmaMaters()`, fed into calculateAlmaMaterTotal's
-  // `almaMaters` param) is player-editable free text (any player can type
-  // any school into their own alma-mater field) — any school name can appear
-  // in the list, not just the six above. Kept here (RG-02's exact fix shape)
-  // rather than in the summing loop itself, since getAlmaMaterMatch() is the
-  // ONE shared matcher every alma-mater consumer in the app now goes
-  // through — without this, a claimed "Miami" (FL Hurricanes) would ALSO
-  // match "Miami (OH)" (RedHawks), because "Miami" is a whole, boundary-clean
-  // word at the start of "Miami (OH)".
-  'Miami':     ['Miami (OH)', 'Miami (Ohio)', 'Miami OH', 'Miami Ohio'],
 };
 
 // Display format: School (Mascot)
@@ -135,33 +93,8 @@ export function getTeamDisplay(game, side='home') {
  * Check whether a team name is an alma mater — precise matching.
  * Returns the matching alma mater key, or null.
  *
- * EXACT EQUALITY FIRST (Drew's ruling, 2026-09-04 — the ESPN-canonical alma-
- * mater dropdown replacing free text: "One way to protect the correct
- * school naming (eg washington vs Washington state)... Do the dropdown").
- * Before ANY pattern/substring logic runs, `teamName` is compared, trimmed
- * and case-insensitively, against every entry in `almaMaters` for a literal
- * match, and the first hit wins. `parseAndReport()` (data-provider.js)
- * stores `team.location` as `game.homeTeam`/`game.awayTeam`; the dropdown
- * stores that SAME field on the claim. Once both sides of a comparison are
- * ESPN's own `location` string, "Washington" === "Washington State" is
- * false — full stop, no substring, no exclude list to maintain. This is a
- * genuine correctness fix, not just a shortcut: the OLD code, given BOTH
- * "Washington" and "Washington State" simultaneously claimed by two
- * different players, would resolve `getAlmaMaterMatch('Washington State',
- * ['Washington','Washington State'])` to `'Washington'` — the WRONG
- * claimant — because the loop hit "Washington"'s word-boundary substring
- * pattern before ever reaching "Washington State"'s own entry. Exact-first
- * checks literal equality against the WHOLE list before any substring logic
- * runs at all, so the team that IS "Washington State" resolves to the
- * "Washington State" claim, not its same-prefix sibling. See almatest.mjs
- * §1 for this exact before/after proof.
- *
- * The pattern/substring logic below still runs as a FALLBACK — reached only
- * when no exact match exists anywhere in `almaMaters` for this `teamName` —
- * so legacy stored values (claims saved before the dropdown existed, e.g. a
- * free-text "Oklahoma Sooners" instead of the canonical "Oklahoma") still
- * resolve. Its own robustness rules (prevents the USC-class bug where an
- * alma mater's own key wasn't in its pattern list):
+ * Robustness rules (prevents the USC-class bug where an alma mater's own
+ * key wasn't in its pattern list):
  *  1. The alma mater KEY itself is always treated as a valid pattern, even if
  *     it was omitted from ALMA_MATER_EXACT_PATTERNS.
  *  2. Exclusions are checked first (e.g. "Arkansas State" never matches "Arkansas").
@@ -169,40 +102,11 @@ export function getTeamDisplay(game, side='home') {
  *     phrase, not as a substring of a longer word. This stops "USC" from
  *     matching inside "USCUpstate"-type concatenations while still matching the
  *     bare "USC" that ESPN returns as team.location.
- *
- * `almaMaters` (optional) is the CLAIMED roster to match against — pass
- * `claimedAlmaMaters()` (app.js — the distinct, non-empty set of ACTIVE
- * players' `player.almaMater` values) from a caller that has the storage
- * seam available (data-model.js itself never imports storage.js, so it
- * can't default to that here). Omitting it falls back to the full
- * ALMA_MATERS catalog, which keeps every caller that hasn't been updated for
- * the derived-roster model working exactly as before.
- *
- * PRECISION TRADEOFF, residual after exact-first — a claimed school NOT in
- * the ALMA_MATERS catalog AND not itself an exact match for the `teamName`
- * being tested still falls into the substring fallback: rule 1 above (the
- * key itself is always a valid pattern) finds it via word-boundary matching
- * on the bare name — so a claim like "Clemson" matches its own team's ESPN
- * name correctly. But a non-catalog school gets NO entry in
- * ALMA_MATER_EXACT_PATTERNS and, more importantly, NO entry in
- * ALMA_MATER_EXCLUDE_PATTERNS — so a SOLO "Washington" claim (no
- * "Washington State" claim on record to out-compete it via exact-first)
- * still has no substring protection against a same-prefix sibling program
- * the way Arkansas/Miami/Oklahoma/Purdue/USC do. The six catalog schools
- * remain fully precise regardless of who claims them; only a genuinely new
- * claim outside the catalog inherits this looser fallback behavior, and
- * only when (a) it happens to share a word-prefix with another program's
- * name AND (b) that other program isn't itself claimed too (in which case
- * exact-first already disambiguates them, per the proof above).
  */
-export function getAlmaMaterMatch(teamName, almaMaters = ALMA_MATERS) {
+export function getAlmaMaterMatch(teamName) {
   if (!teamName) return null;
   const t = teamName.trim();
   const tLow = t.toLowerCase();
-
-  for (const alma of almaMaters) {
-    if (typeof alma === 'string' && alma.trim().toLowerCase() === tLow) return alma;
-  }
 
   const wordAwareIncludes = (haystack, needle) => {
     const n = needle.toLowerCase();
@@ -216,7 +120,7 @@ export function getAlmaMaterMatch(teamName, almaMaters = ALMA_MATERS) {
     return (!before || !isWordChar(before)) && (!after || !isWordChar(after));
   };
 
-  for (const alma of almaMaters) {
+  for (const alma of ALMA_MATERS) {
     // Exclusions first
     const excludes = ALMA_MATER_EXCLUDE_PATTERNS[alma] || [];
     if (excludes.some(ex => tLow.includes(ex.toLowerCase()))) continue;
@@ -311,23 +215,10 @@ export const THEMES = [
 
 // ─── DEFAULT RULES ────────────────────────────────────────────────────────────
 
-// F3 (2026-09-04) — this array's "Alma mater games (OU, Texas A&M, USC,
-// Notre Dame, Purdue, Arkansas)..." line used to hardcode the six-school
-// catalog directly. That went stale the moment the roster became derived
-// from player claims (claimedAlmaMaters(), app.js): Kevin's Purdue -> Notre
-// Dame move updated the REAL roster everywhere except this one static
-// string, so the Rules tab showed TWO disagreeing rosters a few sections
-// apart — one hardcoded (still naming Purdue), one derived (correct). Fixed
-// by not naming schools here at all — data-model.js never imports
-// storage.js, so it has no way to read claimedAlmaMaters() and compute a
-// roster string itself (same constraint documented on getAlmaMaterMatch()
-// above). Instead this item points at the single derived list that already
-// renders on the same page (renderRulesPage()'s "⭐ Alma Maters" section,
-// js/app.js) — one source of truth, not two copies to keep in sync.
 export const DEFAULT_RULES = [
   { id:'r1', section:'The Basics', items:[
     'Each week, the Commissioner selects 10 college football games for the slate.',
-    'Alma mater games — the schools claimed by active players, listed under ⭐ Alma Maters below — are always prioritized.',
+    'Alma mater games (OU, Texas A&M, USC, Notre Dame, Purdue, Arkansas) are always prioritized.',
     'You pick which team you think will win against the spread.',
     'Picks are blind — you cannot see others\' picks until you submit your own.',
     'Games lock at kickoff. If the week is locked, no picks are accepted even for future games.',
@@ -352,14 +243,7 @@ export const DEFAULT_RULES = [
 // ─── DEFAULT SETTINGS ─────────────────────────────────────────────────────────
 
 export const DEFAULT_SETTINGS = {
-  // NOTE: `almaMaters` was removed from here 2026-09-04. It briefly existed
-  // (8ae64f4) as a separately-editable roster; Drew's ruling the same week
-  // rejected the two-list model — the roster is derived from player claims
-  // (`claimedAlmaMaters()` in app.js), not stored settings. A stray
-  // `almaMaters` field may still exist in an already-saved settings blob
-  // from that window; nothing reads it, and getSettings()'s
-  // `{...DEFAULT_SETTINGS, ...stored}` merge no longer reintroduces it for
-  // any settings blob that doesn't already carry one.
+  almaMaters: ALMA_MATERS,
   weeklyGameCount: 10,
   candidateGameCount: 25,
   weeklyPrize: 'Loser buys winner a consolation prize',
@@ -412,7 +296,7 @@ export const DEFAULT_SETTINGS = {
 export const DEMO_PLAYERS = [
   { playerId:'p1', displayName:'Drew',    initials:'DH', email:'', active:true, pinHash:btoa('1111'), almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
   { playerId:'p2', displayName:'Brayden', initials:'BR', email:'', active:true, pinHash:btoa('2222'), almaMater:'Oklahoma',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
-  { playerId:'p3', displayName:'Kevin',   initials:'KC', email:'', active:true, pinHash:btoa('3333'), almaMater:'Notre Dame', createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
+  { playerId:'p3', displayName:'Kevin',   initials:'KC', email:'', active:true, pinHash:btoa('3333'), almaMater:'Purdue',     createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
   { playerId:'p4', displayName:'Koby',    initials:'KR', email:'', active:true, pinHash:btoa('4444'), almaMater:'USC',        createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
   { playerId:'p5', displayName:'Jacob',   initials:'JP', email:'', active:true, pinHash:btoa('5555'), almaMater:'Arkansas',   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
   { playerId:'p6', displayName:'Kihoon',  initials:'KB', email:'', active:true, pinHash:btoa('6666'), almaMater:'Texas A&M',  createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z' },
@@ -437,7 +321,6 @@ export const REAL_WEEK_1_2026 = {
   extraPointEnabled:true, extraPointActual:null, extraPointDetect:null,
   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z',
   lockedAt:null, finalizedAt:null,
-  lockedAlmaMaters: null,  // F4 (2026-09-04) — see createWeek()'s comment below; null until LOCKED
 };
 
 /**
@@ -470,7 +353,6 @@ export const DEMO_WEEK = {
   extraPointEnabled:true, extraPointActual:null, extraPointDetect:null,
   createdAt:'2026-01-01T00:00:00Z', updatedAt:'2026-01-01T00:00:00Z',
   lockedAt:null, finalizedAt:null,
-  lockedAlmaMaters: null,
 };
 
 // Demo games. The `spread` field is SIGNED, home-perspective (AD-03): negative
@@ -513,11 +395,6 @@ export const HISTORICAL_DEMO_WEEK = {
   actualTiebreakerValue:201, tiebreakerFinalized:true,
   createdAt:'2025-09-01T00:00:00Z', updatedAt:'2025-09-01T00:00:00Z',
   lockedAt:'2025-09-13T11:00:00Z', finalizedAt:null,
-  // Fixture predates F4 (2026-09-04) and never re-locked since — exercises
-  // the "no snapshot on an already-locked week" fallback path on purpose
-  // (almaMatersForAutoCalc() in app.js reads the live roster here, not this
-  // null). Left null deliberately; do not backfill it.
-  lockedAlmaMaters: null,
 };
 
 export const HISTORICAL_DEMO_GAMES = [
@@ -595,18 +472,6 @@ export function createWeek(season, weekNumber, startDate='', endDate='') {
     extraPointEnabled:true, extraPointActual:null, extraPointDetect:null,
     createdAt:new Date().toISOString(), updatedAt:new Date().toISOString(),
     lockedAt:null, finalizedAt:null,
-    // F4 (2026-09-04) — mirrors lockedSpread's shape exactly, one level up:
-    // a snapshot of claimedAlmaMaters() taken the instant the week
-    // transitions to LOCKED (applyWeekStatusChange() and the auto-lock leg
-    // of tickAutoTransition() in app.js — the only two places a week
-    // becomes LOCKED), so a claim edit or player deactivation AFTER lock
-    // can never silently move the tiebreaker Auto-Calc's answer out from
-    // under picks players already submitted against it. null until then.
-    // Old Sheet rows locked before this field existed lack it entirely
-    // (absent, not null) — almaMatersForAutoCalc() in app.js falls back to
-    // the LIVE roster for those rather than throwing or reading an empty
-    // list as "genuinely zero schools claimed."
-    lockedAlmaMaters: null,
   };
 }
 
@@ -717,17 +582,6 @@ export function createGame(weekId, overrides={}) {
     homeScore:null, awayScore:null,
     status:'scheduled', actualWinner:null, atsWinner:null,
     isAlmaMaterGame:false,
-    // DI-7 (Commissioner Slate Builder) — derived at ESPN parse time from
-    // comp.broadcasts[] (see data-provider.js detectNationalTV()). Old/manual
-    // records simply lack these fields; every read site treats undefined the
-    // same as false/null, so no migration is required.
-    nationalTV:false, broadcastNetwork:null,
-    // Scoring-only signal (DI-2 "marquee event" bonus) — no render path, so
-    // unlike nationalTV/broadcastNetwork it never needs to survive an
-    // add-to-slate action; it only has to be present on the AVAILABLE GAMES
-    // pool at parse time so computeScore() can see it while building the
-    // suggested slate.
-    marqueeEvent:false,
     venue:null, venueDisplay:null, neutralSite:false,
     // Scoring multiplier — default 1.0 keeps behavior identical to pre-multiplier
     // weeks. Commissioner sets 2 (or 1.5, 3, etc.) for marquee/rivalry/playoff

@@ -435,18 +435,8 @@ export function getTiebreakerGuess(weekId,playerId){
 }
 export function setTiebreakerGuess(weekId,playerId,value){
   const all=getTiebreakerGuesses();
-  const key=`${weekId}__${playerId}`;
-  all[key]=Number(value);
-  // RG-49 — DECLARE THE FIELD. This is a read-modify-write of a blob holding
-  // one entry PER PLAYER PER WEEK under a single seam key: exactly the shape
-  // RG-24 was raised for (`cfbp_settings`, ~17 independent fields), one key
-  // over. Without the field list, a device booting on a stale mirror re-applies
-  // its whole obsolete view of everyone's guesses over the fresh remote and
-  // flushPush sends it to the Sheet — so one player's ordinary submit during the
-  // 10–20s Apps Script cold start silently deletes the other five. Declared
-  // here, not diffed in backend.js, for the same reason saveSetting() declares:
-  // a diff cannot tell a real edit from a key this device never learned about.
-  save(KEYS.TB_GUESSES,all,[key]);
+  all[`${weekId}__${playerId}`]=Number(value);
+  save(KEYS.TB_GUESSES,all);
 }
 
 // ─── ISCHEMIC EXTRA POINT GUESSES (v0.16.0) ───────────────────────────────────
@@ -463,11 +453,7 @@ export function setExtraPointGuess(weekId,playerId,value){
   const key=`${weekId}__${playerId}`;
   if(value===null||value===''||value===undefined) delete all[key];
   else all[key]=Number(value);
-  // RG-49 — same reasoning as setTiebreakerGuess above. The RG-24 rebase also
-  // carries the DELETE correctly: a field named in the list but absent from the
-  // written value is deleted from the fresh remote, so clearing your own guess
-  // stays cleared and still cannot touch anyone else's.
-  save(KEYS.EP_GUESSES,all,[key]);
+  save(KEYS.EP_GUESSES,all);
 }
 
 // ─── ACTIVE WEEK ──────────────────────────────────────────────────────────────
