@@ -46,9 +46,48 @@ const KEYS = {
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
 // (Session/auth and the site PIN unlock are per-device; backend config is local.)
+//
+// RG-56 (2026-09-04) — AVAIL_GAMES joined this list, and it is the only entry
+// here that is not a per-device auth concern, so the reason is written down.
+//
+// The available-games POOL is the commissioner's ESPN candidate scratch pad:
+// `{ weekId: [game, …] }`, raw parsed ESPN rows, replaced wholesale by the next
+// "Fetch ESPN games" click. One app key is ONE Google Sheets cell
+// (`backend/Code.gs`, CFBP_STORE: `key | json | updatedAt`) and Sheets caps a
+// cell at 50,000 characters. A parsed candidate game serializes to ~963 chars,
+// so a single week crosses the cap at ~52 games; Drew's Sep 3–7 fetch returned
+// 91 (87,651 chars, 175% of the cap). `setMany()` has no chunking and no size
+// check, so Apps Script threw, `handle()` returned ok:false for the WHOLE
+// batch, and every other key in that batch — the slate, the week status, his
+// own picks — never committed. flushPush() then re-queued the same doomed batch
+// on every retry. That is the outage: a scratch key full of third-party data
+// holding irreplaceable user data hostage.
+//
+// RG-55 (the 760-team ESPN catalog) reached the same CONCLUSION the same day,
+// on the same three grounds — identical on every device, re-fetches in one
+// click, never authoritative — but by a DIFFERENT disposition, and the
+// difference matters. RG-55 chose in-memory and explicitly declined a
+// localStorage exemption, on the reasoning that a first exception hands the
+// next generalist a precedent. This key goes through DEVICE_LOCAL_KEYS instead,
+// which is not an exemption at all: the pool must survive a reload, and routing
+// it here never leaves the load()/save() seam. Cite the distinction, not a
+// sameness — this codebase has been bitten twice by confident wrong citations
+// (RG-49's key names that never existed; three test files CLAUDE.md named that
+// never existed). The grounds are: it is identical on every device, it
+// re-fetches in one click, and it is never authoritative — once a
+// candidate is added to the slate it lives in KEYS.GAMES, which IS shared. The
+// only cost is that a pool built on one device is not visible on another, where
+// "Fetch ESPN games" rebuilds it.
+//
+// This is NOT the silent-localStorage-fallback AD-06 prohibits. That prohibition
+// is about hiding a BROKEN backend behind local storage. This is a declared,
+// permanent routing decision for one key, made in the open at the same seam that
+// already routes SESSION and SITE_UNLOCK, and it is unconditional — it behaves
+// identically whether the backend is healthy, degraded or absent.
 const DEVICE_LOCAL_KEYS = new Set([
   KEYS.SESSION,
   KEYS.SITE_UNLOCK,
+  KEYS.AVAIL_GAMES,
   'cfbp_backend_config',
 ]);
 
@@ -435,8 +474,18 @@ export function getTiebreakerGuess(weekId,playerId){
 }
 export function setTiebreakerGuess(weekId,playerId,value){
   const all=getTiebreakerGuesses();
-  all[`${weekId}__${playerId}`]=Number(value);
-  save(KEYS.TB_GUESSES,all);
+  const key=`${weekId}__${playerId}`;
+  all[key]=Number(value);
+  // RG-49 — DECLARE THE FIELD. This is a read-modify-write of a blob holding
+  // one entry PER PLAYER PER WEEK under a single seam key: exactly the shape
+  // RG-24 was raised for (`cfbp_settings`, ~17 independent fields), one key
+  // over. Without the field list, a device booting on a stale mirror re-applies
+  // its whole obsolete view of everyone's guesses over the fresh remote and
+  // flushPush sends it to the Sheet — so one player's ordinary submit during the
+  // 10–20s Apps Script cold start silently deletes the other five. Declared
+  // here, not diffed in backend.js, for the same reason saveSetting() declares:
+  // a diff cannot tell a real edit from a key this device never learned about.
+  save(KEYS.TB_GUESSES,all,[key]);
 }
 
 // ─── ISCHEMIC EXTRA POINT GUESSES (v0.16.0) ───────────────────────────────────
@@ -453,7 +502,11 @@ export function setExtraPointGuess(weekId,playerId,value){
   const key=`${weekId}__${playerId}`;
   if(value===null||value===''||value===undefined) delete all[key];
   else all[key]=Number(value);
-  save(KEYS.EP_GUESSES,all);
+  // RG-49 — same reasoning as setTiebreakerGuess above. The RG-24 rebase also
+  // carries the DELETE correctly: a field named in the list but absent from the
+  // written value is deleted from the fresh remote, so clearing your own guess
+  // stays cleared and still cannot touch anyone else's.
+  save(KEYS.EP_GUESSES,all,[key]);
 }
 
 // ─── ACTIVE WEEK ──────────────────────────────────────────────────────────────

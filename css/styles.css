@@ -177,6 +177,11 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .spread-badge{background:var(--maroon-pale);color:var(--maroon);font-weight:700;font-family:'Oswald',sans-serif;font-size:.85rem;padding:2px 10px;border-radius:20px;border:1px solid var(--maroon-tint)}
 .spread-badge-sm{background:var(--maroon-pale);color:var(--maroon);font-size:.7rem;font-weight:700;font-family:'Oswald',sans-serif;padding:1px 7px;border-radius:20px;border:1px solid var(--maroon-tint);white-space:nowrap}
 .alma-mater-badge{font-size:.7rem;font-weight:600;color:var(--maroon);background:var(--maroon-tint);padding:2px 8px;border-radius:20px;border:1px solid rgba(80,0,0,.2)}
+/* DI-7 (Commissioner Slate Builder) — commissioner-only badge (Available
+   Games / Selected Slate). Deliberately NOT maroon like the alma badge —
+   this is an informational proxy tag, not a highlight — so it stays neutral
+   using existing text/border vars rather than a new brand color. */
+.national-tv-badge{font-size:.7rem;font-weight:600;color:var(--text-secondary);background:var(--bg-input);padding:2px 8px;border-radius:20px;border:1px solid var(--border)}
 .ats-row{display:flex;gap:16px;justify-content:center;font-size:.78rem;padding:6px 0;border-top:1px dashed var(--border);margin-top:6px}
 .live-score{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;text-align:center;padding:8px 0;border-top:1px solid var(--border);margin-top:8px}
 .score-num{font-family:'Oswald',sans-serif;font-size:1.5rem;font-weight:700;color:var(--text-primary)}
@@ -531,6 +536,10 @@ body[data-tab="chat"] .app-header{display:none}
 .suggested-matchup{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:600;flex:1;color:var(--text-primary)}
 .suggested-spread{white-space:nowrap}
 .suggested-time{white-space:nowrap}
+/* DI-6 — budget visibility banner + anchor-not-filled notes, directly above
+   the Suggested Slate game list. */
+.suggested-budget-banner{font-family:'Oswald',sans-serif;font-weight:600;font-size:.85rem;color:var(--maroon);margin-bottom:8px}
+.suggested-anchor-note{margin-bottom:4px}
 
 /* Proposed data source badge */
 .dq-proposed{background:#FEF9EC;color:#9A6B00;border:1px solid #F0DC8A}

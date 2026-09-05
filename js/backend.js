@@ -67,10 +67,26 @@ const _dirty = new Set();      // keys changed since last push
  */
 const _dirtyFields = new Map();
 
-/** User data whose loss is unrecoverable — see storage.js USER_MUTABLE_KEYS. */
+/**
+ * User data whose loss is unrecoverable — see storage.js USER_MUTABLE_KEYS.
+ *
+ * RG-49 — the last two entries read `cfbp_tb_guesses` / `cfbp_ep_guesses` until
+ * 2026-09-02. Neither string has ever existed anywhere in the app; storage.js
+ * calls those keys `cfbp_tiebreaker_guesses` / `cfbp_extra_point_guesses`. So
+ * `_USER_DATA_KEYS.includes(k)` was false for both REAL keys, and defense (c)
+ * was INERT for tiebreaker and Extra Point guesses from the day it was written
+ * while reading, to any human or any source-text audit, as though it covered
+ * them. persisttest [6] is the structural check that every key named in this
+ * array is a key storage.js actually defines.
+ *
+ * Keep key names in the array itself, not in comments inside it: [6] reads the
+ * string literals out of this block, so a retired key name mentioned between
+ * the brackets will fail that assertion. Failing loud on a comment is the safe
+ * direction, but the comment belongs up here regardless.
+ */
 const _USER_DATA_KEYS = [
   'cfbp_players', 'cfbp_weeks', 'cfbp_games', 'cfbp_picks', 'cfbp_results',
-  'cfbp_obligations', 'cfbp_tb_guesses', 'cfbp_ep_guesses',
+  'cfbp_obligations', 'cfbp_tiebreaker_guesses', 'cfbp_extra_point_guesses',
 ];
 function _size(v) {
   if (Array.isArray(v)) return v.length;
@@ -151,6 +167,70 @@ function _rebaseRecords(local, remote, idField) {
     return merged;
   });
 }
+
+/**
+ * RG-49 — APPEND-ONLY LOGS merge by id; they are never re-applied wholesale.
+ *
+ * `cfbp_feedback` is a list of immutable rows written by six different people
+ * at six different times into ONE seam key. A device booting on a stale mirror
+ * holds a well-formed, populated, obsolete copy of the whole list; the default
+ * branch in hydrate() re-applies it over the fresher remote and flushPush sends
+ * it to the Sheet. Every submission silently deletes the queue behind it —
+ * which is how the bug-reporting channel itself became lossy, and therefore why
+ * no other report in the queue could be trusted to be complete. Drew, 2026-09-01:
+ * "I don't think the feature/bug feedback submitted is always getting saved."
+ *
+ * `_shrinks` (defense (c)) is NOT the fix for this shape. Dropping the smaller
+ * side would throw away the submission the player just made — the same silent
+ * loss, arrived at from the other direction. Both halves are pinned by
+ * persisttest [3] and [4]. The merge is a UNION keyed on the row id: remote
+ * first, then any local row the remote has not seen.
+ *
+ * Scoped to `cfbp_feedback` on purpose. `cfbp_comments` has the identical shape
+ * and the identical exposure, but it also has an ORDINARY, player-reachable
+ * delete (`deleteComment`, wired to the per-game comment bubbles), and a union
+ * would resurrect a comment someone deleted — the inverse hazard ledger §6
+ * already records against `_rebaseRecords()`. That is Drew's decision, not a
+ * guess to make here, so it is deliberately left out.
+ *
+ * Feedback's own delete surface, CHECKED 2026-09-02 rather than assumed:
+ *   clearFeedback()  no production call site at all; its only two callers are
+ *                    loadtest.mjs fixtures, which run in LOCAL mode and never
+ *                    reach this rebase.
+ *   resetToDemo()    DOES clear feedback and IS reachable (commissioner Full
+ *                    Factory Reset), so this union can undo a factory reset's
+ *                    feedback clear if one is run inside the stale window.
+ * That residual is accepted on defense (c)'s own stated principle: a deletion is
+ * rare, visible, and can simply be redone once synced; silently destroying every
+ * player's submissions is neither. The trade only ever runs in that direction.
+ *
+ * A row with no id is KEPT rather than deduped: it may duplicate on a later
+ * hydrate, which is visible and recoverable. Dropping a submission is not.
+ */
+const _APPEND_ONLY_ID = { cfbp_feedback: 'id' };
+function _unionById(local, remote, idField) {
+  if (!Array.isArray(local) || !Array.isArray(remote)) return local;
+  const seen = new Set();
+  const out = [];
+  remote.forEach(r => {
+    if (_isPlainObject(r) && r[idField] != null) seen.add(r[idField]);
+    out.push(r);
+  });
+  local.forEach(l => {
+    const id = _isPlainObject(l) ? l[idField] : null;
+    if (id != null && seen.has(id)) return;
+    if (id != null) seen.add(id);
+    out.push(l);
+  });
+  return out;
+}
+/**
+ * Test-only seam, LOAD-BEARING for the same reason `_shrinksForTest` is (RG-27):
+ * a source-text match cannot tell a working union from a gutted one. Verified by
+ * mutation 2026-09-02 — replacing the body with `return local` leaves the name,
+ * the export, the call site and this comment intact and destroys the protection.
+ */
+export function _unionByIdForTest(local, remote, idField) { return _unionById(local, remote, idField); }
 
 const _listeners = new Set();  // status change subscribers
 
@@ -340,6 +420,9 @@ export async function hydrate() {
           if (f in v) merged[f] = v[f]; else delete merged[f];
         });
         _cache.set(k, merged);
+      } else if (_APPEND_ONLY_ID[k]) {
+        // RG-49 — append-only log: union by id, never wholesale replace.
+        _cache.set(k, _unionById(v, _cache.get(k), _APPEND_ONLY_ID[k]));
       } else if (_USER_DATA_KEYS.includes(k) && _shrinks(v, _cache.get(k))) {
         // NEW DEFENSE (c), 2026-08-12. RG-12's two guards both protect against
         // an empty REMOTE. Neither protects against a stale LOCAL that looks
@@ -425,6 +508,64 @@ function schedulePush() {
   if (_pushTimer) clearTimeout(_pushTimer);
   _pushTimer = setTimeout(flushPush, 800);
 }
+
+/**
+ * RG-56 (2026-09-04) — THE BATCH IS NOT ALL-OR-NOTHING ANY MORE.
+ *
+ * Drew, live site, mid-week, an hour before a pick deadline: "I cleared the
+ * pool, am still getting the red banner. This is a big issue if it wont sync
+ * because it will not be usable and will not be able to receive picks from the
+ * last person before the deadline."
+ *
+ * One app storage key is ONE Google Sheets cell, and Sheets caps a cell at
+ * 50,000 characters. `backend/Code.gs` `setMany()` walks `Object.keys(entries)`
+ * writing each in turn with NO chunking and NO size check; an over-cap value
+ * makes Apps Script throw, `handle()`'s catch returns `{ok:false}` for the WHOLE
+ * request, and the keys ordered after the offender never write. The catch below
+ * then re-queued every key in the batch, so the identical doomed batch was
+ * retried on every subsequent write — indefinitely. On the commissioner's
+ * device that put the slate, the week status and his own picks permanently
+ * behind `cfbp_avail_games`, a scratch pad of third-party ESPN rows.
+ *
+ * Two things follow, and they are separate fixes:
+ *   - The pool should never have been in the batch. That is storage.js's
+ *     DEVICE_LOCAL_KEYS, and it removes today's trigger.
+ *   - A single unstorable value must never again take irreplaceable user data
+ *     down with it. That is this guard, and it is the one that matters, because
+ *     the trigger is not unique to the pool: at a MEASURED 238 chars a pick and
+ *     60 picks a week, `cfbp_picks` crosses the same cap around WEEK 3, and
+ *     `cfbp_games` (942 chars a game) around week 5. Both are keys we cannot make device-local.
+ *
+ * So: measure each value the way Code.gs will, hold back anything it provably
+ * cannot store, send the rest, and fail LOUD (AD-06) with the offending key
+ * NAMED in the banner. Held-back keys stay dirty — quarantined, never dropped —
+ * so they go the moment they fit again. The alternative (send it anyway and let
+ * the Sheet refuse) is what produced the outage.
+ *
+ * This is a stopgap, deliberately. The real fix is chunking a large value across
+ * several cells in Code.gs so nothing has to be held back at all; that changes
+ * the stored format and needs a redeploy, so it is a feature-sized change and is
+ * not being made here. Until it exists, the guard's job is to keep picks moving.
+ */
+export const SHEET_CELL_MAX = 50000;
+
+/**
+ * Exactly what `Code.gs` computes: `JSON.stringify(entries[key]).length`.
+ * Returns 0 for a value JSON cannot represent (stringify yields undefined) —
+ * such a value never reaches the Sheet as text at all, so it cannot overflow a
+ * cell, and measuring it as over-cap would quarantine it forever.
+ *
+ * Test-only seam, LOAD-BEARING for the reason `_shrinksForTest` documents
+ * (RG-27): a source-text match cannot tell a working size check from a gutted
+ * one. Mutation-verified 2026-09-04 — replacing the body with `return 0`
+ * leaves the name, the export, the call site and this comment intact and
+ * destroys the protection; pushtest [5] goes red.
+ */
+export function cellChars(value) {
+  const s = JSON.stringify(value);
+  return typeof s === 'string' ? s.length : 0;
+}
+
 export async function flushPush() {
   if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
   if (!_dirty.size) return { pushed: 0 };
@@ -444,24 +585,74 @@ export async function flushPush() {
   const sentFields = new Map(_dirtyFields);
   _dirty.clear();
   _dirtyFields.clear();
+
+  // RG-56 — quarantine anything the Sheet provably cannot store, BEFORE the
+  // call, so one over-cap value cannot fail the batch that carries the picks.
+  const oversize = [];
+  for (const k of Object.keys(entries)) {
+    const chars = cellChars(entries[k]);
+    if (chars > SHEET_CELL_MAX) { oversize.push({ key: k, chars }); delete entries[k]; }
+  }
+  /** Put keys back in the queue, restoring RG-24's field list with them. */
+  const requeue = keys => keys.forEach(k => {
+    _dirty.add(k);
+    if (!_dirtyFields.has(k) && sentFields.has(k)) _dirtyFields.set(k, sentFields.get(k));
+  });
+  const sendable = Object.keys(entries);
+
   emit('syncing');
   try {
-    await call('setMany', { entries });
-    _lastSyncAt = new Date().toISOString();
-    _lastError = null;
+    // Skip the round trip when the whole batch was quarantined — there is
+    // nothing to write, and an empty setMany would report a false success.
+    // `_lastSyncAt` moves only when something actually reached the Sheet, so
+    // the status panel can never read "synced just now" off a push that sent
+    // nothing.
+    //
+    // persistMirror() runs either way, but be precise about what that buys: the
+    // mirror holds the held-back value, so primeFromMirror() shows it after a
+    // reload — and then the NEXT hydrate() clears _cache, re-applies the remote,
+    // and the value is gone, because _dirty is RAM-only so the key is not in
+    // localEdits. Worse, that hydrate emits 'synced', which CLEARS the red
+    // banner. At week 3 the key is cfbp_picks and the sequence reads: banner
+    // names the problem -> player reloads -> picks render for a moment -> picks
+    // vanish -> no banner. This does NOT make a held write survive a reload.
+    // Ledger section 6 tracks that (held writes are memory-only); it is not
+    // solved here and this comment must not imply it is.
+    if (sendable.length) {
+      await call('setMany', { entries });
+      _lastSyncAt = new Date().toISOString();
+    }
     persistMirror();
-    emit('synced', { pushed: Object.keys(entries).length });
-    return { pushed: Object.keys(entries).length };
   } catch (err) {
-    // Re-mark dirty so a later push retries
-    Object.keys(entries).forEach(k => {
-      _dirty.add(k);
-      if (!_dirtyFields.has(k) && sentFields.has(k)) _dirtyFields.set(k, sentFields.get(k));
-    });
+    // Re-mark dirty so a later push retries — including the quarantined keys,
+    // which are still unsent.
+    requeue(sendable);
+    requeue(oversize.map(o => o.key));
     _lastError = String(err.message || err);
     emit('error', { error: _lastError });
     throw err;
   }
+
+  if (oversize.length) {
+    requeue(oversize.map(o => o.key));
+    _lastError =
+      'Too large for the Sheet, held back and NOT synced: ' +
+      oversize.map(o => `${o.key} (${o.chars.toLocaleString()} chars, limit ${SHEET_CELL_MAX.toLocaleString()})`).join('; ') +
+      // Only true when something was actually sent. With the whole batch
+      // quarantined, sendable.length is 0, no round trip happens, and NOTHING
+      // synced — the banner is the only diagnostic anyone reads, so it must not
+      // claim otherwise.
+      (sendable.length ? '. Everything else in this batch did sync.' : '. Nothing in this batch synced.');
+    console.warn('[backend] RG-56 quarantine —', _lastError);
+    // LOUD (AD-06): the banner stays up while any key is unsyncable, and it
+    // names the key so the next person does not have to guess which one.
+    emit('error', { error: _lastError });
+    return { pushed: sendable.length, oversize };
+  }
+
+  _lastError = null;
+  emit('synced', { pushed: sendable.length });
+  return { pushed: sendable.length };
 }
 
 // ── Manual full refresh (pull) ─────────────────────────────────────────────────
