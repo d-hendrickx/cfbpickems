@@ -125,21 +125,26 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .app-header-inner{max-width:var(--max-width);margin:0 auto;padding:12px var(--page-pad);display:flex;align-items:center;justify-content:space-between;gap:12px}
 /* UN-108: header-meta is the LEFT slot (week label + status badge) now that
    UN-109 removed the app-logo block that used to occupy it.
-   UN-127 (change 1): now a flex ROW, not a plain block — it holds the
-   two-line week text (#header-meta-week) AND the feedback shortcut button
-   (js/app.js setupHeaderFeedbackButton) as ROW siblings. Row, never column:
-   a flex row can only place its children side by side, so no matter what the
-   week text does, the button cannot become a third STACKED line — the
-   structural guarantee UN-117 needs. align-items:center keeps the two-line
-   text block vertically centered against the button's 40px tap target. */
-.header-meta{display:flex;align-items:center;gap:4px;text-align:left;font-size:.75rem;color:rgba(255,255,255,.75);line-height:1.4}
+   UN-127 (change 1): held the two-line week text (#header-meta-week) AND the
+   feedback shortcut button (js/app.js setupHeaderFeedbackButton) as flex ROW
+   siblings, specifically so the button could never become a third STACKED
+   line under UN-117's original "exactly two lines" guarantee.
+   DI-A1 AMENDMENT (2026-09-09, Drew's explicit request): Drew asked for the
+   feedback button, now carrying a visible "Feedback" text label, on its OWN
+   LINE beneath the week date range — the third stacked line the row layout
+   above existed to prevent. UN-117's guarantee is narrowed to "unless
+   explicitly requested"; this is that request. display switched from `flex`
+   (row) to `flex` (COLUMN) so the week block and the button stack as real
+   sibling lines instead of sitting side by side — a flex row structurally
+   cannot produce this, which is why the axis had to change, not just the
+   button's own markup. align-items:flex-start keeps both children left-
+   aligned, matching the existing text-align:left. No breakpoint below
+   reintroduces the row — this is a permanent height cost, accepted, since
+   the header is position:sticky and pays it on every screen. */
+.header-meta{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;font-size:.75rem;color:rgba(255,255,255,.75);line-height:1.4}
 /* The week-text block must never be squeezed narrower than its own content —
-   both its lines are white-space:nowrap by design (UN-117), so a shrunk box
-   would just overflow its own edges into the button next to it rather than
-   wrap. flex-shrink:0 keeps it at its natural width; if the row genuinely
-   runs out of room the button (also flex-shrink:0, immediately below) or the
-   already-wrapping .header-right cluster absorb the squeeze instead — see
-   the comment on setupHeaderFeedbackButton() for the full reasoning. */
+   both its lines are white-space:nowrap by design (UN-117). flex-shrink:0
+   keeps it at its natural width regardless of the column layout above. */
 .header-meta #header-meta-week{flex-shrink:0}
 .header-meta strong{color:#fff;display:block;font-size:.82rem;font-family:'Oswald',sans-serif}
 /* Nav */
@@ -188,6 +193,12 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .score-leading{color:var(--maroon)}
 .score-status{font-size:.72rem;color:var(--live);font-weight:700;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+/* Item 2 (in-game quarter+clock), Pass B — halftime/stale live status must NOT
+   pulse (a frozen score under a pulsing LIVE reads as a stalled poll). */
+.score-status-no-pulse{animation:none}
+.live-status-detail{padding-top:2px}
+/* Same reasoning for the small pulsing dot used in dashboard live pills/chips. */
+.live-dot-static{animation:none;opacity:1;transform:none}
 /* Time chips */
 .time-chip{display:inline-flex;align-items:center;gap:4px;font-size:.7rem;font-weight:600;font-family:'Oswald',sans-serif;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.04em}
 .time-morning{background:#FEF9EC;color:#9A6B00;border:1px solid #F0DC8A}
@@ -365,6 +376,14 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .admin-section-title{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--maroon);margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--maroon-tint)}
 /* UN-123 — feedback review list, commissioner Data tab */
 .feedback-admin-list{max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+/* Item 10 (DI-B1) — exclude-from-CSV-export checkbox. A bare checkbox (the
+   .obcorr-check pattern this is modeled on) sits well under the 40px
+   tap-target floor (CONVENTIONS #17); wrapping it in a padded <label> (not
+   just a div) gives the WHOLE padded box native click-to-toggle behavior
+   with zero extra JS, and reaches the floor without growing the visible
+   checkbox itself. */
+.fb-excl-check-wrap{display:inline-flex;align-items:center;justify-content:center;
+  padding:11px 8px;min-width:40px;min-height:40px;box-sizing:border-box;cursor:pointer;flex-shrink:0}
 .game-admin-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 14px;margin-bottom:10px;box-shadow:var(--shadow-card)}
 .game-admin-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .game-admin-matchup{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;flex:1;color:var(--text-primary)}
@@ -475,18 +494,22 @@ body[data-tab="chat"] .app-header{display:none}
 /* UN-127 (item 4, relocated same day per Drew's ruling — see the doc comment
    on setupHeaderFeedbackButton() in js/app.js for the full history): quiet
    feedback-form shortcut, injected into #header-meta at boot (app.js
-   setupHeaderFeedbackButton), as a flex ROW sibling of the week text — never
-   a stacked line. Same "pad the wrapper" tap target technique as
-   .header-identity in .header-right — a >=40x40 clickable area around a
-   visibly small 26px circle, so it reads as one quiet icon without actually
-   violating CONVENTIONS #17. flex-shrink:0 so the icon itself is never the
-   thing that gets squeezed if the row runs tight. */
-.header-feedback-btn{display:inline-flex;align-items:center;justify-content:center;
-  background:none;border:none;cursor:pointer;padding:8px 4px;min-height:40px;min-width:40px;
+   setupHeaderFeedbackButton).
+   DI-A1 AMENDMENT (2026-09-09): the button now carries a visible "Feedback"
+   text label alongside the icon, and sits on its OWN LINE beneath the week
+   date range (#header-meta is now flex-direction:column — see that rule's
+   comment) rather than as a row sibling of the week text. It is no longer a
+   fixed 40x40 icon-only square: width is auto so the label can render, but
+   min-height:40px keeps the tap target no smaller than before (CONVENTIONS
+   #17). flex-shrink:0 so it never gets squeezed narrower than its content. */
+.header-feedback-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:none;border:none;cursor:pointer;padding:6px 4px;min-height:40px;
   flex-shrink:0;-webkit-tap-highlight-color:transparent}
 .header-feedback-icon{display:inline-flex;align-items:center;justify-content:center;
   width:26px;height:26px;border-radius:50%;background:rgba(255,255,255,.15);
-  border:1px solid rgba(255,255,255,.3);font-size:.85rem;line-height:1}
+  border:1px solid rgba(255,255,255,.3);font-size:.85rem;line-height:1;flex-shrink:0}
+.header-feedback-label{color:rgba(255,255,255,.85);font-family:'Inter',sans-serif;
+  font-size:.72rem;font-weight:600;letter-spacing:.02em}
 .header-feedback-btn:hover .header-feedback-icon,
 .header-feedback-btn:active .header-feedback-icon{background:rgba(255,255,255,.28)}
 
@@ -892,6 +915,11 @@ label[for="week-show-history"],label:has(#week-show-history){
 .dc-status.dc-final{background:var(--bg-input);color:var(--text-secondary)}
 .dc-status.dc-live{background:var(--maroon-pale);color:var(--maroon-mid);border:1px solid var(--maroon-tint)}
 .dc-status.dc-scheduled{background:transparent;color:var(--text-muted)}
+/* Item 2 (in-game quarter+clock), Pass B (DI-5) — quarter/clock chip, own pill
+   so it never pushes into the score chip's text. liveStatusDisplayShort()
+   already caps this at ~14 chars; white-space:nowrap is the defensive belt
+   ensuring the chip itself never wraps to a second line (UN-119 density). */
+.dc-status.dc-live-detail{background:transparent;color:var(--maroon-mid);white-space:nowrap}
 
 /* Player chips inside a compact game card */
 .dc-chips{display:flex;flex-wrap:wrap;gap:6px}

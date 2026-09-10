@@ -197,9 +197,19 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
 
   const updated = [];
   const errors = [];
+  // Item 2 remediation — per-eventId live status, merged across every
+  // sport's fetch this cycle. Returned as a SIBLING of `updated`, never
+  // attached to an `updated` entry itself (that entry's shape is spread
+  // toward saveGame()'s allow-list in app.js; see the comment there).
+  const liveStatusByEventId = new Map();
   for (const { sport, result } of settled) {
     if (result.error) { errors.push(`${sport}: ${result.error}`); continue; }
     if (!result.games?.length) continue;
+    if (result._liveStatusByEventId) {
+      for (const [eventId, status] of result._liveStatusByEventId) {
+        liveStatusByEventId.set(eventId, status);
+      }
+    }
     const gamesInSport = bySport.get(sport) || [];
     for (const liveGame of result.games) {
       const stored = gamesInSport.find(g =>
@@ -235,11 +245,15 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
         kickoffConfirmed: storedConfirmed ? stored.kickoffConfirmed : liveGame.kickoffConfirmed,
         kickoffDateOnly:  storedConfirmed ? stored.kickoffDateOnly  : liveGame.kickoffDateOnly,
         lastUpdated: new Date().toISOString(),
+        // Item 2 remediation — live status is NOT attached here. It rides
+        // the sibling `liveStatusByEventId` map returned below, keyed by
+        // `espnEventId` (present on this very entry, two lines up) so
+        // app.js can look it up without this object ever carrying it.
       });
     }
   }
   _state.lastScoreRefresh = new Date().toISOString();
-  return { updated, errors, timestamp: _state.lastScoreRefresh };
+  return { updated, errors, timestamp: _state.lastScoreRefresh, liveStatusByEventId };
 }
 
 export function getProviderState() { return { ..._state }; }
@@ -357,10 +371,10 @@ function finalise(result, espnUrl, method, almaMaters = ALMA_MATERS) {
   }
 
   // For multi-day fetches we return raw events for merging upstream
-  const { games, report } = parseAndReport(events, espnUrl, method, null, null, almaMaters);
+  const { games, report, liveStatusByEventId } = parseAndReport(events, espnUrl, method, null, null, almaMaters);
   _state.lastParsedCount   = games.length;
   _state.lastQualityReport = report;
-  return { games, error: null, usingDemo: false, espnUrl, rawEventCount: events.length, _rawEvents: events, qualityReport: report, fetchMethod: method };
+  return { games, error: null, usingDemo: false, espnUrl, rawEventCount: events.length, _rawEvents: events, qualityReport: report, fetchMethod: method, _liveStatusByEventId: liveStatusByEventId };
 }
 
 // ─── PARSE + QUALITY REPORT ───────────────────────────────────────────────────
@@ -372,6 +386,10 @@ function finalise(result, espnUrl, method, almaMaters = ALMA_MATERS) {
 function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters = ALMA_MATERS) {
   let withValidKickoff=0, withConfirmedTime=0, withFinalScores=0;
   let withSpread=0, withoutSpread=0, withUnknownTeam=0, outsideRange=0;
+  // Item 2 remediation — keyed by event.id, returned on the wrapper (never
+  // attached to a game object; see the comment at the bottom of the
+  // events.map() loop below for why).
+  const liveStatusByEventId = new Map();
 
   const rangeStart = startDate ? new Date(startDate + 'T00:00:00') : null;
   const rangeEnd   = endDate   ? new Date(endDate   + 'T23:59:59') : (rangeStart ? new Date(startDate + 'T23:59:59') : null);
@@ -513,7 +531,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
 
     const dq = spread !== null ? DATA_QUALITY.CONFIRMED : DATA_QUALITY.PARTIAL;
 
-    return createGame('', {
+    const parsedGame = createGame('', {
       espnEventId:    event.id,
       dataQuality:    dq,
       dataSource:     method === 'direct' ? 'espn_live' : 'espn_historical',
@@ -537,6 +555,26 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       neutralSite: neutral,
       lastUpdated: new Date().toISOString(),
     });
+
+    // Item 2 (in-game quarter+clock), Pass A/B remediation — ESPN's raw
+    // status.type carries the human-readable in-game clock (`detail`/
+    // `shortDetail`) and a deterministic period name (`name`, e.g.
+    // STATUS_HALFTIME/STATUS_END_PERIOD) that normalizeStatus() collapses
+    // into the single coarse GAME_STATUS.LIVE bucket above. This information
+    // is now carried ONLY in the `liveStatusByEventId` map returned
+    // alongside `games` (see bottom of this function) — NEVER attached to
+    // the game object itself. A per-game-object property rides every future
+    // `{...game}` spread (scoreCandidateGames → add-to-slate → createGame()
+    // → saveGame(), and the AVAIL_GAMES pool save) all the way into the
+    // shared/synced Sheet. The map, keyed by event.id, is the `_rawEvents`
+    // pattern applied correctly: it lives on the result wrapper, never on an
+    // object that can be spread into a persisted record.
+    liveStatusByEventId.set(String(event.id), {
+      name:        statusName || null,
+      detail:      event.status?.type?.detail ?? null,
+      shortDetail: event.status?.type?.shortDetail ?? null,
+    });
+    return parsedGame;
   }).filter(Boolean);
 
   let dqStatus;
@@ -562,7 +600,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     })),
   };
 
-  return { games, report };
+  return { games, report, liveStatusByEventId };
 }
 
 function buildFailReport(espnUrl, error) {

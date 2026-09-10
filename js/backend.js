@@ -542,12 +542,42 @@ function schedulePush() {
  * so they go the moment they fit again. The alternative (send it anyway and let
  * the Sheet refuse) is what produced the outage.
  *
- * This is a stopgap, deliberately. The real fix is chunking a large value across
- * several cells in Code.gs so nothing has to be held back at all; that changes
- * the stored format and needs a redeploy, so it is a feature-sized change and is
- * not being made here. Until it exists, the guard's job is to keep picks moving.
+ * UPDATE 2026-09-05 (Item CAP) — THE REAL FIX NOW EXISTS. backend/Code.gs chunks
+ * a single over-cap value transparently across as many 50,000-char cells as it
+ * needs and reassembles it on read, so a value larger than one cell is no longer
+ * unstorable. The 50,000-char PER-CELL limit therefore stopped being the binding
+ * constraint on a single app key. This constant is repurposed (name kept for
+ * continuity — pushtest and the banner text reference it): it is no longer the
+ * Sheets cell cap, it is a TOTAL-PAYLOAD RUNAWAY TRIPWIRE on one key.
+ *
+ * ┌─ DEPLOY ORDER — READ THIS BEFORE SHIPPING ────────────────────────────────┐
+ * │ This raised ceiling is ONLY safe once Code.gs's chunking is DEPLOYED and   │
+ * │ CONFIRMED live on the same backend this client talks to. Ship the raised   │
+ * │ client cap against an OLD, non-chunking Code.gs and you reproduce the      │
+ * │ RG-56 outage EXACTLY: the client stops quarantining the over-cap picks,    │
+ * │ sends them, the old server throws on the over-cap cell, handle() returns   │
+ * │ {ok:false} for the WHOLE batch, and picks + slate + week status all fail   │
+ * │ behind one value — mid-season, an hour before a deadline. Correct order:   │
+ * │   (1) deploy Code.gs chunking and CONFIRM it (see captest.mjs/chunkstore); │
+ * │   (2) THEN ship this raised cap. Never the reverse.                        │
+ * └───────────────────────────────────────────────────────────────────────────┘
+ *
+ * WHY 2,000,000, and why a ceiling still exists at all:
+ *   - The RG-56 loud-fail quarantine must SURVIVE. A value a bug has let run
+ *     away (an unbounded append, a serialization loop) must still fail loud and
+ *     be held back rather than shipped. Removing the guard, not raising it, is
+ *     what would be dangerous.
+ *   - The number sits far above any LEGITIMATE single-key payload: a full
+ *     15-week season of cfbp_picks measures ~214,111 chars (pushtest [8], via the
+ *     real createPick path). 2,000,000 is ~9x that — comfortable headroom for
+ *     more players, more games a week, and record-shape growth — while a
+ *     multi-MB single key can only be a defect.
+ *   - It is a per-KEY tripwire, NOT a target. The Google Sheet has a finite
+ *     per-spreadsheet cell budget, and chunking a value spends MORE cells, not
+ *     fewer, so a runaway is doubly expensive. This ceiling is a smoke alarm,
+ *     not a storage quota to fill.
  */
-export const SHEET_CELL_MAX = 50000;
+export const SHEET_CELL_MAX = 2000000;
 
 /**
  * Exactly what `Code.gs` computes: `JSON.stringify(entries[key]).length`.
@@ -586,8 +616,15 @@ export async function flushPush() {
   _dirty.clear();
   _dirtyFields.clear();
 
-  // RG-56 — quarantine anything the Sheet provably cannot store, BEFORE the
-  // call, so one over-cap value cannot fail the batch that carries the picks.
+  // RG-56 / Item CAP — quarantine anything so large it can only be a runaway,
+  // BEFORE the call, so it cannot fail the batch that carries the picks. Since
+  // 2026-09-05 SHEET_CELL_MAX is a TOTAL-PAYLOAD tripwire (2,000,000), NOT the
+  // 50,000-char Sheets per-cell limit: Code.gs now chunks a single over-cap value
+  // across cells, so ordinary large keys (season-scale cfbp_picks, ~214k) are
+  // SENT and chunked server-side, not held back. DEPLOY ORDER (see SHEET_CELL_MAX
+  // above): this only holds while the LIVE Code.gs actually chunks — against an
+  // old non-chunking backend an over-cap value sent here throws server-side and
+  // fails the whole batch (the RG-56 outage). Confirm chunking is live first.
   const oversize = [];
   for (const k of Object.keys(entries)) {
     const chars = cellChars(entries[k]);
@@ -636,7 +673,7 @@ export async function flushPush() {
   if (oversize.length) {
     requeue(oversize.map(o => o.key));
     _lastError =
-      'Too large for the Sheet, held back and NOT synced: ' +
+      'Too large to sync (runaway value over the safety ceiling), held back and NOT synced: ' +
       oversize.map(o => `${o.key} (${o.chars.toLocaleString()} chars, limit ${SHEET_CELL_MAX.toLocaleString()})`).join('; ') +
       // Only true when something was actually sent. With the whole batch
       // quarantined, sendable.length is 0, no round trip happens, and NOTHING

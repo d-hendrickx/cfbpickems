@@ -332,13 +332,29 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
          matchupBlock.indexOf('class="team away"') < matchupBlock.indexOf('class="team home"'),
     '3b: fixture check: the game card renders the AWAY team in grid column 1 and HOME in column 3');
 
-  // 3c — THE BUG, on the block Drew named. The two .score-num divs inside
-  // .live-score must appear away-then-home so they line up under the names.
-  const liveScoreBlock = (APP_SRC.match(/const liveScore = [\s\S]*?<\/div>`\s*:\s*''/) || [''])[0];
-  assert(liveScoreBlock.length > 0, 'fixture check: renderGameCard\'s liveScore block located for structural assertions');
-  const firstNumIsAway = liveScoreBlock.indexOf('${game.awayScore}') < liveScoreBlock.indexOf('${game.homeScore}');
+  // 3c — THE BUG, on the shared score-block source Drew named. Item 2
+  // (commits 58a041c/ae9be3e/cab55be) extracted this markup OUT of an inline
+  // `const liveScore = … ? \`<div class="live-score">…</div>\` : ''` ternary in
+  // renderGameCard and INTO the shared renderLiveScoreBlockHTML(), now used by
+  // renderGameCard AND updatePicksLiveStatusInPlace(). The old locator keyed off
+  // `const liveScore = ` and the ternary shape; after the extraction that regex
+  // re-bound to an unrelated region containing NEITHER score token, so the
+  // orientation check passed/failed on nothing (RG-69). Bind by FUNCTION NAME to
+  // the one place the score markup now lives, and demand BOTH tokens are present
+  // so the locator fails LOUDLY if the markup moves again instead of rotting to a
+  // vacuous pass. The two .score-num divs inside .live-score must appear
+  // away-then-home so they line up under the names in the 3-column grid.
+  const lsbIdx = APP_SRC.indexOf('function renderLiveScoreBlockHTML');
+  const liveScoreBlock = lsbIdx >= 0
+    ? (APP_SRC.slice(lsbIdx).match(/<div class="live-score">[\s\S]*?<\/div>\s*<\/div>/) || [''])[0]
+    : '';
+  const awayNumIdx = liveScoreBlock.indexOf('${game.awayScore}');
+  const homeNumIdx = liveScoreBlock.indexOf('${game.homeScore}');
+  assert(liveScoreBlock.length > 0 && awayNumIdx >= 0 && homeNumIdx >= 0,
+    'fixture check: renderLiveScoreBlockHTML\'s .live-score block located WITH both score tokens present — a miss here means the locator has rotted (markup moved/renamed), not that orientation is fine');
+  const firstNumIsAway = awayNumIdx < homeNumIdx;
   assert(firstNumIsAway,
-    '3c: THE BUG — renderGameCard\'s .live-score prints the AWAY score in grid column 1, under the away team name. It currently prints homeScore first, putting each score under the OTHER team [structural — only a browser confirms the pixels, but the grid columns make the mapping deterministic]');
+    '3c: THE BUG — renderLiveScoreBlockHTML\'s .live-score prints the AWAY score in grid column 1, under the away team name. It currently prints homeScore first, putting each score under the OTHER team [structural — only a browser confirms the pixels, but the grid columns make the mapping deterministic]');
 
   // 3d — the commissioner's admin game list. Its label is "away @ home" too.
   // Scope to renderAdminGamesList specifically — a second, unrelated

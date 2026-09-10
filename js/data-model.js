@@ -796,13 +796,30 @@ export function formatSpread(spread, favorite, game = null) {
 
 // ─── DATE / LABEL HELPERS ─────────────────────────────────────────────────────
 
+/**
+ * DI-135 — shared composition rule for the three label helpers below.
+ * `espnWeekNumber` (when non-blank) overrides the DISPLAYED week number only
+ * — it never touches `week.weekNumber` itself, which stays the ordering/
+ * identity key everywhere else. `roundLabel` is a SUFFIX appended after the
+ * display number ("Week 1, Part 2"), not a full replacement. The demo/
+ * historical special-case label wins over both, unchanged from before.
+ */
+function resolveWeekDisplayNumber(week) {
+  const overrideRaw = (week?.espnWeekNumber ?? '').toString().trim();
+  return overrideRaw !== '' ? overrideRaw : week?.weekNumber;
+}
+
+function composeWeekNamePart(week) {
+  if (week.label?.startsWith('📋') || week.label?.startsWith('Historical')) return week.label;
+  const displayNumber = resolveWeekDisplayNumber(week);
+  return week.roundLabel
+    ? `Week ${displayNumber}, ${week.roundLabel}`
+    : `Week ${displayNumber}`;
+}
+
 export function formatWeekLabel(week) {
   if (!week) return '';
-  const weekPart = week.roundLabel
-    ? `Week ${week.roundLabel}`
-    : (week.label?.startsWith('📋') || week.label?.startsWith('Historical')
-        ? week.label
-        : `Week ${week.weekNumber}`);
+  const weekPart = composeWeekNamePart(week);
 
   if (week.dataSourceMode === 'demo') return weekPart;
   if (week.startDate && week.endDate && week.startDate !== week.endDate) {
@@ -828,17 +845,31 @@ export function formatWeekLabel(week) {
  * `name` is always present. `dates` is '' for demo weeks and for weeks with no
  * dates on file, so callers can render the second line conditionally rather
  * than emitting an empty element that still claims vertical space.
+ *
+ * DI-A2 (2026-09-09): `collapseYear` is an OPT-IN option, default false. When
+ * true and startDate/endDate share a calendar year, the leading date drops its
+ * year — "Sep 3, 2026–Sep 7, 2026" becomes "Sep 3 – Sep 7, 2026" — since
+ * repeating the year twice in one line is noise once the header is the only
+ * caller asking for it. A CROSS-YEAR range (Dec 30, 2026 – Jan 2, 2027) must
+ * never lose either year, so the check falls straight through to the
+ * unmodified two-full-dates format whenever the years differ, regardless of
+ * the flag. Every other existing caller omits the option and gets the exact
+ * same string as before this change — verified byte-identical in
+ * headermetatest.mjs.
  */
-export function formatWeekLabelParts(week) {
+export function formatWeekLabelParts(week, { collapseYear = false } = {}) {
   if (!week) return { name: '', dates: '' };
-  const name = week.roundLabel
-    ? `Week ${week.roundLabel}`
-    : (week.label?.startsWith('📋') || week.label?.startsWith('Historical')
-        ? week.label
-        : `Week ${week.weekNumber}`);
+  const name = composeWeekNamePart(week);
 
   if (week.dataSourceMode === 'demo') return { name, dates: '' };
   if (week.startDate && week.endDate && week.startDate !== week.endDate) {
+    if (collapseYear) {
+      const startYear = new Date(week.startDate + 'T12:00:00').getFullYear();
+      const endYear = new Date(week.endDate + 'T12:00:00').getFullYear();
+      if (startYear === endYear) {
+        return { name, dates: `${fmtDate(week.startDate, { omitYear: true })} – ${fmtDate(week.endDate)}` };
+      }
+    }
     return { name, dates: `${fmtDate(week.startDate)}–${fmtDate(week.endDate)}` };
   }
   if (week.startDate) return { name, dates: fmtDate(week.startDate) };
@@ -856,7 +887,7 @@ export function formatWeekGroupLabel(memberWeeks) {
   if (!memberWeeks || !memberWeeks.length) return '';
   if (memberWeeks.length === 1) return formatWeekLabel(memberWeeks[0]);
   const sorted = [...memberWeeks].sort((a, b) => (a.weekNumber ?? 0) - (b.weekNumber ?? 0));
-  const labels = sorted.map(w => w.roundLabel ? `Week ${w.roundLabel}` : `Week ${w.weekNumber}`);
+  const labels = sorted.map(w => composeWeekNamePart(w));
   const unique = [...new Set(labels)];
   // Members sharing one plain label (e.g. two parts both left roundLabel
   // blank, same weekNumber) collapse to "Week N (2 parts)" rather than
@@ -866,9 +897,17 @@ export function formatWeekGroupLabel(memberWeeks) {
   return unique.length === 1 ? `${unique[0]} (${sorted.length} parts)` : labels.join(' + ');
 }
 
-function fmtDate(ds) {
+// DI-A2 (2026-09-09): `omitYear` is opt-in, default false, so every existing
+// caller (there was only ever one signature before this) keeps its year and
+// its exact prior string. formatWeekLabelParts() is the only caller that ever
+// passes `omitYear: true`, and only for the leading date of a same-year range.
+function fmtDate(ds, { omitYear = false } = {}) {
   if (!ds) return '';
-  try { return new Date(ds+'T12:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); }
+  try {
+    const opts = { month: 'short', day: 'numeric' };
+    if (!omitYear) opts.year = 'numeric';
+    return new Date(ds+'T12:00:00').toLocaleDateString('en-US', opts);
+  }
   catch { return ds; }
 }
 

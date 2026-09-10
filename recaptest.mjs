@@ -77,7 +77,7 @@ console.log('\n[1] Drew\'s live data — Week 1 Part 2 must recap Week 1 Part 1�
 
 const LIVE_PART1 = {
   weekId: 'w2026_1', season: '2026', weekNumber: 1,
-  label: 'Week 1', roundLabel: '1, Part 1', espnWeekNumber: '1',
+  label: 'Week 1', roundLabel: 'Part 1', espnWeekNumber: '1',
   startDate: '2026-08-29', endDate: '2026-08-30',
   status: 'final', dataSourceMode: 'espn_live',
   showInHistory: true,
@@ -574,7 +574,9 @@ seed({ weeks: [LIVE_PART1, PART2_DONE, REAL_WEEK2, LIVE_DEMO], players: LIVE_PLA
        results: [...LIVE_RESULTS, ...LIVE_RESULTS.map(r => ({ ...r, resultId: r.resultId + '_p2', weekId: 'w_1788306292997' }))],
        games: [...LIVE_GAMES, { ...LIVE_GAMES[0], gameId: 'g_r2', weekId: 'w_1788306292997' }] });
 const w2Footer = renderPicksFooterHTML(REAL_WEEK2);
-assert(w2Footer.includes('Chart Review — Week Part 2') && !w2Footer.includes('The Permanent Record'),
+// DI-135: roundLabel is now a suffix with the display number auto-prepended,
+// so this reads "Week 1, Part 2" (not the pre-DI-135 "Week Part 2").
+assert(w2Footer.includes('Chart Review — Week 1, Part 2') && !w2Footer.includes('The Permanent Record'),
   '[10g] a genuine weekNumber:2 current week RENDERS the Chart Review for the most recent finalized week (Part 2) — this reading of the report reproduces on neither tree');
 
 // (d) DISCRIMINATOR — identical fixture, previous week never FINALIZED.

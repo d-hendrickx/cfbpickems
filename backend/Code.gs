@@ -144,63 +144,256 @@ function storeSheet() {
   return s;
 }
 
+// ── Cell-cap chunking (Item CAP, 2026-09-04) ────────────────────────────────
+// A Sheets cell caps at 50,000 chars. cfbp_picks (238 chars/pick × 60/week)
+// crosses that around WEEK 3 and cfbp_games around week 5 — keys we cannot make
+// device-local, because they ARE the shared league record. setMany() used to
+// write each value into a single cell with no size check, so an over-cap value
+// made Apps Script throw and failed the whole batch (RG-56). This splits a value
+// too large for one cell across several cells and reassembles it on read.
+//
+// A logical key `K` whose JSON exceeds CELL_SAFE_LIMIT is stored as:
+//   row  K                      -> the marker string  CHUNK_MARK + <gen> + ':' + <partCount>
+//   row  K + CHUNK_TAG + <gen>0 -> chunk 0 (up to CELL_SAFE_LIMIT chars)
+//   row  K + CHUNK_TAG + <gen>1 -> chunk 1
+//   ...
+// <gen> is 'A' or 'B'. A JSON string never begins with '_' (objects '{', arrays
+// '[', strings '"', numbers/true/false/null with their own leads), so CHUNK_MARK
+// can never collide with a real stored value, and a legacy single-cell row reads
+// back unchanged — BACKWARD COMPATIBLE with every value already in the Sheet.
+//
+// GENERATION PING-PONG (Item CAP hardening, 2026-09-05). A chunked→chunked UPDATE
+// must NOT overwrite the live prior fragments before the marker flip, or a crash
+// mid-write leaves a reader reassembling new-front + old-tail → a corrupt value.
+// So a new chunked write lands on the INACTIVE generation's FRESH rows and the
+// marker atomically repoints from the old generation to the new. The dead
+// generation is blanked AFTER the flip, and those blank rows are REUSED by the
+// next write (putCell pulls from a free-row pool), so growth is bounded to ~2×
+// fragments — no row is leaked per write. Legacy generation-less markers
+// (CHUNK_MARK + <n>) still read via the old <key>+PART+i fragment keys.
+//
+// THIS BLOCK IS THE TESTED TWIN OF backend/chunkstore.mjs. captest.mjs runs that
+// module and greps this file to confirm the two have not drifted (twin-sync).
+// Keep the constants and control flow in step with chunkstore.mjs. A deploy is
+// still MANUAL: Deploy → Manage deployments → Edit → New version, same deployment.
+var CELL_SAFE_LIMIT = 45000;            // chars per cell; < 50,000 hard cap, with headroom
+var CHUNK_MARK = '__CFBP_CHUNKED__';    // primary-cell marker: CHUNK_MARK + <gen> + ':' + <partCount>  (legacy: CHUNK_MARK + <partCount>)
+var CHUNK_TAG  = '__CFBP_PART__';       // chunk-row key = <key> + CHUNK_TAG + <gen?> + <index>
+
+function chunkKey(key, gen, i) { return key + CHUNK_TAG + (gen === null || gen === undefined ? '' : gen) + i; }
+function isChunkKey(key) { return String(key).indexOf(CHUNK_TAG) !== -1; }
+
+/** Parse a marker cell -> {gen, n} or null. Generational "A:5"/"B:5", or legacy
+ *  generation-less "5" (gen=null, read via the old <key>+PART+i fragment keys). */
+function parseMarker(raw) {
+  if (typeof raw !== 'string' || raw.indexOf(CHUNK_MARK) !== 0) return null;
+  var rest = raw.slice(CHUNK_MARK.length);
+  var m = /^([AB]):(\d+)$/.exec(rest);
+  if (m) return { gen: m[1], n: parseInt(m[2], 10) };
+  if (/^\d+$/.test(rest)) return { gen: null, n: parseInt(rest, 10) };
+  return null;
+}
+
+/** The generation a NEW chunked write targets, given the prior marker. Ping-pong
+ *  A↔B; a legacy/non-chunked prior gets 'A' (its rows never collide with legacy). */
+function nextGen(priorRaw) {
+  var m = parseMarker(priorRaw);
+  return (m && m.gen === 'A') ? 'B' : 'A';
+}
+
+/** Reassemble the raw JSON string for `key` from a map of every row's raw cell.
+ *  Returns undefined when absent; a legacy row returns its cell text unchanged. */
+function readRaw(key, rawByKey) {
+  var raw = rawByKey[key];
+  if (raw === undefined) return undefined;
+  var m = parseMarker(raw);
+  if (m) {
+    var joined = '';
+    for (var i = 0; i < m.n; i++) {
+      var part = rawByKey[chunkKey(key, m.gen, i)];
+      joined += (part === undefined || part === null) ? '' : String(part);
+    }
+    return joined;
+  }
+  return raw;
+}
+
+/** Write one logical key: one cell if it fits, else fresh-generation chunk rows
+ *  + a marker row. `rowByKey` maps a physical row key -> its 1-based sheet row;
+ *  `freeRows` is a pool of blank rows (from prior orphan cleanup) that putCell
+ *  reuses before appending, which is what bounds row growth across ping-pong.
+ *  `priorRaw` is the current marker cell, so a chunked→chunked write can pick the
+ *  INACTIVE generation. */
+function writeValue(s, rowByKey, freeRows, key, str, priorRaw, now) {
+  if (typeof str !== 'string') str = 'null';            // JSON.stringify(undefined)
+  if (str.length <= CELL_SAFE_LIMIT) {
+    putCell(s, rowByKey, freeRows, key, str, now);      // single cell holds the value directly
+    clearOrphanChunks(s, rowByKey, freeRows, key, null, 0, now);   // a prior chunked value's fragments are all orphans now
+    return;
+  }
+  var gen = nextGen(priorRaw);                           // land on the INACTIVE generation
+  var n = Math.ceil(str.length / CELL_SAFE_LIMIT);
+  // FRESH-GENERATION FRAGMENTS FIRST, MARKER LAST. Writing the marker is the
+  // atomic commit: because the fragments go to the inactive generation's rows,
+  // the live prior value (old marker + old generation) is untouched until the
+  // marker flips. A crash before the flip leaves a reader following the OLD
+  // marker to intact OLD fragments — never a new-front/old-tail mixture.
+  for (var i = 0; i < n; i++) {
+    putCell(s, rowByKey, freeRows, chunkKey(key, gen, i), str.slice(i * CELL_SAFE_LIMIT, (i + 1) * CELL_SAFE_LIMIT), now);
+  }
+  putCell(s, rowByKey, freeRows, key, CHUNK_MARK + gen + ':' + n, now);   // flip the marker LAST — the commit
+  clearOrphanChunks(s, rowByKey, freeRows, key, gen, n, now);             // blank the dead generation + any stragglers
+}
+
+/** Blank every chunk-fragment row of `key` that is NOT part of the live set
+ *  (`gen`, `keepParts`): the whole other generation, any legacy fragments, and
+ *  any higher-index fragment of the same generation. keepParts === 0 (single
+ *  cell) orphans EVERY fragment. Rows are BLANKED (key + json cleared), not
+ *  deleted: deleteRow would reshuffle every 1-based index cached in rowByKey
+ *  mid-batch. A blanked row is skipped by getAll's `key === ''` guard, and it is
+ *  pushed onto `freeRows` so the NEXT write reuses it instead of appending —
+ *  that reuse is what keeps the ping-pong bounded to ~2× fragments. */
+function clearOrphanChunks(s, rowByKey, freeRows, key, gen, keepParts, now) {
+  var prefix = key + CHUNK_TAG;
+  var keep = {};
+  for (var i = 0; i < keepParts; i++) keep[chunkKey(key, gen, i)] = true;
+  Object.keys(rowByKey).forEach(function (k) {
+    if (k.indexOf(prefix) !== 0) return;
+    if (keep[k]) return;
+    var row = rowByKey[k];
+    s.getRange(row, 1, 1, 3).setValues([['', '', now]]);
+    delete rowByKey[k];
+    freeRows.push(row);                                 // reclaimed — reused before any append
+  });
+}
+
+/** Overwrite the json+updatedAt of an existing row, reuse a reclaimed blank row,
+ *  or append a new one. The free-row pool is drained before appending so blanked
+ *  orphans from prior writes are recycled rather than left to accumulate.
+ *
+ * The json cell is forced to PLAIN-TEXT format ('@') before the value is set.
+ * setValues() otherwise coerces a string that looks like a number/date/boolean
+ * to its typed value — harmless for the primary cell (JSON always begins with
+ * {, [, or ") but NOT for a chunk fragment, whose split boundary can land on an
+ * all-numeric substring that Sheets would store as a lossy number and corrupt on
+ * reassembly. Text format on write, plus String() on read (readRaw), closes it.
+ * (Apps-Script-only behaviour; verified only by a real deploy, not by node.) */
+function putCell(s, rowByKey, freeRows, key, str, now) {
+  var row;
+  if (rowByKey[key]) {
+    row = rowByKey[key];
+  } else if (freeRows.length) {
+    row = freeRows.shift();                             // recycle a blanked orphan row
+    s.getRange(row, 1).setValue(key);
+    rowByKey[key] = row;
+  } else {
+    row = s.getLastRow() + 1;
+    s.getRange(row, 1).setValue(key);
+    rowByKey[key] = row;
+  }
+  s.getRange(row, 2).setNumberFormat('@');          // json column -> plain text
+  s.getRange(row, 2, 1, 2).setValues([[str, now]]);
+}
+
 function getAll() {
   var s = storeSheet();
   var values = s.getDataRange().getValues();
-  var out = {};
+  var rawByKey = {};
   for (var i = 1; i < values.length; i++) {
-    var key = values[i][0];
-    if (!key) continue;
-    var raw = values[i][1];
-    out[key] = raw === '' || raw === null ? null : safeParse(raw);
+    var k = values[i][0];
+    if (k === '' || k === null) continue;
+    rawByKey[String(k)] = values[i][1];
   }
+  var out = {};
+  Object.keys(rawByKey).forEach(function (key) {
+    if (isChunkKey(key)) return;                          // fragments are not app keys
+    var raw = readRaw(key, rawByKey);
+    out[key] = (raw === '' || raw === undefined || raw === null) ? null : safeParse(raw);
+  });
   return out;
 }
 
 function getOne(key) {
   var s = storeSheet();
   var values = s.getDataRange().getValues();
+  var rawByKey = {};
   for (var i = 1; i < values.length; i++) {
-    if (values[i][0] === key) {
-      var raw = values[i][1];
-      return raw === '' || raw === null ? null : safeParse(raw);
-    }
+    var k = values[i][0];
+    if (k === '' || k === null) continue;
+    rawByKey[String(k)] = values[i][1];
   }
-  return null;
+  var raw = readRaw(key, rawByKey);
+  return (raw === '' || raw === undefined || raw === null) ? null : safeParse(raw);
+}
+
+// Build the row index the write path needs: rowByKey maps a live physical row
+// key -> its 1-based row; freeRows collects blank rows (from prior orphan
+// cleanup) for putCell to recycle; rawByKey maps a live key -> its json cell so
+// writeValue can read the PRIOR marker and pick the inactive generation.
+function scanStore(values) {
+  var rowByKey = {}, rawByKey = {}, freeRows = [];
+  for (var i = 1; i < values.length; i++) {
+    var k = values[i][0];
+    if (k === '' || k === null) { freeRows.push(i + 1); continue; }
+    rowByKey[String(k)] = i + 1;
+    rawByKey[String(k)] = values[i][1];
+  }
+  return { rowByKey: rowByKey, rawByKey: rawByKey, freeRows: freeRows };
+}
+
+// ── Concurrent-writer guard (Item CAP, 2026-09-05) ──────────────────────────
+// setMany/setOne mutate the chunked store as a read-marker → write-fragments →
+// flip-marker → cleanup sequence. The generation ping-pong makes that sequence
+// SINGLE-WRITER crash-atomic, but NOT concurrent-writer atomic: two Apps Script
+// executions writing the SAME over-cap key in the same window would both read
+// prior marker A, both pick generation B (nextGen of A), interleave their B
+// fragments onto the same rows, and both flip the marker to B:n → mixed
+// reassembly → safeParse downgrade → silent corruption of the value. cfbp_picks
+// holds all six players' picks, so two near-simultaneous submissions past the
+// cap (~week 3) is a realistic path — this is the pick-integrity failure class.
+//
+// Only a lock closes it. This mirrors chatAppend's LockService discipline
+// exactly: one SCRIPT lock, a 10s wait budget, always released in a finally. The
+// lock must span the ENTIRE read-then-write, not the individual cell writes — if
+// it only covered the flip, both writers could still read marker A and both pick
+// generation B before either flipped. On failure to acquire, waitLock THROWS;
+// handle()'s catch turns that into { ok:false, error } and the client treats the
+// push as failed and retries — loud-fail (never a silently dropped write).
+//
+// Reads (getAll/getOne) deliberately take NO lock. Each is a single
+// getDataRange().getValues() snapshot, and because writeValue writes all
+// fragments BEFORE flipping the marker (marker cell last), any snapshot reads
+// either the old marker → intact prior generation, or the new marker → the
+// fully-written new generation. Never a mixture. Locking reads would only add
+// contention on the hot getAll path for no correctness gain.
+function withStoreLock(fn) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);                                  // same wait budget as chatAppend; throws on failure → loud-fail
+  try { return fn(); }
+  finally { lock.releaseLock(); }                        // always released, even when fn throws
 }
 
 function setOne(key, value) {
   if (!key) throw new Error('Missing key');
-  var s = storeSheet();
-  var values = s.getDataRange().getValues();
-  var str = JSON.stringify(value);
-  var now = new Date().toISOString();
-  for (var i = 1; i < values.length; i++) {
-    if (values[i][0] === key) {
-      s.getRange(i + 1, 2, 1, 2).setValues([[str, now]]);
-      return;
-    }
-  }
-  s.appendRow([key, str, now]);
+  return withStoreLock(function () {
+    var s = storeSheet();
+    var m = scanStore(s.getDataRange().getValues());
+    writeValue(s, m.rowByKey, m.freeRows, key, JSON.stringify(value), m.rawByKey[key], new Date().toISOString());
+  });
 }
 
 function setMany(entries) {
-  var s = storeSheet();
-  var values = s.getDataRange().getValues();
-  var rowByKey = {};
-  for (var i = 1; i < values.length; i++) rowByKey[values[i][0]] = i + 1;
-  var now = new Date().toISOString();
-  var count = 0;
-  Object.keys(entries).forEach(function (key) {
-    var str = JSON.stringify(entries[key]);
-    if (rowByKey[key]) {
-      s.getRange(rowByKey[key], 2, 1, 2).setValues([[str, now]]);
-    } else {
-      s.appendRow([key, str, now]);
-    }
-    count++;
+  return withStoreLock(function () {
+    var s = storeSheet();
+    var m = scanStore(s.getDataRange().getValues());
+    var now = new Date().toISOString();
+    var count = 0;
+    Object.keys(entries).forEach(function (key) {
+      writeValue(s, m.rowByKey, m.freeRows, key, JSON.stringify(entries[key]), m.rawByKey[key], now);
+      count++;
+    });
+    return count;
   });
-  return count;
 }
 
 // ── Snapshots (season backups / rollback) ─────────────────────────────────────
@@ -210,10 +403,41 @@ function snapSheet() {
   return s;
 }
 
+// Append one row to CFBP_SNAPSHOTS with the json column forced to plain text,
+// so a fragment whose split boundary lands on an all-numeric substring is not
+// coerced to a lossy number (same reason putCell does it for the store).
+function snapAppend(s, rowVals) {
+  var row = s.getLastRow() + 1;
+  s.getRange(row, 3).setNumberFormat('@');            // json column -> plain text
+  s.getRange(row, 1, 1, 4).setValues([rowVals]);
+}
+
+// Item CAP NOTE 3 (2026-09-04). The full reassembled store crosses the 50,000-char
+// cell cap on the same week 3–5 timeline as cfbp_picks/cfbp_games, so a single-cell
+// snapshot payload would throw exactly when the season is largest — and restore
+// snapshots first, so rollback would be dead too. The payload now rides the SAME
+// chunk convention as CFBP_STORE: fragment rows keyed <id> + CHUNK_TAG + i written
+// FIRST, then the marker row <id> holding CHUNK_MARK + n LAST (NOTE 1's ordering).
+// A payload that fits stays a single row, byte-for-byte — old snapshots read back
+// unchanged. Snapshots are APPEND-ONLY with a fresh id every time, so there is no
+// in-place-overwrite hazard: they keep the legacy generation-less fragment keys
+// (chunkKey(id, null, i)) and marker (CHUNK_MARK + n), which readRaw reads via the
+// gen=null branch. Generations exist only for the mutated-in-place store rows.
 function makeSnapshot(label) {
   var all = getAll();
   var id = 'snap_' + Date.now();
-  snapSheet().appendRow([id, label || '', JSON.stringify(all), new Date().toISOString()]);
+  var s = snapSheet();
+  var now = new Date().toISOString();
+  var str = JSON.stringify(all);
+  if (str.length <= CELL_SAFE_LIMIT) {
+    snapAppend(s, [id, label || '', str, now]);
+    return id;
+  }
+  var n = Math.ceil(str.length / CELL_SAFE_LIMIT);
+  for (var i = 0; i < n; i++) {
+    snapAppend(s, [chunkKey(id, null, i), '', str.slice(i * CELL_SAFE_LIMIT, (i + 1) * CELL_SAFE_LIMIT), now]);
+  }
+  snapAppend(s, [id, label || '', CHUNK_MARK + n, now]);   // marker row LAST — the commit
   return id;
 }
 
@@ -222,7 +446,9 @@ function listSnapshots() {
   var values = s.getDataRange().getValues();
   var out = [];
   for (var i = 1; i < values.length; i++) {
-    out.push({ id: values[i][0], label: values[i][1], createdAt: values[i][3] });
+    var rid = values[i][0];
+    if (rid === '' || rid === null || isChunkKey(rid)) continue;   // skip blanks + fragment rows
+    out.push({ id: rid, label: values[i][1], createdAt: values[i][3] });
   }
   return out.reverse(); // newest first
 }
@@ -231,16 +457,21 @@ function restoreSnapshot(id) {
   if (!id) throw new Error('Missing snapshot id');
   var s = snapSheet();
   var values = s.getDataRange().getValues();
+  // Map every snapshot row's id -> its json cell, then reassemble through the same
+  // readRaw the store uses. A legacy single-cell snapshot has no marker and reads
+  // straight through — backward compatible with every backup already on the Sheet.
+  var rawById = {};
   for (var i = 1; i < values.length; i++) {
-    if (values[i][0] === id) {
-      var data = safeParse(values[i][2]) || {};
-      // Take a safety snapshot of current state before overwriting
-      makeSnapshot('auto-before-restore-' + id);
-      setMany(data);
-      return;
-    }
+    var rid = values[i][0];
+    if (rid === '' || rid === null) continue;
+    rawById[String(rid)] = values[i][2];
   }
-  throw new Error('Snapshot not found: ' + id);
+  var raw = readRaw(String(id), rawById);
+  if (raw === undefined) throw new Error('Snapshot not found: ' + id);
+  var data = safeParse(raw) || {};
+  // Take a safety snapshot of current state before overwriting
+  makeSnapshot('auto-before-restore-' + id);
+  setMany(data);
 }
 
 

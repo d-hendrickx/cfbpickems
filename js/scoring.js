@@ -138,6 +138,21 @@ export function gameMultiplier(game) {
  * results exactly, and a pooled-group caller can reuse the identical
  * winner/loser logic on POOLED totals instead of re-deriving it.
  */
+/**
+ * Did the tiebreaker genuinely order two rows already tied on correctPicks?
+ * True ONLY when their tiebreakerDelta yields a distinct, deterministic
+ * ordering under the nulls-last sort — i.e. the tiebreaker actually decided
+ * it. Both-null (nobody guessed) or equal non-null deltas (guesses equally
+ * close) is an arbitrary, stable-sort coin flip and returns false. One delta
+ * present and the other null is decisive (nulls-last ranks the guesser above
+ * the non-guesser) and returns true.
+ */
+function tiebreakerBrokeTie(a, b) {
+  if (a.tiebreakerDelta === null && b.tiebreakerDelta === null) return false;
+  if (a.tiebreakerDelta === b.tiebreakerDelta) return false;
+  return true;
+}
+
 export function rankWeeklyResults(rows, anyFinal) {
   rows.sort((a,b)=>{
     const d=b.correctPicks-a.correctPicks; if(d!==0) return d;
@@ -150,11 +165,17 @@ export function rankWeeklyResults(rows, anyFinal) {
   rows.forEach((r,i)=>{ r.rank=i+1; });
   if(anyFinal&&rows.length>1){
     rows[0].isWinner=true;
-    if(rows[1]&&rows[0].correctPicks===rows[1].correctPicks) rows[0].wonByTiebreaker=true;
+    // "(TB)" only when the tiebreaker GENUINELY broke the correctPicks tie —
+    // not a coin flip among equal or both-absent guesses. A tie is broken iff
+    // the two rows' tiebreakerDelta produce a distinct ordering (nulls-last):
+    // both null, or equal non-null deltas, is arbitrary and must NOT flag.
+    if(rows[1]&&rows[0].correctPicks===rows[1].correctPicks)
+      rows[0].wonByTiebreaker=tiebreakerBrokeTie(rows[0],rows[1]);
     rows[rows.length-1].isLoser=true;
     const last=rows[rows.length-1];
     const sl=rows[rows.length-2];
-    if(sl&&last.correctPicks===sl.correctPicks) last.wonByTiebreaker=true;
+    if(sl&&last.correctPicks===sl.correctPicks)
+      last.wonByTiebreaker=tiebreakerBrokeTie(last,sl);
   }
   return rows;
 }

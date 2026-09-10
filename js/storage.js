@@ -38,6 +38,7 @@ const KEYS = {
   REJECTED_SUGG: 'cfbp_rejected_suggestions',  // per-week dismissed suggested games
   REACTIONS:   'cfbp_reactions',                // per-week game emoji reactions
   FEEDBACK:    'cfbp_feedback',                 // user-submitted feature requests / issues
+  FEEDBACK_EXCLUDED: 'cfbp_feedback_excluded_ids', // Item 10 (DI-B1): per-id "leave out of CSV export" flag
   COMMENTS:    'cfbp_comments',                 // per-game + general chat messages (with PickEms Bot)
   ACTIVE_WEEK: 'cfbp_active_week',
   FETCH_PROOF: 'cfbp_fetch_proof',
@@ -191,6 +192,7 @@ export function ensureSeedData(opts = {}) {
   seed(KEYS.REJECTED_SUGG,{});
   seed(KEYS.REACTIONS,    {});
   seed(KEYS.FEEDBACK,     []);
+  seed(KEYS.FEEDBACK_EXCLUDED, []);
   seed(KEYS.COMMENTS,     []);
   seed(KEYS.ACTIVE_WEEK,  REAL_WEEK_1_2026.weekId);
 }
@@ -211,6 +213,7 @@ export function resetToDemo() {
   save(KEYS.REJECTED_SUGG, {});
   save(KEYS.REACTIONS, {});
   save(KEYS.FEEDBACK, []);
+  save(KEYS.FEEDBACK_EXCLUDED, []);
   save(KEYS.COMMENTS, []);
   save(KEYS.ACTIVE_WEEK, REAL_WEEK_1_2026.weekId);
   save(KEYS.FETCH_PROOF, null);
@@ -750,6 +753,28 @@ export function appendFeedback(entry) {
   save(KEYS.FEEDBACK, all);
 }
 export function clearFeedback() { save(KEYS.FEEDBACK, []); }
+
+// ─── FEEDBACK EXPORT EXCLUSIONS ───────────────────────────────────────────────
+// Item 10 (DI-B1) — per-feedback-id "leave this out of the next CSV export"
+// flag, checked in the Data-tab feedback list (renderFeedbackAdmin) and
+// honored by buildFeedbackCsvRows(). Modeled EXACTLY on REJECTED_SUGG above:
+// a persisted id-SET with toggle add/remove, going through load()/save() so
+// it syncs cross-device like everything else in this file. Flat, unlike
+// REJECTED_SUGG's per-week grouping — feedback ids are already globally
+// unique ('fb_<timestamp>_<rand>', see the entry builder in app.js), so
+// nothing here needs a weekId key.
+//
+// DEFAULT-WHEN-MISSING (CONVENTIONS #10): absence from this set means
+// INCLUDED. Only an explicit uncheck adds an id here — nothing ever adds a
+// new id automatically — so a freshly submitted report can never be silently
+// missing from a download just because other rows were excluded earlier.
+export function getExcludedFeedbackIds() { return load(KEYS.FEEDBACK_EXCLUDED) || []; }
+export function isFeedbackExcluded(id) { return getExcludedFeedbackIds().includes(id); }
+export function setFeedbackExcluded(id, excluded) {
+  const set = new Set(getExcludedFeedbackIds());
+  if (excluded) set.add(id); else set.delete(id);
+  save(KEYS.FEEDBACK_EXCLUDED, [...set]);
+}
 
 // ─── COMMENTS / CHAT ─────────────────────────────────────────────────────────
 // Per-game comments + general chat + PickEms Bot posts all live in one list.

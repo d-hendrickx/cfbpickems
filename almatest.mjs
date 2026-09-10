@@ -979,9 +979,19 @@ console.log('\n[13] F4 — the Auto-Calc roster freezes at LOCK, mirroring locke
   const autoWeek = freshWeek({
     weekId: 'f4_auto', status: WEEK_STATUS.OPEN, dataSourceMode: 'espn_historical',
     picksLockAt: new Date(Date.now() - 60 * 1000).toISOString(), // 1 minute in the past — the auto-lock condition is already true
+    // §13c exercises the OPEN→LOCKED (auto-lock) leg ONLY; LOCKED is its
+    // terminal state. Disable auto-live so the tick cannot cascade
+    // LOCKED→LIVE. This is what keeps the "week is now LOCKED" sanity check
+    // true BY CONSTRUCTION rather than by luck of the calendar: with
+    // auto-live on, once real "now" passed the game's kickoff the tick would
+    // advance the week straight through LOCKED to LIVE in a single call and
+    // this fixture would rot (it did — the hardcoded kickoff went stale).
+    autoLiveEnabled: false,
   });
   storage.saveWeek(autoWeek);
-  storage.saveGame(freshGame({ weekId: 'f4_auto', spread: -3 }));
+  // Kickoff pinned relative to "now" (well in the future) rather than a
+  // hardcoded calendar date, so nothing in this block depends on when it runs.
+  storage.saveGame(freshGame({ weekId: 'f4_auto', spread: -3, kickoff: new Date(Date.now() + 60 * 60 * 1000).toISOString() }));
   storage.setActiveWeekId('f4_auto');
   const rosterAtAutoLock = claimedAlmaMaters();
   tickAutoTransition();

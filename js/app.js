@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.17.10';
-export const APP_VERSION_DATE = '2026-09-04';
+export const APP_VERSION = 'v0.18.0';
+export const APP_VERSION_DATE = '2026-09-10';
 
 /**
  * UN-124 — "What's new" card content, hand-maintained per release. NOT
@@ -19,22 +19,17 @@ export const APP_VERSION_DATE = '2026-09-04';
 const WHATS_NEW = {
   version: APP_VERSION,
   added: [
-    'The commissioner\'s game picker now suggests the ten games actually worth watching. Every alma mater is guaranteed a slot, there is always a Saturday-morning opener and a game that kicks off last on Saturday night, and the spread of conferences, days and kickoff times is deliberate. A "Next Best" shortlist sits underneath for one-tap swaps.',
-    'Games on national TV are flagged, and you can filter the available list by that or by tight spreads.',
-    'Alma maters now follow whoever claims them. Change a player\'s school and the Alma Mater Watch, the rankings, the slate and the tiebreaker all update together — no more editing a list in two places.',
-    'Schools are chosen from ESPN\'s full catalog, so Washington and Washington State can never be mistaken for each other.',
+    'You can now see where a live game stands. The quarter and clock show right on the game card, on the dashboard and on your picks, so a score means more than just a number — "trailing" with twelve minutes left is a very different thing from "trailing" in the first. It reflects the last refresh (at the interval you choose), and at the break it simply reads "Halftime" and stops flashing, so a frozen score never looks like a stalled feed.',
+    'The Feedback button now has a clear "Feedback" label and sits on its own line under the week, instead of an unlabeled icon.',
+    'When downloading the feedback report, the commissioner can tick exactly which items to include. Untick one and it stays unticked until you re-tick it; a brand-new report always starts included.',
   ],
   fixed: [
-    'Spreads were being stored backwards whenever the away team was favored. ESPN writes its line from the favorite\'s side using an abbreviation, and the app was guessing at which team that meant — when the guess failed it silently assumed the home team. The line is now read from ESPN\'s own data, and if it cannot be resolved you get no spread rather than a wrong one.',
-    'Extra Point guesses, tiebreakers and submitted feedback were being destroyed by the next player to open the app. A stale device could overwrite everyone else\'s entries. Fixed, and the guard that was supposed to prevent it — which had been pointed at storage keys that never existed — now points at the real ones.',
-    'Scores are printed under the right team. Six places showed home-then-away while every matchup line reads away-first, so on the game card each score sat under the opposing team\'s name.',
-    'The standings now agree with the weekly result about who came last.',
-    'The picks page shows last week\'s recap instead of last season\'s. A week that spans two slates was invisible to the lookup.',
-    'Games kicking at 8:00 PM ET no longer read "Time TBD" — midnight UTC is a real kickoff slot, not a placeholder. Games already on a slate correct themselves within a minute.',
-    'The picks list now runs earliest kickoff first. Friday night games were appearing below Saturday morning ones.',
-    'On a shared phone, one player\'s Extra Point guess could survive a logout and pre-fill the next player\'s box — where it was readable while the week was still open, and could be recorded as theirs.',
-    'Adding a game from the Available Games list saved it twice.',
-    'Cross-device sync could stop entirely once a week\'s candidate list got large enough. That list is no longer shared between devices, and if any single item is ever too big to store, everything else still syncs and the app tells the commissioner exactly which one is stuck.',
+    'The auto-refresh interval you pick now actually refreshes the scores, on every tab — not just the dashboard. Sitting on your picks during a game used to update nothing until you refreshed by hand.',
+    'The "(TB)" tiebreaker tag now appears only when a tiebreaker genuinely decided the week — no more "(TB)" beside a name in a week where nobody entered one.',
+    'An unpaid debt in the standings simply reads "Unpaid" again, instead of a "Needs review" note that was meant for the commissioner\'s tools.',
+    'The demo/simulation controls can no longer touch a real week. Their reset and randomize buttons refuse to run on anything but a demo week, so a misclick can never wipe a real week\'s scores and results again.',
+    'A newly created second part of a week now appears in the dashboard\'s "Viewing Week" list, and its name reads the way it should — "Week 1, Part 2" — with the optional ESPN Week # now setting the displayed number. The redundant repeated year has also been dropped from the week\'s date range.',
+    'Cross-device sync keeps working as the season fills up. The way picks and games are stored can now grow past the single-cell limit that would otherwise have stalled syncing around midseason.',
   ],
 };
 
@@ -103,6 +98,7 @@ import {
   getReactionsForGame, toggleReaction,
   getComments, getGameComments, addComment, deleteComment, addBotPostIfNew,
   getFeedback, appendFeedback,
+  getExcludedFeedbackIds, isFeedbackExcluded, setFeedbackExcluded,
   countPicksForGame, deletePicksForGame,
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
@@ -525,8 +521,12 @@ function refreshHeader() {
   if (!el) return;
   // UN-117 — name and dates each own a line; the status badge rides with the
   // name so a wrapped date range can never orphan it onto a third line.
+  // DI-A2 (2026-09-09): this is the ONE caller that passes collapseYear:true —
+  // the header is a tight strip where "Sep 3, 2026–Sep 7, 2026" repeats the
+  // year for no reason; renderWeekBanner() and renderCommPage() below omit
+  // the option on purpose and stay byte-identical (headermetatest.mjs).
   if (week) {
-    const wl = formatWeekLabelParts(week);
+    const wl = formatWeekLabelParts(week, { collapseYear: true });
     el.innerHTML = `<span class="week-heading week-heading-inline">
       <span class="week-heading-name"><strong>${escHtml(wl.name)}</strong><span class="badge badge-${week.status} ml-sm">${week.status.toUpperCase()}</span></span>
       ${wl.dates ? `<span class="week-heading-dates">${escHtml(wl.dates)}</span>` : ''}
@@ -601,17 +601,24 @@ export function setupHeaderIdentity() {
  * become a third line no matter how the week name/date text reformats. The
  * week block's own two-line internal structure is completely untouched.
  *
- * Tap target: reuses .header-feedback-btn/.header-feedback-icon UNCHANGED
- * from the .header-right version — an invisible padded wrapper (40x40,
- * border-box) around the visible 26px icon, the same "pad the wrapper"
- * technique as .header-identity right next to it. This is IN-FLOW padding,
- * not an out-of-flow ::before overlay: unlike the repeated-per-card
- * .dc-meta .chat-bubble-btn case (where 40px of in-flow padding would have
- * re-inflated height on every dashboard card), this button exists exactly
- * once, and .header-right's own .header-identity chip already forces the
- * whole header row to >=40px tall — so the padded wrapper costs nothing
- * additional in header height, and there's no neighbour for an overlay to
- * steal taps from in the first place.
+ * DI-A1 AMENDMENT (2026-09-09, Drew's explicit request): the button now
+ * carries a visible "Feedback" text label next to the icon, and Drew asked
+ * for it on its OWN LINE beneath the week date range — i.e. the exact third
+ * stacked line the paragraph above spent a whole incident avoiding. UN-117's
+ * "never a third stacked line" guarantee is hereby NARROWED to "unless
+ * explicitly requested" — this is that explicit request, made with full
+ * knowledge of the tradeoff (the header is position:sticky, so this costs
+ * permanent header height on every screen, at every width, with no desktop
+ * breakpoint reintroducing the row). #header-meta changed from a flex ROW to
+ * a flex COLUMN (see the CSS comment on .header-meta) specifically so this
+ * button becomes a real sibling line under the week block rather than
+ * beside it — the row layout could not produce this by construction, which
+ * is exactly why it had to change.
+ *
+ * Tap target: reuses .header-feedback-icon UNCHANGED — the same 26px visible
+ * circle. .header-feedback-btn itself grew (icon + label, no longer a fixed
+ * 40x40 square) but keeps its >=40px min-height, the same "pad the wrapper"
+ * technique as .header-identity right next to it.
  *
  * Unlike tz-toggle/theme-toggle it is NEVER tab-gated (display:none per
  * tab) — reach is the whole point — so it shows on every tab where the
@@ -633,7 +640,9 @@ export function setupHeaderFeedbackButton() {
   btn.className = 'header-feedback-btn';
   btn.title = 'Submit a bug or feature idea';
   btn.setAttribute('aria-label', 'Submit feedback');
-  btn.innerHTML = '<span class="header-feedback-icon">🗣</span>';
+  // DI-A1 (2026-09-09): visible text label, settled copy "Feedback", next to
+  // the existing icon — no longer icon-only.
+  btn.innerHTML = '<span class="header-feedback-icon">🗣</span><span class="header-feedback-label">Feedback</span>';
   host.appendChild(btn);
   btn.addEventListener('click', () => {
     // Don't blow away an in-progress draft if the player is already on
@@ -1437,6 +1446,60 @@ function renderGamesList(games, week) {
 // DI-7 — this is the SHARED player-facing card (Picks page + Dashboard). It
 // intentionally gets NO national-TV badge — a deliberate scope boundary, not
 // an oversight. Do not mirror the alma badge's footprint here.
+// Item 2 Pass B — the score/status block shared by renderGameCard's initial
+// render AND updatePicksLiveStatusInPlace()'s surgical DI-2 refresh below.
+// Single source of markup so the two paths can never drift (mirrors the
+// house rule against duplicating render logic across surfaces). FINAL games
+// deliberately never look up liveStatusById — the lookup is gated on
+// game.status===LIVE, so a final game's block renders exactly as before
+// Item 2 (no-op, per the brief).
+function renderLiveScoreBlockHTML(game) {
+  if (!((game.status===GAME_STATUS.LIVE||game.status===GAME_STATUS.FINAL) && game.homeScore!==null)) return '';
+  const liveEntry = game.status===GAME_STATUS.LIVE ? liveStatusById.get(game.gameId) : null;
+  const liveDisp  = liveEntry ? liveStatusDisplay(liveEntry) : null;
+  const noPulseCls = liveDisp && liveDisp.pulse===false ? ' score-status-no-pulse' : '';
+  return `<div class="live-block">
+    <div class="live-score">
+      <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${game.awayScore}</div>
+      <div class="score-status${noPulseCls}">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
+      <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
+    </div>${liveDisp ? `<div class="live-status-detail text-xs text-muted text-center">${escHtml(liveDisp.text)}</div>` : ''}
+  </div>`;
+}
+
+// DI-2 — after a successful runAutoRefreshTick(), the Picks tab's game cards
+// (both the pre-submission draft cards and the post-submission read-only
+// cards — both share renderGameCard's markup, both carry data-game-id) need
+// their quarter/clock text to update without a manual refresh. Rebuilding
+// the whole card via renderGameCard() would work for the read-only view, but
+// the draft view's pick buttons carry click listeners bound once by
+// bindPickButtons() — regenerating their markup here would silently drop
+// those bindings. So this patches ONLY the .live-block region in place,
+// leaving every other node (and its listeners) untouched. FINAL games are
+// skipped entirely (deliberate no-op, same as the render path).
+// Exported for testability (livestatustest.mjs Pass B) — same rationale as
+// renderLeaderboard()/renderDashboardTable() etc. above.
+export function updatePicksLiveStatusInPlace(games) {
+  for (const game of games) {
+    if (game.status !== GAME_STATUS.LIVE) continue;
+    const cards = document.querySelectorAll(`#page-picks .game-card[data-game-id="${game.gameId}"]`);
+    if (!cards.length) continue;
+    const html = renderLiveScoreBlockHTML(game);
+    cards.forEach(card => {
+      const existing = card.querySelector('.live-block');
+      if (existing) {
+        if (html) existing.outerHTML = html;
+        else existing.remove();
+      } else if (html) {
+        // Game just went live since the card was last fully rendered — the
+        // block didn't exist yet. Insert it right after `.matchup`, the same
+        // position renderGameCard's template puts it in.
+        card.querySelector('.matchup')?.insertAdjacentHTML('afterend', html);
+      }
+    });
+  }
+}
+
 export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
   const sv = game.lockedSpread!==null ? game.lockedSpread : game.spread;
   // For final games with no spread: show "Final" label; TBD only for future unset games.
@@ -1469,12 +1532,7 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
     return `<span class="game-venue text-muted text-xs">📍 ${escHtml(loc)}${game.neutralSite?' 🌍':''}</span>`;
   })();
 
-  const liveScore = (game.status===GAME_STATUS.LIVE||game.status===GAME_STATUS.FINAL) && game.homeScore!==null
-    ? `<div class="live-score">
-        <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${game.awayScore}</div>
-        <div class="score-status">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
-        <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
-      </div>` : '';
+  const liveScore = renderLiveScoreBlockHTML(game);
 
   let atsInfo = '';
   if (showResult && game.status===GAME_STATUS.FINAL) {
@@ -1927,6 +1985,30 @@ export function initScrollFades(root) {
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
+/**
+ * RG (2026-09-05) — which weeks the dashboard "Viewing Week" toggle may offer.
+ *
+ * Extracted from renderDashboardInner() so the rule is unit-testable without a
+ * DOM. The reported defect: the commissioner created "Week 1, Part 2", but the
+ * dashboard toggle only listed the demo week and Part 1 — Part 2 never appeared.
+ * A freshly created week is status:'draft' (createWeek()), and this filter used
+ * to exclude ALL drafts unconditionally. Worse, createWeek's caller calls
+ * setActiveWeekId() on the new week, so getCurrentWeek() returns that draft and
+ * the heading renders "Week ... Part 2" — a week the dropdown could not list.
+ * Heading and toggle disagreed.
+ *
+ * Fix at the right layer: draft weeks stay hidden from PLAYERS (an unopened week
+ * is not theirs to view — the blind rule is untouched, drafts are never open),
+ * but are VISIBLE to the commissioner, matching both the demo-week escape here
+ * and the commissioner panel's own (unfiltered) active-week selector.
+ */
+export function selectableDashboardWeeks(weeks, isCommissioner) {
+  return (weeks || []).filter(w =>
+    (w.status !== WEEK_STATUS.DRAFT || isCommissioner) &&
+    (w.dataSourceMode !== 'demo' || isCommissioner)
+  ).sort((a, b) => b.weekNumber - a.weekNumber);
+}
+
 function renderDashboard() {
   renderDashboardInner();
   // v0.16.0 — chat teaser card pinned to the top of the dashboard
@@ -1940,11 +2022,9 @@ function renderDashboardInner() {
   const c=document.getElementById('page-dashboard'); if(!c)return;
   const session=getSession();
   const isCommissioner = !!session?.isAdmin;
-  // Demo weeks are commissioner-only. Filter them out of the week list players see.
-  const allWeeks=getWeeks().filter(w =>
-    w.status!==WEEK_STATUS.DRAFT &&
-    (w.dataSourceMode!=='demo' || isCommissioner)
-  ).sort((a,b)=>b.weekNumber-a.weekNumber);
+  // Demo weeks are commissioner-only; so are drafts. Filter them out of the
+  // week list players see (see selectableDashboardWeeks() for the why).
+  const allWeeks=selectableDashboardWeeks(getWeeks(), isCommissioner);
   const currentWeek=getCurrentWeek();
   const currentWeekVisible = currentWeek && (currentWeek.dataSourceMode !== 'demo' || isCommissioner);
   if(!currentWeekVisible && !allWeeks.length){c.innerHTML=emptyState('📊','No Weeks Yet','Commissioner needs to open a week.');return;}
@@ -2364,7 +2444,13 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
       stateIndicator = `<span class="status-pill status-pill-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
-      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot"></span>LIVE ${game.awayScore}–${game.homeScore}</span>`;
+      // Item 2 Pass B (DI-4) — append the captured quarter/clock text, verbatim,
+      // right next to the existing LIVE pill. No entry -> disp is null -> the
+      // pill renders exactly as before (no added text).
+      const liveDisp = liveStatusDisplay(liveStatusById.get(game.gameId));
+      const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
+      const detailText = liveDisp ? ` · ${escHtml(liveDisp.text)}` : '';
+      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${game.awayScore}–${game.homeScore}${detailText}</span>`;
     }
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -2771,7 +2857,14 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
       stateIndicator = `<span class="dc-status dc-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
-      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot"></span>${game.awayScore}–${game.homeScore}</span>`;
+      // Item 2 Pass B (DI-5) — a SEPARATE chip (own dc-status pill), never
+      // appended inline into the score chip's text, so the ≤14-char budget
+      // from liveStatusDisplayShort() can't push the score itself around.
+      // No entry -> liveDisp null -> no chip added (unchanged today).
+      const liveDisp = liveStatusDisplayShort(liveStatusById.get(game.gameId));
+      const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
+      const detailChip = liveDisp ? `<span class="dc-status dc-live-detail">${escHtml(liveDisp.text)}</span>` : '';
+      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${game.awayScore}–${game.homeScore}</span>${detailChip}`;
     }
     const statusInfo = `<span class="dc-status dc-scheduled">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -2927,11 +3020,16 @@ export function renderLeaderboard() {
             // UN-126 — presence of an obligation for this gid no longer
             // implies it's the settled answer. If more than one ACTIVE
             // (non-voided) 'weekly' obligation exists for this gid, or any
-            // of them is flagged needsReview, this row shows a review
-            // warning instead of silently picking one and rendering it as
-            // if the league had already agreed — the exact defect this
-            // closes (a stale singleton obligation sitting next to a
-            // freshly pooled winner, disagreeing with what's on screen).
+            // of them is flagged needsReview, this row is "conflicted"
+            // instead of silently picking one and rendering it as if the
+            // league had already agreed — the exact defect this closes (a
+            // stale singleton obligation sitting next to a freshly pooled
+            // winner, disagreeing with what's on screen). UN-135: the
+            // computation stays exactly as-is, but the PLAYER-facing badge
+            // for a conflicted row is intentionally the plain Unpaid badge
+            // (no diagnostic text) — the "Needs review" wording and title
+            // stay commissioner-only, in renderObligationsAdmin() and
+            // renderObligationCorrectionsAdmin().
             const gobs = obligations.filter(o=>o.weekId===gid && o.type==='weekly' && isObligationActive(o));
             const conflicted = gobs.length > 1 || gobs.some(o=>o.needsReview);
             const ob = !conflicted && gobs.length === 1 ? gobs[0] : null;
@@ -2941,7 +3039,7 @@ export function renderLeaderboard() {
               <td class="player-name-cell">${loser?escHtml(loser.displayName):'—'}</td>
               <td>
                 ${conflicted
-                  ? '<span class="badge badge-loss" title="An existing obligation record disagrees with the computed outcome — the commissioner needs to merge or void one in Data → Obligation Corrections">⚠️ Needs review</span>'
+                  ? '<span class="badge badge-locked">Unpaid</span>'
                   : ob ? obligationActionsHTML(ob.status, ob, getSession(), {
                       payerName: getPlayer(ob.payerPlayerId)?.displayName || '?',
                       recipientName: getPlayer(ob.recipientPlayerId)?.displayName || '?',
@@ -3146,11 +3244,11 @@ function renderCommPage() {
             </div>
             <div class="flex gap-sm flex-wrap mb-md">
               <div class="form-group" style="flex:1;min-width:120px;margin:0">
-                <label class="form-label">Custom Round Label <span class="text-muted text-xs">(e.g. 1.1, 1A)</span></label>
-                <input class="form-input" id="week-round-label" placeholder="e.g. 1.1" value="${escHtml(week.roundLabel||'')}" />
+                <label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" → "Week 1, Part 2")</span></label>
+                <input class="form-input" id="week-round-label" placeholder="e.g. Part 2" value="${escHtml(week.roundLabel||'')}" />
               </div>
               <div class="form-group" style="flex:1;min-width:80px;margin:0">
-                <label class="form-label">ESPN Week # <span class="text-muted text-xs">(optional)</span></label>
+                <label class="form-label">ESPN Week # <span class="text-muted text-xs">(overrides the DISPLAYED number only, e.g. "3" → "Week 3" — does not change this week's internal order)</span></label>
                 <input class="form-input" id="week-espn-num" type="number" placeholder="1" value="${escHtml(String(week.espnWeekNumber||''))}" />
               </div>
             </div>
@@ -4421,6 +4519,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       // default. Without this, duplicating Part 1 to make a later, unrelated
       // week would silently inherit its group.
       groupId:null, isGroupTiebreaker:false,
+      // DI-135 — a duplicate must not inherit the source's custom round
+      // label or ESPN Week # override; those describe the SOURCE week's
+      // display, not the new one's.
+      roundLabel:'', espnWeekNumber:'',
       createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
     };
     saveWeek(newW); setActiveWeekId(newW.weekId);
@@ -4458,8 +4560,17 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       if(to==='final' && arePicksPublic(week) && weekHasUnresolvedTie(week, getPlayers().filter(p=>p.active), getPicks(week.weekId), getGames(week.weekId))){
         if(!confirm("This week has a tie in correct picks and no tiebreaker value entered — the winner/loser will be assigned arbitrarily. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later — entering the tiebreaker afterward recalculates automatically (OK)."))return;
       }
-      applyWeekStatusChange(week,to);
-      refreshHeader(); showToast(`Week: ${to}`,'success'); renderCommPage();
+      const statusResult=applyWeekStatusChange(week,to);
+      refreshHeader(); showToast(`Week: ${to}`,'success');
+      // Item SS (runtime) — LOUD-FAIL: surface any games whose spread was
+      // refused rather than frozen (sign contradicted the recorded
+      // favorite). A second, separate toast so it can't be lost in/confused
+      // with the ordinary "Week: locked" success toast above.
+      if(statusResult?.spreadLockRefusals?.length){
+        const names=statusResult.spreadLockRefusals.map(g=>`${g.awayTeam} @ ${g.homeTeam}`).join(', ');
+        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length>1?'s':''} — sign contradicts recorded favorite: ${escHtml(names)}. Fix the spread/favorite in Games, then lock again.`,'error');
+      }
+      renderCommPage();
     });
   });
 
@@ -4780,6 +4891,17 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('export-weekly-results-csv-btn')?.addEventListener('click', exportAllWeeklyResultsCSV);
   document.getElementById('export-obligations-csv-btn')?.addEventListener('click', exportObligationsCSV);
   document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
+  // Item 10 (DI-B1) — per-row exclude-from-export checkbox. Persists through
+  // the storage seam on every toggle; the checkbox's own `checked` attribute
+  // is already the on-screen reflection, so no re-render is needed here (same
+  // no-rerender-needed shape as the obcorr-check bulk-select listeners above).
+  document.querySelectorAll('.fb-excl-check').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = cb.dataset.fbId;
+      if (!id) return;
+      setFeedbackExcluded(id, !cb.checked);
+    });
+  });
   document.getElementById('export-full-json-btn')?.addEventListener('click', exportFullBackupJSON);
   document.getElementById('export-full-csv-bundle-btn')?.addEventListener('click', exportFullCsvBundle);
 
@@ -4814,6 +4936,41 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   });
 
   // ── Demo simulation ──
+  // RG — A destructive Demo-Simulation RESET must never touch a real week.
+  // A misclick on "↩ Reset All Scheduled" while a real week was displayed wiped
+  // every score and result off Week 1 in production (fb_1788048433261_z3aak,
+  // v0.17.7). The score-ENTRY paths below (set live/final, update, finalize,
+  // batch apply) are the commissioner's legitimate weekly workflow on real
+  // weeks and are deliberately NOT gated — only the reset/wipe paths are. For a
+  // real week the correct reset is the Data tab's "🗑 Clear Current Week Data",
+  // which is confirmed, scoped, and intentional. Deny-by-default: any demo
+  // reset handler must call this first, so a new one added later inherits the
+  // guard rather than shipping another silent way to nuke real results.
+  const demoResetAllowed = () => {
+    if (week && week.dataSourceMode === 'demo') return true;
+    showToast('🚫 Demo reset only works on a Demo week. This is a real week — to clear it use the Data tab → "🗑 Clear Current Week Data".', 'error');
+    return false;
+  };
+  // The batch grid is BOTH the weekly score-entry workflow AND a place a row can
+  // be reset — so unlike the pure reset buttons it can't be demo-only (a real
+  // MANUAL week is hand-driven; resetting a row there is the commissioner's own
+  // workflow — gradetest §1g). What must never happen is a batch-apply WIPING a
+  // real ESPN-graded game: those weeks are fed from the live scoreboard, and the
+  // correct reset for them is the Data tab's confirmed "🗑 Clear Current Week
+  // Data", never the Demo Simulation grid. So the destructive path is refused
+  // only on the FEED modes. A row is destructive when, against the game already
+  // on file, it would demote a graded game back to scheduled or null a score /
+  // winner / cover that currently exists. Entry (filling live/final WITH scores)
+  // never trips this — it only writes values, never nulls one. `!= null` catches
+  // both null and an absent key (a Sheet round-trip can drop either).
+  const weekIsEspnFeed = () =>
+    !!week && (week.dataSourceMode === 'espn_live' || week.dataSourceMode === 'espn_historical');
+  const batchRowWipesData = (g, next) =>
+    (next.status === 'scheduled' && g.status !== 'scheduled') ||
+    (g.homeScore    != null && next.homeScore    == null) ||
+    (g.awayScore    != null && next.awayScore    == null) ||
+    (g.actualWinner != null && next.actualWinner == null) ||
+    (g.atsWinner    != null && next.atsWinner    == null);
   const demoGameSel = document.getElementById('demo-game-select');
   const demoCtrls   = document.getElementById('demo-game-controls');
   demoGameSel?.addEventListener('change', ()=>{
@@ -4858,6 +5015,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     showToast(`FINAL: ${td(g,'home')} ${hs} – ${td(g,'away')} ${as_}`,'success'); renderCommPage();
   });
   document.getElementById('demo-set-scheduled')?.addEventListener('click',()=>{
+    if(!demoResetAllowed())return;
     const gid=demoGameSel?.value; if(!gid)return;
     const g=getGame(gid); if(!g)return;
     saveGame({...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null,dataSource:'manual'});
@@ -4909,6 +5067,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     renderCommPage();
   });
   document.getElementById('demo-reset-all-scheduled')?.addEventListener('click',()=>{
+    if(!demoResetAllowed())return;
     if(!week)return;
     getGames(week.weekId).forEach(g=>saveGame({...g,status:'scheduled',homeScore:null,awayScore:null,actualWinner:null,atsWinner:null}));
     showToast('All games reset to scheduled','warning'); renderCommPage();
@@ -4918,7 +5077,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('demo-batch-apply')?.addEventListener('click',()=>{
     if(!week)return;
     const rows=document.querySelectorAll('.batch-grid tbody tr');
-    let applied=0;
+    // Compute every row's would-be next state FIRST, so a destructive edit can
+    // be caught before anything is persisted (Finding 1 / RG). Nothing is
+    // written in this pass.
+    const planned=[];
     rows.forEach(row=>{
       const gid=row.dataset.gameId;
       const g=getGame(gid); if(!g)return;
@@ -4953,9 +5115,19 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
         lastUpdated:new Date().toISOString(),
       };
       next.atsWinner=calculateAtsWinner(next);
-      saveGame(next);
-      applied++;
+      planned.push({g,next});
     });
+    // Deny-by-default on the feed modes: if ANY row would demote a graded game
+    // or null a score/winner/cover that already exists on file, refuse the whole
+    // apply and write nothing. Score ENTRY (live/final WITH scores) is never
+    // destructive, so the normal weekly workflow is untouched. Demo and manual
+    // weeks are hand-driven and keep the reset ability (gradetest §1g).
+    if(weekIsEspnFeed() && planned.some(({g,next})=>batchRowWipesData(g,next))){
+      showToast('🚫 That would wipe a real game\'s score or result on an ESPN week. Enter or correct scores here, but to clear a game use the Data tab → "🗑 Clear Current Week Data".','error');
+      return;
+    }
+    let applied=0;
+    planned.forEach(({next})=>{ saveGame(next); applied++; });
     showToast(`💾 Applied changes to ${applied} games`,'success'); renderCommPage();
   });
 
@@ -4965,6 +5137,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // anything (the picks matrix only shows scores for live/final games), which
   // is exactly the "scores disappear" symptom the user reported.
   document.getElementById('demo-batch-randomize')?.addEventListener('click',()=>{
+    // Randomize invents scores to pressure-test the dashboard's live/final
+    // states — it has no legitimate purpose on a real week, so it is demo-only.
+    // (On a real week it would only exist to overwrite real results.)
+    if(!demoResetAllowed())return;
     const rows = document.querySelectorAll('.batch-grid tbody tr');
     rows.forEach(row=>{
       const rand=()=>Math.floor(Math.random()*42); // 0–41, realistic CFB range
@@ -6336,7 +6512,7 @@ function showCreateWeekModal() {
     <div class="modal-header"><h3>Create New Week</h3><button class="modal-close" id="cw-c">✕</button></div>
     <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="cw-season" value="${getSettings().season||'2026'}" /></div>
     <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="cw-num" type="number" value="${nextNum}" /></div>
-    <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(e.g. 1.1, 1A — leave blank to use week number)</span></label><input class="form-input" id="cw-round" placeholder="e.g. 1.1" /></div>
+    <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="cw-round" placeholder="e.g. Part 2" /></div>
     <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" id="cw-start" type="date" /></div>
     <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="cw-end" type="date" /></div>
     <div class="form-group"><label class="form-label">Data Source</label>
@@ -7094,7 +7270,9 @@ function feedbackKindBadgeHTML(kind) {
 export function renderFeedbackAdmin(entries = getFeedback()) {
   const sorted = entries.slice().sort((a, b) => new Date(b.submittedAt || 0) - new Date(a.submittedAt || 0));
   if (!sorted.length) return '<p class="text-muted text-sm">No feedback submitted yet.</p>';
-  return sorted.map(e => {
+  // Item 10 (DI-B1) — copy is EXACT, per the approved design input.
+  const helpNote = `<p class="text-muted text-xs" style="margin:0 0 6px">Uncheck an item to leave it out of the next CSV export. Your selection is remembered.</p>`;
+  const rows = sorted.map(e => {
     const w = e.weekId ? getWeek(e.weekId) : null;
     const weekLabel = e.weekId ? (formatWeekLabel(w) || e.weekId) : '—';
     // Guarded for VALIDITY, not just presence: a legacy or hand-edited row with
@@ -7107,12 +7285,27 @@ export function renderFeedbackAdmin(entries = getFeedback()) {
     // Truncate ONLY here (display). The CSV export never truncates — Drew's
     // stated purpose is feeding the full text to a coding agent months later.
     const preview = e.body && e.body.length > 240 ? e.body.slice(0, 240) + '…' : (e.body || '');
-    return `<div style="padding:8px 0;border-bottom:1px solid var(--border)">
-      <div class="text-sm"><strong>${escHtml(e.name || '(anonymous)')}</strong> ${feedbackKindBadgeHTML(e.kind)}
-        <span class="text-xs text-muted"> · ${escHtml(weekLabel)} · ${escHtml(date)} · v${escHtml(e.appVersion || '?')}</span></div>
-      <div class="text-xs text-secondary" style="margin-top:4px;white-space:pre-wrap">${escHtml(preview)}</div>
+    // DEFAULT INCLUDED (CONVENTIONS #10): absence from the excluded-id set —
+    // true for every legacy row and every freshly submitted one — checks the
+    // box. Only an explicit prior uncheck (isFeedbackExcluded) unchecks it.
+    const included = !isFeedbackExcluded(e.id);
+    // Padded ≥40px tap target (CONVENTIONS #17) — the bare obcorr-check
+    // checkbox this is modeled on sits UNDER the floor; a <label> wrapping the
+    // input gives the whole padded box native click-to-toggle behavior with no
+    // extra JS. .fb-excl-check-wrap carries the padding (styles.css).
+    const checkbox = `<label class="fb-excl-check-wrap" title="${included ? 'Included in CSV export' : 'Excluded from CSV export'}">
+        <input type="checkbox" class="fb-excl-check" data-fb-id="${escHtml(e.id || '')}" ${included ? 'checked' : ''} />
+      </label>`;
+    return `<div class="flex gap-sm" style="padding:8px 0;border-bottom:1px solid var(--border);align-items:flex-start">
+      ${checkbox}
+      <div style="flex:1">
+        <div class="text-sm"><strong>${escHtml(e.name || '(anonymous)')}</strong> ${feedbackKindBadgeHTML(e.kind)}
+          <span class="text-xs text-muted"> · ${escHtml(weekLabel)} · ${escHtml(date)} · v${escHtml(e.appVersion || '?')}</span></div>
+        <div class="text-xs text-secondary" style="margin-top:4px;white-space:pre-wrap">${escHtml(preview)}</div>
+      </div>
     </div>`;
   }).join('');
+  return helpNote + rows;
 }
 
 /**
@@ -7447,6 +7640,49 @@ function weekHasUnresolvedTie(week, players, picks, games) {
 }
 
 /**
+ * Item SS (runtime half, 2026-09-10) — does `game.spread`'s SIGN agree with
+ * its OWN recorded `favorite` team, under AD-03's signed home-perspective
+ * convention (negative = home favored, positive = away favored, 0 = PK)?
+ *
+ * Returns:
+ *   true  — CONSISTENT, or nothing to check at all: no favorite resolved
+ *           (`favorite` null/absent, or it names neither `homeTeam` nor
+ *           `awayTeam`), or spread is null/undefined/0 (0 asserts no sign
+ *           either way — PK games are consistent with any favorite or none,
+ *           per the approved spec).
+ *   false — CONTRADICTION: a favorite IS resolved and disagrees with the
+ *           sign actually stored. This is exactly the shape RG-54's dg8
+ *           fixture (`spread:-2.5` with `favorite:'Alabama'` when Alabama
+ *           was the AWAY team) and the v0.13–v0.15 spread bug both produced
+ *           — a wrong sign that grades real money wrong once frozen.
+ *
+ * Deliberately permissive whenever it CANNOT determine an expected sign —
+ * this guards a real, detectable contradiction, not the absence of one.
+ * A game with no favorite resolved (`spreadSource:'espn_unresolved'`, a
+ * manual entry mid-edit, a PK) must never be blocked here — only an actual
+ * disagreement between the stored sign and the stored favorite is refused.
+ *
+ * Uses the game's OWN structured `favorite` field (a team name, matching
+ * `homeTeam`/`awayTeam` exactly) — never a display string — same lesson
+ * RG-54 already paid for once (`extractSpread()` derives it from ESPN's
+ * structured odds flags, never from rendered text).
+ *
+ * SHARED by both places a week can reach LOCKED — `applyWeekStatusChange()`
+ * (manual) and `tickAutoTransition()` (auto) — so they cannot independently
+ * drift on what "consistent" means. Same two-call-sites-must-agree lesson as
+ * RG-52/RG-53 (recap week-ordering, fixed at both call sites together).
+ */
+export function isSpreadSignConsistentWithFavorite(game) {
+  if (!game) return true;
+  const { spread, favorite, homeTeam, awayTeam } = game;
+  if (spread === null || spread === undefined || spread === 0) return true; // no sign asserted
+  if (!favorite) return true; // no resolved favorite — nothing to contradict
+  if (favorite === homeTeam) return spread <= 0; // home favored -> home-perspective spread must be <=0
+  if (favorite === awayTeam) return spread >= 0; // away favored -> home-perspective spread must be >=0
+  return true; // favorite matches neither team name — can't determine expected sign; don't block on it
+}
+
+/**
  * The commissioner's Week-tab status buttons (draft/open/locked/live/final).
  *
  * Extracted from the `.week-status-btn` click handler so the ORDER OF
@@ -7454,7 +7690,13 @@ function weekHasUnresolvedTie(week, players, picks, games) {
  * inside renderCommPage() and can't be driven without a real DOM, which is why
  * the drop described below went unnoticed. Everything DOM-facing
  * (refreshHeader/showToast/renderCommPage) stays in the handler; this owns the
- * state transition and nothing else.
+ * state transition and nothing else. Item SS's runtime spread-lock guard
+ * (below) keeps to that split too: THIS function only decides which games'
+ * spreads are safe to freeze and reports the refused ones back on the
+ * returned week object (`spreadLockRefusals`, attached AFTER saveWeek() has
+ * already taken its own snapshot — see the note at the return — so it is
+ * never itself persisted); the handler is what turns that into a visible
+ * warning.
  *
  * RG (2026-08-12) — THE TRANSITION IS PERSISTED BEFORE ANY SIDE EFFECT RUNS.
  * This used to call finalizeWeek(week) — the pre-transition snapshot — and only
@@ -7474,8 +7716,32 @@ function weekHasUnresolvedTie(week, players, picks, games) {
 export function applyWeekStatusChange(week, to) {
   if(!week||!to)return null;
   const upd={...week,status:to};
+  const spreadLockRefusals=[];
   if(to==='locked'){
-    getGames(week.weekId).forEach(g=>saveGame({...g,lockedSpread:g.spread}));
+    getGames(week.weekId).forEach(g=>{
+      // Item SS (runtime) — LOUD-FAIL per-game: refuse to FREEZE (not to
+      // lock the week) a spread whose sign contradicts its own recorded
+      // favorite, rather than silently locking in a grade that will be
+      // wrong (AD-03/AD-06). lockedSpread is left null on this one game and
+      // the commissioner is warned by name (see the .week-status-btn
+      // handler / the auto-lock toast).
+      // GUARANTEE, stated accurately: this WARNS and does NOT permanently
+      // freeze the bad value — so once the commissioner corrects the sign,
+      // the fix takes effect. It does NOT exclude the game from grading:
+      // calculateAtsWinner() falls back to the LIVE game.spread when
+      // lockedSpread is null (scoring.js), and doRefreshScores()/
+      // evaluatePick() grade via that fallback — so a refused game left
+      // uncorrected still grades against its (wrong-signed) live spread.
+      // The value here is the loud warning + the recoverable (un-frozen)
+      // state, NOT auto-exclusion. The rest of the slate locks normally;
+      // aborting the WHOLE week over one bad data-entry mistake would hold
+      // five other games' picks hostage to it.
+      if(g.spread!==null && g.spread!==undefined && !isSpreadSignConsistentWithFavorite(g)){
+        spreadLockRefusals.push(g);
+        return;
+      }
+      saveGame({...g,lockedSpread:g.spread});
+    });
     upd.lockedAt=new Date().toISOString();
     // F4 (2026-09-04, clearing the reviewer BLOCK) — mirrors the lockedSpread
     // freeze immediately above, one level up: snapshot the roster the
@@ -7489,6 +7755,10 @@ export function applyWeekStatusChange(week, to) {
   if(to==='final'){upd.finalizedAt=new Date().toISOString();}
   saveWeek(upd);
   if(to==='final')finalizeWeek(upd);
+  // Attached AFTER saveWeek() — storage.js's saveWeek() does `{...week}` at
+  // call time, so mutating `upd` past this point can never leak into what
+  // was persisted. Purely a transient signal for the DOM-facing caller.
+  upd.spreadLockRefusals=spreadLockRefusals;
   return upd;
 }
 
@@ -7617,30 +7887,62 @@ export function finalizeWeek(week) {
 
 let _refreshTimer=null;
 
-function setupAutoRefresh() {
-  if(_refreshTimer)clearInterval(_refreshTimer);
+export function setupAutoRefresh() {
+  // Idempotent (re-)arm: clear any existing timer FIRST so repeated calls
+  // (boot + every interval-setting save) can never stack duplicate intervals.
+  if(_refreshTimer){clearInterval(_refreshTimer);_refreshTimer=null;}
   const{autoRefreshInterval=60}=getSettings();
-  if(!autoRefreshInterval)return;
-  _refreshTimer=setInterval(async()=>{
-    // Auto-transition check runs EVERY tick regardless of active tab or week
-    // mode (demo weeks are skipped inside the helper). Transitions affect all
-    // users so whichever device ticks first writes the new status to the
-    // shared backend and everyone else picks it up on next hydrate.
-    tickAutoTransition();
-
-    if(state.currentTab!=='dashboard') return;
-    const week=getCurrentWeek();
-    if(!week) return;
-    // Skip auto-refresh entirely for demo or fully-manual weeks. Otherwise the
-    // simulated scores get walked over by whatever ESPN currently returns —
-    // which is what was causing "demo resets after a few seconds."
-    if (week.dataSourceMode === 'demo' || week.dataSourceMode === 'manual') return;
-    await doRefreshScores(week,getGames(week.weekId));
-    renderDashboard();
-  },autoRefreshInterval*1000);
+  if(!autoRefreshInterval)return;                       // "Off" — no timer at all
+  _refreshTimer=setInterval(()=>{ runAutoRefreshTick(); },autoRefreshInterval*1000);
   // Run one auto-transition check immediately so an app that opens after the
   // lock time has passed doesn't have to wait for the next tick.
   tickAutoTransition();
+}
+
+/**
+ * One auto-refresh tick. Extracted and exported so the timer's behaviour can be
+ * asserted directly (same reasoning as tickAutoTransition()'s export) — the
+ * setInterval callback itself is unreachable from Node.
+ *
+ * RG (fb_1788025448083, v0.17.7) — "scores don't refresh at the selected
+ * interval; I have to hit Refresh Scores manually." Root cause was the tab
+ * gate that used to sit here: the tick returned early on ANY tab except
+ * 'dashboard', so a player or commissioner sitting on the Picks tab during a
+ * live window never got a single fetch. That directly contradicts the live
+ * polling contract in CLAUDE.md ("60-second polling loop … only runs on
+ * non-demo weeks" — NOT "only on the dashboard"). The DATA refresh must run on
+ * every non-demo/non-manual week regardless of active tab; only the wholesale
+ * re-render stays tab-scoped.
+ *
+ * The Picks-tab live render (quarter/clock) is DI-2 and belongs to
+ * feature-builder — it must be a surgical score update, NOT a full
+ * renderPicksPage(), which would blow away a player's in-progress edits every
+ * interval. So this function keeps the data fresh but intentionally does NOT
+ * re-render Picks; it re-renders only the dashboard, which is safe to rebuild.
+ */
+export async function runAutoRefreshTick() {
+  // Auto-transition check runs EVERY tick regardless of active tab or week
+  // mode (demo weeks are skipped inside the helper). Transitions affect all
+  // users so whichever device ticks first writes the new status to the
+  // shared backend and everyone else picks it up on next hydrate.
+  tickAutoTransition();
+
+  const week=getCurrentWeek();
+  if(!week) return;
+  // Skip auto-refresh entirely for demo or fully-manual weeks. Otherwise the
+  // simulated scores get walked over by whatever ESPN currently returns —
+  // which is what was causing "demo resets after a few seconds."
+  if (week.dataSourceMode === 'demo' || week.dataSourceMode === 'manual') return;
+  // Keep score DATA fresh no matter which tab is showing.
+  await doRefreshScores(week,getGames(week.weekId));
+  // Re-render only the surface that's safe to rebuild wholesale. Dashboard's
+  // own re-render already covers its live-status text (it goes through
+  // renderDashboardTable/renderDashboardCompact fresh every time). The
+  // Picks tab is NOT rebuilt wholesale — renderPicksPage() would wipe an
+  // in-progress draft pick — so its game cards get a surgical DI-2 patch
+  // instead, touching only the score/status region.
+  if(state.currentTab==='dashboard') renderDashboard();
+  else if(state.currentTab==='picks') updatePicksLiveStatusInPlace(getGames(week.weekId));
 }
 
 /**
@@ -7686,10 +7988,27 @@ export function tickAutoTransition() {
         changed = true;
         // Lock the spreads on all games at their current values so late-hour
         // line moves don't rewrite what players were graded against.
+        // Item SS (runtime) — same guard as applyWeekStatusChange()'s manual
+        // leg, via the shared isSpreadSignConsistentWithFavorite() helper so
+        // the two lock paths cannot disagree about what "consistent" means.
+        const autoSpreadLockRefusals = [];
         for (const g of games) {
           if (g.spread !== null && g.spread !== undefined && (g.lockedSpread === null || g.lockedSpread === undefined)) {
+            if (!isSpreadSignConsistentWithFavorite(g)) {
+              autoSpreadLockRefusals.push(g);
+              continue; // LOUD-FAIL per-game: leave lockedSpread unset rather than freeze a contradictory sign.
+            }
             saveGame({ ...g, lockedSpread: g.spread, updatedAt: new Date().toISOString() });
           }
+        }
+        // Nothing wraps this tick in a click handler (it fires from a
+        // background timer, no commissioner necessarily watching), so —
+        // unlike applyWeekStatusChange() — this is the one place that must
+        // surface the warning itself rather than defer to a DOM-facing
+        // caller. Same showToast() the rest of this module already uses.
+        if (autoSpreadLockRefusals.length) {
+          const names = autoSpreadLockRefusals.map(g => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
+          showToast(`⚠️ Auto-lock: spread NOT frozen for ${autoSpreadLockRefusals.length} game${autoSpreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${escHtml(names)}. Fix in Commissioner → Games, then lock manually.`, 'error');
         }
       }
     }
@@ -7726,7 +8045,76 @@ export function tickAutoTransition() {
   }
 }
 
-async function doRefreshScores(week,games) {
+// Item 2 (in-game quarter+clock), Pass A — MODULE-LEVEL, IN-MEMORY ONLY.
+// Keyed by game.gameId (the stable internal id, NOT espnEventId — the whole
+// point is that this survives refresh-to-refresh matching by the id
+// storage/scoring/renderers already key on). Value: { name, detail,
+// shortDetail, capturedAt }, straight from ESPN's status.type via
+// data-provider.js's `liveStatusByEventId` map (see parseAndReport() /
+// refreshScoresByEventIds()) — keyed by espnEventId, never attached to a
+// game object. Repopulated on every doRefreshScores() poll (~60s while a
+// week is live). NEVER written to
+// the Sheet — there is no getX/setX pair in storage.js for this on purpose.
+// Pass B wires it into renderGameCard/renderDashboardTable/
+// renderDashboardCompact via liveStatusDisplay()/liveStatusDisplayShort()
+// below. Exported for testability (livestatustest.mjs) and for Pass B.
+export const liveStatusById = new Map();
+
+// Item 2 Pass A — pure, DOM-free. `entry` is a liveStatusById value (or
+// undefined/null — callers get null back so "no entry" renders nothing,
+// covering both a never-refreshed game and a FINAL game the caller simply
+// never looks up). `nowMs` is injectable for tests.
+//
+// State table:
+//   no entry                          -> null (caller renders nothing / unchanged)
+//   entry.name === STATUS_HALFTIME    -> { text: 'Halftime', pulse: false }
+//   any other entry.name (in-progress,
+//     STATUS_END_PERIOD, overtime, …) -> { text: entry.detail verbatim, pulse: true }
+//   stale (now - capturedAt > 3min)   -> text gets ' · updated Nm ago' appended,
+//                                        pulse forced false, no red (that's a
+//                                        caller/CSS decision, not this helper's)
+//
+// Deliberately NOT handled here (Pass B's job, per the brief):
+//   - FINAL games: caller simply never calls this for a final game (no-op)
+//   - "never refreshed": indistinguishable from "no entry" — same null return
+const LIVE_STATUS_STALE_MS = 3 * 60 * 1000;
+
+export function liveStatusDisplay(entry, nowMs = Date.now()) {
+  if (!entry) return null;
+  const isHalftime = entry.name === 'STATUS_HALFTIME';
+  let text  = isHalftime ? 'Halftime' : (entry.detail || '');
+  let pulse = !isHalftime;
+  const ageMs = nowMs - (entry.capturedAt ?? nowMs);
+  if (ageMs > LIVE_STATUS_STALE_MS) {
+    const mins = Math.floor(ageMs / 60000);
+    text = text ? `${text} · updated ${mins}m ago` : `updated ${mins}m ago`;
+    pulse = false;
+  }
+  return { text, pulse };
+}
+
+// Compact-surface variant — uses shortDetail (ESPN's own abbreviated text,
+// falling back to detail if a payload is missing it) and enforces a ~14-char
+// budget so the compact table/card can never wrap. Staleness still zeroes
+// `pulse`, but the "· updated Nm ago" suffix is deliberately NOT appended
+// here — there is no room for it inside the budget, and Pass B decides
+// separately whether the compact surface needs its own staleness affordance.
+const LIVE_STATUS_SHORT_BUDGET = 14;
+
+export function liveStatusDisplayShort(entry, nowMs = Date.now()) {
+  if (!entry) return null;
+  const isHalftime = entry.name === 'STATUS_HALFTIME';
+  const source = isHalftime ? 'Halftime' : (entry.shortDetail || entry.detail || '');
+  let pulse = !isHalftime;
+  const ageMs = nowMs - (entry.capturedAt ?? nowMs);
+  if (ageMs > LIVE_STATUS_STALE_MS) pulse = false;
+  const text = source.length <= LIVE_STATUS_SHORT_BUDGET
+    ? source
+    : source.slice(0, Math.max(0, LIVE_STATUS_SHORT_BUDGET - 1)) + '…';
+  return { text, pulse };
+}
+
+export async function doRefreshScores(week,games) {
   // Which games should we ask ESPN about?
   //   - Regular CFB pipeline games (isManual falsy, espnEventId set)      → yes
   //   - Manual out-of-league games with FULL ESPN linking (both espnSport
@@ -7743,7 +8131,7 @@ async function doRefreshScores(week,games) {
     return !!g.espnSport && !!g.espnEventId;            // manual w/ full ESPN linking
   });
   if (!refreshable.length) return;
-  const{updated,errors}=await refreshScoresByEventIds(
+  const{updated,errors,liveStatusByEventId}=await refreshScoresByEventIds(
     refreshable.map(g=>g.espnEventId).filter(Boolean), refreshable
   );
   for(const upd of updated){
@@ -7751,6 +8139,21 @@ async function doRefreshScores(week,games) {
     if(!stored) continue;
     const wasFinal = stored.status===GAME_STATUS.FINAL;
     const wasLive  = stored.status===GAME_STATUS.LIVE;
+    // Item 2 remediation — capture ESPN's raw live-status text into the
+    // module-level, in-memory-only Map BEFORE the persisted save below.
+    // Deliberately unconditional (every poll, any status) — Pass B's
+    // renderers decide when to look it up. Looked up by espnEventId from
+    // the sibling map data-provider.js returns — `upd` itself never carries
+    // live status (see refreshScoresByEventIds()).
+    const liveStatus = liveStatusByEventId?.get(String(upd.espnEventId));
+    if (liveStatus) {
+      liveStatusById.set(upd.gameId, { ...liveStatus, capturedAt: Date.now() });
+    }
+    // Item 2 Pass A: saveGame()'s object below is an EXPLICIT ALLOW-LIST of
+    // persisted fields. detail/shortDetail/name/quarter/clock are
+    // INTENTIONALLY NOT included — they're transient (liveStatusById, above)
+    // and must never round-trip to the Sheet on every 30-60s live poll. Do
+    // NOT "simplify" this to `{...stored, ...upd}` or add those keys here.
     saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated});
     // v0.17.0 — kickoff system event + SCRIBE live observations
     try {
@@ -8036,9 +8439,19 @@ function exportObligationsCSV() {
  * arguments in a test; an unknown or absent week yields '—' for the label and
  * the raw id is still emitted, so a row is never silently unattributable.
  */
-export function buildFeedbackCsvRows(entries, weeksById = null) {
+/**
+ * Item 10 (DI-B1) — `excludedIds` defaults to the live per-id exclude set
+ * (getExcludedFeedbackIds()) so exportFeedbackCSV()'s real call site needs no
+ * extra argument, exactly like `weeksById`'s default above. Pass an explicit
+ * array (including []) to keep the builder pure for a test. A row whose id
+ * is in the set is skipped entirely — DEFAULT INCLUDED (CONVENTIONS #10): a
+ * row with no id, or an id not in the set, is never skipped.
+ */
+export function buildFeedbackCsvRows(entries, weeksById = null, excludedIds = null) {
+  const excluded = new Set(excludedIds !== null ? excludedIds : getExcludedFeedbackIds());
   const rows = [['Feedback ID', 'Date', 'Name', 'Type', 'Week', 'Week ID', 'App Version', 'Description']];
   for (const e of entries) {
+    if (e.id && excluded.has(e.id)) continue;
     const wk = e.weekId && weeksById ? weeksById[e.weekId] : null;
     rows.push([
       e.id || '',
@@ -8055,7 +8468,21 @@ export function buildFeedbackCsvRows(entries, weeksById = null) {
 }
 
 function exportFeedbackCSV() {
-  const rows = buildFeedbackCsvRows(getFeedback(), Object.fromEntries(getWeeks().map(w => [w.weekId, w])));
+  const allEntries = getFeedback();
+  // WARN, don't silently export a header-only CSV (Item 10 / DI-B1) — if
+  // every entry that exists is also in the excluded set, there is nothing to
+  // download. `allEntries.length` guards the trivially-empty-store case too
+  // (no entries at all is not "everything excluded" and keeps its own
+  // existing empty-state messaging via the export itself).
+  if (allEntries.length) {
+    const excludedIds = getExcludedFeedbackIds();
+    const allExcluded = allEntries.every(e => e.id && excludedIds.includes(e.id));
+    if (allExcluded) {
+      showToast('⚠️ Every feedback item is excluded — nothing to export. Re-check at least one item first.', 'error');
+      return;
+    }
+  }
+  const rows = buildFeedbackCsvRows(allEntries, Object.fromEntries(getWeeks().map(w => [w.weekId, w])));
   downloadFile(toCsv(rows), `feedback.csv`);
   showToast('📥 Feedback CSV exported','success');
 }

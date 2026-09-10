@@ -3206,11 +3206,22 @@ console.log('\n[35] UN-117 — week name and date range each own a line…');
   assert(parts.dates.length > 0 && parts.dates === formatWeekLabel(wk).split(' — ')[1],
     `the date line carries the WHOLE range, never half of it — got "${parts.dates}"`);
 
-  // roundLabel is how Drew names multi-part weeks ("1 Part 1"). It belongs on
-  // the NAME line, not squeezed in with the dates.
-  const rl = formatWeekLabelParts({ ...wk, roundLabel: '1 Part 1' });
-  assert(rl.name === 'Week 1 Part 1', `a custom roundLabel stays on the name line — got "${rl.name}"`);
+  // roundLabel is how Drew names multi-part weeks ("Part 1"). It belongs on
+  // the NAME line, not squeezed in with the dates — DI-135: it's a SUFFIX
+  // appended after the display number, not a full replacement.
+  const rl = formatWeekLabelParts({ ...wk, roundLabel: 'Part 1' });
+  assert(rl.name === 'Week 1, Part 1', `a roundLabel is appended as a suffix, with the display number auto-prepended — got "${rl.name}"`);
   assert(rl.dates.length > 0, 'a custom-named week still gets its date line');
+
+  // DI-135 — espnWeekNumber overrides the DISPLAYED week number only.
+  const ov = formatWeekLabelParts({ ...wk, espnWeekNumber: '7' });
+  assert(ov.name === 'Week 7', `espnWeekNumber overrides the displayed number — got "${ov.name}"`);
+
+  const both = formatWeekLabelParts({ ...wk, espnWeekNumber: '7', roundLabel: 'Part 2' });
+  assert(both.name === 'Week 7, Part 2', `override number + roundLabel suffix compose together — got "${both.name}"`);
+
+  const blankOverride = formatWeekLabelParts({ ...wk, espnWeekNumber: '' });
+  assert(blankOverride.name === 'Week 1', 'a blank espnWeekNumber (the createWeek default) is treated as unset, not as "Week "');
 
   // Absent data must yield an EMPTY string, so the caller can omit the element
   // entirely rather than render a blank line that still claims height.
@@ -5986,9 +5997,13 @@ console.log('\n[54] UN-126 — obligation settled-ness fix (Part 1) + merge/void
   assert(stale54.needsReview === true && fresh54.needsReview === true,
     'BOTH the stale and the fresh record are flagged needsReview — surfaced, not silently resolved either way');
 
-  // Weekly History (what every player sees on Standings) shows a review
-  // warning instead of confidently rendering either payer as if settled —
-  // the exact "display and money disagree, silently" defect this closes.
+  // Weekly History (what every player sees on Standings) — UN-135: a
+  // conflicted row is a PLAYER-facing money display, not a diagnostic tool,
+  // so it now renders the plain, ordinary Unpaid badge instead of a
+  // "Needs review" warning — full parity with a normal unpaid row, no
+  // asterisk, no title, no action button. The commissioner still sees the
+  // real diagnostic (companion guard immediately below, same fixture,
+  // BEFORE resolution) — this only ever changed the player-facing copy.
   {
     const realGetById54 = document.getElementById;
     let lbHtml54 = '';
@@ -6002,10 +6017,27 @@ console.log('\n[54] UN-126 — obligation settled-ness fix (Part 1) + merge/void
     document.getElementById = realGetById54;
 
     const wh54 = /Weekly History<\/div>[\s\S]*?<table class="dashboard-table">([\s\S]*?)<\/table>/.exec(lbHtml54)?.[1] || '';
-    assert(/Needs review/.test(wh54),
-      'Weekly History renders the ⚠️ Needs review warning for the conflicted group row');
+    assert(!/Needs review/.test(wh54),
+      'UN-135: Weekly History (player Standings) no longer renders the ⚠️ Needs review warning for a conflicted group row');
+    assert(/badge badge-locked">Unpaid<\/span>/.test(wh54),
+      'UN-135: the conflicted row instead renders the plain existing Unpaid badge — full parity with a normal unpaid row');
     assert(!/Mark Paid|Confirm Paid/.test(wh54),
       'Weekly History does NOT render a normal payment action while the row is conflicted — it would name a payer that may be wrong');
+  }
+
+  // ── 54a-companion (RG-27 lesson: a protection needs a test that detects
+  // its own removal) — UN-135 changed ONLY the player-facing Weekly History
+  // copy. The commissioner's two diagnostic surfaces, driven off the SAME
+  // still-conflicted fixture (stale54/fresh54 both needsReview:true, not
+  // yet voided), MUST still say "Needs review" — if a future edit collapses
+  // the commissioner view to match the softened player view, this goes red.
+  {
+    const adminHtml54 = app54.renderObligationsAdmin();
+    assert(/Needs review/.test(adminHtml54),
+      'UN-135 companion guard: renderObligationsAdmin() (commissioner) still shows ⚠️ Needs review for the same conflicted data');
+    const corrHtml54 = app54.renderObligationCorrectionsAdmin();
+    assert(/Needs review/.test(corrHtml54),
+      'UN-135 companion guard: renderObligationCorrectionsAdmin() (commissioner) still shows ⚠️ Needs review for the same conflicted data');
   }
 
   // ── 54b — Part 2 resolves it: void the stale record. ─────────────────────
@@ -6916,17 +6948,20 @@ console.log('\n[60] UN-127 item 4 (relocated) — feedback shortcut moved under 
     assert(headerMetaChildren60.length === 1,
       'calling setup again (e.g. a second boot() in the same session) does not append a second button — idempotent');
 
-    // (e) The two-line guarantee itself. #header-meta must be a flex ROW —
-    // never column (which would literally stack the button under the week
-    // text) and never wrapping (which could push the button onto its own
-    // line at narrow widths even in a row layout).
+    // (e) Layout guarantee. AMENDED 2026-09-09 (DI-A1): UN-117's original
+    // "never a third stacked line" is narrowed to "unless explicitly
+    // requested." Drew explicitly requested the Feedback button on its own
+    // line beneath the week's date range, so #header-meta is now
+    // INTENTIONALLY flex-direction:column — the button IS the third stacked
+    // line. This assertion is flipped from the pre-amendment guarantee and
+    // now pins the column layout, so a silent revert to a row fails here.
     const headerMetaRule60 = (cssSrc.match(/\.header-meta\{[^}]*\}/) || [''])[0];
     assert(/display:\s*flex/.test(headerMetaRule60),
       `[structural] #header-meta is display:flex — got "${headerMetaRule60}"`);
-    assert(!/flex-direction:\s*column/.test(headerMetaRule60),
-      '[structural] #header-meta is not flex-direction:column — a column layout is exactly what would stack the button under the week text as a third line');
+    assert(/flex-direction:\s*column/.test(headerMetaRule60),
+      '[structural] #header-meta is flex-direction:column — DI-A1 (2026-09-09) intentionally stacks the Feedback button as a third line beneath the week text (UN-117 amended)');
     assert(!/flex-wrap:\s*wrap\b/.test(headerMetaRule60),
-      '[structural] #header-meta does not wrap its own children onto a new line — row+nowrap is what guarantees the button and the week text always share one row, never stack');
+      '[structural] #header-meta does not set flex-wrap — the three stacked lines come from flex-direction:column (DI-A1), not from wrapping, so no unintended reflow of the stacked lines');
     // UN-117's own two-line internals (name+badge line, date-range line) are
     // untouched by this batch — re-confirmed here (suite [35] already proves
     // this in full) so a regression on THIS specific guarantee fails right

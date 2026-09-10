@@ -50,6 +50,15 @@
  * The stub below is a faithful port of `setMany()` + `handle()`'s catch,
  * including the cell cap and the partial-commit ordering, because every one of
  * those five steps has to be reproducible before any of it can be fixed.
+ *
+ * UPDATE 2026-09-05 (Item CAP): the server half of the fix is now deployed —
+ * `backend/Code.gs` CHUNKS a single over-cap value transparently across as many
+ * 50,000-char cells as it needs and reassembles it on read. The stub's setMany
+ * below models that upgrade (it chunks instead of throwing), so this suite now
+ * proves the OTHER half: that the client stops quarantining an ordinary
+ * season-scale `cfbp_picks` and lets it ride to the now-capable backend. The
+ * per-cell 50,000 limit is still real (that is why chunking exists); it is just
+ * no longer the binding ceiling on a single app key. See section [8].
  */
 
 // ── DOM / browser stubs ──────────────────────────────────────────────────────
@@ -95,28 +104,37 @@ const dp      = await import('./js/data-provider.js');
 // ═════════════════════════════════════════════════════════════════════════════
 
 /**
- * Google Sheets' hard per-cell limit. `Code.gs` stores each app key as one
- * cell (`setValues([[str, now]])` / `appendRow`) and never checks this.
+ * Google Sheets' hard PER-CELL limit — still 50,000 chars. `Code.gs` stores an
+ * app key across one OR MORE cells: since the Item CAP chunking upgrade a value
+ * larger than one cell is split across several cells and reassembled on read, so
+ * this limit no longer caps a single app key. It is modelled here (the stub
+ * chunks at exactly this boundary) so the size FACTS in section [1] and the
+ * chunk math in [8] stay honest about what one cell holds.
  */
 const SHEET_CELL_MAX = 50000;
 
+/** Split a string into ≤ SHEET_CELL_MAX-char pieces — how Code.gs fills cells. */
+function toCells(str) {
+  const parts = [];
+  for (let i = 0; i < str.length; i += SHEET_CELL_MAX) parts.push(str.slice(i, i + SHEET_CELL_MAX));
+  return parts.length ? parts : [''];
+}
+
 function makeSheetBackend(initialData = {}) {
-  const SHEET = new Map();                       // key -> json string (one cell)
-  Object.entries(initialData).forEach(([k, v]) => SHEET.set(k, JSON.stringify(v)));
+  const SHEET = new Map();                       // key -> array of cell strings (chunked)
+  Object.entries(initialData).forEach(([k, v]) => SHEET.set(k, toCells(JSON.stringify(v))));
   const log = { setManyCalls: 0, rejected: [], batches: [] };
 
-  /** Port of Code.gs setMany(). Writes each key IN ORDER; throws on cell overflow. */
+  /**
+   * Port of Code.gs setMany() AFTER the chunking upgrade: each value is written
+   * across as many 50,000-char cells as it needs and reassembled on read. It no
+   * longer THROWS on an over-cap value — transparently storing a large value is
+   * the entire point of the deployed server change this client half completes.
+   */
   function setMany(entries) {
     let count = 0;
     for (const key of Object.keys(entries)) {
-      const str = JSON.stringify(entries[key]);
-      if (str.length > SHEET_CELL_MAX) {
-        // What Apps Script does when a cell value exceeds the limit. The exact
-        // wording is Google's and is deliberately NOT asserted anywhere below;
-        // what matters is that it is a throw, not a return.
-        throw new Error('Argument too large: value');
-      }
-      SHEET.set(key, str);                       // committed — Sheets flushes it
+      SHEET.set(key, toCells(JSON.stringify(entries[key])));   // chunked, committed
       count++;
     }
     return count;
@@ -128,7 +146,7 @@ function makeSheetBackend(initialData = {}) {
       if (req.action === 'ping')    return { ok: true, time: new Date().toISOString() };
       if (req.action === 'getAll') {
         const data = {};
-        SHEET.forEach((raw, k) => { try { data[k] = JSON.parse(raw); } catch { data[k] = raw; } });
+        SHEET.forEach((cells, k) => { const raw = cells.join(''); try { data[k] = JSON.parse(raw); } catch { data[k] = raw; } });
         return { ok: true, data, chatHead: 0 };
       }
       if (req.action === 'setMany') {
@@ -151,8 +169,8 @@ function makeSheetBackend(initialData = {}) {
 
   return {
     SHEET, log,
-    /** What the Sheet actually holds for a key, parsed — null if the row is absent. */
-    read: k => (SHEET.has(k) ? JSON.parse(SHEET.get(k)) : null),
+    /** What the Sheet actually holds for a key, parsed (chunks rejoined) — null if absent. */
+    read: k => (SHEET.has(k) ? JSON.parse(SHEET.get(k).join('')) : null),
     has: k => SHEET.has(k),
     /** Was `k` ever OFFERED to the backend, whether or not the write succeeded? */
     everSent: k => log.batches.some(keys => keys.includes(k)),
@@ -350,26 +368,33 @@ console.log('\n[4] ARE THE PICKS SAFE? — what a failed push leaves behind for 
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[5] THE GUARD — an over-cap value is quarantined and NAMED, never allowed to block the batch…');
+console.log('\n[5] THE GUARD — a PATHOLOGICAL (runaway) value is quarantined and NAMED, never allowed to block the batch…');
 // ═════════════════════════════════════════════════════════════════════════════
-// The class, not just today's instance. cfbp_picks is measured to cross the
-// same cap around WEEK 3 and cfbp_games around week 5; when that happens the
-// batch must still deliver everything else, and the banner must say WHICH key.
+// DEFENCE-IN-DEPTH, POST-CHUNKING. Ordinary large keys (a full season of
+// cfbp_picks, a week of cfbp_games) now CHUNK through to the Sheet — see [8].
+// The quarantine no longer fires for them. What it still catches is a value so
+// large it can only be a runaway (an unbounded append, a serialization loop):
+// above the client's TOTAL-PAYLOAD ceiling (backend.js SHEET_CELL_MAX). When
+// that happens the batch must still deliver everything else, and the banner must
+// say WHICH key. This is the RG-56 loud-fail, preserved.
 {
   const sheet = makeSheetBackend(REMOTE_BASE());
   await bootDevice(sheet);
   const w = watchStatus();
 
-  // A key that is over cap and is NOT the available-games pool.
-  const fatComments = Array.from({ length: 400 }, (_, i) => ({
+  // A key that is over the CLIENT RUNAWAY CEILING and is NOT the games pool.
+  // Sized deliberately past be.SHEET_CELL_MAX so it can only be a defect, not
+  // legitimate league data.
+  const bodyLen = Math.ceil(be.SHEET_CELL_MAX / 300) + 100;   // ~300 comments clears the ceiling
+  const fatComments = Array.from({ length: 300 }, (_, i) => ({
     commentId: 'c_' + i, weekId: 'w1', gameId: 'g1', authorId: 'p0', authorKind: 'player',
-    body: 'x'.repeat(120), createdAt: '2026-09-04T17:00:00.000Z',
+    body: 'x'.repeat(bodyLen), createdAt: '2026-09-04T17:00:00.000Z',
   }));
-  assert(JSON.stringify(fatComments).length > SHEET_CELL_MAX, 'fixture check: the comments blob is genuinely over cap');
+  assert(JSON.stringify(fatComments).length > be.SHEET_CELL_MAX,
+    'fixture check: the comments blob is genuinely past the client runaway ceiling');
 
   // Injected at the cache seam directly: the point of this section is an
-  // ARBITRARY over-cap key, not this particular one. cfbp_picks is measured to
-  // cross the same cap around WEEK 3 and cfbp_games around week 5.
+  // ARBITRARY runaway key, not this particular one.
   be.cacheSet('cfbp_comments', fatComments);
   storage.saveAllPicks([{ pickId: 'pk_g', weekId: 'w1', gameId: 'g1', playerId: 'p1', selectedTeam: 'Michigan',
     selectedAt: '2026-09-04T19:00:00.000Z', updatedAt: '2026-09-04T19:00:00.000Z', locked: false, result: 'pending' }]);
@@ -504,13 +529,15 @@ console.log('\n[7] THE BANNER TEXT IS DIAGNOSTIC — three different failures, t
   await be.flushPush();   // teardown: drain the queue for the next section
 
   // ── (c) THE CLIENT QUARANTINE: held back before the request is even made ───
+  // A value past the CLIENT runaway ceiling (backend.js SHEET_CELL_MAX), so the
+  // client holds it before the request — the third, distinct failure string.
   const wc = watchStatus();
-  be.cacheSet('cfbp_nicknames', { n: 'z'.repeat(SHEET_CELL_MAX + 10) });
+  be.cacheSet('cfbp_nicknames', { n: 'z'.repeat(be.SHEET_CELL_MAX + 10) });
   await be.flushPush();
   const qMsg = be.getSyncStatus().lastError || '';
 
-  assert(qMsg.includes('cfbp_nicknames') && qMsg.includes(SHEET_CELL_MAX.toLocaleString()),
-    'the client-side quarantine names the offending key AND the cap it broke — a third, self-explaining string');
+  assert(qMsg.includes('cfbp_nicknames') && qMsg.includes(be.SHEET_CELL_MAX.toLocaleString()),
+    'the client-side quarantine names the offending key AND the ceiling it broke — a third, self-explaining string');
   assert(qMsg !== 'Failed to fetch' && qMsg !== 'Argument too large: value',
     'all three failure modes are distinguishable from the banner alone, which is the only diagnostic a player or the commissioner can actually read');
   wc.off();
@@ -520,17 +547,24 @@ console.log('\n[7] THE BANNER TEXT IS DIAGNOSTIC — three different failures, t
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[8] THE SAME CAP IS COMING FOR THE PICKS — measured at season scale…');
+console.log('\n[8] THE PICKS OUTGROW ONE CELL — and the chunking backend now SYNCS them anyway…');
 // ═════════════════════════════════════════════════════════════════════════════
-// Making cfbp_avail_games device-local removes TODAY's trigger. It does not
-// remove the class, and the class has a date on it. `cfbp_picks` and
-// `cfbp_games` are single keys that grow every week for the whole season and
-// CANNOT be made device-local — they are the shared league record.
+// `cfbp_picks` and `cfbp_games` are single keys that grow every week for the
+// whole season and CANNOT be made device-local — they are the shared league
+// record. cfbp_picks crosses the 50,000-char PER-CELL limit around week 3.
 //
-// This section exists so the next change that inflates a per-record shape (which
-// is exactly what v0.17.9 did to games: +21 chars each, moving the pool's
-// crossing point from 57 candidates to 53) fails HERE, before a deploy, instead
-// of mid-season on the commissioner's device an hour before a deadline.
+// Before Item CAP that scheduled an outage: the client quarantined the over-cap
+// picks, so they never reached the Sheet and a red banner went up mid-season an
+// hour before a deadline. Now backend/Code.gs chunks a single value across
+// cells, so the correct behaviour INVERTED: an ordinary season-scale cfbp_picks
+// must be SENT (offered to the backend, not deleted from the batch) and must
+// ROUND-TRIP. The quarantine is reserved for a genuinely pathological runaway
+// value above the client's TOTAL-PAYLOAD ceiling — asserted at the end.
+//
+// This section still fails HERE, before a deploy, if a change inflates a
+// per-record shape (v0.17.9 did exactly that to games: +21 chars each): the
+// two-sided char-count bands below force a deliberate re-derivation, and the
+// headroom assertion fires if cfbp_picks ever approaches the runaway ceiling.
 {
   const dm = await import('./js/data-model.js');
 
@@ -556,9 +590,16 @@ console.log('\n[8] THE SAME CAP IS COMING FOR THE PICKS — measured at season s
   const gameChars   = Math.round(JSON.stringify(seasonGames).length / seasonGames.length);
   const picksWeek   = Math.max(1, Math.floor(SHEET_CELL_MAX / (pickChars * 60)));
   const gamesWeek   = Math.max(1, Math.floor(SHEET_CELL_MAX / (gameChars * 10)));
+  const seasonPicksChars = JSON.stringify(seasonPicks).length;
 
-  assert(JSON.stringify(seasonPicks).length > SHEET_CELL_MAX,
-    `a full season of picks is ${JSON.stringify(seasonPicks).length} chars in ONE cell — ${Math.round(JSON.stringify(seasonPicks).length / SHEET_CELL_MAX * 100)}% of the cap. This key cannot be made device-local; it IS the league record`);
+  assert(seasonPicksChars > SHEET_CELL_MAX,
+    `a full season of picks is ${seasonPicksChars} chars — ${Math.round(seasonPicksChars / SHEET_CELL_MAX * 100)}% of ONE 50,000-char cell, so it MUST be chunked across cells. This key cannot be made device-local; it IS the league record`);
+  // TIES THE TEST TO THE CLIENT CEILING: a full season of picks must sit well
+  // under backend.js SHEET_CELL_MAX (the runaway tripwire), with generous
+  // headroom. If this fails, cfbp_picks is nearing the ceiling and would start
+  // quarantining LIVE picks — raise the ceiling deliberately or shard the key.
+  assert(seasonPicksChars < be.SHEET_CELL_MAX / 2,
+    `a full season of picks (${seasonPicksChars} chars) is under half the ${be.SHEET_CELL_MAX.toLocaleString()}-char client runaway ceiling — ${(be.SHEET_CELL_MAX / seasonPicksChars).toFixed(1)}x headroom`);
   // TWO-SIDED BANDS ON THE MEASURED CHAR COUNT, not on the derived week number.
   //
   // The first version of this asserted `picksWeek <= 5`, which is directionally
@@ -571,17 +612,22 @@ console.log('\n[8] THE SAME CAP IS COMING FOR THE PICKS — measured at season s
   // A band on the char count fails in BOTH directions, so any change to the
   // record shape has to come back here and re-derive the deadline deliberately.
   assert(pickChars >= 200 && pickChars <= 280,
-    `a pick measures ${pickChars} chars (band 200-280). If this failed, the pick record CHANGED SHAPE: re-derive the cap deadline — currently WEEK ${picksWeek} — and update js/backend.js, docs/SESSION_LOG_090126.md and this file together`);
+    `a pick measures ${pickChars} chars (band 200-280). If this failed, the pick record CHANGED SHAPE: re-derive where chunking begins — currently ~WEEK ${picksWeek} — re-check the ceiling headroom above, and update js/backend.js, docs/SESSION_LOG_090126.md and this file together`);
   assert(gameChars >= 850 && gameChars <= 1050,
-    `a slate game measures ${gameChars} chars (band 850-1050). If this failed, the game record CHANGED SHAPE: re-derive the cap deadline — currently WEEK ${gamesWeek} — and update the same three places`);
+    `a slate game measures ${gameChars} chars (band 850-1050). If this failed, the game record CHANGED SHAPE: re-derive where chunking begins — currently ~WEEK ${gamesWeek} — and update the same three places`);
   assert(picksWeek <= 4,
-    `cfbp_picks (6 players x 10 games, ~${pickChars} chars a pick) crosses the ${SHEET_CELL_MAX}-char cap around WEEK ${picksWeek} of this season — the outage is scheduled, not hypothetical`);
+    `cfbp_picks (6 players x 10 games, ~${pickChars} chars a pick) exceeds one 50,000-char cell around WEEK ${picksWeek} of this season — from there the backend chunks it, so it syncs instead of an outage`);
   assert(gamesWeek <= 6,
-    `cfbp_games (10 slate games a week, ~${gameChars} chars a game) crosses it around WEEK ${gamesWeek}`);
+    `cfbp_games (10 slate games a week, ~${gameChars} chars a game) exceeds one cell around WEEK ${gamesWeek}`);
 
-  // And what the guard actually buys, stated honestly: it converts a silent,
-  // league-wide, everything-behind-one-key outage into a loud, named, single-key
-  // hold. It does NOT keep the picks syncing. Only chunking in Code.gs does that.
+  // ── FIXED, NOT MERELY CONTAINED (Item CAP) ─────────────────────────────────
+  // The old assertion here read "NOT FIXED, ONLY CONTAINED": an over-cap
+  // cfbp_picks was quarantined, so it was unsent-but-unlost and the real fix
+  // (chunking in Code.gs) was still owed. That fix now ships. So this INVERTS:
+  // an ordinary season-scale cfbp_picks must be OFFERED to the backend, written,
+  // and read back intact, with NO error banner. This is the regression test for
+  // Item CAP — it fails against the old 50,000-char client cap (which quarantines
+  // the picks) and passes only once the client ceiling is raised above a season.
   const sheet = makeSheetBackend(REMOTE_BASE());
   await bootDevice(sheet);
   const w = watchStatus();
@@ -592,14 +638,44 @@ console.log('\n[8] THE SAME CAP IS COMING FOR THE PICKS — measured at season s
   try { await be.flushPush(); } catch (e) { threw = e; }
 
   assert(threw === null && sheet.has('cfbp_obligations'),
-    'with an over-cap cfbp_picks in the batch, every OTHER key in that batch still reaches the Sheet — the batch is no longer all-or-nothing');
-  assert(w.errors().some(e => String((e.detail || {}).error || '').includes('cfbp_picks')),
-    'the banner names cfbp_picks specifically, so week 3 does not start with the same guessing game week 1 did');
-  assert(be.getSyncStatus().pendingWrites >= 1 && !sheet.everSent('cfbp_picks')
-         && (sheet.read('cfbp_picks') || []).length === 0,
-    'NOT FIXED, ONLY CONTAINED: the picks are held — never OFFERED to the Sheet and never written there, but still in the queue, so they are unsent and unlost. Chunking a large value across cells in backend/Code.gs is the real fix and is feature-sized; this guard only buys the time to build it');
+    'the push resolves and every OTHER key in the batch reaches the Sheet');
+  assert(sheet.everSent('cfbp_picks'),
+    'THE FIX: an over-cap cfbp_picks is now OFFERED to the backend — NOT deleted from the push batch by the client quarantine as it was pre-CAP');
+  assert((sheet.read('cfbp_picks') || []).length === seasonPicks.length,
+    'THE FIX: the over-cap cfbp_picks ROUND-TRIPS — the chunking backend stores all of it and getAll reassembles it, so live picks actually sync');
+  assert(w.errors().length === 0 && be.getSyncStatus().lastError === null,
+    'and NO red banner: a season-scale picks payload is normal data now, not a sync failure');
+  assert(be.getSyncStatus().pendingWrites === 0,
+    'the queue drains — nothing is held back for an ordinary large picks value');
 
   w.off();
+
+  // ── DEFENCE-IN-DEPTH SURVIVES: a truly pathological runaway still quarantines ─
+  // The raised ceiling is a runaway tripwire, not a removal of the guard. A value
+  // that has clearly run away (here ~10x a full season, past the client ceiling)
+  // must STILL be held back and fail LOUD — never shipped to the backend where it
+  // would spend a multi-MB slug of the shared Sheet's cell budget.
+  const sheet2 = makeSheetBackend(REMOTE_BASE());
+  await bootDevice(sheet2);
+  const w2 = watchStatus();
+
+  const runawayPicks = Array(10).fill(seasonPicks).flat();     // ~10 seasons in one key
+  assert(JSON.stringify(runawayPicks).length > be.SHEET_CELL_MAX,
+    'fixture check: the runaway value is genuinely past the client ceiling');
+
+  be.cacheSet('cfbp_picks', runawayPicks);
+  storage.saveAllObligations([{ obligationId: 'o2', weekId: 'w1', playerId: 'p1', kind: 'winner', settled: false }]);
+  let threw2 = null;
+  try { await be.flushPush(); } catch (e) { threw2 = e; }
+
+  assert(threw2 === null && sheet2.has('cfbp_obligations'),
+    'a quarantined runaway does not throw, and the rest of the batch still lands — the batch is not all-or-nothing');
+  assert(w2.errors().some(e => String((e.detail || {}).error || '').includes('cfbp_picks')),
+    'the red banner NAMES cfbp_picks as the runaway — loud-fail (AD-06) preserved');
+  assert(be.getSyncStatus().pendingWrites >= 1 && !sheet2.everSent('cfbp_picks'),
+    'the runaway is HELD — never OFFERED to the backend, still queued, unsent and unlost');
+
+  w2.off();
   be.cacheSet('cfbp_picks', []);    // teardown: release the quarantine
   await be.flushPush();
 }
