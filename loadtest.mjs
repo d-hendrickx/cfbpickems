@@ -8151,6 +8151,417 @@ console.log('\n[71] Transport — the first tick with nothing known skips the he
   }
 }
 
+// ── [72] ─────────────────────────────────────────────────────────────────────
+// BUG-B, the ">500-chat-event cold-boot window" (found in review 2026-09-11,
+// ledger §6). The server's `chatSince(seq, limit)` caps the page it RETURNS at
+// 500 rows but still reports the TRUE head (Code.gs `chatSince`). The client
+// treated one call as one complete answer: a cold boot fetched
+// fetchSince(0,500), handed chat.js 500 events AND head=1237, ingest() set
+// S.head=1237, and every later tick saw fetchHead()===S.head and concluded
+// "caught up". Events 501..1237 — the NEWEST messages, the ones a chat exists
+// to show — were never requested again for the life of that session, and
+// backfill() cannot recover them because it walks BACKWARD from the oldest seq
+// already seen. Chat head was 227 when this was written; the cap bites the day
+// the log crosses 500.
+//
+// The invariant this suite pins, and the one the old code violated: a page
+// delivery may only report the server's true head when the events in hand
+// actually reach it. Any other page reports the seq it genuinely delivered, so
+// getKnownHead() stays an honest cursor and the next tick resumes from it.
+console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-row page must page forward to the head…');
+{
+  const transport72 = mods['chatTransport'], backend72 = mods['backend'], chat72 = mods['chat'];
+  const _realFetch72 = globalThis.fetch, _realST72 = globalThis.setTimeout, _realCT72 = globalThis.clearTimeout;
+  const settle = async (n = 60) => { for (let i = 0; i < n; i++) await new Promise(r => _realST72(r, 0)); };
+
+  const N72 = 1237;                       // mid-season-sized log, 2.47 pages
+  let HEAD72 = N72;
+  let calls72 = [];
+  let scheduled72 = null;
+  const mkEv = seq => ({ id: 'cp' + seq, seq, ts: 1_700_000_000_000 + seq, type: 'message',
+                         author: 'p1', body: 'msg ' + seq, notify: false });
+
+  // Faithful mock of Code.gs chatSince(): page capped, head always TRUE.
+  const serverSince = (afterSeq, limit) => {
+    const cap = Math.max(1, Math.min(limit || 500, 1000));
+    if (HEAD72 <= afterSeq) return { ok: true, events: [], head: HEAD72 };
+    const count = Math.min(cap, HEAD72 - afterSeq);
+    const events = [];
+    for (let s = afterSeq + 1; s <= afterSeq + count; s++) events.push(mkEv(s));
+    return { ok: true, events, head: HEAD72 };
+  };
+  let sinceImpl = serverSince;
+
+  globalThis.setTimeout = fn => { scheduled72 = fn; return 1; };   // hold the next tick
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    const seq = Number(u.searchParams.get('seq') || 0);
+    const limit = Number(u.searchParams.get('limit') || 0);
+    calls72.push({ action, seq, limit });
+    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD72 }) };
+    if (action === 'chatSince') { const r = sinceImpl(seq, limit); return { ok: true, json: async () => r }; }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  backend72.setBackendConfig('https://example.invalid/exec', 'tok72');
+
+  let unsub72 = null;
+  const deliveries = [];                  // every onEvents call, as the transport made it
+  const record = (events, head, delivery) => {
+    const maxSeq = (events || []).reduce((m, e) => (typeof e?.seq === 'number' && e.seq > m ? e.seq : m), 0);
+    deliveries.push({ n: (events || []).length, head, maxSeq, caughtUp: delivery?.caughtUp });
+  };
+
+  try {
+    chat72._resetForTest();
+    unsub72 = transport72.subscribe(
+      (events, head, delivery) => { record(events, head, delivery); chat72.ingest(events, head, delivery); },
+      { getMode: () => 'idle', getKnownHead: () => chat72.chatStatus().head }
+    );
+    await settle();
+
+    // ── A. The fold actually holds the whole room ──
+    assert(chat72.getMessage('cp1') !== null, 'cold boot: the OLDEST event (seq 1) is folded');
+    assert(chat72.getMessage('cp500') !== null, 'cold boot: the last event of page one (seq 500) is folded');
+    assert(chat72.getMessage('cp501') !== null,
+      'cold boot: the FIRST event past the 500-row page cap (seq 501) is folded — the page boundary is not the end of the room');
+    assert(chat72.getMessage('cp1237') !== null,
+      'cold boot: the NEWEST event (seq 1237) is folded — losing the newest messages is the worst case for a chat');
+    assert(chat72.getMessages({ tag: 'all' }).length === N72,
+      `cold boot: all ${N72} events folded — got ${chat72.getMessages({ tag: 'all' }).length}`);
+    assert(chat72.chatStatus().head === N72,
+      `cold boot: the local head lands on the true head (${N72}) — got ${chat72.chatStatus().head}`);
+
+    // ── B. The cursor never claims more than it delivered ──
+    // This is the root cause stated as an invariant. Pre-fix the single
+    // delivery was { n: 500, head: 1237 } — a head 737 events ahead of
+    // anything actually in hand, which is exactly what silenced every
+    // subsequent tick.
+    const lying = deliveries.filter(d => d.n > 0 && d.head > d.maxSeq);
+    assert(lying.length === 0,
+      `no page delivery reports a head beyond the highest seq it actually delivered — got ${JSON.stringify(lying)}`);
+    assert(deliveries.length === 3 && deliveries.map(d => d.n).join(',') === '500,500,237',
+      `the room fills progressively, one folded page per round trip — got [${deliveries.map(d => d.n).join(', ')}]`);
+
+    // ── B2. Every page SAYS which kind of delivery it is (BUG-C) ──
+    // Paging changed what a delivery MEANS, not just how many there are.
+    // js/notifications.js had been inferring "backfill vs live" from call
+    // ordering, which paging silently invalidated — it relayed a push for all
+    // 737 messages on pages 2 and 3 (3,685 sends, 737 × 5 recipients). The
+    // transport is the only layer that knows, because `caughtUp` is computed
+    // here, so it reports it on every delivery instead of leaving consumers to
+    // guess. Consumed by chat.js ingest() -> the 'events' notification;
+    // end-to-end coverage is notifytest.mjs [12b].
+    assert(deliveries.map(d => String(d.caughtUp)).join(',') === 'false,false,true',
+      `each page is marked backfill-or-live by the transport itself — got [${deliveries.map(d => String(d.caughtUp)).join(', ')}], expected [false, false, true]`);
+    assert(deliveries.every(d => d.caughtUp !== true || d.head <= d.maxSeq),
+      'and no delivery ever claims caught-up while reporting a head beyond the events it delivered');
+
+    // ── C. The first-tick optimization survives (§[71]) ──
+    assert(calls72.filter(c => c.action === 'chatHead').length === 0,
+      'the cold-boot drain still skips the head probe entirely — one Apps Script cold start, not two');
+    assert(calls72.map(c => c.seq).join(',') === '0,500,1000',
+      `each page resumes from the last seq actually received — got [${calls72.map(c => c.seq).join(', ')}]`);
+    assert(calls72.every(c => c.limit === 500),
+      'every page asks for the server-capped 500, so no request is silently truncated below what we ask for');
+
+    // ── D. Steady state: a burst bigger than one page while we were away ──
+    // Same truncation assumption lived in the known>0 branch: a tab that was
+    // hidden (or in error backoff) through a >500-event burst would take one
+    // page and believe it was current.
+    calls72 = []; deliveries.length = 0;
+    HEAD72 = 1900;
+    scheduled72?.(); await settle();
+    assert(calls72[0]?.action === 'chatHead' && calls72.length === 3,
+      `a later tick still probes the cheap head first, then pages until caught up — got [${calls72.map(c => c.action + ':' + c.seq).join(', ')}]`);
+    assert(chat72.getMessage('cp1900') !== null && chat72.getMessages({ tag: 'all' }).length === 1900,
+      `a >500-event burst caught up in one tick — got ${chat72.getMessages({ tag: 'all' }).length} of 1900`);
+    assert(chat72.chatStatus().head === 1900, `head after the burst is 1900 — got ${chat72.chatStatus().head}`);
+
+    // ── E. An idle tick is still one cheap call ──
+    calls72 = [];
+    scheduled72?.(); await settle();
+    assert(calls72.length === 1 && calls72[0].action === 'chatHead',
+      `nothing new: one cached head probe, no page walk — got [${calls72.map(c => c.action).join(', ')}]`);
+
+    // ── G. "Caught up" is decided by the seq reached, NOT by page fullness ──
+    // A page can come back SHORTER than the cap while the head is still ahead:
+    // the common case is new messages landing mid-drain (the head the last page
+    // reported is already stale), and Apps Script is free to return a short
+    // read besides. Treating "short page" as "caught up" re-opens BUG-B in a
+    // narrower window, so the walk keys off the seq actually reached.
+    chat72._resetForTest();
+    calls72 = []; deliveries.length = 0;
+    HEAD72 = N72;
+    sinceImpl = (afterSeq) => {                       // honest, but 200 rows at a time
+      if (HEAD72 <= afterSeq) return { ok: true, events: [], head: HEAD72 };
+      const count = Math.min(200, HEAD72 - afterSeq);
+      const events = [];
+      for (let s2 = afterSeq + 1; s2 <= afterSeq + count; s2++) events.push(mkEv(s2));
+      return { ok: true, events, head: HEAD72 };
+    };
+    unsub72(); unsub72 = null;
+    unsub72 = transport72.subscribe(
+      (events, head, delivery) => { record(events, head, delivery); chat72.ingest(events, head, delivery); },
+      { getMode: () => 'idle', getKnownHead: () => chat72.chatStatus().head }
+    );
+    await settle();
+    assert(chat72.getMessages({ tag: 'all' }).length === N72,
+      `a page shorter than the cap does not end the walk while the head is still ahead — got ${chat72.getMessages({ tag: 'all' }).length} of ${N72}`);
+    assert(deliveries.filter(d => d.n > 0 && d.head > d.maxSeq).length === 0,
+      'and a short page still reports only the seq it delivered');
+    assert(chat72.chatStatus().head === N72,
+      `head lands on the true head after a short-page walk — got ${chat72.chatStatus().head}`);
+    sinceImpl = serverSince;
+
+    // ── F. A broken server cannot spin the loop ──
+    // F1: a server that returns a full page without advancing the cursor.
+    chat72._resetForTest();
+    calls72 = []; deliveries.length = 0;
+    HEAD72 = 1_000_000;
+    sinceImpl = () => ({ ok: true, events: Array.from({ length: 500 }, (_, i) => mkEv(i + 1)), head: HEAD72 });
+    unsub72(); unsub72 = null;
+    let known72 = 0;
+    unsub72 = transport72.subscribe((events, head, delivery) => { record(events, head, delivery); if (head > known72) known72 = head; },
+      { getMode: () => 'idle', getKnownHead: () => known72 });
+    await settle();
+    assert(calls72.length <= 2,
+      `a server that never advances the cursor stops the walk immediately — got ${calls72.length} calls`);
+    assert(known72 <= 500,
+      `and the cursor is never advanced to a head we did not receive — got ${known72}`);
+
+    // F2: an honest but enormous backlog — bounded pages per tick, and the
+    // cursor stays where the events actually reached so the next tick resumes.
+    calls72 = []; deliveries.length = 0;
+    known72 = 0;
+    sinceImpl = serverSince;
+    unsub72(); unsub72 = null;
+    unsub72 = transport72.subscribe((events, head, delivery) => { record(events, head, delivery); if (head > known72) known72 = head; },
+      { getMode: () => 'idle', getKnownHead: () => known72 });
+    await settle(120);
+    assert(calls72.length > 1 && calls72.length <= 20,
+      `a million-event backlog is bounded to at most 20 pages in a single tick — got ${calls72.length}`);
+    assert(known72 === calls72.length * 500,
+      `the cursor equals exactly what was delivered, so the next tick resumes from there — got ${known72} after ${calls72.length} pages`);
+    assert(known72 < HEAD72, 'and the bound never reports "caught up" on a backlog it has not finished');
+  } finally {
+    unsub72?.();
+    globalThis.fetch = _realFetch72;
+    globalThis.setTimeout = _realST72;
+    globalThis.clearTimeout = _realCT72;
+    backend72.clearBackendConfig();
+    chat72._resetForTest();
+  }
+}
+
+// ── 73. backendtest.mjs — spawned as a subprocess, same shape as [68] ───────
+// BUG-A (2026-09-11). Own process for the reason synctest.mjs states: it drives
+// the real hydrate()/chatTransport against a stubbed fetch and leaves the
+// backend singleton hydrated, which would poison every suite after it.
+console.log('\n[73] backendtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['backendtest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `backendtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch73 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch73, `backendtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch73 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch73) {
+    assert(summaryMatch73[1] === '✅ ALL PASS', `backendtest.mjs itself reports ALL PASS (got: ${summaryMatch73[0]})`);
+    assert(Number(summaryMatch73[3]) === 0, `backendtest.mjs reports zero failed assertions (got ${summaryMatch73[3]} failed, ${summaryMatch73[2]} passed)`);
+    assert(Number(summaryMatch73[2]) >= 40, `backendtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch73[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── [74] ─────────────────────────────────────────────────────────────────────
+// RG-95 — THE SAME HOLE, THROUGH THE OTHER WRITER. BUG-B (§[72]) made the
+// transport's page deliveries honest: a delivery only reports the server's TRUE
+// head when the events in hand actually reach it. But the transport is not the
+// only thing that writes the room cursor — `flushOutbox()` in chat.js did
+//
+//     if (typeof head === 'number' && head > S.head) S.head = head;
+//
+// with the head from `chatAppend`, and that head is the TRUE sheet head
+// (Code.gs `chatAppend` → `msgHead(s)`), not a head this device has received
+// events up to. One dropped read is enough to weaponize it, and a dropped read
+// is the ordinary case — Apps Script cold starts are exactly why §[71] exists:
+//
+//   1. cold boot, the first drain fails (500 / cold start) — room blank, head 0
+//   2. the player types into the blank room; the append SUCCEEDS
+//   3. S.head jumps to the server's true head (1238 today's 227 + growth)
+//   4. every later tick: fetchHead() === S.head → "caught up" → never fetches
+//   5. the room stays empty except the player's own message, for the session
+//
+// `initChat()` flushes a persisted outbox on EVERY boot, so step 2 does not
+// even need the player to type — a message queued yesterday reaches it.
+//
+// The invariant, stated once for BOTH writer sites: the room cursor may only
+// be advanced by events the device has actually received. A page delivery
+// reports only the seq it delivered (transport, §[72]); an append reports
+// nothing at all (chat.js) — the sender's own message still gets its assigned
+// seq on the ITEM, which is what the sender needs, and the next tick re-reads
+// it from the log like any other event (ids are deduped server-side and in the
+// fold, AD-09/AD-10).
+console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (transport page AND outbox append)…');
+{
+  const transport74 = mods['chatTransport'], backend74 = mods['backend'], chat74 = mods['chat'];
+  const _realFetch74 = globalThis.fetch, _realST74 = globalThis.setTimeout, _realCT74 = globalThis.clearTimeout;
+  const settle = async (n = 80) => { for (let i = 0; i < n; i++) await new Promise(r => _realST74(r, 0)); };
+
+  const N74 = 1237;                  // longer than one 500-row page, so the page path runs in the same scenario
+  let HEAD74 = N74;
+  let sinceFails74 = true;           // the cold-start read failure that starts the sequence
+  let calls74 = [];
+  // Every scheduled callback is COLLECTED, never auto-fired, and fired in the
+  // batch this test means to fire: the app schedules other timers (toast
+  // removal) while this runs, so holding "the last thing scheduled" would drive
+  // the wrong callback and pass vacuously.
+  const timers74 = [];
+  const fireHeld = async (held) => { for (const fn of held) { try { fn(); } catch {} } await settle(); };
+  const log74 = new Map();           // the server's append-only log: seq -> event
+  for (let s = 1; s <= N74; s++) {
+    log74.set(s, { id: 'r' + s, seq: s, ts: 1_700_000_000_000 + s, type: 'message',
+                   author: 'p2', body: 'existing ' + s, notify: false });
+  }
+
+  // Faithful mocks of Code.gs chatSince() (page capped, head always TRUE) and
+  // chatAppend() (assigns seqs, returns msgHead(s) — the TRUE head).
+  const serverSince74 = (afterSeq, limit) => {
+    const cap = Math.max(1, Math.min(limit || 500, 1000));
+    const events = [];
+    for (let s = afterSeq + 1; s <= HEAD74 && events.length < cap; s++) {
+      if (log74.has(s)) events.push(log74.get(s));
+    }
+    return { ok: true, action: 'chatSince', events, head: HEAD74 };
+  };
+  const serverAppend74 = (events) => {
+    const assigned = (events || []).map(e => {
+      const seq = ++HEAD74;
+      log74.set(seq, { ...e, seq, ts: 1_700_000_100_000 + seq, local: undefined });
+      return { id: e.id, seq, ts: 1_700_000_100_000 + seq };
+    });
+    return { ok: true, action: 'chatAppend', assigned, head: HEAD74 };   // TRUE sheet head
+  };
+
+  globalThis.setTimeout = fn => { timers74.push(fn); return timers74.length; };   // hold, never auto-fire
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'POST') {
+      const body = JSON.parse(opts.body || '{}');
+      calls74.push({ action: body.action });
+      if (body.action === 'chatAppend') { const r = serverAppend74(body.events); return { ok: true, json: async () => r }; }
+      return { ok: true, json: async () => ({ ok: true, action: body.action }) };
+    }
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    const seq = Number(u.searchParams.get('seq') || 0);
+    calls74.push({ action, seq });
+    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, action, head: HEAD74 }) };
+    if (action === 'chatSince') {
+      if (sinceFails74) return { ok: false, status: 500, json: async () => ({}) };   // Apps Script cold start
+      const r = serverSince74(seq, Number(u.searchParams.get('limit') || 0));
+      return { ok: true, json: async () => r };
+    }
+    return { ok: true, json: async () => ({ ok: true, action }) };
+  };
+
+  backend74.setBackendConfig('https://example.invalid/exec', 'tok74');
+  storage.saveSetting('chatEnabled', true);
+  storage.saveSetting('chatEpochSeq', 0);
+
+  let unsub74 = null;
+  let deliveredMax74 = 0;                 // the highest seq the transport actually handed to chat.js
+  const deliveries74 = [];
+  const cursorLies74 = [];                // every moment S.head claimed more than was delivered
+
+  try {
+    chat74._resetForTest();
+    unsub74 = transport74.subscribe(
+      (events, head) => {
+        const maxSeq = (events || []).reduce((m, e) => (typeof e?.seq === 'number' && e.seq > m ? e.seq : m), 0);
+        deliveries74.push({ n: (events || []).length, head, maxSeq });
+        if (maxSeq > deliveredMax74) deliveredMax74 = maxSeq;
+        chat74.ingest(events, head);
+        if (chat74.chatStatus().head > deliveredMax74) cursorLies74.push({ at: 'delivery', head: chat74.chatStatus().head, deliveredMax: deliveredMax74 });
+      },
+      { getMode: () => 'idle', getKnownHead: () => chat74.chatStatus().head }
+    );
+    await settle();
+    const bootTick74 = timers74.splice(0);               // the transport's next tick after the failed read
+
+    // ── A. Fixture: the first read really did fail, and nothing was folded ──
+    assert(calls74.length === 1 && calls74[0].action === 'chatSince',
+      `fixture: the cold boot made exactly one read and it failed — got [${calls74.map(c => c.action).join(', ')}]`);
+    assert(chat74.getMessages({ tag: 'all' }).length === 0 && chat74.chatStatus().head === 0,
+      `fixture: the room is blank and the cursor is 0 after the failed read — got ${chat74.getMessages({ tag: 'all' }).length} messages, head ${chat74.chatStatus().head}`);
+
+    // ── B. The player sends from the blank room; the append succeeds ──
+    sinceFails74 = false;                                // the server is warm now
+    calls74 = [];
+    const ownId74 = chat74.sendMessage({ body: 'anyone here?', author: 'p1' });
+    await fireHeld(timers74.splice(0));                  // scheduleFlush()'s coalescing timer -> flushOutbox()
+    assert(calls74.some(c => c.action === 'chatAppend'),
+      `fixture: the send reached chatAppend — got [${calls74.map(c => c.action).join(', ')}]`);
+    assert(chat74.getMessage(ownId74)?.seq === N74 + 1 && chat74.getMessage(ownId74)?.local === false,
+      `the sender still gets their own message reconciled to its assigned seq (${N74 + 1}) — the fix must not cost the sender that — got seq ${chat74.getMessage(ownId74)?.seq}, local ${chat74.getMessage(ownId74)?.local}`);
+
+    // THE APPEND-SITE INVARIANT. chatAppend answers with the TRUE sheet head;
+    // adopting it here claims 1238 events this device has never seen.
+    assert(chat74.chatStatus().head <= deliveredMax74,
+      `the outbox append never advances the room cursor past what the transport actually delivered — cursor ${chat74.chatStatus().head}, delivered up to ${deliveredMax74}`);
+
+    // ── C. …so the very next tick MUST go and fetch. This is the user-visible half ──
+    calls74 = [];
+    await fireHeld(bootTick74);
+    assert(calls74.some(c => c.action === 'chatSince'),
+      `the next tick after an append FETCHES the backlog instead of concluding "caught up" — got [${calls74.map(c => c.action + (c.seq !== undefined ? ':' + c.seq : '')).join(', ')}]`);
+    assert(calls74.filter(c => c.action === 'chatHead').length === 0,
+      `and with nothing yet received it skips the head probe entirely (§[71] still holds) — got [${calls74.map(c => c.action).join(', ')}]`);
+    assert(chat74.getMessage('r1') !== null && chat74.getMessage('r' + N74) !== null,
+      'the whole backlog folds — oldest and newest pre-existing messages are both in the room');
+    assert(chat74.getMessages({ tag: 'all' }).length === N74 + 1,
+      `the room holds every message, not just the player's own — got ${chat74.getMessages({ tag: 'all' }).length} of ${N74 + 1}`);
+    assert(chat74.getMessage(ownId74)?.seq === N74 + 1,
+      'and the player\'s own message is still exactly one message, re-read from the log and deduped by id (AD-09/AD-10)');
+    assert(chat74.chatStatus().head === N74 + 1,
+      `only NOW, having received them, does the cursor reach the true head — got ${chat74.chatStatus().head}`);
+
+    // ── D. The page path's half of the same invariant, in the same run ──
+    assert(deliveries74.filter(d => d.n > 0 && d.head > d.maxSeq).length === 0,
+      `no page delivery reports a head beyond the highest seq it delivered — got ${JSON.stringify(deliveries74.filter(d => d.n > 0 && d.head > d.maxSeq))}`);
+    assert(deliveries74.map(d => d.n).join(',') === '500,500,238',
+      `and the backlog came back one capped page at a time — got [${deliveries74.map(d => d.n).join(', ')}]`);
+    assert(cursorLies74.length === 0,
+      `at no point did the cursor claim a position the device had not received — got ${JSON.stringify(cursorLies74)}`);
+
+    // ── E. Steady state is unharmed: an append on a CAUGHT-UP room ──
+    // The other direction of the same fix — dropping the head adoption must not
+    // strand the sender's own message when the room is already current.
+    const drainTick74 = timers74.splice(0);              // the transport's next tick after the drain
+    calls74 = [];
+    const own2 = chat74.sendMessage({ body: 'there you are', author: 'p1' });
+    await fireHeld(timers74.splice(0));                  // flush the second send
+    calls74 = [];
+    await fireHeld(drainTick74);
+    assert(calls74[0]?.action === 'chatHead' && calls74.some(c => c.action === 'chatSince'),
+      `a caught-up room still probes the cheap head first, sees it advance, and pulls the new event — got [${calls74.map(c => c.action).join(', ')}]`);
+    assert(chat74.getMessages({ tag: 'all' }).length === N74 + 2 && chat74.getMessage(own2)?.seq === N74 + 2,
+      `and the second message exists exactly once, at its assigned seq — got ${chat74.getMessages({ tag: 'all' }).length} messages`);
+    assert(chat74.chatStatus().head === N74 + 2,
+      `cursor tracks the true head once it has genuinely caught up — got ${chat74.chatStatus().head}`);
+  } finally {
+    unsub74?.();
+    globalThis.fetch = _realFetch74;
+    globalThis.setTimeout = _realST74;
+    globalThis.clearTimeout = _realCT74;
+    backend74.clearBackendConfig();
+    chat74._resetForTest();
+  }
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -26,6 +26,50 @@ database and Google Apps Script as the API. ~15 minutes, no credit card, no serv
 4. Open **View → Logs** (or **Execution log**). Copy the **token** it prints.
    - Lost it later? Run the **`logToken`** function and check the log again.
 
+### 3.5 One-time authorization for outbound calls (push + SCRIBE)
+
+**Required once, and again any time a NEW Google service is used by `Code.gs`.**
+
+`setup()` in step 3 only granted the permissions the script needed *at that
+moment*. Since v0.20.0 the backend also makes **outbound HTTPS calls** — to
+OneSignal (push notifications) and to Anthropic (the interactive @SCRIBE runtime
+and the SCRIBE Trainer). That needs a scope the original grant does not include:
+
+```
+https://www.googleapis.com/auth/script.external_request
+```
+
+**Pasting new code does NOT expand an existing grant.** The consent screen only
+reappears when you *Run a function interactively from the editor*. Skip this step
+and the deployed web app holds the new code with no permission to use it — every
+SCRIBE call fails and `CFBP_SCRIBE_LOG` records:
+
+> `network_You do not have permission to call UrlFetchApp.fetch. Required permissions: https://www.googleapis.com/auth/script.external_request`
+
+(That is what happened on 2026-09-11 — BUG-A, second cause. Nothing was spent:
+the call is refused before it ever leaves Google.)
+
+To grant it:
+
+1. In the Apps Script toolbar, choose the function **`authorizeExternalRequests`**
+   from the dropdown.
+2. Click **Run**.
+3. Google asks for permission → **Review permissions** → pick your account →
+   **Advanced → Go to CFBP Backend (unsafe)** → **Allow**. The consent screen now
+   lists *"Connect to an external service"* — that is the scope you are granting.
+4. Open the **Execution log**. Expect:
+   `External requests are AUTHORIZED. api.anthropic.com/v1/models responded HTTP 401 …`
+   **A 401 is the success case.** No API key is sent; the 401 proves the request
+   left Google. Any "You do not have permission to call UrlFetchApp.fetch" means
+   the consent was not completed — run it again.
+5. **Then publish a new version** — see the deploy note under step 4: **Deploy →
+   Manage deployments → edit (pencil) → Version: New version → Deploy**. Use
+   **New version of the SAME deployment**, never "New deployment", which changes
+   the `/exec` URL and silently disconnects every player's device.
+
+The function is a free, keyless GET that spends nothing and calls nothing else —
+it is safe to re-run any time you are unsure whether the grant is in place.
+
 ### 4. Deploy as a Web App
 1. Top right: **Deploy → New deployment**.
 2. Click the gear ⚙ next to "Select type" → **Web app**.

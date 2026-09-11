@@ -792,20 +792,67 @@ export function notifyCommissionerAnnouncement(body, commissionerPlayerId, playe
 //    push only, direct excerpt, no SCRIBE voice. ──
 let _chatWatermarkSeq = 0;
 let _chatWired = false;
-// F1 (2026-09-10 remediation) — true once the watermark reflects a REAL fold
-// head (either seeded from a non-empty fold at wire time, or re-seeded off
-// the first post-wire 'events' notification — see wireChatNotifications()).
+// F1 (2026-09-10 remediation) — true once the watermark reflects a COMPLETE
+// fold, i.e. the transport has reached the server's true head at least once.
 // Before that, _scanNewChatMessages() must never run: the reviewer measured
 // 1,000 relay sends after a 200-message backfill because the watermark
 // started at 0 and the initial backfill ingest was treated as 200 brand-new
-// messages.
+// messages. BUG-C (2026-09-11) — "complete" is now decided by the transport's
+// delivery kind, not by which notification arrived first; see
+// wireChatNotifications() below for why that distinction cost 3,685 sends.
 let _watermarkSeeded = false;
 
 function _currentChatHead() {
   try { return chatStatus().head || 0; } catch { return 0; }
 }
 
+/** True once the transport has reached the server's TRUE head at least once
+ *  this session (chat.js S.caughtUp, set from chatTransport's delivery kind).
+ *  Before that, a non-zero fold head means "the walk got this far," NOT "this
+ *  is the whole room" — which is exactly the distinction BUG-C turned on. */
+function _chatIsCaughtUp() {
+  try { return chatStatus().caughtUp === true; } catch { return false; }
+}
+
+/** Advance the watermark to whatever the fold now holds WITHOUT relaying.
+ *  Every history path funnels through here so "history advances the watermark"
+ *  is one statement in one place, not a rule repeated at three call sites. */
+function _advanceChatWatermarkSilently() {
+  _chatWatermarkSeq = Math.max(_chatWatermarkSeq, _currentChatHead());
+}
+
+// BUG-C (2026-09-11) — SECOND LAYER, deliberately redundant with the
+// classification above. F1 (2026-09-10) and BUG-C (2026-09-11) are the same
+// failure — a pile of history scanned as new — arriving through two different
+// mechanisms one day apart, and the second one came through a door F1 could not
+// have known about (BUG-B's paging). So the scan itself refuses an implausible
+// burst rather than trusting that the classification is airtight forever: a
+// single batch that would produce more than CHAT_RELAY_BURST_CAP relay sends
+// advances the watermark, records the refusal, warns, and relays NOTHING.
+//
+// 100 sends is 20 messages in a six-player league. NOTE (reviewer, 2026-09-11):
+// a batch is NOT bounded by one poll interval — chatTransport returns early
+// while document.hidden and ticks immediately on resume, so one batch spans
+// the whole hidden window (a phone in a pocket through a Saturday game). That
+// is the COMMON trip, and it is intended: relaying 25 hour-old messages as
+// 125 catch-up pushes is worse than relaying none. The messages are already in
+// the fold and still badge as unread; a "N new messages" digest push is an
+// open user-experience item. The cap is two orders of magnitude below the
+// 3,685 BUG-C actually produced; the cost of no cap is a five-device storm.
+const CHAT_RELAY_BURST_CAP = 100;
+const _chatRelayBurstTrips = [];
+
+export function _chatWatermarkForTest() { return _chatWatermarkSeq; }
+export function _chatRelayBurstTripsForTest() { return _chatRelayBurstTrips.map(t => ({ ...t })); }
+export function _resetChatRelayBurstTripsForTest() { _chatRelayBurstTrips.length = 0; }
+
 function _scanNewChatMessages() {
+  // F1's invariant, enforced at the dangerous action rather than only at the
+  // call site: never scan against a watermark that does not reflect a COMPLETE
+  // fold. wireChatNotifications() already guarantees this on every path that
+  // reaches here today (it sets the flag from the transport's own caught-up
+  // report before calling), so this is belt-and-braces for the next caller.
+  if (!_watermarkSeeded) return;
   let all;
   try { all = getMessages({}); } catch { return; }
   const fresh = all.filter(m => m.type === 'message' && !m.deleted && typeof m.seq === 'number' && m.seq > _chatWatermarkSeq);
@@ -820,6 +867,24 @@ function _scanNewChatMessages() {
   // device isn't the recipient in that case anyway — sender exclusion below
   // handles it).
   const players = _activePlayers();
+  const projected = fresh.length * Math.max(0, players.length - 1);
+  if (projected > CHAT_RELAY_BURST_CAP) {
+    // The watermark was advanced above, BEFORE this guard, on purpose: a
+    // refused burst must never be re-scanned into a second storm.
+    const trip = { messages: fresh.length, recipients: Math.max(0, players.length - 1), projected,
+                   watermark: _chatWatermarkSeq, at: new Date().toISOString() };
+    _chatRelayBurstTrips.push(trip);
+    if (typeof console !== 'undefined') {
+      console.warn('[notifications] chat relay burst cap TRIPPED — ' +
+        `${trip.messages} new messages × ${trip.recipients} recipients = ${trip.projected} relay sends ` +
+        `exceeds the cap of ${CHAT_RELAY_BURST_CAP}. Nothing was relayed; the watermark advanced to ` +
+        `${trip.watermark}. Either a delivery that should have been classified as HISTORY reached the scan ` +
+        '(the BUG-C shape — check notifications.js wireChatNotifications() and the transport\'s caught-up ' +
+        'reporting), or the room genuinely produced more traffic in one poll interval than a push fan-out ' +
+        'should ever carry. Both are worth looking at; neither is worth five phones buzzing this many times.');
+    }
+    return;
+  }
   for (const m of fresh) {
     const senderId = m.author;
     const preview = (m.body || '').slice(0, 60);
@@ -847,46 +912,62 @@ function _scanNewChatMessages() {
 /**
  * Call once at boot (js/app.js). Idempotent.
  *
- * F1 (2026-09-10 remediation) — seed the watermark from the CURRENT fold
- * head BEFORE subscribing. Two cases:
- *   1. The fold already has messages at wire time (chat.initChat()'s backfill
- *      already ran, or ran concurrently and finished first) — chatStatus().head
- *      is a real, non-zero baseline. Seed immediately, mark seeded, subscribe.
- *      Regression-tested: ingest a ≥50-message backfill, THEN call this — zero
- *      relay calls for any of those 50, and one genuinely new message after
- *      still fires to the expected recipients.
- *   2. wireChatNotifications() runs BEFORE the fold has anything (head is 0
- *      because nothing has been fetched yet, not because the room is empty)
- *      — seeding to 0 here would be indistinguishable from "the room is
- *      genuinely empty," and the very next 'events' notification is almost
- *      certainly the initial backfill batch, not real new messages. Instead:
- *      stay unseeded, and on the FIRST 'events' notification received,
- *      re-seed the watermark to WHATEVER the head is by then and skip
- *      scanning that batch — treating it as the backfill snapshot. Every
- *      notification after that first one scans normally.
+ * F1 (2026-09-10) established the rule: never relay a backfill. BUG-C
+ * (2026-09-11) replaced the WAY it is decided, because F1's version — "the
+ * first post-wire 'events' notification IS the backfill" — stopped being true
+ * the day BUG-B taught the transport to page. A cold boot against a
+ * mid-season log now arrives as three notifications, not one, and F1 skipped
+ * only the first: the reviewer measured 3,685 relay calls (737 already-read
+ * messages × 5 recipients) on a 1,237-event log. Wiring that landed BETWEEN
+ * two pages had the same hole through the other branch — a real, non-zero
+ * head that was nonetheless only a third of the room.
+ *
+ * The rule now, in one sentence, keyed off FACTS the transport reports rather
+ * than the ORDER notifications happen to arrive in:
+ *
+ *   A batch is LIVE only if the room was already complete before it arrived
+ *   (detail.wasCaughtUp) AND this delivery itself reaches the true head
+ *   (detail.caughtUp). Everything else is history: advance the watermark,
+ *   relay nothing.
+ *
+ * That covers all four shapes without a timing assumption anywhere:
+ *   1. wired AFTER the drain finished (chatStatus().caughtUp) — seed from the
+ *      fold head, which is now known to be the WHOLE room, and scan normally.
+ *   2. wired BEFORE any page lands — every page classifies as history; the
+ *      page that reaches the head seeds us; the next batch is live.
+ *   3. wired BETWEEN pages — identical, because a partial head no longer
+ *      reads as a complete one. This is the CASE 1 hole BUG-C found.
+ *   4. a >1-page burst arriving while ALREADY live — the mid-walk pages
+ *      advance the watermark silently instead of relaying 500 pushes; only a
+ *      caught-up delivery relays. (Missing pushes for a 500-message burst is
+ *      the right trade against a five-device storm; the burst cap in
+ *      _scanNewChatMessages() is the backstop if one ever slips through.)
+ *
+ * Guarded by notifytest.mjs [12] (F1's original cases), [12b] (BUG-C, driven
+ * through the real transport) and [12c] (the burst cap).
  */
 export function wireChatNotifications() {
   if (_chatWired) return;
   _chatWired = true;
-  const initialHead = _currentChatHead();
-  if (initialHead > 0) {
-    _chatWatermarkSeq = initialHead;
-    _watermarkSeeded = true;
-  } else {
-    _chatWatermarkSeq = 0;
-    _watermarkSeeded = false;
-  }
-  onChat((kind) => {
+  // Case 1 — the room is only a trustworthy baseline once the transport says
+  // the walk actually reached the server's head. A non-zero head on its own
+  // means "the walk got this far," which is what BUG-C mistook for "complete."
+  _chatWatermarkSeq = _currentChatHead();
+  _watermarkSeeded = _chatIsCaughtUp();
+  onChat((kind, detail) => {
     if (kind !== 'events') return;
-    if (!_watermarkSeeded) {
-      // Case 2 above — this is (almost certainly) the initial backfill's own
-      // ingest firing 'events' for the first time. Re-seed to the fold's
-      // current head and do NOT scan this batch — every message in it is
-      // already-known history, not something to relay.
-      _chatWatermarkSeq = _currentChatHead();
-      _watermarkSeeded = true;
+    const caughtUp = detail?.caughtUp === true;
+    const wasCaughtUp = detail?.wasCaughtUp === true;
+    if (!wasCaughtUp) {
+      // The room was NOT complete before this batch — history, every page of
+      // it, however many there are. A detail-less notification lands here too,
+      // which is the safe side to fail to.
+      _advanceChatWatermarkSilently();
+      if (caughtUp) _watermarkSeeded = true;   // this page reached the head: the room is complete from here on
       return;
     }
+    _watermarkSeeded = true;
+    if (!caughtUp) { _advanceChatWatermarkSilently(); return; }   // mid-walk page of a live burst (shape 4)
     _scanNewChatMessages();
   });
 }
@@ -895,4 +976,5 @@ export function _resetChatWatermarkForTest() {
   _chatWatermarkSeq = 0;
   _chatWired = false;
   _watermarkSeeded = false;
+  _chatRelayBurstTrips.length = 0;
 }

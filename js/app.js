@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.20.0';
-export const APP_VERSION_DATE = '2026-09-10';
+export const APP_VERSION = 'v0.20.1';
+export const APP_VERSION_DATE = '2026-09-11';
 
 /**
  * UN-124 — "What's new" card content, hand-maintained per release. NOT
@@ -24,6 +24,9 @@ const WHATS_NEW = {
     'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
   ],
   fixed: [
+    'Sync and SCRIBE stopped answering the wrong question. The server could occasionally reply to a request with its health check instead of an answer; the app took that as success, which showed up as "Sync refused" on a perfectly healthy league, @scribe falling back to canned lines, and a Trainer run that never ran. Every reply is now checked against the request it belongs to, and the server refuses to answer an empty one.',
+    'The Locker Room no longer opens blank and stays blank. Two ways that could happen are gone: a long season\'s log is now read in pages until the room is caught up, and sending a message from an empty room no longer convinces the app it has already seen everything.',
+    'No push storm on a cold open. Reading history in pages could have pushed every old message to everyone; history is now told apart from live messages before any push goes out, with a hard cap underneath.',
     'SCRIBE\'s answers about picks respect the blind rule harder than the app itself: while a week is open it won\'t repeat anyone\'s pick in the room — including your own.',
   ],
 };

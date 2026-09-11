@@ -28,6 +28,10 @@
  *   [8] "No cfbp_notifications row is ever created for CHAT_MESSAGE_CREATED."
  *   [9] Mutation check on the blind-rule guard (gut it, confirm red, restore
  *       from a scratch copy — never git checkout/restore/stash).
+ *   [12b]/[12c] BUG-C (2026-09-11) — a multi-page cold-boot backfill is
+ *       history on EVERY page, not just the first (BUG-B's paging reopened
+ *       F1 through a door F1 did not know existed), plus the relay burst cap
+ *       that backstops the classification.
  *   [10]-[21] Build 1 / re-review remediations (F1-F10, BLOCKING #1/#2,
  *       NON-BLOCKING #3/#4/#5/#7) — see the section header comments above
  *       [10] and [17] for the full index.
@@ -514,6 +518,250 @@ console.log('\n[12] F1 — chat watermark seeding (no relay storm on backfill)�
   notif._clearPushAdapterForTest();
 }
 
+// ── [12b] ────────────────────────────────────────────────────────────────────
+// BUG-C (2026-09-11) — found in review as a BLOCK on the uncommitted BUG-B
+// paging fix. BUG-B made chatTransport.drainSince() page forward on a cold
+// boot: onEvents() is called ONCE PER PAGE, each page reporting an honest
+// per-page head. F1's seeding ([12] above) assumed the FIRST post-wire
+// 'events' notification IS the complete backfill — so it re-seeded off page 1
+// and handed pages 2..n to _scanNewChatMessages() as brand-new messages.
+// Measured on a 1,237-event log (mid-season-sized; the real head was 227 the
+// day this was written): 3,685 relay calls = 737 messages × 5 recipients, for
+// messages every player had already read. Server-side dedupKeyAlreadySent
+// cannot help — every message carries a DISTINCT dedup key. CASE 1 had the
+// same hole through the other door: wiring that lands BETWEEN two pages sees
+// a real non-zero head, seeds from it, and then relays every later page.
+//
+// The invariant, stated once: a batch is LIVE only if the transport had
+// already reached the server's TRUE head BEFORE that batch arrived. Anything
+// else is history — it advances the watermark and relays nothing, however many
+// pages it takes and wherever wireChatNotifications() lands in the sequence.
+//
+// Driven through the REAL production path — chat.initChat() -> _subscribeNow()
+// -> transport.subscribe() -> drainSince() -> chat.ingest() — against a
+// faithful mock of Code.gs chatSince() (page capped at 500, head always TRUE),
+// the same fixture shape loadtest [72] uses. The delivery kind is produced by
+// the code under test, never hand-fed by the test.
+console.log('\n[12b] BUG-C — every page of a multi-page cold-boot backfill is history, wherever the wiring lands…');
+{
+  const chat = await import('./js/chat.js');
+  const backend = await import('./js/backend.js');
+  const _realFetch = globalThis.fetch, _realST = globalThis.setTimeout, _realCT = globalThis.clearTimeout;
+  const settle = async (n = 80) => { for (let i = 0; i < n; i++) await new Promise(r => _realST(r, 0)); };
+
+  const N = 1237;                     // 2.47 pages at the transport's 500-row PAGE_LIMIT
+  let HEAD = N;
+  let idPrefix = 'c3';
+  const timers = [];
+  const calls = [];
+  // Every message id is namespaced per run: _fireOne's SESSION dedup set is
+  // module-global and never reset, so re-using ids across the two runs would
+  // make the second run pass vacuously on 'dedup-session'.
+  const mk = seq => ({ id: `${idPrefix}_${seq}`, seq, ts: 1_700_000_000_000 + seq, type: 'message',
+                       author: 'p2', gameTag: '', body: 'msg ' + seq, targetId: '', replyTo: '', notify: true, meta: null });
+  const serverSince = (afterSeq, limit) => {
+    const cap = Math.max(1, Math.min(limit || 500, 1000));
+    if (HEAD <= afterSeq) return { ok: true, events: [], head: HEAD };
+    const count = Math.min(cap, HEAD - afterSeq);
+    const events = [];
+    for (let s = afterSeq + 1; s <= afterSeq + count; s++) events.push(mk(s));
+    return { ok: true, events, head: HEAD };
+  };
+  const fireHeld = async () => {
+    const held = timers.splice(0, timers.length);
+    for (const fn of held) { try { fn(); } catch {} }
+    await settle();
+  };
+
+  globalThis.setTimeout = fn => { timers.push(fn); return timers.length; };
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    calls.push(action);
+    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD }) };
+    if (action === 'chatSince') {
+      const r = serverSince(Number(u.searchParams.get('seq') || 0), Number(u.searchParams.get('limit') || 0));
+      return { ok: true, json: async () => r };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  backend.setBackendConfig('https://example.invalid/exec', 'tok12b');
+
+  // wireAfterPages: 0 = wired before the fold has anything (CASE 2 shape);
+  // 1 = wired once page one has landed and the head is real but INCOMPLETE
+  // (CASE 1 shape, the between-pages variant).
+  async function coldBoot(prefix, wireAfterPages) {
+    idPrefix = prefix; HEAD = N; timers.length = 0; calls.length = 0;
+    chat._resetForTest();
+    notif._resetChatWatermarkForTest();
+    const captured = [];
+    notif.registerPushAdapter({ isConfigured: () => true, send: async r => { captured.push(r); return { ok: true }; } });
+    let pages = 0;
+    const unhook = chat.onChat(kind => { if (kind === 'events' && ++pages === wireAfterPages) notif.wireChatNotifications(); });
+    if (wireAfterPages === 0) notif.wireChatNotifications();
+    chat.initChat('p1');
+    await settle();
+    const out = {
+      history: captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length,
+      pages,
+      head: chat.chatStatus().head,
+      watermark: notif._chatWatermarkForTest?.(),
+      trips: notif._chatRelayBurstTripsForTest?.().length,
+    };
+    HEAD = N + 1;                      // ONE genuinely live message arrives
+    await fireHeld();
+    out.live = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length - out.history;
+    out.headAfterLive = chat.chatStatus().head;
+    out.watermarkAfterLive = notif._chatWatermarkForTest?.();
+    unhook();
+    notif._clearPushAdapterForTest();
+    chat._resetForTest();
+    notif._resetChatWatermarkForTest();
+    return out;
+  }
+
+  try {
+    // ── A. Wired BEFORE the fold has anything (production boot order) ──
+    const a = await coldBoot('c3a', 0);
+    assert(a.pages === 3 && a.head === N,
+      `fixture check: the cold boot really did arrive as 3 pages and reach the true head ${N} — got ${a.pages} pages, head ${a.head} (a 1-page delivery would make every assertion below vacuous)`);
+    assert(a.history === 0,
+      `CASE 3 (wired BEFORE a 3-page backfill): ZERO relay calls for all ${N} history messages — got ${a.history} (pre-fix: 3685 = 737 × 5)`);
+    assert(a.trips === 0,
+      `CASE 3: and that zero comes from CLASSIFYING the pages as history, not from the burst cap swallowing them — burst-cap trips ${a.trips}, expected 0`);
+    assert(a.watermark === N,
+      `CASE 3: the watermark advanced silently through every page and ends at the TRUE head ${N} — got ${a.watermark}`);
+    assert(a.live === players.length - 1,
+      `CASE 3: the ONE genuinely live message that follows fires to exactly the expected recipients — got ${a.live}, expected ${players.length - 1}`);
+    assert(a.watermarkAfterLive === N + 1 && a.headAfterLive === N + 1,
+      `CASE 3: watermark and head both land on ${N + 1} after the live message — got ${a.watermarkAfterLive} / ${a.headAfterLive}`);
+
+    // ── B. Wired BETWEEN pages (CASE 1's variant — a real but incomplete head) ──
+    const b = await coldBoot('c3b', 1);
+    assert(b.pages === 3 && b.head === N,
+      `fixture check: the between-pages run also arrived as 3 pages and reached ${N} — got ${b.pages} pages, head ${b.head}`);
+    assert(b.history === 0,
+      `CASE 1-variant (wired BETWEEN page 1 and page 2): ZERO relay calls for the 737 messages in pages 2 and 3 — got ${b.history} (pre-fix: 3685)`);
+    assert(b.trips === 0,
+      `CASE 1-variant: and again by classification, not by the burst cap — burst-cap trips ${b.trips}, expected 0`);
+    assert(b.watermark === N,
+      `CASE 1-variant: watermark ends at the TRUE head ${N}, not at page one's honest-but-partial 500 — got ${b.watermark}`);
+    assert(b.live === players.length - 1,
+      `CASE 1-variant: the live message after the drain still fires to exactly the expected recipients — got ${b.live}, expected ${players.length - 1}`);
+    // ── C. The EMPTY room, wired before the drain ──
+    // A drain that finds nothing folds nothing, so chat.js fires no 'events'
+    // notification at all — there is no batch to seed off. F1's ordering rule
+    // had no answer for that and swallowed the first message ever sent in a
+    // fresh room; the transport's caught-up report does, because the fold was
+    // already complete before that message arrived.
+    idPrefix = 'c3c'; HEAD = 0; timers.length = 0;
+    chat._resetForTest();
+    notif._resetChatWatermarkForTest();
+    const capturedC = [];
+    notif.registerPushAdapter({ isConfigured: () => true, send: async r => { capturedC.push(r); return { ok: true }; } });
+    notif.wireChatNotifications();
+    chat.initChat('p1');
+    await settle();
+    assert(chat.chatStatus().head === 0 && chat.getMessages({ tag: 'all' }).length === 0,
+      `fixture check: the drain really did find an empty room — head ${chat.chatStatus().head}, ${chat.getMessages({ tag: 'all' }).length} messages`);
+    HEAD = 1;
+    await fireHeld();
+    const cLive = capturedC.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+    assert(cLive === players.length - 1,
+      `the FIRST message ever sent in an empty room still notifies — got ${cLive}, expected ${players.length - 1} (F1's ordering rule swallowed this one)`);
+    notif._clearPushAdapterForTest();
+
+    // ── D. Worst case: a >1-page burst arriving while ALREADY live ──
+    // Not the BUG-C shape (the room was complete first, so these ARE new), but
+    // the shape that decides how bad "worst case" can get. Mid-walk pages
+    // advance the watermark instead of relaying, and the caught-up page meets
+    // the burst cap — so a 1,200-message dump is bounded to zero sends and one
+    // recorded refusal, never 6,000 pushes.
+    idPrefix = 'c3d'; HEAD = 1; timers.length = 0;
+    chat._resetForTest();
+    notif._resetChatWatermarkForTest();
+    const capturedD = [];
+    notif.registerPushAdapter({ isConfigured: () => true, send: async r => { capturedD.push(r); return { ok: true }; } });
+    chat.initChat('p1');
+    await settle();                      // room complete at head 1 — we are live
+    notif.wireChatNotifications();
+    HEAD = 1201;                         // 1,200 new messages land between ticks
+    await fireHeld();
+    const dSends = capturedD.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+    const dTrips = notif._chatRelayBurstTripsForTest?.() || [];
+    assert(chat.chatStatus().head === 1201 && chat.getMessages({ tag: 'all' }).length === 1201,
+      `fixture check: all 1,200 burst messages were folded and displayed — head ${chat.chatStatus().head}, ${chat.getMessages({ tag: 'all' }).length} messages (the fold is never what gets throttled)`);
+    assert(dSends === 0 && dTrips.length === 1,
+      `a 1,200-message live burst produces ZERO pushes and ONE recorded refusal, not 6,000 pushes — got ${dSends} sends, ${dTrips.length} trips`);
+    notif._clearPushAdapterForTest();
+  } finally {
+    globalThis.fetch = _realFetch;
+    globalThis.setTimeout = _realST;
+    globalThis.clearTimeout = _realCT;
+    backend.clearBackendConfig();
+    chat._resetForTest();
+    notif._clearPushAdapterForTest();
+    notif._resetChatWatermarkForTest();
+  }
+}
+
+// ── [12c] ────────────────────────────────────────────────────────────────────
+// BUG-C second layer. [12b] fixes the CLASSIFICATION; this pins the backstop
+// for the next door nobody has found yet. F1 (2026-09-10) and BUG-C
+// (2026-09-11) are the same failure — "a pile of history got scanned as new" —
+// arriving through two different mechanisms two days apart, so the scan itself
+// now refuses to emit an implausible burst: one batch that would produce more
+// than CHAT_RELAY_BURST_CAP relay sends advances the watermark, logs loudly,
+// and relays nothing. 100 sends is 20 messages in a six-player league — beyond
+// any human flurry inside one poll interval (5-60s), and two orders of
+// magnitude below the 3,685 BUG-C produced.
+console.log('\n[12c] BUG-C second layer — the scan refuses an implausible burst instead of relaying it…');
+{
+  const chat = await import('./js/chat.js');
+  chat._resetForTest();
+  notif._resetChatWatermarkForTest();
+  notif._resetChatRelayBurstTripsForTest?.();
+  const captured = [];
+  notif.registerPushAdapter({ isConfigured: () => true, send: async r => { captured.push(r); return { ok: true }; } });
+  const mk = (pfx, seq) => ({ id: `${pfx}_${seq}`, seq, ts: Date.now(), type: 'message', author: 'p2',
+                              gameTag: '', body: 'b' + seq, targetId: '', replyTo: '', notify: true, meta: null });
+  chat.ingest([mk('bcap', 1)]);          // prime a real, complete fold
+  notif.wireChatNotifications();         // seeds from a non-zero head, caught up
+  await new Promise(r => setTimeout(r, 5));
+
+  // Under the cap: 15 messages × 5 recipients = 75 sends — every one relayed.
+  const under = [];
+  for (let s = 2; s <= 16; s++) under.push(mk('bcap', s));
+  chat.ingest(under);
+  await new Promise(r => setTimeout(r, 10));
+  const underCount = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+  assert(underCount === 15 * (players.length - 1),
+    `a batch UNDER the cap relays normally — got ${underCount}, expected ${15 * (players.length - 1)}`);
+  assert((notif._chatRelayBurstTripsForTest?.() || []).length === 0,
+    'and it does not trip the burst cap');
+
+  // Over the cap: 30 messages × 5 = 150 sends — nothing relayed, watermark
+  // still advanced (so the burst can never be re-scanned into a second storm).
+  const over = [];
+  for (let s = 17; s <= 46; s++) over.push(mk('bcap', s));
+  chat.ingest(over);
+  await new Promise(r => setTimeout(r, 10));
+  const overCount = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length - underCount;
+  assert(overCount === 0,
+    `a batch OVER the cap relays NOTHING — got ${overCount} relay calls, expected 0`);
+  const trips = notif._chatRelayBurstTripsForTest?.() || [];
+  assert(trips.length === 1 && trips[0].projected === 30 * (players.length - 1) && trips[0].messages === 30,
+    `the refusal is RECORDED, not silent — got ${JSON.stringify(trips)}, expected one trip of ${30 * (players.length - 1)} sends across 30 messages`);
+  assert(notif._chatWatermarkForTest?.() === 46,
+    `the watermark still advanced past the refused burst (46) so it can never be re-scanned — got ${notif._chatWatermarkForTest?.()}`);
+
+  chat._resetForTest();
+  notif._clearPushAdapterForTest();
+  notif._resetChatWatermarkForTest();
+  notif._resetChatRelayBurstTripsForTest?.();
+}
+
 // ── [13] Mutation check — disable F1's seed, confirm the storm reappears,
 //    restore from a SCRATCH COPY (never git checkout/restore/stash). ───────
 console.log('\n[13] Mutation check — F1 chat watermark seed (_currentChatHead)…');
@@ -532,6 +780,7 @@ console.log('\n[13] Mutation check — F1 chat watermark seed (_currentChatHead)
   await writeFile(target, gutted, 'utf8');
 
   let mutantStormCount = -1;
+  let mutantTrips = null;
   try {
     const mutantNotif = await import(`./js/notifications.js?mutant=${Date.now()}`);
     chat._resetForTest();
@@ -551,6 +800,7 @@ console.log('\n[13] Mutation check — F1 chat watermark seed (_currentChatHead)
     // (the 50 "old" ones are still in the fold and still > watermark 0) —
     // exactly the storm shape the reviewer measured.
     mutantStormCount = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+    mutantTrips = (mutantNotif._chatRelayBurstTripsForTest?.() || []);
     chat._resetForTest();
     mutantNotif._clearPushAdapterForTest();
   } finally {
@@ -558,8 +808,19 @@ console.log('\n[13] Mutation check — F1 chat watermark seed (_currentChatHead)
     // never leave the gutted seed live in the working tree.
     await copyFile(scratchCopy, target);
   }
-  assert(mutantStormCount === (players.length - 1) * 51,
-    `[13c] MUTATION CONFIRMED: with the seed disabled, the watermark stays stuck at 0 and the next scan re-floods all 51 messages — ${(players.length - 1) * 51} relay calls (got ${mutantStormCount}) — this IS the storm F1 fixes`);
+  // BUG-C (2026-09-11) amended what this assertion can observe. Until today the
+  // gutted seed produced 255 actual relay calls. It still produces a scan of all
+  // 51 messages — the mutation still breaks the primary guard exactly as before
+  // — but BUG-C's SECOND layer now intercepts the burst before it reaches an
+  // adapter, so the storm is visible as a RECORDED refusal rather than as sends.
+  // Asserting the refused projection keeps the canary honest (it still measures
+  // "the scan saw 51 fresh messages, not 1") and additionally proves the
+  // backstop fires when the classification layer is broken. If BOTH layers were
+  // gutted this assertion goes red on the trips array being empty.
+  assert(mutantTrips?.length === 1 && mutantTrips[0].projected === (players.length - 1) * 51 && mutantTrips[0].messages === 51,
+    `[13c] MUTATION CONFIRMED: with the seed disabled, the watermark stays stuck at 0 and the next scan re-floods all 51 messages — ${(players.length - 1) * 51} relay sends, now intercepted and recorded by the burst cap (got ${JSON.stringify(mutantTrips)}) — this IS the storm F1 fixes`);
+  assert(mutantStormCount === 0,
+    `[13c'] and the second layer means the mutated build sent NOTHING rather than ${(players.length - 1) * 51} pushes — got ${mutantStormCount}`);
 
   const restored = await readFile(target, 'utf8');
   assert(restored === original, '[13d] source restored byte-for-byte from the scratch copy — never via git checkout/restore/stash');

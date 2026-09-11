@@ -41,6 +41,8 @@
  *       silently change behavior in the surprising direction.
  *
  * ENDPOINTS (all POST to the web-app URL; GET supported for quick health check)
+ *   (no action)         -> { ok:false, error:"Empty request…", misrouted:true }  (BUG-A)
+ *   every response also echoes  _action:"<the action it ran>"         (BUG-A)
  *   action: "ping"      -> { ok:true, time }
  *   action: "getAll"    -> { ok:true, data:{ key: value, ... } }
  *   action: "get"       -> { key }                 -> { ok:true, key, value }
@@ -161,6 +163,49 @@ function logToken() {
   Logger.log('CFBP token: ' + PropertiesService.getScriptProperties().getProperty(TOKEN_PROP));
 }
 
+/**
+ * BUG-A, SECOND CAUSE (2026-09-11) — ONE-TIME AUTHORIZATION FOR OUTBOUND CALLS.
+ * ---------------------------------------------------------------------------
+ * RUN THIS ONCE FROM THE APPS SCRIPT EDITOR (select `authorizeExternalRequests`
+ * in the function dropdown → Run → accept the consent screen). Then create a
+ * NEW deployment version. It is not an endpoint and nothing in the app calls it.
+ *
+ * WHY IT EXISTS. Drew's CFBP_SCRIBE_LOG, 2026-09-11, shows both live rows —
+ * a `mention` at 07:12Z and a `trainer` at 07:16Z — failing with:
+ *
+ *   network_You do not have permission to call UrlFetchApp.fetch.
+ *   Required permissions: https://www.googleapis.com/auth/script.external_request
+ *
+ * That is Apps Script refusing the call before it leaves Google. Until v0.20.0
+ * this project made ZERO UrlFetchApp calls, so the OAuth grant stored for the
+ * web app (which executes as Drew) never included the external-request scope.
+ * Pasting new code does NOT expand an existing grant — the consent screen only
+ * reappears when a function is RUN INTERACTIVELY from the editor. So the
+ * deployed script had the Anthropic/OneSignal code and no permission to use it.
+ *
+ * Note what this means for the Trainer: nothing was ever spent. The throw
+ * happens at UrlFetchApp, before any request reaches Anthropic. scribeInvoke_
+ * retries once, then returns `{ok:false, error:'network_…'}`, which is why
+ * @scribe degraded to canned lines (js/scribeLines.js's mention branch treats a
+ * failed ask exactly like a throttle — C1, one fallback mechanism, not two).
+ *
+ * This function is deliberately the CHEAPEST POSSIBLE trigger for that consent:
+ * a keyless GET that costs nothing, spends nothing, and needs no Script
+ * Property to be set first. Anthropic answers it 401 (no API key) — a 401 is a
+ * SUCCESS here, because it proves the request left Google. The permission is
+ * granted per-script, not per-host, so this one call also authorizes the
+ * OneSignal push relay. It must never call scribeInvoke_/runTrainer: those
+ * spend money, and an authorization step must be free to re-run.
+ */
+function authorizeExternalRequests() {
+  var resp = UrlFetchApp.fetch('https://api.anthropic.com/v1/models', { muteHttpExceptions: true });
+  var code = resp.getResponseCode();
+  Logger.log('External requests are AUTHORIZED. api.anthropic.com/v1/models responded HTTP ' + code +
+             ' (401 is expected and fine — no API key is sent; it proves the request left Google).');
+  Logger.log('Next: Deploy -> Manage deployments -> Edit (pencil) -> Version: New version -> Deploy.');
+  return code;
+}
+
 // Optional: rotate the token (invalidates all existing clients)
 function rotateToken() {
   var token = Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, '').slice(0, 8);
@@ -170,19 +215,66 @@ function rotateToken() {
 }
 
 // ── HTTP entry points ─────────────────────────────────────────────────────────
+
+/**
+ * BUG-A (2026-09-11) — NEVER ANSWER A QUESTION THAT WASN'T ASKED.
+ *
+ * handle() used to open with `var action = req.action || 'ping'`, so a request
+ * that arrived with NO action was answered with the PING payload — HTTP 200,
+ * {ok:true, service:'cfbp-backend'} — whatever the client had actually asked
+ * for. The client's only check was `if (!data.ok)`, so a ping payload read as a
+ * successful getAll / scribeAsk / runTrainer / setMany. Symptoms: "Sync
+ * refused" toasts on Run Trainer, @scribe falling back to canned lines, and
+ * (unreported, worst) writes reported as synced that never reached the Sheet.
+ *
+ * Two paths deliver an action-less request, BOTH reproduced against the live
+ * /exec URL on 2026-09-11:
+ *   doPost — Apps Script hands it an empty `postData.contents` (correlated with
+ *            cold start);  curl -sL --data '' "$URL"  →  the ping payload.
+ *   doGet  — a POST that Apps Script 302-redirects arrives here as a GET with
+ *            no body and no `action` param;  curl -sL "$URL"  →  the ping payload.
+ *
+ * So: refuse an action-less request at BOTH entry points AND at handle() (three
+ * layers, because a future caller of handle() must not be able to reintroduce
+ * this), and flag the refusal `misrouted:true` so the client retries instead of
+ * treating it as a dead error. The real `ping` health check — GET ?action=ping
+ * and POST {"action":"ping"} — is unchanged and still works.
+ */
+function emptyRequest_() {
+  return { ok: false, error: 'Empty request — no action supplied', misrouted: true };
+}
+
+/**
+ * BUG-A — the action currently being dispatched, echoed onto every response by
+ * json() so the client can verify positively that the reply belongs to its
+ * request rather than sniffing for the ping marker. Reset at both entry points
+ * so a reused execution context can never echo a previous request's action.
+ */
+var CURRENT_ACTION_ = '';
+
 function doGet(e) {
+  CURRENT_ACTION_ = '';
   // Health check / simple read via querystring (?action=ping)
-  return handle(e && e.parameter ? e.parameter : {}, true);
+  var p = (e && e.parameter) ? e.parameter : {};
+  if (!p.action) return json(emptyRequest_());   // BUG-A: the redirected-POST path
+  return handle(p, true);
 }
 function doPost(e) {
+  CURRENT_ACTION_ = '';
+  var raw = (e && e.postData && e.postData.contents) ? e.postData.contents : '';
+  if (!raw) return json(emptyRequest_());        // BUG-A: the empty-body path
   var body = {};
-  try { body = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {}; }
+  try { body = JSON.parse(raw); }
   catch (err) { return json({ ok: false, error: 'Bad JSON body' }); }
+  if (!body || !body.action) return json(emptyRequest_());
   return handle(body, false);
 }
 
 function handle(req, isGet) {
-  var action = req.action || 'ping';
+  // BUG-A — no `|| 'ping'` default. An absent action is an error, not a ping.
+  var action = (req && req.action) ? String(req.action) : '';
+  CURRENT_ACTION_ = action;
+  if (!action) return json(emptyRequest_());
 
   if (action === 'ping') {
     return json({ ok: true, time: new Date().toISOString(), service: 'cfbp-backend', version: 2 });
@@ -1694,6 +1786,20 @@ function safeParse(raw) {
 }
 
 function json(obj) {
+  // BUG-A (2026-09-11) — echo the action this response answers, so the client
+  // can verify routing positively (js/backend.js isMisroutedResponse check (b))
+  // instead of inferring it from the ping marker.
+  //
+  // The echo is RESERVED under `_action` (review finding 2, 2026-09-11). It
+  // first shipped as plain `action`, which meant the echo and any handler's own
+  // `action` payload field shared one name: the echo had to yield to the
+  // handler ("never overwrite"), and a handler returning a top-level `action`
+  // for its own reasons would have been read by the client as a MISROUTE —
+  // retried, then thrown at the player as a sync failure. Underscored, the
+  // names cannot collide, so this writes unconditionally and the client can
+  // trust it. Still omitted entirely when nothing dispatched (an empty or bad
+  // request), which is exactly when there is no action to be answering.
+  if (obj && typeof obj === 'object' && CURRENT_ACTION_) obj._action = CURRENT_ACTION_;
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);

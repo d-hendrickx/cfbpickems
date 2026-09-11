@@ -60,6 +60,13 @@ const S = {
   unsub: null,
   subs: new Set(),
   backfillLow: null,
+  // BUG-C (2026-09-11) — has the transport reached the server's TRUE head at
+  // least once this session? Until it has, everything arriving is history,
+  // however many pages it takes (chatTransport drainSince pages a cold boot).
+  // This is SESSION state, which is why it lives here and not in the transport
+  // (which knows one delivery at a time) or in notifications.js (which cannot
+  // see the transport at all — AD-16).
+  caughtUp: false,
 };
 
 function notify(kind, detail) { S.subs.forEach(fn => { try { fn(kind, detail); } catch {} }); }
@@ -67,7 +74,7 @@ export function onChat(fn) { S.subs.add(fn); return () => S.subs.delete(fn); }
 export function chatStatus() {
   return { head: S.head, offline: S.offline, staleDeployment: S.staleDeployment,
            lastError: S.lastError, outbox: S.outbox.length, failed: S.failed.size,
-           mode: roomMode() };
+           mode: roomMode(), caughtUp: S.caughtUp };
 }
 
 // ── Commissioner chat on/off toggle (batch 3+4 item A) ────────────────────────
@@ -402,8 +409,33 @@ function applyTo(target, ev) {
   }
 }
 
-/** Ingest raw events from any source (poll, backfill, optimistic local). */
-export function ingest(events, head) {
+/**
+ * Ingest raw events from any source (poll, backfill, optimistic local).
+ *
+ * BUG-C (2026-09-11) — `delivery` is the transport's delivery kind,
+ * `{ caughtUp }` (chatTransport drainSince). It is NOT used by the fold, which
+ * stays order-independent and idempotent (AD-09/AD-10); it is forwarded, with
+ * the session's PRIOR state, on the 'events' notification so a subscriber can
+ * tell history from news without guessing from call ordering:
+ *
+ *   caughtUp    — this delivery reaches the server's true head
+ *   wasCaughtUp — the room was ALREADY complete before this delivery landed,
+ *                 i.e. anything new in it is genuinely new
+ *
+ * A caller that passes no `delivery` is asserting a COMPLETE delivery
+ * (`caughtUp: true`): that is true of the optimistic local send, the outbox
+ * reconcile and "load earlier", which are the only in-module callers, and they
+ * pass `{ caughtUp: S.caughtUp }` explicitly so they stay liveness-NEUTRAL —
+ * a local send says nothing about whether the transport has finished draining,
+ * and a "load earlier" page is older history by definition.
+ */
+export function ingest(events, head, delivery) {
+  // Default fails OPEN (no delivery arg → treated as caught up) — the inverse
+  // of notifications.js, which fails CLOSED on a detail-less notification.
+  // Safe only because every caller passes it explicitly; keep it that way.
+  const caughtUp = delivery ? delivery.caughtUp === true : true;
+  const wasCaughtUp = S.caughtUp;
+  if (caughtUp) S.caughtUp = true;
   if (typeof head === 'number' && head > S.head) S.head = head;
   let n = 0;
   for (const ev of events || []) {
@@ -438,7 +470,7 @@ export function ingest(events, head) {
       }
     }
   }
-  if (n || (events && events.length)) notify('events', { added: n });
+  if (n || (events && events.length)) notify('events', { added: n, caughtUp, wasCaughtUp });
   return n;
 }
 
@@ -513,7 +545,7 @@ export function sendEvent(ev) {
     notify: !!ev.notify, meta: ev.meta || null,
     local: true, _localTs: Date.now(),
   };
-  ingest([full]);                       // optimistic
+  ingest([full], undefined, { caughtUp: S.caughtUp });   // optimistic — liveness-neutral (BUG-C)
   S.outbox.push({ ev: full, attempts: 0 });
   persistOutbox();
   scheduleFlush();
@@ -560,7 +592,7 @@ function loadOutbox() {
   try {
     const arr = JSON.parse(localStorage.getItem(K_OUTBOX) || '[]');
     S.outbox = arr.map(ev => ({ ev, attempts: 0 }));
-    ingest(arr.map(ev => ({ ...ev, local: true })));
+    ingest(arr.map(ev => ({ ...ev, local: true })), undefined, { caughtUp: S.caughtUp });
   } catch { S.outbox = []; }
 }
 function scheduleFlush() {
@@ -576,14 +608,30 @@ export async function flushOutbox() {
   if (!S.outbox.length || !isBackendConfigured() || !isChatEnabled()) return;
   const batch = S.outbox.splice(0, S.outbox.length);
   try {
-    const { assigned, head } = await appendEvents(batch.map(o => o.ev));
+    // RG-95 — the response's `head` is DELIBERATELY IGNORED. `chatAppend`
+    // answers with the TRUE sheet head (Code.gs `msgHead(s)`), not a head this
+    // device has received events up to, and S.head is the poll cursor: the
+    // transport asks `getKnownHead()` and only fetches when the server's head
+    // is AHEAD of it. Adopting the append's head therefore claims every event
+    // between here and the true head as already seen. One dropped read — an
+    // Apps Script cold start, the ordinary case §[71] exists for — plus one
+    // successful send, and the room stays empty except the sender's own
+    // message for the rest of the session. `initChat()` flushes a persisted
+    // outbox on every boot, so it does not even take a player typing.
+    //
+    // Same invariant BUG-B established in the transport (chatTransport.js
+    // drainSince): the cursor is only ever advanced by events actually
+    // received. The sender loses nothing — their message gets its assigned seq
+    // on the ITEM just below, and the next tick re-reads it from the log like
+    // any other event, deduped by id server-side and in the fold (AD-09/AD-10).
+    // Guarded by loadtest §[74].
+    const { assigned } = await appendEvents(batch.map(o => o.ev));
     const byId = new Map(assigned.map(a => [a.id, a]));
     batch.forEach(o => {
       const a = byId.get(o.ev.id);
       const item = S.items.get(o.ev.id);
       if (a && item) { item.seq = a.seq; if (a.ts) item.ts = a.ts; item.local = false; }
     });
-    if (typeof head === 'number' && head > S.head) S.head = head;
     persistOutbox();
     notify('sent', { count: batch.length });
   } catch (err) {
@@ -609,7 +657,10 @@ export function retryFailed(id) {
   S.outbox.push({ ev, attempts: 0 });
   persistOutbox();
   scheduleFlush();
-  notify('events', {});
+  // A UI refresh ping, not a delivery: no events changed hands, so it carries
+  // the CURRENT liveness unchanged rather than an empty detail, which a
+  // subscriber would have to classify blind (BUG-C).
+  notify('events', { added: 0, caughtUp: S.caughtUp, wasCaughtUp: S.caughtUp });
 }
 export function isFailed(id) { return S.failed.has(id); }
 export function isPending(id) {
@@ -646,7 +697,7 @@ export function setPollMode(mode) { setViewOpen(mode === 'active'); }
 function _subscribeNow() {
   if (S.unsub) S.unsub();
   S.unsub = subscribe(
-    (events, head) => ingest(events, head),
+    (events, head, delivery) => ingest(events, head, delivery),
     {
       getMode: roomMode,
       getKnownHead: () => S.head,
@@ -706,7 +757,9 @@ export async function backfill(limit = 100) {
   if (!isBackendConfigured() || !isChatEnabled() || S.backfillLow === null || S.backfillLow <= 1) return 0;
   try {
     const { events } = await fetchBefore(S.backfillLow, limit);
-    return ingest(events);
+    // "Load earlier" is older history by construction — never a live delivery,
+    // and never a reason to declare the forward walk caught up (BUG-C).
+    return ingest(events, undefined, { caughtUp: S.caughtUp });
   } catch (err) { handleTransportError(err); return 0; }
 }
 
@@ -990,7 +1043,7 @@ export function _resetForTest() {
   if (S.unsub) { S.unsub(); S.unsub = null; }             // no dangling timers across test sections
   S.items.clear(); S.buffered.clear(); S.head = 0; S.outbox = []; S.failed.clear();
   S.offline = false; S.staleDeployment = false;
-  S.backfillLow = null; S.viewOpen = false;
+  S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;
 }
 /** Item A (batch 3+4) — the only way to observe from OUTSIDE this module
  *  whether the poll loop is actually running (S.unsub is intentionally

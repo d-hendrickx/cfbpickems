@@ -378,20 +378,145 @@ export function onBackendStatus(fn) { _listeners.add(fn); return () => _listener
 function emit(status, detail) { _listeners.forEach(fn => { try { fn(status, detail); } catch {} }); }
 
 // ── Low-level transport ─────────────────────────────────────────────────────
+
+/**
+ * BUG-A (2026-09-11) — MISROUTE DETECTION: a 200/ok reply that does not belong
+ * to the request that was sent.
+ *
+ * `backend/Code.gs` `handle()` opened with `var action = req.action || 'ping'`.
+ * A request arriving with NO action was therefore answered with the PING
+ * payload — HTTP 200, `{ok:true, time, service:'cfbp-backend', version:2}` —
+ * whatever the client had actually asked for. Two paths deliver an action-less
+ * request, BOTH reproduced against the live /exec URL on 2026-09-11:
+ *   - doPost receives an empty `postData.contents` (observed correlating with
+ *     Apps Script cold start);
+ *   - a POST that Apps Script 302-redirects arrives at doGet as a GET with no
+ *     body and no `action` param.
+ *
+ * `call()` below only asked `if (!data.ok) throw`. A ping payload IS ok, so
+ * EVERY caller read a misrouted reply as a successful reply to its own action:
+ *   getAll     → no `data` → hydrate()'s RG-12 guard fires → "Sync refused…",
+ *                a guard doing its job while describing the wrong problem;
+ *   scribeAsk  → no responseMessageId → the canned-line degrade;
+ *   runTrainer → no `skipped` → app.js toasts success for a run that never ran;
+ *   set/setMany/chatAppend/notifyPush → a write that NEVER REACHED THE SERVER
+ *                reported as synced. That last one is the dangerous one, and
+ *                it is the one nobody could report, because it is invisible.
+ *
+ * A misroute is detected three ways, newest deployment first:
+ *   (a) `misrouted:true`        — the fixed Code.gs says so outright;
+ *   (b) `_action` echo mismatch — the fixed Code.gs echoes, under a RESERVED
+ *       name, the action it ran. Underscored deliberately (review finding 2,
+ *       2026-09-11): the echo is transport metadata, not payload. On the plain
+ *       name, the first handler to return a top-level `action` of its own —
+ *       entirely reasonable, nothing here forbids it — would have its correct
+ *       reply read as a misroute, retried, and then thrown at the player as a
+ *       sync failure;
+ *   (c) `service:'cfbp-backend'` on a non-ping action — the ping marker. This
+ *       is the ONLY signal available against a deployment that predates the
+ *       Code.gs fix, i.e. the server in production right now, which is why the
+ *       client fix ships independently of the redeploy. Do not delete (c)
+ *       afterwards either: a browser holding cached JS (RG-04) can be talking
+ *       to a deployment older than itself in either direction.
+ */
+const PING_MARKER = 'cfbp-backend';
+
+/**
+ * Backoff for a misrouted reply. Short on purpose — the observed window is the
+ * first handful of requests after an Apps Script cold start, and the caller is
+ * usually a human waiting on a tap.
+ */
+const MISROUTE_RETRY_DELAYS = [400, 1200];   // up to 3 attempts total
+
+/**
+ * Actions that are NEVER retried automatically, even though the evidence says a
+ * misrouted request never reached the dispatcher at all.
+ *
+ * Retry safety was CHECKED, not assumed, for every other action:
+ *   getAll/get/chatHead/chatSince/chatBefore/chatMetrics/listSnapshots/
+ *   notifyLog/ping  reads, no side effect;
+ *   set/setMany     last-write-wins on the identical payload (Code.gs setOne/
+ *                   setMany) — re-sending is a no-op;
+ *   chatAppend      id-deduped server-side (Code.gs chatAppend → knownIds() over
+ *                   the last 2000 events + idSeqFullScan fallback), which is
+ *                   exactly what makes the chat log append-only and
+ *                   order-independent (AD-09/AD-10);
+ *   notifyPush      dedupKey-deduped server-side (Code.gs notifyPush →
+ *                   dedupKeyAlreadySent) so a duplicate relay cannot double-push;
+ *   snapshot/restoreSnapshot  a duplicate backup row is harmless, and a backup
+ *                   the commissioner THINKS was taken is not.
+ *
+ * `scribeAsk` and `runTrainer` are different in kind: each spends real money at
+ * Anthropic. The misroute evidence is strong but not a proof, and the cost of
+ * being wrong is an unasked-for charge, so these two throw on the FIRST
+ * misroute and let the paths that already exist handle it — scribeLines.js's
+ * mention branch degrades to canned lines (C1: one fallback mechanism, not
+ * two), app.js's Comm→Data handler toasts `err.message`. Both now name
+ * misrouting instead of blaming sync.
+ */
+const NO_RETRY_ACTIONS = { scribeAsk: 1, runTrainer: 1 };
+
+/**
+ * True when `data` is a reply to some OTHER request than `action`.
+ * Exported because js/chatTransport.js has its own fetch path and must apply
+ * the identical rule — one definition, so the two cannot drift. This is a pure
+ * predicate; AD-16 (chatTransport is the only module touching the chat backend)
+ * is untouched, no URL, sheet name or polling mechanic crosses the seam.
+ */
+export function isMisroutedResponse(action, data) {
+  if (!data || typeof data !== 'object') return false;
+  if (data.misrouted === true) return true;                              // (a)
+  if (typeof data._action === 'string' && data._action) return data._action !== action;  // (b)
+  if (action === 'ping') return false;             // ping's own payload, legitimately
+  return data.service === PING_MARKER;                                   // (c)
+}
+
+function misrouteError(action) {
+  const err = new Error(
+    'Backend misrouted the request (empty action) — retry in a moment. ' +
+    `The server answered '${action}' with its health-check payload, which means the ` +
+    'request never reached the dispatcher: nothing was read, written or spent.'
+  );
+  err.misrouted = true;
+  err.action = action;
+  return err;
+}
+
+/**
+ * Run `send()` (which resolves to the parsed JSON body) and reject a misrouted
+ * reply instead of handing it back as success. Retries per the rules above.
+ * Shared by call() here and by js/chatTransport.js's get()/post().
+ */
+export async function requestWithMisrouteGuard(action, send) {
+  const delays = NO_RETRY_ACTIONS[action] ? [] : MISROUTE_RETRY_DELAYS;
+  for (let attempt = 0; ; attempt++) {
+    const data = await send();
+    if (!isMisroutedResponse(action, data)) return data;
+    if (attempt >= delays.length) throw misrouteError(action);
+    console.warn(`[backend] misrouted reply to '${action}' — retrying in ${delays[attempt]}ms`);
+    await new Promise(r => setTimeout(r, delays[attempt]));
+  }
+}
+
 async function call(action, payload = {}) {
   const c = getBackendConfig();
   if (!c || !c.url) throw new Error('Backend not configured');
   const body = JSON.stringify({ action, token: c.token, ...payload });
-  // Apps Script web apps accept text/plain without a CORS preflight, which
-  // avoids the OPTIONS request that Apps Script does not handle.
-  const res = await fetch(c.url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body,
-    redirect: 'follow',
+  // BUG-A — the misroute check runs BEFORE the `!data.ok` check below, so the
+  // fixed server's `{ok:false, misrouted:true}` empty-request reply is retried
+  // rather than surfacing as a dead error.
+  const data = await requestWithMisrouteGuard(action, async () => {
+    // Apps Script web apps accept text/plain without a CORS preflight, which
+    // avoids the OPTIONS request that Apps Script does not handle.
+    const res = await fetch(c.url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body,
+      redirect: 'follow',
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
   });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'Backend error');
   return data;
 }
