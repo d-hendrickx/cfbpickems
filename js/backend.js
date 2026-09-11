@@ -83,10 +83,28 @@ const _dirtyFields = new Map();
  * string literals out of this block, so a retired key name mentioned between
  * the brackets will fail that assertion. Failing loud on a comment is the safe
  * direction, but the comment belongs up here regardless.
+ *
+ * Build 2b, Group E (2026-09-10, UN-161…163) added the last two entries
+ * below — SCRIBE Trainer learnings/Canon. Deliberately HERE, not in
+ * `_APPEND_ONLY_ID`: those two keys are commissioner-edited IN PLACE (an
+ * approve/reject flips a status field on an EXISTING array entry, per the
+ * design input) rather than append-only. A union-by-id merge is not viable
+ * either — the model-supplied learning/canon ids are not guaranteed non-
+ * empty, and an experiment or fact-candidate item carries no id field at
+ * all (see storage.js KEYS.SCRIBE_LEARNINGS for the full shape). Shrink
+ * protection is the right, narrower defense: `runTrainer` (backend/Code.gs)
+ * writes this key directly, server-side, entirely outside this client's
+ * push/pull cycle, so a commissioner approving an item on a device whose
+ * mirror predates a fresh Trainer run would otherwise push a SHORTER array
+ * back and silently erase whatever the run just added. The third key,
+ * cfbp_scribe_reports, is NOT listed: no client code path ever calls
+ * save() on it (the only client accessor is a read), so nothing is ever
+ * locally dirty for this defense to protect.
  */
 const _USER_DATA_KEYS = [
   'cfbp_players', 'cfbp_weeks', 'cfbp_games', 'cfbp_picks', 'cfbp_results',
   'cfbp_obligations', 'cfbp_tiebreaker_guesses', 'cfbp_extra_point_guesses',
+  'cfbp_scribe_learnings', 'cfbp_scribe_canon',
 ];
 function _size(v) {
   if (Array.isArray(v)) return v.length;
@@ -763,4 +781,45 @@ export async function notifyLogFetch(playerId, afterSeq = 0) {
   if (!isBackendConfigured()) return { records: [], head: afterSeq };
   const r = await call('notifyLog', { playerId, afterSeq });
   return { records: r.records || [], head: r.head ?? afterSeq };
+}
+
+// ── Interactive SCRIBE relay (Build 2, Group C, 2026-09-10, UN-150…154) ────
+// `scribeAsk` is the ONE new action for the LLM-backed @SCRIBE runtime. The
+// entire tool-use loop (context assembly, league/sports tools, the Anthropic
+// call itself) runs server-side inside Code.gs — this is a thin relay, same
+// shape as notifyPushRelay above. `call()`'s existing contract governs: a
+// normal DEGRADE outcome (throttled/budget-capped/disabled) is `{ok:true,
+// ...}` and returns normally; only a genuine server-side error/unreachable
+// backend throws, which js/scribeLines.js's mention branch treats as the
+// SAME degrade path as a throttle (C1: "one fallback mechanism, not two").
+export async function scribeAskRemote({ triggerMessageId, playerId, weekId = '', gameTag = '', webSearch }) {
+  return call('scribeAsk', { triggerMessageId, playerId, weekId, gameTag, webSearch });
+}
+
+// ── SCRIBE Trainer relay (Build 2b, Group E, 2026-09-10, UN-161…163) ───────
+// Thin trigger, same shape as `createSnapshot`/`restoreSnapshot` above. The
+// entire analysis pass, model call, and persistence to
+// KEYS.SCRIBE_LEARNINGS/CANON/REPORTS happen server-side; the caller
+// (js/scribeAgent.js) re-hydrates afterward to see the result, exactly like
+// `restoreSnapshot()` already does.
+//
+// Round-2 remediation (reviewer SIGNIFICANT #8) — the shared backend token
+// is NOT sufficient for this action. It ships in `config.json` on every
+// player's device (AD-05), and `runTrainer` spends real money at Anthropic.
+// The server now additionally requires the commissioner password hash, the
+// same `btoa(password)` credential app.js already checks before destructive
+// commissioner actions. `adminPasswordHash` is supplied by the caller (the
+// Comm→Data button prompts for it).
+//
+// CORRECTED round 3 — this comment used to claim a missing/incorrect
+// credential "returns `{ok:false, error}` rather than throwing here." It does
+// not. The server returns `{ok:false, error}`, and `call()` above turns any
+// `!data.ok` body into `throw new Error(data.error)` (see the `if (!data.ok)`
+// line in `call()`), so the REJECTION reaches the caller as a thrown Error,
+// not a resolved value. The behaviour is correct and unchanged — app.js's
+// Comm→Data handler wraps this in try/catch and surfaces `err.message` in
+// the failure toast — only the comment was wrong. Callers must keep the
+// try/catch; do not write `if (!result.ok)` and expect it to fire.
+export async function runTrainerRemote({ adminPasswordHash = '' } = {}) {
+  return call('runTrainer', { adminPasswordHash });
 }

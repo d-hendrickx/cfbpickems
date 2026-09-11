@@ -542,6 +542,14 @@ body[data-tab="chat"] .app-header{display:none}
 
 .notif-priming-card{padding:14px}
 .notif-priming-title{font-weight:700;font-size:.9rem;margin-bottom:4px}
+/* Reviewer ruling (2026-09-10), DI-A2: the priming card's only action is a
+   `.btn-sm`, whose base min-height is 34px — under DI-A2's explicit 44px tap
+   target (the same floor .notif-prefs-row below is built to). A missed tap on
+   THIS button reads as "push is broken" rather than as a missed tap, because
+   nothing else on the card responds. Explicit floor on the one id rather than
+   raising .btn-sm globally, which would reflow every compact row in the app —
+   same narrow approach #chat-search-btn and .scribe-approve-btn already take. */
+#notif-priming-btn{min-height:44px}
 
 /* DI-A4 — full-width tappable <label> rows, ≥44px tap target (a NEW
    requirement here, unlike .chat-prefs-row's undersized native checkboxes —
@@ -1942,6 +1950,12 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-reveal{background:var(--gold-pale);border:1px solid var(--gold);border-radius:12px;padding:10px}
 .chat-reveal-title{font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:.04em;margin-bottom:6px}
 .chat-reveal .chat-system-body{white-space:pre-line;font-variant-numeric:tabular-nums}
+/* NIT (remediation round 1) — the scribeAskAck broadcast placeholder (C-5).
+   Same RG-09 pending visual language as .is-pending above: muted (via the
+   existing dashed/secondary-text .chat-system-body look, not a new one) and
+   FULL opacity on the text — never dimmed, that's the whole point of RG-09. */
+.chat-scribe-ack{opacity:1}
+.chat-scribe-ack .chat-system-body{color:var(--text-secondary)}
 .chat-mention-menu{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
 .chat-mention-opt{background:var(--bg-card-alt);border:1px solid var(--border);border-radius:999px;
   padding:3px 10px;font-size:.72rem;cursor:pointer}
@@ -2299,3 +2313,14 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    (CONVENTIONS #13, var(--*) only; no new token invented). */
 .chat-fb-star.is-rated{opacity:1;border-color:var(--maroon);
   background:var(--maroon-pale)}
+
+/* ── E5b — SCRIBE Trainer approve/reject rows (Comm→Data) ────────────────
+   Reviewer note #14 (2026-09-10, Build 2b round 2), CONVENTIONS #17. These
+   four buttons use `.btn-sm`, whose base `min-height` is 34px — under the
+   40px tap-target floor. They sit in a dense two-button row on a 375px
+   phone, so a mis-tap is an approval of the wrong learning, not a cosmetic
+   annoyance. Explicit floor here rather than raising `.btn-sm` globally
+   (which would reflow every compact row in the app). Same narrow,
+   named-selector approach `#chat-search-btn` et al. already take above. */
+.scribe-approve-btn, .scribe-reject-btn,
+.scribe-canon-approve-btn, .scribe-canon-reject-btn{min-height:40px}

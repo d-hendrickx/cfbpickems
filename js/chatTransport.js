@@ -105,8 +105,10 @@ export async function fetchMetrics(days = 7) {
 /**
  * subscribe(onEvents, opts) — polling implementation of a push interface.
  * Two-phase: polls the cheap cached head; only calls fetchSince when the head
- * has actually advanced. Adaptive interval + ±20% jitter + hidden-pause live
- * HERE (transport concern), so a websocket swap deletes them wholesale.
+ * has actually advanced. The ONE exception is a tick with nothing known yet
+ * (getKnownHead() === 0), which fetches directly — see tick() below.
+ * Adaptive interval + ±20% jitter + hidden-pause live HERE (transport
+ * concern), so a websocket swap deletes them wholesale.
  *
  * opts.getMode()      -> 'hot' | 'warm' | 'idle' | 'closed'   (room activity, supplied by chat.js)
  * opts.getKnownHead() -> highest seq already ingested
@@ -125,10 +127,26 @@ export function subscribe(onEvents, opts = {}) {
     if (!isBackendConfigured() || (typeof document !== 'undefined' && document.hidden)) return schedule();
     try {
       const known = opts.getKnownHead?.() || 0;
-      const { head } = await fetchHead();
-      if (head > known) {
-        const { events, head: h2 } = await fetchSince(known, 500);
-        onEvents(events, h2);
+      // Nothing known yet (cold boot, or a reload — the fold is rebuilt from
+      // the transport on every boot, nothing is cached device-locally): the
+      // head probe cannot tell us anything we would act on. Any head > 0 means
+      // "fetch everything from 0", and head === 0 means the room is empty,
+      // which fetchSince(0) reports just as well. So the probe buys nothing
+      // and costs a full Apps Script cold start (10-20s, ledger §5) in front
+      // of the first message the player sees — the "it starts off blank" half
+      // of Drew's report. Skip straight to the fetch.
+      //
+      // Every tick WITH something known keeps the two-phase head-then-since
+      // behaviour, which is what keeps the steady-state poll cheap.
+      if (known === 0) {
+        const { events, head } = await fetchSince(0, 500);
+        onEvents(events, head);
+      } else {
+        const { head } = await fetchHead();
+        if (head > known) {
+          const { events, head: h2 } = await fetchSince(known, 500);
+          onEvents(events, h2);
+        }
       }
       if (fails >= 3) opts.onStatus?.('online');
       fails = 0; backoff = 0;

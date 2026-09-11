@@ -754,6 +754,31 @@ export function markSeen(tag = 'all') {
   notify('seen', { tag });
 }
 
+/**
+ * THE read cursor that applies to a message carrying `tag`.
+ *
+ * Read state is TWO-LEVEL (AD-12): markSeen('all') advances the room cursor
+ * `.seq` (and every tag it already knows about), while markSeen(gameId) —
+ * what openGameChatSheet() calls — advances ONLY `byTag[gameId]`. Opening one
+ * game thread is not reading the room, and reading the room is reading every
+ * thread. A message is "read" when it sits at or below the cursor for ITS OWN
+ * tag, which falls back to the room cursor for a tag never opened.
+ *
+ * Defined ONCE, deliberately: unreadCount(), unreadAuthors(),
+ * latestUnreadNotifying() and chat-ui's notifAckThroughSeq() all route
+ * through it. A second copy of this expression is exactly how the dashboard
+ * teaser came to disagree with the unread badge about what "read" means.
+ */
+function readCursorFor(ls, tag) {
+  return (tag && tag !== 'all') ? (ls.byTag[tag] ?? ls.seq) : ls.seq;
+}
+
+/** Public accessor for the same cursor — chat-ui's toast gate needs the
+ *  tag-aware "read through seq N" number without re-deriving it. */
+export function readThroughSeq(tag = 'all') {
+  return Number(readCursorFor(getLastSeen(), tag)) || 0;
+}
+
 function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   // A message hidden by retention can never count toward unread — a player
   // who can't scroll to it should never see a badge promising it's there.
@@ -768,7 +793,7 @@ function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
 
 export function unreadCount(selfId, tag = 'all') {
   const ls = getLastSeen();
-  const after = tag === 'all' ? ls.seq : (ls.byTag[tag] ?? ls.seq);
+  const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();          // resolved once, not per message
   let n = 0;
   S.items.forEach(m => {
@@ -786,7 +811,7 @@ export function unreadCount(selfId, tag = 'all') {
  */
 export function unreadAuthors(selfId, tag = 'all') {
   const ls = getLastSeen();
-  const after = tag === 'all' ? ls.seq : (ls.byTag[tag] ?? ls.seq);
+  const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();
   const seen = new Set();
   const out = [];
@@ -831,6 +856,40 @@ export function latestNotifying(selfId) {
     // a pre-epoch test message could still surface as the dashboard's chat
     // preview even though every other surface has forgotten it.
     if (isHiddenByEpoch(m)) return;
+    if (!best || cmpOrder(m, best) > 0) best = m;   // AD-10 — ordered pair, see cmpOrder()
+  });
+  return best;
+}
+
+/**
+ * The newest notifying message that is still UNREAD for `selfId`, or null.
+ *
+ * Same fold, same ordering (AD-10) and the same own-author / retention /
+ * epoch exclusions as latestNotifying() above — all of them already live
+ * inside isUnreadFor(), which is reused here rather than re-listed, so the
+ * two surfaces can never drift apart on what counts as "notifying me". The
+ * addition is the fall-through: a message the reader has already read — in
+ * the room OR inside its own game thread (readCursorFor) — is skipped and
+ * the search continues to the next one down.
+ *
+ * `floorSeq` is the caller's acknowledgement watermark (chat-ui's ✕
+ * dismissal); messages at or below it are skipped too. That key belongs to
+ * chat-ui, so it is passed in rather than read here.
+ *
+ * Why this exists: the dashboard teaser gated on the ROOM cursor alone, so
+ * reading a message inside its game thread left unreadCount(tag) at 0 while
+ * the teaser kept announcing that exact message. A per-tag read still must
+ * NOT silence an unrelated unread room message — hence "fall through to the
+ * next one", not "suppress the card".
+ */
+export function latestUnreadNotifying(selfId, floorSeq = 0) {
+  const ls = getLastSeen();
+  const cutoff = retentionCutoff();
+  const floor = Number(floorSeq) || 0;
+  let best = null;
+  S.items.forEach(m => {
+    if (typeof m.seq !== 'number' || m.seq <= floor) return;   // at/below the ✕ dismissal
+    if (!isUnreadFor(m, selfId, readCursorFor(ls, m.gameTag || 'all'), cutoff)) return;
     if (!best || cmpOrder(m, best) > 0) best = m;   // AD-10 — ordered pair, see cmpOrder()
   });
   return best;

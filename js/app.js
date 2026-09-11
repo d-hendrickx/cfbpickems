@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.19.0';
+export const APP_VERSION = 'v0.20.0';
 export const APP_VERSION_DATE = '2026-09-10';
 
 /**
@@ -19,14 +19,12 @@ export const APP_VERSION_DATE = '2026-09-10';
 const WHATS_NEW = {
   version: APP_VERSION,
   added: [
-    'Push notifications. If IRB Pick \'Ems is on your home screen, you can now get a push — even with the app closed — when someone posts in chat, when picks open, when you still owe picks and the lock is getting close, when the week is final, and when a debt is settled. Turn it on from the new 🔔 bell in the header and choose exactly which kinds you want; the bell also keeps a history, so a dismissed banner is never the only record.',
-    'Reminders are personal. You only hear about picks you still owe. The "locking soon" warning names who is still out — not what anyone picked.',
-    'Rate SCRIBE. Every SCRIBE line now carries a ⭐. Tap it to call the line a Hit, Mid, or Too much, or write what SCRIBE should have said instead. Long-press any human message to flag it 📌 Remember this or 👁 Weigh in (SCRIBE should have said something here). This is how SCRIBE learns the room this season — be honest, and be generous with Too much.',
-    'Links in chat are tappable, and a 🔍 in the chat header searches the whole room.',
-    'SCRIBE dropped the doctor act. Same receipts, less clinic.',
+    'You can talk to SCRIBE. Type @scribe in the Locker Room with a real question — a standing, a matchup, a pick record, whether a starter is playing — and it answers with the actual numbers first, banter second. While it looks things up you\'ll see "SCRIBE is looking into it…"; if it\'s throttled or the budget is spent, it says so and falls back to a canned line instead of guessing. Six questions per person per hour.',
+    'SCRIBE is learning from you. Every week the Trainer reads your ⭐ ratings, rewrites, 📌 flags and 👁 weigh-ins, works out what landed and what didn\'t, and posts a short out-of-character report to the room, with the full write-up under Rules → SCRIBE Training. Strong patterns adjust how SCRIBE talks; anything shaky waits for the commissioner.',
+    'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
   ],
   fixed: [
-    'A reply to a message that has since been withdrawn or aged out of view now says so, instead of showing a quote button that did nothing.',
+    'SCRIBE\'s answers about picks respect the blind rule harder than the app itself: while a week is open it won\'t repeat anyone\'s pick in the room — including your own.',
   ],
 };
 
@@ -106,6 +104,8 @@ import {
   exportAllData, exportAllDataRaw,
   // Groups A/B (2026-09-10) — notification category prefs, DI-A4
   getNotifyPushMaster, setNotifyPushMaster, getNotifyCategoryPrefs, setNotifyCategoryPref,
+  // Build 2b, E3-E5 (2026-09-10, UN-161…163) — SCRIBE Trainer output
+  getScribeLearnings, setScribeLearnings, getScribeCanon, setScribeCanon, getScribeReports,
 } from './storage.js';
 
 import {
@@ -145,6 +145,7 @@ import {
 } from './chat-ui.js';
 import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled } from './chat.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
+import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote } from './scribeAgent.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
 import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
 import { renderPicksFooterHTML, renderWeekRecapCardHTML } from './recap.js';
@@ -877,7 +878,12 @@ function renderPrimingCardHTML(pushState) {
   const copy = {
     'never-asked': { title: 'Enable push notifications', body: "Get notified for chat, pick reminders, and results — even when the app is closed.", btn: 'Turn On' },
     denied:        { title: 'Push is off', body: "You turned off notifications for this device. You'll still see everything here — to turn push back on, check your phone's notification settings for this app.", btn: null },
-    unsupported:   { title: "Install to get push", body: "Add IRB Pick 'Ems to your home screen to receive push notifications on iPhone.", btn: null },
+    // 2026-09-10 — split out of the old single 'unsupported' state. An iPhone
+    // in a Safari TAB can get push, but only after Add to Home Screen, so it
+    // gets instructions and NO Turn On button (a button there can only fail —
+    // OneSignal's SDK refuses to load outside the installed app).
+    'needs-install': { title: "Install to get push", body: "Push needs the home-screen app. Tap Share → Add to Home Screen, then open IRB Pick 'Ems from the icon and come back here.", btn: null },
+    unsupported:   { title: "Push isn't available here", body: "This browser can't do push notifications. You'll still see everything in the app — try an iPhone home-screen install, or Chrome on Android.", btn: null },
   }[pushState];
   if (!copy) return '';
   return `<div class="card notif-priming-card" id="notif-priming-card">
@@ -973,11 +979,69 @@ function deepLinkTo(destination) {
   }, 60);
 }
 
+/**
+ * RG (2026-09-10) — "tapping Turn On shows 'Could not enable push'".
+ * requestPushPermission() used to resolve a bare boolean, so FOUR unrelated
+ * failures (SDK never loaded, init already spent, OneSignal worker not found,
+ * prompt dismissed) produced one indistinguishable toast that named no cause
+ * and suggested no action. It now resolves { ok, reason, detail } — this is
+ * the only place that turns a reason into player-facing words. Anything
+ * unmapped falls through to a message that still tells the player where to
+ * look, and the underlying error is always on the console.
+ */
+function pushFailureMessage(res) {
+  const reason = res?.reason || 'request-failed';
+  if (res?.detail) console.warn('[push] Turn On failed:', reason, '—', res.detail);
+  else console.warn('[push] Turn On failed:', reason);
+  return {
+    // ── the player can act on these ──
+    'not-installed-ios':   "Push needs the home-screen app: Share → Add to Home Screen, then open it from the icon.",
+    'denied':              "Notifications are blocked for this app — turn them back on in your phone's Settings.",
+    'dismissed':           "No answer to the permission prompt. Tap Turn On again and choose Allow.",
+    // ── nothing to act on; say so instead of implying a retry ──
+    'unsupported-browser': "This browser can't do push notifications.",
+    'no-browser':          "This browser can't do push notifications.",
+    // ── transient: a retry genuinely can help ──
+    'sw-not-found':        "Push service didn't install. Fully close and reopen the app, then try again.",
+    'sdk-not-loaded':      "Push service didn't load — check your connection and try again.",
+    'config-unreachable':  "Couldn't reach the league's settings — check your connection and try again.",
+    'prompt-timeout':      "Push didn't finish setting up. Fully close and reopen the app, then tap Turn On again.",
+    'init-failed':         "Push setup failed. Fully close and reopen the app, then try again.",
+    'request-failed':      "Push setup failed. Fully close and reopen the app, then try again.",
+    'init-already-spent':  "Push setup already ran and didn't finish. Fully close and reopen the app, then try again.",
+    // ── commissioner-side setup gaps. A player retrying forever will never
+    //    fix these, so the copy says whose problem it is. 'web-push-not-enabled'
+    //    is the LIVE one: the league's push app has no Web Push platform
+    //    configured yet, which is why every tap failed on v0.19.0. ──
+    'not-configured':      "Push isn't switched on for the league yet.",
+    'web-push-not-enabled':"Push isn't finished being set up for the league yet — the commissioner has to switch it on.",
+    'app-id-mismatch':     "Push is misconfigured for the league — the commissioner needs to fix the setup.",
+    'wrong-site-origin':   "Push is set up for a different website address — the commissioner needs to fix the setup.",
+  }[reason] || "Could not enable push — see the console for details.";
+}
+
 function bindNotifCenterBody(ov, playerId) {
-  ov.querySelector('#notif-priming-btn')?.addEventListener('click', async () => {
-    const ok = await requestPushPermission();
-    showToast(ok ? '✅ Push enabled' : 'Could not enable push', ok ? 'success' : 'error');
-    await refreshNotifCenterBody(ov, playerId);
+  ov.querySelector('#notif-priming-btn')?.addEventListener('click', async (ev) => {
+    // Reviewer ruling (2026-09-10): requestPushPermission() can be in flight for
+    // as long as the native sheet is on screen (up to PROMPT_TIMEOUT_MS), and
+    // the button stayed live that whole time. A double-tap — the normal reaction
+    // to a button that appears to do nothing — queued a SECOND
+    // OneSignal.Notifications.requestPermission(), i.e. two prompts, two races
+    // for one `Notification.permission`, and two toasts that can disagree.
+    // Disable for exactly the duration of the await.
+    const btn = ev.currentTarget;
+    if (btn.disabled) return;
+    btn.disabled = true;
+    try {
+      const res = await requestPushPermission();
+      showToast(res.ok ? '✅ Push enabled' : pushFailureMessage(res), res.ok ? 'success' : 'error');
+      await refreshNotifCenterBody(ov, playerId);
+    } finally {
+      // refreshNotifCenterBody() re-renders the card, so this usually re-enables
+      // a detached node — harmless, and it is what keeps the button usable when
+      // the state did NOT change (a dismissed prompt is still 'never-asked').
+      btn.disabled = false;
+    }
   });
   ov.querySelector('#notif-master-toggle')?.addEventListener('change', (e) => {
     setNotifyPushMaster(e.target.checked);
@@ -3796,6 +3860,10 @@ function renderCommPage() {
     // and did not select it.
     sections.push(renderFeedbackAdminSectionHTML());
 
+    // SCRIBE Trainer (Build 2b, E5b, UN-163) — directly after Feedback, same
+    // tab (RG-10): both are "review what players told us" surfaces.
+    sections.push(renderScribeTrainerAdminSectionHTML());
+
     // DI-H (2026-09-02) — the one-time (though PERMANENTLY available)
     // retroactive recompute. Placed directly ABOVE Obligation Corrections so
     // anything it flags via DI-D's finalizeWeek() → reconcileWeeklyObligation()
@@ -5214,6 +5282,70 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('export-weekly-results-csv-btn')?.addEventListener('click', exportAllWeeklyResultsCSV);
   document.getElementById('export-obligations-csv-btn')?.addEventListener('click', exportObligationsCSV);
   document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
+
+  // ── SCRIBE Trainer (Build 2b, E5b, 2026-09-10, UN-161…163) ──
+  document.getElementById('scribe-run-trainer-btn')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    // Reviewer SIGNIFICANT #8 — a Trainer run spends real money at Anthropic,
+    // so it carries the same commissioner-password confirmation the other
+    // consequential Data-tab actions do (the factory-reset flow above is the
+    // precedent, same `btoa(pw)` comparison). The check is re-performed
+    // SERVER-side against the stored hash; this local comparison only exists
+    // to fail fast with a clear message instead of a round trip.
+    const pw = prompt('Enter the Commissioner password to run the SCRIBE Trainer. This makes a paid model call.');
+    if (!pw) return;
+    const adminPasswordHash = btoa(pw);
+    if (adminPasswordHash !== getSettings().adminPasswordHash) {
+      showToast('❌ Incorrect password — Trainer run cancelled', 'error'); return;
+    }
+    btn.disabled = true; const original = btn.textContent; btn.textContent = 'Running…';
+    try {
+      const result = await runTrainerRemote({ adminPasswordHash });
+      if (result && result.skipped) {
+        // Not a failure — a deliberate no-op (kill switch off, hourly floor,
+        // or too little rated feedback in the window to say anything).
+        // 'warning' (not a new 'info' class) — styles.css defines exactly
+        // success/error/warning; a skip is advisory, not a failure.
+        showToast(`ℹ️ Trainer skipped: ${result.error || result.skipped}`, 'warning');
+      } else if (result && result.ok) {
+        await refreshFromBackend();   // server wrote directly through the seam — pull it into the mirror
+        showToast('🧠 SCRIBE Training run complete', 'success');
+      } else {
+        showToast(`⚠️ Trainer run failed: ${result && result.error ? result.error : 'unknown error'}`, 'error');
+      }
+    } catch (err) {
+      showToast(`⚠️ Trainer run failed: ${err && err.message ? err.message : err}`, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = original;
+      renderCommPage();
+    }
+  });
+  // Approve/reject — a plain status flip on the ONE flat array (learnings,
+  // holding all three pending kinds) or the Canon array, through the
+  // storage seam (CONVENTIONS #8) — no new backend action needed, this is
+  // exactly what `set`/`setMany` already exist for.
+  document.querySelectorAll('.scribe-approve-btn, .scribe-reject-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.learningIdx);
+      const all = getScribeLearnings();
+      if (!all[idx]) return;
+      all[idx] = { ...all[idx], status: btn.classList.contains('scribe-approve-btn') ? 'approved' : 'rejected' };
+      setScribeLearnings(all);
+      showToast(btn.classList.contains('scribe-approve-btn') ? '✅ Approved' : '✖ Rejected', 'success');
+      renderCommPage();
+    });
+  });
+  document.querySelectorAll('.scribe-canon-approve-btn, .scribe-canon-reject-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.canonIdx);
+      const all = getScribeCanon();
+      if (!all[idx]) return;
+      all[idx] = { ...all[idx], approvalStatus: btn.classList.contains('scribe-canon-approve-btn') ? 'approved' : 'rejected' };
+      setScribeCanon(all);
+      showToast(btn.classList.contains('scribe-canon-approve-btn') ? '✅ Approved' : '✖ Rejected', 'success');
+      renderCommPage();
+    });
+  });
   // Item 10 (DI-B1) — per-row exclude-from-export checkbox. Persists through
   // the storage seam on every toggle; the checkbox's own `checked` attribute
   // is already the on-screen reflection, so no re-render is needed here (same
@@ -7443,6 +7575,12 @@ export function renderRulesPage() {
          required to "count." The checkbox below is the explicit, opt-IN,
          defaulted-OFF escape hatch for the genuinely urgent case; it does not
          remove the ability to email, it just stops forcing it every time. -->
+    <!-- Build 2b, E5a (2026-09-10, UN-163): the Training-archive card, at the
+         end of the Rules page per the DI — a new card, not a new nav tab, not
+         posted into the Locker Room (an out-of-character report would
+         collide with the locked Chat/Locker-Room split otherwise). -->
+    ${renderScribeTrainingCardHTML()}
+
     <div class="card feedback-card">
       <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
       <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
@@ -7480,6 +7618,7 @@ export function renderRulesPage() {
   // Wire feedback handler (Priority 13)
   document.getElementById('fb-submit-btn')?.addEventListener('click', submitFeedback);
   bindFeedbackKindToggle();
+  bindScribeReportRowHandlers();   // Build 2b, E5a
 }
 
 /**
@@ -7637,6 +7776,164 @@ export function renderFeedbackAdmin(entries = getFeedback()) {
   return helpNote + rows;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Build 2b — SCRIBE Trainer (E3-E5, 2026-09-10, UN-161…163)
+// ═══════════════════════════════════════════════════════════════════════════
+
+// §8's exact section order + product-language labels, mirroring
+// backend/Code.gs's SCRIBE_REPORT_SECTION_ORDER_ constant (kept in sync BY
+// HAND, same cross-runtime obligation as every other client/server
+// contract). Declared once so the archive modal and any future caller read
+// the SAME list rather than a second hand-typed copy.
+const SCRIBE_REPORT_SECTIONS = [
+  ['dataset', 'Dataset'],
+  ['what_landed', 'What landed'],
+  ['what_missed', 'What missed'],
+  ['what_scribe_learned', 'What SCRIBE learned'],
+  ['changes_being_tested', 'Changes being tested'],
+  ['feedback_not_adopted', 'Feedback that was not adopted'],
+  ['what_we_need_more_data_on', 'What we need more data on'],
+];
+
+/**
+ * E5a — "SCRIBE Training" card, Rules page. Reverse-chronological archive of
+ * `getScribeReports()`; each row opens the full §8-format report in a
+ * `.modal.centered` (verbatim reuse — see `openScribeReportModal` below,
+ * wired from `renderRulesPage()`). Exported pure HTML (no DOM), same
+ * testability reasoning as `renderFeedbackAdminSectionHTML`/
+ * `renderCommExtraPointCardHTML`.
+ */
+export function renderScribeTrainingCardHTML() {
+  const reports = getScribeReports();
+  if (!reports.length) {
+    return `
+    <div class="card mb-md">
+      <div class="rules-section"><h3>🧠 SCRIBE Training</h3>
+        <p class="text-muted text-sm">Nothing yet — this fills in once the first training pass runs.</p>
+      </div>
+    </div>`;
+  }
+  // Oldest-first as stored (scribeSaveReports_ appends) — reverse for display.
+  const rows = reports.slice().reverse().map((r, revIdx) => {
+    const idx = reports.length - 1 - revIdx;   // real index into getScribeReports()
+    const dateLabel = r.createdAt ? new Date(r.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '(undated)';
+    return `<button type="button" class="scribe-report-row" data-scribe-report-idx="${idx}" style="display:flex;justify-content:space-between;align-items:center;width:100%;min-height:44px;padding:10px 4px;border:none;border-bottom:1px solid var(--border);background:none;text-align:left;cursor:pointer;color:inherit;font:inherit">
+      <span>Training Report — ${escHtml(dateLabel)}</span><span class="text-muted">›</span>
+    </button>`;
+  }).join('');
+  return `
+    <div class="card mb-md">
+      <div class="rules-section"><h3>🧠 SCRIBE Training</h3>
+        <p class="text-muted text-xs mb-sm">A plain-language, out-of-character account of what your ratings, rewrites, and 👁 weigh-ins have actually changed. Not a normal SCRIBE post — this is the system talking, not SCRIBE.</p>
+        <div class="scribe-report-list">${rows}</div>
+      </div>
+    </div>`;
+}
+
+/** Full §8-order report body for the archive modal — used by both the
+ *  modal opener below AND loadtest.mjs's structural section-order assertion. */
+export function renderScribeReportBodyHTML(entry) {
+  const report = (entry && entry.report) || {};
+  return SCRIBE_REPORT_SECTIONS.map(([key, label]) =>
+    `<div class="mb-md"><div class="card-title mb-sm">${escHtml(label)}</div><p class="text-sm" style="white-space:pre-wrap">${escHtml(String(report[key] || '(nothing recorded for this section)'))}</p></div>`
+  ).join('');
+}
+
+function openScribeReportModal(entry) {
+  if (!entry) return;
+  const dateLabel = entry.createdAt ? new Date(entry.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '(undated)';
+  const ov = document.createElement('div'); ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Training Report — ${escHtml(dateLabel)}</h3><button class="modal-close" id="scribe-report-close">✕</button></div>
+    ${renderScribeReportBodyHTML(entry)}
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#scribe-report-close')?.addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+}
+
+/** Wired from `renderRulesPage()` — event delegation over the archive list,
+ *  since rows are re-rendered on every page open (same pattern the feedback
+ *  form's handlers use, just delegated instead of per-row bound). */
+function bindScribeReportRowHandlers() {
+  document.querySelectorAll('.scribe-report-row').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = Number(btn.dataset.scribeReportIdx);
+      openScribeReportModal(getScribeReports()[idx]);
+    });
+  });
+}
+
+/**
+ * E5b — Comm→Data metrics + approve/reject card. Metrics are the SNAPSHOT
+ * stored with the most recent report (`entry.metrics`) — never an
+ * independent recompute (CONVENTIONS #21's render-path-consistency spirit
+ * applied to this new surface; the "as of" stamp is the actual point of
+ * this design, per the DI). Approve/reject rows cover all four pending item
+ * kinds — learning, experiment, fact_candidate (all three live in
+ * `getScribeLearnings()`), and canon (its own key).
+ */
+export function renderScribeTrainerAdminSectionHTML() {
+  const reports = getScribeReports();
+  const latest = reports.length ? reports[reports.length - 1] : null;
+  const learnings = getScribeLearnings();
+  const canon = getScribeCanon();
+  const activeCtx = getActiveContext();
+
+  const metricsBlock = latest ? `
+    <div class="stat-grid mb-sm" style="display:flex;flex-wrap:wrap;gap:16px">
+      <div><div style="font-size:1.3rem;font-weight:700;color:var(--maroon)">${latest.metrics.humanMessagesPerInterjection == null ? 'n/a' : latest.metrics.humanMessagesPerInterjection.toFixed(2)}</div><div class="text-muted text-xs">human msgs / SCRIBE interjection</div></div>
+      <div><div style="font-size:1.1rem;font-weight:600">${latest.metrics.ratingMix.hit}% / ${latest.metrics.ratingMix.mid}% / ${latest.metrics.ratingMix.tooMuch}%</div><div class="text-muted text-xs">Hit / Mid / Too Much</div></div>
+      <div><div style="font-size:1.1rem;font-weight:600">${latest.metrics.rewriteCount}</div><div class="text-muted text-xs">rewrites this season</div></div>
+      <div><div style="font-size:1.1rem;font-weight:600">${activeCtx.activeLearnings.length + activeCtx.canonExamples.length}</div><div class="text-muted text-xs">active right now</div></div>
+    </div>
+    ${latest.metrics.perPlayerHints.length ? `<ul class="rules-list text-xs">${latest.metrics.perPlayerHints.map(h => `<li>${escHtml(h)}</li>`).join('')}</ul>` : ''}
+    <p class="text-muted text-xs">as of ${escHtml(new Date(latest.metrics.asOf || latest.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}</p>
+  ` : `<p class="text-muted text-sm">No Trainer run yet — click "Run Trainer now" to produce the first snapshot.</p>`;
+
+  const pendingLearningRows = learnings.map((l, idx) => ({ l, idx }))
+    .filter(x => x.l.status === 'pending' && (x.l.kind === 'learning' || x.l.kind === 'experiment' || x.l.kind === 'fact_candidate'))
+    .map(({ l, idx }) => {
+      let label;
+      if (l.kind === 'learning') label = `<strong>[learning/${escHtml(l.category)}]</strong> ${escHtml(l.instruction)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
+      else if (l.kind === 'experiment') label = `<strong>[experiment]</strong> ${escHtml(l.experiment)} — ${escHtml(l.reason)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
+      else label = `<strong>[fact candidate]</strong> ${escHtml(l.playerId)} · ${escHtml(l.key)}: ${escHtml(l.value)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
+      return `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
+        <div class="text-sm" style="flex:1">${label}</div>
+        <div class="flex gap-sm">
+          <button class="btn btn-secondary btn-sm scribe-approve-btn" data-learning-idx="${idx}">✅ Approve</button>
+          <button class="btn btn-ghost btn-sm scribe-reject-btn" data-learning-idx="${idx}">✖ Reject</button>
+        </div>
+      </div>`;
+    }).join('');
+
+  const pendingCanonRows = canon.map((c, idx) => ({ c, idx })).filter(x => x.c.approvalStatus === 'pending')
+    .map(({ c, idx }) => `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
+      <div class="text-sm" style="flex:1"><strong>[canon]</strong> ${escHtml(c.contextSummary)} → "${escHtml(c.preferredResponse)}" <span class="text-muted text-xs">(confidence ${c.confidence})</span></div>
+      <div class="flex gap-sm">
+        <button class="btn btn-secondary btn-sm scribe-canon-approve-btn" data-canon-idx="${idx}">✅ Approve</button>
+        <button class="btn btn-ghost btn-sm scribe-canon-reject-btn" data-canon-idx="${idx}">✖ Reject</button>
+      </div>
+    </div>`).join('');
+
+  const pendingHTML = (pendingLearningRows || pendingCanonRows)
+    ? `<div class="divider"></div><div class="card-title mb-sm">Pending review</div>${pendingLearningRows}${pendingCanonRows}`
+    : `<div class="divider"></div><p class="text-muted text-xs">Nothing pending review.</p>`;
+
+  return `
+    <div class="admin-section" data-comm-tab="data">
+      <div class="admin-section-title">🧠 SCRIBE Training</div>
+      <div class="card">
+        <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
+          <p class="text-muted text-xs" style="margin:0">Periodic snapshot, not live — see the "as of" stamp below. ≥0.9-confidence learnings/Canon auto-apply; everything else waits here.</p>
+          <button class="btn btn-primary btn-sm" id="scribe-run-trainer-btn">▶ Run Trainer now</button>
+        </div>
+        ${metricsBlock}
+        ${pendingHTML}
+      </div>
+    </div>`;
+}
+
 /**
  * UN-123 — the whole Data-tab feedback card, INCLUDING its
  * data-comm-tab="data" wrapper (RG-10: an untagged admin-section renders on
@@ -7775,6 +8072,21 @@ function renderCommExtrasV16(week, games) {
     // own bare padding-bottom-only row above, which this pass leaves as-is.
     const scribeFeedbackOn = isScribeFeedbackEnabled();
     const imagePreviewOn = isChatImagePreviewEnabled();
+    // Build 2, Group C (2026-09-10, UN-150…154) — the two client-visible
+    // convenience gates for the interactive (LLM-backed) @SCRIBE runtime.
+    // Placed with the other pilot toggles in this SAME card (RG-10). The
+    // AUTHORITATIVE gate is server-side (SCRIBE_INTERACTIVE_ENABLED /
+    // SCRIBE_WEB_SEARCH_ENABLED Script Properties, backend/Code.gs) — these
+    // only save a wasted round trip when SCRIBE is known to be off here.
+    const scribeInteractiveOn = isScribeInteractiveEnabled();
+    const scribeWebSearchOn = isScribeWebSearchEnabled();
+    // Build 2b, E4 (2026-09-10, UN-162) — the fast "something just made
+    // SCRIBE noticeably worse, stop it NOW" emergency stop, separate from
+    // the per-learning approve/reject granularity (Comm→Data). This is
+    // client-visible AND authoritative (unlike the two above, whose real
+    // gate is server-side): Code.gs reads this SAME `cfbp_settings` blob
+    // directly (scribeLearningsEnabled_()), no Script Property involved.
+    const scribeLearningsOn = isScribeLearningsEnabled();
     c.insertAdjacentHTML('beforeend', `
     <div class="admin-section" data-comm-tab="settings">
     <div class="card mb-md" id="comm-chat-card">
@@ -7793,11 +8105,32 @@ function renderCommExtrasV16(week, games) {
           <span class="text-muted text-xs" style="display:block">Shows the Rate/Flag controls on chat messages for the six training players. Turn off to retire the pilot instrumentation.</span>
         </span>
       </label>
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;border-bottom:1px solid var(--border)">
         <input type="checkbox" id="chat-image-preview-toggle" ${imagePreviewOn ? 'checked' : ''} />
         <span>
           <span class="form-label" style="margin:0;display:block">Show image previews in chat</span>
           <span class="text-muted text-xs" style="display:block">Renders a pasted image link inline. Off by default — the image host can see who views it.</span>
+        </span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;border-bottom:1px solid var(--border)">
+        <input type="checkbox" id="scribe-interactive-toggle" ${scribeInteractiveOn ? 'checked' : ''} />
+        <span>
+          <span class="form-label" style="margin:0;display:block">SCRIBE answers @mentions (interactive, LLM-backed)</span>
+          <span class="text-muted text-xs" style="display:block">Lets a direct @SCRIBE question get a real, tool-grounded answer instead of only the canned reply. Costs real money per question — see backend/Code.gs for the Script Property spend caps and kill switch. Off here just saves a round trip; the server's own switch is authoritative.</span>
+        </span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;border-bottom:1px solid var(--border)">
+        <input type="checkbox" id="scribe-websearch-toggle" ${scribeWebSearchOn ? 'checked' : ''} />
+        <span>
+          <span class="form-label" style="margin:0;display:block">SCRIBE can search the web (starters, injuries, rankings, news)</span>
+          <span class="text-muted text-xs" style="display:block">Only matters when the toggle above is on. The most expensive tool call in the system — turn off to prove out cost on score/spread/league questions first.</span>
+        </span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+        <input type="checkbox" id="scribe-learnings-toggle" ${scribeLearningsOn ? 'checked' : ''} />
+        <span>
+          <span class="form-label" style="margin:0;display:block">SCRIBE Trainer learnings active</span>
+          <span class="text-muted text-xs" style="display:block">Lets commissioner-approved Trainer learnings and Canon examples reach SCRIBE's live replies. Turn off to run on the base persona alone — an emergency stop, separate from approving/rejecting individual learnings (Comm→Data).</span>
         </span>
       </label>
       <div class="divider"></div>
@@ -7858,6 +8191,27 @@ function renderCommExtrasV16(week, games) {
       ? '🖼️ Image previews enabled in chat'
       : '🖼️ Image previews disabled in chat', 'success');
     if (state.currentTab === 'chat') { try { renderChatPage(); } catch {} }
+    renderCommPage();
+  });
+  document.getElementById('scribe-interactive-toggle')?.addEventListener('change', e => {
+    saveSetting('scribeInteractiveEnabled', e.target.checked);
+    showToast(e.target.checked
+      ? '🤖 SCRIBE will try to answer @mentions for real (server switch must also be on)'
+      : '🤖 SCRIBE @mentions get the canned reply only — round trip skipped client-side', 'success');
+    renderCommPage();
+  });
+  document.getElementById('scribe-websearch-toggle')?.addEventListener('change', e => {
+    saveSetting('scribeWebSearchEnabled', e.target.checked);
+    showToast(e.target.checked
+      ? '🔎 SCRIBE web search enabled (server switch must also be on)'
+      : '🔎 SCRIBE web search off — score/spread/league answers only', 'success');
+    renderCommPage();
+  });
+  document.getElementById('scribe-learnings-toggle')?.addEventListener('change', e => {
+    saveSetting('scribeLearningsEnabled', e.target.checked);
+    showToast(e.target.checked
+      ? '🧠 Trainer learnings active — approved learnings/Canon reach SCRIBE again'
+      : '🧠 Trainer learnings OFF. SCRIBE runs on the base persona alone.', 'success');
     renderCommPage();
   });
   document.getElementById('ep-detect-btn')?.addEventListener('click', async () => {

@@ -74,6 +74,7 @@ import {
   sendMessage, sendEvent, editMessage, deleteMessage, toggleReact, pinMessage,
   sendGameReact, retryFailed, isFailed, isPending,
   unreadCount, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
+  latestUnreadNotifying, readThroughSeq,
   backfill, chatDigest as _digest, setViewOpen,
   getRetentionDays, isChatEnabled,
   backfillBlockedByEpoch,
@@ -340,7 +341,10 @@ function showToast(msg, { force = false } = {}) {
   // RG-25 — the player already acknowledged this message on the OTHER surface
   // (dashboard teaser ✕, or by opening the room). One acknowledgement, both
   // surfaces. Forced system announcements carry no seq and are never gated.
-  if (!force && typeof msg?.seq === 'number' && msg.seq <= _notifAckSeq()) return;
+  // The watermark is TAG-AWARE: a message posted in a game thread is
+  // acknowledged by reading THAT thread as well as by reading the room, which
+  // is the same two-level rule the unread badge uses (chat.js readCursorFor).
+  if (!force && typeof msg?.seq === 'number' && msg.seq <= notifAckThroughSeq(msg.gameTag)) return;
   U.toastQueue.push(msg);
   if (!U.toastShowing) drainToast();
 }
@@ -1130,9 +1134,14 @@ function openFeedbackTextModal({ targetId, category, title, placeholder, submitL
 function messageHTML(m, self, showNewDivider) {
   if (m.type === 'system') {
     const reveal = m.meta?.kind === 'reveal';
+    // Build 2, Group C — the scribeAskAck placeholder (C-5). Same RG-09
+    // pending visual language as an outbound message's 🕐 (no new vocabulary),
+    // full-opacity text (this is a real, already-broadcast event, not a
+    // client-side optimistic guess).
+    const scribeAck = m.meta?.kind === 'scribeAsk';
     return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
-      <div class="chat-msg chat-system${reveal ? ' chat-reveal' : ''}" data-mid="${esc(m.id)}">
-        <div class="chat-system-body">${reveal ? `<div class="chat-reveal-title">🔓 ${esc(m.meta?.title || 'Picks are in')}</div>` : ''}${bodyHTML(m).replace(/\n/g, '<br>')}</div>
+      <div class="chat-msg chat-system${reveal ? ' chat-reveal' : ''}${scribeAck ? ' chat-scribe-ack' : ''}" data-mid="${esc(m.id)}">
+        <div class="chat-system-body">${reveal ? `<div class="chat-reveal-title">🔓 ${esc(m.meta?.title || 'Picks are in')}</div>` : ''}${scribeAck ? '🕐 ' : ''}${bodyHTML(m).replace(/\n/g, '<br>')}</div>
         <span class="chat-time">${relTime(m.ts)}</span>
       </div>`;
   }
@@ -1296,6 +1305,7 @@ export function renderChatPage() {
   }
   else if (U.filter === 'all') list = getMessages({ tag: 'all', respectRetention: true });
   else list = getMessages({ tag: U.filter, respectRetention: true });
+  list = filterSupersededScribeAcks(list);
 
   const showSys = getNotifPrefs().systemEvents;
   if (!showSys) list = list.filter(m => m.type !== 'system');
@@ -1516,6 +1526,49 @@ function currentComposerTag() {
   const viewTag = ['all', 'records', 'mentions'].includes(U.filter) ? '' : U.filter;
   return resolveTag({ replyTo: U.replyTo, viewTag });
 }
+
+/**
+ * Build 2, Group C (2026-09-10, C-5 — Drew's broadcast-ack ruling) —
+ * supersession for the `scribeAskAck` placeholder. The server appends a
+ * `type:'system'`, `meta.kind:'scribeAsk'` event the moment it wins the
+ * dedup lock for a mention (id `scribe_ack_<triggerMessageId>`, `targetId`
+ * = the triggering message's id) so EVERY device sees "SCRIBE is looking
+ * into it…" on the next ordinary poll. Neither event is ever mutated or
+ * deleted (append-only log, AD-10) — this is a RENDER-time fold, the same
+ * hide-not-destroy shape chat retention/the epoch clear already use: once
+ * the real reply (or the client's degraded fallback — same deterministic id,
+ * `scribe_llm_<triggerMessageId>`, by construction) exists in the fold, the
+ * ack is filtered out of what's displayed. `getMessage()` is an O(1) Map
+ * lookup, so this costs nothing per render pass.
+ */
+// B3c remediation (2026-09-10, round 1) — render-time staleness bound. Without
+// this, an ack that never gets superseded (the server crashed before posting
+// a reply AND the asker's own tab was closed/backgrounded before the client
+// degrade fallback ever ran) pinned "SCRIBE is looking into it…" on screen
+// FOREVER, on every device, for that trigger. Device-local, no write: the
+// underlying ack event is untouched in the fold (AD-10 hide-not-destroy) —
+// this only affects what THIS render pass shows.
+const SCRIBE_ACK_STALE_MS = 5 * 60 * 1000;
+
+function filterSupersededScribeAcks(list) {
+  return list.filter(m => {
+    if (m.type !== 'system' || m.meta?.kind !== 'scribeAsk') return true;
+    // NOTE: read triggerMessageId from `meta`, not `m.targetId` — chat.js's
+    // fold (`newItem()`) never copies `targetId` onto a rendered item (it's
+    // consumed transiently, only by mutation-style events like react/edit/
+    // delete/pin, to find their target). `meta` is preserved verbatim, so
+    // that's the durable field to key supersession on — Code.gs's
+    // `scribePostAck_` sets both `targetId` (server-side bookkeeping) and
+    // `meta.triggerMessageId` (client-visible) for exactly this reason.
+    if (getMessage(`scribe_llm_${m.meta?.triggerMessageId}`)) return false;   // superseded by the real (or degraded) reply
+    if (Date.now() - (m.ts || 0) > SCRIBE_ACK_STALE_MS) return false;         // B3c — stop showing it after 5 minutes with no reply
+    return true;
+  });
+}
+/** Test-only (same convention as `_renderSheetMessagesForTest` above) — lets
+ *  scribetest.mjs exercise the REAL supersession fold without also driving
+ *  full page rendering. */
+export function _filterSupersededScribeAcksForTest(list) { return filterSupersededScribeAcks(list); }
 
 function mentionCandidates(prefix) {
   const names = [...getPlayers().filter(p => p.active).map(p => ({ id: p.playerId, name: nameOf(p.playerId) })),
@@ -2318,7 +2371,7 @@ function renderSheetMessages() {
   const self = me();
   // Retention applies here too — otherwise a player could dodge the window by
   // opening a game's bottom sheet instead of the main room (UN-88).
-  const list = coalesceStream(getMessages({ tag: U.sheetGameId, respectRetention: true }));
+  const list = coalesceStream(filterSupersededScribeAcks(getMessages({ tag: U.sheetGameId, respectRetention: true })));
   host.innerHTML = list.length
     ? list.map(item => item.kind === 'gamereact-run' ? gamereactRunHTML(item) : messageHTML(item, self, false)).join('')
     : '<div class="chat-empty">No entries for this game yet.</div>';
@@ -2385,10 +2438,56 @@ function teaserDismissedSeq() {
 function setTeaserDismissedSeq(seq) {
   lsSet(TEASER_DISMISS_KEY, String(Math.max(Number(seq) || 0, teaserDismissedSeq())));
 }
+/**
+ * The ONE "this device has acknowledged notifications through seq N" value,
+ * read by both announcing surfaces. TWO things acknowledge a message, and
+ * only one of them was ever consulted here:
+ *
+ *  1. an explicit ✕ on the toast or the teaser  -> teaserDismissedSeq()
+ *  2. READING THE ROOM                          -> getLastSeen().seq
+ *
+ * Drew, live v0.19.0 (2026-09-10): "the chat function keeps popping up the
+ * most recent message at the top of the dashboard regardless of how many
+ * times I click into it … it starts off blank, and then will populate all of
+ * the messages and I will re-get the current in-app notification." Opening the
+ * room is the most complete form of reading a message there is, and it left
+ * (1) untouched — so every return to the Dashboard, and every post-reload
+ * backfill (the fold is rebuilt from the transport on every boot, so the
+ * re-announcement rides in with the messages), re-announced something already
+ * read. The floating toast never had this bug because initChatUI()'s
+ * subscriber already gates it on `latest.seq > getLastSeen().seq`; the teaser
+ * was the one surface that consulted only half the state.
+ *
+ * Derived, not a third stored watermark — a stored copy is exactly the
+ * two-representations-of-one-concept drift AD-20/RG-25 warn about. MONOTONIC
+ * by construction (RG-14): both inputs are monotonic and max() of two
+ * monotonic values is monotonic, so neither half can un-acknowledge what the
+ * other already acknowledged.
+ *
+ * The read half is TAG-AWARE, and that is the whole of the follow-up fix.
+ * Read state is two-level: markSeen('all') advances the room cursor,
+ * markSeen(gameId) — what openGameChatSheet() calls — advances `byTag` only.
+ * Consulting `.seq` alone meant a message read inside its own game thread
+ * still counted as unacknowledged here, so the teaser re-announced the exact
+ * message the unread badge had already zeroed. `readThroughSeq(tag)` is
+ * chat.js's single definition of that cursor — not a copy of the expression.
+ *
+ * Note what this deliberately does NOT do: reading game thread g1 raises the
+ * watermark for messages tagged g1 and nothing else, so an unrelated unread
+ * room message is still announced (it just falls through to that message
+ * instead of re-announcing the one that was read).
+ */
+function notifAckThroughSeq(tag = 'all') {
+  return Math.max(teaserDismissedSeq(), readThroughSeq(tag));
+}
 // Test-only accessors (underscore-prefixed per this file's convention — see
 // _toastWouldSuppress, _reactionsHTML) so loadtest drives the real shared
-// state rather than a re-implementation of it.
+// state rather than a re-implementation of it. `_notifAckSeq` is deliberately
+// the DISMISSAL watermark alone — RG-25's assertions are about what an
+// explicit ✕ writes — while `_notifAckThroughSeq` is the derived gate the
+// surfaces actually read.
 export function _notifAckSeq() { return teaserDismissedSeq(); }
+export function _notifAckThroughSeq(tag = 'all') { return notifAckThroughSeq(tag); }
 export function _ackNotif(seq) { setTeaserDismissedSeq(seq); }
 
 /**
@@ -2401,17 +2500,21 @@ export function _ackNotif(seq) { setTeaserDismissedSeq(seq); }
  *  - chat disabled (item A): not rendered.
  *  - zero messages ever (no notifying message exists): not rendered — no
  *    empty card taking up dashboard space.
- *  - dismissed, no new activity since (latest notifying seq <= dismissed
- *    seq): not rendered.
- *  - new activity since dismissal: rendered.
+ *  - acknowledged, nothing unread left (every notifying message is either at
+ *    or below the ✕ dismissal, or already read — in the room OR inside its
+ *    own game thread): not rendered.
+ *  - new activity since that acknowledgement: rendered.
  */
 export function dashboardChatTeaserHTML() {
   if (!isChatEnabled()) return '';
   const self = me();
-  const latest = latestNotifying(self);
-  if (!latest) return '';                                    // zero messages ever
+  // The newest notifying message that is STILL UNREAD for this viewer, above
+  // the ✕-dismissal watermark. Falls through a message already read (in the
+  // room or in its own game thread) to the next one down, so a per-tag read
+  // silences only what it actually read. null => nothing to announce.
+  const latest = latestUnreadNotifying(self, teaserDismissedSeq());
+  if (!latest) return '';
   const latestSeq = typeof latest.seq === 'number' ? latest.seq : 0;
-  if (latestSeq <= teaserDismissedSeq()) return '';           // dismissed, nothing new since
   const n = self ? unreadCount(self, 'all') : 0;
   const preview = `<strong>${esc(nameOf(latest.author))}</strong>: ${esc(latest.body.slice(0, 64))}`;
   return `

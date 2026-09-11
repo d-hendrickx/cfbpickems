@@ -30,10 +30,22 @@
  * a device or requests permission until `OneSignal.init({appId})` actually runs
  * with a real App ID, so those listeners simply never fire in production today.
  *
- * VERIFICATION NOTE — same caveat as js/push-onesignal.js: builder could not
- * reach OneSignal's live docs during this pass to confirm the exact current
- * v16 service-worker script URL. If it has moved by the time Drew ships this,
- * update the URL below; nothing else in this file changes.
+ * VERIFIED 2026-09-10 (the caveat that used to sit here is resolved):
+ *   • https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js → HTTP 200,
+ *     39,725 bytes. The URL below is current.
+ *   • OneSignal's own "OneSignal service worker" doc states the combine
+ *     pattern verbatim: "To combine, add the OneSignal importScripts line to
+ *     your existing service worker file… After combining, update the OneSignal
+ *     configuration to point to your existing service worker file", and "You
+ *     can rename the file if needed." So this merge IS the supported setup —
+ *     NOT a workaround, and NOT a second registration.
+ *   • The other half of it lives in js/push-onesignal.js's init(): the SDK
+ *     only honours our worker filename when init passes `path` AND
+ *     `serviceWorkerOverrideForTypical: true` (a "Typical Site" dashboard
+ *     otherwise overrides it back to the default OneSignalSDKWorker.js, which
+ *     this site does not host — that URL 404s in production). notifytest.mjs
+ *     [24g] holds the two files to the same filename; do not rename this file
+ *     without reading that assertion.
  *
  * Any change to this file requires the usual cache-bust (CACHE_NAME + all
  * three `?v=` references in index.html) — per this batch's task instructions,
@@ -54,13 +66,14 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v19-0';
+const CACHE_NAME = 'cfb-pickems-v20-0';
 
 const STATIC_ASSETS = [
   './',
   './index.html',
   './css/styles.css',
   './js/app.js',
+  './js/sw-register.js',
   './js/data-model.js',
   './js/storage.js',
   './js/data-provider.js',
@@ -74,6 +87,8 @@ const STATIC_ASSETS = [
   './js/history-2025.js',
   './js/chat-ui.js',
   './js/scribeLines.js',
+  './js/scribeAgent.js',     // statically imported by app.js/chat-ui.js — boot-critical (reviewer N1, 2026-09-10)
+  './js/scribeFeedback.js',  // same — omitted from the shell cache after the Build 1 merge
   './js/extra-point.js',
   './js/recap.js',
   './manifest.json',
@@ -100,9 +115,25 @@ self.addEventListener('activate', event => {
   );
 });
 
-// ── MESSAGE: allow page to trigger immediate SW takeover ─────────────────────
+// ── MESSAGE: page → worker control channel ───────────────────────────────────
+//   SKIP_WAITING — allow the page to trigger immediate SW takeover.
+//   GET_VERSION  — report CACHE_NAME so the page can tell a REAL app-shell
+//                  update from a controller flip that changed nothing (F1,
+//                  2026-09-10). The OneSignal SDK re-registers THIS SAME FILE
+//                  under its own query string; that fires `controllerchange`
+//                  with an identical shell, and the page used to reload on it
+//                  unconditionally — see js/sw-register.js. Answered on the
+//                  MessagePort the page supplies; a worker deployed before
+//                  this change simply never answers, and the page treats
+//                  "no answer" as unknown and reloads, so the genuine update
+//                  path survives the transition.
 self.addEventListener('message', event => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (!event.data) return;
+  if (event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data.type === 'GET_VERSION') {
+    try { event.ports && event.ports[0] && event.ports[0].postMessage({ type: 'VERSION', cacheName: CACHE_NAME }); }
+    catch (err) { /* port closed — the page gave up and reloaded already */ }
+  }
 });
 
 // ── FETCH ─────────────────────────────────────────────────────────────────────

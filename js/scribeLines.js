@@ -41,6 +41,13 @@
  */
 
 import { sendEvent } from './chat.js';
+// Build 2, Group C (2026-09-10, UN-150…154) — the @scribe mention branch now
+// calls the interactive (LLM-backed) runtime instead of posting a canned
+// line unconditionally. One-directional import (scribeAgent.js never imports
+// this module) so there is no cycle: scribeAgent.js is a thin backend relay
+// + settings gate, this module owns the pool/fallback/dedup mechanics it
+// already owned before this build.
+import { isScribeInteractiveEnabled, scribeAskRemote } from './scribeAgent.js';
 
 // UN-160 (E2) — a hand-bumped constant, analogous to APP_VERSION (js/app.js):
 // bump it alongside a SCRIBE_POOLS content edit so a feedback record can tell
@@ -98,6 +105,11 @@ export const SCRIBE_POOLS = {
   // v2.1: `mention` is the Tier-0 degraded fallback for a direct @scribe
   // mention — honest, in-register "not engaging with that right now," never
   // a mock-legal brush-off.
+  // B3 remediation (2026-09-10, round 1) — widened 6 -> 10 lines so the pool
+  // takes longer to fully burn within the 14-day reuse window, per the
+  // reviewer's B3b finding: a fully-burned pool used to mean silence on a
+  // direct @scribe mention (see scribeMentionDegraded()'s LAST_RESORT line,
+  // below, for the hard floor beneath even this).
   mention: [
     'Not touching that one right now, {NAME}.',
     'Not getting into that one right now. Standings are public if you want the real answer.',
@@ -105,6 +117,10 @@ export const SCRIBE_POOLS = {
     'Not the moment for that, {NAME}. Ask again later.',
     'I keep the receipts, {NAME}. I do not issue predictions.',
     'That one\'s not happening right now. Standings don\'t lie, though, if that helps.',
+    'Ask the standings page, {NAME}. It answers faster than I will right now.',
+    'Sitting this one out, {NAME}.',
+    'Not right now. The record\'s public if you want to check it yourself.',
+    'Give it a minute, {NAME}. Try again later.',
   ],
   backdoorBust: [
     'Rough ending. Backdoor cover, right at the gun.',
@@ -231,6 +247,88 @@ function pickLine(poolKey, vars = {}) {
 /** Time bucket for deterministic ids (10-minute granularity). */
 function bucket(ms = Date.now(), sizeMin = 10) { return Math.floor(ms / (sizeMin * 60000)); }
 
+// ── Build 2, Group C (2026-09-10) — degraded-mode fallback for the
+// interactive @scribe mention ────────────────────────────────────────────
+// Drew's C-2 ruling: on throttle/budget-cap/outage, SCRIBE degrades to the
+// existing static `mention` pool AND must VISIBLY tell players it's running
+// on canned lines — a degraded reply must never read as an ordinary LLM
+// answer. This reuses the SAME pool/ledger/no-repeat mechanics as
+// `scribeTrigger('mention', …)` (via `pickLine`, not duplicated), always
+// bypasses the rate limit (mirrors `scribeTrigger`'s own `direct` bypass —
+// a direct question should never be silently dropped), and uses the SAME
+// deterministic id the real LLM reply would use (`scribe_llm_<id>`) so a
+// genuine race between "the real answer actually did land" and "the client
+// gave up and degraded" collapses to one post at the server's id-dedupe,
+// exactly the mechanism this file's header already documents for tier-0.
+const DEGRADED_SUFFIX = ' (running on canned lines right now)';
+
+// B3b remediation (2026-09-10, round 1) — a hard floor BENEATH the mention
+// pool itself. `pickLine('mention', …)` returns null only when every line in
+// the pool is within its 14-day reuse window — previously that meant
+// `scribeMentionDegraded` returned `false` and posted NOTHING, which is
+// exactly the "permanent orphan ack" failure mode this remediation round
+// exists to close: a direct @scribe question must never go answered with
+// total silence. This line deliberately bypasses `pickLine()`'s reuse
+// ledger entirely (it isn't drawn from SCRIBE_POOLS.mention and is never
+// marked used), so it can post on the coldest possible day without waiting
+// out anyone else's cooldown.
+const LAST_RESORT_MENTION_LINE = "Can't get to that one right now.";
+
+export function scribeMentionDegraded({ gameTag = '', subject = '', vars = {}, triggerMessageId = null } = {}) {
+  const line = pickLine('mention', vars) || LAST_RESORT_MENTION_LINE;
+  const id = `scribe_llm_${triggerMessageId || subject || 'x'}`.replace(/[^a-zA-Z0-9_:-]/g, '');
+  sendEvent({ type: 'message', gameTag, body: line + DEGRADED_SUFFIX, author: 'scribe', id,
+              notify: true, replyTo: triggerMessageId || '',
+              meta: { source: 'tier0', trigger: 'mention', scribeVersion: SCRIBE_VERSION,
+                      degraded: true,
+                      ...(triggerMessageId ? { triggerMessageId } : {}) } });
+  return true;   // B3b — this function ALWAYS posts now; there is no silent-no-op path left
+}
+
+/**
+ * Orchestrates one `@scribe` mention: gate → call the interactive runtime →
+ * degrade on any non-answer outcome. Fire-and-forget from the caller's
+ * perspective (`scribeInspectMessage` stays synchronous) — this is the one
+ * async edge in an otherwise synchronous module, which is why it's a
+ * dedicated function rather than folded into `scribeTrigger` itself.
+ */
+async function fireScribeMention({ gameTag, author, authorName, triggerMessageId }) {
+  const vars = { name: authorName };
+  if (!isScribeInteractiveEnabled()) {
+    // Client-side convenience gate off. Mirrors the server kill-switch
+    // contract (C1): a disabled trigger still answers via the pool today's
+    // players are used to, not silence — the client-visible gate is an
+    // OFF-ramp for cost, not a UX regression while it's flipped off.
+    return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
+  }
+  try {
+    const r = await scribeAskRemote({ triggerMessageId, playerId: author, gameTag });
+    // F4/B3a remediation (2026-09-10, round 1) — a real message id is the
+    // ONLY thing that counts as "answered," whether it's a fresh reply or a
+    // dedup that landed after the fact. Everything else degrades, including:
+    //   - r.disabled (F4)         — the SERVER kill switch off used to mean
+    //     total silence ("matches today's behavior" was wrong: today's
+    //     ACTUAL pre-Build-2 behavior was the canned pool always posting on
+    //     @scribe — shipping with the Script Property off by default made
+    //     the default deploy a silent regression).
+    //   - deduped:true with NO responseMessageId (B3a) — either a
+    //     still-in-flight answer or a reclaimed-and-still-failing one; the
+    //     degrade fallback is SAFE to fire here even if the real answer is
+    //     genuinely still coming, because both paths post under the exact
+    //     same deterministic id (scribe_llm_<triggerMessageId>) — the
+    //     server's own id-dedupe collapses a late real answer and an early
+    //     degrade to a single row, never two posts.
+    //   - throttled / budget-capped / outage / anything else ok:true-but-
+    //     no-answer.
+    if (r && r.ok && r.responseMessageId) return true;
+    return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
+  } catch {
+    // Network/outage failure reaching scribeAsk at all → same degrade path
+    // (C1: throttle, budget-cap and outage share ONE visible fallback).
+    return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
+  }
+}
+
 /**
  * Fire a SCRIBE trigger. Silently drops when rate-limited or the pool is spent.
  * `trigger`: key of SCRIBE_POOLS. `subject`: stable string identifying the event
@@ -277,9 +375,18 @@ const recentByAuthor = new Map();  // author -> [timestamps]
 export function scribeInspectMessage({ author, authorName, body, gameTag = '', standings = null, triggerMessageId = null }) {
   const low = (body || '').toLowerCase();
 
-  // 1. Direct @scribe mention with a question
+  // 1. Direct @scribe mention with a question — Build 2, Group C: this used
+  // to post a canned line synchronously and unconditionally. It now hands
+  // off to the interactive (LLM-backed) runtime, fire-and-forget (this
+  // function's own synchronous contract is unchanged — callers never awaited
+  // its return value for anything consequential). `fireScribeMention` itself
+  // decides between a real answer and the degraded canned-pool fallback.
   if (low.includes('@scribe')) {
-    return scribeTrigger('mention', { gameTag, subject: author, vars: { name: authorName }, triggerMessageId });
+    // Returns the PROMISE (not a bare `true`) so a caller that wants to
+    // await the eventual post — a test, mainly — can; every REAL call site
+    // today (chat-ui.js) ignores the return value entirely, so this is
+    // fire-and-forget in production exactly as before, just now awaitable.
+    return fireScribeMention({ gameTag, author, authorName, triggerMessageId });
   }
   // 2. Drink debt vocabulary
   if (/\bdrink|owes?\b|\bbalance|\bbeer|\bsapporo\b/.test(low)) {

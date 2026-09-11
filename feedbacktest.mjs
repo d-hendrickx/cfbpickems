@@ -694,7 +694,15 @@ assert(typeof getFeedbackFor('wi_human').p1.weigh_in === 'string', 'the weigh_in
 console.log('\n[14] E2 — meta.triggerMessageId / meta.scribeVersion on SCRIBE posts…');
 
 _resetForTest();
-const mentionOk = scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: '@scribe how am I doing', gameTag: '', triggerMessageId: 'human_msg_42' });
+// Build 2, Group C (2026-09-10) — the mention branch now calls the
+// interactive (LLM-backed) runtime first and only falls back to the tier-0
+// canned pool afterward, so `scribeInspectMessage()`'s mention path is now
+// genuinely async (it always was a network call in production; the OLD
+// synchronous canned-line-only contract was the thing that couldn't survive
+// this feature existing). The backend isn't configured in this test
+// environment, so `scribeAskRemote()` rejects immediately and this resolves
+// via the SAME degraded-fallback path exercised in scribetest.mjs.
+const mentionOk = await scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: '@scribe how am I doing', gameTag: '', triggerMessageId: 'human_msg_42' });
 assert(mentionOk === true, 'fixture check: the @scribe mention trigger actually fired (not rate-limited/pool-exhausted)');
 const scribeReply = getMessages({ tag: 'all', types: ['message'] }).find(m => m.author === 'scribe');
 assert(!!scribeReply, 'fixture check: a SCRIBE reply was actually folded');

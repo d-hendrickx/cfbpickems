@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=19-0" />
+  <link rel="stylesheet" href="css/styles.css?v=20-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -207,38 +207,25 @@
 <div id="toast-container"></div>
 
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=19-0"></script>
-<script>
+<script type="module" src="js/app.js?v=20-0"></script>
+<script type="module">
   // Service worker registration + auto-update.
-  // When a new SW takes over (e.g. v10 replacing v9), force a one-time reload
-  // so the user sees the new code instead of the cached v9 shell.
+  // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
+  // it could be tested without a browser — notifytest.mjs [25]. Behaviour is
+  // unchanged for first install and for a genuine release; what changed is
+  // that we no longer re-register a differently-queried URL for a worker that
+  // is already registered (the OneSignal SDK registers the SAME file as
+  // `?appId=…&sdkVersion=…`, and each side re-registering the other's file at
+  // the same scope produced an endless install → claim → reload cycle), and a
+  // `controllerchange` only reloads when the shell's CACHE_NAME really changed.
+  // NOTE: the `?v=` below is still bumped with every release per the deploy
+  // checklist, but CACHE_NAME inside service-worker.js is what invalidates the
+  // cache — see the RG-04 note in js/sw-register.js.
+  import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('service-worker.js?v=19-0')
-        .then(reg => {
-          console.log('[SW] registered:', reg.scope);
-          // If there's already a waiting worker, tell it to activate now.
-          if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-          // Watch for new installations and tell them to take over.
-          reg.addEventListener('updatefound', () => {
-            const newSW = reg.installing;
-            if (!newSW) return;
-            newSW.addEventListener('statechange', () => {
-              if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
-                newSW.postMessage({ type: 'SKIP_WAITING' });
-              }
-            });
-          });
-        })
-        .catch(e => console.warn('[SW] failed', e));
-
-      // When a new SW takes control mid-session, reload exactly once.
-      let reloaded = false;
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        if (reloaded) return;
-        reloaded = true;
-        window.location.reload();
-      });
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=20-0' })
+        .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }
 </script>

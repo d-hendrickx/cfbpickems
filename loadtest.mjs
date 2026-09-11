@@ -72,7 +72,7 @@ function assert(cond, label) {
 // ── 1. Module import smoke test ───────────────────────────────────────────────
 console.log('\n[1] Importing all modules…');
 const mods = {};
-for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'backend', 'chatTransport', 'chat', 'scribeLines', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'chat-ui', 'app']) {
+for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'chat-ui', 'app']) {
   try {
     mods[m] = await import(`./js/${m}.js`);
     console.log('  ✅ js/' + m + '.js');
@@ -7773,6 +7773,382 @@ console.log('\n[66] Items E/F re-review close-out — SCRIBE feedback + image pr
   storage.saveSetting('chatImagePreviewEnabled', false);
   assert(chatMod66.isChatImagePreviewEnabled() === false,
     'turning the toggle OFF (chatImagePreviewEnabled=false, also the shipped default) is honored by isChatImagePreviewEnabled()');
+}
+
+// ── 67. B2 remediation (2026-09-10, reviewer BLOCK) — scribeToolsTwin.mjs is
+// NOW ACTUALLY part of this mandatory run ──────────────────────────────────
+// backend/Code.gs's own header comment on the C3 ported-twin block claimed
+// scribeToolsTwin.mjs was "wired into loadtest.mjs's mandatory run" — it was
+// not: the file existed and passed standalone, but `node loadtest.mjs` never
+// executed it, so a drift regression between Code.gs's twins and the real
+// js/scoring.js|storage.js|data-model.js functions they port would have
+// shipped silently, one release at a time, with every OTHER loadtest section
+// green. Spawned as a subprocess (same precedent as section [33]'s
+// execFileSync probes) rather than imported directly: scribeToolsTwin.mjs
+// loads backend/Code.gs into a fresh `vm` context of its own, and doing that
+// import-side-effect-laden work a second time inside THIS process's already-
+// populated module graph risks exactly the "dirty state" class of false pass
+// section [33] warns about for storage.js. A subprocess gets a clean process,
+// full stop.
+console.log('\n[67] scribeToolsTwin.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['scribeToolsTwin.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `scribeToolsTwin.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch, `scribeToolsTwin.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch) {
+    assert(summaryMatch[1] === '✅ ALL PASS', `scribeToolsTwin.mjs itself reports ALL PASS (got: ${summaryMatch[0]})`);
+    assert(Number(summaryMatch[3]) === 0, `scribeToolsTwin.mjs reports zero failed assertions (got ${summaryMatch[3]} failed, ${summaryMatch[2]} passed)`);
+    assert(Number(summaryMatch[2]) >= 10, `scribeToolsTwin.mjs actually ran a non-trivial number of assertions (got ${summaryMatch[2]} — a near-zero count would mean the drift guard is vacuous)`);
+  }
+}
+
+// ── 68. trainertest.mjs — spawned as a subprocess, same shape as [67] ───────
+// Build 2b, Group E (2026-09-10, UN-161…163). Same "clean process" reasoning
+// section [67] gives for scribeToolsTwin.mjs: trainertest.mjs loads
+// backend/Code.gs into its OWN fresh `vm` context AND does real ESM imports
+// of js/app.js/js/storage.js/js/scribeAgent.js — doing all of that a second
+// time inside THIS already-populated module graph risks the same "dirty
+// state" false-pass class [67]'s own comment names.
+console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['trainertest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `trainertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch68 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch68, `trainertest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch68 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch68) {
+    assert(summaryMatch68[1] === '✅ ALL PASS', `trainertest.mjs itself reports ALL PASS (got: ${summaryMatch68[0]})`);
+    assert(Number(summaryMatch68[3]) === 0, `trainertest.mjs reports zero failed assertions (got ${summaryMatch68[3]} failed, ${summaryMatch68[2]} passed)`);
+    assert(Number(summaryMatch68[2]) >= 10, `trainertest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch68[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 69. RG — the dashboard chat teaser re-announces a message already READ ──
+// Drew, live v0.19.0, 2026-09-10, verbatim: "the 'chat' function keeps popping
+// up the most recent message at the top of the dashboard regardless of how
+// many times I click into it. The chat also takes a while to load, it starts
+// off blank, and then will populate all of the messages and I will re-get the
+// current 'in app notification' at the top of the dashboard."
+//
+// ONE defect in two costumes. dashboardChatTeaserHTML() gated visibility on
+// the ✕-dismissal watermark ALONE (`latestSeq <= teaserDismissedSeq()`), and
+// nothing else — so OPENING THE ROOM, which is the most complete form of
+// reading a message there is, never suppressed the teaser. Only the ✕ did.
+//  (a) navigate Chat -> Dashboard: renderDashboard() re-inserts the card.
+//  (b) reload: the fold starts empty (nothing is cached device-locally —
+//      S.items is rebuilt entirely from the transport, which is also the
+//      "starts off blank" half of the report), so the teaser is correctly
+//      absent on first paint; when the backfill lands ~10-20s later it fires
+//      notify('events') and the teaser re-appears for a message read in the
+//      PREVIOUS session, because K_LASTSEEN persisted across the reload and
+//      the teaser never consulted it.
+// The floating toast already consulted the read cursor for exactly this
+// reason (initChatUI's subscriber: `latest.seq > getLastSeen().seq`); the
+// teaser was the one surface that didn't. Fixed by deriving ONE
+// "acknowledged through seq N" value — max(✕ dismissal, read cursor) — and
+// gating the teaser on that.
+console.log('\n[69] RG — the dashboard teaser must not re-announce a message already read (v0.19.0 field report)…');
+{
+  const chat69 = mods['chat'], chatUi69 = mods['chat-ui'];
+  const ev69 = o => ({ gameTag: '', type: 'message', author: 'p1', body: '', notify: true, ...o });
+  chat69._resetForTest();
+  storage.saveSetting('chatEnabled', true);
+  storage.saveSetting('chatEpochSeq', 0);
+  storage.saveSetting('chatRetentionDays', 0);
+  localStorage.removeItem('cfbp_chat_lastseen2');
+  localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+  storage.setSession('p2', false, true);          // viewer is p2; p1 is the poster
+  const T69 = 1786500000000;
+
+  // ── Session 1: boot -> backfill -> open the room ──────────────────────────
+  chat69.ingest([
+    ev69({ id: 'rg69a', seq: 41, ts: T69, body: 'anyone taking the over', author: 'p1' }),
+    ev69({ id: 'rg69b', seq: 42, ts: T69 + 60000, body: 'lock of the week', author: 'p1' }),
+  ], 42);
+  assert(/lock of the week/.test(chatUi69.dashboardChatTeaserHTML()),
+    'fixture: the teaser announces the newest unread message before anything is read (non-vacuous baseline)');
+
+  // Tapping the teaser opens the room; renderChatPage()'s 1s mark timer then
+  // calls exactly this. Drew's "click into it".
+  chat69.markSeen('all');
+  assert(chat69.unreadCount('p2', 'all') === 0, 'reading the room clears the unread count (fixture check)');
+  assert(chat69.getLastSeen().seq === 42, 'the device-local read cursor advanced to the head (42)');
+
+  assert(chatUi69.dashboardChatTeaserHTML() === '',
+    'THE BUG (a): back on the dashboard, the teaser does NOT re-announce a message already read ("regardless of how many times I click into it")');
+
+  // ── Session 2: page reload. Module state is gone; device-local storage is
+  // not. _resetForTest() is a faithful stand-in — it clears S.items/S.head
+  // and touches no localStorage key. ──
+  chat69._resetForTest();
+  assert(chatUi69.dashboardChatTeaserHTML() === '',
+    'first paint after reload: nothing folded yet, so nothing is announced');
+  chat69.ingest([
+    ev69({ id: 'rg69a', seq: 41, ts: T69, body: 'anyone taking the over', author: 'p1' }),
+    ev69({ id: 'rg69b', seq: 42, ts: T69 + 60000, body: 'lock of the week', author: 'p1' }),
+  ], 42);
+  assert(chatUi69.dashboardChatTeaserHTML() === '',
+    'THE BUG (b): when the backfill lands after a reload it does not re-announce an already-read message ("I will re-get the current in-app notification")');
+
+  // ── UN-93 must survive: genuinely new activity still gets announced ───────
+  chat69.ingest([ev69({ id: 'rg69c', seq: 43, ts: T69 + 120000, body: 'brand new take', author: 'p1' })], 43);
+  assert(/brand new take/.test(chatUi69.dashboardChatTeaserHTML()),
+    'a strictly newer unread message still surfaces the teaser (UN-93 unchanged — this is not a mute switch)');
+
+  // ── Read state is TWO-LEVEL, and both levels acknowledge ─────────────────
+  // openGameChatSheet() (chat-ui.js) calls markSeen(gameId), which writes
+  // `byTag` and never `.seq`. Gating the teaser on the ROOM cursor alone
+  // therefore left the card re-announcing the very message the player had
+  // just read inside its game thread — with unreadCount(g1) already at 0.
+  // (Found in review of the first fix for this RG; the first fix consulted
+  // half of the read state, which is the same shape as the original bug.)
+  //
+  // The correct pair, and they must BOTH hold:
+  //   (i) the message you read in its thread stops being announced;
+  //  (ii) an unrelated unread ROOM message is not silenced by that read —
+  //       the card falls through to it rather than vanishing. A per-tag read
+  //       acknowledges what it read, nothing else.
+  chat69.ingest([
+    ev69({ id: 'rg69n', seq: 44, ts: T69 + 180000, body: 'unrelated room message', gameTag: '', author: 'p1' }),
+    ev69({ id: 'rg69m', seq: 45, ts: T69 + 240000, body: 'M inside the g1 thread', gameTag: 'g1', author: 'p1' }),
+  ], 45);
+  assert(/M inside the g1 thread/.test(chatUi69.dashboardChatTeaserHTML()),
+    'fixture: the newest unread message (posted in game thread g1) is what the teaser announces');
+
+  chat69.markSeen('g1');                       // the player opens the g1 game sheet
+  assert(chat69.unreadCount('p2', 'g1') === 0,
+    'fixture: reading the g1 thread zeroes that thread\'s unread count (the state the teaser must agree with)');
+  const teaser69 = chatUi69.dashboardChatTeaserHTML();
+  assert(!/M inside the g1 thread/.test(teaser69),
+    'THE BUG (c): reading a message inside its GAME THREAD stops the teaser announcing that exact message (byTag is read state too, not just .seq)');
+  assert(/unrelated room message/.test(teaser69),
+    'and it falls THROUGH to a different unread room message rather than going blank — a per-tag read never silences unrelated room activity');
+
+  // Reading the room clears the fall-through target too (reading the room is
+  // reading every thread — the other direction of the same rule).
+  chat69.markSeen('all');
+  assert(chatUi69.dashboardChatTeaserHTML() === '',
+    'reading the room then clears the fall-through message as well (both levels, one rule)');
+  // Re-arm with genuinely new activity so the monotonic block below is not
+  // asserting against an already-empty teaser.
+  chat69.ingest([ev69({ id: 'rg69o', seq: 46, ts: T69 + 300000, body: 'back to unread', author: 'p1' })], 46);
+  assert(/back to unread/.test(chatUi69.dashboardChatTeaserHTML()),
+    'fixture: new activity after that read re-arms the teaser (non-vacuous baseline for the monotonic cases)');
+
+  // ── Monotonic, both ways. The derived watermark is max(✕, read cursor), so
+  // neither half can rewind the other (RG-14 / RG-25). ─────────────────────
+  chatUi69._ackNotif(99);                          // ✕ dismissal well ahead of the read cursor
+  assert(chatUi69.dashboardChatTeaserHTML() === '', 'an explicit ✕ dismissal above the read cursor still suppresses (the dismissal half is intact)');
+  chat69.markSeen('all');                          // cursor advances to 43 — BELOW the dismissal
+  chat69.ingest([ev69({ id: 'rg69d', seq: 50, ts: T69 + 180000, body: 'below the dismissal', author: 'p1' })], 50);
+  assert(chatUi69.dashboardChatTeaserHTML() === '',
+    'a read cursor BELOW an existing ✕ dismissal never un-dismisses what was already acknowledged (monotonic)');
+  chat69.ingest([ev69({ id: 'rg69e', seq: 120, ts: T69 + 240000, body: 'above everything', author: 'p1' })], 120);
+  assert(/above everything/.test(chatUi69.dashboardChatTeaserHTML()),
+    'and a message above BOTH watermarks is still announced');
+
+  // The unread badge and the teaser must agree about what "read" means — the
+  // reported symptom was a card announcing a message the badge already
+  // considered read (it rendered with no unread dot at all).
+  chat69.markSeen('all');
+  assert(chat69.unreadCount('p2', 'all') === 0 && chatUi69.dashboardChatTeaserHTML() === '',
+    'teaser and unread count agree: zero unread means nothing to announce');
+
+  storage.clearSession();
+  localStorage.removeItem('cfbp_chat_lastseen2');
+  localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+  chat69._resetForTest();
+}
+
+// ── 70. The toast gate reads the same DERIVED, tag-aware acknowledgement ─────
+// Review finding 2 on the [69] fix: showToast()'s suppression named
+// notifAckThroughSeq(), but NOTHING in the suite could tell that apart from
+// the ✕-dismissal watermark alone — reverting that one line to _notifAckSeq()
+// left a fully green run. Same failure mode as RG-25's original: a recorded
+// protection no test could distinguish from its own absence.
+//
+// Two surfaces announce a message (the floating toast and the dashboard
+// teaser) and there is ONE notion of "acknowledged": the ✕ dismissal, OR
+// having read the message — in the room, or inside its own game thread. These
+// assertions pin the read half, and pin that it is per-tag.
+console.log('\n[70] RG — the toast gate uses the derived, tag-aware acknowledgement (review finding 2)…');
+{
+  const chat70 = mods['chat'], chatUi70 = mods['chat-ui'];
+  const ev70 = o => ({ gameTag: '', type: 'message', author: 'p1', body: '', notify: true, ...o });
+  const T70 = 1786500000000;
+  const _realST70 = globalThis.setTimeout, _realCT70 = globalThis.clearTimeout, _realDoc70 = globalThis.document;
+
+  // Minimal DOM harness — the toast must be driven through the REAL
+  // showToast/drainToast (same rule as §32), because the defect being guarded
+  // lives in showToast's gate expression, not in a re-implementation of it.
+  function mkEl70(tag = 'div') {
+    const L = {};
+    return {
+      tagName: tag, id: '', className: '', dataset: {}, style: {},
+      _html: '', _removed: false, _children: [],
+      classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+      set innerHTML(v) { this._html = v; },
+      get innerHTML() { return this._html; },
+      addEventListener(t, fn) { (L[t] ||= []).push(fn); },
+      removeEventListener() {},
+      appendChild(c) { this._children.push(c); return c; },
+      remove() { this._removed = true; DOC70.body._children = DOC70.body._children.filter(x => x !== this); },
+      querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    };
+  }
+  const DOC70 = {
+    body: mkEl70('body'),
+    createElement: t => mkEl70(t),
+    querySelector: () => null, querySelectorAll: () => [],   // no page is "active" -> no page suppression
+    getElementById: id => DOC70.body._children.find(c => c.id === id && !c._removed) || null,
+    addEventListener() {}, removeEventListener() {}, hidden: false,
+  };
+  const live70 = () => DOC70.getElementById('chat-toast');
+  function reset70() {
+    chatUi70._resetToastsForTest();
+    live70()?.remove();
+    localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+  }
+  globalThis.document = DOC70;
+  globalThis.setTimeout = () => 0;          // no auto-dismiss timer fires here
+  globalThis.clearTimeout = () => {};
+
+  try {
+    chat70._resetForTest();
+    storage.saveSetting('chatEnabled', true);
+    storage.saveSetting('chatEpochSeq', 0);
+    storage.saveSetting('chatRetentionDays', 0);
+    localStorage.removeItem('cfbp_chat_lastseen2');
+
+    // 70a — non-vacuous baseline: nothing read, nothing dismissed -> it mounts.
+    reset70();
+    chatUi70._showToastForTest({ author: 'p1', body: 'unread room message', seq: 890, gameTag: '' });
+    assert(!!live70() && /unread room message/.test(live70().innerHTML),
+      'fixture: with nothing read and nothing dismissed, showToast() actually mounts a toast (non-vacuous baseline)');
+
+    // 70b — READING THE ROOM suppresses the toast, with the ✕ watermark still
+    // at zero. This is the assertion that goes red if the gate is reverted to
+    // the dismissal watermark alone.
+    reset70();
+    chat70.ingest([ev70({ id: 't70a', seq: 900, ts: T70, body: 'room activity' })], 900);
+    chat70.markSeen('all');
+    assert(chatUi70._notifAckSeq() === 0,
+      `fixture: the ✕ dismissal watermark is untouched (0) — any suppression below can only come from the READ cursor, got ${chatUi70._notifAckSeq()}`);
+    assert(chatUi70._notifAckThroughSeq() === 900,
+      `the derived acknowledgement picks up the read cursor — got ${chatUi70._notifAckThroughSeq()}`);
+    const depth70 = chatUi70._toastQueueDepth();
+    chatUi70._showToastForTest({ author: 'p1', body: 'already read in the room', seq: 890, gameTag: '' });
+    assert(!live70() && chatUi70._toastQueueDepth() === depth70,
+      'a message already READ IN THE ROOM raises no toast even though nothing was ever ✕-dismissed (gate the toast on the dismissal watermark alone and this goes red)');
+
+    // 70c — and the read half is per-tag, exactly like the unread badge:
+    // reading ONE game thread acknowledges that thread and nothing else.
+    reset70();
+    chat70._resetForTest();
+    localStorage.removeItem('cfbp_chat_lastseen2');
+    chat70.ingest([ev70({ id: 't70b', seq: 910, ts: T70 + 1000, gameTag: 'g1', body: 'posted in g1' })], 910);
+    chat70.markSeen('g1');                                     // openGameChatSheet()
+    assert(chatUi70._notifAckThroughSeq('g1') === 910 && chatUi70._notifAckThroughSeq('all') === 0,
+      `the derived acknowledgement is per-tag: g1 acknowledged through 910, the room still 0 — got ${chatUi70._notifAckThroughSeq('g1')} / ${chatUi70._notifAckThroughSeq('all')}`);
+    chatUi70._showToastForTest({ author: 'p1', body: 'read in its thread', seq: 910, gameTag: 'g1' });
+    assert(!live70(),
+      'a message already read inside its own game thread raises no toast');
+    chatUi70._showToastForTest({ author: 'p1', body: 'unrelated room message', seq: 910, gameTag: '' });
+    assert(!!live70() && /unrelated room message/.test(live70().innerHTML),
+      'but an unrelated ROOM message at the very same seq still does — reading one thread never silences the room (drop the tag argument from the gate and this goes red)');
+
+    // 70d — the dismissal half is NOT tag-scoped: one ✕ covers everything at
+    // or below it, in any thread. max() of the two halves, both directions.
+    reset70();
+    chatUi70._ackNotif(950);
+    const depth70d = chatUi70._toastQueueDepth();
+    chatUi70._showToastForTest({ author: 'p1', body: 'dismissed already', seq: 940, gameTag: 'g2' });
+    assert(!live70() && chatUi70._toastQueueDepth() === depth70d,
+      'an explicit ✕ dismissal still silences a toast in ANY thread — the dismissal half stays room-wide (RG-25 intact)');
+  } finally {
+    globalThis.setTimeout = _realST70;
+    globalThis.clearTimeout = _realCT70;
+    globalThis.document = _realDoc70;
+    localStorage.removeItem('cfbp_chat_lastseen2');
+    localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
+    chat70._resetForTest();
+  }
+}
+
+// ── 71. Transport: no head probe when nothing is known yet ───────────────────
+// "It starts off blank, and then will populate all of the messages" — the fold
+// is rebuilt from the transport on every boot, and the first tick used to pay
+// for TWO sequential Apps Script calls (chatHead, then chatSince) before a
+// single message could render. Cold starts run 10-20s (ledger §5), so that
+// probe can double the blank window. It also buys nothing when nothing is
+// known: whatever the head says, the follow-up call is fetchSince(0).
+//
+// Transport-local — no AD-16 exposure: chatTransport.js remains the only
+// module touching the chat backend, and chat.js's callback shape is unchanged.
+console.log('\n[71] Transport — the first tick with nothing known skips the head probe…');
+{
+  const transport71 = mods['chatTransport'], backend71 = mods['backend'];
+  const _realFetch71 = globalThis.fetch, _realST71 = globalThis.setTimeout, _realCT71 = globalThis.clearTimeout;
+  const calls71 = [];
+  let HEAD71 = 7;
+  let EVENTS71 = [{ id: 'tr1', seq: 7, ts: 1, type: 'message', author: 'p1', body: 'hello', notify: true }];
+  let scheduled71 = null;
+  const flush71 = () => new Promise(r => _realST71(r, 0));
+
+  globalThis.setTimeout = fn => { scheduled71 = fn; return 1; };   // hold the next tick, don't fire it
+  globalThis.clearTimeout = () => {};
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    calls71.push({ action, seq: u.searchParams.get('seq') });
+    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD71 }) };
+    if (action === 'chatSince') return { ok: true, json: async () => ({ ok: true, events: EVENTS71, head: HEAD71 }) };
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  backend71.setBackendConfig('https://example.invalid/exec', 'tok71');
+
+  let known71 = 0, unsub71 = null;
+  try {
+    unsub71 = transport71.subscribe((events, head) => { if (typeof head === 'number' && head > known71) known71 = head; },
+      { getMode: () => 'idle', getKnownHead: () => known71 });
+    await flush71(); await flush71();
+    assert(calls71.length === 1 && calls71[0].action === 'chatSince',
+      `first tick with a known head of 0 makes exactly ONE call and it is chatSince — got [${calls71.map(c => c.action).join(', ')}]`);
+    assert(calls71[0]?.seq === '0',
+      `and it asks for everything from seq 0 — got ${calls71[0]?.seq}`);
+    assert(known71 === 7, 'fixture: the events from that single call were delivered to the subscriber (head advanced to 7)');
+
+    // Later tick, head unchanged: back to the cheap two-phase probe, and it
+    // must NOT re-fetch since the head has not moved.
+    calls71.length = 0;
+    scheduled71?.(); await flush71(); await flush71();
+    assert(calls71.length === 1 && calls71[0].action === 'chatHead',
+      `a later tick probes the cheap head first and skips chatSince when the head has not advanced — got [${calls71.map(c => c.action).join(', ')}]`);
+
+    // Later tick, head advanced: two-phase head-then-since, unchanged.
+    calls71.length = 0;
+    HEAD71 = 9;
+    EVENTS71 = [{ id: 'tr2', seq: 9, ts: 2, type: 'message', author: 'p1', body: 'newer', notify: true }];
+    scheduled71?.(); await flush71(); await flush71();
+    assert(calls71.map(c => c.action).join(',') === 'chatHead,chatSince',
+      `and when the head HAS advanced it follows with chatSince — the two-phase behaviour is preserved for every tick after the first — got [${calls71.map(c => c.action).join(', ')}]`);
+    assert(calls71[1]?.seq === '7',
+      `the follow-up asks only for what is missing (since 7), not the whole log — got ${calls71[1]?.seq}`);
+  } finally {
+    unsub71?.();
+    globalThis.fetch = _realFetch71;
+    globalThis.setTimeout = _realST71;
+    globalThis.clearTimeout = _realCT71;
+    backend71.clearBackendConfig();
+  }
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

@@ -414,6 +414,31 @@ export const DEFAULT_SETTINGS = {
   // FALSE (Drew's D7 ruling: built, off by default) because an inline external
   // <img> is a passive IP-disclosure vector; chat-ui.js reads `=== true`.
   chatImagePreviewEnabled: false,
+  // Build 2, Group C (2026-09-10, UN-150…154) — CLIENT-VISIBLE convenience
+  // gates for the interactive (LLM-backed) @SCRIBE runtime. These are NOT the
+  // authoritative switch — that's the server-side `SCRIBE_INTERACTIVE_ENABLED`
+  // / `SCRIBE_WEB_SEARCH_ENABLED` Script Properties in backend/Code.gs, which
+  // default OFF (a brand-new paid-API capability must not silently start
+  // spending money the moment this ships) and are checked FIRST on every
+  // `scribeAsk` call regardless of what these settings say. These two exist
+  // purely so a commissioner who has already turned SCRIBE off doesn't pay a
+  // wasted network round trip on every `@scribe` mention (C1's own framing).
+  // Default TRUE here (unlike the server props): once Drew actually sets the
+  // Script Properties, the feature should work without ALSO needing a second
+  // client-side flip — same reasoning as `scribeFeedbackEnabled`'s default.
+  scribeInteractiveEnabled: true,
+  scribeWebSearchEnabled: true,
+  // Build 2b, E4 (2026-09-10, UN-162) — kill switch on approved-Trainer-
+  // learnings/Canon reaching SCRIBE's live generation context. Default TRUE
+  // (E-2 ruling): a missing value (every settings blob written before this
+  // field existed) must read as "learnings active," not silently disabled —
+  // same `!== false` pattern as scribeFeedbackEnabled/chatEnabled
+  // (CONVENTIONS #10). When false, Code.gs's context assembly leaves BOTH
+  // reserved slots (activeLearnings/canonExamples) empty regardless of what
+  // is `approved` in KEYS.SCRIBE_LEARNINGS/SCRIBE_CANON — the fast "something
+  // just made SCRIBE noticeably worse, stop it now" control, separate from
+  // per-learning approve/reject granularity.
+  scribeLearningsEnabled: true,
 };
 
 // ─── DEMO PLAYERS — correct alma maters and 2-letter initials ─────────────────

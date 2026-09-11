@@ -1637,6 +1637,18 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     // Build 1 (2026-09-10): two booleans — E1 feedback master switch (UN-159),
     // F4-interim inline image previews (UN-164). Tiny scalars, trivially bounded.
     'scribeFeedbackEnabled', 'chatImagePreviewEnabled',
+    // Build 2, Group C (2026-09-10, UN-150…154): two more booleans — the
+    // client-visible convenience gates for the interactive @SCRIBE runtime.
+    // Trivially bounded (same shape as the pair above).
+    'scribeInteractiveEnabled', 'scribeWebSearchEnabled',
+    // Build 2b, E4 (2026-09-10, UN-162, correction #9): the Trainer-learnings
+    // runtime kill switch. Same trivially-bounded boolean shape as the pair
+    // above. (`scribeFrequency` is D1's own field, Build 3, not yet written
+    // by any saveSetting() call in this codebase — added to this list only
+    // once D1 actually ships it, per this guard's own "judge before it
+    // ships" purpose; listing it now would be reviewing a field that does
+    // not exist yet.)
+    'scribeLearningsEnabled',
     // small maps/arrays, bounded by a fixed real-world count
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players

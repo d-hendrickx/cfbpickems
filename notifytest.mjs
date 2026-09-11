@@ -1468,6 +1468,748 @@ console.log('\n[23g] Mutation canary — ignoring the flag read goes RED (scratc
   assert(after === before, '[23g-g] the REAL backend/Code.gs on disk is byte-identical before/after this canary — only scratch copies were ever mutated');
 }
 
+// ── [24] PUSH "Turn On" DIAGNOSTICS (RG, 2026-09-10) ─────────────────────────
+//    Bug as reported: on live v0.19.0, tapping "Turn On" in the Notification
+//    Center shows "Could not enable push". That string was the ONLY thing
+//    js/app.js could say, because requestPushPermission() resolved a bare
+//    boolean — six unrelated causes collapsed onto one `false`:
+//
+//      (a) the OneSignal app itself has no Web Push platform configured
+//          (LIVE root cause — GET onesignal.com/api/v1/sync/<appId>/web for
+//          this league's real App ID returns {"success":false,"code":2,
+//          "description":"This app is not configured for web push."}, and the
+//          shipped v16 SDK turns code 2 into throw new Error("App not
+//          configured for web push") inside init()),
+//      (b) the SDK's worker lookup failing ("OneSignal service worker not found!"),
+//      (c) the player dismissing the prompt, (d) the player blocking it,
+//      (e) the SDK script never arriving, (f) an iOS Safari TAB where the
+//          SDK refuses to load at all.
+//
+//    Worse, (e) never resolved AT ALL — the promise waited on a deferred queue
+//    that would never drain, so the button was a DEAD TAP with no toast.
+//
+//    These assertions pin: one distinct reason per cause, a bounded answer for
+//    every tap, a toast map that covers every reason, and the iOS-tab card
+//    rendering "install" instead of a button that cannot work.
+console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bounded answer, complete toast map…');
+{
+  const pushSrcPath = fileURLToPath(new URL('./js/push-onesignal.js', import.meta.url));
+  const appSrcPath  = fileURLToPath(new URL('./js/app.js', import.meta.url));
+  const swSrcPath   = fileURLToPath(new URL('./service-worker.js', import.meta.url));
+  const htmlSrcPath = fileURLToPath(new URL('./index.html', import.meta.url));
+
+  // ── stub rig ──────────────────────────────────────────────────────────────
+  const saved = {
+    document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch,
+    matchMedia: globalThis.matchMedia, Notification: globalThis.Notification,
+    PushSubscriptionOptions: globalThis.PushSubscriptionOptions,
+  };
+  const setNav = (v) => { try { globalThis.navigator = v; }
+    catch { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } };
+
+  function installPushStubs({
+    appId = 'abad65e9-0000-0000-0000-000000000000', configOk = true, configSlowMs = 0,
+    scriptLoads = true, drains = true, initBehaviour = 'ok', permBehaviour = 'granted',
+    ua = 'Mozilla/5.0 (Linux; Android 14) Chrome/127', vendor = 'Google Inc.',
+    maxTouchPoints = 1, standalone = false, sdkCompatible = true, permission = 'default',
+  } = {}) {
+    const state = { initCalls: 0, initOpts: null, configFetches: 0 };
+    const fakeOneSignal = {
+      async init(opts) {
+        state.initCalls++; state.initOpts = opts;
+        // Real v16 sets its "already initialized" flag BEFORE the work that can
+        // fail, so a second init() ALWAYS throws regardless of the first outcome.
+        if (state.initCalls > 1) throw new Error('SDK already initialized');
+        if (initBehaviour === 'web-push-off')   throw new Error('App not configured for web push');
+        if (initBehaviour === 'app-id-mismatch') throw new Error("AppID doesn't match existing apps");
+        if (initBehaviour === 'wrong-origin')    throw new Error('Can only be used on: https://example.com');
+        if (initBehaviour === 'throw')           throw new Error('IndexedDB unavailable');
+        if (initBehaviour === 'throw-object')    throw { success: false, code: 2, description: 'This app is not configured for web push.' };
+      },
+      Notifications: {
+        async requestPermission() {
+          if (permBehaviour === 'sw-missing') throw new Error('OneSignal service worker not found!');
+          if (permBehaviour === 'dismissed')  throw new Error('Permission dismissed');
+          if (permBehaviour === 'blocked')    { globalThis.Notification.permission = 'denied'; throw new Error('Permission blocked'); }
+          if (permBehaviour === 'hang')       return new Promise(() => {});
+          if (permBehaviour === 'odd-throw')  throw new Error('something exotic');
+          globalThis.Notification.permission = permBehaviour === 'granted' ? 'granted' : 'default';
+        },
+      },
+    };
+    const drain = () => {
+      const pending = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred : [];
+      globalThis.OneSignalDeferred = { push: (fn) => { fn(fakeOneSignal); } };
+      pending.forEach(fn => fn(fakeOneSignal));
+    };
+    globalThis.OneSignalDeferred = undefined;
+    globalThis.document = {
+      head: { appendChild(s) { setTimeout(() => { if (!scriptLoads) return s.onerror?.(); if (drains) drain(); s.onload?.(); }, 0); } },
+      createElement: () => ({ src: '', defer: false, onload: null, onerror: null }),
+      body: { dataset: {} },
+    };
+    setNav({ userAgent: ua, vendor, maxTouchPoints, standalone, serviceWorker: {} });
+    globalThis.matchMedia = () => ({ matches: !!standalone });
+    globalThis.Notification = { permission, requestPermission: async () => globalThis.Notification.permission };
+    if (sdkCompatible) {
+      globalThis.PushSubscriptionOptions = function () {};
+      globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
+    } else { delete globalThis.PushSubscriptionOptions; }
+    globalThis.fetch = async () => {
+      state.configFetches++;
+      if (configSlowMs) await new Promise(r => setTimeout(r, configSlowMs));
+      if (!configOk) throw new Error('offline');
+      return { ok: true, json: async () => ({ oneSignalAppId: appId }) };
+    };
+    return state;
+  }
+  // The two "no dead tap" bounds are implemented with setTimeout().unref() so
+  // they never hold a Node harness open. That means Node can exit while one is
+  // pending — a browser never can, it always has an event loop. Keep the loop
+  // alive for exactly as long as we're waiting on one.
+  const withKeepAlive = async (promise) => {
+    const ka = setInterval(() => {}, 5);
+    try { return await promise; } finally { clearInterval(ka); }
+  };
+
+  const restoreGlobals = () => {
+    globalThis.document = saved.document; setNav(saved.navigator); globalThis.fetch = saved.fetch;
+    globalThis.matchMedia = saved.matchMedia; globalThis.Notification = saved.Notification;
+    globalThis.PushSubscriptionOptions = saved.PushSubscriptionOptions;
+    delete globalThis.OneSignalDeferred;
+  };
+
+  installPushStubs();
+  const push = await import('./js/push-onesignal.js');
+
+  // ── [24a] one distinct reason per failure class ───────────────────────────
+  const classes = [
+    ['web-push-not-enabled', { initBehaviour: 'web-push-off' },
+      'the league\'s OneSignal app has no Web Push platform configured — the LIVE root cause, and the one where "try again" is useless advice'],
+    ['web-push-not-enabled', { initBehaviour: 'throw-object' },
+      'same cause arriving as a raw JSONP object ({code:2}) instead of an Error — classified identically, never "[object Object]"'],
+    ['app-id-mismatch',      { initBehaviour: 'app-id-mismatch' }, 'config.json\'s App ID does not match any OneSignal app'],
+    ['wrong-site-origin',    { initBehaviour: 'wrong-origin' },    'the OneSignal app is configured for a different site origin'],
+    ['init-failed',          { initBehaviour: 'throw' },           'any other init throw still lands somewhere honest'],
+    ['sw-not-found',         { permBehaviour: 'sw-missing' },      'the SDK could not find its service worker'],
+    ['denied',               { permBehaviour: 'blocked' },         'the player tapped Block'],
+    ['dismissed',            { permBehaviour: 'dismissed' },       'the player dismissed the prompt without answering'],
+    ['request-failed',       { permBehaviour: 'odd-throw' },       'an exotic throw with the permission still "default" is NOT silently called a dismissal'],
+    ['sdk-not-loaded',       { scriptLoads: false },               'the SDK script itself never loaded'],
+    ['not-installed-ios',    { sdkCompatible: false, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', vendor: 'Apple Computer, Inc.', maxTouchPoints: 5, standalone: false },
+      'iPhone Safari TAB — push is unreachable until the app is installed'],
+    ['unsupported-browser',  { sdkCompatible: false, ua: 'Mozilla/5.0 (Windows NT 10.0) Firefox/60', vendor: 'Mozilla', maxTouchPoints: 0 },
+      'a browser the SDK refuses outright'],
+    ['not-configured',       { appId: '' },                        'no App ID in config.json (feature not live)'],
+    ['config-unreachable',   { configOk: false },                  'config.json could not be read at all — distinct from "no App ID", because the advice differs'],
+  ];
+  const seen = new Set();
+  for (const [expected, opts, why] of classes) {
+    installPushStubs(opts);
+    push._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
+    const res = await push.requestPushPermission();
+    assert(res && res.ok === false && res.reason === expected,
+      `[24a] ${expected}: ${why} (got ${JSON.stringify(res)})`);
+    seen.add(res?.reason);
+  }
+  assert(seen.size === classes.length - 1,   // web-push-not-enabled appears twice by design
+    `[24a] the failure classes produce DISTINCT reasons, not one collapsed value — ${seen.size} distinct reasons from ${classes.length} cases (the bug was 1 from all of them)`);
+
+  // ── [24b] the granted path ────────────────────────────────────────────────
+  installPushStubs({ permBehaviour: 'granted' });
+  push._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
+  const okRes = await push.requestPushPermission();
+  assert(okRes?.ok === true && okRes.reason === 'granted', `[24b] the happy path resolves {ok:true, reason:'granted'} (got ${JSON.stringify(okRes)})`);
+
+  // ── [24c] NO DEAD TAPS — every tap gets a bounded answer ──────────────────
+  installPushStubs({ scriptLoads: true, drains: false });   // script 200s, SDK never appears
+  push._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
+  const hung = await withKeepAlive(push.requestPushPermission());
+  assert(hung?.ok === false && hung.reason === 'sdk-not-loaded',
+    `[24c] script loads but the SDK never drains its queue → bounded 'sdk-not-loaded', NOT a promise that never settles (the pre-fix dead tap) (got ${JSON.stringify(hung)})`);
+
+  installPushStubs({ permBehaviour: 'hang' });
+  push._resetForTest({ sdkReadyMs: 500, promptMs: 60 });
+  const noAnswer = await withKeepAlive(push.requestPushPermission());
+  assert(noAnswer?.ok === false && noAnswer.reason === 'prompt-timeout',
+    `[24c] a permission prompt that never returns still produces an answer ('prompt-timeout') (got ${JSON.stringify(noAnswer)})`);
+
+  // ── [24d] iOS Safari TAB renders the INSTALL card, never a Turn On button ─
+  const iosTab = { sdkCompatible: false, ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X)', vendor: 'Apple Computer, Inc.', maxTouchPoints: 5, standalone: false };
+  installPushStubs(iosTab);
+  push._resetForTest();
+  assert(await push.subscriptionState() === 'needs-install',
+    '[24d] iPhone Safari TAB → subscriptionState() "needs-install" (its own state; the old single "unsupported" could not tell "install me" from "never going to work")');
+
+  // A future iOS that exposes the push API in a TAB must STILL say needs-install:
+  // Apple only delivers web push to home-screen apps, so a Turn On button there
+  // can only fail. The Apple-handheld test therefore outranks the SDK's own.
+  installPushStubs({ ...iosTab, sdkCompatible: true });
+  push._resetForTest();
+  assert(await push.subscriptionState() === 'needs-install',
+    '[24d] iPhone Safari TAB that DOES expose PushSubscriptionOptions is still "needs-install" — not-standalone outranks SDK compatibility');
+  installPushStubs({ ...iosTab, sdkCompatible: true });
+  push._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
+  const tabTap = await push.requestPushPermission();
+  assert(tabTap?.reason === 'not-installed-ios',
+    `[24d] …and the same precedence holds in requestPushPermission() — card and button can never disagree (got ${JSON.stringify(tabTap)})`);
+
+  // iPad (Safari reports a MAC user-agent since iPadOS 13 — the old /iP(hone|ad|od)/
+  // test could never match one, so an iPad in a tab used to get a button that failed).
+  installPushStubs({ sdkCompatible: false, ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Safari/605', vendor: 'Apple Computer, Inc.', maxTouchPoints: 5, standalone: false });
+  push._resetForTest();
+  assert(await push.subscriptionState() === 'needs-install',
+    '[24d] iPad in a Safari TAB (Mac user-agent, touch points > 0) → "needs-install", the case a UA regex structurally cannot catch');
+
+  // Installed on the home screen → the real priming state, with a button.
+  installPushStubs({ standalone: true, sdkCompatible: true, permission: 'default' });
+  push._resetForTest();
+  assert(await push.subscriptionState() === 'never-asked',
+    '[24d] the SAME iPhone once installed to the home screen → "never-asked" (Turn On is offered exactly where it can work)');
+  installPushStubs({ standalone: true, sdkCompatible: true, permission: 'denied' });
+  push._resetForTest();
+  assert(await push.subscriptionState() === 'denied', '[24d] a blocked install reports "denied", not "unsupported"');
+
+  // ── [24e] toast map covers every reason — cross-scan of BOTH sources ──────
+  const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
+  const pushSrc = await readFile(pushSrcPath, 'utf8');
+  const appSrc  = await readFile(appSrcPath, 'utf8');
+  const OK_REASONS = new Set(['granted', 'initialized']);
+  //   Captures the whole right-hand side of `reason:` and harvests every
+  //   string literal in it, so a reason produced by a TERNARY
+  //   (`reason: x ? 'config-unreachable' : 'not-configured'`) is scanned too —
+  //   a literal-only regex quietly missed those and would have let an unmapped
+  //   reason ship.
+  const emittedReasons = (src) => {
+    const out = new Set();
+    for (const m of stripComments(src).matchAll(/reason:\s*([^,\n}]+)/g))
+      for (const lit of m[1].matchAll(/'([a-z0-9-]+)'/g))
+        if (!OK_REASONS.has(lit[1])) out.add(lit[1]);
+    return out;
+  };
+  const toastMapKeys = (src) => {
+    const i = src.indexOf('function pushFailureMessage');
+    const j = src.indexOf('}[reason]', i);
+    const out = new Set();
+    if (i < 0 || j < 0) return out;
+    for (const m of src.slice(i, j).matchAll(/'([a-z0-9-]+)':/g)) out.add(m[1]);
+    return out;
+  };
+  const reasons = emittedReasons(pushSrc);
+  const toasts  = toastMapKeys(appSrc);
+  assert(reasons.size >= 12, `[24e] the cross-scan actually found the reason literals (${reasons.size} found: ${[...reasons].sort().join(', ')})`);
+  assert(toasts.size >= 12, `[24e] the cross-scan actually found app.js's toast map (${toasts.size} keys)`);
+  const unmapped = [...reasons].filter(r => !toasts.has(r));
+  assert(unmapped.length === 0,
+    `[24e] EVERY reason js/push-onesignal.js can emit has its own message in js/app.js's pushFailureMessage() — no reason falls through to a generic toast (unmapped: ${unmapped.join(', ') || 'none'})`);
+  const orphaned = [...toasts].filter(r => !reasons.has(r));
+  assert(orphaned.length === 0,
+    `[24e] and no message is stranded on a reason that no longer exists — a rename breaks this in BOTH directions (orphans: ${orphaned.join(', ') || 'none'})`);
+  assert(!/OneSignal/.test(appSrc.slice(appSrc.indexOf('function pushFailureMessage'), appSrc.indexOf('}[reason]'))),
+    '[24e] no player-facing message names the vendor — players read product language, not "OneSignal"');
+
+  // ── [24f] every subscriptionState() value has a priming-card state ────────
+  const sliceFn = (src, startNeedle, endNeedle) => {
+    const i = src.indexOf(startNeedle); const j = src.indexOf(endNeedle, i);
+    return i < 0 || j < 0 ? '' : src.slice(i, j);
+  };
+  const stateBody = sliceFn(stripComments(pushSrc), 'export async function subscriptionState', '\n}');
+  const statesEmitted = new Set([...stateBody.matchAll(/return '([a-z-]+)'/g)].map(m => m[1]));
+  const cardBody = sliceFn(appSrc, 'function renderPrimingCardHTML', '}[pushState]');
+  const cardStates = new Set([...cardBody.matchAll(/^\s*'?([a-z-]+)'?:\s*\{/gm)].map(m => m[1]));
+  const silentStates = new Set([...cardBody.matchAll(/pushState === '([a-z-]+)'/g)].map(m => m[1]));
+  assert(statesEmitted.size >= 5, `[24f] cross-scan found subscriptionState()'s return values (${[...statesEmitted].sort().join(', ')})`);
+  const uncovered = [...statesEmitted].filter(s => !cardStates.has(s) && !silentStates.has(s));
+  assert(uncovered.length === 0,
+    `[24f] every state subscriptionState() can return is either drawn as a priming card or deliberately silent in app.js — a state added on one side only renders NOTHING (uncovered: ${uncovered.join(', ') || 'none'})`);
+  assert(/'needs-install'\s*:\s*\{[^}]*btn:\s*null/.test(cardBody),
+    '[24f] the needs-install card carries NO button — instructions only, because a Turn On tap in an iOS tab cannot succeed');
+  assert(/'never-asked'\s*:\s*\{[^}]*btn:\s*'Turn On'/.test(cardBody),
+    '[24f] …while never-asked still offers the Turn On button');
+
+  // ── [24g] service-worker wiring is structurally coherent ──────────────────
+  //   Evidence (read from the shipped v16 SDK, OneSignalSDK.page.es6.js?v=160610):
+  //     • config merge:  path/serviceWorkerParam/serviceWorkerPath are taken
+  //       from OUR init() ONLY when serviceWorkerOverrideForTypical is true
+  //       (otherwise the dashboard's values win, defaulting to
+  //       It = "OneSignalSDKWorker.js" — which this site does not host: it
+  //       404s on https://irbfootball.com/OneSignalSDKWorker.js).
+  //     • worker path:   serviceWorkerPath is read ONLY inside
+  //       `e.userConfig.path && (...)` — no `path`, no override.
+  //     • ownership test: fa() compares the BASENAME of the registered
+  //       worker's scriptURL against the configured one, so index.html's
+  //       registered filename and serviceWorkerPath must agree exactly.
+  //
+  //   [24g] IS BLIND TO F1 BY DESIGN — do not "fix" it here. It strips the
+  //   query (`.split('?')[0]`) on BOTH sides precisely because fa()'s OWNERSHIP
+  //   test does, so it can prove the SDK will accept our worker as its own.
+  //   The F1 reload loop lives in the OTHER SDK comparison — ma(), which
+  //   compares the FULL scriptURL, query included — so a check that strips the
+  //   query structurally cannot see it. That is what [25] is for. Two SDK
+  //   comparisons, two different guards.
+  //   (The registration call itself moved to js/sw-register.js on 2026-09-10;
+  //   index.html still owns the URL string, which is what this scans.)
+  const swSrc   = await readFile(swSrcPath, 'utf8');
+  const htmlSrc = await readFile(htmlSrcPath, 'utf8');
+  function workerConfigFindings(pushText, swText, htmlText) {
+    const bad = [];
+    const init = sliceFn(stripComments(pushText), 'OneSignal.init({', '})');
+    if (!/serviceWorkerOverrideForTypical:\s*true/.test(init)) bad.push('serviceWorkerOverrideForTypical:true missing — a "Typical Site" dashboard silently overrides our worker path back to OneSignalSDKWorker.js');
+    if (!/path:\s*'\//.test(init)) bad.push("path:'/' missing — serviceWorkerPath is ignored without it");
+    if (!/serviceWorkerParam:\s*\{\s*scope:\s*'\/'/.test(init)) bad.push("serviceWorkerParam scope '/' missing");
+    const m = init.match(/serviceWorkerPath:\s*'([^']+)'/);
+    if (!m) bad.push('serviceWorkerPath missing');
+    const reg = htmlText.match(/serviceWorker\.register\('([^']+)'/)
+             || htmlText.match(/scriptUrl:\s*'([^']+)'/);
+    if (!reg) bad.push('index.html names no service-worker script to register');
+    if (m && reg) {
+      const configured = m[1].split('?')[0].split('/').pop();
+      const registered = reg[1].split('?')[0].split('/').pop();
+      if (configured !== registered) bad.push(`worker filename mismatch: init says "${configured}", index.html registers "${registered}" — the SDK compares basenames and would call ours a 3rd-party worker`);
+    }
+    if (!/importScripts\(\s*'https:\/\/cdn\.onesignal\.com\/sdks\/web\/v16\/OneSignalSDK\.sw\.js'\s*\)/.test(swText))
+      bad.push('service-worker.js does not importScripts the OneSignal worker — the merged-worker pattern requires it');
+    if (swText.indexOf('importScripts(') > swText.indexOf('const CACHE_NAME'))
+      bad.push('importScripts must run at top level, before the rest of the worker');
+    return bad;
+  }
+  const findings = workerConfigFindings(pushSrc, swSrc, htmlSrc);
+  assert(findings.length === 0,
+    `[24g] the merged-worker configuration is coherent: our init() overrides the dashboard, points at OUR worker, and index.html registers that exact filename (${findings.join(' | ') || 'no findings'})`);
+
+  // ── [24h] the config read is not poisoned by one transient failure ────────
+  const st1 = installPushStubs({ configOk: false });
+  push._resetForTest();
+  assert(await push.isPushConfigured() === false, '[24h] a failed config.json read reports "not configured" for that call…');
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'abad65e9-1111-2222-3333-444444444444' }) });
+  assert(await push.isPushConfigured() === true,
+    '[24h] …but is NOT memoized — the very next call succeeds. Memoizing the failure pinned push to "not configured" for the life of the page, and the priming card then renders nothing at all with no way back short of a reload');
+  void st1;
+
+  const st2 = installPushStubs({ configSlowMs: 30, sdkCompatible: true, standalone: true });
+  push._resetForTest();
+  const stateWhileConfigInFlight = await push.subscriptionState();
+  assert(stateWhileConfigInFlight !== 'unconfigured',
+    '[24h] the priming card waits for config.json before deciding — subscriptionState() awaits the App ID rather than reading a not-yet-populated value at boot');
+  assert(st2.configFetches >= 1, '[24h] (and that state really did come from a config read)');
+
+  // ── [24i] a failed boot init does not poison the later tap ────────────────
+  //   app.js calls ensureOneSignalInit() at boot (js/app.js ~line 325); the
+  //   player taps Turn On later. v16's init() sets its "already initialized"
+  //   flag BEFORE the work that can fail, so re-calling init() after a failed
+  //   first attempt throws "SDK already initialized" — a downstream error that
+  //   HIDES the original cause. Exactly one init() per page is the fix.
+  const st3 = installPushStubs({ initBehaviour: 'web-push-off' });
+  push._resetForTest({ sdkReadyMs: 200, promptMs: 200 });
+  const boot = await push.ensureOneSignalInit();
+  const tap  = await push.requestPushPermission();
+  assert(boot.ok === false && boot.reason === 'web-push-not-enabled', '[24i] the boot-time init reports the real cause');
+  assert(tap.ok === false && tap.reason === 'web-push-not-enabled',
+    `[24i] and the later Turn On tap reports THAT SAME cause — not the misleading "SDK already initialized" the SDK would throw on a second init (got ${JSON.stringify(tap)})`);
+  assert(st3.initCalls === 1,
+    `[24i] OneSignal.init() ran EXACTLY ONCE across a boot init + a button tap (got ${st3.initCalls}) — the SDK's init is single-shot and fails closed`);
+
+  // ── [24j] MUTATION CANARY — scratch copies only, real files never written ─
+  //    Per CLAUDE.md: never git checkout/restore/stash to undo a mutation.
+  const scratchDir = process.env.TMPDIR || '/tmp';
+  const beforeBytes = pushSrc;
+  await writeFile(`${scratchDir}/push-onesignal.pre-mutation.${Date.now()}.js`, beforeBytes, 'utf8');
+
+  // MUTATION 1 — collapse requestPushPermission back to a bare boolean.
+  let mutant = pushSrc
+    .replace(/finish\(\{ ok: true, reason: 'granted' \}\)/, 'finish(true)')
+    .replace(/finish\(\{ ok: false, reason: 'denied' \}\)/, 'finish(false)')
+    .replace(/finish\(\{ ok: false, reason: 'dismissed' \}\)/, 'finish(false)')
+    .replace(/finish\(\{ ok: false, \.\.\.classifyPermissionError\(err\) \}\)/, 'finish(false)')
+    .replace(/return \{ ok: false, reason: init\.reason, detail: init\.detail \};/, 'return false;');
+  assert(mutant !== pushSrc, '[24j-a] the mutation actually changed the scratch text (non-vacuous)');
+  const mutantPath = `${scratchDir}/push-onesignal.bare-boolean.${Date.now()}.mjs`;
+  await writeFile(mutantPath, mutant, 'utf8');
+  const mutantMod = await import(`file://${mutantPath}`);
+  installPushStubs({ permBehaviour: 'sw-missing' });
+  mutantMod._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
+  const mutantRes = await mutantMod.requestPushPermission();
+  assert(mutantRes === false && mutantRes?.reason === undefined,
+    `[24j-b] CANARY CONFIRMED: with requestPushPermission() collapsed back to a bare boolean (scratch copy only), the sw-not-found case resolves ${JSON.stringify(mutantRes)} with no reason — every [24a] assertion WOULD go red`);
+
+  // MUTATION 2 — drop the dashboard override from the init() options.
+  const mutant2 = pushSrc.replace(/\n\s*serviceWorkerOverrideForTypical: true,/, '');
+  assert(mutant2 !== pushSrc, '[24j-c] the second mutation actually changed the scratch text');
+  const findings2 = workerConfigFindings(mutant2, swSrc, htmlSrc);
+  assert(findings2.some(f => /serviceWorkerOverrideForTypical/.test(f)),
+    '[24j-d] CANARY CONFIRMED: removing serviceWorkerOverrideForTypical (scratch text only) makes [24g] report a finding — that guard can fail, it is not vacuous');
+
+  // MUTATION 3 — rename the worker in init() without renaming the registration.
+  const mutant3 = pushSrc.replace(/serviceWorkerPath: '[^']+'/, "serviceWorkerPath: 'OneSignalSDKWorker.js'");
+  const findings3 = workerConfigFindings(mutant3, swSrc, htmlSrc);
+  assert(findings3.some(f => /filename mismatch/.test(f)),
+    '[24j-e] CANARY CONFIRMED: pointing init() at a worker filename index.html does not register is caught by [24g] — the 404 that produces "OneSignal service worker not found!" cannot ship silently');
+
+  const afterBytes = await readFile(pushSrcPath, 'utf8');
+  assert(afterBytes === beforeBytes,
+    '[24j-f] the REAL js/push-onesignal.js on disk is byte-identical before/after this canary — only scratch copies were ever written');
+
+  restoreGlobals();
+}
+
+// ── [25] F1 — SERVICE-WORKER RE-REGISTRATION RELOAD LOOP ────────────────────
+//   LATENT on production today; it unlocks the moment Drew configures the
+//   OneSignal dashboard, because the SDK only registers a worker once push is
+//   actually set up for the app.
+//
+//   Two registrars, same file, same scope, different query strings — and each
+//   side's "is this already mine?" test compares the FULL URL:
+//
+//     ours   index.html → navigator.serviceWorker.register('service-worker.js?v=20-0')
+//     SDK    OneSignalSDK.page.es6.js?v=160610
+//            ma():  registered scriptURL === `${origin}/service-worker.js?appId=<id>&sdkVersion=160610`?
+//            Sa():  if not → register(that url, {scope:'/'}), on EVERY init(),
+//                   and init() runs from internalInit() on every page load.
+//
+//   Neither string can ever equal the other. A new scriptURL at the same scope
+//   installs a new worker; service-worker.js skipWaiting()s in install and
+//   clients.claim()s in activate → `controllerchange` → index.html reloaded
+//   unconditionally → the reloaded page registers `?v=20-0` again → flip →
+//   loop. `let reloaded = false` is per-PAGE-LOAD: it capped reloads at one per
+//   load and never broke the cycle.
+//
+//   Modelled before the fix (scratch repro, same simulator as below driving the
+//   OLD inline logic): 8 page loads, 8 reloads, 16 register() calls, 0
+//   update() calls, alternating URLs, no convergence.
+//
+//   Fix is both halves, and both are asserted here:
+//     (A) convergence  — js/sw-register.js registerServiceWorker(): a
+//         registration whose BASENAME is ours gets update(), never a
+//         re-register under a different query.
+//     (B) conditional reload — wireControllerChangeReload(): a controller flip
+//         earns a reload only when the new controller's CACHE_NAME differs from
+//         the one the page booted under.
+console.log('\n[25] Service worker: the two registrars converge, and only a real shell change reloads…');
+{
+  const ORIGIN = 'https://irbfootball.com';
+  const APP_ID = 'abad65e9-0000-0000-0000-000000000000';
+  const SDK_URL = `${ORIGIN}/service-worker.js?appId=${APP_ID}&sdkVersion=160610`;
+  const OUR_URL = 'service-worker.js?v=20-0';
+  const swRegPath = fileURLToPath(new URL('./js/sw-register.js', import.meta.url));
+  const swRegSrc = await readFile(swRegPath, 'utf8');
+  const swSrc25 = await readFile(fileURLToPath(new URL('./service-worker.js', import.meta.url)), 'utf8');
+  const htmlSrc25 = await readFile(fileURLToPath(new URL('./index.html', import.meta.url)), 'utf8');
+  const appSrc25 = await readFile(fileURLToPath(new URL('./js/app.js', import.meta.url)), 'utf8');
+  const cssSrc25 = await readFile(fileURLToPath(new URL('./css/styles.css', import.meta.url)), 'utf8');
+  const swReg = await import('./js/sw-register.js');
+
+  const settle = () => new Promise(r => setTimeout(r, 0));
+
+  // A MessageChannel stand-in — the page↔worker version handshake, with no
+  // Node MessagePort to keep the event loop alive.
+  const fakeChannel = () => {
+    const port1 = { onmessage: null, close() {} };
+    const port2 = { postMessage: (m) => { port1.onmessage && port1.onmessage({ data: m }); } };
+    return { port1, port2 };
+  };
+  const readV = (worker, opts) => swReg.readWorkerVersion(worker, { ...(opts || {}), channel: fakeChannel, timeoutMs: 50 });
+
+  /** Deterministic model of one origin's service-worker registry. */
+  function makeSwEnv({ cacheName = 'cfb-pickems-v20-0', answersVersion = true } = {}) {
+    const env = {
+      cacheName, reg: null, controller: null,
+      listeners: [], queue: [],
+      registerCalls: [], updateCalls: 0, reloads: 0, pageLoads: 0,
+    };
+    const mkWorker = (href) => ({
+      scriptURL: href, state: 'installing', cacheName: env.cacheName,
+      addEventListener() {},
+      postMessage(msg, ports) {
+        // Mirrors service-worker.js's message handler. A worker deployed BEFORE
+        // this change simply never answers — answersVersion:false models that.
+        if (msg && msg.type === 'GET_VERSION' && answersVersion && ports && ports[0]) {
+          ports[0].postMessage({ type: 'VERSION', cacheName: this.cacheName });
+        }
+      },
+    });
+    const install = (href) => {
+      const w = mkWorker(href);
+      const reg = env.reg && env.reg.scriptURL === href ? env.reg : {
+        scope: ORIGIN + '/', scriptURL: href, active: env.reg && env.reg.active, waiting: null, installing: null,
+        addEventListener() {}, async update() { env.updateCalls++; doUpdate(); },
+      };
+      reg.scriptURL = href; reg.installing = w; env.reg = reg;
+      env.queue.push(() => {
+        w.state = 'activated'; reg.installing = null; reg.active = w; env.controller = w;
+        env.listeners.slice().forEach(fn => fn());      // clients.claim() → controllerchange
+      });
+      return reg;
+    };
+    // update() re-fetches the script from the network; a CACHE_NAME bump is a
+    // byte-diff, so a new worker installs. Identical bytes → nothing happens.
+    const doUpdate = () => {
+      if (env.reg && env.reg.active && env.reg.active.cacheName !== env.cacheName) install(env.reg.scriptURL);
+    };
+    env.nav = {
+      serviceWorker: {
+        get controller() { return env.controller; },
+        async getRegistration() { return env.reg; },
+        async register(url, opts) {
+          const href = new URL(url, ORIGIN + '/').href;
+          env.registerCalls.push(href);
+          if (env.reg && env.reg.scriptURL === href && env.reg.active) return env.reg;  // same URL, same bytes: no-op
+          return install(href);
+        },
+        addEventListener(type, fn) { if (type === 'controllerchange') env.listeners.push(fn); },
+      },
+    };
+    env.drain = async () => {
+      let guard = 0;
+      while (env.queue.length && guard++ < 50) { env.queue.shift()(); await settle(); }
+      await settle();
+    };
+    env.preRegister = (href) => { install(href); env.queue.shift()(); };   // seed without events
+    return env;
+  }
+
+  // OneSignal v16 ma()/Sa(), transcribed from the shipped bundle.
+  async function sdkInit(env) {
+    const reg = await env.nav.serviceWorker.getRegistration('/');
+    const cur = reg && (reg.active || reg.waiting || reg.installing);
+    if (!cur || cur.scriptURL !== SDK_URL) await env.nav.serviceWorker.register(SDK_URL, { scope: '/' });
+  }
+
+  /** One page load: our registrar + the SDK's, in the order the browser runs
+   *  them. Returns true if the page asked to reload. */
+  async function pageLoad(env, setup) {
+    env.pageLoads++;
+    env.listeners = [];                 // a reload wipes the page's listeners
+    let wantsReload = false;
+    await setup(env, () => { wantsReload = true; env.reloads++; });
+    await env.drain();
+    await sdkInit(env);
+    await env.drain();
+    return wantsReload;
+  }
+  const ourSetup = (env, reload) => swReg.setupServiceWorker({
+    nav: env.nav, scriptUrl: OUR_URL, reload, readVersion: readV, versionTimeoutMs: 50,
+    log: () => {}, warn: () => {},
+  });
+
+  // ── [25a] CONVERGENCE — the SDK registered first; we must NOT re-register ─
+  {
+    const env = makeSwEnv();
+    env.preRegister(SDK_URL);                       // dashboard configured, SDK won the race
+    const res = await swReg.registerServiceWorker({ nav: env.nav, scriptUrl: OUR_URL });
+    assert(res.action === 'updated',
+      `[25a] a worker for OUR script file is already registered (under the SDK's query string) → update(), not a second register() (got "${res.action}")`);
+    assert(env.registerCalls.length === 0,
+      `[25a] register() was NOT called with a different URL for the same file — this is the assertion the whole loop hangs on (calls: ${JSON.stringify(env.registerCalls)})`);
+    assert(env.updateCalls === 1, `[25a] …and update() WAS called exactly once instead (got ${env.updateCalls})`);
+    assert(env.reg.scriptURL === SDK_URL,
+      '[25a] the registration still points at the SDK\'s URL, so the SDK\'s own ma() check now matches and IT stops re-registering too — that is what "converge" means');
+  }
+
+  // ── [25b] the full loop, end to end: it must terminate ────────────────────
+  {
+    const env = makeSwEnv();
+    let loads = 0, reloadAsked = true;
+    while (reloadAsked && loads < 8) { reloadAsked = await pageLoad(env, ourSetup); loads++; }
+    assert(loads <= 2,
+      `[25b] a fresh device converges in ≤2 page loads (got ${loads}; the OLD inline logic ran the 8-load cap out and never stopped — 8 reloads, 16 register() calls, 0 update()s)`);
+    assert(env.reloads <= 1,
+      `[25b] …costing at most ONE reload in total (got ${env.reloads})`);
+    // Steady state: keep loading the page; nothing may move.
+    const regsBefore = env.registerCalls.length, reloadsBefore = env.reloads;
+    for (let i = 0; i < 3; i++) await pageLoad(env, ourSetup);
+    assert(env.registerCalls.length === regsBefore,
+      `[25b] three more page loads register NOTHING new — both registrars are satisfied (${env.registerCalls.length - regsBefore} new calls)`);
+    assert(env.reloads === reloadsBefore,
+      `[25b] …and reload NOTHING (${env.reloads - reloadsBefore} new reloads). This is the exact condition the loop violated.`);
+  }
+
+  // ── [25c] reload policy: same CACHE_NAME silent, different reloads once ───
+  {
+    const mkCtrl = (name, answers = true) => ({
+      scriptURL: ORIGIN + '/service-worker.js', cacheName: name,
+      postMessage(m, ports) { if (m && m.type === 'GET_VERSION' && answers && ports && ports[0]) ports[0].postMessage({ type: 'VERSION', cacheName: name }); },
+    });
+    const mkNav = () => {
+      const ls = [];
+      return { ls, nav: { serviceWorker: { controller: null, addEventListener: (t, f) => { if (t === 'controllerchange') ls.push(f); } } } };
+    };
+    // same shell
+    {
+      const { nav, ls } = mkNav();
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-0');
+      let reloads = 0;
+      swReg.wireControllerChangeReload({ nav, bootVersion: Promise.resolve('cfb-pickems-v20-0'), reload: () => reloads++, readVersion: readV, log: () => {} });
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-0');   // SDK re-registered the SAME file
+      ls.forEach(f => f()); await settle(); await settle();
+      assert(reloads === 0,
+        `[25c] controllerchange with an IDENTICAL CACHE_NAME does not reload (got ${reloads}) — a controller flip is not an app update`);
+    }
+    // real update
+    {
+      const { nav, ls } = mkNav();
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-0');
+      let reloads = 0;
+      swReg.wireControllerChangeReload({ nav, bootVersion: Promise.resolve('cfb-pickems-v20-0'), reload: () => reloads++, readVersion: readV, log: () => {} });
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-1');
+      ls.forEach(f => f()); await settle(); await settle();
+      ls.forEach(f => f()); await settle(); await settle();          // a second flip must not double-reload
+      assert(reloads === 1,
+        `[25c] a DIFFERENT CACHE_NAME reloads EXACTLY once, even across two controllerchange events (got ${reloads}) — the genuine update path is preserved`);
+    }
+    // unknown version → fail safe toward reloading
+    {
+      const { nav, ls } = mkNav();
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-0', false);
+      let reloads = 0;
+      swReg.wireControllerChangeReload({ nav, bootVersion: Promise.resolve(null), reload: () => reloads++, readVersion: readV, log: () => {} });
+      nav.serviceWorker.controller = mkCtrl('cfb-pickems-v20-1', false);
+      ls.forEach(f => f());
+      await new Promise(r => setTimeout(r, 90));   // readVersion's timeout must elapse
+      assert(reloads === 1,
+        `[25c] a worker that cannot answer GET_VERSION (anything deployed BEFORE this change) still gets its reload (got ${reloads}) — "unknown" is never treated as "unchanged"`);
+    }
+  }
+
+  // ── [25d] first install, and the genuine release, both still work ─────────
+  {
+    const env = makeSwEnv();
+    const res = await swReg.setupServiceWorker({ nav: env.nav, scriptUrl: OUR_URL, reload: () => env.reloads++, readVersion: readV, versionTimeoutMs: 50, log: () => {}, warn: () => {} });
+    assert(res.action === 'registered' && env.registerCalls.length === 1 && env.registerCalls[0] === ORIGIN + '/' + OUR_URL,
+      `[25d] fresh device with no registration → a real register() of service-worker.js?v=20-0 (got ${res.action}, ${JSON.stringify(env.registerCalls)})`);
+    await env.drain();
+    assert(env.reloads === 1, `[25d] …and first install still reloads once when the new worker claims the page (got ${env.reloads})`);
+
+    // RG-04: ship a release. The registered URL is now whatever is registered;
+    // what invalidates the shell is CACHE_NAME INSIDE service-worker.js.
+    await sdkInit(env); await env.drain();                 // let the SDK take the URL over first
+    const reloadsAfterConverge = env.reloads;
+    env.cacheName = 'cfb-pickems-v20-1';                   // ← the deploy
+    let released = 0;
+    await swReg.setupServiceWorker({ nav: env.nav, scriptUrl: 'service-worker.js?v=20-1', reload: () => { released++; env.reloads++; }, readVersion: readV, versionTimeoutMs: 50, log: () => {}, warn: () => {} });
+    await env.drain();
+    assert(env.updateCalls >= 1 && released === 1,
+      `[25d] RG-04 HOLDS: a CACHE_NAME bump reaches the device through update() and reloads exactly once, WITHOUT us re-registering a new ?v= URL (update()s: ${env.updateCalls}, reloads: ${released})`);
+    assert(env.reg.active.cacheName === 'cfb-pickems-v20-1',
+      '[25d] …and the worker actually running afterwards is the new one');
+    void reloadsAfterConverge;
+  }
+
+  // ── [25e] wiring: one registrar, in the shell, talking to a worker that answers
+  {
+    assert(/setupServiceWorker\(\{\s*scriptUrl:/.test(htmlSrc25),
+      '[25e] index.html registers through js/sw-register.js');
+    const strayRegs = (htmlSrc25.match(/serviceWorker\.register\(/g) || []).length;
+    assert(strayRegs === 0,
+      `[25e] index.html contains NO direct serviceWorker.register() call any more (${strayRegs} found) — one registrar on our side, or F1 comes straight back`);
+    assert(/GET_VERSION/.test(swSrc25) && /cacheName:\s*CACHE_NAME/.test(swSrc25),
+      '[25e] service-worker.js answers GET_VERSION with its CACHE_NAME — the page cannot tell a real update from a controller flip without it');
+    assert(/'\.\/js\/sw-register\.js'/.test(swSrc25),
+      '[25e] js/sw-register.js is in STATIC_ASSETS — the offline shell boots, and a boot-critical module is not left uncached');
+    assert(/swScriptBasename\(worker\.scriptURL\) === ourName/.test(swRegSrc),
+      '[25e] the ownership test compares BASENAMES, not full URLs (the mutation in [25f] is exactly this line)');
+  }
+
+  // ── [25f] MUTATION CANARIES — scratch copies only, real file never written
+  //   Three mutants, because the fix has two halves and each one has to be
+  //   shown to be load-bearing on its own:
+  //     A reverted        → we re-register the same file (the [25a] assertion goes red)
+  //     A reverted        → a new worker installs on EVERY page load, forever
+  //     A and B reverted  → F1 itself: the page never stops reloading
+  {
+    const scratch = process.env.TMPDIR || '/tmp';
+    const before = swRegSrc;
+    const stamp = Date.now();
+    const mutantA = swRegSrc.replace(
+      'if (worker && swScriptBasename(worker.scriptURL) === ourName) {',
+      'if (worker && worker.scriptURL === scriptUrl) {');
+    assert(mutantA !== swRegSrc, '[25f-a] the basename mutation actually changed the scratch text (non-vacuous)');
+    const mutantAB = mutantA.replace('if (before && after && before === after) {', 'if (false) {');
+    assert(mutantAB !== mutantA, '[25f-a] …and the reload-policy mutation is non-vacuous too');
+
+    const pathA = `${scratch}/sw-register.no-basename.${stamp}.mjs`;
+    const pathAB = `${scratch}/sw-register.no-basename-no-version.${stamp}.mjs`;
+    await writeFile(pathA, mutantA, 'utf8');
+    await writeFile(pathAB, mutantAB, 'utf8');
+    const modA = await import(`file://${pathA}`);
+    const modAB = await import(`file://${pathAB}`);
+
+    const envA0 = makeSwEnv();
+    envA0.preRegister(SDK_URL);
+    const resA = await modA.registerServiceWorker({ nav: envA0.nav, scriptUrl: OUR_URL });
+    assert(resA.action === 'registered' && envA0.registerCalls.length === 1,
+      `[25f-b] CANARY CONFIRMED: with the basename check reverted to a full-URL compare (scratch copy only), we re-register the same file under our own query — [25a] goes red (action "${resA.action}", calls ${JSON.stringify(envA0.registerCalls)})`);
+
+    // A reverted, B intact: no reload loop — and that is exactly why B alone is
+    // not enough. The worker churns invisibly on every single page load.
+    const envA = makeSwEnv();
+    const runA = (e, reload) => modA.setupServiceWorker({ nav: e.nav, scriptUrl: OUR_URL, reload, readVersion: readV, versionTimeoutMs: 50, log: () => {}, warn: () => {} });
+    await pageLoad(envA, runA);                       // first install (legitimately reloads once)
+    const regs1 = envA.registerCalls.length, reloads1 = envA.reloads;
+    for (let i = 0; i < 4; i++) await pageLoad(envA, runA);
+    assert(envA.registerCalls.length - regs1 >= 4 && envA.reloads === reloads1,
+      `[25f-c] CANARY CONFIRMED: without (A), four further page loads re-register ${envA.registerCalls.length - regs1} more times — a new worker installed and claimed on EVERY load, forever — while (B) holds reloads at ${envA.reloads}. (B) hides the churn; it does not stop it. Both halves ship.`);
+
+    // A and B both reverted = the shipped v20-0 behaviour = F1.
+    const envAB = makeSwEnv();
+    let loads = 0, again = true;
+    while (again && loads < 8) { again = await pageLoad(envAB, (e, reload) => modAB.setupServiceWorker({ nav: e.nav, scriptUrl: OUR_URL, reload, readVersion: readV, versionTimeoutMs: 50, log: () => {}, warn: () => {} })); loads++; }
+    assert(loads >= 8 && envAB.reloads >= 8,
+      `[25f-d] CANARY CONFIRMED: with BOTH halves reverted the page never converges — ${loads} page loads, ${envAB.reloads} reloads, capped only by this test. That is F1, reproduced.`);
+
+    const after = await readFile(swRegPath, 'utf8');
+    assert(after === before, '[25f-e] the REAL js/sw-register.js on disk is byte-identical before/after these canaries — only scratch copies were written');
+  }
+
+  // ── [25g] double-tap on Turn On fires ONE permission prompt ───────────────
+  //   Reviewer ruling. requestPushPermission() stays in flight for as long as
+  //   the native sheet is up (PROMPT_TIMEOUT_MS is 120s), and the button was
+  //   live that whole time. The handler is EXECUTED here, sliced out of the
+  //   real js/app.js, so this cannot pass on a comment.
+  {
+    const needle = "ov.querySelector('#notif-priming-btn')?.addEventListener('click'";
+    const i = appSrc25.indexOf(needle);
+    assert(i > 0, '[25g] found the priming-button handler in js/app.js');
+    const end = appSrc25.indexOf('\n  });', i);
+    const handlerSrc = appSrc25.slice(i, end + '\n  });'.length);
+
+    const runTaps = async (src) => {
+      let handler = null, calls = 0, toasts = 0;
+      const releases = [];
+      const btn = { disabled: false, addEventListener: (t, f) => { if (t === 'click') handler = f; } };
+      const ov = { querySelector: () => btn };
+      new Function('ov', 'showToast', 'requestPushPermission', 'pushFailureMessage', 'refreshNotifCenterBody', 'playerId', src)(
+        ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, () => 'nope', async () => {}, 'p1');
+      const t1 = handler({ currentTarget: btn });
+      const disabledDuring = btn.disabled;
+      const t2 = handler({ currentTarget: btn });        // the impatient second tap
+      await settle();
+      releases.forEach(r => r({ ok: true, reason: 'granted' }));
+      await Promise.all([t1, t2]); await settle();
+      return { calls, disabledDuring, toasts, enabledAfter: btn.disabled === false };
+    };
+
+    const real = await runTaps(handlerSrc);
+    assert(real.calls === 1,
+      `[25g] two taps while the prompt is open produce exactly ONE requestPushPermission() call (got ${real.calls}) — two would mean two native prompts racing for one Notification.permission, and two toasts that can disagree`);
+    assert(real.disabledDuring === true, '[25g] the button is disabled for the duration of the await');
+    assert(real.toasts === 1, '[25g] …and exactly one toast is shown');
+    assert(real.enabledAfter === true, '[25g] the button is re-enabled afterwards (a dismissed prompt leaves the card on never-asked, and it must stay tappable)');
+
+    const mutantHandler = handlerSrc.replace('btn.disabled = true;', '');
+    assert(mutantHandler !== handlerSrc, '[25g] (the canary mutation is non-vacuous)');
+    const mutated = await runTaps(mutantHandler);
+    assert(mutated.calls === 2,
+      `[25g] CANARY CONFIRMED: delete the disable and the double-tap fires TWO prompts again (got ${mutated.calls})`);
+  }
+
+  // ── [25h] DI-A2's 44px tap target on the Turn On button ──────────────────
+  {
+    const m = cssSrc25.match(/#notif-priming-btn\s*\{[^}]*min-height:\s*(\d+)px/);
+    assert(!!m && Number(m[1]) >= 44,
+      `[25h] #notif-priming-btn has an explicit min-height ≥44px per DI-A2 (found ${m ? m[1] + 'px' : 'no rule'}) — .btn-sm's base 34px is under the floor, and a missed tap on the card's only action reads as "push is broken"`);
+  }
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

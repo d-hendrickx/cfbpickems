@@ -50,6 +50,30 @@ const KEYS = {
   // here (see js/notifications.js §2) — this key holds lifecycle events only
   // (picksOpen/reminder/locking/locked/results/obligations/announcements).
   NOTIFICATIONS: 'cfbp_notifications',
+  // Build 2b, E3-E5 (2026-09-10, UN-161…163) — SCRIBE Trainer output. THREE
+  // small, flat-array KV keys (NOT the append-only chat-event log E2 uses for
+  // feedback, NOT a new dedicated Apps Script sheet like D2's future
+  // CFBP_SCRIBE_MEMORY): learnings/Canon/reports are read-heavy, low-write,
+  // small-N (dozens across a season), and are APPROVED/EDITED IN PLACE via a
+  // status flip — the opposite write/mutation profile from feedback
+  // (write-heavy, append-only, never edited) or a future Facts store (needs
+  // true per-row delete). Written server-side by `runTrainer` (backend/
+  // Code.gs) via the existing setOne()/getOne() seam — same physical
+  // mechanism as every other cfbp_* key, just written from Apps Script
+  // directly rather than through the client's debounced push.
+  //   SCRIBE_LEARNINGS holds THREE item kinds in one flat array — `kind:
+  //     'learning' | 'experiment' | 'fact_candidate'` — per the DI's own
+  //     instruction to fold fact_candidates in here "so nothing is lost"
+  //     rather than invent a fourth key for a shape this key already fits
+  //     (small, status-gated, commissioner-approved-in-place).
+  //   SCRIBE_CANON holds canon_candidate entries only (`approval_status`,
+  //     not `status` — matches the DI's own field name for this one kind).
+  //   SCRIBE_REPORTS holds one entry per Trainer run (§8 report sections +
+  //     the computed metrics snapshot) — read-only from the client's side;
+  //     nothing ever flips a report's own field, only learnings/Canon rows.
+  SCRIBE_LEARNINGS: 'cfbp_scribe_learnings',
+  SCRIBE_CANON:     'cfbp_scribe_canon',
+  SCRIBE_REPORTS:   'cfbp_scribe_reports',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -209,6 +233,14 @@ export function ensureSeedData(opts = {}) {
   // failed hydrate for a key that never existed before now (RG-12's concern is
   // specific to keys that already hold live data). Safe to seed unconditionally.
   seed(KEYS.NOTIFICATIONS, []);
+  // Build 2b (2026-09-10) — brand-new keys as of this release, same class as
+  // NOTIFICATIONS just above: nothing has ever held real data under them, so
+  // an empty read cannot be confused with a failed hydrate (RG-12's concern
+  // is specific to keys that ALREADY hold live data). Safe to seed
+  // unconditionally, not gated behind maySeedUserData.
+  seed(KEYS.SCRIBE_LEARNINGS, []);
+  seed(KEYS.SCRIBE_CANON,     []);
+  seed(KEYS.SCRIBE_REPORTS,   []);
 }
 
 export function resetToDemo() {
@@ -232,6 +264,9 @@ export function resetToDemo() {
   save(KEYS.ACTIVE_WEEK, REAL_WEEK_1_2026.weekId);
   save(KEYS.FETCH_PROOF, null);
   save(KEYS.NOTIFICATIONS, []);
+  save(KEYS.SCRIBE_LEARNINGS, []);
+  save(KEYS.SCRIBE_CANON, []);
+  save(KEYS.SCRIBE_REPORTS, []);
   clearSession();
 }
 
@@ -818,6 +853,52 @@ export function appendFeedback(entry) {
   save(KEYS.FEEDBACK, all);
 }
 export function clearFeedback() { save(KEYS.FEEDBACK, []); }
+
+// ─── SCRIBE TRAINER OUTPUT (Build 2b, E3-E5, 2026-09-10, UN-161…163) ──────────
+// Written server-side by `runTrainer` (backend/Code.gs) through the SAME
+// setOne()/getOne() seam every other cfbp_* key uses — these accessors exist
+// so the CLIENT (Comm→Data approve/reject UI, the Rules-page archive card)
+// reads/writes through the storage seam like everything else (CONVENTIONS
+// #8), never a parallel fetch path. A commissioner's approve/reject flip
+// round-trips through the normal debounced push like any other setting.
+//
+// SCRIBE_LEARNINGS holds three item `kind`s in one flat array — see the KEYS
+// comment above for why one key covers all three. Shape per item:
+//   kind:'learning'       { learningId, category, instruction, evidenceSummary,
+//                            confidence, status:'pending'|'approved'|'rejected',
+//                            createdAt, reviewAt }
+//   kind:'experiment'     { experiment, reason, confidence,
+//                            status:'pending'|'approved'|'rejected' } — NEVER
+//                            auto-applied regardless of confidence (E3 DI,
+//                            §3 D1 calibration loop: "gated through the same
+//                            human-approval step... never auto-applied").
+//   kind:'fact_candidate' { playerId, key, value, confidence, sourceMessageId,
+//                            status:'pending'|'approved'|'rejected' } — ALWAYS
+//                            written pending regardless of confidence: D2
+//                            (the Facts store this would apply to) does not
+//                            exist yet in this build, so there is no runtime
+//                            path an auto-approval could take effect on.
+export function getScribeLearnings() { return load(KEYS.SCRIBE_LEARNINGS) || []; }
+export function setScribeLearnings(list) { save(KEYS.SCRIBE_LEARNINGS, list || []); }
+
+// SCRIBE_CANON items: { canonId, contextSummary, relevantFacts,
+// preferredResponse, whyItWorked, pattern, source,
+// approvalStatus:'pending'|'approved'|'rejected' } — field named
+// `approvalStatus` (not `status`) per the DI's own field name for this kind.
+export function getScribeCanon() { return load(KEYS.SCRIBE_CANON) || []; }
+export function setScribeCanon(list) { save(KEYS.SCRIBE_CANON, list || []); }
+
+// SCRIBE_REPORTS: one entry per Trainer run, oldest-first as stored (E5a's
+// archive card reverses for display — see app.js). Read-only from the
+// client's side; nothing here ever flips a report's own field. The only
+// writer in production is `runTrainer` (backend/Code.gs), server-side,
+// through this same physical key.
+export function getScribeReports() { return load(KEYS.SCRIBE_REPORTS) || []; }
+// Test-only seam (same `_xxxForTest` convention as `_resetEspnTeamsCacheForTest`)
+// — trainertest.mjs's PART B needs to seed a report to exercise the archive
+// card/modal without spinning up the full Apps Script harness for a
+// client-side render test. No production call site.
+export function _setScribeReportsForTest(list) { save(KEYS.SCRIBE_REPORTS, list || []); }
 
 // ─── FEEDBACK EXPORT EXCLUSIONS ───────────────────────────────────────────────
 // Item 10 (DI-B1) — per-feedback-id "leave this out of the next CSV export"
