@@ -20,7 +20,7 @@
  * 4. Extra Point blackjack grading suite.
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 
 // ── DOM / browser stubs ───────────────────────────────────────────────────────
 const store = new Map();
@@ -72,7 +72,7 @@ function assert(cond, label) {
 // ── 1. Module import smoke test ───────────────────────────────────────────────
 console.log('\n[1] Importing all modules…');
 const mods = {};
-for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'backend', 'chatTransport', 'chat', 'scribeLines', 'extra-point', 'recap', 'history-2025', 'chat-ui', 'app']) {
+for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'backend', 'chatTransport', 'chat', 'scribeLines', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'chat-ui', 'app']) {
   try {
     mods[m] = await import(`./js/${m}.js`);
     console.log('  ✅ js/' + m + '.js');
@@ -199,7 +199,11 @@ Object.entries(SCRIBE_POOLS).forEach(([k, pool]) => {
   if (profane > 1) profanityHeavy++;
   pool.forEach(raw => {
     const l = raw.replace(/\{NAME\}|\{N\}|\{TEAM\}/g, 'name');
-    const words = l.split(/\s+/).filter(w => w.length > 3 && w === w.toUpperCase() && /[A-Z]{4,}/.test(w) && !['SCRIBE', 'NOTE:', 'BLACKJACK', 'BUST.', 'FINAL:'].includes(w));
+    // 'NOTE:' removed from this whitelist (test-only pass, 2026-09-10) — it
+    // was an accommodation for the now-retired "SCRIBE NOTE:" reflex opener
+    // (v2.1 voice refresh); see section [65] below for the app-wide scan
+    // that actually enforces the retirement.
+    const words = l.split(/\s+/).filter(w => w.length > 3 && w === w.toUpperCase() && /[A-Z]{4,}/.test(w) && !['SCRIBE', 'BLACKJACK', 'BUST.', 'FINAL:'].includes(w));
     if (words.length) capsViolations++;
   });
 });
@@ -7578,6 +7582,197 @@ function okOwnIndirect(week) {
     `fixture check: the scan actually parsed both real files and found ${seen64.length} disclosing functions — a broken parser would report 0 and pass everything above`);
   assert(seen64.includes('renderDashboardInner') && seen64.includes('pickChip') && seen64.includes('emitPickRevealEvent'),
     'fixture check: the scan reaches the three surfaces that have historically leaked (the standard matrix, the chat pick chip, the reveal ritual) — proof it is looking where the defects have actually been');
+}
+
+// ── 65. SCRIBE voice v2.1 retired-tic scan (app-wide) ─────────────────────────
+console.log('\n[65] SCRIBE voice v2.1 retired-tic scan (app-wide)…');
+{
+  // UN-77 (2026-08-13, the "orders" retirement): a single-FILE grep let two
+  // live instances of a retired word survive elsewhere in the app — the
+  // grep's scope was one file, the register's wasn't. This session's
+  // reviewer found the identical shape of miss one level up: js/scribeLines.js
+  // was rewritten for the v2.1 voice refresh (retiring "SCRIBE NOTE:" as a
+  // reflex opener; "Filed."/"Noted."/"Documented."/"— SCRIBE" as reflex
+  // closers; "the chart" as the standings stand-in; and the mock-clinical
+  // SOAP-note Assessment:/Plan:/Prognosis: template — docs/SCRIBE.md §6,
+  // changelog 2.1) — but js/recap.js, js/extra-point.js and js/chat-ui.js
+  // still shipped the retired register after scribeLines.js's OWN pools were
+  // already clean. A scan scoped to scribeLines.js alone would have stayed
+  // green straight through that exact miss. This scan is deliberately
+  // APP-WIDE — every file in js/*.js, not the one file SCRIBE's canned lines
+  // happen to live in — so the next retired-register survivor, wherever it
+  // ships, cannot hide behind a file boundary again.
+  //
+  // NOTE for anyone re-running this immediately after this pass: a `scribe`
+  // agent was concurrently rewriting recap.js/extra-point.js/one chat-ui.js
+  // string when this section was authored — hits in exactly those three
+  // files are EXPECTED to still be red until that work lands; re-run once it
+  // finishes rather than treating a hit there as this scan misbehaving.
+  //
+  // Scans STRING/TEMPLATE-LITERAL content by scanning every NON-COMMENT
+  // line's raw text — comment lines (trimmed start `*`, `//`, or `/*`) are
+  // excluded, mirroring almatest.mjs's scanSettingKeys() prose-exclusion
+  // (almatest.mjs:1656) verbatim, so documentation quoting the retired
+  // register — this very section's own header, SCRIBE.md's changelog, the
+  // ledger — can never make this guard permanently red for describing what
+  // it guards against. Both halves of that exclusion are proven by the two
+  // canaries below: a live literal IS caught; a commented quotation of the
+  // identical text is NOT.
+  const jsDir65 = new URL('./js/', import.meta.url);
+  const jsFiles65 = (await readdir(jsDir65)).filter(f => f.endsWith('.js')).sort();
+  assert(jsFiles65.length >= 14,
+    `fixture check: the app-wide scan really enumerated js/*.js (found ${jsFiles65.length} files) — a broken/empty readdir would make every assertion below pass vacuously`);
+
+  const RETIRED_TICS = [
+    { name: 'SCRIBE NOTE:', re: /SCRIBE NOTE:/ },
+    { name: 'Filed.', re: /\bFiled\./ },
+    { name: 'Noted.', re: /\bNoted\./ },
+    { name: 'Documented.', re: /\bDocumented\./ },
+    { name: '— SCRIBE (reflex closer)', re: /—\s*SCRIBE\b/ },
+    { name: 'the chart', re: /\bthe chart\b/i },
+    { name: 'Chart Review', re: /Chart Review/ },
+    { name: 'permanent record', re: /permanent record/ },
+    { name: 'SOAP framing (Assessment:/Plan:/Prognosis: as a line-leading label)', re: /(^|['"`]|[.!?]\s)\s*(Assessment|Plan|Prognosis):/ },
+  ];
+
+  function scanSourceForRetiredTics(src) {
+    const hits = [];
+    src.split('\n').forEach((rawLine, i) => {
+      const t = rawLine.trimStart();
+      if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*')) return; // prose — see header above
+      RETIRED_TICS.forEach(tic => { if (tic.re.test(rawLine)) hits.push({ line: i + 1, tic: tic.name, text: rawLine.trim() }); });
+    });
+    return hits;
+  }
+
+  const allHits65 = [];
+  for (const f of jsFiles65) {
+    const src = await readFile(new URL(f, jsDir65), 'utf8');
+    scanSourceForRetiredTics(src).forEach(h => allHits65.push({ file: f, ...h }));
+  }
+  if (allHits65.length) {
+    console.log(`  … ${allHits65.length} retired-tic hit(s) found (see below) — expected transient for recap.js/extra-point.js/chat-ui.js while the scribe pass is in flight:`);
+    allHits65.forEach(h => console.log(`     ${h.file}:${h.line} [${h.tic}] ${h.text}`));
+  }
+  assert(allHits65.length === 0,
+    'app-wide SCRIBE v2.1 retired-tic scan: zero live (non-comment) hits across every js/*.js file — see console output above for exact file:line hits, if any (UN-77 precedent: this scan is app-wide precisely so a fix in one file can never hide a survivor in another)');
+
+  // Canary 1 — a live literal on a real code line IS caught (RG-27: a guard
+  // that cannot fail is not a guard).
+  const canaryLiveHits65 = scanSourceForRetiredTics('  return `${name} — SCRIBE keeps the receipts.`;');
+  assert(canaryLiveHits65.some(h => h.tic === '— SCRIBE (reflex closer)'),
+    'canary: a live "— SCRIBE" closer on a real (non-comment) code line IS caught by this scan');
+
+  // Canary 2 — the identical text, inside a comment, is correctly NOT
+  // caught. Proves the prose exclusion is narrow (comment lines only) and
+  // deliberate, not a loophole that also swallows live code quoting itself.
+  const canaryCommentHits65 = scanSourceForRetiredTics('  // e.g. "— SCRIBE keeps the receipts." was the retired closer');
+  assert(canaryCommentHits65.length === 0,
+    'canary: the identical text, inside a // comment line, is correctly NOT counted — documentation quoting the retired register cannot make this guard permanently red');
+}
+
+// ── 66. Items E/F re-review close-out — commissioner UI for two orphaned
+//       pilot settings (UN-159 D5 `scribeFeedbackEnabled`, UN-164 F4-interim
+//       `chatImagePreviewEnabled`) ───────────────────────────────────────────
+// Both settings already had safe defaults in data-model.js DEFAULT_SETTINGS
+// and were already on almatest.mjs's bounded-size allow-list; this pass adds
+// the missing commissioner toggle to js/app.js's Settings tab, next to the
+// existing chatEnabled precedent. RG-10 (an admin-section that renders on
+// ALL FIVE commissioner tabs because it isn't scoped to one) is the specific
+// hazard for anything added to that card, so this section proves both new
+// rows sit inside the SETTINGS container specifically (not just "inside A
+// container") via a nearest-preceding-data-comm-tab scan, mirroring [46]'s
+// general guard but pinned to these two ids. It also proves the two change
+// handlers write through the storage seam, and that the settings-off state
+// is honored by each field's own consumer.
+console.log('\n[66] Items E/F re-review close-out — SCRIBE feedback + image preview toggles…');
+{
+  // 66a — locate which tagged admin-section (if any) ACTUALLY CONTAINS a
+  // given anchor. A naive "nearest preceding data-comm-tab attribute in
+  // source order" heuristic was tried first and is deliberately NOT what
+  // ships here: it reports the tab of whichever tagged section happens to
+  // appear earliest before the anchor, even when that section has already
+  // CLOSED and the anchor is really a later, untagged SIBLING — exactly the
+  // classic RG-10 shape (a card appended after a tagged section, sharing no
+  // wrapper with it). The mutation drill below caught that heuristic
+  // reporting a false "settings" for a sibling card outside every tagged
+  // section, which is why this version tracks div depth to find each
+  // admin-section's real [start,end) range instead of just its start.
+  const adminSectionRanges66 = (src) => {
+    const ranges = [];
+    const openRe = /<div\s+class="admin-section"\s+data-comm-tab="([^"]+)">/g;
+    let om;
+    while ((om = openRe.exec(src))) {
+      const tab = om[1];
+      const start = om.index;
+      const tagRe = /<div\b[^>]*>|<\/div>/g;
+      tagRe.lastIndex = om.index + om[0].length;
+      let depth = 1, end = src.length, tm;
+      while ((tm = tagRe.exec(src))) {
+        if (tm[0] === '</div>') { depth--; if (depth === 0) { end = tagRe.lastIndex; break; } }
+        else { depth++; }
+      }
+      ranges.push({ tab, start, end });
+    }
+    return ranges;
+  };
+  const commTabFor66 = (src, anchor) => {
+    const idx = src.indexOf(anchor);
+    if (idx === -1) return undefined;
+    const hit = adminSectionRanges66(src).find(r => idx >= r.start && idx < r.end);
+    return hit ? hit.tab : null;
+  };
+
+  for (const [anchor, label] of [
+    ['id="scribe-feedback-toggle"', 'SCRIBE feedback buttons toggle'],
+    ['id="chat-image-preview-toggle"', 'image previews toggle'],
+  ]) {
+    const tab = commTabFor66(appJsSrc, anchor);
+    assert(tab === 'settings',
+      `${label} sits inside a data-comm-tab="settings" container (containing tab was ${JSON.stringify(tab)})`);
+    assert(!['week', 'games', 'players', 'data'].includes(tab),
+      `${label} does NOT render under the week/games/players/or data tabs (RG-10 negative check, got ${JSON.stringify(tab)})`);
+  }
+
+  // 66b — self-test the detector itself (RG-27: a guard that cannot fail is
+  // not a guard). No containing tagged section at all → null. Nested inside
+  // a "week" section → "week". Placed as an untagged SIBLING immediately
+  // after a "settings" section closes (the real RG-10 shape the mutation
+  // drill below reproduces against the actual file) → null, NOT "settings".
+  assert(commTabFor66('<div class="card"><input id="scribe-feedback-toggle"></div>', 'id="scribe-feedback-toggle"') === null,
+    'detector fixture: an id with no containing tagged section at all reads as null, not "settings"');
+  assert(commTabFor66('<div class="admin-section" data-comm-tab="week"><input id="scribe-feedback-toggle"></div>', 'id="scribe-feedback-toggle"') === 'week',
+    'detector fixture: an id nested inside a data-comm-tab="week" section reads "week", correctly NOT "settings"');
+  assert(commTabFor66('<div class="admin-section" data-comm-tab="settings"><div>ok</div></div><div class="card"><input id="scribe-feedback-toggle"></div>', 'id="scribe-feedback-toggle"') === null,
+    'detector fixture: an id placed as an UNTAGGED SIBLING right after a settings section CLOSES reads as null, not "settings" (the shape a nearest-preceding-attribute heuristic would miss)');
+
+  // 66c — structural: the two change handlers write through saveSetting()
+  // (the storage seam), not localStorage directly.
+  assert(/document\.getElementById\('scribe-feedback-toggle'\)\?\.addEventListener\('change', e => \{\s*saveSetting\('scribeFeedbackEnabled', e\.target\.checked\);/.test(appJsSrc),
+    "the scribe-feedback-toggle change handler calls saveSetting('scribeFeedbackEnabled', e.target.checked) — the storage seam");
+  assert(/document\.getElementById\('chat-image-preview-toggle'\)\?\.addEventListener\('change', e => \{\s*saveSetting\('chatImagePreviewEnabled', e\.target\.checked\);/.test(appJsSrc),
+    "the chat-image-preview-toggle change handler calls saveSetting('chatImagePreviewEnabled', e.target.checked) — the storage seam");
+
+  // 66d — settings-off state is honored by each field's own consumer.
+  // Reuses the real seams end-to-end: storage.saveSetting() write, then the
+  // real isScribeFeedbackEnabled()/isChatImagePreviewEnabled() reads.
+  const scribeFeedbackMod66 = mods['scribeFeedback'];
+  const chatMod66 = mods['chat'];
+
+  storage.saveSetting('scribeFeedbackEnabled', true);
+  assert(scribeFeedbackMod66.isScribeFeedbackEnabled() === true,
+    'scribeFeedbackEnabled=true is honored by isScribeFeedbackEnabled()');
+  storage.saveSetting('scribeFeedbackEnabled', false);
+  assert(scribeFeedbackMod66.isScribeFeedbackEnabled() === false,
+    'turning the toggle OFF (scribeFeedbackEnabled=false) is honored by isScribeFeedbackEnabled() — Rate/Flag controls stop rendering');
+  storage.saveSetting('scribeFeedbackEnabled', true); // restore the pilot default for any later section
+
+  storage.saveSetting('chatImagePreviewEnabled', true);
+  assert(chatMod66.isChatImagePreviewEnabled() === true,
+    'chatImagePreviewEnabled=true is honored by isChatImagePreviewEnabled()');
+  storage.saveSetting('chatImagePreviewEnabled', false);
+  assert(chatMod66.isChatImagePreviewEnabled() === false,
+    'turning the toggle OFF (chatImagePreviewEnabled=false, also the shipped default) is honored by isChatImagePreviewEnabled()');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

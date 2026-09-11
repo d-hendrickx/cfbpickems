@@ -117,7 +117,7 @@ export function renderPrevWeekRecapHTML(currentWeek) {
   return renderWeekRecapCardHTML(prev);
 }
 
-/** SCRIBE "Chart Review" card for one finalized week (also used by the
+/** SCRIBE weekly recap card for one finalized week (also used by the
  *  read-only historical picks view). */
 export function renderWeekRecapCardHTML(prev) {
   const s = buildWeekStorylines(prev);
@@ -126,7 +126,7 @@ export function renderWeekRecapCardHTML(prev) {
   const lines = [];
   lines.push(`<div class="recap-line recap-winner">🏆 <strong>${esc(s.nameOf(s.winner.playerId))}</strong> took ${esc(formatWeekLabel(prev))} — ${s.winner.correctPicks ?? s.winner.points ?? '?'} correct${s.winner.wonTiebreaker ? ' (won on the tiebreaker)' : ''}.</div>`);
   if (s.loser && s.loser.playerId !== s.winner.playerId) {
-    lines.push(`<div class="recap-line">🥶 <strong>${esc(s.nameOf(s.loser.playerId))}</strong> brought up the rear. The chart has been updated accordingly.</div>`);
+    lines.push(`<div class="recap-line">🥶 <strong>${esc(s.nameOf(s.loser.playerId))}</strong> brought up the rear.</div>`);
   }
   s.loneWolves.slice(0, 2).forEach(lw => {
     lines.push(`<div class="recap-line">🐺 Lone wolf: <strong>${esc(lw.name)}</strong> stood alone on ${esc(lw.team)} (${esc(lw.matchup)}) — and covered.</div>`);
@@ -166,17 +166,16 @@ export function renderWeekRecapCardHTML(prev) {
   const standings = calculateSeasonStandings(s.players, seasonResults);
   if (standings?.length) {
     const top = standings[0];
-    lines.push(`<div class="recap-line">📈 Season chart after ${esc(formatWeekLabel(prev))}: <strong>${esc(s.nameOf(top.playerId))}</strong> leads.</div>`);
+    lines.push(`<div class="recap-line">📈 Standings after ${esc(formatWeekLabel(prev))}: <strong>${esc(s.nameOf(top.playerId))}</strong> leads.</div>`);
   }
 
   return `
     <div class="card mb-md recap-card">
       <div class="recap-header">
-        <h3>📋 Chart Review — ${esc(formatWeekLabel(prev))}</h3>
+        <h3>📋 ${esc(formatWeekLabel(prev))} Recap</h3>
         <span class="recap-byline">filed by S.C.R.I.B.E.</span>
       </div>
       ${lines.join('')}
-      <div class="recap-closer">Filed. — SCRIBE</div>
     </div>`;
 }
 
@@ -210,7 +209,7 @@ export function renderSeasonSummaryHTML(currentWeek) {
       <div class="recap-line">🍺 Ledger carried into this season: ${Object.entries(nets).sort((a,b)=>b[1]-a[1]).map(([n,v]) => `${esc(n)} ${fmtNet(v)}`).join(' · ')} — all payable in person.</div>
       <div class="recap-line">🎯 Extra Point champion: Jacob (4). Kevin finished at −1, which remains the only negative Extra Point total in league history.</div>
       ${blurb ? `<div class="recap-blurb">${esc(blurb).replace(/\n/g, '<br>')}</div>` : ''}
-      <div class="recap-closer">The chart resets. The record does not. — SCRIBE</div>
+      <div class="recap-closer">The season resets. The receipts don't.</div>
     </div>`;
   }
 
@@ -246,7 +245,7 @@ export function renderSeasonSummaryHTML(currentWeek) {
       </div>
       ${computed}
       ${blurb ? `<div class="recap-blurb">${esc(blurb).replace(/\n/g, '<br>')}</div>` : ''}
-      <div class="recap-closer">Noted for the permanent record. — SCRIBE</div>
+      <div class="recap-closer">Last season isn't going anywhere.</div>
     </div>`;
 }
 

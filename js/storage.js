@@ -43,6 +43,13 @@ const KEYS = {
   ACTIVE_WEEK: 'cfbp_active_week',
   FETCH_PROOF: 'cfbp_fetch_proof',
   SITE_UNLOCK: SITE_PIN_KEY,  // 'cfbp_site_unlocked'
+  // Groups A/B notification workstream (UN-139…UN-148, 2026-09-10). ONE shared
+  // list of provider-independent notification records — mirrors the
+  // KEYS.COMMENTS single-key precedent (CLAUDE.md architecture bullet),
+  // filtered client-side by playerId. Chat messages are explicitly NOT written
+  // here (see js/notifications.js §2) — this key holds lifecycle events only
+  // (picksOpen/reminder/locking/locked/results/obligations/announcements).
+  NOTIFICATIONS: 'cfbp_notifications',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -195,6 +202,13 @@ export function ensureSeedData(opts = {}) {
   seed(KEYS.FEEDBACK_EXCLUDED, []);
   seed(KEYS.COMMENTS,     []);
   seed(KEYS.ACTIVE_WEEK,  REAL_WEEK_1_2026.weekId);
+  // Not in USER_MUTABLE_KEYS — same class as COMMENTS/FEEDBACK/REACTIONS just
+  // above: user-GENERATED content, not commissioner-authored league state, and
+  // — unlike those — a genuinely NEW key as of this release, so no device has
+  // ever held real data under it. An empty read cannot be confused with a
+  // failed hydrate for a key that never existed before now (RG-12's concern is
+  // specific to keys that already hold live data). Safe to seed unconditionally.
+  seed(KEYS.NOTIFICATIONS, []);
 }
 
 export function resetToDemo() {
@@ -217,6 +231,7 @@ export function resetToDemo() {
   save(KEYS.COMMENTS, []);
   save(KEYS.ACTIVE_WEEK, REAL_WEEK_1_2026.weekId);
   save(KEYS.FETCH_PROOF, null);
+  save(KEYS.NOTIFICATIONS, []);
   clearSession();
 }
 
@@ -315,6 +330,56 @@ export function getChatNickFor(playerId) {
   const p = (load(KEYS.PLAYERS) || []).find(x => x.playerId === playerId);
   return p?.preferences?.chatNick || null;
 }
+
+// ── Groups A/B notification prefs (UN-139…UN-148, 2026-09-10, DI-A4) ──────────
+// A DIFFERENT concept from getNotifPrefs()/setNotifPrefs() above, which govern
+// the existing in-app toast (sound/toasts/systemEvents/toastDuration) while the
+// app is OPEN. These govern the Notification Center's push/in-app category
+// toggles — `player.preferences.notifyPushMaster` (the one master "Push
+// Notifications" row) and `player.preferences.notifyCategories.*` (five
+// category rows: chat/pickReminders/leagueUpdates/results/obligations).
+// CONVENTIONS #10 — default-when-missing: an old/absent record reads as
+// EVERYTHING ON (opt-out model), matching the existing chat-prefs precedent
+// (`toasts`/`systemEvents` also default true) so a fresh install behaves
+// exactly like an explicit "leave it on" choice.
+export const DEFAULT_NOTIFY_CATEGORIES = Object.freeze({
+  chat: true, pickReminders: true, leagueUpdates: true, results: true, obligations: true,
+});
+
+// Session-scoped (own prefs) — used by the Notification Center's settings card.
+export function getNotifyPushMaster() {
+  const v = _playerPref('notifyPushMaster');
+  return v === undefined ? true : !!v;
+}
+export function setNotifyPushMaster(on) { _setPlayerPref('notifyPushMaster', !!on); }
+export function getNotifyCategoryPrefs() {
+  return { ...DEFAULT_NOTIFY_CATEGORIES, ...(_playerPref('notifyCategories') || {}) };
+}
+export function setNotifyCategoryPref(category, on) {
+  _setPlayerPref('notifyCategories', { ...getNotifyCategoryPrefs(), [category]: !!on });
+}
+
+// ANY-player reads — the policy layer (js/notifications.js) resolves whether a
+// RECIPIENT (not necessarily the signed-in session) wants a given category,
+// exactly the same shape getAccentFor()/getChatNickFor() already use above.
+export function getNotifyPushMasterFor(playerId) {
+  const p = (load(KEYS.PLAYERS) || []).find(x => x.playerId === playerId);
+  const v = p?.preferences?.notifyPushMaster;
+  return v === undefined ? true : !!v;
+}
+export function getNotifyCategoryPrefsFor(playerId) {
+  const p = (load(KEYS.PLAYERS) || []).find(x => x.playerId === playerId);
+  return { ...DEFAULT_NOTIFY_CATEGORIES, ...(p?.preferences?.notifyCategories || {}) };
+}
+
+// ── Groups A/B notification records (DI-A3, §2) ───────────────────────────────
+// ONE shared list, exactly the KEYS.COMMENTS precedent — every read/write goes
+// through load()/save() like every other key (CONVENTIONS #8). Retention
+// pruning (30 days / 200-record cap per player, §1.3) is a POLICY concern, not
+// a storage concern, and lives in js/notifications.js — this pair is a pure
+// read/write seam, same shape as every getX/setX pair above it.
+export function getNotifications() { return load(KEYS.NOTIFICATIONS) || []; }
+export function setNotifications(list) { save(KEYS.NOTIFICATIONS, list); }
 
 export function getTheme() {
   // v0.17.0 — league default is the school-agnostic neutral palette; players

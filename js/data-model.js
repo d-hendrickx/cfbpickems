@@ -405,6 +405,15 @@ export const DEFAULT_SETTINGS = {
   // the Commissioner explicitly turns it on — that is the intended behavior
   // change, not a bug.
   randomizePicksEnabled: false,
+  // Build 1 (2026-09-10) — E1 feedback instrumentation master switch (UN-159).
+  // Default TRUE for the six-player pilot (Drew's D5 ruling: commissioner
+  // master switch, not per-player opt-in). A missing value must read as ON
+  // (CONVENTIONS #10) — chat-ui.js reads `!== false` for exactly that reason.
+  scribeFeedbackEnabled: true,
+  // Build 1 (2026-09-10) — F4-interim inline image previews (UN-164). Default
+  // FALSE (Drew's D7 ruling: built, off by default) because an inline external
+  // <img> is a passive IP-disclosure vector; chat-ui.js reads `=== true`.
+  chatImagePreviewEnabled: false,
 };
 
 // ─── DEMO PLAYERS — correct alma maters and 2-letter initials ─────────────────

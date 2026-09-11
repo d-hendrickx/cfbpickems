@@ -135,8 +135,8 @@ assert(prevForPart2?.weekId === 'w2026_1',
   '[1b] findPreviousFinalizedWeek(Part 2) === w2026_1 (Week 1, Part 1)');
 
 const footer = renderPicksFooterHTML(LIVE_PART2);
-assert(footer.includes('Chart Review'),
-  '[1c] picks footer renders the Chart Review recap card');
+assert(footer.includes('Recap'),
+  '[1c] picks footer renders the week recap card');
 assert(footer.includes('Week 1, Part 1'),
   '[1d] the recap card names Week 1, Part 1');
 assert(!footer.includes('The Permanent Record'),
@@ -323,11 +323,11 @@ seed({ weeks: [P1_FINAL, P2_FINAL, LIVE_DEMO], players: LIVE_PLAYERS,
        results: [...LIVE_RESULTS, ...P2_RESULTS],
        games: [...LIVE_GAMES, { ...LIVE_GAMES[0], gameId: 'g_p2', weekId: 'w_1788306292997' }] });
 
-const chartLineOf = html => (html.match(/📈 Season chart after[^<]*<strong>[^<]*<\/strong> leads\./) || [''])[0];
+const chartLineOf = html => (html.match(/📈 Standings after[^<]*<strong>[^<]*<\/strong> leads\./) || [''])[0];
 
 const p1Chart = chartLineOf(recap.renderWeekRecapCardHTML(P1_FINAL));
 assert(p1Chart !== '',
-  '[6a] Part 1\'s Chart Review renders a "Season chart after…" line');
+  '[6a] Part 1\'s recap card renders a "Standings after…" line');
 assert(p1Chart.includes('<strong>Drew</strong>'),
   '[6b] "Season chart after Week 1, Part 1" names Drew — who actually led at that point');
 assert(!p1Chart.includes('<strong>Kevin</strong>'),
@@ -442,7 +442,7 @@ const KEVIN_HEAVY = wid => LIVE_PLAYERS.map((p, i) => ({
 }));
 const ghost = over => ({ ...LIVE_PART1, weekId: 'wGhost', roundLabel: 'G',
                          startDate: '2026-08-01', createdAt: '2026-07-01T00:00:00Z', ...over });
-const chartOf = html => (html.match(/📈 Season chart after[^<]*<strong>[^<]*<\/strong> leads\./) || [''])[0];
+const chartOf = html => (html.match(/📈 Standings after[^<]*<strong>[^<]*<\/strong> leads\./) || [''])[0];
 
 for (const [over, label] of [
   [{ status: 'live' },          '[9c] a NON-final earlier week\'s results never enter the chart line'],
@@ -535,7 +535,11 @@ assert(findPreviousFinalizedWeek(NUMBERED_CUR)?.weekId === 'wNoNumEarly',
 // ─────────────────────────────────────────────────────────────────────────────
 console.log('\n[10] Drew 2026-09-04 — the live configuration, pinned at the render layer…');
 
-const NAMES_PART1 = 'Chart Review — Week 1, Part 1';
+// v2.1 voice refresh: the recap card's H3 is now "{week label} Recap" (no
+// "Chart Review" prefix), and the week label carries the fixture's date
+// range between the name and "Recap" — so the two are asserted separately
+// rather than as one contiguous pinned string.
+const NAMES_PART1 = 'Week 1, Part 1';
 
 // (a) The CURRENT week's own status must not steer its footer. Drew's week is
 //     locked/live by now; §[1] only ever exercised 'open'.
@@ -544,8 +548,8 @@ for (const st of ['open', 'locked', 'live']) {
   seed({ weeks: [LIVE_PART1, cur, LIVE_DEMO], players: LIVE_PLAYERS,
          results: LIVE_RESULTS, games: LIVE_GAMES });
   const f = renderPicksFooterHTML(cur);
-  assert(f.includes(NAMES_PART1) && !f.includes('The Permanent Record'),
-    `[10a:${st}] picks footer on a ${st.toUpperCase()} current week renders "${NAMES_PART1}", not the Permanent Record`);
+  assert(f.includes(NAMES_PART1) && f.includes('Recap') && !f.includes('The Permanent Record'),
+    `[10a:${st}] picks footer on a ${st.toUpperCase()} current week renders "${NAMES_PART1}" Recap, not the Permanent Record`);
 }
 
 // (b) THE PAIR, from ONE fixture — the two pages Drew compared, side by side.
@@ -557,10 +561,10 @@ seed({ weeks: [LIVE_PART1, { ...LIVE_PART2, status: 'live' }, LIVE_DEMO],
        players: LIVE_PLAYERS, results: LIVE_RESULTS, games: LIVE_GAMES });
 const curFooter = renderPicksFooterHTML({ ...LIVE_PART2, status: 'live' });
 const histCard  = recap.renderWeekRecapCardHTML(LIVE_PART1);
-assert(curFooter.includes(NAMES_PART1),
-  '[10d] the page you PICK on (Week 1, Part 2) shows LAST week\'s Chart Review');
-assert(histCard.includes(NAMES_PART1) && !histCard.includes('Week Part 2'),
-  '[10e] the page you BROWSE BACK to (Week 1, Part 1) shows its OWN Chart Review, not its sibling\'s — historical view, unchanged by the fix');
+assert(curFooter.includes(NAMES_PART1) && curFooter.includes('Recap'),
+  '[10d] the page you PICK on (Week 1, Part 2) shows LAST week\'s recap');
+assert(histCard.includes(NAMES_PART1) && histCard.includes('Recap') && !histCard.includes('Week Part 2'),
+  '[10e] the page you BROWSE BACK to (Week 1, Part 1) shows its OWN recap, not its sibling\'s — historical view, unchanged by the fix');
 assert(!curFooter.includes('The Permanent Record') && !histCard.includes('The Permanent Record'),
   '[10f] the Permanent Record appears on NEITHER page once a finalized week exists in the season');
 
@@ -576,14 +580,14 @@ seed({ weeks: [LIVE_PART1, PART2_DONE, REAL_WEEK2, LIVE_DEMO], players: LIVE_PLA
 const w2Footer = renderPicksFooterHTML(REAL_WEEK2);
 // DI-135: roundLabel is now a suffix with the display number auto-prepended,
 // so this reads "Week 1, Part 2" (not the pre-DI-135 "Week Part 2").
-assert(w2Footer.includes('Chart Review — Week 1, Part 2') && !w2Footer.includes('The Permanent Record'),
-  '[10g] a genuine weekNumber:2 current week RENDERS the Chart Review for the most recent finalized week (Part 2) — this reading of the report reproduces on neither tree');
+assert(w2Footer.includes('Week 1, Part 2') && w2Footer.includes('Recap') && !w2Footer.includes('The Permanent Record'),
+  '[10g] a genuine weekNumber:2 current week RENDERS the recap for the most recent finalized week (Part 2) — this reading of the report reproduces on neither tree');
 
 // (d) DISCRIMINATOR — identical fixture, previous week never FINALIZED.
 seed({ weeks: [{ ...LIVE_PART1, status: 'live', finalizedAt: null }, { ...LIVE_PART2, status: 'live' }, LIVE_DEMO],
        players: LIVE_PLAYERS, results: LIVE_RESULTS, games: LIVE_GAMES });
 const unfinalizedFooter = renderPicksFooterHTML({ ...LIVE_PART2, status: 'live' });
-assert(unfinalizedFooter.includes('The Permanent Record') && !unfinalizedFooter.includes('Chart Review'),
+assert(unfinalizedFooter.includes('The Permanent Record') && !unfinalizedFooter.includes('Recap'),
   '[10h] DOCUMENTED, NOT ENDORSED: a previous week that was never FINALIZED still falls back to the Permanent Record — same pixels as the fixed bug, different cause (design question, see §[8])');
 
 console.log(`\n[recaptest] ${pass} passed, ${fail} failed`);

@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.18.0';
+export const APP_VERSION = 'v0.19.0';
 export const APP_VERSION_DATE = '2026-09-10';
 
 /**
@@ -19,17 +19,14 @@ export const APP_VERSION_DATE = '2026-09-10';
 const WHATS_NEW = {
   version: APP_VERSION,
   added: [
-    'You can now see where a live game stands. The quarter and clock show right on the game card, on the dashboard and on your picks, so a score means more than just a number — "trailing" with twelve minutes left is a very different thing from "trailing" in the first. It reflects the last refresh (at the interval you choose), and at the break it simply reads "Halftime" and stops flashing, so a frozen score never looks like a stalled feed.',
-    'The Feedback button now has a clear "Feedback" label and sits on its own line under the week, instead of an unlabeled icon.',
-    'When downloading the feedback report, the commissioner can tick exactly which items to include. Untick one and it stays unticked until you re-tick it; a brand-new report always starts included.',
+    'Push notifications. If IRB Pick \'Ems is on your home screen, you can now get a push — even with the app closed — when someone posts in chat, when picks open, when you still owe picks and the lock is getting close, when the week is final, and when a debt is settled. Turn it on from the new 🔔 bell in the header and choose exactly which kinds you want; the bell also keeps a history, so a dismissed banner is never the only record.',
+    'Reminders are personal. You only hear about picks you still owe. The "locking soon" warning names who is still out — not what anyone picked.',
+    'Rate SCRIBE. Every SCRIBE line now carries a ⭐. Tap it to call the line a Hit, Mid, or Too much, or write what SCRIBE should have said instead. Long-press any human message to flag it 📌 Remember this or 👁 Weigh in (SCRIBE should have said something here). This is how SCRIBE learns the room this season — be honest, and be generous with Too much.',
+    'Links in chat are tappable, and a 🔍 in the chat header searches the whole room.',
+    'SCRIBE dropped the doctor act. Same receipts, less clinic.',
   ],
   fixed: [
-    'The auto-refresh interval you pick now actually refreshes the scores, on every tab — not just the dashboard. Sitting on your picks during a game used to update nothing until you refreshed by hand.',
-    'The "(TB)" tiebreaker tag now appears only when a tiebreaker genuinely decided the week — no more "(TB)" beside a name in a week where nobody entered one.',
-    'An unpaid debt in the standings simply reads "Unpaid" again, instead of a "Needs review" note that was meant for the commissioner\'s tools.',
-    'The demo/simulation controls can no longer touch a real week. Their reset and randomize buttons refuse to run on anything but a demo week, so a misclick can never wipe a real week\'s scores and results again.',
-    'A newly created second part of a week now appears in the dashboard\'s "Viewing Week" list, and its name reads the way it should — "Week 1, Part 2" — with the optional ESPN Week # now setting the displayed number. The redundant repeated year has also been dropped from the week\'s date range.',
-    'Cross-device sync keeps working as the season fills up. The way picks and games are stored can now grow past the single-cell limit that would otherwise have stalled syncing around midseason.',
+    'A reply to a message that has since been withdrawn or aged out of view now says so, instead of showing a quote button that did nothing.',
   ],
 };
 
@@ -107,6 +104,8 @@ import {
   getEffectiveSitePin, setSitePin,
   resetCurrentWeekData,
   exportAllData, exportAllDataRaw,
+  // Groups A/B (2026-09-10) — notification category prefs, DI-A4
+  getNotifyPushMaster, setNotifyPushMaster, getNotifyCategoryPrefs, setNotifyCategoryPref,
 } from './storage.js';
 
 import {
@@ -144,7 +143,8 @@ import {
   chatDigest,
   setChatSyncStatus,
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats } from './chat.js';
+import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled } from './chat.js';
+import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
 import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
 import { renderPicksFooterHTML, renderWeekRecapCardHTML } from './recap.js';
@@ -152,6 +152,20 @@ import {
   detectLongestFieldGoal, gradeWeekExtraPoint, gradeExtraPoint,
   renderExtraPointResultsHTML, EP_OUTCOME_LABEL,
 } from './extra-point.js';
+
+// ── Groups A/B — in-app + push notifications (UN-139…UN-148, 2026-09-10) ─────
+import {
+  wireChatNotifications, destinationFor,
+  notifyPicksOpened, notifyPicksLocked, notifyResultsFinalized,
+  notifyObligationCreated, notifyObligationSettled, notifyCommissionerAnnouncement,
+  getNotificationsForPlayer, unreadLifecycleCount, markNotificationRead,
+  registerPushAdapter, OneSignalRelayAdapter,
+  pollNotifyLog,
+} from './notifications.js';
+import {
+  ensureOneSignalInit, loginOneSignal, logoutOneSignal, wireForegroundSuppression,
+  subscriptionState, requestPushPermission,
+} from './push-onesignal.js';
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 
@@ -299,6 +313,52 @@ async function boot() {
 
   // Chat engine + badges (v0.16.0)
   try { initChatUI(); updateChatBadges(); } catch (e) { console.warn('[chat] init failed', e); }
+
+  // ── Groups A/B — notifications boot wiring (2026-09-10) ──────────────────
+  try {
+    registerPushAdapter(new OneSignalRelayAdapter());   // §4 — provider isolation: absent adapter is also a valid state, never required
+    wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
+    setupNotifBell();
+    renderNotifBell();
+    const sess0 = getSession();
+    ensureOneSignalInit().then(() => {
+      if (sess0?.playerId) loginOneSignal(sess0.playerId);
+      wireForegroundSuppression(destinationFor);          // §3 step 3 — client-side-only foreground suppression
+    });
+    // F2/F4 remediation (2026-09-10) — fold the server-fired reminder/
+    // locking-soon log (PICKS_REMINDER/PICKS_LOCKING_SOON are push-only from
+    // the client's perspective — Code.gs's scanReminders fires them entirely
+    // server-side) into the Notification Center at hydrate, then re-render
+    // the bell so its count reflects them immediately rather than waiting
+    // for the first auto-refresh tick.
+    if (sess0?.playerId) {
+      pollNotifyLog(sess0.playerId, { force: true }).then(() => renderNotifBell()).catch(() => {});
+    }
+  } catch (e) { console.warn('[notifications] boot wiring failed', e); }
+
+  // DI-A5 — deep-link landing. Mirrors index.html's own "?access=scribe"
+  // query-param precedent: read once, scrub the URL so a bookmarked/shared
+  // link stays clean, then navigate. `ntab`/`nparams` are written by
+  // backend/Code.gs's buildDestinationUrl() into the OneSignal push payload's
+  // `url` field, which the SDK's own (merged) service worker opens on tap —
+  // we never hand-author notificationclick handling (correction #1).
+  //
+  // F10 remediation (2026-09-10) — the scrub used to replace the ENTIRE
+  // query string with nothing, silently dropping any OTHER param a link
+  // might carry (e.g. "?access=scribe"). Strip ONLY the notification params.
+  try {
+    const params = new URLSearchParams(location.search);
+    const ntab = params.get('ntab');
+    if (ntab) {
+      let nparams = {};
+      try { nparams = JSON.parse(params.get('nparams') || '{}'); } catch {}
+      params.delete('ntab');
+      params.delete('nparams');
+      const rest = params.toString();
+      history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : ''));
+      setTimeout(() => deepLinkTo({ tab: ntab, params: nparams }), 0);
+    }
+  } catch (e) { console.warn('[notifications] deep-link parse failed', e); }
 
   window.addEventListener('beforeunload', () => { try { flushPush(); } catch {} });
 }
@@ -508,6 +568,10 @@ function navigateTo(tab) {
   try { setPollMode(tab === 'chat' ? 'active' : 'passive'); updateChatBadges(); } catch {}
   try { refreshChatEnabled(); } catch {}
   try { checkPickRevealDue(); } catch {}
+  // F4 remediation (2026-09-10) — the bell badge used to go stale between
+  // whatever call sites happened to remember it; navigation is a natural,
+  // cheap chokepoint to keep it honest (mirrors updateChatBadges() above).
+  try { renderNotifBell(); } catch {}
 }
 
 function refreshHeader() {
@@ -718,6 +782,14 @@ function resyncPlayerPreferences() {
   renderTzToggle();
   renderThemeToggle();
   renderHeaderIdentity();
+  // Groups A/B, correction #2 (2026-09-10): OneSignal.login()/.logout() on
+  // EVERY session change (login/logout/player switch) — the same chokepoint
+  // this whole function already exists for. Without logout(), a handed-off
+  // phone keeps receiving the PREVIOUS player's pushes. Both no-op cleanly
+  // when push isn't configured (empty App ID) or off-browser (loadtest/node).
+  const sess = getSession();
+  if (sess?.playerId) loginOneSignal(sess.playerId); else logoutOneSignal();
+  renderNotifBell();
 }
 
 /**
@@ -748,6 +820,208 @@ export function renderThemeToggle() {
     setTheme(key);
     applyTheme(key);
   });
+}
+
+// ─── GROUPS A/B — NOTIFICATION CENTER (UN-139…UN-148, DI-A2/A3/A4/A5/B5) ──────
+// Reuses .modal-overlay/.modal/.modal-header/.modal-close verbatim (the game
+// modal / edit-player modal precedent) and .card for rows — no new sheet
+// component invented (DI-A3's own reuse note).
+
+const NOTIF_ICON = {
+  PICKS_OPENED: '🏈', PICKS_REMINDER: '⏰', PICKS_LOCKING_SOON: '⏳', PICKS_LOCKED: '🔒',
+  RESULTS_FINALIZED: '🏆', OBLIGATION_CREATED: '💵', OBLIGATION_SETTLED: '✅',
+  COMMISSIONER_ANNOUNCEMENT: '🎙',
+};
+
+function relTime(iso) {
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return '';
+  const diffMin = Math.floor((Date.now() - t) / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const h = Math.floor(diffMin / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
+/** Bell badge: bound once at boot (idempotent). Click opens the Center. */
+function setupNotifBell() {
+  const btn = document.getElementById('notif-bell-btn');
+  if (!btn || btn.dataset.bound) return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', () => { openNotificationCenter(); });
+}
+
+/** Re-render the bell's visibility + unread count. Call on session change and
+ *  whenever a notification is created/read (mirrors updateChatBadges()'s role
+ *  for the chat pill — a SEPARATE counter, never merged, per Q4). */
+function renderNotifBell() {
+  const btn = document.getElementById('notif-bell-btn');
+  const badge = document.getElementById('notif-bell-badge');
+  if (!btn) return;
+  // DI-A4 — signed OUT still reaches the bell (an anonymous viewer sees the
+  // Center's public chat-summary row, just no push settings/priming card,
+  // handled inside renderNotifCenterBodyHTML). Only the UNREAD COUNT is
+  // player-specific — an anonymous viewer has no lifecycle notifications of
+  // their own, so the badge simply stays empty for them.
+  btn.hidden = false;
+  const sess = getSession();
+  if (!badge) return;
+  const n = sess?.playerId ? unreadLifecycleCount(sess.playerId) : 0;
+  if (n > 0) { badge.hidden = false; badge.textContent = n > 99 ? '99+' : String(n); }
+  else { badge.hidden = true; badge.textContent = ''; }
+}
+
+function renderPrimingCardHTML(pushState) {
+  if (pushState === 'granted' || pushState === 'unconfigured') return '';
+  const copy = {
+    'never-asked': { title: 'Enable push notifications', body: "Get notified for chat, pick reminders, and results — even when the app is closed.", btn: 'Turn On' },
+    denied:        { title: 'Push is off', body: "You turned off notifications for this device. You'll still see everything here — to turn push back on, check your phone's notification settings for this app.", btn: null },
+    unsupported:   { title: "Install to get push", body: "Add IRB Pick 'Ems to your home screen to receive push notifications on iPhone.", btn: null },
+  }[pushState];
+  if (!copy) return '';
+  return `<div class="card notif-priming-card" id="notif-priming-card">
+    <div class="notif-priming-title">${escHtml(copy.title)}</div>
+    <p class="text-muted text-sm">${escHtml(copy.body)}</p>
+    ${copy.btn ? `<button class="btn btn-primary btn-sm" id="notif-priming-btn">${escHtml(copy.btn)}</button>` : ''}
+  </div>`;
+}
+
+/** DI-A4 — master + 5 category rows. Each row is a full-width tappable
+ *  <label> wrapping its checkbox (≥44px tap target) — a NEW requirement per
+ *  the DI, not inherited from chat-ui.js's existing (undersized) prefs rows. */
+function renderNotifPrefsCardHTML() {
+  const master = getNotifyPushMaster();
+  const cats = getNotifyCategoryPrefs();
+  const rows = [
+    ['chat', 'Chat'], ['pickReminders', 'Pick Reminders'], ['leagueUpdates', 'League Updates'],
+    ['results', 'Results'], ['obligations', 'Obligations'],
+  ];
+  return `<div class="card notif-prefs-card">
+    <label class="notif-prefs-row notif-prefs-master">
+      <span>Push Notifications</span>
+      <input type="checkbox" id="notif-master-toggle" ${master ? 'checked' : ''} />
+    </label>
+    ${rows.map(([key, label]) => `
+      <label class="notif-prefs-row${master ? '' : ' notif-prefs-row-dim'}" data-cat-row="${key}">
+        <span>${escHtml(label)}</span>
+        <input type="checkbox" class="notif-cat-toggle" data-cat="${key}" ${cats[key] ? 'checked' : ''} />
+      </label>`).join('')}
+  </div>`;
+}
+
+function notifRowHTML(n) {
+  const unread = !n.readAt;
+  const icon = NOTIF_ICON[n.event] || '🔔';
+  return `<div class="card notif-row${unread ? ' notif-row-unread' : ''}" data-notif-id="${escHtml(n.id)}">
+    <span class="notif-row-icon">${icon}</span>
+    <span class="notif-row-body">
+      <span class="notif-row-title">${escHtml(n.title)}</span>
+      <span class="notif-row-sub">${escHtml(n.body)}</span>
+    </span>
+    <span class="notif-row-time">${escHtml(relTime(n.createdAt))}</span>
+  </div>`;
+}
+
+async function renderNotifCenterBodyHTML(playerId, pushState) {
+  // DI-A4 — signed OUT (playerId null): no priming card, no prefs card
+  // ("no player identity to attach a subscription to"), no lifecycle rows
+  // (those are per-player records) — ONLY the public chat-summary row.
+  const primingHTML = playerId ? renderPrimingCardHTML(pushState) : '';
+  const prefsHTML = playerId ? renderNotifPrefsCardHTML() : '';
+  const notifs = playerId ? getNotificationsForPlayer(playerId) : [];
+  let chatUnread = 0;
+  try { chatUnread = isChatEnabled() ? unreadCount(playerId, 'all') : 0; } catch {}
+  const chatRowHTML = chatUnread > 0
+    ? `<div class="card notif-row" id="notif-chat-summary-row">
+         <span class="notif-row-icon">💬</span>
+         <span class="notif-row-body"><span class="notif-row-title">${chatUnread} unread in the Locker Room →</span></span>
+       </div>` : '';
+  if (!notifs.length && !chatRowHTML) {
+    return `${primingHTML}${prefsHTML}<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Nothing yet. We'll let you know when something happens.</p>`;
+  }
+  return `${primingHTML}${prefsHTML}${chatRowHTML}${notifs.map(notifRowHTML).join('')}`;
+}
+
+/** DI-A3's error state — the red sync banner already covers backend hydrate
+ *  failure app-wide (AD-06); this just names it instead of showing an empty
+ *  state that could be mistaken for "nothing happened." */
+function renderNotifCenterSkeletonHTML() {
+  if (document.getElementById('backend-error-banner')) {
+    return `<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Can't load notifications right now — see the sync banner above.</p>`;
+  }
+  return `<div class="card" style="height:52px;opacity:.5"></div><div class="card" style="height:52px;opacity:.35"></div><div class="card" style="height:52px;opacity:.2"></div>`;
+}
+
+/** DI-A5 — resolve a stored/pushed destination into real navigation +
+ *  best-effort scroll. Every entry in notifications.js's DEEP_LINK_TABLE maps
+ *  to an EXISTING navigateTo() tab; a message no longer in retention (chat)
+ *  or a section id not on the page (rare) just lands on the tab's default
+ *  view rather than throwing. */
+function deepLinkTo(destination) {
+  if (!destination?.tab) { navigateTo('dashboard'); return; }
+  navigateTo(destination.tab);
+  const params = destination.params || {};
+  setTimeout(() => {
+    if (destination.tab === 'chat' && params.messageId) {
+      const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(params.messageId) : params.messageId;
+      const el = document.querySelector(`[data-mid="${safeId}"]`);
+      if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('chat-flash'); setTimeout(() => el.classList.remove('chat-flash'), 1200); }
+    } else if (destination.tab === 'leaderboard' && params.section === 'obligations') {
+      document.getElementById('obligations-section')?.scrollIntoView({ block: 'start' });
+    }
+  }, 60);
+}
+
+function bindNotifCenterBody(ov, playerId) {
+  ov.querySelector('#notif-priming-btn')?.addEventListener('click', async () => {
+    const ok = await requestPushPermission();
+    showToast(ok ? '✅ Push enabled' : 'Could not enable push', ok ? 'success' : 'error');
+    await refreshNotifCenterBody(ov, playerId);
+  });
+  ov.querySelector('#notif-master-toggle')?.addEventListener('change', (e) => {
+    setNotifyPushMaster(e.target.checked);
+    ov.querySelectorAll('[data-cat-row]').forEach(row => row.classList.toggle('notif-prefs-row-dim', !e.target.checked));
+  });
+  ov.querySelectorAll('.notif-cat-toggle').forEach(cb => {
+    cb.addEventListener('change', (e) => setNotifyCategoryPref(e.target.dataset.cat, e.target.checked));
+  });
+  ov.querySelector('#notif-chat-summary-row')?.addEventListener('click', () => { ov.remove(); navigateTo('chat'); });
+  ov.querySelectorAll('[data-notif-id]').forEach(row => {
+    row.addEventListener('click', () => {
+      const id = row.dataset.notifId;
+      const n = getNotificationsForPlayer(playerId).find(x => x.id === id);
+      markNotificationRead(id, playerId);
+      renderNotifBell();
+      ov.remove();
+      if (n) deepLinkTo(n.destination);
+    });
+  });
+}
+
+async function refreshNotifCenterBody(ov, playerId) {
+  const body = ov.querySelector('#notif-center-body');
+  if (!body) return;
+  const st = await subscriptionState();
+  body.innerHTML = await renderNotifCenterBodyHTML(playerId, st);
+  bindNotifCenterBody(ov, playerId);
+}
+
+async function openNotificationCenter() {
+  // DI-A4 — signed OUT still opens the Center; it just renders ONLY the
+  // public chat-summary row (no push settings, no lifecycle history — see
+  // renderNotifCenterBodyHTML's playerId-null branch).
+  const sess = getSession();
+  const playerId = sess?.playerId || null;
+  const ov = document.createElement('div'); ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Notifications</h3><button class="modal-close" id="notif-close">✕</button></div>
+    <div id="notif-center-body">${renderNotifCenterSkeletonHTML()}</div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#notif-close')?.addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  await refreshNotifCenterBody(ov, playerId);
 }
 
 // ─── PICK PERMISSION ──────────────────────────────────────────────────────────
@@ -3011,7 +3285,11 @@ export function renderLeaderboard() {
       ${renderAlmaMaterRankings()}
     </div>
 
-    <div class="admin-section-title">Weekly History</div>
+    <!-- Groups A/B (2026-09-10, DI-A5): the obligation deep-link destination
+         for OBLIGATION_CREATED/OBLIGATION_SETTLED — Weekly History IS the
+         player-facing obligations view (each row carries its own
+         obligationActionsHTML). No new page; this id is the scroll target. -->
+    <div class="admin-section-title" id="obligations-section">Weekly History</div>
     ${groupRows.length?`<div class="dashboard-scroll mb-md">
       <table class="dashboard-table">
         <thead><tr><th>Week</th><th>🏆 Winner</th><th>💀 Loser</th><th>Status</th></tr></thead>
@@ -3222,6 +3500,23 @@ function renderCommPage() {
             <button class="btn btn-ghost btn-sm" id="duplicate-week-btn">📋 Duplicate</button>
             ${week?`<button class="btn btn-danger btn-sm" id="delete-week-btn">🗑 Delete</button>`:''}
           </div>
+        </div>
+      </div>`);
+
+    // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcements. RG-10
+    // tagging (data-comm-tab="week") so this renders ONLY on Week, not all
+    // five tabs. No week-status dependency — sendable any time. NEVER
+    // SCRIBE-attributed (actor.kind is hardcoded 'commissioner' inside
+    // notifyCommissionerAnnouncement() — a structural rule, not a UI one).
+    sections.push(`
+      <div class="admin-section" data-comm-tab="week">
+        <div class="admin-section-title">🎙 Commissioner Announcement</div>
+        <div class="card">
+          <p class="text-muted text-xs mb-sm">Sent to every active player's Notification Center + push, labeled "Commissioner" — never SCRIBE. Not silenceable by players (same as any other explicit commissioner message).</p>
+          <div class="form-group">
+            <textarea class="form-input" id="comm-announce-body" rows="3" placeholder="Message the league…" maxlength="500"></textarea>
+          </div>
+          <button class="btn btn-primary btn-sm" id="comm-announce-send-btn" disabled>Send to league</button>
         </div>
       </div>`);
 
@@ -4509,6 +4804,34 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     setActiveWeekId(e.target.value); refreshHeader(); renderCommPage();
   });
   document.getElementById('create-week-btn')?.addEventListener('click', ()=>showCreateWeekModal());
+  // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcement send control.
+  // States: empty -> disabled; sending -> brief loading label; sent -> toast
+  // + textarea clears (matches DI's exact states table).
+  {
+    const announceBody = document.getElementById('comm-announce-body');
+    const announceBtn = document.getElementById('comm-announce-send-btn');
+    announceBody?.addEventListener('input', () => {
+      if (announceBtn) announceBtn.disabled = !announceBody.value.trim();
+    });
+    announceBtn?.addEventListener('click', () => {
+      const text = (announceBody?.value || '').trim();
+      if (!text) return;
+      const original = announceBtn.textContent;
+      announceBtn.disabled = true; announceBtn.textContent = 'Sending…';
+      try {
+        const sess = getSession();
+        notifyCommissionerAnnouncement(text, sess?.playerId || null, getPlayers());
+        renderNotifBell();
+        showToast('✅ Announcement sent', 'success');
+        if (announceBody) announceBody.value = '';
+      } catch (e) {
+        console.warn('[notifications] announcement send failed', e);
+        showToast('Could not send announcement', 'error');
+      } finally {
+        announceBtn.textContent = original; announceBtn.disabled = true;
+      }
+    });
+  }
   document.getElementById('duplicate-week-btn')?.addEventListener('click', ()=>{
     if(!week)return;
     const newW={...week,weekId:`w_${Date.now()}`,weekNumber:week.weekNumber+1,
@@ -5363,6 +5686,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const ob=createObligation(null,payer,recip,note||'1 drink','manual');
     ob.note=note||'manual entry'; ob.weekLabel='manual';
     saveObligation(ob);
+    try { notifyObligationCreated(ob); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-created hook failed', e); }
     showToast('✅ Obligation added','success'); renderCommPage();
   });
   document.querySelectorAll('.ob-delete-btn').forEach(btn=>{
@@ -5996,10 +6320,15 @@ function handleObligationAction(obId, action) {
     saveObligation({ ...ob, status: next, deniedReason: null });
     showToast(`Marked as paid — waiting on ${escHtml(recipientName)} or the commissioner to confirm.`, 'warning');
   } else if (action === 'mark' && next === 'paid') {
-    saveObligation({ ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null });
+    const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
+    saveObligation(settled);
+    // Groups A/B (2026-09-10, DI-B4) — "settled," both parties.
+    try { notifyObligationSettled(settled); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-settled hook failed', e); }
     showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
   } else if (action === 'confirm') {
-    saveObligation({ ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null });
+    const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
+    saveObligation(settled);
+    try { notifyObligationSettled(settled); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-settled hook failed', e); }
     showToast(`Confirmed — ${escHtml(payerName)} paid ${escHtml(recipientName)}.`, 'success');
   } else if (action === 'undo') {
     saveObligation({ ...ob, status: next, paidAt: null });
@@ -7068,7 +7397,7 @@ export function renderRulesPage() {
           <li>Each week, guess the <strong>longest MADE field goal on the slate</strong>, in yards.</li>
           <li><strong>Closest without going over wins.</strong> Any guess over the actual is a <strong>bust</strong> — you're out.</li>
           <li>Hit it exactly = <strong>Blackjack</strong>. Outright win, beats everything.</li>
-          <li>Tied winning guesses share the win. Everyone busts → the house (the chart) wins.</li>
+          <li>Tied winning guesses share the win. Everyone busts → the house wins.</li>
           <li>Optional side bet — skipping it just means you can't win it. The actual is auto-detected from ESPN scoring plays and verified by the Commissioner.</li>
         </ul>
       </div>
@@ -7081,7 +7410,7 @@ export function renderRulesPage() {
           <li><strong>One Locker Room.</strong> Everything happens in the main chat. Any message can be tagged to a game — tap 💬 on a game card and your post shows up both in that game's thread and in the Locker Room. Replies inherit the tag, so conversations stay findable. Untag with one tap if the talk drifts.</li>
           <li>React, reply, pin to the 🏛 Hall of Records, edit your own messages within 5 minutes, withdraw with a tombstone. The log is append-only.</li>
           <li>At lock, the Locker Room gets <strong>the reveal</strong> — everyone's picks posted at once. Game finals, standings, and Extra Point results file in automatically. Nothing ever leaks a pick before lock.</li>
-          <li><strong>S.C.R.I.B.E. is the seventh member of this league.</strong> Records custodian, attending physician of the chart. It documents lock times, adverse events, live-game complications, and outstanding balances on its own schedule — and it answers when addressed. It is not summoned. It is on duty.</li>
+          <li><strong>S.C.R.I.B.E. is the seventh member of this league.</strong> It keeps the receipts — lock times, bad beats, live-game swings, and who owes whom — and brings them up at the worst possible moment. It answers when you @ it. It is not summoned. It is on duty.</li>
           <li>House rule, inherited and non-negotiable: savage about football, never about real life.</li>
         </ul>
       </div>
@@ -7436,6 +7765,16 @@ function renderCommExtrasV16(week, games) {
     // existing card (RG-10: inside data-comm-tab="settings"), not a new
     // card — a master on/off switch belongs above the features it governs.
     const chatOn = isChatEnabled();
+    // Items E/F re-review close-out (2026-09-10) — two approved pilot
+    // settings with no commissioner UI: `scribeFeedbackEnabled` (UN-159 D5)
+    // and `chatImagePreviewEnabled` (UN-164 F4-interim). Both already have
+    // safe defaults in data-model.js DEFAULT_SETTINGS. Placed with the
+    // master chatEnabled toggle (RG-10: inside this data-comm-tab="settings"
+    // container), each row padded to a ≥44px tap target — the better
+    // precedent (.notif-prefs-row, css/styles.css) rather than chatEnabled's
+    // own bare padding-bottom-only row above, which this pass leaves as-is.
+    const scribeFeedbackOn = isScribeFeedbackEnabled();
+    const imagePreviewOn = isChatImagePreviewEnabled();
     c.insertAdjacentHTML('beforeend', `
     <div class="admin-section" data-comm-tab="settings">
     <div class="card mb-md" id="comm-chat-card">
@@ -7447,6 +7786,20 @@ function renderCommExtrasV16(week, games) {
       <p class="text-muted text-xs mb-sm">${chatOn
         ? 'Players can see and use chat. Turn off to hide it league-wide while you work on it.'
         : 'Chat is hidden for everyone. Nothing is deleted — history returns when you turn it back on. Polling is stopped.'}</p>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;border-bottom:1px solid var(--border)">
+        <input type="checkbox" id="scribe-feedback-toggle" ${scribeFeedbackOn ? 'checked' : ''} />
+        <span>
+          <span class="form-label" style="margin:0;display:block">SCRIBE feedback buttons (pilot)</span>
+          <span class="text-muted text-xs" style="display:block">Shows the Rate/Flag controls on chat messages for the six training players. Turn off to retire the pilot instrumentation.</span>
+        </span>
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:11px 0;min-height:44px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+        <input type="checkbox" id="chat-image-preview-toggle" ${imagePreviewOn ? 'checked' : ''} />
+        <span>
+          <span class="form-label" style="margin:0;display:block">Show image previews in chat</span>
+          <span class="text-muted text-xs" style="display:block">Renders a pasted image link inline. Off by default — the image host can see who views it.</span>
+        </span>
+      </label>
       <div class="divider"></div>
       <p class="text-muted text-xs">Tier 0 (deterministic lines) runs automatically with rate limits. Tier 1 lets you paste a reviewed batch of SCRIBE posts. The digest feeds recap generation.</p>
       <div class="flex gap-sm flex-wrap mb-sm">
@@ -7455,7 +7808,7 @@ function renderCommExtrasV16(week, games) {
       </div>
       <div class="form-group">
         <label class="form-label" style="font-size:.7rem">SCRIBE queue (Tier 1) — paste JSON: [{"channel":"general","body":"…","postAt":"2026-08-29T18:00Z"}]</label>
-        <textarea class="form-input" id="scribe-queue-input" rows="3" placeholder='[{"channel":"general","body":"SCRIBE NOTE: …"}]'></textarea>
+        <textarea class="form-input" id="scribe-queue-input" rows="3" placeholder='[{"channel":"general","body":"Week 4 is open. Do better."}]'></textarea>
       </div>
       <div class="flex gap-sm flex-wrap mb-sm">
         <button class="btn btn-primary btn-sm" id="scribe-queue-btn">Post queue as SCRIBE</button>
@@ -7489,6 +7842,22 @@ function renderCommExtrasV16(week, games) {
     showToast(e.target.checked
       ? '💬 Chat enabled — visible to everyone'
       : '🙈 Chat disabled — hidden league-wide, nothing deleted', 'success');
+    renderCommPage();
+  });
+  document.getElementById('scribe-feedback-toggle')?.addEventListener('change', e => {
+    saveSetting('scribeFeedbackEnabled', e.target.checked);
+    showToast(e.target.checked
+      ? '🗳️ SCRIBE feedback buttons enabled — Rate/Flag visible in chat'
+      : '🚫 SCRIBE feedback buttons disabled — pilot instrumentation retired', 'success');
+    if (state.currentTab === 'chat') { try { renderChatPage(); } catch {} }
+    renderCommPage();
+  });
+  document.getElementById('chat-image-preview-toggle')?.addEventListener('change', e => {
+    saveSetting('chatImagePreviewEnabled', e.target.checked);
+    showToast(e.target.checked
+      ? '🖼️ Image previews enabled in chat'
+      : '🖼️ Image previews disabled in chat', 'success');
+    if (state.currentTab === 'chat') { try { renderChatPage(); } catch {} }
     renderCommPage();
   });
   document.getElementById('ep-detect-btn')?.addEventListener('click', async () => {
@@ -7755,6 +8124,26 @@ export function applyWeekStatusChange(week, to) {
   if(to==='final'){upd.finalizedAt=new Date().toISOString();}
   saveWeek(upd);
   if(to==='final')finalizeWeek(upd);
+  // Groups A/B (2026-09-10, DI-B2) — the two CLIENT-triggered lifecycle
+  // events this chokepoint owns. Both are single-commissioner-device fires
+  // (this function only runs from the Week tab's status buttons / auto-
+  // transition), so the per-recipient dedupKey (js/notifications.js) is
+  // exactly enough to make a stray double-click or a second commissioner
+  // device harmless — never a second notification. Demo weeks never fire
+  // (guarded inside notifyPicksOpened/notifyPicksLocked themselves too, but
+  // checked here first to avoid the wasted getPlayers()/getPicks() work).
+  if (upd.dataSourceMode !== 'demo') {
+    try {
+      if (to === WEEK_STATUS.OPEN && week.status === WEEK_STATUS.DRAFT) {
+        notifyPicksOpened(upd, getPlayers());
+      } else if (to === WEEK_STATUS.LOCKED) {
+        const activePlayers = getPlayers().filter(p => p.active);
+        const submittedCount = activePlayers.filter(p => hasPlayerSubmitted(upd.weekId, p.playerId)).length;
+        notifyPicksLocked(upd, activePlayers, submittedCount, activePlayers.length);
+      }
+      renderNotifBell();   // instant feedback if the ACTING commissioner is also a recipient
+    } catch (e) { console.warn('[notifications] week-status hook failed', e); }
+  }
   // Attached AFTER saveWeek() — storage.js's saveWeek() does `{...week}` at
   // call time, so mutating `upd` past this point can never leak into what
   // was persisted. Purely a transient signal for the DOM-facing caller.
@@ -7798,7 +8187,14 @@ function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, pri
   const matching = existing.find(o => o.payerPlayerId === payerPlayerId && o.recipientPlayerId === recipientPlayerId);
   if (matching) return;                     // already correctly on record — nothing to do
   if (!existing.length) {
-    saveObligation(createObligation(weekId, payerPlayerId, recipientPlayerId, prize));
+    // Groups A/B (2026-09-10, DI-B4) — "created" only, the clean first-time
+    // path. The conflict/needsReview branch below is deliberately NOT
+    // notified — it's a commissioner-bookkeeping correction, the same
+    // "changed" class DI-B4's own research triage scoped OUT (created +
+    // settled only).
+    const ob = createObligation(weekId, payerPlayerId, recipientPlayerId, prize);
+    saveObligation(ob);
+    try { notifyObligationCreated(ob); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-created hook failed', e); }
     return;
   }
   const alreadyFlagged = existing.some(o =>
@@ -7846,6 +8242,21 @@ export function finalizeWeek(week) {
       if (graded) emitExtraPointEvent(week.weekId, graded);
     }
   } catch(e){ console.warn('[finalizeWeek] chat events', e); }
+  // Groups A/B (2026-09-10, DI-B3) — once per week, at FINAL. weekWinnerName/
+  // weekLoserName come DIRECTLY from `results` (this function's own
+  // calculateWeeklyResults() return value, two lines up) — never independently
+  // re-derived (SCRIBE.md §9.1 boundary). Demo weeks never notify. Per-part
+  // finalization of a grouped week fires its OWN notification here, exactly
+  // like emitWeekFinalEvent() above it — same "a part finalizing alone still
+  // fires its own events" behavior this function already documents.
+  if (week.dataSourceMode !== 'demo') {
+    try {
+      const winner = results.find(r=>r.isWinner);
+      const loser = results.find(r=>r.isLoser);
+      notifyResultsFinalized(week, winner?.displayName || undefined, loser?.displayName || undefined, players);
+      renderNotifBell();
+    } catch (e) { console.warn('[notifications] results-finalized hook failed', e); }
+  }
   const settings=getSettings();
 
   // ── UN-118/UN-125 — multi-part week grouping (DI-126d) ────────────────────
@@ -7921,6 +8332,18 @@ export function setupAutoRefresh() {
  * re-render Picks; it re-renders only the dashboard, which is safe to rebuild.
  */
 export async function runAutoRefreshTick() {
+  // F2/F4 remediation (2026-09-10) — server-fired reminders (PICKS_REMINDER/
+  // PICKS_LOCKING_SOON) have NO client-side trigger point at all — Code.gs's
+  // scanReminders fires them independently of any tab/week-mode state — so
+  // this poll must run BEFORE the demo/manual early-returns below, on every
+  // tick, for whoever is signed in. pollNotifyLog() is internally throttled
+  // to ≤60s and skips a hidden tab on its own, so it's safe to call every
+  // tick unconditionally.
+  try {
+    const sess = getSession();
+    if (sess?.playerId) { await pollNotifyLog(sess.playerId); renderNotifBell(); }
+  } catch (e) { console.warn('[notifications] notifyLog poll failed', e); }
+
   // Auto-transition check runs EVERY tick regardless of active tab or week
   // mode (demo weeks are skipped inside the helper). Transitions affect all
   // users so whichever device ticks first writes the new status to the

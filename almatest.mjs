@@ -1634,6 +1634,9 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     'dashboardLayout', 'chatRetentionDays', 'autoRefreshInterval', 'randomizePicksEnabled',
     'chatEpochSeq', 'chatEpochSetAt', 'chatEnabled', 'adminPasswordHash', 'sitePin',
     'commissionerEmail', 'welcomeTitleTop', 'welcomeTitleMain', 'welcomeSubtitle',
+    // Build 1 (2026-09-10): two booleans — E1 feedback master switch (UN-159),
+    // F4-interim inline image previews (UN-164). Tiny scalars, trivially bounded.
+    'scribeFeedbackEnabled', 'chatImagePreviewEnabled',
     // small maps/arrays, bounded by a fixed real-world count
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players

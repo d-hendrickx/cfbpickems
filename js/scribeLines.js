@@ -3,12 +3,18 @@
  * ============================================================
  * Spread Coverage Records & Ischemic Banter Engine.
  *
- * Canned-line engine governed by PICKEMS_BOT_VOICE_PROFILE_2.md. No API calls.
+ * Canned-line engine governed by docs/SCRIBE.md (v2.1). No API calls.
  * Voice constraints enforced IN THE POOLS (do not drift):
- *   - deadpan, clinical, chart-note register
- *   - standings = "the chart", picks = "picks", busts = "adverse events",
- *     drink debts = "outstanding balances"
- *   - openers: "SCRIBE NOTE:", "Chart review, gentlemen."  closers: "Filed.", "— SCRIBE"
+ *   - deadpan, dry — the funniest friend in the group chat, with perfect recall
+ *   - standings = "the standings" (not "the chart"), picks = "picks"
+ *   - "SCRIBE NOTE:" as a reflex opener; "Filed.", "Noted.", "Documented.",
+ *     "— SCRIBE" as reflex closers; and the mock-clinical SOAP-note template
+ *     ("Assessment: / Plan: / Prognosis:") as a default line structure are all
+ *     RETIRED as defaults (v2.1) — rare seasoning only, per docs/SCRIBE.md §6,
+ *     never a majority of lines in a pool
+ *   - flat-delivered casual hype ("LFG", "we're so back", "RIP", "pay up") is
+ *     in-register when a moment earns it — distinct from "never hypes" (no
+ *     "MASSIVE upset," no announcer voice); see docs/SCRIBE.md §6
  *   - profanity rare and surgical (max ONE instance per pool)
  *   - almost no ALL CAPS — restraint is the bit
  *   - savage about football, never about real life
@@ -16,6 +22,12 @@
  * v0.17.1 vocabulary correction: "orders" is RETIRED. Picks are picks — the
  * medical-jargon substitution read as strained rather than natural SCRIBE voice.
  * The rest of the register stands.
+ *
+ * v2.1 (2026-09-10) voice refresh: pool lines rewritten to drop the reflex
+ * opener/closer tics and the SOAP-note-as-default template Drew flagged as
+ * "very cringey" in draft notification copy review (2026-09-10 ruling; see
+ * docs/SCRIBE.md changelog). Mechanism — pool keys, pickLine() selection,
+ * the ledger, rate limits, deterministic ids — is unchanged. Copy only.
  *
  * RATE LIMITS DEFINE THE CHARACTER:
  *   - max 1 SCRIBE message / 10 min in general
@@ -30,6 +42,13 @@
 
 import { sendEvent } from './chat.js';
 
+// UN-160 (E2) — a hand-bumped constant, analogous to APP_VERSION (js/app.js):
+// bump it alongside a SCRIBE_POOLS content edit so a feedback record can tell
+// WHICH voice pool generated the line it's rating, months later. Deliberately
+// NOT tied to APP_VERSION itself — SCRIBE's voice can change independently of
+// an app release. Carried on every SCRIBE post via scribeTrigger() below.
+export const SCRIBE_VERSION = '2.1';
+
 const LEDGER_KEY = 'cfbp_scribe_ledger';   // { lineHash: lastUsedMs }
 const LAST_POST_KEY = 'cfbp_scribe_lastpost'; // { rateKey: lastMs } ('' = main room, gameId = per-game)
 const REUSE_WINDOW_MS = 14 * 24 * 3600 * 1000;
@@ -39,122 +58,128 @@ const GAME_COOLDOWN = 60 * 60 * 1000;
 // ── Line pools ────────────────────────────────────────────────────────────────
 // {NAME} = display name of the subject player. {N} = a number when supplied.
 export const SCRIBE_POOLS = {
-  // ── v0.17.0: live-game observations (fed by the score poll) ──
+  // ── v2.1 voice refresh (2026-09-10): reflex openers/closers ("SCRIBE NOTE:",
+  // "Filed.", "Noted.", "Documented.", "— SCRIBE") and the SOAP-note-as-default
+  // template are gone as DEFAULTS per docs/SCRIBE.md §6. Same jokes, fewer
+  // costumes. "The chart" reverts to "the standings" throughout.
   coverageFlip: [
-    'SCRIBE NOTE: the number just changed sides. Adjust your blood pressure accordingly.',
-    'Coverage status has flipped. The chart is watching. So should you.',
-    'Live update: the spread and the scoreboard have exchanged positions. Documented.',
-    'Mid-game reversal noted. Several picks now in jeopardy. Filed.',
+    'The number just flipped. Adjust your blood pressure accordingly.',
+    'The cover just flipped. You should probably be watching this one.',
+    'The spread and the scoreboard just swapped places.',
+    'Big reversal. A few of you are in trouble now.',
     'The cover has changed hands. No further comment at this time.',
   ],
   upsetWatch: [
-    'SCRIBE NOTE: the underdog is not cooperating with anyone\'s picks, gentlemen.',
-    'Upset conditions developing. The chart advises hydration.',
-    'The favorite is experiencing complications. Monitoring.',
-    'Documented at this time: {TEAM} did not read the number.',
-    'Adverse conditions on the field. Several charts affected. Filed.',
+    'The underdog isn\'t cooperating with anyone\'s picks.',
+    'Upset watch: this one\'s getting away from the favorite.',
+    'The favorite is in trouble.',
+    '{TEAM} clearly didn\'t see the spread.',
+    'Rough day on the field. A lot of picks just died.',
   ],
   callout: [
-    'Adverse event. Prior statement available for review.',
-    'The record reflects an earlier confidence. The scoreboard reflects otherwise.',
-    'For completeness, attaching the pre-game assessment to the post-game outcome.',
-    'Chart correlation complete: statement, then result. Filed without commentary.',
-    'One prior note is now clinically relevant. Presented as documented.',
+    'Bold talk earlier. Result\'s in now.',
+    'Somebody was pretty confident about this one. The scoreboard disagreed.',
+    'Here\'s what was said before kickoff. Here\'s what happened.',
+    'Before, and after. Let that sit.',
+    'Someone\'s about to regret typing that.',
   ],
   anniversary: [
-    'One year ago today, this was entered into the record. It remains there.',
-    'SCRIBE NOTE: annual chart review surfaced the following prior entry.',
-    'The permanent record observes an anniversary. Presented as filed.',
-    'Twelve months of documentation later, this entry stands unamended.',
+    'One year ago today, this happened. Still true.',
+    'A year ago today, this happened.',
+    'Happy anniversary to this specific disaster.',
+    'A year later, still just as true.',
   ],
   silence: [
-    'Chart is quiet. Unusual.',
-    'No entries in some time. The record notes the silence.',
-    'SCRIBE NOTE: vitals steady, room quiet. Documented.',
-    'The log has been idle. The standings have not moved either, for those wondering.',
+    'It\'s quiet in here. Weird.',
+    'Nobody\'s said anything in a while.',
+    'Everybody\'s suspiciously quiet.',
+    'Quiet week. Standings haven\'t moved either, for what it\'s worth.',
   ],
+  // v2.1: `mention` is the Tier-0 degraded fallback for a direct @scribe
+  // mention — honest, in-register "not engaging with that right now," never
+  // a mock-legal brush-off.
   mention: [
-    'Chart review, gentlemen. The answer is in the standings.',
-    'SCRIBE NOTE: I document. I do not consult. Filed.',
-    'Per my last note, the chart is current and the chart is public. — SCRIBE',
-    'Noted. The permanent record reflects your inquiry, {NAME}.',
-    'This encounter has been documented. Direct further questions to the chart.',
+    'Not touching that one right now, {NAME}.',
+    'Not getting into that one right now. Standings are public if you want the real answer.',
+    'Can\'t help with that one, {NAME}. Try the standings page.',
+    'Not the moment for that, {NAME}. Ask again later.',
     'I keep the receipts, {NAME}. I do not issue predictions.',
-    'SCRIBE NOTE: query received. Assessment: the standings speak. Plan: none.',
+    'That one\'s not happening right now. Standings don\'t lie, though, if that helps.',
   ],
   backdoorBust: [
-    'Adverse event logged. Late-game complication.',
-    'SCRIBE NOTE: {NAME} experienced a backdoor cover. Documented without comment.',
-    'Adverse Event Report — mechanism: garbage time. Patient: {NAME}. Prognosis: unchanged.',
-    'The chart notes a terminal-minute decompensation for {NAME}. Filed.',
-    'Pick busted at the gun. This encounter has been documented.',
-    'Assessment: covered for 59 minutes. Plan: continue current management. — SCRIBE',
+    'Rough ending. Backdoor cover, right at the gun.',
+    '{NAME} got backdoored. That\'s it. That\'s the post.',
+    '{NAME}\'s pick died in garbage time. Classic.',
+    '{NAME} lost it in the final minute. Brutal.',
+    'Busted at the buzzer. Tough one.',
+    'Covered for 59 minutes and 58 seconds. So close.',
   ],
   lastPlaceTaunt: [
-    'Noting the confidence. Noting the position on the chart.',
-    'SCRIBE NOTE: bold statement from the lower quadrant of the chart. Filed.',
-    'The chart has been consulted. The chart does not support the tone, {NAME}.',
-    'Documented at this time, for the record: {NAME} is talking. The chart is also talking.',
-    'Per my last note, standing on the chart is earned, not announced. — SCRIBE',
+    'Bold talk for someone in last place, {NAME}.',
+    'Big talk from the bottom of the standings.',
+    'The standings don\'t back that tone, {NAME}.',
+    '{NAME} is talking. So are the standings, and they disagree.',
+    'Standing is earned, not announced, {NAME}.',
     'This is a learning opportunity, {NAME}.',
   ],
   buzzerPicks: [
-    'Picks received at the buzzer. Filed.',
-    'SCRIBE NOTE: {NAME} filed picks with {N} minutes to spare. Documented.',
-    'Late picks noted. The chart does not award style points for urgency.',
-    'Picks in under the wire. This encounter has been documented. — SCRIBE',
-    'Timestamp preserved for the permanent record, {NAME}. It is not flattering.',
-    'Received. Reviewed. Filed. Next time, gentlemen, consider daylight.',
+    'Picks landed right at the buzzer.',
+    '{NAME} got picks in with {N} minutes to spare. Living dangerously.',
+    'Cutting it close. No style points for urgency.',
+    'Under the wire. Barely.',
+    'Got the timestamp, {NAME}. It\'s not a good look.',
+    'Got \'em. Next time, maybe don\'t cut it this close.',
   ],
   verbosity: [
-    'The chart notes elevated verbosity.',
-    'SCRIBE NOTE: {NAME} has posted {N} times in two minutes. Vitals otherwise stable.',
-    'Output volume documented. Signal-to-noise assessment withheld. — SCRIBE',
-    'Per my last note, brevity is also a skill, {NAME}. Filed.',
-    'Elevated message frequency observed. Monitoring. No intervention indicated.',
-    'The cohort is advised that {NAME} is typing. Still. Noted for the permanent record.',
+    'Somebody\'s typing a lot right now.',
+    '{NAME} has sent {N} messages in two minutes. Take a breath.',
+    'That\'s a lot of messages. Not all of them were necessary.',
+    'Brevity is also a skill, {NAME}.',
+    'Alright, {NAME}. Carry on.',
+    '{NAME} is still typing. We can all see it.',
   ],
   drinkDebt: [
-    'Outstanding balance remains open. — SCRIBE',
-    'SCRIBE NOTE: an outstanding balance has been referenced. Payment accepted in person only, per league bylaw.',
+    'Still owed. Pay up.',
+    'Somebody mentioned the tab. In-person payment only, per the rules.',
     'The ledger is current. The ledger is patient. The ledger forgets nothing.',
-    'Balance noted. Interest accrues in humiliation, not currency. Filed.',
-    'Per league bylaw: outstanding balances are settled in person. The committee has been notified.',
-    'Documented. The billing department (me) thanks you for your attention to this matter.',
+    'Balance\'s still there. Interest accrues in humiliation, not cash.',
+    'Per the rules: debts get settled in person. Everyone\'s watching.',
+    'The billing department (that\'s me) thanks you for your attention to this matter.',
   ],
+  // v2.1: the "historical hit rate of unanimous picks: unfavorable" line is
+  // REMOVED, not reworded — that claim was never backed by computed data.
   unanimous: [
-    'SCRIBE NOTE: unanimous picks detected this week. Historical hit rate of unanimous picks: unfavorable. Filed.',
-    'Second Opinion: the cohort agrees. The cohort has agreed before. Noted for the permanent record.',
-    'Six identical picks received. I will simply leave the all-time record here. — SCRIBE',
-    'Unanimity documented. Confidence is not a diagnosis, gentlemen.',
-    'The chart notes full consensus. The chart also has a long memory.',
+    'Everyone agrees. Everyone\'s agreed before too.',
+    'Six identical picks. I\'ll just leave the all-time record right here.',
+    'Everyone\'s on the same side this week. Confidence is not a diagnosis, gentlemen.',
+    'Full consensus this week. History has a long memory.',
   ],
   loneWolfWin: [
-    'SCRIBE NOTE: lone pick on the winning side. {NAME} stands alone, correctly. Filed.',
-    'One dissent. One cover. The permanent record credits {NAME}. — SCRIBE',
-    'Against the cohort, with the spread. Documented with something adjacent to respect, {NAME}.',
-    'Adverse event for five. Routine documentation for {NAME}.',
-    'The chart notes a solo cover. The cohort is invited to review its process.',
+    '{NAME} was the only one on this side. Correctly.',
+    'One dissenter, one cover. Credit to {NAME}.',
+    'Went against everybody and covered anyway, {NAME}. Respect. Sort of.',
+    'Bad week for five of you. Just another Tuesday for {NAME}.',
+    'Solo cover. Everyone else should probably rethink their process.',
   ],
   chartLeadChange: [
-    'Chart review, gentlemen. New name at the top. Documented.',
-    'SCRIBE NOTE: leadership of the chart has changed hands. The chart remains open. I remain.',
-    'Lead change filed. Previous occupant is invited to reread their own proclamations. — SCRIBE',
-    'The top line of the chart has a new author. Noted for the permanent record.',
-    'Standings updated. The throne is drafty this time of year. Filed.',
+    'New name at the top of the standings, gentlemen.',
+    'We\'ve got a new leader. Season\'s still long.',
+    'Lead change. Whoever was on top last week might want to reread their own texts.',
+    'New name on top. Wild how fast that changes.',
+    'Standings updated. The throne is drafty this time of year.',
   ],
   extraPointBust: [
-    'Adverse Event Report — Extra Point. Assessment: {NAME} went over. Plan: none. Prognosis: thirsty.',
-    'SCRIBE NOTE: {NAME} busted the Extra Point. Blackjack rules were posted. Reading them was optional, apparently.',
-    'Bust documented. The house (the chart) thanks you for your donation, {NAME}.',
-    'Over the number. Off the table. Filed. — SCRIBE',
-    'Extra Point adverse event logged for {NAME}. Restraint, gentlemen, is also a strategy.',
+    '{NAME} went over on the Extra Point. Outlook: thirsty.',
+    '{NAME} busted the Extra Point. The rules were posted. Reading them was optional, apparently.',
+    'Busted. The house thanks you for your donation, {NAME}.',
+    'Over the number. Off the table.',
+    '{NAME} busted the Extra Point. Restraint is also a strategy, gentlemen.',
   ],
   extraPointWin: [
-    'SCRIBE NOTE: Extra Point resolved. {NAME} holds. The chart credits the discipline. Filed.',
-    'Closest without going over: {NAME}. Blackjack rules honored. Documented.',
-    'Extra Point settled. {NAME} read the table correctly. — SCRIBE',
-    'The Extra Point has a winner. The Extra Point also has casualties. Both are in the chart.',
+    '{NAME} holds on the Extra Point. Discipline, apparently.',
+    'Closest without going over: {NAME}. Rules respected.',
+    'Extra Point\'s done. {NAME} read the table correctly.',
+    'The Extra Point has a winner. It also has casualties. Both are noted.',
   ],
 };
 
@@ -211,7 +236,7 @@ function bucket(ms = Date.now(), sizeMin = 10) { return Math.floor(ms / (sizeMin
  * `trigger`: key of SCRIBE_POOLS. `subject`: stable string identifying the event
  * (playerId, gameId…) — part of the deterministic id so six clients dedupe.
  */
-export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, bucketMin = 10, notify = false, quote = null } = {}) {
+export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, bucketMin = 10, notify = false, quote = null, triggerMessageId = null } = {}) {
   if (!SCRIBE_POOLS[trigger]) return false;
   // Direct-mention replies bypass the rate limit (spec); everything else is
   // rationed — the restraint IS the character.
@@ -221,9 +246,24 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
   if (!line) return false;
   const id = `scribe_${trigger}_${subject || 'x'}_${bucket(Date.now(), bucketMin)}`
     .replace(/[^a-zA-Z0-9_:-]/g, '');
+  // UN-160 (E2) — "response id = the chat event id" is already true by
+  // construction (this `id` IS the chat event's id, Drew's own ruling); the
+  // two fields E2 adds are both on `meta`. `scribeVersion` rides EVERY SCRIBE
+  // post uniformly (all six event-driven triggers below, plus every
+  // message-driven one). `triggerMessageId` — the id of the HUMAN message
+  // that caused this response — is only ever supplied by
+  // scribeInspectMessage() (message-driven triggers: mention/drinkDebt/
+  // verbosity/lastPlaceTaunt); event-driven triggers (callout, extraPoint*,
+  // coverageFlip, upsetWatch, anniversary) correctly omit it — `callout`
+  // already carries the equivalent pointer via `meta.quote.id`, and the rest
+  // have no single triggering human message at all.
+  // `meta.activeLearningSnapshot` is RESERVED for E3/E4 (later) — deliberately
+  // left unset here, not fielded with a placeholder value.
   sendEvent({ type: 'message', gameTag, body: line, author: 'scribe', id,
               notify: direct || notify,
-              meta: { source: 'tier0', trigger, ...(quote ? { quote } : {}) } });
+              meta: { source: 'tier0', trigger, scribeVersion: SCRIBE_VERSION,
+                       ...(quote ? { quote } : {}),
+                       ...(triggerMessageId ? { triggerMessageId } : {}) } });
   if (!direct) noteRate(gameTag);
   return true;
 }
@@ -234,16 +274,16 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
 
 const recentByAuthor = new Map();  // author -> [timestamps]
 
-export function scribeInspectMessage({ author, authorName, body, gameTag = '', standings = null }) {
+export function scribeInspectMessage({ author, authorName, body, gameTag = '', standings = null, triggerMessageId = null }) {
   const low = (body || '').toLowerCase();
 
   // 1. Direct @scribe mention with a question
   if (low.includes('@scribe')) {
-    return scribeTrigger('mention', { gameTag, subject: author, vars: { name: authorName } });
+    return scribeTrigger('mention', { gameTag, subject: author, vars: { name: authorName }, triggerMessageId });
   }
   // 2. Drink debt vocabulary
   if (/\bdrink|owes?\b|\bbalance|\bbeer|\bsapporo\b/.test(low)) {
-    return scribeTrigger('drinkDebt', { gameTag, subject: 'debt' });
+    return scribeTrigger('drinkDebt', { gameTag, subject: 'debt', triggerMessageId });
   }
   // 3. Verbosity: >5 messages from one author in 2 minutes
   const now = Date.now();
@@ -251,12 +291,12 @@ export function scribeInspectMessage({ author, authorName, body, gameTag = '', s
   arr.push(now); recentByAuthor.set(author, arr);
   if (arr.length > 5) {
     recentByAuthor.set(author, []);   // reset so it doesn't refire per message
-    return scribeTrigger('verbosity', { gameTag, subject: author, vars: { name: authorName, n: arr.length } });
+    return scribeTrigger('verbosity', { gameTag, subject: author, vars: { name: authorName, n: arr.length }, triggerMessageId });
   }
   // 4. Last place taunting first place (needs standings context)
   if (standings && standings.lastPlaceId === author && standings.firstPlaceName &&
       low.includes(standings.firstPlaceName.toLowerCase())) {
-    return scribeTrigger('lastPlaceTaunt', { gameTag, subject: author, vars: { name: authorName } });
+    return scribeTrigger('lastPlaceTaunt', { gameTag, subject: author, vars: { name: authorName }, triggerMessageId });
   }
   return false;
 }

@@ -206,8 +206,24 @@ function _rebaseRecords(local, remote, idField) {
  *
  * A row with no id is KEPT rather than deduped: it may duplicate on a later
  * hydrate, which is visible and recoverable. Dropping a submission is not.
+ *
+ * `cfbp_notifications` joined this map 2026-09-10 (NON-BLOCKING #4/#5
+ * remediation, Groups A/B notifications) on the SAME `cfbp_feedback`
+ * reasoning, checked the same way: js/notifications.js has no ordinary,
+ * player-reachable delete for an individual notification row (retention
+ * pruning is a policy-layer batch operation applied at READ time only as of
+ * this remediation — see that module's createInAppNotification()/
+ * getNotificationsForPlayer() header notes — never a single-row delete a
+ * union could resurrect the INVERSE of). `readAt` is device-local for every
+ * row regardless of origin (same pass), so this key's shared copy is, in
+ * practice, append-only from the policy layer: no per-row delete or field
+ * mutation is ever written back. The one shorter write is resetToDemo()
+ * (storage.js) saving [] — the same accepted residual as cfbp_feedback
+ * above: a device holding a pre-reset mirror can union old rows back until
+ * it re-hydrates, and read-time age pruning keeps any resurrected row out
+ * of the visible window.
  */
-const _APPEND_ONLY_ID = { cfbp_feedback: 'id' };
+const _APPEND_ONLY_ID = { cfbp_feedback: 'id', cfbp_notifications: 'id' };
 function _unionById(local, remote, idField) {
   if (!Array.isArray(local) || !Array.isArray(remote)) return local;
   const seen = new Set();
@@ -717,4 +733,34 @@ export async function chatSinceRemote(afterSeq, limit = 500) {
 export async function chatBeforeRemote(beforeSeq, limit = 100) {
   const r = await call('chatBefore', { seq: beforeSeq, limit });
   return { events: r.events || [], head: r.head ?? 0 };
+}
+
+// ── Push-notification relay (Groups A/B, 2026-09-10) ───────────────────────────
+// notifyPush is a client → server relay for IMMEDIATE lifecycle events (chat
+// message, picks opened/locked, results finalized, obligations, commissioner
+// announcements). It never sends the push itself — js/notifications.js builds
+// the notification record and Code.gs holds the OneSignal REST key, making the
+// one batched UrlFetchApp call server-side (see backend/Code.gs and
+// DESIGN_INPUTS_BATCH1_091026.md §4/§5). Scheduled reminders (24h/1h/15m
+// before lock, "locking soon") are NOT sent through this path — those are
+// entirely server-side (Code.gs's `scanReminders` time trigger), the same
+// immediate-vs-scheduled split chat's own append/fetch functions model above.
+export async function notifyPushRelay({ dedupKey, playerIds, title, body, destination, event }) {
+  return call('notifyPush', { dedupKey, playerIds, title, body, destination, event });
+}
+
+// ── Server-fired notifyLog read (F2, 2026-09-10 remediation) ───────────────
+// PICKS_REMINDER/PICKS_LOCKING_SOON fire ENTIRELY server-side (Code.gs's
+// scanReminders trigger) and were previously push-only, with no persistent
+// record for anyone who didn't have push granted or had the app closed when
+// it arrived. CFBP_NOTIFY_LOG (Code.gs) is the server's OWN append-only
+// record of those two events; this is a READ of it — never written back to
+// cfbp_notifications (RG-49 clobber class). js/notifications.js folds the
+// result into a separate, device-local cache (see that file's header note).
+// `afterSeq` is CFBP_NOTIFY_LOG's own row-index cursor (same "contiguous row
+// = seq" trick chat's msgHead uses) — 0 fetches the player's full log.
+export async function notifyLogFetch(playerId, afterSeq = 0) {
+  if (!isBackendConfigured()) return { records: [], head: afterSeq };
+  const r = await call('notifyLog', { playerId, afterSeq });
+  return { records: r.records || [], head: r.head ?? afterSeq };
 }

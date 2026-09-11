@@ -1,5 +1,7 @@
 {
   "_comment": "Cross-device data sync config. See CROSS_DEVICE_SETUP.md.",
   "backendUrl": "https://script.google.com/macros/s/AKfycbwfdxbt-RgaqhXeM3rmeLUMYOCFM_cV5UWsUevQCvdUnPlt7vra4C5g2trbYOSJXQP1lA/exec",
-  "backendToken": "f36fe8394e1b4d8183bedec406288671e608f460"
+  "backendToken": "f36fe8394e1b4d8183bedec406288671e608f460",
+  "_oneSignalComment": "PUBLIC OneSignal App ID (Groups A/B push, 2026-09-10) — safe to ship in source, per DESIGN_INPUTS_BATCH1_091026.md Appendix. The REST API key is NEVER put here — it lives only in Apps Script Script Properties. Empty string = push stays off; js/push-onesignal.js no-ops cleanly.",
+  "oneSignalAppId": "abad65e9-e9d8-4b69-b342-c43947a7189a"
 }

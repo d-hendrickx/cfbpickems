@@ -151,7 +151,7 @@ export function renderExtraPointResultsHTML(week, graded, escHtml) {
         ${detect ? `<div class="text-muted text-xs">${escHtml(detect.text || '')} — ${escHtml(detect.matchup || '')}</div>` : ''}
       </div>
       ${rowsHtml}
-      ${graded.allBusted ? '<div class="ep-house">Everyone busted. The house wins. The house is the chart.</div>' : ''}
+      ${graded.allBusted ? '<div class="ep-house">Everyone busted. The house wins. It usually does.</div>' : ''}
       <div class="text-muted text-xs mt-sm">Blackjack rules: closest without going over. Over = bust. Exact = blackjack.</div>
     </div>`;
 }

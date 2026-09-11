@@ -517,6 +517,44 @@ body[data-tab="chat"] .app-header{display:none}
 .tz-btn{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.7);font-family:'Oswald',sans-serif;font-size:.62rem;font-weight:700;letter-spacing:.04em;padding:3px 7px;border-radius:6px;cursor:pointer;transition:all .15s}
 .tz-btn.active,.tz-btn:hover{background:var(--gold);color:#1C1410;border-color:var(--gold)}
 
+/* Groups A/B (2026-09-10, DI-A3) — bell icon, .header-right, between
+   #header-identity and #sync-badge. Same 40px tap-target floor as
+   .header-identity/.header-feedback-icon right next to it (CONVENTIONS #17). */
+.notif-bell-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  background:none;border:none;cursor:pointer;padding:8px 6px;min-height:40px;min-width:40px;
+  font-size:1.1rem;line-height:1;-webkit-tap-highlight-color:transparent}
+.notif-bell-btn[hidden]{display:none}
+.notif-bell-badge{position:absolute;top:2px;right:0;background:var(--gold);color:var(--maroon);
+  font-family:'Oswald',sans-serif;font-size:.6rem;font-weight:700;line-height:1;
+  padding:2px 4px;border-radius:8px;min-width:14px;text-align:center}
+.notif-bell-badge[hidden]{display:none}
+
+/* Notification Center rows — reuses .card + the app's existing
+   unread-accent idiom (border-left:4px solid var(--maroon), same as
+   .recap-card/.week-banner) rather than inventing a new color. */
+.notif-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;cursor:pointer}
+.notif-row-unread{border-left:4px solid var(--maroon)}
+.notif-row-icon{font-size:1.1rem;flex-shrink:0;line-height:1.3}
+.notif-row-body{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.notif-row-title{font-weight:700;font-size:.85rem}
+.notif-row-sub{font-size:.78rem;color:var(--text-secondary)}
+.notif-row-time{font-size:.68rem;color:var(--text-muted);white-space:nowrap;flex-shrink:0}
+
+.notif-priming-card{padding:14px}
+.notif-priming-title{font-weight:700;font-size:.9rem;margin-bottom:4px}
+
+/* DI-A4 — full-width tappable <label> rows, ≥44px tap target (a NEW
+   requirement here, unlike .chat-prefs-row's undersized native checkboxes —
+   see that DI's explicit note). */
+.notif-prefs-card{padding:8px 14px}
+.notif-prefs-row{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:11px 0;border-bottom:1px solid var(--border);min-height:44px;cursor:pointer;
+  font-size:.82rem;font-weight:600}
+.notif-prefs-row:last-child{border-bottom:none}
+.notif-prefs-row input[type="checkbox"]{width:20px;height:20px;flex-shrink:0}
+.notif-prefs-row-dim{opacity:.45;pointer-events:none}
+.notif-prefs-master{font-weight:700}
+
 /* Game time display */
 .game-time{font-family:'Oswald',sans-serif;font-size:.75rem;font-weight:600;color:var(--text-secondary);letter-spacing:.02em;white-space:nowrap}
 
@@ -1665,7 +1703,15 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-failed{color:#B02A37;font-weight:700;font-size:.65rem}
 .chat-retry{background:#B02A37;color:#fff;border:none;border-radius:6px;padding:1px 6px;font-size:.6rem;cursor:pointer;margin-left:4px}
 .chat-reply-quote{display:block;width:100%;text-align:left;background:var(--bg-card-alt);border:none;border-left:3px solid var(--maroon-light);border-radius:6px;padding:4px 8px;font-size:.7rem;color:var(--text-secondary);margin-top:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.chat-reactions{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;align-items:center}
+/* position:relative (2026-09-10, reviewer BLOCK finding #1) — the containing
+   block for toggleFeedbackPicker()'s absolutely-positioned popover when it is
+   opened from the persistent ⭐, which lives in THIS row. Mirrors exactly what
+   .chat-actions (position:absolute, below) already provides for the long-press
+   ⭐. Without it the popover resolved to .chat-bubble-col via `left:0` off the
+   star's own right-aligned box and ran ~256px past a 390px viewport. Purely a
+   containing block: the popover is out of flow, so this row's flex layout,
+   height and density are untouched. */
+.chat-reactions{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;align-items:center;position:relative}
 /* CONVENTIONS #17 / UN-114: was padding:1px 7px at .7rem, ~17px tall — worse
    than either prior named tap-target offender in this file. min-height (not
    a fixed height) + box-sizing:border-box raises the hit box to the 40px
@@ -2042,3 +2088,214 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
   .lock-countdown { padding: 14px 16px; }
   .lock-countdown-main { font-size: 1.02rem; }
 }
+
+/* ===== Build 1 (2026-09-10): E1 feedback capture + F1–F4 chat depth — merged from scratch ef-styles.css by the coordinator ===== */
+/**
+ * Build 1 CSS — E1 feedback capture + F1–F4 chat depth
+ * =========================================================================
+ * Reviewer BLOCK finding #10: the original scratch-file header claimed this
+ * still needed manual merging into the real file. That claim is stale — this
+ * IS the real styles.css, the block already lives here. Corrected rather
+ * than left as a misleading artifact for the next reader.
+ *
+ * Placement suggestions (not load-bearing, just where these read most
+ * naturally alongside their siblings in the existing file):
+ *   - .chat-header-actions              → beside .chat-header-row (~line 1824)
+ *   - .chat-search-*                    → beside .chat-pills-scroll/.chat-pill (~line 1577-1587)
+ *   - .chat-act-feedback                → beside .chat-act (~line 1724)
+ *   - .feedback-picker-wrap/grid/stack and .feedback-pick-option → beside .reaction-picker/.reaction-pick-option (~line 1026-1220)
+ *   - .chat-quote-hidden/.chat-quote-muted → beside .chat-reply-quote (~line 1667)
+ *   - .chat-img-preview + --chat-img-preview-max-h → beside .chat-bubble (~line 1656), var in :root
+ *
+ * Selectors covered, one block per feature:
+ *   E1  .chat-act-feedback, .feedback-picker-wrap, .feedback-picker-grid,
+ *       .feedback-picker-stack, .feedback-pick-option, .feedback-pick-option.active
+ *   E1 follow-up (2026-09-10)  .chat-fb-star (+ ::after, .is-unrated,
+ *       .is-rated) — persistent ⭐ on SCRIBE messages; block at the very
+ *       bottom of this file, beside its siblings above
+ *   F1/F4-interim  .chat-img-preview, --chat-img-preview-max-h
+ *   F2  .chat-header-actions, .chat-search-row, .chat-search-input,
+ *       .chat-search-results, .chat-search-result, .chat-search-result-meta,
+ *       .chat-search-result-body
+ *   F3  .chat-quote-hidden, .chat-quote-muted
+ *
+ * All values reuse existing theme custom properties (var(--maroon) etc,
+ * CONVENTIONS #13) — no hardcoded hex except where an existing sibling rule
+ * (e.g. .chat-failed, .chat-retry) already hardcodes the SAME error red, kept
+ * consistent rather than introducing a new token unprompted.
+ */
+
+/* ── :root — new custom property (F4-interim, design-input requirement:
+   "max-height: 240px (CSS var-backed, not a hex)") ────────────────────── */
+:root {
+  --chat-img-preview-max-h: 240px;
+}
+
+/* ── F2 — header search toggle + search bar + results list ──────────────
+   Reuses .btn/.btn-ghost/.btn-sm (already used by #chat-prefs-btn) for the
+   new 🔍 button — no new button component. .chat-header-actions wraps BOTH
+   icon buttons so .chat-header-row's existing `justify-content:space-between`
+   (styles.css:1824) still distributes exactly two children (h2, this
+   wrapper) instead of being thrown off by a third top-level child. */
+.chat-header-actions{display:flex;align-items:center;gap:6px}
+
+/* Occupies the EXACT slot .chat-pills-scroll used to (renderChatPage() swaps
+   one for the other) — same row height budget, matching CONVENTIONS #17's
+   40px floor via .form-input's existing min-height:46px. */
+.chat-search-row{display:flex;align-items:center;gap:6px;padding:2px 0 8px}
+.chat-search-input{flex:1;min-height:40px}
+/* Non-blocking finding #11 (CONVENTIONS #17) — .btn-sm's base min-height is
+   34px, under the 40px tap-target floor. These three are icon/short-label
+   buttons a player taps directly (search toggle, clear, close), so they get
+   an explicit floor rather than inheriting the smaller default. */
+#chat-search-btn, #chat-search-close, #chat-search-clear{min-height:40px;min-width:40px}
+
+.chat-search-results{display:flex;flex-direction:column;gap:6px}
+/* Reuses .chat-empty (unmodified) for the "No messages match." state — see
+   searchResultsHTML() in chat-ui.js; only the result-row component is new. */
+.chat-search-result{display:flex;flex-direction:column;align-items:flex-start;
+  gap:2px;width:100%;text-align:left;background:var(--bg-card-alt);
+  border:none;border-radius:8px;padding:8px 10px;cursor:pointer;
+  min-height:40px;box-sizing:border-box}
+.chat-search-result:hover{background:var(--bg-input)}
+.chat-search-result-meta{font-size:.68rem;color:var(--text-muted)}
+.chat-search-result-body{font-size:.85rem;color:var(--text-primary);
+  overflow:hidden;text-overflow:ellipsis;display:-webkit-box;
+  -webkit-line-clamp:2;-webkit-box-orient:vertical}
+
+/* ── E1 — feedback trigger icon + popover ────────────────────────────────
+   .chat-act-feedback extends .chat-act (styles.css:1724, unchanged) — same
+   40px floor, but this ONE action carries a text label ("⭐ Hit" etc, not
+   just an emoji glyph) so it needs horizontal padding .chat-act's other
+   emoji-only siblings don't. */
+.chat-act-feedback{padding:0 8px;width:auto;font-size:.72rem;font-weight:600;
+  gap:3px;white-space:nowrap}
+
+/* .feedback-picker-wrap sits on the SAME element that already gets the
+   `.reaction-picker` class in chat-ui.js (toggleFeedbackPicker() adds both
+   classes) — so it inherits .reaction-picker's exact anchoring/positioning
+   (position:absolute, bottom:100%, background/border/shadow, styles.css
+   ~1026-1219) VERBATIM, per the design input's explicit reuse requirement.
+   Nothing below re-declares position/anchoring — only the INNER grid/stack
+   layout, which is new content, not a new anchoring mechanism.
+
+   Reviewer BLOCK finding #2: .reaction-picker ALSO carries
+   `display:grid !important; grid-template-columns:repeat(5,44px)` (plus the
+   `repeat(7,42px)`/`repeat(5,42px)` breakpoints at ≤480px/≤360px) for ITS
+   OWN emoji grid — and since .feedback-picker-wrap is literally the SAME
+   element (both classes on one node), it inherited that grid too. The 306px-
+   wide .feedback-picker-grid CHILD was then placed inside a 42–44px-wide
+   grid TRACK (the wrap's own single implicit column), spilling outside the
+   popover at 321–360px viewports. Reset display/grid-template-columns back
+   to block here so .feedback-picker-wrap is a plain flow container again —
+   .reaction-picker's OTHER properties (position, background, border,
+   padding-adjacent shadow) are unaffected, only the emoji-grid-specific
+   layout is undone, and only on THIS wrapper class, never on
+   .reaction-picker itself. */
+.feedback-picker-wrap{display:block !important;grid-template-columns:none !important;padding:6px}
+
+/* 2×2 grid, SCRIBE messages (🔥 Hit · 😐 Mid · 🚫 Too much · ✏️ Rewrite) —
+   sized per the design input's own math: "~2×150px + gap ≈ 306px — fits
+   inside a 320px viewport with the popover's own small inset margin (match
+   .reaction-picker's existing max-width clamp pattern)". */
+.feedback-picker-grid{display:grid;grid-template-columns:repeat(2,150px);
+  gap:6px;max-width:calc(100vw - 48px)}
+/* Single-column fallback, ≤360px (reviewer BLOCK finding #2: widened from
+   ≤320px — the 306px grid (2×150px+gap) does not reliably fit inside a
+   321–360px viewport once the popover's own inset padding/margin is
+   accounted for, so that band was ALSO overflowing before this fix, not
+   just ≤320px). Collapses to a single column (4 stacked rows) rather than
+   shrinking the tap target below 44px (explicit design-input requirement:
+   "tap-target size is never the thing that flexes"). */
+@media (max-width:384px){
+  .feedback-picker-grid{grid-template-columns:1fr;width:180px}
+}
+
+/* Stacked, human messages (📌 Remember this · 👁 Weigh in). */
+.feedback-picker-stack{display:flex;flex-direction:column;gap:6px;width:220px;
+  max-width:calc(100vw - 48px)}
+
+/* Every option: word label + emoji (not emoji-only — "four single-character
+   glyphs are not visually distinct enough at speed", design input), ≥44px
+   tall — tap-target floor is NEVER the thing that flexes, per the same
+   design-input line, so this is 44px even though CONVENTIONS #17's general
+   app-wide floor is 40px. */
+.feedback-pick-option{display:flex;align-items:center;justify-content:center;
+  gap:6px;min-height:44px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg-card);
+  color:var(--text-primary);font-size:.78rem;font-weight:600;cursor:pointer;
+  box-sizing:border-box;text-align:center}
+.feedback-pick-option:hover{background:var(--bg-input)}
+/* "Filled/checked" state — the rater's own current value, reflected back on
+   the option itself (design input names this explicitly for ✏️ Rewrite;
+   applied here uniformly to all six options, same mechanism). Reuses the
+   maroon "mine" accent language .chat-react-pill.me already established
+   (styles.css:1686) rather than inventing a second "this is mine" color. */
+.feedback-pick-option.active{border-color:var(--maroon);
+  background:var(--maroon-pale);color:var(--maroon)}
+
+/* ── F3 — quote-reply polish: hidden-parent / deleted-parent states ─────
+   Both extend .chat-reply-quote (styles.css:1667) rather than re-declaring
+   its base layout — only the NEW distinguishing treatment lives here. */
+/* Retention/epoch-hidden parent — non-interactive (a <div>, not a
+   <button> — chat-ui.js already omits the button/data-jump for this case),
+   so `cursor:pointer` inherited from .chat-reply-quote is overridden back to
+   the default, and the copy reads visually as informational, not tappable. */
+.chat-quote-hidden{cursor:default;font-style:italic;color:var(--text-muted)}
+/* Deleted parent — STILL tappable (data-jump to the tombstone is kept,
+   unchanged), just visually muted so it reads at a glance as distinct from a
+   normal live quote (the gap named in the design input). */
+.chat-reply-quote.chat-quote-muted{opacity:.55}
+
+/* ── F4-interim — inline image preview (off by default, settings-gated) ──
+   `loading="lazy" referrerpolicy="no-referrer"` live on the <img> tag itself
+   (js/chat-ui.js renderUrlToken()) — this block is layout/sizing only. */
+.chat-img-preview{display:block;max-width:100%;
+  max-height:var(--chat-img-preview-max-h);border-radius:8px;margin-top:4px;
+  object-fit:cover}
+
+/* ── E1 follow-up — persistent ⭐ on SCRIBE messages (2026-09-10, Drew
+   approved recommendation (b)) ─────────────────────────────────────────────
+   Lives INSIDE the existing `.chat-reactions` footer row (chat-ui.js passes
+   it to reactionsHTML()'s trailing slot) — no new row, per the design input's
+   RG-20/34 density constraint.
+
+   TAP TARGET: ≥40×40 (CONVENTIONS #17) WITHOUT growing the row, using the
+   exact ::after overlay pattern `.chat-react-pill` already established at
+   styles.css:~1715 for precisely this conflict — v0.17.5 found that a literal
+   `min-height:40px` there grew the visible pill by ~23px and erased UN-113's
+   density gain. `min-width:40px` is free (horizontal space is not the scarce
+   axis); the vertical 40px comes from the transparent overlay, so the glyph
+   stays compact.
+
+   `position:relative` is load-bearing for the ::after overlay ONLY. It used
+   to ALSO be the anchor for toggleFeedbackPicker()'s popover — that was
+   reviewer BLOCK finding #1 (2026-09-10): combined with `margin-left:auto`
+   below, anchoring `.reaction-picker{left:0}` to this button opened a ~320px
+   popover at x≈326 on a 390px viewport, ~256px past the right edge, which
+   `.chat-scroll`'s computed `overflow-x:auto` exposed as a sliver plus a
+   horizontal scrollbar. The popover now hosts on the `.chat-reactions` ROW
+   (position:relative, styles.css ~1706) like the `.chat-actions` entry point
+   does, so it opens from the bubble column's left edge instead. Do not remove
+   `position:relative` here — the ::after still needs it.
+
+   `margin-left:auto` right-aligns it at the end of the row — including the
+   common case where the row holds nothing else (a SCRIBE line with no
+   reactions yet), which is the design input's stated phone-first behavior. */
+.chat-fb-star{background:none;border:1px solid transparent;border-radius:999px;
+  padding:2px 6px;font-size:.8rem;line-height:1;cursor:pointer;
+  box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;
+  min-width:40px;position:relative;margin-left:auto;flex-shrink:0;
+  color:var(--text-secondary)}
+.chat-fb-star::after{content:'';position:absolute;left:0;right:0;top:50%;
+  transform:translateY(-50%);height:40px}
+.chat-fb-star:hover{background:var(--bg-input)}
+/* Unrated — "hollow/muted ⭐" per the design input. Muted rather than a
+   different glyph so the control still reads as the same ⭐ family the
+   `.chat-actions` entry point uses. */
+.chat-fb-star.is-unrated{opacity:.5}
+/* Rated by me — reuses the maroon "this is mine" accent language already
+   established by `.chat-react-pill.me` and `.feedback-pick-option.active`
+   (CONVENTIONS #13, var(--*) only; no new token invented). */
+.chat-fb-star.is-rated{opacity:1;border-color:var(--maroon);
+  background:var(--maroon-pale)}

@@ -77,8 +77,11 @@ import {
   backfill, chatDigest as _digest, setViewOpen,
   getRetentionDays, isChatEnabled,
   backfillBlockedByEpoch,
+  isHiddenByRetention, isHiddenByEpoch,
+  isChatImagePreviewEnabled,
 } from './chat.js';
 import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
+import { recordFeedback, getFeedbackFor, isScribeFeedbackEnabled } from './scribeFeedback.js';
 import {
   getSession, getPlayers, getPlayer, getCurrentWeek, getGames, getWeeks,
   getPicks, getEffectiveWeekStatus, arePicksPublic,
@@ -113,6 +116,8 @@ const U = {
   toastQueue: [],
   toastShowing: false,
   prefsOpen: false,
+  searchOpen: false,        // F2 (UN-165) — replaces the pills row in place
+  searchQuery: '',
   returnToChat: false,      // set when a signed-out reader taps "Log in" in chat
   returnFilter: null,       // the filter they were reading, restored after login
   returnAt: 0,              // when it was set — the intent expires (see RETURN_WINDOW_MS)
@@ -543,11 +548,138 @@ function retentionNoticeHTML() {
   return `<div class="chat-retention-notice text-muted text-xs">Showing the last ${days} days. 🏛 Pinned messages are always kept.</div>`;
 }
 
+// ── F2 (UN-165) — in-chat search ──────────────────────────────────────────────
+/**
+ * Replaces `.chat-pills-scroll`'s row content IN PLACE when search is open —
+ * zero additional steady-state vertical space (design-input requirement),
+ * reusing a row height the layout already budgets for. See renderChatPage()
+ * for the toggle between this and pillsHTML().
+ */
+function searchBarHTML() {
+  // Non-blocking finding #8 — the clear (✕) and close (✕) buttons used to be
+  // visually identical glyphs side by side. Clear now reads "Clear" (text,
+  // only rendered when a query exists) and close keeps the ✕ glyph with an
+  // explicit aria-label, so the two are distinguishable both visually and to
+  // assistive tech.
+  return `<div class="chat-search-row">
+    <input type="text" id="chat-search-input" class="form-input chat-search-input"
+      placeholder="Search this chat…" value="${esc(U.searchQuery)}" />
+    ${U.searchQuery ? `<button class="btn btn-ghost btn-sm" id="chat-search-clear" title="Clear search" aria-label="Clear search">Clear</button>` : ''}
+    <button class="btn btn-ghost btn-sm" id="chat-search-close" title="Close search" aria-label="Close search">✕</button>
+  </div>`;
+}
+
+/**
+ * Search is over the WHOLE room, not scoped to the current pill filter
+ * (design input, verbatim: "a player searching for 'backdoor' shouldn't have
+ * to remember which game thread it was in"). `respectRetention: true` — same
+ * call the main feed already makes — so a retention/epoch-hidden message can
+ * never surface as a result a player then can't actually jump to
+ * (feedbacktest.mjs proves this against both hides independently).
+ *
+ * "Load older messages" (Part 0b correction #8, binding) — the fold only
+ * holds this device's backfilled window; shown whenever backfilling further
+ * could still surface more real history (the SAME condition the main feed's
+ * own "↑ load earlier" button already uses — retention makes it pointless
+ * (older messages would just be filtered right back out), the epoch makes it
+ * impossible (nothing further back is anything but pre-launch test chatter)).
+ */
+function searchResultsHTML(query) {
+  const results = getMessages({ tag: 'all', respectRetention: true, textContains: query })
+    .filter(m => m.type === 'message' && !m.deleted);
+  const canLoadOlder = !retentionOn() && !backfillBlockedByEpoch();
+  const loadOlderHTML = canLoadOlder ? `<button class="chat-load-older" id="chat-search-load-older">Load older messages</button>` : '';
+  if (!results.length) return `<div class="chat-empty">No messages match.</div>${loadOlderHTML}`;
+  // Non-blocking finding #7 — bodyHTML(m) can emit <a>/<img> tags (F1/F4-
+  // interim); nesting those inside a <button> is an invalid content model,
+  // and a tap on a nested link would follow the link instead of jumping to
+  // the message (a <button> doesn't natively navigate, but nested
+  // interactive content inside interactive content is undefined/broken
+  // behavior across browsers). Preferred fix per the design input: plain
+  // escaped text preview, since a search result is a FINDER (jump-to), not a
+  // place to actually interact with links/images.
+  const rows = results.map(m => `
+    <button type="button" class="chat-search-result" data-search-jump="${esc(m.id)}">
+      <span class="chat-search-result-meta"><strong>${esc(nameOf(m.author))}</strong> · ${relTime(m.ts)}</span>
+      <span class="chat-search-result-body">${esc(m.body).replace(/\n/g, ' ')}</span>
+    </button>`).join('');
+  return `<div class="chat-search-results">${rows}</div>${loadOlderHTML}`;
+}
+// Test-only seam (same convention as `_quoteHTMLForTest`/`_messageHTMLForTest`)
+// — reviewer BLOCK finding #4: direct coverage of the search RENDER function
+// (not just getMessages() itself), so a regression that applies textContains
+// without respectRetention inside THIS function specifically goes red.
+export const _searchResultsHTMLForTest = searchResultsHTML;
+
 // ── Message rendering ─────────────────────────────────────────────────────────
+// F1 (UN-164) — a single tokenizing pass over the ALREADY-ESCAPED body: split
+// on URL matches first, run mention-detection only on the leftover non-URL
+// segments. This is the requirement DESIGN_INPUTS_BATCH1_091026.md Document 2
+// names explicitly — two independent blind `.replace()` calls (URL pass then
+// mention pass, or vice versa) can corrupt each other (a URL containing '@',
+// e.g. `https://x.com/@drew`, matched by the mention pass AFTER linkify would
+// inject a `<span>` INSIDE an href attribute value). Splitting first makes
+// the two passes operate on disjoint text by construction, not by ordering
+// discipline — feedbacktest.mjs proves this against the adversarial case.
+//
+// URL_RE has exactly ONE capturing group, so `String.split(URL_RE)` on the
+// escaped body interleaves [text, urlMatch, text, urlMatch, ...] — odd
+// indices are URL tokens, even indices are plain text. No protocol-relative
+// (`//…`) matches — ambiguous with plain text, not worth the false-positive
+// risk in a 6-person room (explicit design-input bound).
+const URL_RE = /(https?:\/\/[^\s<>"']+|www\.[^\s<>"']+)/gi;
+// Trailing-punctuation trim — "check this out (https://example.com)." must
+// not swallow the sentence's own closing punctuation into the href. Only the
+// characters that can actually survive esc() as literal trailing chars in
+// practice (`)`, `]`, `,`, `.`) — deliberately NOT `;` (an HTML entity like
+// `&amp;` ends in `;`; trimming it would corrupt the entity, not the URL).
+const URL_TRAILING_PUNCT_RE = /[)\],.]+$/;
+const MENTION_RE = /@([A-Za-z][\w.']*)/g;
+// F4-interim (Drew's decision: build now, off-by-default) — case-insensitive
+// image-extension allow-list, query/hash-aware.
+const IMAGE_EXT_RE = /\.(jpe?g|png|gif|webp)(?:[?#]|$)/i;
+
+function linkifySegment(text) {
+  // Mentions only — every URL substring has ALREADY been split out into its
+  // own token before this ever runs (see bodyHTML() below), so this can
+  // never fire on text the URL pass produced.
+  return text.replace(MENTION_RE, '<span class="chat-mention">@$1</span>');
+}
+
+/**
+ * `raw` is a slice of the ALREADY-ESCAPED body — esc() has already turned
+ * every `<`/`>`/`&`/`"`/`'` in the player's original text into inert
+ * entities, so `raw` can contain no raw `<`/`>` by construction. The only
+ * markup this function's OWN output introduces is the `<a>` (and, gated,
+ * `<img>`) wrapper it writes itself — it cannot be used to prematurely close
+ * or inject into that tag.
+ */
+function renderUrlToken(raw, imgPreview) {
+  let url = raw;
+  let trail = '';
+  const tm = URL_TRAILING_PUNCT_RE.exec(url);
+  if (tm) { trail = tm[0]; url = url.slice(0, url.length - trail.length); }
+  if (!url) return raw;   // degenerate: the whole token was punctuation — bail out unlinked
+  const href = /^www\./i.test(url) ? `https://${url}` : url;
+  const link = `<a href="${href}" rel="noopener noreferrer" target="_blank">${url}</a>`;
+  // F4-interim — gated behind settings.chatImagePreviewEnabled (off by
+  // default, D7/Drew's decision). `loading="lazy" referrerpolicy="no-referrer"`
+  // per the design input; the passive-IP-disclosure caveat it also names is
+  // why this stays a flag rather than F1's unconditional default.
+  const img = (imgPreview && IMAGE_EXT_RE.test(href.split(/[?#]/)[0]))
+    ? `<br><img src="${href}" loading="lazy" referrerpolicy="no-referrer" class="chat-img-preview" alt="">` : '';
+  return `${link}${img}${trail}`;
+}
+
 function bodyHTML(m) {
-  let t = esc(m.body);
-  t = t.replace(/@([A-Za-z][\w.']*)/g, '<span class="chat-mention">@$1</span>');
-  return t;
+  const escaped = esc(m.body);
+  const imgPreview = isChatImagePreviewEnabled();
+  const parts = escaped.split(URL_RE);
+  let out = '';
+  for (let i = 0; i < parts.length; i++) {
+    out += (i % 2 === 1) ? renderUrlToken(parts[i], imgPreview) : linkifySegment(parts[i] || '');
+  }
+  return out;
 }
 
 function quoteHTML(m) {
@@ -558,12 +690,44 @@ function quoteHTML(m) {
   if (!m.replyTo) return '';
   const parent = getMessage(m.replyTo);
   if (!parent) return '';
-  return `<button class="chat-reply-quote" data-jump="${esc(parent.id)}">↩ <strong>${esc(nameOf(parent.author))}</strong>: ${esc((parent.deleted ? 'message withdrawn' : parent.body).slice(0, 90))}</button>`;
+  // F3 (UN-166) — getMessage() reads the fold's S.items map DIRECTLY,
+  // unfiltered by retention/epoch (those are render-time filters applied
+  // only inside getMessages()). A parent that has aged past the retention
+  // window, or predates the epoch cutoff, still exists in the fold — so
+  // without this check, this would render a live-looking, TAPPABLE quote
+  // whose data-jump target will never exist in the current DOM: a silent
+  // dead tap. This is the one real gap this DI closes (everything else about
+  // quote-reply rendering already worked) — non-interactive, no data-jump,
+  // not a <button>, when the parent is hidden either way.
+  if (isHiddenByRetention(parent) || isHiddenByEpoch(parent)) {
+    return `<div class="chat-reply-quote chat-quote-hidden">↩ replying to an earlier message (not shown)</div>`;
+  }
+  // Deleted parent (pre-existing behavior, UNCHANGED functionally) — still
+  // tappable (jumping to the tombstone is real context: "a reply to
+  // something withdrawn"), now visually muted so it reads at a glance as
+  // distinct from a normal live quote (the other gap this DI closes).
+  const muted = parent.deleted ? ' chat-quote-muted' : '';
+  return `<button class="chat-reply-quote${muted}" data-jump="${esc(parent.id)}">↩ <strong>${esc(nameOf(parent.author))}</strong>: ${esc((parent.deleted ? 'message withdrawn' : parent.body).slice(0, 90))}</button>`;
 }
+// Test-only seam (same convention as `_reactionsHTML`/`_messageHTMLForTest`)
+// — F3 (UN-166)'s one real functional gap (retention/epoch-hidden parent)
+// needs direct coverage, not just an indirect read through messageHTML().
+export const _quoteHTMLForTest = quoteHTML;
 
-function reactionsHTML(m, self) {
+/**
+ * `trailing` (2026-09-10, E1 follow-up) — extra content pinned to the RIGHT
+ * end of this same row. Today its only caller passes persistentStarHTML().
+ * It exists so the persistent ⭐ REUSES the existing reactions row instead of
+ * adding a second footer row (explicit design input: "reuse that row, do not
+ * add a new row; keep compact density per RG-20/34"). When `trailing` is ''
+ * — every non-SCRIBE message, and every message with instrumentation off —
+ * this function's output is byte-for-byte what it was before, including the
+ * empty-string early return.
+ */
+function reactionsHTML(m, self, trailing = '') {
   const entries = Object.entries(m.reactions || {});
-  if (!entries.length) return '';
+  if (!entries.length && !trailing) return '';
+  if (!entries.length) return `<div class="chat-reactions">${trailing}</div>`;
   // UN-114: attribution moved off `title` (removed below) and onto an
   // always-visible line — tooltips don't fire on touch, the exact
   // anti-pattern already named three times in this codebase (see
@@ -571,7 +735,7 @@ function reactionsHTML(m, self) {
   // is unchanged.
   const pills = entries.map(([emoji, who]) =>
     `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}">${emoji} ${who.length}</button>`).join('');
-  return `<div class="chat-reactions">${pills}</div>${reactionNamesHTML(entries)}`;
+  return `<div class="chat-reactions">${pills}${trailing}</div>${reactionNamesHTML(entries)}`;
 }
 
 /**
@@ -625,6 +789,344 @@ function calloutEligible(m) {
   return found.game.kickoff && (m.ts || 0) < new Date(found.game.kickoff).getTime();
 }
 
+// ── E1 (UN-159) — SCRIBE feedback controls ────────────────────────────────────
+/**
+ * One new icon in `.chat-actions`, context-sensitive by author, FIRST
+ * position (highest-priority — "the entire point of the pilot
+ * instrumentation, it should not be buried after reply/pin/edit" — design
+ * input, verbatim). `.chat-actions` is already a confirmed density hazard
+ * (RG-13/16/17/20/34 lineage) — this is the "+1 icon net regardless of
+ * message type" solution: one entry point, a small anchored popover, never
+ * six new inline icons.
+ *
+ * Reads via getFeedbackFor(), scoped to `self` — the CURRENT viewer's own
+ * state ONLY. Every device's fold actually holds every player's feedback
+ * (the poll ingests every event type, same as reactions/pins), but this
+ * function never reads any entry but `[self]` — that's what makes the
+ * attribution-privacy boundary a UI-level guarantee, not a lookup gap
+ * (Attribution section, Part 0b correction #10 — explicitly UI-level only,
+ * not stronger than KEYS.FEEDBACK's existing precedent).
+ */
+/**
+ * THE one reader of "what did *I* say about this message" — shared verbatim by
+ * both feedback entry points (the long-press `.chat-actions` ⭐ and the
+ * persistent ⭐ below), so the two can never drift into showing different
+ * states for the same message. Scoped to `self` only; see feedbackButtonHTML's
+ * attribution-privacy note.
+ */
+function myFeedbackState(m, self) {
+  const mine = self ? (getFeedbackFor(m.id)[self] || {}) : {};
+  const rating = mine.rating || null;
+  const hasRewrite = typeof mine.rewrite === 'string' && mine.rewrite.length > 0;
+  return { rating, hasRewrite, rated: !!rating || hasRewrite };
+}
+
+function feedbackButtonHTML(m, self) {
+  if (m.author === 'scribe') {
+    const { rating } = myFeedbackState(m, self);
+    const label = { hit: '⭐ Hit', mid: '⭐ Mid', too_much: '⭐ Too much' }[rating] || '⭐ Rate';
+    return `<button class="chat-act chat-act-feedback" data-fb-open="${esc(m.id)}" title="Rate this SCRIBE line">${label}</button>`;
+  }
+  if (m.author === 'system') return '';
+  return `<button class="chat-act chat-act-feedback" data-fb-open="${esc(m.id)}" title="Flag this message">🚩 Flag</button>`;
+}
+
+/**
+ * E1 follow-up (2026-09-10, Drew approved recommendation (b)) — ALWAYS-VISIBLE
+ * ⭐ in the bubble footer, SCRIBE messages ONLY.
+ *
+ * WHY: rating a SCRIBE line was a three-gesture path — long-press (or
+ * right-click) to reveal `.chat-actions`, tap ⭐, tap a rating. The pilot's
+ * whole value is how many ratings actually get collected, and the affordance
+ * was invisible until you already knew it was there. This is the one-gesture
+ * entry point: tap → popover → rate.
+ *
+ * IT IS NOT A SECOND CODE PATH. It renders the same `data-fb-open` attribute
+ * the `.chat-actions` ⭐ does, so bindMessageActionButtons()'s single
+ * `[data-fb-open]` handler wires it, and it opens the SAME popover via the
+ * SAME toggleFeedbackPicker() — no duplicated rating logic anywhere.
+ * (toggleFeedbackPicker anchors to `anchorEl.closest('.chat-actions,
+ * .chat-reactions') || anchorEl`. This button's row container,
+ * `.chat-reactions`, is position:relative in styles.css, so the popover
+ * hangs off the ROW's left edge — the same containing block the
+ * `.chat-actions` entry point gets, rather than off this right-aligned
+ * button, which pushed the popover off-screen. Corrected 2026-09-10,
+ * reviewer BLOCK finding #1; `position:relative` on `.chat-fb-star` itself
+ * remains, but now only for its ::after tap-target overlay.)
+ *
+ * ABSENT ENTIRELY (not hidden, zero trace in the HTML) when: the author is
+ * not SCRIBE, the master switch is off, or the message is deleted/withdrawn.
+ * Human messages are untouched — 🚩 Flag stays behind the long-press.
+ *
+ * STATE: hollow/muted ⭐ when I have not rated it; my own value's glyph when I
+ * have. `myFeedbackState()` is the single shared reader, so this and the
+ * `.chat-actions` ⭐ always agree about what I said. The glyphs here are the
+ * popover's own (🔥/😐/🚫/✏️, feedbackPopoverHTML below) rather than
+ * `.chat-actions`'s word labels — a compact always-on control has no room for
+ * "⭐ Too much", and matching the popover's glyphs is what makes the state
+ * legible at a glance. A rating outranks a rewrite when a player has both:
+ * the rating is the value this control primarily collects.
+ */
+function persistentStarHTML(m, self) {
+  if (m.author !== 'scribe' || m.deleted || !self || !isScribeFeedbackEnabled()) return ''; // !self: a signed-out reader gets no dead control (reviewer 2026-09-10)
+  const { rating, hasRewrite, rated } = myFeedbackState(m, self);
+  const glyph = { hit: '🔥', mid: '😐', too_much: '🚫' }[rating] || (hasRewrite ? '✏️' : '⭐');
+  const title = rated ? 'Your rating — tap to change' : 'Rate this SCRIBE line';
+  return `<button class="chat-fb-star ${rated ? 'is-rated' : 'is-unrated'}" data-fb-open="${esc(m.id)}" title="${esc(title)}" aria-label="${esc(title)}">${glyph}</button>`;
+}
+// Test-only seam (same convention as `_feedbackPopoverHTMLForTest`) — direct
+// coverage of the SCRIBE-only gate and the state glyph, so a regression goes
+// red on its own assertion rather than only inside messageHTML()'s composite.
+export const _persistentStarHTMLForTest = persistentStarHTML;
+
+/**
+ * Popover contents. SCRIBE messages: 2×2 grid, 🔥 Hit · 😐 Mid · 🚫 Too much ·
+ * ✏️ Rewrite — word label + emoji (not emoji-only; four single-character
+ * glyphs are not distinct enough at speed, per design input). `🚫 Too much`
+ * is deliberately rendered with EQUAL visual weight to the other three
+ * (Drew's decision, D6) — not larger, not a different color, despite the
+ * briefing calling it "the most important button" (that claim is about the
+ * DATA it produces, not required UI emphasis — flagged explicitly in the
+ * design-input review, not silently resolved either way).
+ *
+ * Human messages: 📌 Remember this · 👁 Weigh in, stacked.
+ *
+ * Every option shows a "filled/checked" `.active` state when the RATER's own
+ * current value is set — the design input names this explicitly only for
+ * ✏️ Rewrite ("shows a filled/checked state... so the rater can tell they
+ * already wrote one"); applied here uniformly across all six options as the
+ * same mechanism, same reasoning, not a new one per option.
+ */
+function feedbackPopoverHTML(m, self) {
+  const mine = self ? (getFeedbackFor(m.id)[self] || {}) : {};
+  if (m.author === 'scribe') {
+    const opt = (val, emoji, label) =>
+      `<button type="button" class="feedback-pick-option${mine.rating === val ? ' active' : ''}" data-fb-rating="${val}">${emoji} ${esc(label)}</button>`;
+    return `<div class="feedback-picker feedback-picker-grid">
+      ${opt('hit', '🔥', 'Hit')}
+      ${opt('mid', '😐', 'Mid')}
+      ${opt('too_much', '🚫', 'Too much')}
+      <button type="button" class="feedback-pick-option${mine.rewrite ? ' active' : ''}" data-fb-rewrite="1">✏️ Rewrite</button>
+    </div>`;
+  }
+  return `<div class="feedback-picker feedback-picker-stack">
+    <button type="button" class="feedback-pick-option${mine.remember_this ? ' active' : ''}" data-fb-remember="1">📌 Remember this</button>
+    <button type="button" class="feedback-pick-option${mine.weigh_in ? ' active' : ''}" data-fb-weighin="1">👁 Weigh in</button>
+  </div>`;
+}
+// Test-only seam (same convention as `_quoteHTMLForTest`/`_messageHTMLForTest`)
+// — reviewer BLOCK finding #4: direct coverage of the popover's own render
+// function, so a regression to any of the six controls' labels/data-fb-*
+// attributes, or to D6's "equal styling, no distinct emphasis class" rule,
+// goes red instead of being invisible behind messageHTML()'s composite output.
+export const _feedbackPopoverHTMLForTest = feedbackPopoverHTML;
+
+/**
+ * Reuses toggleMessageReactPicker()'s exact anchoring mechanism VERBATIM
+ * (design-input requirement): `position:absolute`, anchored to a positioned
+ * ROW CONTAINER (same containing block), single-open-at-a-time (closes the
+ * reaction picker too, if open — and vice versa, see toggleMessageReactPicker
+ * below), dismissed by outside-click/Escape/scroll via the SAME closer
+ * pattern `#chat-react-picker` already uses.
+ *
+ * The host selector is `.chat-actions, .chat-reactions` — BOTH row
+ * containers, never the trigger button itself (reviewer BLOCK, 2026-09-10,
+ * findings #1 and #2). The persistent ⭐ (persistentStarHTML) lives in
+ * `.chat-reactions` and is `margin-left:auto` right-aligned, so hosting the
+ * popover on the BUTTON anchored `.reaction-picker{left:0}` to the button's
+ * own left edge (x≈326 on a 390px viewport) and pushed a ~320px popover
+ * ~256px past the viewport — `.chat-scroll`'s computed `overflow-x:auto`
+ * then showed a horizontal sliver and scrollbar. Hosting on the ROW instead
+ * puts `left:0` at the bubble column's left edge (x≈62), which is exactly
+ * where the `.chat-actions` path already opened it and which fits a 320px
+ * popover inside a 390px viewport with room to spare.
+ *
+ * Hosting on the row also fixes finding #2: appending an absolutely
+ * positioned <div> full of <button>s INSIDE a <button> is invalid nested
+ * interactive content, and a mis-tap on the popover's own padding bubbled
+ * back up to the ⭐ and closed the thing the player was aiming at. As a
+ * SIBLING of the ⭐ there is no nesting and no bubbling-to-trigger.
+ *
+ * `.chat-reactions` and `.chat-actions` are never ancestors of one another
+ * (siblings inside `.chat-bubble-col`), so `closest()` on either trigger is
+ * unambiguous: the long-press ⭐ resolves to `.chat-actions`, the persistent
+ * ⭐ to `.chat-reactions`. Both are descendants of `.chat-msg[data-mid=…]`,
+ * so the reveal-closer's "click inside the revealed message" check still
+ * treats a click in the popover as inside (see [17] in feedbacktest.mjs).
+ */
+function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage) {
+  const existing = document.getElementById('chat-feedback-picker');
+  const reopening = existing?.dataset?.mid === mid;
+  existing?.remove();
+  document.getElementById('chat-react-picker')?.remove();   // single-open-at-a-time across BOTH popovers
+  if (reopening) return;
+  const self = me(); if (!self) return;
+  const m = getMessage(mid); if (!m) return;
+  // Row container, never the trigger button — see the block comment above.
+  const host = anchorEl.closest?.('.chat-actions, .chat-reactions') || anchorEl;
+  const picker = document.createElement('div');
+  picker.className = 'reaction-picker feedback-picker-wrap';
+  picker.id = 'chat-feedback-picker';
+  picker.dataset.mid = mid;
+  picker.innerHTML = feedbackPopoverHTML(m, self);
+  host.appendChild(picker);
+
+  picker.querySelectorAll('[data-fb-rating]').forEach(opt => opt.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const mineNow = getFeedbackFor(mid)[self] || {};
+    // Re-tapping the CURRENTLY selected rating clears it back to untouched
+    // (same toggle-off semantics toggleReact() already has) — an EXPLICIT
+    // clear event (value: null), not silence, so the clear itself round-trips
+    // through the record the same way the rating did.
+    const value = mineNow.rating === opt.dataset.fbRating ? null : opt.dataset.fbRating;
+    recordFeedback({ targetId: mid, category: 'rating', value, author: self });
+    picker.remove();
+    renderFn();
+  }));
+  picker.querySelector('[data-fb-rewrite]')?.addEventListener('click', ev => {
+    ev.stopPropagation();
+    picker.remove();
+    const mineNow = getFeedbackFor(mid)[self] || {};
+    openFeedbackTextModal({
+      targetId: mid, category: 'rewrite', renderFn,
+      title: 'What should SCRIBE have said?',
+      placeholder: 'Write the line. Even a rough half-sentence helps.',
+      submitLabel: 'Save rewrite', requireText: true,
+      prefill: typeof mineNow.rewrite === 'string' ? mineNow.rewrite : '',
+    });
+  });
+  picker.querySelector('[data-fb-remember]')?.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const mineNow = getFeedbackFor(mid)[self] || {};
+    // Toggle-style boolean presence — same idiom as a reaction: instant,
+    // reversible, no toast (E1 copy strings: "Rating success: no toast").
+    recordFeedback({ targetId: mid, category: 'remember_this', value: !mineNow.remember_this, author: self });
+    picker.remove();
+    renderFn();
+  });
+  picker.querySelector('[data-fb-weighin]')?.addEventListener('click', ev => {
+    ev.stopPropagation();
+    picker.remove();
+    const mineNow = getFeedbackFor(mid)[self] || {};
+    // Part 0b correction #7 (binding) — "Weigh in" ALWAYS routes through the
+    // rewrite modal with an OPTIONAL text field, rather than an instant
+    // boolean tap: "a bare flag drops the highest-value data the briefing
+    // names." Submitting with text stores that text as the value; submitting
+    // blank stores the boolean flag `true` — one category, one record,
+    // either shape (see openFeedbackTextModal()'s submit handler).
+    openFeedbackTextModal({
+      targetId: mid, category: 'weigh_in', renderFn,
+      title: 'What should SCRIBE have said here?',
+      placeholder: 'Optional — what should SCRIBE have said?',
+      submitLabel: 'Save', requireText: false,
+      prefill: typeof mineNow.weigh_in === 'string' ? mineNow.weigh_in : '',
+      // Non-blocking finding #5 — weigh_in could never be cleared once set: a
+      // blank resubmit stores the bare `true` flag (correction #7's own
+      // fallback), not a clear, so a mis-tap was permanent. `hasExisting` is
+      // computed from the truthy VALUE (covers both the string-rewrite shape
+      // and the bare-boolean-flag shape), not from `prefill` alone — prefill
+      // is '' for the bare-flag case, which would otherwise hide Remove
+      // exactly when it's most needed (an accidental bare tap).
+      allowRemove: !!mineNow.weigh_in,
+    });
+  });
+
+  setTimeout(() => {
+    const closer = ev => {
+      if (!picker.contains(ev.target) && !ev.target.closest?.('[data-fb-open]')) {
+        picker.remove();
+        document.removeEventListener('click', closer);
+      }
+    };
+    document.addEventListener('click', closer);
+  }, 0);
+}
+// Test-only seam (same convention as `_persistentStarHTMLForTest` /
+// `_feedbackPopoverHTMLForTest` / `_revealMessageActions`). Reviewer BLOCK
+// finding #1/#2, 2026-09-10: WHERE the popover lands in the DOM is the whole
+// defect, and that is only observable by running the function against a real
+// element tree — a source scan can pin the selector string but cannot prove
+// the popover ends up a SIBLING of the ⭐ rather than a child of it.
+// NB: this line deliberately references the function WITHOUT a trailing `(`
+// so feedbacktest [28](f)'s "exactly two `toggleFeedbackPicker(` code lines"
+// one-code-path assertion still counts definition + single call site only.
+export const _toggleFeedbackPickerForTest = toggleFeedbackPicker;
+
+/**
+ * ✏️ Rewrite (SCRIBE messages) and 👁 Weigh in (human messages, correction
+ * #7) share this ONE modal — reuses `.modal-overlay.centered .modal`
+ * VERBATIM (the game modal / edit-player modal / reset-PIN modal precedent,
+ * `js/app.js`), not a new modal component. `requireText` is the only real
+ * difference: Rewrite requires non-empty text (Submit disabled until
+ * non-empty); Weigh-in's text is optional (Submit always enabled — a bare
+ * flag is still a valid, if lower-value, submission).
+ */
+function openFeedbackTextModal({ targetId, category, title, placeholder, submitLabel, requireText, prefill = '', allowRemove = false, renderFn = renderChatPage }) {
+  const self = me(); if (!self) return;
+  document.getElementById('feedback-text-modal')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.id = 'feedback-text-modal';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>${esc(title)}</h3><button class="modal-close" id="fb-modal-close">✕</button></div>
+    <div class="form-group">
+      <textarea class="form-textarea" id="fb-modal-text" maxlength="1000" rows="4" placeholder="${esc(placeholder)}">${esc(prefill)}</textarea>
+      <span class="chat-char-count" id="fb-modal-count" style="display:none"></span>
+    </div>
+    <button class="btn btn-primary btn-block" id="fb-modal-submit"${requireText ? ' disabled' : ''}>${esc(submitLabel)}</button>
+    ${allowRemove ? `<button class="btn btn-ghost btn-block" id="fb-modal-remove">Remove</button>` : ''}
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#fb-modal-close')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  const textEl = ov.querySelector('#fb-modal-text');
+  const countEl = ov.querySelector('#fb-modal-count');
+  const submitBtn = ov.querySelector('#fb-modal-submit');
+  const sync = () => {
+    // Same near-limit threshold/format as the composer's own #chat-count
+    // (E1's explicit reuse requirement — not a second counter convention).
+    const len = textEl.value.length;
+    if (countEl) { countEl.style.display = len >= 900 ? 'inline' : 'none'; countEl.textContent = `${len}/1000`; }
+    if (requireText && submitBtn) submitBtn.disabled = !textEl.value.trim();
+  };
+  textEl?.addEventListener('input', sync);
+  sync();
+  // Non-blocking finding #5 — an explicit clear (value: null), the same
+  // "explicit clear event, not silence" shape E1 already uses for re-tapping
+  // a selected rating (chat.js's applyTo() 'feedback' branch treats `null` as
+  // a real, replace-worthy value — never a no-op).
+  ov.querySelector('#fb-modal-remove')?.addEventListener('click', () => {
+    recordFeedback({ targetId, category, value: null, author: self });
+    close();
+    renderFn();
+  });
+  submitBtn?.addEventListener('click', () => {
+    const text = (textEl.value || '').trim();
+    if (requireText && !text) return;
+    // weigh_in: text if supplied, else the boolean flag — see correction #7's
+    // note above. rewrite: always text (requireText guarantees non-empty).
+    recordFeedback({ targetId, category, value: text || true, author: self });
+    close();
+    // Reviewer BLOCK finding #1: _toastWouldSuppress() suppresses on BOTH the
+    // chat page AND the dashboard — i.e. every page a rewrite can actually be
+    // submitted from (the modal only opens from a message rendered in chat).
+    // Without `force:true` this toast was unconditionally a silent no-op.
+    // `force` bypasses that suppression exactly like the pick-reveal system
+    // announcement already does (line ~2326, `showToast({author:'system',
+    // body:...}, {force:true})`) — and this MUST follow the same
+    // message-shaped-object precedent, not a bare string: drainToast() reads
+    // `msg.author`/`msg.body` and pipes `msg.author` through initialsOf(),
+    // which does `nameOf(id).slice(0,2)` for any non-scribe/system author —
+    // a bare string has no `.author`, so `nameOf(undefined)` returns
+    // `undefined` and `.slice()` on it throws. `author:'system'` is the exact
+    // short-circuit initialsOf()/nameOf() already have for this case (⚙ /
+    // "League"), so this renders safely, not just "doesn't crash."
+    if (category === 'rewrite') showToast({ author: 'system', body: 'Rewrite saved.' }, { force: true });
+    renderFn();
+  });
+}
+
 function messageHTML(m, self, showNewDivider) {
   if (m.type === 'system') {
     const reveal = m.meta?.kind === 'reveal';
@@ -659,8 +1161,9 @@ function messageHTML(m, self, showNewDivider) {
       </div>
       ${quoteHTML(m)}
       <div class="chat-bubble">${m.deleted ? '<span class="chat-tombstone">🪦 message withdrawn</span>' : bodyHTML(m).replace(/\n/g, '<br>')}</div>
-      ${reactionsHTML(m, self)}
+      ${reactionsHTML(m, self, persistentStarHTML(m, self))}
       ${m.deleted ? '' : `<div class="chat-actions">
+        ${isScribeFeedbackEnabled() ? feedbackButtonHTML(m, self) : ''}
         <button class="chat-act chat-act-react" data-react-open="${esc(m.id)}" title="React">➕</button>
         <button class="chat-act" data-reply="${esc(m.id)}" title="Reply">↩</button>
         ${calloutEligible(m) ? `<button class="chat-act" data-callout="${esc(m.id)}" title="Quote this next to the result">📎</button>` : ''}
@@ -855,21 +1358,31 @@ export function renderChatPage() {
   // there's no per-element `top` math for siblings whose own height also
   // varies. The offline banner and retention notice stay in NORMAL flow
   // above that sticky unit, pushing it down rather than floating separately.
+  // F2 (UN-165) — a non-empty query REPLACES the message-list area with
+  // search results; an OPEN-but-empty query leaves the normal feed rendered
+  // unchanged (States table: "Empty query... message list unchanged").
+  const searchQuery = U.searchQuery.trim();
+  const scrollBodyHTML = (U.searchOpen && searchQuery)
+    ? searchResultsHTML(searchQuery)
+    : `${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}${msgsHTML}`;
+
   c.innerHTML = `
     ${banner}
     ${retentionNoticeHTML()}
     <div class="chat-sticky-stack">
       <div class="chat-header-row">
         <h2>Chat <span class="badge badge-beta" title="Still being tested — tell us if something looks wrong">BETA</span> ${_chatSyncBadgeHTML()}</h2>
-        <button class="btn btn-ghost btn-sm" id="chat-prefs-btn" title="Chat preferences">⚙️</button>
+        <div class="chat-header-actions">
+          <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat">🔍</button>
+          <button class="btn btn-ghost btn-sm" id="chat-prefs-btn" title="Chat preferences">⚙️</button>
+        </div>
       </div>
-      ${pillsHTML()}
+      ${U.searchOpen ? searchBarHTML() : pillsHTML()}
       ${viewHeader}
     </div>
     ${U.prefsOpen ? prefsPanelHTML() : ''}
     <div class="chat-scroll" id="chat-scroll">
-      ${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}
-      ${msgsHTML}
+      ${scrollBodyHTML}
     </div>
     <button class="chat-jump-latest" id="chat-jump" style="display:none">↓ latest</button>
     ${self ? composerHTML() : loginPromptHTML()}
@@ -877,8 +1390,17 @@ export function renderChatPage() {
 
   bindChatPage();
   watchChatStickyMetrics();
-  const scroll = document.getElementById('chat-scroll');
-  if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  if (U.searchOpen) {
+    // Focus (and restore caret position) rather than scroll-to-bottom — this
+    // page re-renders on every keystroke (same pattern as every other U.*
+    // state change in this module), and a text input that loses focus on
+    // every keystroke would be unusable.
+    const si = document.getElementById('chat-search-input');
+    if (si) { si.focus(); const p = si.value.length; si.setSelectionRange?.(p, p); }
+  } else {
+    const scroll = document.getElementById('chat-scroll');
+    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+  }
 
   // Mark read after the view has been visibly open for 1s (spec)
   clearTimeout(U.markTimer);
@@ -892,6 +1414,10 @@ export function renderChatPage() {
 
 function renderPillsOnly() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
+  // F2 (UN-165) — while search is open, `.chat-pills-scroll` isn't in the DOM
+  // at all (searchBarHTML() occupies that slot instead — see
+  // renderChatPage()), so `host` is null and this periodic refresh correctly
+  // no-ops rather than clobbering the search input mid-edit.
   const host = document.querySelector('#page-chat .chat-pills-scroll');
   if (host) host.outerHTML = pillsHTML();
   bindFilterButtons(document.getElementById('page-chat'));
@@ -1016,10 +1542,13 @@ function doSend() {
   const self = me(); if (!self) return;
   const gameTag = currentComposerTag();
   const mentions = extractMentions(body);
-  sendMessage({ body, gameTag, replyTo: U.replyTo || '', author: self, mentions });
+  const sentId = sendMessage({ body, gameTag, replyTo: U.replyTo || '', author: self, mentions });
   // SCRIBE participates as a member — it reads the Locker Room, it isn't summoned.
+  // UN-160 (E2) — triggerMessageId threads the just-sent human message's own
+  // id into any resulting SCRIBE response's meta, so a rating/rewrite against
+  // that response can be traced back to what actually caused it.
   try {
-    scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag, standings: standingsCtx() });
+    scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag, standings: standingsCtx(), triggerMessageId: sentId });
   } catch {}
   U.replyTo = null; U.tagStripped = false;
   if (input) input.value = '';
@@ -1044,17 +1573,17 @@ function bindFilterButtons(root) {
 }
 
 /**
- * DI-125b — the six per-message action buttons ([data-reply], [data-react-
- * open], [data-pin], [data-edit], [data-del], [data-callout]), wired ONCE
- * here and reused by BOTH the main feed (bindChatPage, `host = #page-chat`)
- * and the sheet (renderSheetMessages, `host = #chat-sheet-scroll`) — not
- * forked into two near-identical copies. `renderFn` is the surface's own
- * refresh (renderChatPage vs renderSheetMessages); `surface` ('main'|'sheet')
- * is threaded only into the two handlers whose TARGET depends on which
- * composer should react (openReplyFor, toggleMessageReactPicker's post-pick
- * refresh via openReactPickerFor). Every handler body below is otherwise
- * byte-identical to what shipped in bindChatPage() before this batch — moved,
- * not rewritten.
+ * DI-125b — the per-message action buttons ([data-reply], [data-react-
+ * open], [data-pin], [data-edit], [data-del], [data-callout], and — UN-159,
+ * E1 — [data-fb-open]), wired ONCE here and reused by BOTH the main feed
+ * (bindChatPage, `host = #page-chat`) and the sheet (renderSheetMessages,
+ * `host = #chat-sheet-scroll`) — not forked into two near-identical copies.
+ * `renderFn` is the surface's own refresh (renderChatPage vs
+ * renderSheetMessages); `surface` ('main'|'sheet') is threaded only into the
+ * two handlers whose TARGET depends on which composer should react
+ * (openReplyFor, toggleMessageReactPicker's post-pick refresh via
+ * openReactPickerFor). Every handler body below is otherwise byte-identical
+ * to what shipped in bindChatPage() before this batch — moved, not rewritten.
  *
  * [data-react] (tap-to-vote) and [data-retry] are DELIBERATELY excluded —
  * DI-125c requires the reaction pill's plain tap stay untouched, and retry
@@ -1062,6 +1591,11 @@ function bindFilterButtons(root) {
  */
 function bindMessageActionButtons(host, renderFn, surface) {
   host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
+  host?.querySelectorAll('[data-fb-open]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    if (!me()) return;
+    toggleFeedbackPicker(b, b.dataset.fbOpen, renderFn);
+  }));
   host?.querySelectorAll('[data-react-open]').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     if (!me()) return;
@@ -1081,7 +1615,7 @@ function bindMessageActionButtons(host, renderFn, surface) {
   }));
   host?.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => {
     const self = me(); if (!self) return;
-    if (confirm('Withdraw this message? A tombstone will remain — SCRIBE keeps the receipts.')) {
+    if (confirm('Withdraw this message? A tombstone will remain. SCRIBE keeps the receipts.')) {
       deleteMessage(b.dataset.del, self); renderFn();
     }
   }));
@@ -1115,6 +1649,58 @@ function bindChatPage() {
     await backfill(100);
     renderChatPage();
   });
+
+  // F2 (UN-165) — search. 🔍 toggles open/closed (closing resets the query,
+  // restoring the pills row per the design input's "tapping 🔍 again...
+  // restores the pills row"). Escape and the ✕ clear button are the OTHER
+  // two named ways to close, per the same sentence; emptying the input via
+  // backspace alone stays OPEN at the "empty query" state (States table:
+  // "Cleared → returns to the empty-query state, not a no-results flash") —
+  // deliberately NOT a third full-close trigger, so backspacing doesn't
+  // unexpectedly snap the search UI shut mid-edit.
+  document.getElementById('chat-search-btn')?.addEventListener('click', () => {
+    U.searchOpen = !U.searchOpen;
+    if (!U.searchOpen) U.searchQuery = '';
+    renderChatPage();
+  });
+  document.getElementById('chat-search-close')?.addEventListener('click', () => {
+    U.searchOpen = false; U.searchQuery = '';
+    renderChatPage();
+  });
+  document.getElementById('chat-search-clear')?.addEventListener('click', () => {
+    U.searchQuery = '';
+    renderChatPage();
+  });
+  const searchInput = document.getElementById('chat-search-input');
+  searchInput?.addEventListener('input', () => {
+    U.searchQuery = searchInput.value;
+    renderChatPage();
+  });
+  searchInput?.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { U.searchOpen = false; U.searchQuery = ''; renderChatPage(); }
+  });
+  document.getElementById('chat-search-load-older')?.addEventListener('click', async e => {
+    e.target.textContent = '…';
+    // Non-blocking finding #11 (CONVENTIONS #4) — backfill() itself always
+    // resolves (its own try/catch never rethrows), so this can't reject
+    // today, but an unguarded await on a network-backed call is exactly the
+    // shape that silently breaks sync if that ever changes. Belt-and-
+    // suspenders, matching the wrap-every-await-in-try/catch house rule.
+    try { await backfill(100); } catch { /* backfill() never rejects; defensive only */ }
+    renderChatPage();
+  });
+  // Tapping a result: exit search back to the normal feed, THEN jump — the
+  // SAME scrollIntoView + .chat-flash mechanism as F3's [data-jump] handler
+  // just below (kept as a separate wiring, not literally the same attribute,
+  // because a search-result tap must ALSO close search first; the generic
+  // [data-jump] handler only ever jumps, never changes view state).
+  c.querySelectorAll('[data-search-jump]').forEach(b => b.addEventListener('click', () => {
+    const mid = b.dataset.searchJump;
+    U.searchOpen = false; U.searchQuery = '';
+    renderChatPage();
+    const target = document.querySelector(`#chat-scroll [data-mid="${mid}"]`);
+    if (target) { target.scrollIntoView({ block: 'center' }); target.classList.add('chat-flash'); setTimeout(() => target.classList.remove('chat-flash'), 1200); }
+  }));
 
   const scroll = document.getElementById('chat-scroll');
   const jump = document.getElementById('chat-jump');
@@ -1190,6 +1776,7 @@ function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
   const existing = document.getElementById('chat-react-picker');
   const reopening = existing?.dataset?.mid === mid;
   existing?.remove();
+  document.getElementById('chat-feedback-picker')?.remove();   // single-open-at-a-time across BOTH popovers (E1)
   if (reopening) return;
   const self = me(); if (!self) return;
   const host = anchorEl.closest?.('.chat-actions') || anchorEl;
@@ -1627,8 +2214,8 @@ function sendSheetMessage() {
   const body = (inp?.value || '').trim();
   const self = me();
   if (!body || !self) return;
-  sendMessage({ body, gameTag: gameId, replyTo: U.sheetReplyTo || '', author: self, mentions: extractMentions(body) });
-  try { scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag: gameId }); } catch {}
+  const sentId = sendMessage({ body, gameTag: gameId, replyTo: U.sheetReplyTo || '', author: self, mentions: extractMentions(body) });
+  try { scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag: gameId, triggerMessageId: sentId }); } catch {}
   if (inp) inp.value = '';
   U.sheetReplyTo = null;
   renderSheetComposer();
@@ -1972,7 +2559,7 @@ export function emitExtraPointEvent(weekId, graded) {
   });
   sendEvent({
     id: `sys_ep_${weekId}`, type: 'system', author: 'system', notify: false,
-    body: `🎯 Extra Point — actual ${graded.actual} yd\n${lines.join('\n')}${graded.allBusted ? '\nEveryone over. The house (the chart) wins.' : ''}`,
+    body: `🎯 Extra Point — actual ${graded.actual} yd\n${lines.join('\n')}${graded.allBusted ? '\nEveryone over. The house wins.' : ''}`,
     meta: { kind: 'extraPoint', weekId },
   });
   try {

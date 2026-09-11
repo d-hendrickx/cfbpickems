@@ -6,7 +6,11 @@
  * room you can fail to check.
  *
  *  - Append-only events: message / edit / delete / react / gamereact /
- *    unreact / system / pin / unpin
+ *    unreact / system / pin / unpin / feedback
+ *  - `feedback` (UN-159/UN-160, SCRIBE pilot instrumentation) is a mutation
+ *    on an existing target (react/pin's shape, not message's) — no new KV
+ *    key, rides this same append-only Messages sheet via chatTransport.js.
+ *    See js/scribeFeedback.js for the read/write surface.
  *  - Client fold is ORDER-INDEPENDENT + IDEMPOTENT (AD-10). Events referencing
  *    unknown targets buffer until the target arrives. react/unreact resolve
  *    latest-wins per (emoji, author) — the naive toggle was RG-06.
@@ -76,6 +80,19 @@ export function chatStatus() {
 // data boundary).
 export function isChatEnabled() {
   return getSettings().chatEnabled !== false;
+}
+
+// ── F4-interim (UN-164/F1) — inline pasted-image-URL preview, off-by-default ──
+// `settings.chatImagePreviewEnabled` is in DEFAULT_SETTINGS (data-model.js,
+// ~line 416). Explicit `=== true` (not `isChatEnabled()`'s `!== false`
+// pattern) is deliberate: this is a NEW opt-in flag, so a missing value
+// (every settings blob, including ones written before this shipped) must
+// read OFF — the opposite default direction, same reasoning as
+// `randomizePicksEnabled` (data-model.js DEFAULT_SETTINGS) — a passive
+// external-image-load IP-disclosure vector (F1's design input) should never
+// turn itself on for an existing league by default.
+export function isChatImagePreviewEnabled() {
+  return getSettings().chatImagePreviewEnabled === true;
 }
 
 // ── Chat retention (UN-88) — CLIENT-SIDE HIDE ONLY ────────────────────────────
@@ -257,7 +274,15 @@ function newItem(ev) {
            replyTo: ev.replyTo || '', notify: !!ev.notify, meta: ev.meta || null,
            type: ev.type, edited: false, deleted: false, pinned: false,
            reactions: {}, local: !!ev.local,
-           _editTs: 0, _reactOps: new Map(), _pinOps: new Map() };
+           // UN-159/UN-160 (E1/E2, SCRIBE pilot feedback) — `feedback` is a
+           // DERIVED plain object, same shape/precedent as `reactions` above:
+           // { [playerId]: { rating, rewrite, remember_this, weigh_in } },
+           // rebuilt from `_feedbackOps` on every 'feedback' mutation. Every
+           // item gets this field (not only ones that ever receive feedback)
+           // so a reader can always do `m.feedback[self]` without an extra
+           // existence check.
+           feedback: {},
+           _editTs: 0, _reactOps: new Map(), _pinOps: new Map(), _feedbackOps: new Map() };
 }
 
 /**
@@ -281,6 +306,25 @@ function cmpOrder(a, b) {
   return ((a?.ts || 0) - (b?.ts || 0)) || ((a?.seq || 0) - (b?.seq || 0));
 }
 
+// ── Prototype-pollution guard (reviewer BLOCK, remediation build 1) ──────────
+// `ev.author`/`meta.category`/`meta.emoji` flow into PLAIN OBJECT keys below
+// (`nextFeedback[op.author][op.category]`, `next[em]`). A remote event is
+// attacker-controlled data (any device holding the shared token can send an
+// arbitrary event through chatTransport.js) — if one of those three strings
+// is `__proto__`, bracket-assignment on a plain object does NOT create an own
+// property named "__proto__"; `Object.prototype.__proto__` is an ACCESSOR,
+// so `obj['__proto__']` reads back the real, already-truthy prototype object,
+// which means `obj['__proto__'] = obj['__proto__'] || {}` never creates a
+// fresh object — it silently re-resolves to `Object.prototype` itself, and
+// the following `[...] = value` write lands ON Object.prototype, corrupting
+// every plain object in the process (`({}).polluted` would then read back
+// whatever was written). `constructor`/`prototype` are the same family of
+// footgun for other prototype-chain traversals. Reject all three AT THE
+// DOOR — a poisoned event never enters `_feedbackOps`/`_reactOps`, so it can
+// never resurface via the rebuild loops below either.
+const UNSAFE_OBJECT_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+function isUnsafeKey(k) { return UNSAFE_OBJECT_KEYS.has(k); }
+
 function applyTo(target, ev) {
   // Same pair, same reason as cmpOrder() above — these last-writer-wins races
   // used the identical packed scalar, so two devices could disagree about
@@ -297,6 +341,10 @@ function applyTo(target, ev) {
   } else if (ev.type === 'react' || ev.type === 'unreact') {
     // Latest-wins per (emoji, author) — order-independent (RG-06 guard).
     const emoji = ev.meta?.emoji; if (!emoji) return;
+    // Prototype-pollution guard (same reasoning as the 'feedback' branch,
+    // below) — `emoji` becomes an object key in the rebuild loop
+    // (`next[em] = next[em] || []`) a few lines down.
+    if (isUnsafeKey(emoji)) return;
     const key = `${emoji}|${ev.author}`;
     const cur = target._reactOps.get(key);
     if (cur && cur.id === ev.id) return;
@@ -309,6 +357,48 @@ function applyTo(target, ev) {
       (next[em] = next[em] || []).push(author);
     });
     target.reactions = next;
+  } else if (ev.type === 'feedback') {
+    // UN-159/UN-160 (E1/E2, DESIGN_INPUTS_BATCH1_091026.md Document 2) — a
+    // 'feedback' event is a MUTATION on an EXISTING target (a SCRIBE
+    // response's chat event, or a human message's), applied here exactly
+    // like react/unreact/pin/edit above — NOT a new S.items entry, NO new KV
+    // key (chatTransport.js's already-incremental Messages sheet only,
+    // AD-16). ev.targetId is already how `target` was looked up (ingest()),
+    // so scoping this map to (author, category) — rather than repeating
+    // targetId a second time inside the key — is the SAME composite key the
+    // design's record shape describes (`${targetId}|${playerId}|${category}`),
+    // just without the redundant prefix a per-target Map already provides.
+    //
+    // Latest-wins per (author, category) — same RG-06 shuffle-order guard as
+    // react/unreact. A SECOND rating value on the SAME category REPLACES the
+    // first (never stacks — "changed my mind" in E1's state table); a
+    // rewrite and a rating are DISJOINT categories and never collide (E1/E2's
+    // "rewrite stored distinctly from rating" requirement — structural, not
+    // just labeled, because they can never share a key).
+    const category = ev.meta?.category; if (!category) return;
+    // Prototype-pollution guard — see UNSAFE_OBJECT_KEYS' comment above.
+    // `ev.author` and `category` both become object keys two lines below
+    // (`nextFeedback[op.author][op.category]`); reject both here so a
+    // poisoned event never even enters `_feedbackOps`.
+    if (isUnsafeKey(ev.author) || isUnsafeKey(category)) return;
+    const key = `${ev.author}|${category}`;
+    const cur = target._feedbackOps.get(key);
+    if (cur && cur.id === ev.id) return;
+    if (cur && cmpOrder(cur.stamp, stamp) >= 0) return;
+    target._feedbackOps.set(key, { stamp, id: ev.id, author: ev.author, category, value: ev.meta?.value ?? null });
+    // Object.create(null) — belt-and-suspenders alongside the reject-at-the-
+    // door guard above: even if some future caller ever pushed an op into
+    // `_feedbackOps` without going through the guard above, a null-prototype
+    // object has no `__proto__`/`constructor`/`prototype` ACCESSOR to
+    // collide with, so `nextFeedback[op.author] = nextFeedback[op.author] ||
+    // Object.create(null)` always creates a genuine fresh object instead of
+    // silently resolving to a shared prototype.
+    const nextFeedback = Object.create(null);
+    target._feedbackOps.forEach(op => {
+      if (!nextFeedback[op.author]) nextFeedback[op.author] = Object.create(null);
+      nextFeedback[op.author][op.category] = op.value;
+    });
+    target.feedback = nextFeedback;
   }
 }
 
@@ -337,7 +427,7 @@ export function ingest(events, head) {
         if (waiting) { waiting.forEach(w => applyTo(item, w)); S.buffered.delete(ev.id); }
         n++;
       }
-    } else if (['edit', 'delete', 'react', 'unreact', 'pin', 'unpin'].includes(ev.type)) {
+    } else if (['edit', 'delete', 'react', 'unreact', 'pin', 'unpin', 'feedback'].includes(ev.type)) {
       const target = S.items.get(ev.targetId);
       if (target) applyTo(target, ev);
       else {
@@ -353,13 +443,24 @@ export function ingest(events, head) {
 }
 
 /** Chronological list. filter: {tag:'all'|''|gameId, pinned, mentionsOf, types,
- *  respectRetention}. `respectRetention` is opt-in and defaults to false so
- *  existing non-display callers (the weekly digest, SCRIBE's pre-kick lookup)
- *  keep reading the full history unless they explicitly ask to be filtered —
- *  retention is a rendering preference, not a data-availability change. Chat
- *  page render paths pass `respectRetention: true`. */
+ *  respectRetention, textContains}. `respectRetention` is opt-in and defaults
+ *  to false so existing non-display callers (the weekly digest, SCRIBE's
+ *  pre-kick lookup) keep reading the full history unless they explicitly ask
+ *  to be filtered — retention is a rendering preference, not a
+ *  data-availability change. Chat page render paths pass
+ *  `respectRetention: true`.
+ *
+ *  `textContains` (F2, UN-165) — optional, case-insensitive substring match
+ *  against `m.body`, additive-only, read-only (no fold/ordering/mutation
+ *  change). Deliberately placed AFTER the epoch/retention checks below, not
+ *  before: a message search must never surface a message the main feed
+ *  itself would hide, or a tap on a result would land on nothing (the exact
+ *  "filter/search surface disagrees with what the underlying view honors"
+ *  class named in the design input). feedbacktest.mjs mutation-checks this
+ *  ordering directly. */
 export function getMessages(filter = {}) {
   const tag = filter.tag ?? 'all';
+  const needle = filter.textContains ? String(filter.textContains).toLowerCase() : '';
   const out = [];
   S.items.forEach(m => {
     if (filter.types && !filter.types.includes(m.type)) return;
@@ -372,6 +473,7 @@ export function getMessages(filter = {}) {
     // retention before this.
     if (isHiddenByEpoch(m)) return;
     if (filter.respectRetention && isHiddenByRetention(m)) return;
+    if (needle && !(m.body || '').toLowerCase().includes(needle)) return;
     if (filter.mentionsOf) {
       const mentioned = (m.meta?.mentions || []).includes(filter.mentionsOf);
       const replyToMe = m.replyTo && S.items.get(m.replyTo)?.author === filter.mentionsOf;
@@ -835,11 +937,35 @@ export function _resetForTest() {
  *  whether the poll loop is actually running (S.unsub is intentionally
  *  private). Answers the literal hazard: "prove polling stops." */
 export function _isPollingActiveForTest() { return !!S.unsub; }
+/**
+ * UN-159/UN-160 — `_feedbackOps` folds via a Map, so `target.feedback`'s own
+ * key order (playerId, and category within each playerId) reflects EVENT
+ * ARRIVAL order, not anything semantic. A shuffle-fold-identical proof must
+ * sort both levels before serializing, or two folds holding the exact same
+ * feedback VALUES could still produce two different JSON strings purely from
+ * insertion-order — a false failure, not a real divergence.
+ */
+function sortedFeedback(fb) {
+  // Prototype-pollution guard, same reasoning/shape as applyTo()'s 'feedback'
+  // branch above — hardened identically per reviewer finding #3, even though
+  // applyTo() already rejects a poisoned author/category at the door (this is
+  // the SAME test-serialization path _foldedSnapshot() uses, and a future
+  // caller could hand this function an object built some other way).
+  const out = {};
+  Object.keys(fb).sort().forEach(pid => {
+    if (isUnsafeKey(pid)) return;
+    const cats = {};
+    Object.keys(fb[pid]).sort().forEach(c => { if (!isUnsafeKey(c)) cats[c] = fb[pid][c]; });
+    out[pid] = cats;
+  });
+  return out;
+}
 export function _foldedSnapshot() {
   const list = getMessages({ tag: 'all' }).map(m => ({
     id: m.id, seq: m.seq, ts: m.ts, author: m.author, tag: m.gameTag, body: m.body,
     edited: m.edited, deleted: m.deleted, pinned: m.pinned, notify: m.notify,
     reactions: Object.fromEntries(Object.entries(m.reactions).map(([e, who]) => [e, [...who].sort()])),
+    feedback: sortedFeedback(m.feedback || {}),
   }));
   return JSON.stringify(list);
 }
