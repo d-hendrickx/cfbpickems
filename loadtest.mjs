@@ -8562,6 +8562,398 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
   }
 }
 
+console.log('\n[75] BUG-D — whenAppended(): the outbox is the only thing that knows when the SERVER can see a message…');
+{
+  // The seam BUG-D added, tested at its own layer. scribetest.mjs [26] proves
+  // the @scribe mention uses it correctly end to end; this proves the four
+  // outcomes the outbox itself owns. Anything that needs the server to be able
+  // to READ a message it just sent must wait on this, not on the id sendEvent
+  // hands back — an id exists ~750ms of coalescing window before the wire.
+  const chat75 = mods['chat'], backend75 = mods['backend'];
+  const _realFetch75 = globalThis.fetch;
+  let appendOk75 = true, seq75 = 500;
+  globalThis.fetch = async (url, opts = {}) => {
+    if ((opts.method || 'GET') === 'GET') {
+      // startFreshChat() reads the LIVE head before it clears (case (h)). Head
+      // 0 keeps the epoch watermark OFF (getChatEpochSeq: `Number(...) || 0`)
+      // so this case cannot hide messages from any later section — it is the
+      // outbox-clearing half of _applyEpochLocally that is under test here.
+      const action = new URL(String(url)).searchParams.get('action');
+      return { ok: true, json: async () => ({ ok: true, _action: action, head: 0 }) };
+    }
+    const body = JSON.parse(opts.body || '{}');
+    if (body.action === 'chatAppend') {
+      if (!appendOk75) throw new Error('network down');
+      const assigned = (body.events || []).map(e => ({ id: e.id, seq: ++seq75, ts: 1_700_000_200_000 + seq75 }));
+      return { ok: true, json: async () => ({ ok: true, _action: 'chatAppend', assigned, head: seq75 }) };
+    }
+    return { ok: true, json: async () => ({ ok: true, _action: body.action }) };
+  };
+  try {
+    backend75.setBackendConfig('https://example.invalid/exec', 'tok75');
+    storage.saveSetting('chatEnabled', true);
+
+    // (a) resolves with the assigned seq once the outbox flush reconciles.
+    chat75._resetForTest();
+    const idA = chat75.sendMessage({ body: 'hello', author: 'p1' });
+    const pA = chat75.whenAppended(idA, { timeoutMs: 1500 });
+    let settledA = false; pA.then(() => { settledA = true; }, () => { settledA = true; });
+    await new Promise(r => setTimeout(r, 0));
+    assert(settledA === false && chat75.isPending(idA),
+      'the wait does NOT settle while the event is still sitting in the debounced outbox (the whole point — the id exists, the message does not)');
+    await chat75.flushOutbox();
+    // `.catch(e => e)` deliberately: a mutant that never settles this wait must
+    // surface as a red assertion here, not as an uncaught rejection that takes
+    // the whole harness down before the remaining cases run.
+    const seqA = await pA.catch(e => e);
+    assert(typeof seqA === 'number' && seqA === chat75.getMessage(idA).seq,
+      `resolves with the server-ASSIGNED seq, not the local one — got ${seqA}`);
+
+    // (b) an id already acknowledged resolves immediately (no second wait).
+    assert(await chat75.whenAppended(idA, { timeoutMs: 5000 }) === seqA,
+      'an already-acknowledged id resolves immediately with the same seq');
+
+    // (c) an id this module never queued is not ours to wait on — resolves,
+    //     so a caller with its own server-side error handling keeps it.
+    assert(await chat75.whenAppended('neverSentHere', { timeoutMs: 5000 }) === null,
+      'an unknown id resolves (null) instead of stalling — "nothing of ours to wait on" is not a failure');
+
+    // (d) FAILED (MAX_ATTEMPTS exhausted) rejects — never resolves, never hangs.
+    chat75._resetForTest();
+    appendOk75 = false;
+    const idD = chat75.sendMessage({ body: 'into the void', author: 'p1' });
+    const pD = chat75.whenAppended(idD, { timeoutMs: 5000 });
+    let rejectedD = false; pD.catch(() => { rejectedD = true; });
+    for (let i = 0; i < 3; i++) await chat75.flushOutbox();     // MAX_ATTEMPTS
+    await new Promise(r => setTimeout(r, 0));
+    assert(chat75.isFailed(idD) && rejectedD,
+      'an append that exhausts its retries REJECTS the wait — a caller can tell "not yet" from "never"');
+
+    // (e) nothing can flush at all -> reject now rather than burn the bound.
+    chat75._resetForTest();
+    appendOk75 = true;
+    const idE = chat75.sendMessage({ body: 'chat is off', author: 'p1' });
+    storage.saveSetting('chatEnabled', false);
+    let rejectedE = false;
+    const tE = Date.now();
+    await chat75.whenAppended(idE, { timeoutMs: 5000 }).catch(() => { rejectedE = true; });
+    const elapsedE = Date.now() - tE;
+    // The elapsed bound is the whole assertion: delete the early
+    // !isBackendConfigured()/!isChatEnabled() reject and this still REJECTS —
+    // just 5 seconds later, via the timeout. "Immediately" has to be measured.
+    assert(rejectedE && elapsedE < 1000,
+      `with chat disabled (flushOutbox returns early) the wait rejects immediately rather than waiting out the bound (${elapsedE}ms of 5000ms)`);
+    storage.saveSetting('chatEnabled', true);
+
+    // (f) the bound is real.
+    chat75._resetForTest();
+    const idF = chat75.sendMessage({ body: 'never acked', author: 'p1' });
+    const tF = Date.now();
+    let rejectedF = false;
+    await chat75.whenAppended(idF, { timeoutMs: 120 }).catch(() => { rejectedF = true; });
+    assert(rejectedF && Date.now() - tF >= 100 && Date.now() - tF < 2000,
+      `an append that is never acknowledged rejects when the bound elapses (${Date.now() - tF}ms)`);
+
+    // (g) THE OTHER ACKNOWLEDGEMENT. The append POST can commit server-side and
+    //     still lose its reply (RG-95's own scenario: an Apps Script cold start
+    //     drops the read, the row is in the sheet regardless). The event then
+    //     comes back through the ordinary poll, and ingest()'s optimistic →
+    //     assigned reconcile is the only place that learns of it. Without a
+    //     settle THERE, a mention sent in that window waits out the full bound
+    //     and degrades even though its message is sitting in the room.
+    chat75._resetForTest();
+    appendOk75 = false;                          // the POST reply is lost…
+    const idG = chat75.sendMessage({ body: 'the reply got lost', author: 'p1' });
+    const pG = chat75.whenAppended(idG, { timeoutMs: 1500 });
+    await chat75.flushOutbox();
+    assert(chat75.isPending(idG), 'fixture: after the failed append the message is still unacknowledged');
+    appendOk75 = true;
+    // …but the row DID land, so the poll hands it back with its assigned seq.
+    chat75.ingest([{ id: idG, seq: 777, ts: 1_700_000_300_000, type: 'message',
+                     author: 'p1', body: 'the reply got lost', notify: true }], 777, { caughtUp: true });
+    const seqG = await pG.catch(e => e);
+    assert(seqG === 777,
+      `a poll that folds our own event back resolves the wait with the server seq — the append's reply is not the only acknowledgement (got ${seqG})`);
+
+    // (h) The commissioner's "Clear Chat History" throws the outbox away. A
+    //     wait on a discarded event can never be acknowledged, so it must
+    //     reject at once instead of burning the full 45s production bound with
+    //     an @scribe question in flight.
+    chat75._resetForTest();
+    const idH = chat75.sendMessage({ body: '@scribe who is leading?', author: 'p1' });
+    let rejectedH = false;
+    const pH = chat75.whenAppended(idH, { timeoutMs: 5000 }).catch(() => { rejectedH = true; });
+    const tH = Date.now();
+    await chat75.startFreshChat();               // -> _applyEpochLocally(): empties the outbox
+    await pH;
+    const elapsedH = Date.now() - tH;
+    assert(rejectedH && elapsedH < 1000,
+      `an epoch clear settles every wait it discards, immediately (${elapsedH}ms of a 5000ms bound)`);
+    assert(chat75.chatStatus().outbox === 0, 'fixture: the epoch clear really did empty the outbox');
+  } finally {
+    globalThis.fetch = _realFetch75;
+    backend75.clearBackendConfig();
+    storage.saveSetting('chatEnabled', true);
+    storage.saveSetting('chatEpochSeq', 0);      // case (h) wrote it — leave the room unfiltered
+    chat75._resetForTest();
+  }
+}
+
+// ── [76] ─────────────────────────────────────────────────────────────────────
+// BUG-F / BUG-E (2026-09-11). Own process, like [73]: boottest.mjs replaces the
+// global CLOCK (setTimeout/clearTimeout/Math.random) for whole sections, which
+// would make every suite after it in this file non-deterministic.
+console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['boottest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `boottest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch76 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch76, `boottest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch76 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch76) {
+    assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
+    assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
+    assert(Number(summaryMatch76[2]) >= 30, `boottest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch76[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── [77] ─────────────────────────────────────────────────────────────────────
+// DI-168 (2026-09-11) — manual chat refresh. Added to this file's existing
+// chat-fold/transport section (DI-168i: "no new file — this DI adds no new
+// storage key or sync surface"). DI-169's own tests live in the dedicated
+// cachetest.mjs (spawned at [78], below) per its own, larger cost tier.
+console.log('\n[77] DI-168 — manual chat refresh (forceTick/forceRefresh + render states)…');
+{
+  const transport77 = mods['chatTransport'], backend77 = mods['backend'], chat77 = mods['chat'], chatUi77 = mods['chat-ui'];
+  const _realFetch77 = globalThis.fetch, _realST77 = globalThis.setTimeout, _realCT77 = globalThis.clearTimeout;
+  const settle77 = async (n = 60) => { for (let i = 0; i < n; i++) await new Promise(r => _realST77(r, 0)); };
+
+  let HEAD77 = 10;
+  const mkEv77 = seq => ({ id: 'fr' + seq, seq, ts: 1_700_000_000_000 + seq, type: 'message',
+                           author: 'p1', body: 'msg ' + seq, notify: false });
+  const calls77 = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    const seq = Number(u.searchParams.get('seq') || 0);
+    calls77.push({ action, seq });
+    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD77 }) };
+    if (action === 'chatSince') {
+      const events = [];
+      for (let s = seq + 1; s <= HEAD77; s++) events.push(mkEv77(s));
+      return { ok: true, json: async () => ({ ok: true, events, head: HEAD77 }) };
+    }
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  backend77.setBackendConfig('https://example.invalid/exec', 'tok77');
+
+  try {
+    // ── A. forceTick() reuses the real tick()/drainSince() path — exactly ONE
+    //    network round trip per manual refresh, no new fetch action. ──
+    chat77._resetForTest();
+    let known77 = HEAD77;   // pretend this device is already caught up at HEAD77
+    const sub77 = transport77.subscribe(() => {}, { getMode: () => 'idle', getKnownHead: () => known77 });
+    await settle77();                       // let the automatic first tick land
+    calls77.length = 0;                     // isolate the manual refresh from the boot tick above
+    const ok77 = await sub77.forceTick();
+    assert(ok77 === true, `forceTick() resolves true on a successful round trip — got ${ok77}`);
+    assert(calls77.length === 1 && calls77[0].action === 'chatHead',
+      `a manual refresh against an already-caught-up room issues exactly ONE call (the cheap chatHead probe, no new action) — got [${calls77.map(c => c.action).join(', ')}]`);
+
+    // ── B. Double-tap: two forceTick() calls before the first resolves still
+    //    produce exactly one network call (the inFlight guard). ──
+    calls77.length = 0;
+    let resolveFetch = null;
+    globalThis.fetch = () => new Promise(r => { resolveFetch = r; });   // hold the round trip open
+    const p1 = sub77.forceTick();
+    await Promise.resolve();                // let forceTick's synchronous prefix run and set inFlight
+    const p2 = sub77.forceTick();
+    // MUTATION LEGIBILITY (reviewer note, 2026-09-11): with the inFlight
+    // guard REMOVED, p2 is no longer a coalesced no-op — it becomes a second
+    // REAL tick awaiting a fetch promise nothing ever resolves (each fetch
+    // call above makes a NEW promise and overwrites `resolveFetch`, so the
+    // line below can only ever release one of them). Awaiting it bare made
+    // that mutation read as a >300s HANG of the whole suite instead of a
+    // clean ❌ on this assertion. Both awaits below are therefore bounded.
+    const settled77 = async (p, ms = 3000) => Promise.race([p, new Promise(r => _realST77(() => r('TIMED-OUT'), ms))]);
+    const r2 = await settled77(p2);
+    assert(r2 === null, `the SECOND forceTick() while the first is still in flight coalesces to a no-op (null), not a second network call — got ${r2 === 'TIMED-OUT' ? 'a SECOND real tick that never settled (the inFlight guard did not coalesce it)' : r2}`);
+    resolveFetch({ ok: true, status: 200, json: async () => ({ ok: true, head: HEAD77 }) });
+    const r1 = await settled77(p1);
+    assert(r1 === true, `the FIRST (real) forceTick() still resolves normally once its own round trip completes — got ${r1}`);
+
+    sub77.unsubscribe();
+    globalThis.fetch = _realFetch77;
+
+    // ── C. forceRefresh() (chat.js) drives the SAME mechanism end to end,
+    //    and REJECTS on a failed round trip (chat-ui's Failed state depends
+    //    on this — DI-168f item 5). Boots with a HEALTHY fetch first so the
+    //    automatic first tick (fired synchronously inside initChat(), before
+    //    this test ever calls forceRefresh()) completes cleanly rather than
+    //    racing its OWN misroute-retry backoff (real ~400ms/1200ms timers,
+    //    per BUG-E) against forceRefresh()'s inFlight check — a race that
+    //    would make forceTick() see inFlight===true and coalesce to `null`
+    //    instead of exercising the failure path this assertion is about. ──
+    const healthyFetch77 = async (url) => {
+      const u = new URL(String(url));
+      const action = u.searchParams.get('action');
+      if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD77 }) };
+      if (action === 'chatSince') return { ok: true, json: async () => ({ ok: true, events: [], head: HEAD77 }) };
+      return { ok: true, json: async () => ({ ok: true }) };
+    };
+    globalThis.fetch = healthyFetch77;
+    chat77._resetForTest();
+    backend77.setBackendConfig('https://example.invalid/exec', 'tok77b');
+    chat77.initChat('p1');
+    await settle77();
+    assert(chat77.chatStatus().offline === false, 'fixture: the boot tick landed cleanly on a healthy fetch (not racing its own retry ladder)');
+
+    globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+    let threw77 = false;
+    try { await chat77.forceRefresh(); } catch { threw77 = true; }
+    assert(threw77, 'forceRefresh() REJECTS when the forced tick fails — chat-ui.js drives Checking -> Failed off this rejection alone');
+
+    globalThis.fetch = healthyFetch77;
+    let threw77b = false;
+    try { await chat77.forceRefresh(); } catch { threw77b = true; }
+    assert(!threw77b, 'and RESOLVES once the backend recovers — the same button is its own retry (DI-168c)');
+
+    chat77._resetForTest();
+    backend77.clearBackendConfig();
+  } finally {
+    globalThis.fetch = _realFetch77;
+    globalThis.setTimeout = _realST77;
+    globalThis.clearTimeout = _realCT77;
+    backend77.clearBackendConfig();
+    chat77._resetForTest();
+  }
+
+  // ── D. Render states — DI-168c's table, asserted in RENDERED OUTPUT (the
+  //    actual returned markup), not only the trigger that produces it. ──
+  const cases77 = [
+    ['idle', /aria-label="Refresh chat"/, />🔄<\/button>/, ''],
+    ['checking', /disabled aria-disabled="true"/, /aria-label="Checking for new messages…"/, 'Checking…'],
+    ['updated', /aria-label="Refresh chat"/, null, 'Updated just now'],
+    ['failed', /aria-label="Refresh failed\. Tap to retry\."/, null, "Couldn't refresh — tap to retry"],
+  ];
+  for (const [status, mustMatch, mustMatch2, text] of cases77) {
+    chatUi77._setRefreshStatusForTest(status);
+    const html = chatUi77._refreshControlHTMLForTest('chat-refresh');
+    assert(mustMatch.test(html), `DI-168c '${status}' state: rendered markup matches ${mustMatch} — got: ${html.replace(/\s+/g, ' ')}`);
+    if (mustMatch2) assert(mustMatch2.test(html), `DI-168c '${status}' state: rendered markup ALSO matches ${mustMatch2}`);
+    assert(html.includes(`>${text}</span>`) || (text === '' && />[\s]*<\/span>/.test(html.replace(/\n/g, ''))),
+      `DI-168c '${status}' state: visible status text is "${text}" — got: ${html.replace(/\s+/g, ' ')}`);
+    assert(!/title=/.test(html), `DI-168c: no bare title attribute on the '${status}' render — tooltips do not fire on touch`);
+  }
+  chatUi77._setRefreshStatusForTest('idle');   // leave shared module state clean for any later section
+
+  // ── E. Hidden when chat is disabled — structural (renderChatPage()'s
+  //    disabled bounce fires on document.getElementById('page-chat') being
+  //    non-null, which this harness's DOM stub cannot provide; same fallback
+  //    already used for updateChatBadges()/initChatUI() elsewhere in this
+  //    file). Confirms the refresh button's markup call sits AFTER the
+  //    isChatEnabled() bounce in both render paths that host it. ──
+  const chatUiSrc77 = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  const renderChatPageSrc = (chatUiSrc77.match(/export function renderChatPage\(\)[\s\S]*?\n\}/) || [''])[0];
+  assert(renderChatPageSrc.indexOf('redirectChatDisabled()') > -1 &&
+    renderChatPageSrc.indexOf('redirectChatDisabled()') < renderChatPageSrc.indexOf("refreshControlHTML('chat-refresh')"),
+    "renderChatPage()'s isChatEnabled() bounce runs BEFORE the refresh button is ever built — DI-168c 'Chat disabled: button not rendered'");
+  const openSheetSrc = (chatUiSrc77.match(/export function openGameChatSheet\(gameId\)[\s\S]*?\n\}/) || [''])[0];
+  assert(openSheetSrc.indexOf('redirectChatDisabled()') > -1 &&
+    openSheetSrc.indexOf('redirectChatDisabled()') < openSheetSrc.indexOf("refreshControlHTML('chat-sheet-refresh')"),
+    "openGameChatSheet()'s isChatEnabled() bounce also runs before its refresh button is built");
+
+  // ── F. 44px tap-target floor (DI-168g/CONVENTIONS #17), same precedent as
+  //    #notif-priming-btn ([25h] in notifytest.mjs). ──
+  const cssSrc77 = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  assert(/#chat-refresh-btn,\s*#chat-sheet-refresh-btn\s*\{[^}]*min-width:\s*44px[^}]*min-height:\s*44px/.test(cssSrc77) ||
+    /#chat-refresh-btn,\s*#chat-sheet-refresh-btn\s*\{[^}]*min-height:\s*44px[^}]*min-width:\s*44px/.test(cssSrc77),
+    'DI-168g: #chat-refresh-btn/#chat-sheet-refresh-btn have an explicit 44×44px floor in styles.css — .btn-sm\'s base 34px is under it');
+  assert(/\.chat-refresh-status\{/.test(cssSrc77),
+    'DI-168e: .chat-refresh-status is its OWN class, not a reuse of .sync-badge (which would let this local state stomp the global backend sync indicator)');
+}
+
+// ── [77b] ────────────────────────────────────────────────────────────────────
+// RG-98 F1 (reviewer finding, 2026-09-11) — a tick that returns early
+// (!isBackendConfigured() or document.hidden) must not spend a
+// BOOT_RETRY_DELAYS rung, since it never issued a request. Own block, not
+// boottest.mjs (outside this build's file list — boottest.mjs's own §5
+// already proves the SHORT-hidden-window case unaffected; this is the long
+// one the reviewer measured). setTimeout is captured (not faked wholesale —
+// no clock needed, this drives the scheduler by hand) so the ~30s cumulative
+// boot ladder can be walked in test time, not wall time.
+console.log('\n[77b] RG-98 F1 — a tick that could not attempt a request must not burn a boot-ladder rung…');
+{
+  const transport77b = mods['chatTransport'], backend77b = mods['backend'];
+  const _realFetch77b = globalThis.fetch, _realST77b = globalThis.setTimeout, _realCT77b = globalThis.clearTimeout, _realRandom77b = globalThis.Math.random;
+  const scheduled77b = [];
+  globalThis.setTimeout = (fn, ms) => { scheduled77b.push({ ms, fn }); return scheduled77b.length; };
+  globalThis.clearTimeout = () => {};
+  Math.random = () => 0.5;   // jitter(x) === x exactly — delays compare cleanly
+  let fetchCalls77b = 0;
+  globalThis.fetch = async () => { fetchCalls77b++; return { ok: true, json: async () => ({ ok: true, head: 5, events: [] }) }; };
+  backend77b.setBackendConfig('https://example.invalid/exec', 'tok77b');
+  document.hidden = true;
+
+  const sub77b = transport77b.subscribe(() => {}, { getMode: () => 'closed', getKnownHead: () => 0 });
+  const drain = async (n = 8) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
+  await drain();   // let the first (hidden) tick's synchronous prefix run and schedule its retry
+
+  // Fire five more hidden reschedules by hand — no visibilitychange, matching
+  // the reviewer's exact scenario (a hidden webview with no resume event).
+  const delaysWhileHidden = [];
+  for (let i = 0; i < 5; i++) {
+    const next = scheduled77b.shift();
+    if (!next) break;
+    delaysWhileHidden.push(next.ms);
+    next.fn();
+    await drain();
+  }
+  assert(fetchCalls77b === 0, `while hidden, zero requests were ever attempted (fixture check) — got ${fetchCalls77b}`);
+  assert(delaysWhileHidden.length === 5 && delaysWhileHidden.every(d => d === delaysWhileHidden[0]),
+    `every hidden reschedule uses the SAME un-consumed boot rung instead of advancing through the ladder for a tick that made no request — got [${delaysWhileHidden.join(', ')}]`);
+  assert(delaysWhileHidden[0] === 1000,
+    `and that rung is still the ladder's FIRST one (1000ms) after 5 hidden reschedules — the mutation-worthy line: got ${delaysWhileHidden[0]}ms`);
+
+  // Now become visible (no visibilitychange event — the transport must notice
+  // on its own next scheduled tick, same as boottest.mjs §5's scenario).
+  document.hidden = false;
+  const next77b = scheduled77b.shift();
+  next77b.fn();
+  await drain(20);
+  assert(fetchCalls77b > 0, `the first tick after visibility returns DOES attempt a request — the ladder was never spent while hidden — got ${fetchCalls77b} call(s)`);
+
+  sub77b.unsubscribe();
+  document.hidden = false;
+  globalThis.fetch = _realFetch77b; globalThis.setTimeout = _realST77b; globalThis.clearTimeout = _realCT77b; Math.random = _realRandom77b;
+  backend77b.clearBackendConfig();
+}
+
+// ── [78] ─────────────────────────────────────────────────────────────────────
+// DI-169 (2026-09-11). Own process, like [73]/[76]: cachetest.mjs drives real
+// chat.js/chatTransport.js/chat-ui.js code through several full cache-primed
+// boots, which would otherwise leave localStorage/backend-config/module state
+// behind for every suite after it in this file.
+console.log('\n[78] cachetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['cachetest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `cachetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch78 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch78, `cachetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch78 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch78) {
+    assert(summaryMatch78[1] === '✅ ALL PASS', `cachetest.mjs itself reports ALL PASS (got: ${summaryMatch78[0]})`);
+    assert(Number(summaryMatch78[3]) === 0, `cachetest.mjs reports zero failed assertions (got ${summaryMatch78[3]} failed, ${summaryMatch78[2]} passed)`);
+    assert(Number(summaryMatch78[2]) >= 20, `cachetest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch78[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

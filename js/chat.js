@@ -43,6 +43,16 @@ import { getSettings, saveSetting } from './storage.js';
 const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq } }
 const K_OUTBOX   = 'cfbp_chat_outbox2';
 const K_EPOCH_APPLIED = 'cfbp_chat_epoch_applied';   // UN-112 — device-local watermark, see initChat()
+// DI-169b — SAME precedent as the three keys above: a bare, guarded
+// localStorage key, module-level constant, read/written via try{}catch{}.
+// NEVER registered in storage.js's KEYS object and NEVER added to
+// DEVICE_LOCAL_KEYS — this key never goes through the load()/save() seam
+// (AD-02) at all, so it cannot be routed through it either way. useSheets()
+// only ever runs for keys read through load()/save(); a bare
+// localStorage.getItem/setItem call never enters that function, so it can
+// never reach backend.js's push queue or hydrate, and exportAllDataRaw()
+// (which walks Object.values(KEYS)) is structurally blind to it too.
+const K_EVENTS_CACHE = 'cfbp_chat_events_cache';   // { epoch, head, events[] } — see DI-169
 
 // ── State ─────────────────────────────────────────────────────────────────────
 const S = {
@@ -58,6 +68,7 @@ const S = {
   viewOpen: false,
   selfId: null,
   unsub: null,
+  forceTick: null,           // DI-168 — set alongside S.unsub by _subscribeNow(); see forceRefresh()
   subs: new Set(),
   backfillLow: null,
   // BUG-C (2026-09-11) — has the transport reached the server's TRUE head at
@@ -249,6 +260,12 @@ function localEpochApplied() {
  * commissioner's own device empties immediately as built-in verification.
  */
 function _applyEpochLocally(epochSeq) {
+  // BUG-D — the queued events are about to be DISCARDED, so anything waiting
+  // on one of them will never be acknowledged. Reject now instead of letting
+  // the caller burn its full bound waiting for a send that no longer exists:
+  // an @scribe mention in flight when the commissioner hits "Clear Chat
+  // History" degrades at once rather than 45s later, under the same id.
+  S.outbox.forEach(o => settleAppend(o.ev.id, new Error(`Chat history was cleared before ${o.ev.id} could be sent`)));
   S.outbox = [];
   S.failed.clear();
   persistOutbox();
@@ -451,6 +468,7 @@ export function ingest(events, head, delivery) {
         // Reconcile optimistic → server-assigned
         if (existing.seq === null && typeof ev.seq === 'number') {
           existing.seq = ev.seq; existing.ts = ev.ts ?? existing.ts; existing.local = false;
+          settleAppend(ev.id, null, ev.seq);   // BUG-D — the append's own reply can be lost; this is the other acknowledgement
         }
       } else {
         const item = newItem(ev);
@@ -470,7 +488,12 @@ export function ingest(events, head, delivery) {
       }
     }
   }
-  if (n || (events && events.length)) notify('events', { added: n, caughtUp, wasCaughtUp });
+  // DI-169d — additive only: ingest()'s fold above is UNCHANGED, only what it
+  // forwards on the notification gains a field. `fromCache` is true only for
+  // a device-local cache replay (readAndPrimeEventsCache(), below) — a real
+  // poll or backfill delivery never sets it, so `!!delivery?.fromCache` reads
+  // false for every existing caller without them passing anything new.
+  if (n || (events && events.length)) notify('events', { added: n, caughtUp, wasCaughtUp, fromCache: !!delivery?.fromCache });
   return n;
 }
 
@@ -631,6 +654,7 @@ export async function flushOutbox() {
       const a = byId.get(o.ev.id);
       const item = S.items.get(o.ev.id);
       if (a && item) { item.seq = a.seq; if (a.ts) item.ts = a.ts; item.local = false; }
+      if (a) settleAppend(o.ev.id, null, a.seq);   // BUG-D
     });
     persistOutbox();
     notify('sent', { count: batch.length });
@@ -640,6 +664,7 @@ export async function flushOutbox() {
       o.attempts++;
       if (o.attempts >= MAX_ATTEMPTS) {
         S.failed.set(o.ev.id, o.ev);
+        settleAppend(o.ev.id, new Error(`Append failed for ${o.ev.id}`));   // BUG-D
         notify('failed', { id: o.ev.id });
       } else {
         S.outbox.push(o);
@@ -668,6 +693,65 @@ export function isPending(id) {
   return !!m && m.local && !S.failed.has(id);
 }
 
+// ── Append acknowledgement (BUG-D, 2026-09-11) ────────────────────────────────
+// `sendEvent()` returns an id the instant the event is QUEUED — the event is
+// still ~750ms of coalescing window away from the wire, and further away than
+// that from a server-assigned seq. Anything that needs the SERVER to be able
+// to see a message it just sent (today: the @scribe mention, whose whole
+// request is "re-read message <id> out of CFBP_MESSAGES and answer it") must
+// wait for that acknowledgement, not for the id.
+//
+// It lived here rather than in the caller because the outbox is the only place
+// that knows the three outcomes: assigned (flushOutbox reconcile, or a poll
+// that ingests our own event back), FAILED (MAX_ATTEMPTS exhausted — never
+// silently dropped), or still in flight. Callers get a promise; the transport
+// stays behind chatTransport.js (AD-16) and reads stay synchronous (AD-02) —
+// nothing here changes how anything is READ.
+const APPEND_ACK_TIMEOUT_MS = 20000;
+const appendWaiters = new Map();   // id -> [{ resolve, reject, timer }]
+
+function settleAppend(id, err, seq) {
+  const list = appendWaiters.get(id);
+  if (!list) return;
+  appendWaiters.delete(id);
+  list.forEach(w => { clearTimeout(w.timer); if (err) w.reject(err); else w.resolve(seq); });
+}
+
+/**
+ * Resolves with the server-assigned seq once `id` has been acknowledged.
+ * Rejects if the append FAILS, if it cannot be sent at all right now, or if
+ * the bound elapses. Resolves immediately (with null) for an id this module
+ * is not carrying — "nothing of ours to wait on" is not a failure, and the
+ * caller's own server-side error handling stays the backstop for that case.
+ */
+export function whenAppended(id, { timeoutMs = APPEND_ACK_TIMEOUT_MS } = {}) {
+  if (!id) return Promise.resolve(null);
+  if (S.failed.has(id)) return Promise.reject(new Error(`Append failed for ${id}`));
+  const item = S.items.get(id);
+  if (item && !item.local) return Promise.resolve(item.seq);   // already acknowledged
+  const queued = S.outbox.some(o => o.ev.id === id);
+  if (!item && !queued) return Promise.resolve(null);          // not ours — see above
+  // Nothing will flush while either of these is false (flushOutbox returns
+  // early), so waiting the full bound would only delay an outcome we already
+  // know. The event stays queued and persisted either way — this rejects the
+  // WAIT, it never drops the message.
+  if (!isBackendConfigured() || !isChatEnabled()) {
+    return Promise.reject(new Error(`Append cannot be sent right now for ${id}`));
+  }
+  return new Promise((resolve, reject) => {
+    const w = { resolve, reject, timer: null };
+    w.timer = setTimeout(() => {
+      const list = appendWaiters.get(id) || [];
+      const i = list.indexOf(w);
+      if (i >= 0) list.splice(i, 1);
+      if (!list.length) appendWaiters.delete(id);
+      reject(new Error(`Append not acknowledged within ${timeoutMs}ms for ${id}`));
+    }, timeoutMs);
+    if (!appendWaiters.has(id)) appendWaiters.set(id, []);
+    appendWaiters.get(id).push(w);
+  });
+}
+
 function handleTransportError(err) {
   S.lastError = String(err?.message || err);
   if (err instanceof StaleDeploymentError || err?.stale) {
@@ -691,13 +775,150 @@ export function setViewOpen(open) { S.viewOpen = !!open; }
 /** Back-compat shim for app.js ('active' when the chat tab is showing). */
 export function setPollMode(mode) { setViewOpen(mode === 'active'); }
 
+// ── DI-169 — device-local raw-events cache (instant render on boot) ──────────
+// What is cached: the RAW EVENT LIST exactly as chatTransport.js delivers it
+// to ingest() (id/seq/ts/author/gameTag/body/replyTo/notify/meta/type/
+// targetId) — NOT S.items (the folded state, whose values hold
+// non-serializable Map fields: _reactOps/_pinOps/_feedbackOps) and NOT
+// rendered HTML. Replaying through the same ingest()/applyTo() fold live data
+// already uses means there is no second fold implementation to drift from the
+// real one (AD-10/RG-06's reasoning).
+const EVENTS_CACHE_MAX = 500;              // reuses chatTransport.js's PAGE_LIMIT — a CHOICE, not a fresh guess (DI-169c)
+const EVENTS_CACHE_MAX_BYTES = 300 * 1024; // DI-169c — hard fallback bound in case a pathological meta/mentions payload inflates a small event count
+
+// In-memory accumulation buffer for the CURRENT session's raw wire events —
+// separate from S.items for the reason above. Seeded at boot from a valid
+// cache read (readAndPrimeEventsCache(), below) so the write path merges onto
+// real prior history instead of truncating it away on the very first live
+// delivery of a fresh session.
+let _eventsCacheBuf = [];
+
+/** (ts, seq) order, oldest-trimmed-first — same pair comparison as cmpOrder()
+ *  (AD-10), inlined here rather than imported since cmpOrder() reads folded
+ *  item shape (`.ts`/`.seq` on an object) and this sorts raw wire events,
+ *  which happen to share those two field names but are not the same shape. */
+function _trimEventsCacheBuf() {
+  _eventsCacheBuf.sort((a, b) => (a?.ts || 0) - (b?.ts || 0) || (a?.seq || 0) - (b?.seq || 0));
+  if (_eventsCacheBuf.length > EVENTS_CACHE_MAX) {
+    _eventsCacheBuf = _eventsCacheBuf.slice(_eventsCacheBuf.length - EVENTS_CACHE_MAX);
+  }
+  // Trim from the oldest end until back under the byte budget, costed with a
+  // RUNNING total rather than re-stringifying the whole buffer once per
+  // dropped element (reviewer note, 2026-09-11 — that was O(n²) on the exact
+  // input that reaches it, a buffer big enough to be over budget). The
+  // accounting is exact, not an estimate: JSON.stringify(array) is
+  // '[' + parts.join(',') + ']', so its length is sum(part lengths) +
+  // (n - 1) commas + 2 brackets — i.e. sum(len + 1) + 1.
+  if (_eventsCacheBuf.length > 1) {
+    const sizes = _eventsCacheBuf.map(e => JSON.stringify(e).length + 1);
+    let total = sizes.reduce((a, b) => a + b, 0) + 1;
+    let drop = 0;
+    while (_eventsCacheBuf.length - drop > 1 && total > EVENTS_CACHE_MAX_BYTES) { total -= sizes[drop]; drop++; }
+    if (drop) _eventsCacheBuf = _eventsCacheBuf.slice(drop);
+  }
+}
+
+/**
+ * DI-169c — write policy. Called ONLY from the transport subscription
+ * callback (_subscribeNow(), below), and only when `delivery.caughtUp` is
+ * true — never a mid-walk page, which would cache a `head` the events don't
+ * actually reach (BUG-B's exact shape in a new location). Not hooked into
+ * ingest() generically: ingest() is also called by sendEvent() (local
+ * optimistic sends) and backfill() (older history), and hooking the
+ * transport callback specifically is what structurally excludes outbox/
+ * FAILED items and backfilled history from ever entering the cache, rather
+ * than relying on a separate check to keep them out.
+ *
+ * No separate debounce timer (unlike persistOutbox()'s 750ms coalescing
+ * window) — a caught-up delivery already only fires once per poll interval
+ * (5-60s depending on roomMode), so writing synchronously here is not a hot
+ * loop.
+ */
+function writeEventsCache(head) {
+  try {
+    localStorage.setItem(K_EVENTS_CACHE, JSON.stringify({
+      epoch: getChatEpochSeq(), head: Number(head) || 0, events: _eventsCacheBuf,
+    }));
+  } catch { /* quota / private browsing — never blocks a real message send, DI-169e */ }
+}
+
+/**
+ * DI-169d/e — read policy + invalidation. Called once, from initChat(),
+ * BEFORE _subscribeNow()/flushOutbox() reach the network. Epoch mismatch (a
+ * commissioner "Clear Chat History" on another device since this cache was
+ * written) drops the whole cache — boots with nothing until live data
+ * arrives, same as today's behaviour, never a stale or partial replay.
+ * Corrupt JSON: ignore, warn, boot as if no cache existed (same shape
+ * loadOutbox() already uses for its own guarded parse).
+ */
+function readAndPrimeEventsCache() {
+  let parsed;
+  try {
+    const raw = localStorage.getItem(K_EVENTS_CACHE);
+    if (!raw) return;
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    console.warn('[chat] corrupt events cache, ignoring', e);
+    return;
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.events)) return;
+  if (parsed.epoch !== getChatEpochSeq()) {
+    // DI-169e — epoch mismatch, drop. REMOVE it as well as ignoring it
+    // (reviewer note, 2026-09-11): a superseded cache is dead weight that can
+    // never be read again, and leaving it in place holds its bytes against
+    // the localStorage quota that the NEXT (valid) write needs — a quota
+    // failure there is silent by design (writeEventsCache()'s catch), so it
+    // would show up as "the cache just stopped working," not as an error.
+    try { localStorage.removeItem(K_EVENTS_CACHE); } catch {}
+    return;
+  }
+  _eventsCacheBuf = parsed.events.slice();          // seed so the next real write merges onto real history
+  // DI-169d — caughtUp: false, UNCONDITIONALLY: a cached replay is never a
+  // live delivery reaching today's true head, regardless of what the cache
+  // itself recorded at write time. fromCache: true threads through ingest()'s
+  // notify detail so chat-ui.js can suppress the toast/blip/push-relay path
+  // for THIS delivery without suppressing badge/render (instant render from
+  // the cache is the entire point) — see DI-169d's required guard.
+  //
+  // The cached head IS adopted as the poll cursor here (ingest() sets S.head
+  // from the `head` argument below) — this is the design's second win, not a
+  // side effect: chatTransport.js's subscribe() reads getKnownHead() on its
+  // very first tick, which now returns this non-zero cached head instead of
+  // 0, so that first tick takes the known>0 branch (a cheap chatHead probe,
+  // then an INCREMENTAL chatSince(cachedHead) only if something changed)
+  // rather than RG-91's known===0 branch (a full chatSince(0, 500) cold
+  // read). No chatTransport.js change was needed for this — it falls out of
+  // existing branching once S.head is non-zero before subscribe() is called.
+  ingest(parsed.events, parsed.head, { caughtUp: false, fromCache: true });
+}
+
 /** Force-(re)subscribes regardless of current subscription state — used by
  *  initChat() (selfId may have changed on re-login) and by the enabled-toggle
  *  when going from OFF to ON. Unconditional: callers gate on isChatEnabled(). */
 function _subscribeNow() {
   if (S.unsub) S.unsub();
-  S.unsub = subscribe(
-    (events, head, delivery) => ingest(events, head, delivery),
+  const sub = subscribe(
+    (events, head, delivery) => {
+      ingest(events, head, delivery);
+      // DI-169c — accumulate every raw wire event this session sees
+      // (including a mid-walk page of a big drain — it is real, legitimate
+      // history that arrived through the transport), but only TRIM + WRITE
+      // to localStorage once a delivery actually reaches the head. Writing
+      // mid-walk would persist a head the buffered events don't reach yet.
+      // RG-101 / BUG-H — the write is gated on the delivery actually
+      // CARRYING events, not on caughtUp alone. As of the transport's
+      // RG-101 fix an idle poll (nothing new since last tick) now reports an
+      // empty caught-up delivery on EVERY interval; without this gate each
+      // one would re-stringify and re-write the entire buffer (up to
+      // EVENTS_CACHE_MAX_BYTES = 300KB) to localStorage for no change at
+      // all. Nothing is lost by skipping it: _eventsCacheBuf only ever grows
+      // on the line above, so an empty delivery leaves it byte-identical to
+      // what the last write already persisted.
+      if (events && events.length) {
+        _eventsCacheBuf.push(...events);
+        if (delivery?.caughtUp === true) { _trimEventsCacheBuf(); writeEventsCache(head); }
+      }
+    },
     {
       getMode: roomMode,
       getKnownHead: () => S.head,
@@ -712,6 +933,38 @@ function _subscribeNow() {
       },
     }
   );
+  // DI-168f — subscribe() now returns a function that is BOTH directly
+  // callable (unsubscribe) and carries `.unsubscribe`/`.forceTick` as
+  // properties (see chatTransport.js's own comment on this for why both
+  // shapes coexist). S.unsub keeps its existing bare-callable contract
+  // (_resetForTest(), refreshChatEnabled(), the OFF branch below all already
+  // call it as `S.unsub()`); S.forceTick is new, DI-168's addition.
+  S.unsub = sub.unsubscribe;
+  S.forceTick = sub.forceTick;
+}
+
+/**
+ * DI-168 — manual chat refresh. Reuses the EXACT tick()/drainSince() path the
+ * transport's own visibilitychange fast path and interval poll already use —
+ * no new fetch path, no new Apps Script action (DI-168h). Returns a promise
+ * that RESOLVES when the forced check succeeds and REJECTS when it fails, so
+ * chat-ui.js's button can drive Checking -> Updated/Failed off promise
+ * settlement alone (DI-168f item 5), rather than a new pub/sub channel.
+ *
+ * A coalesced call (another check — the background poll, onVis, or another
+ * forceRefresh() — already in flight in the transport) resolves WITHOUT
+ * throwing: the transport's own `inFlight` guard already ensured exactly one
+ * network round trip is in progress, and this particular call did no work of
+ * its own to report success or failure on. Under real UI use this is
+ * unreachable (chat-ui.js's button disables itself while checking, DI-168f
+ * item 3's belt-and-suspenders UI guard) — it only matters to a caller that
+ * bypasses that guard, e.g. cachetest.mjs's double-tap assertion.
+ */
+export async function forceRefresh() {
+  if (!S.forceTick) return;             // not subscribed (chat off, or not yet booted) — nothing to force
+  const ok = await S.forceTick();
+  if (ok === null) return;              // coalesced no-op — see doc comment above
+  if (!ok) throw new Error('Chat refresh failed');
 }
 
 export function initChat(selfId) {
@@ -733,8 +986,23 @@ export function initChat(selfId) {
   // chatTransport.js) — that is NOT "stopped", it is "throttled", and it keeps
   // burning Apps Script quota indefinitely. Only NOT subscribing at all (no
   // timer scheduled) satisfies "stop chat polling entirely."
-  if (isChatEnabled()) { _subscribeNow(); flushOutbox(); }
-  else if (S.unsub) { S.unsub(); S.unsub = null; }
+  if (isChatEnabled()) {
+    // DI-169d — instant render from the device-local cache, BEFORE
+    // _subscribeNow()/flushOutbox() reach the network (priming S.head here is
+    // also what makes the subscription's first tick an INCREMENTAL read).
+    // INSIDE the isChatEnabled() gate (reviewer note, 2026-09-11): chat OFF
+    // must mean no chat, not just no polling — replaying a cache into the
+    // fold with chat disabled would repopulate badges and message lists for a
+    // player who turned it off. Runs after the epoch heal above, so a cache
+    // written under a just-superseded epoch is compared against the CURRENT
+    // settings.chatEpochSeq and correctly dropped; its position relative to
+    // loadOutbox() is a readability choice, not a correctness one (ingest()
+    // is order-independent, AD-10).
+    readAndPrimeEventsCache();
+    _subscribeNow();
+    flushOutbox();
+  }
+  else if (S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; }
 }
 
 /**
@@ -748,7 +1016,7 @@ export function initChat(selfId) {
 export function refreshChatEnabled() {
   const enabled = isChatEnabled();
   if (enabled && !S.unsub) { _subscribeNow(); flushOutbox(); }
-  else if (!enabled && S.unsub) { S.unsub(); S.unsub = null; }
+  else if (!enabled && S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; }
 }
 
 export async function backfill(limit = 100) {
@@ -1041,9 +1309,24 @@ export function chatDigest(startMs, endMs, ctx = {}) {
 // ── Test hooks ────────────────────────────────────────────────────────────────
 export function _resetForTest() {
   if (S.unsub) { S.unsub(); S.unsub = null; }             // no dangling timers across test sections
+  S.forceTick = null;                                     // DI-168 — same lifecycle as S.unsub, above
   S.items.clear(); S.buffered.clear(); S.head = 0; S.outbox = []; S.failed.clear();
   S.offline = false; S.staleDeployment = false;
   S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;
+  _eventsCacheBuf = [];                                   // DI-169 — no leaking raw events into the next test section's writes
+  // DI-169 — UNLIKE K_LASTSEEN/K_OUTBOX/K_EPOCH_APPLIED above (whose
+  // persistence across _resetForTest() is harmless — they're read on demand
+  // by specific functions, not unconditionally on every initChat()), a stale
+  // K_EVENTS_CACHE left in localStorage feeds DIRECTLY into S.head/
+  // getKnownHead() the moment the NEXT test section calls initChat(), via
+  // readAndPrimeEventsCache() — silently priming a poll cursor from a
+  // PRIOR, unrelated test's writes. Cleared here so "no dangling state
+  // across test sections" (this function's whole purpose) actually holds for
+  // it too. Production code never calls _resetForTest() — this changes no
+  // real-device behavior.
+  try { localStorage.removeItem(K_EVENTS_CACHE); } catch {}
+  appendWaiters.forEach((list, id) => list.forEach(w => { clearTimeout(w.timer); w.reject(new Error(`Chat reset while waiting on ${id}`)); }));
+  appendWaiters.clear();                                  // BUG-D — no dangling timers across test sections
 }
 /** Item A (batch 3+4) — the only way to observe from OUTSIDE this module
  *  whether the poll loop is actually running (S.unsub is intentionally

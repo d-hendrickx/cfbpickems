@@ -40,7 +40,7 @@
  * same trigger simultaneously, the server's id-dedupe collapses them to one row.
  */
 
-import { sendEvent } from './chat.js';
+import { sendEvent, whenAppended } from './chat.js';
 // Build 2, Group C (2026-09-10, UN-150…154) — the @scribe mention branch now
 // calls the interactive (LLM-backed) runtime instead of posting a canned
 // line unconditionally. One-directional import (scribeAgent.js never imports
@@ -274,6 +274,30 @@ const DEGRADED_SUFFIX = ' (running on canned lines right now)';
 // out anyone else's cooldown.
 const LAST_RESORT_MENTION_LINE = "Can't get to that one right now.";
 
+// BUG-D — how long the mention branch waits for its OWN trigger message to be
+// acknowledged by the server before giving up and degrading.
+//
+// 45s, not the 20s this shipped with in review draft 1. js/chat.js's own
+// startFreshChat() comment (~:267) puts Apps Script cold starts at 10-20s,
+// and the worst-case SUCCESS path stacks: 750ms coalescing window + a 20s
+// cold `chatAppend` + backend.js's misroute retries (400ms + 1200ms, each
+// followed by another full round trip) ≈ 26s. A 20s bound therefore expires
+// on a perfectly healthy cold-start send — and because the degrade posts
+// under the deterministic `scribe_llm_<triggerMessageId>` id, expiring early
+// POISONS that trigger: the real answer, arriving seconds later under the
+// same id, is deduped away forever. Timing out too early is strictly worse
+// than waiting.
+//
+// Widening costs nothing in the failure cases that matter, because this bound
+// only governs a HUNG request: a send that genuinely dies rejects fast via the
+// FAILED queue (MAX_ATTEMPTS, ~6s of backoff), and a send that can't go out at
+// all (chat off / backend unconfigured) rejects immediately.
+export const SCRIBE_APPEND_WAIT_MS = 45000;
+let appendWaitMs = SCRIBE_APPEND_WAIT_MS;
+/** Test-only (same convention as chat.js's `_resetForTest`) — scribetest.mjs
+ *  [26] cannot spend 20 real seconds proving the bound exists. */
+export function _setAppendWaitMsForTest(ms) { appendWaitMs = (ms == null ? SCRIBE_APPEND_WAIT_MS : ms); }
+
 export function scribeMentionDegraded({ gameTag = '', subject = '', vars = {}, triggerMessageId = null } = {}) {
   const line = pickLine('mention', vars) || LAST_RESORT_MENTION_LINE;
   const id = `scribe_llm_${triggerMessageId || subject || 'x'}`.replace(/[^a-zA-Z0-9_:-]/g, '');
@@ -299,6 +323,22 @@ async function fireScribeMention({ gameTag, author, authorName, triggerMessageId
     // contract (C1): a disabled trigger still answers via the pool today's
     // players are used to, not silence — the client-visible gate is an
     // OFF-ramp for cost, not a UX regression while it's flipped off.
+    return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
+  }
+  // BUG-D (2026-09-11) — the ask MUST NOT overtake its own trigger message.
+  // `scribeAsk` re-reads the triggering message out of CFBP_MESSAGES by id
+  // (deliberately: never trust a client-supplied body, C1), so asking before
+  // chat.js's debounced outbox has flushed guarantees 'Trigger message not
+  // found' and a canned degrade — which is what every live @scribe mention
+  // got. Waiting on the append is deterministic and free; the server's
+  // not-found error stays as the backstop behind it.
+  try {
+    await whenAppended(triggerMessageId, { timeoutMs: appendWaitMs });
+  } catch {
+    // FAILED outbox item, or the bound elapsed. Either way the question never
+    // reached the room, so a canned reply is the honest outcome — and it posts
+    // under the SAME deterministic id as always, so the id-dedupe contract
+    // documented in this file's header is unchanged.
     return scribeMentionDegraded({ gameTag, subject: author, vars, triggerMessageId });
   }
   try {

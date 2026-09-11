@@ -34,6 +34,12 @@
  *   [9]  Ack supersession (client-side fold)
  *   [10] Cost estimator per model
  *   [11] Mutation-proof: blind-rule tool gate + dedup (scratch copies only)
+ *
+ * [26] (BUG-D, 2026-09-11) is a CLIENT-side ordering suite rather than a
+ * Code.gs one: the mention branch used to issue `scribeAsk` in the same tick
+ * as the trigger message's own send, ~750ms before chat.js's debounced outbox
+ * put that message anywhere the server could read it. Nothing in Code.gs was
+ * wrong — `scribeFindMessageById_` was answering the question it was asked.
  */
 import vm from 'node:vm';
 import { readFile } from 'node:fs/promises';
@@ -1162,6 +1168,158 @@ console.log('\n[25] P2 remediation (Build 2b) — scribeMonthlySpendUsd_ correct
   // yyyy-MM key).
   assert(env25.gs.scribeRowMonthKey_('not a date') === '', 'scribeRowMonthKey_ returns empty string for an unparseable value, never throws');
   assert(env25.gs.scribeRowMonthKey_('') === '', 'scribeRowMonthKey_ returns empty string for an empty value');
+}
+
+console.log('\n[26] BUG-D — the @scribe ask must never race its own trigger message\'s append…');
+{
+  // LIVE SYMPTOM (Drew, 2026-09-11, chat seq 226-234): four "@scribe …"
+  // questions in the Locker Room, each answered within ~10s by the canned
+  // degrade line, no "SCRIBE is looking into it…" ack, and NO row in
+  // CFBP_SCRIBE_LOG. Root cause is a pure ORDERING race on the client:
+  // chat-ui.js doSend() calls sendMessage() (which only queues the event —
+  // chat.js scheduleFlush() debounces 750ms) and then fires
+  // scribeInspectMessage() in the SAME tick, so scribeAsk reaches the server
+  // ~750ms BEFORE the trigger message does. Code.gs's scribeAsk re-reads the
+  // trigger from CFBP_MESSAGES by id (never trusting a client-supplied body)
+  // and correctly answers {ok:false, error:'Trigger message not found'}
+  // (backend/Code.gs :4131) — the client turns that into the degrade.
+  //
+  // Worse than one bad answer: the degrade posts under the deterministic id
+  // `scribe_llm_<triggerMessageId>`, so once it lands, a real answer carrying
+  // the same id is deduped away — the mention is permanently unanswerable.
+  //
+  // These cases drive the REAL modules (chat.js outbox + chatTransport +
+  // backend.js + scribeLines.js) against a mock Apps Script whose scribeAsk
+  // applies exactly the server's lookup rule.
+  const chatMod26 = await import('./js/chat.js');
+  const storageMod26 = await import('./js/storage.js');
+  const backendMod26 = await import('./js/backend.js');
+  const scribeLinesMod26 = await import('./js/scribeLines.js');
+  const priorFetch26 = globalThis.fetch;
+  const sleep26 = ms => new Promise(r => setTimeout(r, ms));
+  const DEGRADE_MARK = '(running on canned lines right now)';
+
+  function mockBackend26({ appendDelayMs = 0, appendFails = false, appendHangs = false } = {}) {
+    const st = { serverLog: new Map(), seq: 0, order: [], asks: [] };
+    globalThis.fetch = async (url, opts) => {
+      const req = JSON.parse(opts.body);
+      if (req.action === 'chatAppend') {
+        st.order.push('chatAppend:request');
+        if (appendFails) throw new Error('network down');
+        if (appendHangs) await new Promise(() => {});   // never settles, and holds no timer
+        if (appendDelayMs) await sleep26(appendDelayMs);
+        const assigned = (req.events || []).map(ev => {
+          const seq = ++st.seq; st.serverLog.set(ev.id, seq);
+          return { id: ev.id, seq, ts: Date.now() };
+        });
+        st.order.push('chatAppend:committed');
+        return { ok: true, json: async () => ({ ok: true, _action: 'chatAppend', assigned, head: st.seq }) };
+      }
+      if (req.action === 'scribeAsk') {
+        // The server's own rule, verbatim: look the trigger up in the log it
+        // can actually see (Code.gs scribeFindMessageById_).
+        const sawTrigger = st.serverLog.has(req.triggerMessageId);
+        st.order.push('scribeAsk:request');
+        st.asks.push({ triggerMessageId: req.triggerMessageId, sawTrigger });
+        if (!sawTrigger) return { ok: true, json: async () => ({ ok: false, _action: 'scribeAsk', error: 'Trigger message not found' }) };
+        return { ok: true, json: async () => ({ ok: true, _action: 'scribeAsk', responseMessageId: 'scribe_llm_' + req.triggerMessageId }) };
+      }
+      return { ok: true, json: async () => ({ ok: true, _action: req.action }) };
+    };
+    return st;
+  }
+
+  // Exactly what chat-ui.js doSend() does, in the same order.
+  function doSend26(body = '@scribe who is leading?') {
+    const sentId = chatMod26.sendMessage({ body, gameTag: '', author: 'p1', mentions: ['scribe'] });
+    return { sentId, done: scribeLinesMod26.scribeInspectMessage({ author: 'p1', authorName: 'Drew', body, gameTag: '', triggerMessageId: sentId }) };
+  }
+  const degradeFor26 = id => chatMod26.getMessages({ tag: 'all' }).find(m => m.id === 'scribe_llm_' + id);
+
+  storageMod26.saveSetting('scribeInteractiveEnabled', true);
+  backendMod26.setBackendConfig('https://example.invalid/exec', 'tok');
+
+  // ── (a) the reproduction, now inverted: a 300ms append must be ACKED before
+  //        the ask goes out, and the server must be able to see the trigger.
+  chatMod26._resetForTest();
+  const stA = mockBackend26({ appendDelayMs: 300 });
+  const a = doSend26();
+  const okA = await a.done;
+  assert(stA.asks.length === 1, `exactly one scribeAsk was issued (got ${stA.asks.length})`);
+  const iCommit26 = stA.order.indexOf('chatAppend:committed');
+  const iAsk26 = stA.order.indexOf('scribeAsk:request');
+  // `iCommit26 >= 0` is load-bearing: pre-fix the append had not even been
+  // REQUESTED when the ask went out, so a bare `iAsk > iCommit` comparison
+  // passes vacuously against -1 — an assertion that cannot fail.
+  assert(iCommit26 >= 0 && iAsk26 > iCommit26,
+    `BUG-D: the ask is issued only AFTER the trigger message's append is acknowledged — order was [${stA.order.join(' → ')}]`);
+  assert(stA.asks[0] && stA.asks[0].sawTrigger === true,
+    'the server can actually SEE the trigger message when scribeAsk arrives — no more {ok:false, "Trigger message not found"}');
+  assert(okA === true && !degradeFor26(a.sentId),
+    'the real reply id is accepted and NO canned degrade is posted under scribe_llm_<triggerMessageId>');
+
+  // ── (b) FAILED append — the question never reached the room, so the canned
+  //        reply is the honest outcome, and scribeAsk must never be spent.
+  chatMod26._resetForTest();
+  // A short bound on purpose: a FAILED append must degrade because it FAILED,
+  // not because the clock ran out. With the bound at 4s and the real path
+  // taking milliseconds, the elapsed assertion below can tell the two apart —
+  // at the production bound both outcomes look identical to the test.
+  scribeLinesMod26._setAppendWaitMsForTest(4000);
+  const stB = mockBackend26({ appendFails: true });
+  const tB = Date.now();
+  const b = doSend26();
+  for (let i = 0; i < 3; i++) await chatMod26.flushOutbox();   // MAX_ATTEMPTS -> FAILED
+  const okB = await b.done;
+  const elapsedB = Date.now() - tB;
+  scribeLinesMod26._setAppendWaitMsForTest(null);
+  assert(okB === true, 'a permanently-failed append still produces a reply (never silence)');
+  const degB = degradeFor26(b.sentId);
+  assert(!!degB && degB.body.includes(DEGRADE_MARK),
+    'the degrade posts under the SAME deterministic id scribe_llm_<triggerMessageId> — the id-dedupe contract is unchanged');
+  assert(stB.asks.length === 0,
+    'scribeAsk is NEVER called for a message that failed to append — no wasted round trip, no model spend on a question the room never got');
+  assert(elapsedB < 1500,
+    `the FAILED queue itself ends the wait — the degrade lands as soon as the send is given up on, not when the bound expires (${elapsedB}ms against a 4000ms bound)`);
+
+  // ── (c) the wait is BOUNDED — an append that never comes back degrades
+  //        rather than hanging forever.
+  chatMod26._resetForTest();
+  scribeLinesMod26._setAppendWaitMsForTest(250);
+  const stC = mockBackend26({ appendHangs: true });
+  const tC = Date.now();
+  const c = doSend26();
+  const okC = await c.done;
+  const elapsedC = Date.now() - tC;
+  scribeLinesMod26._setAppendWaitMsForTest(null);
+  assert(okC === true && !!degradeFor26(c.sentId) && degradeFor26(c.sentId).body.includes(DEGRADE_MARK),
+    'a timed-out append degrades under the same deterministic id');
+  assert(stC.asks.length === 0, 'a timed-out append never issues scribeAsk either');
+  assert(elapsedC < 3000, `the wait is bounded, not indefinite (degraded after ${elapsedC}ms with a 250ms bound)`);
+  // The PRODUCTION bound has to clear the worst-case SUCCESS path, not the
+  // typical one: js/chat.js (~:267, startFreshChat) puts an Apps Script cold
+  // start at 10-20s, and chatAppend can additionally eat backend.js's misroute
+  // retries (400ms + 1200ms + their round trips) on top of the 750ms coalescing
+  // window — ~26s before a healthy send is acknowledged. Expiring before that
+  // is not a missed answer, it POISONS the trigger: the degrade takes the
+  // deterministic scribe_llm_<triggerMessageId> id and the real answer arriving
+  // behind it is deduped away for good.
+  assert(scribeLinesMod26.SCRIBE_APPEND_WAIT_MS >= 30000 && scribeLinesMod26.SCRIBE_APPEND_WAIT_MS <= 60000,
+    `the PRODUCTION bound outlasts a cold-start chatAppend plus misroute retries (got ${scribeLinesMod26.SCRIBE_APPEND_WAIT_MS}ms)`);
+
+  // ── (d) an id this module never sent is NOT waited on — the wait applies to
+  //        our own outbox, and the server's not-found error stays the backstop
+  //        (this is what keeps §[16]'s server-side paths reachable).
+  chatMod26._resetForTest();
+  const stD = mockBackend26({ appendDelayMs: 0 });
+  const tD = Date.now();
+  await scribeLinesMod26.scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: '@scribe hello', gameTag: '', triggerMessageId: 'notOurs' });
+  assert(stD.asks.length === 1 && Date.now() - tD < 3000,
+    'a trigger id that was never queued here asks immediately instead of stalling for the full bound');
+
+  globalThis.fetch = priorFetch26;
+  backendMod26.clearBackendConfig();
+  chatMod26._resetForTest();
 }
 
 console.log('\n══════════════════════════════════════════════════');

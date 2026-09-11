@@ -2164,6 +2164,28 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    an explicit floor rather than inheriting the smaller default. */
 #chat-search-btn, #chat-search-close, #chat-search-clear{min-height:40px;min-width:40px}
 
+/* ── DI-168 — manual chat refresh button + status text ────────────────────
+   Two buttons (main .chat-header-actions + the game-thread sheet's
+   .chat-sheet-header-actions), same markup helper, same styling here.
+   `.btn.btn-ghost.btn-sm` base is reused (DI-168e — extend, don't invent);
+   .btn-sm's own min-height (34px) is under BOTH the 40px CONVENTIONS #17
+   floor and this control's own 44px target, so it gets the SAME explicit
+   override precedent already shipped for #notif-priming-btn (this file,
+   "44px" search above) rather than raising .btn-sm globally, which would
+   reflow every other compact icon row in the app. */
+#chat-refresh-btn, #chat-sheet-refresh-btn{min-width:44px;min-height:44px}
+/* Considered and REJECTED reusing .sync-badge/_chatSyncBadgeHTML() — that
+   pipe is owned by the GLOBAL backend push/pull status (app.js's
+   updateSyncBadge(), driven by onBackendStatus); a local, chat-specific
+   "checking…" state written through the same variable would let it stomp
+   the real backend sync/error indicator, and vice versa. Same TYPOGRAPHY as
+   .sync-badge (small-caps Oswald label) in a separate, purpose-built class
+   instead. */
+.chat-refresh-status{font-size:.62rem;font-family:'Oswald',sans-serif;
+  letter-spacing:.04em;color:var(--text-secondary);white-space:nowrap;
+  align-self:center}
+.chat-refresh-status:empty{display:none}
+
 .chat-search-results{display:flex;flex-direction:column;gap:6px}
 /* Reuses .chat-empty (unmodified) for the "No messages match." state — see
    searchResultsHTML() in chat-ui.js; only the result-row component is new. */

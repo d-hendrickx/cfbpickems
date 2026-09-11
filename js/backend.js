@@ -483,14 +483,83 @@ function misrouteError(action) {
 }
 
 /**
+ * BUG-E (2026-09-11) — TRANSIENT HTTP, the misroute's twin.
+ *
+ * Drew, same day, same live site: a **404** on a request that had already
+ * completed server-side. Apps Script answers a POST with a 302 to a
+ * `googleusercontent.com` URL and the client follows it; that second leg is a
+ * different host on a different edge and it can 404, 500 or 503 on its own,
+ * with the real work already done. `call()` and chatTransport's get()/post()
+ * both did `if (!res.ok) throw new Error('HTTP ' + res.status)` — straight past
+ * the guard, out to the caller. At boot that single flake is a red sync banner
+ * (getAll) or a dead first chat tick, and BUG-F showed what a dead first chat
+ * tick used to cost: up to 68 seconds of blank room.
+ *
+ * Retried on the SAME schedule as a misroute, for the same reason and with the
+ * same safety analysis: a misroute means the action never ran, and a transient
+ * status on the redirect leg means we cannot tell whether it ran — which is why
+ * the retry-safety audit above (reads have no side effect; set/setMany are
+ * last-write-wins on an identical payload; chatAppend is id-deduped;
+ * notifyPush is dedupKey-deduped; a duplicate snapshot row is harmless) is what
+ * this leans on, unchanged. `NO_RETRY_ACTIONS` is honoured identically —
+ * scribeAsk and runTrainer spend real money and get exactly one attempt.
+ *
+ * Only statuses that can mean "try again" are retried. A 400/401/403 is a real,
+ * permanent answer about THIS request (bad token, bad payload) and retrying it
+ * three times only delays the honest error.
+ */
+// RG-99 F3 (reviewer, 2026-09-11): 429 is deliberately NOT in this set. An
+// Apps Script 429 means "over a per-user quota"; retrying it at 400/1200ms is
+// the one case where a fast retry makes things worse. It fails loud instead.
+const TRANSIENT_HTTP = new Set([404, 408, 425, 500, 502, 503, 504]);
+
+/** The transient HTTP status carried by `err`, or 0. Reads `err.status` (set at
+ *  the throw sites here and in chatTransport) and falls back to the message
+ *  text, so a caller that only has the string still classifies correctly. */
+export function transientHttpStatus(err) {
+  let n = Number(err?.status || 0);
+  if (!n) { const m = /^HTTP (\d{3})/.exec(String(err?.message || '')); if (m) n = Number(m[1]); }
+  return TRANSIENT_HTTP.has(n) ? n : 0;
+}
+
+function transientHttpError(action, status, attempts) {
+  // Message keeps the `HTTP <status>` prefix the old error had — it is what
+  // makes the failure diagnosable at a glance, and anything matching on it
+  // keeps working — then says what was already tried, so a player reading the
+  // red banner is not told to "retry in a moment" by code that just did.
+  // `attempts === 1` is the NO_RETRY_ACTIONS path (scribeAsk/runTrainer), which
+  // gets exactly one try on purpose — the copy must not imply we kept trying.
+  const err = new Error(
+    `HTTP ${status} — the backend failed '${action}'` +
+    (attempts > 1 ? ` on all ${attempts} attempts. ` : '. ') +
+    'Nothing was lost locally; this is usually a cold start or a dropped response.'
+  );
+  err.status = status;
+  err.transient = true;
+  err.action = action;
+  return err;
+}
+
+/**
  * Run `send()` (which resolves to the parsed JSON body) and reject a misrouted
- * reply instead of handing it back as success. Retries per the rules above.
+ * reply instead of handing it back as success. Retries per the rules above —
+ * both for a misrouted reply and for a transient HTTP status (BUG-E).
  * Shared by call() here and by js/chatTransport.js's get()/post().
  */
 export async function requestWithMisrouteGuard(action, send) {
   const delays = NO_RETRY_ACTIONS[action] ? [] : MISROUTE_RETRY_DELAYS;
   for (let attempt = 0; ; attempt++) {
-    const data = await send();
+    let data;
+    try {
+      data = await send();
+    } catch (err) {
+      const status = transientHttpStatus(err);
+      if (!status) throw err;                                   // permanent, or not an HTTP status at all
+      if (attempt >= delays.length) throw transientHttpError(action, status, attempt + 1);
+      console.warn(`[backend] HTTP ${status} on '${action}' — retrying in ${delays[attempt]}ms`);
+      await new Promise(r => setTimeout(r, delays[attempt]));
+      continue;
+    }
     if (!isMisroutedResponse(action, data)) return data;
     if (attempt >= delays.length) throw misrouteError(action);
     console.warn(`[backend] misrouted reply to '${action}' — retrying in ${delays[attempt]}ms`);
@@ -514,7 +583,9 @@ async function call(action, payload = {}) {
       body,
       redirect: 'follow',
     });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    // BUG-E — carry the status on the error so requestWithMisrouteGuard can tell
+    // a transient (retryable) status from a permanent one without parsing prose.
+    if (!res.ok) { const e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
     return res.json();
   });
   if (!data.ok) throw new Error(data.error || 'Backend error');

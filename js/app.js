@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.20.1';
+export const APP_VERSION = 'v0.20.3';
 export const APP_VERSION_DATE = '2026-09-11';
 
 /**
@@ -24,6 +24,9 @@ const WHATS_NEW = {
     'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
   ],
   fixed: [
+    'Talking to SCRIBE works now. Your @scribe question was being sent to SCRIBE a split second before the message itself reached the room, so it could never find what you asked and fell back to a canned line every time. It now waits for your message to land first. Questions from before this fix keep their canned reply; ask a fresh one.',
+    'The Locker Room fills on open. Two fixes: a fresh open no longer waits up to a minute after a slow first connection, and the room now remembers what you last saw on this device and shows it instantly while it checks for anything new.',
+    'A 🔄 button in the chat header. Tap it to check for new messages right now instead of waiting for the next automatic check.',
     'Sync and SCRIBE stopped answering the wrong question. The server could occasionally reply to a request with its health check instead of an answer; the app took that as success, which showed up as "Sync refused" on a perfectly healthy league, @scribe falling back to canned lines, and a Trainer run that never ran. Every reply is now checked against the request it belongs to, and the server refuses to answer an empty one.',
     'The Locker Room no longer opens blank and stays blank. Two ways that could happen are gone: a long season\'s log is now read in pages until the room is caught up, and sending a message from an empty room no longer convinces the app it has already seen everything.',
     'No push storm on a cold open. Reading history in pages could have pushed every old message to everyone; history is now told apart from live messages before any push goes out, with a hard cap underneath.',

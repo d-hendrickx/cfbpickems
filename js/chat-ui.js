@@ -80,6 +80,7 @@ import {
   backfillBlockedByEpoch,
   isHiddenByRetention, isHiddenByEpoch,
   isChatImagePreviewEnabled,
+  forceRefresh,
 } from './chat.js';
 import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
 import { recordFeedback, getFeedbackFor, isScribeFeedbackEnabled } from './scribeFeedback.js';
@@ -146,6 +147,98 @@ export function _chatSyncBadgeHTML() {
   const isError = _lastSyncStatus === 'error';
   return `<span id="chat-sync-badge" class="sync-badge${isError ? ' sync-error' : ''}">${isError ? '⚠️ Sync error' : ''}</span>`;
 }
+
+// ── DI-168 — manual chat refresh ──────────────────────────────────────────────
+// Deliberately its OWN local UI state, NOT the global backend sync badge
+// above (_lastSyncStatus/_chatSyncBadgeHTML). That pipe is owned by app.js's
+// GLOBAL backend push/pull status (updateSyncBadge(), driven by
+// onBackendStatus) — writing a manual-refresh "checking…" state through the
+// same variable would let a local, chat-specific poll state stomp the real
+// backend sync/error indicator, and vice versa. Same typography as
+// .sync-badge (small-caps Oswald), separate class (.chat-refresh-status,
+// styles.css), separate state.
+const REFRESH_STATUS_TEXT = {
+  idle: '',
+  checking: 'Checking…',
+  updated: 'Updated just now',
+  failed: "Couldn't refresh — tap to retry",
+};
+const REFRESH_ARIA_LABEL = {
+  idle: 'Refresh chat',
+  checking: 'Checking for new messages…',
+  updated: 'Refresh chat',
+  failed: 'Refresh failed. Tap to retry.',
+};
+let _refreshStatus = 'idle';        // 'idle' | 'checking' | 'updated' | 'failed'
+let _refreshUpdatedTimer = null;
+
+/** Two buttons (main header + game-thread sheet header), one shared status —
+ *  DI-168a: "Two buttons, one handler — both call the same forced-tick
+ *  path." `idPrefix` is 'chat-refresh' (main) or 'chat-sheet-refresh' (sheet),
+ *  matching styles.css's `#chat-refresh-btn,#chat-sheet-refresh-btn` 44px
+ *  override selector exactly. No `title` attribute anywhere (DI-168d —
+ *  tooltips do not fire on touch); every state is carried by the visible
+ *  status text and `aria-label`. */
+function refreshControlHTML(idPrefix) {
+  const status = _refreshStatus;
+  const checking = status === 'checking';
+  return `<button type="button" class="btn btn-ghost btn-sm" id="${idPrefix}-btn"
+      ${checking ? 'disabled aria-disabled="true"' : ''}
+      aria-label="${REFRESH_ARIA_LABEL[status]}">🔄</button>
+    <span class="chat-refresh-status" id="${idPrefix}-status" aria-live="polite">${REFRESH_STATUS_TEXT[status]}</span>`;
+}
+
+/** Patches BOTH refresh controls' DOM state directly rather than forcing a
+ *  full renderChatPage()/renderSheetMessages() re-render for a status change
+ *  — either surface's button may not be in the DOM right now (only one of
+ *  the main page / the sheet is ever open at a time), which getElementById
+ *  returning null already handles safely. */
+function setRefreshStatus(status) {
+  _refreshStatus = status;
+  ['chat-refresh', 'chat-sheet-refresh'].forEach(idPrefix => {
+    const btn = document.getElementById(`${idPrefix}-btn`);
+    if (btn) {
+      if (status === 'checking') { btn.setAttribute('disabled', ''); btn.setAttribute('aria-disabled', 'true'); }
+      else { btn.removeAttribute('disabled'); btn.removeAttribute('aria-disabled'); }
+      btn.setAttribute('aria-label', REFRESH_ARIA_LABEL[status]);
+    }
+    const statusEl = document.getElementById(`${idPrefix}-status`);
+    if (statusEl) statusEl.textContent = REFRESH_STATUS_TEXT[status];
+  });
+}
+
+/**
+ * DI-168f — tap (or Enter/Space via keyboard on the focused native <button>,
+ * DI-168g) calls chat.js's forceRefresh(), which reuses the transport's real
+ * tick()/drainSince() path. The UI-level "already checking" guard here is
+ * belt-and-suspenders alongside the transport's own `inFlight` coalescing
+ * (chatTransport.js) — DI-168f item 3: under normal use THIS guard is what
+ * actually stops a double-tap from doing anything twice, since the button is
+ * disabled the instant the first tap registers.
+ *
+ * DI-168f item 6 (Drew's decision, recorded in the approved design input):
+ * no roomMode() hot-bump on a manual refresh — deliberately just the one
+ * forced check, nothing else changes.
+ */
+async function onChatRefreshTap() {
+  if (_refreshStatus === 'checking') return;
+  clearTimeout(_refreshUpdatedTimer);
+  setRefreshStatus('checking');
+  try {
+    await forceRefresh();
+    setRefreshStatus('updated');
+    _refreshUpdatedTimer = setTimeout(() => setRefreshStatus('idle'), 10000);
+  } catch {
+    setRefreshStatus('failed');
+  }
+}
+// Test-only seams (same convention as `_chatSyncBadgeHTML`/`_toastWouldSuppress`
+// above) — cachetest.mjs drives the REAL markup/state machine/tap handler,
+// never a re-implementation of any of the three.
+export const _refreshControlHTMLForTest = refreshControlHTML;
+export const _setRefreshStatusForTest = setRefreshStatus;
+export const _onChatRefreshTapForTest = onChatRefreshTap;
+export function _refreshStatusForTest() { return _refreshStatus; }
 
 /**
  * Guarded localStorage. These are device-local UI hints (AD-12) — never seam
@@ -1385,6 +1478,7 @@ export function renderChatPage() {
         <div class="chat-header-actions">
           <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat">🔍</button>
           <button class="btn btn-ghost btn-sm" id="chat-prefs-btn" title="Chat preferences">⚙️</button>
+          ${refreshControlHTML('chat-refresh')}
         </div>
       </div>
       ${U.searchOpen ? searchBarHTML() : pillsHTML()}
@@ -1696,6 +1790,7 @@ function bindChatPage() {
     U.prefsOpen = !U.prefsOpen; renderChatPage();
   });
   bindPrefsPanel();
+  document.getElementById('chat-refresh-btn')?.addEventListener('click', onChatRefreshTap);
 
   document.getElementById('chat-load-older')?.addEventListener('click', async e => {
     e.target.textContent = '…';
@@ -2316,6 +2411,7 @@ export function openGameChatSheet(gameId) {
             ${g?.status === GAME_STATUS.LIVE ? ` · <span class="live-pulse"></span> LIVE ${score}` : score ? ' · ' + score : ''}</div></div>
         <div class="chat-sheet-header-actions">
           <button class="btn btn-ghost btn-sm" id="chat-sheet-open-main">Open in chat</button>
+          ${refreshControlHTML('chat-sheet-refresh')}
           <button class="chat-sheet-close" id="chat-sheet-close">✕</button>
         </div>
       </div>
@@ -2333,6 +2429,7 @@ export function openGameChatSheet(gameId) {
     document.getElementById('chat-sheet-hint')?.remove();
   });
   document.getElementById('chat-sheet-open-main')?.addEventListener('click', () => { closeSheet(); U.filter = gameId; navToChat(); });
+  document.getElementById('chat-sheet-refresh-btn')?.addEventListener('click', onChatRefreshTap);
   markSeen(gameId);
   updateChatBadges();
 }
@@ -2740,6 +2837,70 @@ function maybeAnniversary() {
   } catch {}
 }
 
+/**
+ * The onChat() subscriber wired by initChatUI(), below. Factored into a
+ * named, test-exported function (same convention as
+ * `_bindMessageActionButtons`/`_chatSyncBadgeHTML`) so cachetest.mjs can
+ * drive DI-169d's `fromCache` guard through the REAL handler — not a
+ * re-implementation of it. Behavior is otherwise unchanged from the inline
+ * arrow this replaces.
+ */
+function handleChatEvent(kind, detail) {
+  if (kind === 'events') {
+    updateChatBadges();
+    // DI-169d — a cache-primed boot delivers its replay through this SAME
+    // 'events' notification (chat.js's ingest(), fromCache: true). Badge and
+    // render below still run unconditionally — instant render IS the entire
+    // point of the cache — only the toast/blip/push-relay path is
+    // suppressed, so a player's own unread backlog from last session never
+    // toasts or plays a sound before they've opened chat, and never
+    // double-fires once the live drain reconciles the same messages a moment
+    // later (a toast that merely times out doesn't self-suppress on a second
+    // delivery — see chat.js's DI-169 comments).
+    if (!detail?.fromCache) {
+      const self = me();
+      const latest = latestNotifying(self);
+      if (latest && latest.author !== self && !latest.local &&
+          typeof latest.seq === 'number' && latest.seq > getLastSeen().seq) {
+        if (!chatPageActive()) { showToast(latest); playBlip(); }
+      }
+    }
+    if (chatPageActive()) renderChatPage();
+    if (U.sheetGameId) renderSheetMessages();
+    // Live-sync the teaser while the dashboard is on screen: update it if
+    // present, insert it if new activity just made it eligible again (e.g.
+    // a message arrived with a higher seq than the dismissed one), and
+    // remove it if it's no longer eligible (item D — "reappears only for
+    // genuinely new activity").
+    if (dashboardPageActive()) {
+      const teaser = document.getElementById('dash-chat-teaser');
+      const freshHTML = dashboardChatTeaserHTML();
+      if (teaser) {
+        if (freshHTML) { teaser.outerHTML = freshHTML; bindDashboardTeaser(); }
+        else teaser.remove();
+      } else if (freshHTML) {
+        const host = document.getElementById('page-dashboard');
+        host?.insertAdjacentHTML('afterbegin', freshHTML);
+        bindDashboardTeaser();
+      }
+    }
+  }
+  if (kind === 'offline' || kind === 'online') {
+    if (chatPageActive()) renderChatPage();
+  }
+  // UN-112 (DI-112b) — chat.js owns the outbox/lastseen keys and clears
+  // them itself before firing this; module layering means every OTHER
+  // module clears only the keys IT owns, via this notification, rather
+  // than chat.js reaching into them directly.
+  if (kind === 'epochApplied') {
+    lsRemove(TEASER_DISMISS_KEY);   // same stale-cursor risk as lastseen — a dismissal from before the clear must not suppress genuinely new activity
+    lsRemove('cfbp_chat_sheet_hint');   // cosmetic — let the first-use helper reappear in the freshly-cleared room
+    resetScribeMemory();
+    if (chatPageActive()) renderChatPage();
+  }
+}
+export const _handleChatEventForTest = handleChatEvent;
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 export function initChatUI() {
   // v0.17.5 (caught in review): initChat() was called FIRST, but it synchronously
@@ -2752,49 +2913,7 @@ export function initChatUI() {
   // Register first, then boot.
   wireRevealCloser();
 
-  onChat((kind, detail) => {
-    if (kind === 'events') {
-      updateChatBadges();
-      const self = me();
-      const latest = latestNotifying(self);
-      if (latest && latest.author !== self && !latest.local &&
-          typeof latest.seq === 'number' && latest.seq > getLastSeen().seq) {
-        if (!chatPageActive()) { showToast(latest); playBlip(); }
-      }
-      if (chatPageActive()) renderChatPage();
-      if (U.sheetGameId) renderSheetMessages();
-      // Live-sync the teaser while the dashboard is on screen: update it if
-      // present, insert it if new activity just made it eligible again (e.g.
-      // a message arrived with a higher seq than the dismissed one), and
-      // remove it if it's no longer eligible (item D — "reappears only for
-      // genuinely new activity").
-      if (dashboardPageActive()) {
-        const teaser = document.getElementById('dash-chat-teaser');
-        const freshHTML = dashboardChatTeaserHTML();
-        if (teaser) {
-          if (freshHTML) { teaser.outerHTML = freshHTML; bindDashboardTeaser(); }
-          else teaser.remove();
-        } else if (freshHTML) {
-          const host = document.getElementById('page-dashboard');
-          host?.insertAdjacentHTML('afterbegin', freshHTML);
-          bindDashboardTeaser();
-        }
-      }
-    }
-    if (kind === 'offline' || kind === 'online') {
-      if (chatPageActive()) renderChatPage();
-    }
-    // UN-112 (DI-112b) — chat.js owns the outbox/lastseen keys and clears
-    // them itself before firing this; module layering means every OTHER
-    // module clears only the keys IT owns, via this notification, rather
-    // than chat.js reaching into them directly.
-    if (kind === 'epochApplied') {
-      lsRemove(TEASER_DISMISS_KEY);   // same stale-cursor risk as lastseen — a dismissal from before the clear must not suppress genuinely new activity
-      lsRemove('cfbp_chat_sheet_hint');   // cosmetic — let the first-use helper reappear in the freshly-cleared room
-      resetScribeMemory();
-      if (chatPageActive()) renderChatPage();
-    }
-  });
+  onChat(handleChatEvent);
 
   // Boot the engine LAST — everything above is now listening.
   initChat(me());

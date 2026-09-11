@@ -650,11 +650,30 @@ console.log('\n[12b] BUG-C — every page of a multi-page cold-boot backfill is 
     assert(b.live === players.length - 1,
       `CASE 1-variant: the live message after the drain still fires to exactly the expected recipients — got ${b.live}, expected ${players.length - 1}`);
     // ── C. The EMPTY room, wired before the drain ──
-    // A drain that finds nothing folds nothing, so chat.js fires no 'events'
-    // notification at all — there is no batch to seed off. F1's ordering rule
-    // had no answer for that and swallowed the first message ever sent in a
-    // fresh room; the transport's caught-up report does, because the fold was
-    // already complete before that message arrived.
+    // RG-100 F2 (reviewer finding, 2026-09-11) CHANGED THIS CASE'S EXPECTATION
+    // — recorded here rather than silently, per CLAUDE.md's "amended with a
+    // dated note, never silently violated." Original reasoning (kept for the
+    // record): "A drain that finds nothing folds nothing, so chat.js fires no
+    // 'events' notification at all — there is no batch to seed off... the
+    // transport's caught-up report does [answer it], because the fold was
+    // already complete before that message arrived." That was true as far as
+    // it went, but it trusted a `{events:[], head:0}` answer as proof the
+    // room was COMPLETE. It cannot be: that exact shape is ALSO what a cold
+    // Apps Script sheet whose getLastRow() has not warmed up returns — a real
+    // room with real messages, lying about being empty. chatTransport.js's
+    // drainSince() could not tell the two apart from maxSeq>=head alone (0>=0
+    // is true either way), so it now treats head===0 as NEVER caught up
+    // (chatTransport.js's own comment on this, tagged RG-100 F2) — the same
+    // head>0 requirement `seenRoom` already applied a few lines away in
+    // subscribe(). Measured cost of the OLD read: a cold-start artifact ahead
+    // of a real 18-message room relayed 90 pushes for messages every player
+    // had already read (case [12c]-adjacent shape, worse without the burst
+    // cap on a smaller room). Accepted trade, same shape as BUG-C's own: the
+    // very first message posted into a BRAND-NEW, genuinely empty room now
+    // classifies as history on the tick that reveals the room isn't empty
+    // after all — no push for that one message — which is the safe side to
+    // fail to, and the case below now proves it stays limited to exactly that
+    // one message (the SECOND message resumes live relay normally).
     idPrefix = 'c3c'; HEAD = 0; timers.length = 0;
     chat._resetForTest();
     notif._resetChatWatermarkForTest();
@@ -665,11 +684,51 @@ console.log('\n[12b] BUG-C — every page of a multi-page cold-boot backfill is 
     await settle();
     assert(chat.chatStatus().head === 0 && chat.getMessages({ tag: 'all' }).length === 0,
       `fixture check: the drain really did find an empty room — head ${chat.chatStatus().head}, ${chat.getMessages({ tag: 'all' }).length} messages`);
+    assert(chat.chatStatus().caughtUp === false,
+      'RG-100 F2: a head:0 empty delivery is NEVER classified caught-up — it is indistinguishable from a cold-start artifact hiding a real room');
     HEAD = 1;
     await fireHeld();
-    const cLive = capturedC.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
-    assert(cLive === players.length - 1,
-      `the FIRST message ever sent in an empty room still notifies — got ${cLive}, expected ${players.length - 1} (F1's ordering rule swallowed this one)`);
+    const cLiveFirst = capturedC.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+    assert(cLiveFirst === 0,
+      `RG-100 F2: the FIRST message into a room whose only prior read was head:0 classifies as HISTORY, not live — zero relays for it — got ${cLiveFirst} (was 5 before the F2 fix; see the case comment above for why that was actually the bug)`);
+    assert(chat.chatStatus().caughtUp === true,
+      'and the room IS now correctly marked complete, once a delivery has actually reached a real (>0) head');
+    HEAD = 2;
+    await fireHeld();
+    const cLiveSecond = capturedC.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length - cLiveFirst;
+    assert(cLiveSecond === players.length - 1,
+      `and the VERY NEXT message relays completely normally — the F2 fix costs exactly the one ambiguous message, not a permanent suppression — got ${cLiveSecond}, expected ${players.length - 1}`);
+    notif._clearPushAdapterForTest();
+
+    // ── C2. RG-100 F2, end to end through the exact shape the reviewer
+    //    measured: a head:0 cold-start artifact ahead of a REAL, already-
+    //    populated room (not a genuinely empty one) must not mass-relay the
+    //    backfill once the sheet warms up. ──
+    idPrefix = 'c3c2'; HEAD = 0; timers.length = 0;
+    chat._resetForTest();
+    notif._resetChatWatermarkForTest();
+    const capturedC2 = [];
+    notif.registerPushAdapter({ isConfigured: () => true, send: async r => { capturedC2.push(r); return { ok: true }; } });
+    notif.wireChatNotifications();
+    chat.initChat('p1');
+    await settle();                          // tick #1: the cold-start artifact, {events:[], head:0}
+    assert(chat.chatStatus().head === 0 && chat.chatStatus().caughtUp === false,
+      'fixture: the cold-start artifact landed and did NOT latch caughtUp');
+    HEAD = 18;                                // the sheet warms up: 18 real messages were there all along
+    await fireHeld();                         // tick #2: the real backfill
+    const c2History = capturedC2.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+    assert(chat.chatStatus().head === 18 && chat.getMessages({ tag: 'all' }).length === 18,
+      `fixture: the 18-message backfill folded completely — head ${chat.chatStatus().head}, ${chat.getMessages({ tag: 'all' }).length} messages`);
+    assert(c2History === 0,
+      `RG-100 F2: the 18-message backfill relays ZERO pushes (pre-fix: 90 = 18 × 5) — got ${c2History}`);
+    const c2Trips = notif._chatRelayBurstTripsForTest?.() || [];
+    assert(c2Trips.length === 0, `and that zero comes from CLASSIFICATION, not the burst cap swallowing it — trips ${c2Trips.length}, expected 0`);
+    assert(notif._chatWatermarkForTest?.() === 18, `watermark ends at the true head 18, not stuck at the cold-start artifact's 0 — got ${notif._chatWatermarkForTest?.()}`);
+    HEAD = 19;                                // a GENUINELY new message, after reconciliation
+    await fireHeld();
+    const c2Live = capturedC2.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length - c2History;
+    assert(c2Live === players.length - 1,
+      `and a genuinely new message after reconciliation DOES relay — to every other active player — got ${c2Live}, expected ${players.length - 1}`);
     notif._clearPushAdapterForTest();
 
     // ── D. Worst case: a >1-page burst arriving while ALREADY live ──
