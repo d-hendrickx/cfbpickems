@@ -439,7 +439,48 @@ export const DEFAULT_SETTINGS = {
   // just made SCRIBE noticeably worse, stop it now" control, separate from
   // per-learning approve/reject granularity.
   scribeLearningsEnabled: true,
+  // Build 3, Group D (2026-09-11, DI-D1) — the frequency dial. ONE numeric
+  // threshold on a 0-100 scale, stored as its LEVEL NAME so the UI, the
+  // client-side scorer (js/scribeLines.js FREQUENCY_LEVELS) and the server
+  // (backend/Code.gs SCRIBE_FREQUENCY_THRESHOLDS_) all agree on what a level
+  // means without shipping a bare number nobody can interpret later.
+  // Drew's D-1 ruling: all five levels are exposed — Quiet 85 / Reserved 65 /
+  // Balanced 45 / Active 25 / Unhinged 15.
+  // Default-when-missing: 'balanced'. An absent or unrecognized value reads
+  // as Balanced on BOTH sides (CONVENTIONS #10), never as 0 — a malformed
+  // value must make SCRIBE quieter-or-equal, never turn the gate off.
+  scribeFrequency: 'balanced',
+  // Build 3, Group D — client-visible convenience gate for autonomous
+  // participation, the exact mirror of scribeInteractiveEnabled above: it
+  // saves a wasted network round trip when autonomy is known to be off. The
+  // AUTHORITATIVE switch is the server-side SCRIBE_AUTONOMOUS_ENABLED Script
+  // Property, which defaults OFF and is checked first on every call.
+  // Default TRUE here for the same reason as its sibling: once Drew sets the
+  // Script Property, the feature should work without ALSO needing a second
+  // client-side flip.
+  scribeAutonomousEnabled: true,
 };
+
+// ─── SCRIBE FREQUENCY DIAL (Build 3, Group D, DI-D1) ──────────────────────────
+//
+// N-3 (reviewer, round 2) — the canonical level table lives HERE, not in
+// js/scribeLines.js, because two modules need it and one of them
+// (js/scribeAgent.js) cannot import the other without a cycle: scribeLines
+// already imports scribeAgent. data-model.js imports nothing, so it is the
+// one place in this codebase that can be imported from anywhere — the same
+// reasoning AD-20 gives for putting TEAM_ABBR here.
+//
+// A THIRD copy exists in backend/Code.gs (SCRIBE_FREQUENCY_THRESHOLDS_),
+// unavoidably: Apps Script is a separate runtime with no access to this
+// file. scoringtest.mjs parses both sources and asserts they agree, so the
+// two cannot drift silently.
+//
+// One numeric threshold on a 0-100 scale; a candidate speaks when its
+// opportunity score is >= the threshold. Drew's D-1 ruling exposes all five.
+export const SCRIBE_FREQUENCY_LEVELS = {
+  quiet: 85, reserved: 65, balanced: 45, active: 25, unhinged: 15,
+};
+export const SCRIBE_FREQUENCY_DEFAULT = 'balanced';
 
 // ─── DEMO PLAYERS — correct alma maters and 2-letter initials ─────────────────
 

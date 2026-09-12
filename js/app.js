@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.20.3';
+export const APP_VERSION = 'v0.21.0';
 export const APP_VERSION_DATE = '2026-09-11';
 
 /**
@@ -19,6 +19,9 @@ export const APP_VERSION_DATE = '2026-09-11';
 const WHATS_NEW = {
   version: APP_VERSION,
   added: [
+    'SCRIBE can speak up on its own. When something worth a line happens — a lead change, a lone-wolf cover, a broken streak, a unanimous slate, a bold claim in the room — it can post one message about it. The commissioner sets how often under Comm → Settings → SCRIBE Participation, from Quiet to Unhinged. Direct @scribe questions are answered regardless.',
+    'My SCRIBE File. Chat → prefs → 📁 My SCRIBE File shows what SCRIBE has recorded about you in plain language. Delete anything you told it, add hard-limit topics it will never bring up, and set your roast tolerance. Facts it works out from the standings refresh on their own.',
+    'The Locker Room opens instantly. The room now shows what you last saw on this device the moment the app opens, before the league data even loads, then catches up.',
     'You can talk to SCRIBE. Type @scribe in the Locker Room with a real question — a standing, a matchup, a pick record, whether a starter is playing — and it answers with the actual numbers first, banter second. While it looks things up you\'ll see "SCRIBE is looking into it…"; if it\'s throttled or the budget is spent, it says so and falls back to a canned line instead of guessing. Six questions per person per hour.',
     'SCRIBE is learning from you. Every week the Trainer reads your ⭐ ratings, rewrites, 📌 flags and 👁 weigh-ins, works out what landed and what didn\'t, and posts a short out-of-character report to the room, with the full write-up under Rules → SCRIBE Training. Strong patterns adjust how SCRIBE talks; anything shaky waits for the commissioner.',
     'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
@@ -137,6 +140,7 @@ import {
   refreshFromBackend, createSnapshot, listSnapshots, restoreSnapshot,
   onBackendStatus, getSyncStatus, loadDeployedConfig,
   primeFromMirror, isMirrorStale, clearMirror,
+  scribeMemoryListRemote, scribeMemoryUpsertRemote, scribeMemoryDeleteRemote, scribeMemorySyncRemote,
 } from './backend.js';
 
 // ── v0.16.0 modules ──────────────────────────────────────────────────────────
@@ -151,7 +155,14 @@ import {
 } from './chat-ui.js';
 import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled } from './chat.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
-import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote } from './scribeAgent.js';
+import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
+  getScribeFrequency, isScribeAutonomousEnabled } from './scribeAgent.js';
+// Build 3, Group D pass 2 (2026-09-11) — the approved copy tables (FREQUENCY_*
+// / MEMORY_COPY, from SCRIBE_COPY_GROUP_D_091126.md) and the ONE impure
+// week-signal wrapper pass 1 built for these two call sites. Imported rather
+// than retyped so the dial's five level descriptions and the memory modal's
+// body/empty-state strings exist in exactly one place.
+import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, MEMORY_COPY, considerWeekSignals } from './scribeLines.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
 import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
 import { renderPicksFooterHTML, renderWeekRecapCardHTML } from './recap.js';
@@ -280,6 +291,47 @@ async function boot() {
     saveSetting('dashboardLayout', 'compact');
   }
 
+  // ── BUG-G (2026-09-11) — CHAT STARTS HERE, NOT AFTER HYDRATE ──────────────
+  // Second half of Drew's "chat stays blank" report (RG-98 fixed the
+  // scheduling half). The chat engine used to boot from initChatUI() below,
+  // AFTER `await hydrateBackend()` — so DI-169's device-local cache could not
+  // RENDER, and no onChat subscriber existed to render anything the transport
+  // did deliver, until a ~100KB getAll had finished paying the Apps Script
+  // cold start (8s modelled; ~26s with misroute retries; never, on a failed
+  // hydrate). Chat has no data dependency on the hydrated snapshot — its log
+  // lives in a separate Messages sheet reached only through chatTransport.js
+  // (AD-16).
+  //
+  // THIS POSITION IS LOAD-BEARING, and it is above navigateTo() deliberately
+  // (reviewer BLOCK, 2026-09-11). navigateTo() ends with refreshChatEnabled(),
+  // which SUBSCRIBES on its own — so on any device with a primed mirror (every
+  // returning player) the line below used to start the poll loop as a side
+  // effect of a navigation call, with S.head === 0, no device cache replayed,
+  // and no onChat subscriber registered yet. That subscription then spent an
+  // Apps Script cold start on RG-91's full chatSince(0, 500) and delivered its
+  // answer into an empty subscriber set. Running the early phase FIRST means
+  // the cursor, the cache and the subscriber are all in place before anything
+  // else can subscribe, so that first tick is the cheap chatHead probe plus an
+  // incremental read. (chat.js's startChatTransport() ALSO primes before its
+  // own already-subscribed early return, so neither half depends on the other
+  // — belt and braces, because this ordering is exactly the kind that gets
+  // quietly reshuffled later.)
+  //
+  // Before the awaits, not just before hydrate: the cached room renders
+  // SYNCHRONOUSLY here, so it must not wait on the config.json fetch either. A
+  // tick that fires before setBackendConfig() below returns early WITHOUT
+  // consuming a boot-ladder rung (RG-98 F1) and retries ~1s later with the
+  // config in hand — boottest §6 pins that.
+  //
+  // Its own try/catch, deliberately NOT inside the hydrate try below: a chat
+  // failure must never be reported as — or mask — a hydrate failure (AD-06,
+  // the red banner stays exactly as loud as it was).
+  try { initChatUI({ phase: 'early' }); } catch (e) { console.warn('[chat] early start failed', e); }
+  // Item 10 — wired in the EARLY phase as well as the late one (below). The
+  // listener is latched, so the second call is a no-op; what it buys is a
+  // button that works during the hydrate instead of after it.
+  try { wireScribeFileEntry(); } catch (e) { console.warn('[scribe] file entry wiring failed (early)', e); }
+
   if (primedKeys > 0) { navigateTo('dashboard'); rendered = true; }
   // (No mirror yet: leave the built-in section skeletons up until we know
   //  whether this device is cloud-connected — never flash seeded demo data
@@ -296,6 +348,13 @@ async function boot() {
     if (isBackendConfigured()) {
       await hydrateBackend();          // cold start happens here, off-screen
       setBackendMode('googleSheets');
+      // BUG-G — the early start above read the LAST-KNOWN settings.chatEnabled.
+      // This is the first instant the real one is readable, so reconcile here
+      // rather than waiting for initChatUI() a few lines down: a commissioner
+      // who turned chat off while this device was closed must not have it
+      // polling through the whole hydrate-to-render window. Idempotent, and
+      // it subscribes on the OFF->ON direction too.
+      try { refreshChatEnabled(); } catch {}
       ensureSeedData();
       refreshHeader();
       navigateTo(rendered ? (state.currentTab || 'dashboard') : 'dashboard');
@@ -318,8 +377,17 @@ async function boot() {
   }
   if (backendErrorBanner) showBackendErrorBanner(backendErrorBanner);
 
-  // Chat engine + badges (v0.16.0)
+  // Chat engine + badges (v0.16.0) — BUG-G: this is now the LATE phase. The
+  // transport and the cached-room replay already started above, before the
+  // hydrate; what still has to wait for the hydrated settings blob runs here
+  // (epoch heal, outbox load + flush) plus all the UI wiring. Unchanged
+  // otherwise, including for the paths that never ran an early phase at all.
   try { initChatUI(); updateChatBadges(); } catch (e) { console.warn('[chat] init failed', e); }
+  // Build 3, Group D (2026-09-11, DI-D4) — one delegated document listener
+  // for the "My SCRIBE File" button chat-ui.js renders in the player prefs
+  // panel. Idempotent (wires once) and boot-inert: it reads nothing, writes
+  // nothing and fetches nothing until a player actually taps it.
+  try { wireScribeFileEntry(); } catch (e) { console.warn('[scribe] file entry wiring failed', e); }
 
   // ── Groups A/B — notifications boot wiring (2026-09-10) ──────────────────
   try {
@@ -1092,6 +1160,624 @@ async function openNotificationCenter() {
   ov.querySelector('#notif-close')?.addEventListener('click', () => ov.remove());
   ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
   await refreshNotifCenterBody(ov, playerId);
+}
+
+// ═══ BUILD 3, GROUP D pass 2 (2026-09-11) — "MY SCRIBE FILE" ════════════════
+//
+// DI-D3 (player profile) + DI-D4 (player rights over memory), per
+// `DESIGN_INPUTS_BATCH2_091026.md` Document 2 §5–§6 and Drew's D-5 ruling
+// (a real confirm before a real delete — correction #7).
+//
+// WHERE THIS DATA LIVES, AND WHY IT IS NOT IN THE STORAGE SEAM. SCRIBE's
+// memory rows live in their own `CFBP_SCRIBE_MEMORY` sheet (backend/Code.gs),
+// NOT in the `cfbp_*` key/value store — DI-D2 rejects the KV store for this
+// data explicitly, because a player's non-negotiable right to delete a line
+// needs a TRUE physical row delete, which an append-only log or a
+// last-write-wins blob cannot give. So these rows deliberately do not go
+// through `load()`/`save()` (AD-02 governs the KV store; this is a different
+// store with its own action set), and they are never mirrored into it. They
+// are held in the module-level cache below and refreshed explicitly when the
+// modal opens — the same "fetch on open, never a background sync" shape the
+// Notification Center's own body fetch uses.
+//
+// PRIVACY, STATED HONESTLY AND NOT OVERSOLD (Drew's ruling #4): the server's
+// ownership check is best-effort — a PIN-gated app with a shared token has no
+// authenticated identity to check against. The footnote in the modal says so
+// in plain language rather than implying a boundary the architecture does not
+// provide. This module adds a SECOND, client-side filter on top (every render
+// path below drops any row whose `playerId` is not the signed-in player), so
+// a server bug or a mis-wired request cannot put another player's file on
+// this screen. Same lesson as E1's attribution-leak test, one surface over.
+
+/** DI-D4's delete confirm, verbatim per Drew's D-5 / correction #7. ONE
+ *  confirm — the app's low-friction toggle norm is deliberately broken here
+ *  because this is a physical, irreversible delete of a fact about a person. */
+const SCRIBE_DELETE_CONFIRM = 'Delete this? SCRIBE will forget it.';
+/** DI-D4's inline write-failure copy, verbatim. Never a silent failure. */
+const SCRIBE_FILE_SAVE_ERROR = "Couldn't save — try again.";
+/** The read half of the same promise. DI-D4 names only the write copy; this
+ *  is the same sentence in the same register for the fetch that feeds the
+ *  surface, rather than an empty state that would read as "nothing recorded"
+ *  when the truth is "we could not look." */
+const SCRIBE_FILE_LOAD_ERROR = "Couldn't load — try again.";
+/** DI-D4: `<input maxlength="80">`. The constant is shared by the markup and
+ *  by the handler, so the clamp cannot drift from the attribute. */
+const SCRIBE_HARDLINE_MAX = 80;
+/** DI-D4's "unconfirmed" band, as amended by the reviewer (item 5,
+ *  2026-09-11): the tag appears for 0.5 ≤ confidence < 0.85 and nowhere
+ *  else. A row with NO confidence at all — missing, null, empty string — is
+ *  untagged, because `Number('')` is 0 and `Number(null)` is 0, so an
+ *  open-ended "below 0.85" test silently labelled every unstamped row
+ *  "unconfirmed" on the strength of a coercion rather than a judgement.
+ *  That is why the guard below tests the RAW value before it coerces. */
+const SCRIBE_CONFIDENCE_CONFIRMED = 0.85;
+const SCRIBE_CONFIDENCE_FLOOR = 0.5;
+/** DI-D4 §Section 3 — plain labels, not SCRIBE-voiced. Stored as a memory row
+ *  of kind 'roastTolerance' (schema-present; nothing consumes it yet — DI-D4's
+ *  own scope note). */
+const ROAST_TOLERANCE_OPTIONS = [
+  { value: 'light',     label: 'Light' },
+  { value: 'standard',  label: 'Standard' },
+  { value: 'no_limits', label: 'No limits' },
+];
+/**
+ * F3 (copy amendment, coordinator 2026-09-11) — Section 1's body copy.
+ *
+ * The pre-amendment wording ("Delete anything — no explanation needed.")
+ * became inaccurate the moment computed rows went read-only: a player CAN delete
+ * anything he told SCRIBE, and cannot delete the facts it derives from the
+ * standings, because those regenerate on the next sync. The amended line
+ * says exactly that instead of promising something the surface does not do.
+ *
+ * Now imported from MEMORY_COPY.sectionBody (moved there 2026-09-11).
+ */
+const SCRIBE_SECTION1_BODY = MEMORY_COPY.sectionBody;   // moved into MEMORY_COPY (coordinator, 2026-09-11) — single home for approved copy
+
+/** Load-bearing, per DI-D4's explicit instruction not to soften it. */
+const SCRIBE_HARDLINE_BODY = 'Topics SCRIBE will never bring up about you. Private from other players. Visible to the commissioner until real sign-in ships — see below.';
+/** Always visible, never collapsible (DI-D4). */
+const SCRIBE_PRIVACY_FOOTNOTE = 'This is a UI-level boundary, not a technical one — the commissioner administers the underlying data. Real per-player privacy is planned but not built yet (see the SSO roadmap).';
+
+// ── Transport seam ──────────────────────────────────────────────────────────
+// The DEFAULT is the real js/backend.js relay set; production never rewires
+// it. The seam exists so groupdtest.mjs can drive delete/add/tolerance
+// end-to-end with no network — and the test additionally asserts that these
+// defaults ARE the backend exports by identity, so a stubbed test can never
+// quietly prove something about a stub instead of about the app.
+const SCRIBE_MEMORY_TRANSPORT_DEFAULTS = {
+  list: scribeMemoryListRemote,
+  upsert: scribeMemoryUpsertRemote,
+  remove: scribeMemoryDeleteRemote,
+  sync: scribeMemorySyncRemote,
+};
+let scribeMemoryTransport = { ...SCRIBE_MEMORY_TRANSPORT_DEFAULTS };
+/** TEST SEAM (same convention as scribeAgent.js's wireScribeRemoteTransport). */
+export function _wireScribeMemoryTransportForTest(t = {}) {
+  scribeMemoryTransport = { ...SCRIBE_MEMORY_TRANSPORT_DEFAULTS, ...t };
+}
+export function _restoreScribeMemoryTransportForTest() {
+  scribeMemoryTransport = { ...SCRIBE_MEMORY_TRANSPORT_DEFAULTS };
+}
+export function _scribeMemoryTransportDefaultsForTest() { return SCRIBE_MEMORY_TRANSPORT_DEFAULTS; }
+
+// ── Module-level cache (explicitly refreshed on modal open) ─────────────────
+const scribeMemoryCache = { playerId: null, rows: [], loading: false, error: '' };
+/** Inline write error (DI-D4's error state), SCOPED to the control that
+ *  failed — `{ scope:'row'|'hardline'|'tolerance'|'file', id, message }` or
+ *  null. Item 9: a delete that fails must say so ON THAT ROW, not in a
+ *  banner the player may have scrolled away from. Cleared by the next
+ *  successful write or refresh. */
+let scribeFileRowError = null;
+export function _scribeMemoryCacheForTest() { return scribeMemoryCache; }
+/** The current scoped inline error, for groupdtest's item-9 assertions. */
+export function _scribeFileRowErrorForTest() { return scribeFileRowError; }
+export function _setScribeMemoryCacheForTest(playerId, rows = []) {
+  scribeMemoryCache.playerId = playerId;
+  scribeMemoryCache.rows = rows.slice();
+  scribeMemoryCache.loading = false;
+  scribeMemoryCache.error = '';
+  scribeFileRowError = null;
+}
+
+/**
+ * Explicit refresh — called when the modal opens, never on a timer and never
+ * at boot (RG-12's lesson generalized: nothing in this feature runs during
+ * the boot path). Always narrows to the signed-in player's own rows before
+ * anything can render them.
+ */
+export async function refreshScribeMemory(playerId) {
+  if (!playerId) { _setScribeMemoryCacheForTest(null, []); return scribeMemoryCache; }
+  scribeMemoryCache.playerId = playerId;
+  scribeMemoryCache.loading = true;
+  scribeMemoryCache.error = '';
+  scribeFileRowError = null;
+  try {
+    const r = await scribeMemoryTransport.list({ playerId });
+    const rows = (r && r.records) || [];
+    scribeMemoryCache.rows = rows.filter(row => row && String(row.playerId) === String(playerId));
+  } catch (err) {
+    console.warn('[scribe-memory] list failed', err);
+    scribeMemoryCache.rows = [];
+    scribeMemoryCache.error = SCRIBE_FILE_LOAD_ERROR;
+  } finally {
+    scribeMemoryCache.loading = false;
+  }
+  return scribeMemoryCache;
+}
+
+/**
+ * DI-D3 — the season standings rows, computed EXACTLY the way the Standings
+ * page computes them (CONVENTIONS #21: the same function, the same inputs,
+ * never a parallel recompute). Factored out of renderLeaderboard() so the
+ * profile view and the page it must agree with have one definition between
+ * them; renderLeaderboard() now calls this.
+ */
+export function seasonStandingsRows() {
+  const players = getPlayers().filter(p => p.active);
+  // Unfiltered on purpose — group membership must see every week, including
+  // drafts, to know a group's TRUE size (renderLeaderboard's own note).
+  const allWeeksRaw = getWeeks();
+  const visibleWeekIds = new Set(allWeeksRaw.filter(w => w.showInHistory !== false && w.dataSourceMode !== 'demo').map(w => w.weekId));
+  const allResults = getWeeklyResults().filter(r => visibleWeekIds.has(r.weekId));
+  return calculateSeasonStandings(players, allResults, allWeeksRaw);
+}
+
+/**
+ * DI-D3 — `getPlayerProfile(playerId, { rows, withStats })`. A PURE
+ * AGGREGATION, not a store:
+ *   (a) computed stats, via seasonStandingsRows() — the Standings page's own
+ *       numbers, not a second reading of them — only when `withStats:true`
+ *       (item 7: the modal renders no stats, so it does not pay for them);
+ *   (b) `player.preferences.*`, already stored per CLAUDE.md architecture
+ *       bullet 4;
+ *   (c) D2 Facts (`kind:'fact'`);
+ *   (d) D2 Relations (`kind:'relation'`, `headToHead:<otherId>`).
+ * Plus the two player-authored kinds D4 writes (hard-lines, roast tolerance).
+ *
+ * NO-FABRICATION GUARD, structural: an absent field is absent. A player with
+ * zero memory rows gets a well-formed object with empty arrays and
+ * `stats:null` — never an invented placeholder, never a throw. The render
+ * function below prints nothing for what is not here.
+ *
+ * `rows` is injectable so the function is testable (and provably pure) with a
+ * fixture; production passes nothing and it reads the module cache.
+ * `statsIncluded` reports which of the two shapes came back, so a caller can
+ * never mistake "not asked for" for "this player has no standings row."
+ */
+export function getPlayerProfile(playerId, { rows = null, withStats = false } = {}) {
+  const id = String(playerId || '');
+  const player = id ? getPlayer(id) : null;
+  const source = rows || scribeMemoryCache.rows || [];
+  // Defense in depth — see this section's header. Nothing about another
+  // player can reach a render path from here, whatever the server returned.
+  const mine = source.filter(r => r && String(r.playerId) === id);
+  const facts = mine.filter(r => r.kind === 'fact');
+  const relations = mine.filter(r => r.kind === 'relation');
+  const hardlines = mine.filter(r => r.kind === 'hardline');
+  const toleranceRow = mine.find(r => r.kind === 'roastTolerance') || null;
+  return {
+    playerId: id,
+    displayName: player?.displayName || '',
+    // Item 7 (reviewer, 2026-09-11) — LAZY, because the modal does not render
+    // this. `seasonStandingsRows()` walks every player, every week and every
+    // weekly-result row through calculateSeasonStandings(); doing that on
+    // EVERY repaint of a surface that never displays the answer is work
+    // nobody asked for. DI-D3's contract is unchanged — the profile still
+    // carries the Standings page's own numbers, computed by the same
+    // function — it is now computed only when a caller says it wants them.
+    // `null` when not requested, never a half-populated object.
+    stats: withStats ? (id ? (seasonStandingsRows().find(s => s.playerId === id) || null) : null) : null,
+    statsIncluded: !!withStats,
+    preferences: { ...(player?.preferences || {}) },
+    facts,
+    relations,
+    hardlines,
+    // DI-D4's "Episode pointer" — a recorded row that points back at the
+    // message it came from (`sourceMessageId`, written by the Trainer from
+    // the 📌 `remember_this` source set) — is not a separate collection.
+    // It is a PROPERTY of a fact/relation row, and `scribeMemoryRowHTML()`
+    // reads `row.sourceMessageId` directly to decide whether that row gets
+    // the jump affordance. The `episodes` array this used to also return was
+    // computed on every call and rendered nowhere (item 7).
+    roastTolerance: toleranceRow ? String(toleranceRow.value || '') : null,
+    roastToleranceRowId: toleranceRow ? toleranceRow.id : null,
+    isEmpty: mine.length === 0,
+  };
+}
+
+// ── Product-language labels ─────────────────────────────────────────────────
+// DI-D4: rows read as "Alma mater", never as a raw field name. Unknown keys
+// fall back to a de-camelCased version of the key rather than being hidden —
+// a fact SCRIBE holds must always be visible and deletable, even if this
+// table has not been taught its name yet.
+const SCRIBE_FACT_LABELS = {
+  seasonRecord: 'Season record',
+  winPct: 'Win %',
+  currentRank: 'Current rank',
+  weeklyWins: 'Weekly wins',
+  pickStyle: 'Pick style',
+  currentStreak: 'Current streak',
+  almaMater: 'Alma mater',
+  job: 'Job',
+  rival: 'Rival',
+  theme: 'Theme',
+};
+
+function scribeMemoryRowLabel(row) {
+  const key = String(row?.key || '');
+  if (row?.kind === 'relation' && key.startsWith('headToHead')) {
+    const otherId = key.split(':')[1] || '';
+    const other = otherId ? (getPlayer(otherId)?.displayName || otherId) : '';
+    return other ? `Head-to-head vs ${other}` : 'Head-to-head';
+  }
+  if (row?.kind === 'hardline') return 'Off limits';
+  if (row?.kind === 'roastTolerance') return 'Roast tolerance';
+  if (SCRIBE_FACT_LABELS[key]) return SCRIBE_FACT_LABELS[key];
+  const base = key.split(':')[0].replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim();
+  return base ? base.charAt(0).toUpperCase() + base.slice(1) : 'Note';
+}
+
+function scribeMemoryRowValue(row) {
+  const key = String(row?.key || '');
+  if (row?.kind === 'relation' && key.startsWith('headToHead')) {
+    // Server shape: JSON `{pair:'a|b', gamesCompared, agreed, aRightBWrong,
+    // bRightAWrong}` where `a` is the alphabetically first id. Rendered in
+    // second person for whichever side the viewer is on; a row whose pair
+    // cannot be parsed falls back to the raw stored string rather than
+    // guessing at a number (SCRIBE.md §9's no-fabrication rule applied to the
+    // render layer).
+    try {
+      const v = JSON.parse(String(row.value || ''));
+      const first = String(v.pair || '').split('|')[0];
+      const mineIsA = first === String(row.playerId || '');
+      const mine = mineIsA ? v.aRightBWrong : v.bRightAWrong;
+      const theirs = mineIsA ? v.bRightAWrong : v.aRightBWrong;
+      if (!Number.isFinite(Number(v.gamesCompared))) return String(row.value || '');
+      return `${v.gamesCompared} games compared · agreed ${v.agreed} · you right ${mine} · them right ${theirs}`;
+    } catch { return String(row.value || ''); }
+  }
+  return String(row?.value || '');
+}
+
+function scribeMemoryIsUnconfirmed(row) {
+  const raw = row?.confidence;
+  if (raw === undefined || raw === null || raw === '') return false;   // before Number() — see the note above
+  const c = Number(raw);
+  if (!Number.isFinite(c)) return false;
+  return c >= SCRIBE_CONFIDENCE_FLOOR && c < SCRIBE_CONFIDENCE_CONFIRMED;
+}
+
+/**
+ * A COMPUTED row is derived, not recorded: the server recomputes it from the
+ * standings on every memory sync, so deleting one would be undone by the
+ * next refresh. Those rows render read-only with an "as of" stamp instead of
+ * a 🗑 (coordinator amendment, 2026-09-11). Everything a person actually
+ * said or a Trainer proposed about a person — 'player-stated',
+ * 'commissioner-set', 'trainer-proposed' — keeps the delete, which is the
+ * part of DI-D4's promise that has to hold.
+ */
+function scribeMemoryIsComputed(row) { return String(row?.provenance || '') === 'computed'; }
+
+/** "as of Sep 11" for a computed row's `refreshedAt` stamp. Absent or
+ *  unparseable renders nothing rather than a guessed date — the same
+ *  no-fabrication instinct the rest of this surface follows. Tolerates rows
+ *  written before the stamp existed (CONVENTIONS #10). */
+function scribeAsOfLabel(iso) {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return '';
+  try { return 'as of ' + new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  catch { return ''; }
+}
+
+/** One "What SCRIBE knows" row. `.card` per CONVENTIONS #15; 🗑 is an emoji
+ *  per CONVENTIONS #16 and carries its own ≥44px floor in CSS. */
+function scribeMemoryRowHTML(row, errorHTML = '') {
+  const unconfirmed = scribeMemoryIsUnconfirmed(row);
+  const computed = scribeMemoryIsComputed(row);
+  const asOf = computed ? scribeAsOfLabel(row.refreshedAt) : '';
+  const jump = row.sourceMessageId
+    ? `<button class="scribe-mem-jump" data-jump="${escHtml(row.sourceMessageId)}">↩ Jump to the message</button>`
+    : '';
+  return `
+    <div class="card scribe-mem-row${computed ? ' scribe-mem-computed' : ''}" data-mem-id="${escHtml(row.id)}">
+      <div class="scribe-mem-main">
+        <div class="scribe-mem-label">${escHtml(scribeMemoryRowLabel(row))}</div>
+        <div class="scribe-mem-value">${escHtml(scribeMemoryRowValue(row))}${unconfirmed ? ' <span class="scribe-mem-tag">unconfirmed</span>' : ''}</div>
+        ${unconfirmed ? `<div class="text-muted text-xs scribe-mem-hint">${escHtml(MEMORY_COPY.unconfirmedTag)}</div>` : ''}
+        ${asOf ? `<div class="text-muted text-xs scribe-mem-asof">${escHtml(asOf)}</div>` : ''}
+        ${jump}
+        ${errorHTML}
+      </div>
+      ${computed
+        ? '<span class="scribe-mem-computed-note text-muted text-xs">Kept current<br>automatically</span>'
+        : `<button class="scribe-mem-del" data-mem-del="${escHtml(row.id)}" aria-label="Delete this">🗑</button>`}
+    </div>`;
+}
+
+/**
+ * The whole modal body. PURE — state in, HTML out, no DOM — which is what
+ * makes DI-D4's states (empty / populated / loading / error) assertable in
+ * groupdtest.mjs's RENDERED OUTPUT rather than only in source (RG-27: a
+ * source-grep test passes when the guard is reverted).
+ */
+export function renderScribeFileBodyHTML({ profile = null, loading = false, error = '', rowError = null } = {}) {
+  const footnote = `<p class="text-muted text-xs scribe-file-footnote">${escHtml(SCRIBE_PRIVACY_FOOTNOTE)}</p>`;
+  // Item 9 (reviewer, 2026-09-11) — A ROW-LEVEL ERROR BELONGS ON ITS ROW.
+  // This used to render one banner at the top of the modal, which on a 375px
+  // screen can be scrolled far away from the control that failed: the player
+  // sees a row that looks unchanged and a sentence somewhere above it. The
+  // error is now placed where the action was — inside the failing row, under
+  // the Add control, or under the tolerance buttons. `rowError` is
+  // `{ scope, id, message }`; a bare string is still accepted and treated as
+  // scope 'file' so no caller can crash on the shape change.
+  const errAt = (scope, id) => {
+    if (!rowError) return '';
+    const e = (typeof rowError === 'string') ? { scope: 'file', message: rowError } : rowError;
+    if (!e.message) return '';
+    if (e.scope !== scope) return '';
+    if (scope === 'row' && String(e.id || '') !== String(id || '')) return '';
+    return `<p class="text-muted text-xs scribe-file-rowerror" role="alert">${escHtml(e.message)}</p>`;
+  };
+  if (loading) {
+    // DI-A3's skeleton idiom, verbatim (renderNotifCenterSkeletonHTML).
+    return `<div class="scribe-file-skeleton">
+      <div class="card" style="height:52px;opacity:.5"></div>
+      <div class="card" style="height:52px;opacity:.35"></div>
+      <div class="card" style="height:52px;opacity:.2"></div>
+    </div>${footnote}`;
+  }
+  if (error) {
+    return `<p class="text-muted text-sm scribe-file-error" role="alert">${escHtml(error)}</p>${footnote}`;
+  }
+  const p = profile || { facts: [], relations: [], hardlines: [], roastTolerance: null, isEmpty: true };
+  const knows = [...(p.facts || []), ...(p.relations || [])];
+  const knowsHTML = knows.length
+    ? knows.map(row => scribeMemoryRowHTML(row, errAt('row', row.id))).join('')
+    : `<p class="text-muted text-sm scribe-mem-empty">${escHtml(MEMORY_COPY.emptyState)}</p>`;
+  const hardHTML = (p.hardlines || []).length
+    ? (p.hardlines || []).map(row => `
+      <div class="card scribe-mem-row" data-mem-id="${escHtml(row.id)}">
+        <div class="scribe-mem-main"><div class="scribe-mem-value">${escHtml(String(row.value || ''))}</div>${errAt('row', row.id)}</div>
+        <button class="scribe-mem-del" data-mem-del="${escHtml(row.id)}" aria-label="Delete this">🗑</button>
+      </div>`).join('')
+    : `<p class="text-muted text-sm scribe-mem-empty">Nothing off limits yet.</p>`;
+  const tolerance = String(p.roastTolerance || '');
+  const toleranceHTML = ROAST_TOLERANCE_OPTIONS.map(o =>
+    `<button class="scribe-tolerance-opt${o.value === tolerance ? ' selected' : ''}" data-tolerance="${o.value}" aria-pressed="${o.value === tolerance ? 'true' : 'false'}">${escHtml(o.label)}</button>`).join('');
+  return `
+    ${errAt('file')}
+    <div class="scribe-file-section">
+      <h4 class="scribe-file-h">What SCRIBE knows</h4>
+      <p class="text-muted text-xs">${escHtml(SCRIBE_SECTION1_BODY)}</p>
+      <div class="scribe-file-rows">${knowsHTML}</div>
+    </div>
+    <div class="scribe-file-section">
+      <h4 class="scribe-file-h">Hard limits</h4>
+      <p class="text-muted text-xs">${escHtml(SCRIBE_HARDLINE_BODY)}</p>
+      <div class="scribe-file-rows">${hardHTML}</div>
+      <div class="scribe-hardline-add">
+        <input class="form-input" id="scribe-hardline-input" type="text" maxlength="${SCRIBE_HARDLINE_MAX}" placeholder="Add a topic" aria-label="Add a topic" />
+        <button class="btn btn-secondary btn-sm" id="scribe-hardline-add-btn">Add</button>
+      </div>
+      ${errAt('hardline')}
+    </div>
+    <div class="scribe-file-section">
+      <h4 class="scribe-file-h">Roast tolerance</h4>
+      <div class="scribe-tolerance-row">${toleranceHTML}</div>
+      ${errAt('tolerance')}
+    </div>
+    ${footnote}`;
+}
+
+// ── Write handlers — exported so groupdtest.mjs drives the REAL ones ────────
+
+/** DI-D4: tapping 🗑 asks once ("Delete this? SCRIBE will forget it.") and
+ *  then physically deletes. A cancel writes nothing and calls nothing. */
+export async function scribeFileDeleteRow(id) {
+  const playerId = getSession()?.playerId || '';
+  if (!playerId || !id) return { ok: false, skipped: 'no_session' };
+  const row = (scribeMemoryCache.rows || []).find(r => r.id === id);
+  if (!row || String(row.playerId) !== String(playerId)) return { ok: false, skipped: 'not_mine' };
+  // Belt and suspenders with the render: a computed row has no 🗑, and if one
+  // is ever reached some other way the delete would be undone by the next
+  // refresh anyway — better to refuse than to promise a deletion that
+  // silently comes back.
+  if (scribeMemoryIsComputed(row)) return { ok: false, skipped: 'computed' };
+  if (typeof confirm === 'function' && !confirm(SCRIBE_DELETE_CONFIRM)) return { ok: false, skipped: 'cancelled' };
+  try {
+    const r = await scribeMemoryTransport.remove({ id, playerId });
+    if (r && r.ok === false) throw new Error(r.error || 'delete failed');
+    scribeMemoryCache.rows = (scribeMemoryCache.rows || []).filter(x => x.id !== id);
+    scribeFileRowError = null;
+    return { ok: true, id };
+  } catch (err) {
+    console.warn('[scribe-memory] delete failed', err);
+    scribeFileRowError = { scope: 'row', id, message: SCRIBE_FILE_SAVE_ERROR };
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+/**
+ * The upsert key is (playerId, kind, key) server-side, so each topic needs
+ * its own key or five hard-lines would collapse onto one row.
+ *
+ * Item 6 (reviewer, 2026-09-11) — the slug ALONE is not enough. Truncating
+ * to a fixed prefix means two different 60-character topics that happen to
+ * start the same way produce the same key, and the second one silently
+ * OVERWRITES the first: a player would add a boundary, watch the previous
+ * one vanish, and have no way to know why. The key is now a bounded slug
+ * (readable in the raw sheet, which is how the commissioner inspects this)
+ * plus a short hash of the WHOLE topic, so distinctness depends on the full
+ * text while re-adding the identical topic still lands on the same row.
+ *
+ * Same string-hash shape scribeLines.js's own `hashLine()` uses — a
+ * 32-bit rolling hash rendered base36. Not cryptographic and does not need
+ * to be: the population is a handful of rows per player.
+ */
+function hardlineHash(topic) {
+  let h = 0;
+  const s = String(topic);
+  for (let i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) | 0; }
+  return (h >>> 0).toString(36).slice(0, 6).padStart(6, '0');
+}
+function hardlineKeyFor(topic) {
+  const slug = String(topic).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/, '');
+  return 'topic:' + (slug || 'topic') + '-' + hardlineHash(topic);
+}
+
+function mergeIntoMemoryCache(record) {
+  if (!record) return;
+  const rows = (scribeMemoryCache.rows || []).slice();
+  const at = rows.findIndex(r => r.id === record.id ||
+    (String(r.playerId) === String(record.playerId) && r.kind === record.kind && r.key === record.key));
+  if (at >= 0) rows[at] = record; else rows.push(record);
+  scribeMemoryCache.rows = rows;
+}
+
+export async function scribeFileAddTopic(text) {
+  const playerId = getSession()?.playerId || '';
+  const topic = String(text || '').trim().slice(0, SCRIBE_HARDLINE_MAX);
+  if (!playerId) return { ok: false, skipped: 'no_session' };
+  if (!topic) return { ok: false, skipped: 'empty' };
+  const record = {
+    playerId, kind: 'hardline', key: hardlineKeyFor(topic), value: topic,
+    // The server FORCES these two for a player-authored write (Code.gs
+    // scribeMemoryUpsert). Sent anyway so the request is well-formed and the
+    // intent is readable at the call site, never relied on.
+    provenance: 'player-stated', confidence: 1,
+  };
+  try {
+    const r = await scribeMemoryTransport.upsert(record);
+    if (r && r.ok === false) throw new Error(r.error || 'save failed');
+    if (r && r.record) mergeIntoMemoryCache(r.record); else await refreshScribeMemory(playerId);
+    scribeFileRowError = null;
+    return { ok: true, record: (r && r.record) || record };
+  } catch (err) {
+    console.warn('[scribe-memory] hard-line upsert failed', err);
+    scribeFileRowError = { scope: 'hardline', message: SCRIBE_FILE_SAVE_ERROR };
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+export async function scribeFileSetTolerance(value) {
+  const playerId = getSession()?.playerId || '';
+  const v = String(value || '');
+  if (!playerId) return { ok: false, skipped: 'no_session' };
+  if (!ROAST_TOLERANCE_OPTIONS.some(o => o.value === v)) return { ok: false, skipped: 'unknown_value' };
+  const record = { playerId, kind: 'roastTolerance', key: 'roastTolerance', value: v, provenance: 'player-stated', confidence: 1 };
+  try {
+    const r = await scribeMemoryTransport.upsert(record);
+    if (r && r.ok === false) throw new Error(r.error || 'save failed');
+    if (r && r.record) mergeIntoMemoryCache(r.record); else await refreshScribeMemory(playerId);
+    scribeFileRowError = null;
+    return { ok: true, record: (r && r.record) || record };
+  } catch (err) {
+    console.warn('[scribe-memory] roast-tolerance upsert failed', err);
+    scribeFileRowError = { scope: 'tolerance', message: SCRIBE_FILE_SAVE_ERROR };
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+// ── The modal ───────────────────────────────────────────────────────────────
+
+function repaintScribeFileBody(ov) {
+  const body = ov?.querySelector?.('#scribe-file-body');
+  if (!body) return;
+  const playerId = getSession()?.playerId || '';
+  body.innerHTML = renderScribeFileBodyHTML({
+    profile: playerId ? getPlayerProfile(playerId) : null,
+    loading: scribeMemoryCache.loading,
+    error: scribeMemoryCache.error,
+    rowError: scribeFileRowError,
+  });
+  bindScribeFileBody(ov);
+}
+
+function bindScribeFileBody(ov) {
+  if (!ov?.querySelectorAll) return;
+  ov.querySelectorAll('[data-mem-del]').forEach(btn => btn.addEventListener('click', async () => {
+    await scribeFileDeleteRow(btn.dataset.memDel);
+    repaintScribeFileBody(ov);
+  }));
+  // Reuses quoteHTML()'s `data-jump` attribute and the SAME scroll+flash
+  // mechanism the notification deep link already owns (deepLinkTo →
+  // `[data-mid]` + `.chat-flash`). No new navigation mechanism (DI-D4).
+  ov.querySelectorAll('[data-jump]').forEach(btn => btn.addEventListener('click', () => {
+    const messageId = btn.dataset.jump;
+    ov.remove();
+    deepLinkTo({ tab: 'chat', params: { messageId } });
+  }));
+  ov.querySelector('#scribe-hardline-add-btn')?.addEventListener('click', async () => {
+    const input = ov.querySelector('#scribe-hardline-input');
+    const value = input?.value || '';
+    if (!String(value).trim()) return;
+    await scribeFileAddTopic(value);
+    repaintScribeFileBody(ov);
+  });
+  ov.querySelectorAll('[data-tolerance]').forEach(btn => btn.addEventListener('click', async () => {
+    await scribeFileSetTolerance(btn.dataset.tolerance);
+    repaintScribeFileBody(ov);
+  }));
+}
+
+/**
+ * DI-D4's surface. `.modal-overlay.centered .modal` verbatim (the game modal
+ * / Notification Center precedent) — no new sheet component.
+ *
+ * Signed out returns null without rendering anything: the entry point in the
+ * chat prefs panel is already hidden for an anonymous viewer, and this is the
+ * second lock on the same door (the `_playerPref` no-op-without-session
+ * pattern DI-D4 names).
+ */
+export async function openScribeFileModal() {
+  const playerId = getSession()?.playerId || '';
+  if (!playerId) return null;
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>My SCRIBE File</h3><button class="modal-close" id="scribe-file-close">✕</button></div>
+    <div id="scribe-file-body">${renderScribeFileBodyHTML({ loading: true })}</div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#scribe-file-close')?.addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  await refreshScribeMemory(playerId);
+  repaintScribeFileBody(ov);
+  return ov;
+}
+
+/**
+ * The entry point lives in the chat prefs panel (js/chat-ui.js —
+ * `prefsPanelHTML()`, where chatNick/accent are edited, which is the player
+ * settings surface DI-D4 names). It is wired HERE, delegated on `document`,
+ * for two reasons: chat-ui.js re-renders that panel on every prefs change, so
+ * a directly-bound listener would go stale; and a direct import would make
+ * chat-ui.js depend on app.js, which imports chat-ui.js — a cycle. Same
+ * delegation shape `wireRevealCloser()` already uses one module over.
+ */
+// Item 10 — LATCHED, and called from BOTH boot phases (early and late). The
+// early phase exists so a player who taps during the 10-20s hydrate gets the
+// modal (with its loading skeleton, then real rows once the fetch lands)
+// rather than a dead button; the latch is what makes calling it twice free.
+let scribeFileEntryWired = false;
+export function wireScribeFileEntry() {
+  if (scribeFileEntryWired) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  scribeFileEntryWired = true;
+  document.addEventListener('click', e => {
+    const btn = e.target?.closest?.('[data-scribe-file]');
+    if (!btn) return;
+    // Item 10 (reviewer, 2026-09-11) — CATCH IT. `openScribeFileModal()` is
+    // async and its result is intentionally discarded here, which without a
+    // catch makes any throw inside it an unhandled rejection: no modal, no
+    // message, nothing in the UI to explain it. It already handles its own
+    // fetch failure (the error state renders inline); this covers the
+    // genuinely unexpected, and says so out loud rather than silently.
+    openScribeFileModal().catch(err => {
+      console.warn('[scribe-memory] could not open My SCRIBE File', err);
+      showToast("Couldn't open your SCRIBE file — try again.", 'error');
+    });
+  });
 }
 
 // ─── PICK PERMISSION ──────────────────────────────────────────────────────────
@@ -3287,7 +3973,13 @@ export function renderLeaderboard() {
   // UN-118/UN-125 — a multi-part group must count as ONE weekly win/loss, not
   // one per scheduling record. `weeks` is optional and fails safe (see
   // scoring.js) — passing it here is what makes the fix fire for Standings.
-  const standings=calculateSeasonStandings(players,allResults,allWeeksRaw);
+  // Build 3 Group D (2026-09-11) — the call itself moved into
+  // seasonStandingsRows() (same players/weeks/results inputs, same function,
+  // byte-identical output) so DI-D3's player profile reads THE STANDINGS
+  // PAGE'S numbers rather than a second, drift-prone recompute of them
+  // (CONVENTIONS #21). The locals above are still used by the group rows
+  // below; only this one line delegates.
+  const standings=seasonStandingsRows();
   const weeks=getWeeks().filter(w=>w.status!==WEEK_STATUS.DRAFT&&w.dataSourceMode!=='demo').sort((a,b)=>a.weekNumber-b.weekNumber);
   const settings=getSettings();
   const obligations=getObligations();
@@ -5332,12 +6024,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // exactly what `set`/`setMany` already exist for.
   document.querySelectorAll('.scribe-approve-btn, .scribe-reject-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.learningIdx);
-      const all = getScribeLearnings();
-      if (!all[idx]) return;
-      all[idx] = { ...all[idx], status: btn.classList.contains('scribe-approve-btn') ? 'approved' : 'rejected' };
-      setScribeLearnings(all);
-      showToast(btn.classList.contains('scribe-approve-btn') ? '✅ Approved' : '✖ Rejected', 'success');
+      const r = applyScribeLearningDecision(Number(btn.dataset.learningIdx), btn.classList.contains('scribe-approve-btn'));
+      if (!r.ok) return;
+      showToast(r.approved ? '✅ Approved' : '✖ Rejected', 'success');
       renderCommPage();
     });
   });
@@ -7871,6 +8560,155 @@ function bindScribeReportRowHandlers() {
 }
 
 /**
+ * The approve/reject status flip, factored out of its click handler for the
+ * same reason the dial writes were (groupdtest.mjs drives the real one).
+ *
+ * Build 3, Group D (2026-09-11, DI-D2 population path 3) — approving a FACT
+ * CANDIDATE is only half of the contract. The Trainer writes fact candidates
+ * into KEYS.SCRIBE_LEARNINGS as `pending`; flipping one to `approved` here
+ * changes a status and nothing else, and SCRIBE still cannot see the fact.
+ * `scribeMemorySync` is what moves every approved, not-yet-applied candidate
+ * into CFBP_SCRIBE_MEMORY. Fired from here so approval is ONE action rather
+ * than two, per the DI's "automatic on approve" — and fired ONLY for a
+ * fact_candidate, because no other kind has anything to apply.
+ *
+ * Fire-and-forget by design: the status flip has already persisted through
+ * the seam, so the sync's outcome is reported by its own toast rather than
+ * holding the UI.
+ */
+export function applyScribeLearningDecision(idx, approved) {
+  const all = getScribeLearnings();
+  if (!all[idx]) return { ok: false, error: 'no_such_row' };
+  const row = all[idx];
+  all[idx] = { ...row, status: approved ? 'approved' : 'rejected' };
+  setScribeLearnings(all);
+  const synced = !!(approved && row.kind === 'fact_candidate');
+  if (synced) syncApprovedScribeFacts();
+  return { ok: true, approved: !!approved, synced, kind: row.kind };
+}
+
+/**
+ * DI-D2 — "apply approved facts." Fire-and-forget, toast on the result.
+ *
+ * Deliberately NOT password-prompted, unlike "Run Trainer now" right beside
+ * it. That prompt exists because a Trainer run SPENDS REAL MONEY at Anthropic
+ * (reviewer SIGNIFICANT #8); this action makes no model call at all — it
+ * copies already-approved rows from one server-side store into another and
+ * refreshes the deterministic computed facts. It is idempotent twice over
+ * (the upsert collapses on (playerId,kind,key); an applied candidate is
+ * stamped `memoryAppliedAt`), so a double-tap reports `applied: 0` rather
+ * than writing anything twice.
+ *
+ * The credential it does send is the hash already sitting in the settings
+ * blob every device hydrates — so passing it here exposes nothing that was
+ * not already on every player's device (AD-05's same honest scope). The
+ * server still requires it, which keeps a stale/mis-wired client from
+ * triggering the sweep.
+ *
+ * Exported for groupdtest.mjs: the assertion that approving a fact candidate
+ * fires this EXACTLY once needs the real function, not a look-alike.
+ */
+export async function syncApprovedScribeFacts() {
+  try {
+    const r = await scribeMemoryTransport.sync({ adminPasswordHash: getSettings().adminPasswordHash || '' });
+    if (r && r.ok === false) throw new Error(r.error || 'sync failed');
+    const applied = Number(r && r.applied) || 0;
+    showToast(applied
+      ? `🧠 ${applied} approved fact${applied === 1 ? '' : 's'} now in SCRIBE's memory`
+      : "🧠 Nothing new to apply. SCRIBE's memory is already current", 'success');
+    return r;
+  } catch (err) {
+    // Loud, never silent (AD-06's instinct on a commissioner action): the
+    // status flip above already persisted, so the honest message is "the
+    // approval saved, the sync did not."
+    console.warn('[scribe-memory] sync failed', err);
+    showToast(`⚠️ Approved, but applying it to SCRIBE's memory failed: ${err && err.message ? err.message : err}`, 'error');
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+/**
+ * DI-D1 — the two writes behind the dial, factored out of the click handlers
+ * so groupdtest.mjs drives the REAL write path (a handler bound inside
+ * renderCommPanel() cannot be reached without a live DOM, which is exactly
+ * the RG-27 shape where a test ends up asserting against a look-alike).
+ *
+ * Both go through `saveSetting()` — the storage seam (CONVENTIONS #8), which
+ * also DECLARES the changed field so the bounded-size push cannot send a
+ * stale whole-blob over a fresh remote (RG-24/RG-49/RG-55).
+ *
+ * `setScribeFrequency` refuses an unknown level rather than storing it: an
+ * unrecognized value makes `scoreOpportunity()` fall back to Balanced
+ * silently, which reads to a commissioner as "the dial does nothing."
+ */
+export function setScribeFrequency(level) {
+  const lvl = String(level || '').toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(FREQUENCY_LEVELS, lvl)) return { ok: false, error: 'unknown_level' };
+  saveSetting('scribeFrequency', lvl);
+  return { ok: true, level: lvl };
+}
+export function setScribeAutonomousEnabled(on) {
+  saveSetting('scribeAutonomousEnabled', !!on);
+  return { ok: true, enabled: !!on };
+}
+
+/**
+ * DI-D1 — the frequency dial, Comm → Settings.
+ *
+ * INCLUDING its own `data-comm-tab="settings"` wrapper (RG-10: an untagged
+ * `.admin-section` renders on all five commissioner tabs), and exported as a
+ * pure HTML function for the same reason renderFeedbackAdminSectionHTML() is
+ * — so groupdtest.mjs can assert the wrapper, the five options and the
+ * selected state in RENDERED OUTPUT, not by grepping source.
+ *
+ * Drew's D-1 ruling OVERRIDES the design input's own recommendation: the DI
+ * proposed exposing three levels and hiding Reserved/Unhinged in the data
+ * model; Drew ruled "Expose all 5." Copy is FINAL, from
+ * SCRIBE_COPY_GROUP_D_091126.md §5, imported from js/scribeLines.js
+ * (FREQUENCY_COPY) rather than retyped here.
+ *
+ * TWO controls, matching DI-D1's two states:
+ *   OFF  — `settings.scribeAutonomousEnabled = false`. Autonomous
+ *          interjections stop entirely; a direct @SCRIBE question still gets
+ *          answered (Group C's path, deliberately unaffected — which is
+ *          exactly what the copy promises).
+ *   SET  — one of the five levels in `settings.scribeFrequency`, which is a
+ *          threshold on a 0–100 opportunity score (FREQUENCY_LEVELS).
+ *
+ * Both are ordinary settings through the seam (`saveSetting`, CONVENTIONS #8
+ * — which also declares the changed field for the bounded-size push, RG-55).
+ * Neither is authoritative: backend/Code.gs's SCRIBE_AUTONOMOUS_ENABLED
+ * Script Property is the real switch and defaults OFF, so nothing here can
+ * turn autonomy on by itself.
+ */
+export function renderScribeParticipationCardHTML() {
+  const on = isScribeAutonomousEnabled();
+  const current = String(getScribeFrequency() || FREQUENCY_DEFAULT).toLowerCase();
+  const level = Object.prototype.hasOwnProperty.call(FREQUENCY_LEVELS, current) ? current : FREQUENCY_DEFAULT;
+  const options = FREQUENCY_COPY.map(o => `
+        <button class="scribe-freq-opt${o.level === level ? ' selected' : ''}" data-scribe-freq="${o.level}"
+                role="radio" aria-checked="${o.level === level ? 'true' : 'false'}">
+          <span class="scribe-freq-label">${escHtml(o.label)}</span>
+          <span class="scribe-freq-desc">${escHtml(o.description)}</span>
+        </button>`).join('');
+  return `
+    <div class="admin-section" data-comm-tab="settings">
+      <div class="admin-section-title">🎚 SCRIBE Participation</div>
+      <div class="card mb-md" id="comm-scribe-participation-card">
+        <p class="text-muted text-xs mb-sm">How often SCRIBE jumps into the conversation on its own. Direct @SCRIBE questions always get answered regardless of this setting.</p>
+        <label class="notif-prefs-row notif-prefs-master" for="scribe-autonomous-toggle">
+          <span>SCRIBE joins in on its own</span>
+          <input type="checkbox" id="scribe-autonomous-toggle" ${on ? 'checked' : ''} />
+        </label>
+        <div class="scribe-freq-dial${on ? '' : ' notif-prefs-row-dim'}" role="radiogroup" aria-label="SCRIBE participation level">${options}</div>
+        <p class="text-muted text-xs">${on
+          ? `Currently <strong>${escHtml((FREQUENCY_COPY.find(o => o.level === level) || {}).label || level)}</strong> — a candidate moment has to score ${FREQUENCY_LEVELS[level]} or better before SCRIBE writes anything. The 10-minute cooldown applies at every level.`
+          : 'Off. SCRIBE posts nothing unprompted — pick a level after turning it back on.'}</p>
+      </div>
+    </div>`;
+}
+
+/**
  * E5b — Comm→Data metrics + approve/reject card. Metrics are the SNAPSHOT
  * stored with the most recent report (`entry.metrics`) — never an
  * independent recompute (CONVENTIONS #21's render-path-consistency spirit
@@ -8171,6 +9009,13 @@ function renderCommExtrasV16(week, games) {
       </div>
     </div>
     </div>`);
+    // Build 3, Group D (2026-09-11, DI-D1) — the frequency dial, its OWN
+    // card directly beneath "Chat & S.C.R.I.B.E." on the SAME Settings tab.
+    // A separate card (not another row inside the one above) because the DI
+    // specifies a labeled control with five described options, which is a
+    // different shape from that card's list of on/off toggles. Its
+    // data-comm-tab="settings" wrapper ships inside the function (RG-10).
+    c.insertAdjacentHTML('beforeend', renderScribeParticipationCardHTML());
   }
 
   // ── handlers ──
@@ -8219,6 +9064,23 @@ function renderCommExtrasV16(week, games) {
       ? '🧠 Trainer learnings active — approved learnings/Canon reach SCRIBE again'
       : '🧠 Trainer learnings OFF. SCRIBE runs on the base persona alone.', 'success');
     renderCommPage();
+  });
+  // ── DI-D1 — the participation dial (Build 3, Group D, 2026-09-11) ──
+  document.getElementById('scribe-autonomous-toggle')?.addEventListener('change', e => {
+    setScribeAutonomousEnabled(e.target.checked);
+    showToast(e.target.checked
+      ? '🎚 SCRIBE can join in on its own again (the server switch must also be on)'
+      : '🎚 SCRIBE stays quiet unless someone @s it', 'success');
+    renderCommPage();
+  });
+  document.querySelectorAll('[data-scribe-freq]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const level = btn.dataset.scribeFreq;
+      if (!setScribeFrequency(level).ok) return;
+      const copy = FREQUENCY_COPY.find(o => o.level === level);
+      showToast(`🎚 SCRIBE participation: ${copy ? copy.label : level}`, 'success');
+      renderCommPage();
+    });
   });
   document.getElementById('ep-detect-btn')?.addEventListener('click', async () => {
     const st = document.getElementById('ep-detect-status');
@@ -8500,6 +9362,14 @@ export function applyWeekStatusChange(week, to) {
         const activePlayers = getPlayers().filter(p => p.active);
         const submittedCount = activePlayers.filter(p => hasPlayerSubmitted(upd.weekId, p.playerId)).length;
         notifyPicksLocked(upd, activePlayers, submittedCount, activePlayers.length);
+        // DI-D1 AMENDMENT (coordinator, 2026-09-11, reviewer finding F2):
+        // there is NO SCRIBE call site here. The DI named week-lock as one of
+        // two, on the assumption that a locked week's picks are shareable.
+        // They are not: `arePicksPublic()` — the app's single definition of
+        // the blind rule — is live/final only, so a lock-phase call could
+        // never do anything but skip. A call site that can never fire is
+        // worse than no call site: it reads as coverage. `unanimous` fires
+        // from the FINALIZE site instead, where the field is public anyway.
       }
       renderNotifBell();   // instant feedback if the ACTING commissioner is also a recipient
     } catch (e) { console.warn('[notifications] week-status hook failed', e); }
@@ -8571,6 +9441,180 @@ function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, pri
   });
 }
 
+// ── DI-D1 — THE DETECTOR CALL SITES (Build 3, Group D pass 2, 2026-09-11) ──
+//
+// Pass 1 built the pure detectors (`detectWeekSignals`) and the one impure
+// wrapper that feeds a detected signal through the SAME `considerAutonomous`
+// gate every other trigger uses (`considerWeekSignals`, which as amended
+// 2026-09-11 promotes at most ONE candidate per invocation — the
+// highest-point signal — and carries the whole detected set as evidence).
+// Nothing called them. There is exactly ONE call site: the week's RESULTS
+// FINALIZE (lead changes, milestones, streaks, lone-wolf covers — all of
+// which need the standings on both sides of the transition — plus
+// `unanimous`, which the DI originally placed at week-lock).
+//
+// WHY ONE AND NOT THE DI'S TWO (amendment, coordinator 2026-09-11, reviewer
+// finding F2): a lock-phase call could never fire. `arePicksPublic()` is the
+// app's single definition of the blind rule and it is live/final only, so at
+// LOCKED this function correctly refuses to read the field at all — every
+// lock-phase call would have been a guaranteed skip. A call site that cannot
+// fire is worse than none, because it reads as coverage. `unanimous` is
+// detected at finalize instead, where the picks are public regardless.
+//
+// Called ONCE per event, never per game, which is what makes pass 1's "at
+// most one candidate per invocation" mean one message.
+//
+// IDEMPOTENCY, AND WHY IT IS A LEDGER AND NOT JUST THE COOLDOWN. Both call
+// sites can run more than once for the same week: a commissioner can press
+// LOCKED twice, auto-transition and the manual button share this chokepoint,
+// and Comm→Data's "recalculate every finalized week" re-runs `finalizeWeek()`
+// for every already-final week on the board. `considerAutonomous`'s own
+// guards (10-minute cooldown, per-bucket fired set) are time-scoped and
+// module-scoped — they do not survive a reload, and they would happily let
+// week 3's lead change fire again next month. So: a device-local ledger,
+// exactly the shape `checkPickRevealDue()`'s `cfbp_reveal_emitted` already
+// uses for the same class of problem (a once-per-week post that must not
+// re-fire), and the same shape as SCRIBE's own 14-day no-repeat ledger in
+// scribeLines.js. ONE entry per (week, phase) — see item 8 at the write
+// site. Device-local on purpose: it is a de-duplication hint, not
+// league state; the AUTHORITATIVE cross-device collapse is the deterministic
+// post id the server derives (`scribe_auto_<trigger>_<subject>_<bucket>`).
+//
+// Deliberately NOT through `load()`/`save()`: this is per-device UI
+// bookkeeping that must never be pushed to the Sheet or clobber another
+// device's copy, the same reasoning chat.js's lastseen/outbox keys and
+// notifications.js's device-local caches already carry.
+const SCRIBE_WEEK_SIGNAL_LEDGER_KEY = 'cfbp_scribe_weeksignals';
+const SCRIBE_WEEK_SIGNAL_LEDGER_MAX = 200;
+/** A `finalizeWeek()` for a week that finalized weeks ago is a RECOMPUTE, not
+ *  news. Comm→Data's retroactive recalculation runs exactly that, for every
+ *  final week at once; without this, a fresh device would re-announce a whole
+ *  season's lead changes. 24h is generous — the real transition stamps
+ *  `finalizedAt` milliseconds before this runs. */
+const SCRIBE_FINALIZE_FRESHNESS_MS = 24 * 60 * 60 * 1000;
+
+function scribeWeekSignalLedger() {
+  try { return JSON.parse(localStorage.getItem(SCRIBE_WEEK_SIGNAL_LEDGER_KEY) || '[]') || []; }
+  catch { return []; }
+}
+function noteScribeWeekSignals(keys) {
+  if (!keys.length) return;
+  const next = [...scribeWeekSignalLedger()];
+  for (const k of keys) { if (!next.includes(k)) next.push(k); }
+  try { localStorage.setItem(SCRIBE_WEEK_SIGNAL_LEDGER_KEY, JSON.stringify(next.slice(-SCRIBE_WEEK_SIGNAL_LEDGER_MAX))); } catch {}
+}
+/** Test seam — groupdtest.mjs proves the second call fires nothing, which
+ *  needs a way back to a clean slate between sections. */
+export function _resetScribeWeekSignalLedgerForTest() {
+  try { localStorage.removeItem(SCRIBE_WEEK_SIGNAL_LEDGER_KEY); } catch {}
+}
+export function _scribeWeekSignalLedgerForTest() { return scribeWeekSignalLedger(); }
+
+/**
+ * The week status the detectors are told about (pass 1's own signal-level
+ * blind guard reads it). FAIL-CLOSED on the documented disagreement between
+ * `getEffectiveWeekStatus()` and `week.status`: with Auto-Open set and
+ * Auto-Lock blank the effective status reports 'open' for a week the app
+ * already advanced (see canPlayerSubmitPicks's two RG notes), and the wrong
+ * direction to be wrong in here is "more advanced than it really is." So the
+ * LESS permissive of the two wins.
+ */
+function effectiveWeekStatusForSignals(week) {
+  const eff = getEffectiveWeekStatus(week);
+  if (week.status === 'draft' || eff === 'draft') return 'draft';
+  if (week.status === 'open' || eff === 'open') return 'open';
+  return eff;
+}
+
+/**
+ * Fire the week-signal detectors once per (week, phase) per device.
+ *
+ * `phase` is 'lock' or 'final'. Returns `{ fired, skipped?, detected, outcomes }`
+ * — `fired:false` with a reason whenever nothing was evaluated, which is what
+ * makes "it did not double-fire" assertable rather than inferred from silence.
+ *
+ * Every input comes from the functions the rest of the app already uses:
+ * getGames/getPicks/getPlayers through the storage seam, and standings from
+ * `seasonStandingsRows()` — the Standings page's own numbers (CONVENTIONS
+ * #21), never a second recompute.
+ */
+export function fireScribeWeekSignals(week, { phase = 'lock', standingsBefore = null, standingsAfter = null } = {}) {
+  if (!week || !week.weekId) return { fired: false, skipped: 'no_week', detected: [], outcomes: [] };
+  if (week.dataSourceMode === 'demo') return { fired: false, skipped: 'demo', detected: [], outcomes: [] };
+  // THE BLIND RULE, through the app's ONE definition of it. This function
+  // reads EVERY player's picks (getPicks(weekId), no player argument) and
+  // hands them to detectors whose output can become a public chat message —
+  // `unanimous` literally names the side the whole league took. That is the
+  // same disclosure RG-37/RG-40 fixed on two other surfaces, so it asks the
+  // same predicate they ask rather than carrying its own idea of "safe."
+  //
+  // This is also why there is no lock-phase call site any more (F2, above):
+  // at LOCKED this predicate is false, so such a call could only ever skip.
+  // The ledger is deliberately NOT written on this path, so a week that is
+  // somehow not yet public is still evaluated when it becomes so.
+  if (!arePicksPublic(week)) return { fired: false, skipped: 'picks_blind', detected: [], outcomes: [] };
+  const phaseKey = `${week.weekId}|${phase}`;
+  if (scribeWeekSignalLedger().includes(phaseKey)) {
+    return { fired: false, skipped: 'already_fired', detected: [], outcomes: [] };
+  }
+  if (phase === 'final') {
+    const at = week.finalizedAt ? Date.parse(week.finalizedAt) : NaN;
+    // F1 (reviewer BLOCK, 2026-09-11) — THESE TWO CASES ARE NOT THE SAME, and
+    // collapsing them poisoned the ledger for the only run that mattered.
+    // `finalizeWeek()` is not called solely from the final transition: the
+    // "Calculate ATS" button and the manual-score promote path both call it on
+    // a LIVE week whose `finalizedAt` is still null. That produced NaN, the
+    // combined test read NaN as "too old," WROTE `<weekId>|final`, and the
+    // genuine finalize minutes later returned `already_fired` — the feature
+    // silently never ran for that week on that device.
+    //
+    //   NO STAMP  -> the week has not finalized yet. Not news, not stale,
+    //                nothing decided. Return WITHOUT writing the ledger, so
+    //                the real finalize still gets its one evaluation.
+    //   OLD STAMP -> a genuine recompute of a week that finalized long ago
+    //                (Comm→Data's "recalculate every finalized week"). Record
+    //                it: an old week is permanently not news.
+    if (!Number.isFinite(at)) {
+      return { fired: false, skipped: 'not_final_yet', detected: [], outcomes: [] };
+    }
+    if (Date.now() - at > SCRIBE_FINALIZE_FRESHNESS_MS) {
+      noteScribeWeekSignals([phaseKey]);
+      return { fired: false, skipped: 'stale_finalize', detected: [], outcomes: [] };
+    }
+  }
+  let result = { detected: [], outcomes: [] };
+  try {
+    // SEASON-WIDE games/picks/weeks on purpose, not week-scoped:
+    // `detectWeekSignals` filters to `weekId` itself for the per-week
+    // detectors (unanimous, loneWolfWin), and `streak` genuinely needs the
+    // whole season to know whether this week extended or broke one — its own
+    // docstring says so. `weeks` supplies the (season, weekNumber)
+    // comparator, which is what makes this ordering identical to the
+    // server's `scribeOrderedGradedPicks_` rather than merely similar.
+    // Nothing here can leak an OPEN week's picks: only GRADED picks enter a
+    // streak, and an open week has no final games.
+    result = considerWeekSignals({
+      weekId: week.weekId,
+      weekStatus: effectiveWeekStatusForSignals(week),
+      games: getGames(),
+      picks: getPicks(),
+      weeks: getWeeks(),
+      players: getPlayers().filter(p => p.active),
+      standingsBefore, standingsAfter,
+    }) || { detected: [], outcomes: [] };
+  } catch (e) {
+    console.warn('[scribe] week signals failed', e);
+    return { fired: false, skipped: 'error', detected: [], outcomes: [] };
+  }
+  // Item 8 (reviewer) — PHASE KEYS ONLY. This used to also write one
+  // `<weekId>|<signal>|<subject>` entry per detected signal, which nothing
+  // ever read: the only gate is the phase key, and the per-signal rows just
+  // consumed the 200-entry cap that keeps this device-local list bounded.
+  // Dedup granularity is unchanged — one evaluation per week per phase.
+  noteScribeWeekSignals([phaseKey]);
+  return { fired: true, ...result };
+}
+
 /* Exported for loadtest.mjs — driven directly (via applyWeekStatusChange) to
    verify the UN-118/UN-125 obligation gate end-to-end, the same rationale
    RG-30's own [39] suite already exports/drives this function through. */
@@ -8578,6 +9622,12 @@ export function finalizeWeek(week) {
   const players=getPlayers().filter(p=>p.active);
   const picks=getPicks(week.weekId);
   const games=getGames(week.weekId);
+  // DI-D1 — the standings as they stood BEFORE this week's results are
+  // saved. Captured here, at the top, because saveAllWeeklyResults() below
+  // is what changes them; `chartLeadChange` and `milestone` are both
+  // before/after comparisons and there is no second chance to read "before."
+  // Same function the Standings page renders from (seasonStandingsRows).
+  const scribeStandingsBefore=seasonStandingsRows();
   games.forEach(g=>{
     if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null)
       saveGame({...g,atsWinner:calculateAtsWinner(g)});
@@ -8616,6 +9666,18 @@ export function finalizeWeek(week) {
       notifyResultsFinalized(week, winner?.displayName || undefined, loser?.displayName || undefined, players);
       renderNotifBell();
     } catch (e) { console.warn('[notifications] results-finalized hook failed', e); }
+    // DI-D1's ONE call site (see fireScribeWeekSignals for why the DI's
+    // second, lock-phase one was removed) — the `notifyResultsFinalized`
+    // seam the DI names, with its own try/catch so a SCRIBE failure can
+    // never take the notification with it. `after` is read now,
+    // once saveAllWeeklyResults() above has landed, so before/after are two
+    // genuine snapshots of the same function rather than one snapshot and a
+    // guess. Fires at most once per week per device (see the ledger), and
+    // never for a week that finalized more than a day ago — which is what
+    // keeps Comm→Data's "recalculate every finalized week" silent.
+    try {
+      fireScribeWeekSignals(week, { phase: 'final', standingsBefore: scribeStandingsBefore, standingsAfter: seasonStandingsRows() });
+    } catch (e) { console.warn('[scribe] week-final signals failed', e); }
   }
   const settings=getSettings();
 

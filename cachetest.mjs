@@ -89,15 +89,26 @@ function mkEl() {
 // (DOC32/mkEl32), via a real spy on document.body.appendChild.
 let toastMountCount = 0;
 function resetToastMountCount() { toastMountCount = 0; }
+// BUG-G F-2 (2026-09-11) — §12 drives the REAL delegated click handler, so the
+// stub has to actually keep the listeners it is handed instead of dropping
+// them, and has to be able to answer one querySelector (the chat nav item that
+// navToChat() clicks). Default behaviour is unchanged for every other section:
+// querySelectorHook returns null until a section swaps it and restores it.
+const docListeners = new Map();
+let querySelectorHook = () => null;
 globalThis.document = {
-  addEventListener() {}, removeEventListener() {},
+  addEventListener(type, fn) { if (!docListeners.has(type)) docListeners.set(type, []); docListeners.get(type).push(fn); },
+  removeEventListener() {},
   getElementById: () => null,          // no #chat-toast ever pre-exists — matches DOC32
-  querySelector: () => null,           // no #page-chat.active / #page-dashboard.active — toast never chat/dashboard-suppressed
+  querySelector: sel => querySelectorHook(sel),   // null by default — no #page-chat.active / #page-dashboard.active, toast never suppressed
   querySelectorAll: () => [],
   createElement: () => mkEl(),
   body: { ...mkEl(), appendChild(el) { if (el?.id === 'chat-toast') toastMountCount++; } },
   hidden: false,
 };
+// initChatUI()'s late phase constructs one; absent here, `new MutationObserver`
+// throws OUTSIDE the try/catch that guards .observe().
+globalThis.MutationObserver = class { observe() {} disconnect() {} };
 globalThis.window = globalThis;
 try { globalThis.navigator = { serviceWorker: undefined, clipboard: { writeText: async () => {} } }; }
 catch { Object.defineProperty(globalThis, 'navigator', { value: { serviceWorker: undefined, clipboard: { writeText: async () => {} } }, configurable: true }); }
@@ -700,6 +711,417 @@ console.log('\n[9] DI-169 structural corrections — chat OFF replays nothing, a
   assert(parsedB && parsedB.events[0].seq > 1,
     `while the oldest ones are the ones dropped — first retained seq ${parsedB && parsedB.events.length ? parsedB.events[0].seq : 'none'}, of ${BIG}`);
   note(`  trimmed ${BIG} → ${parsedB ? parsedB.events.length : 0} events in ${Date.now() - t0}ms of wall clock (the trim itself is O(n): a running byte total, not a full re-stringify per dropped event — reviewer note, 2026-09-11)`);
+  resetAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [10] BUG-G — startChatTransport(): the PRE-HYDRATE half of boot.
+// ═══════════════════════════════════════════════════════════════════════════
+// js/app.js used to gate initChatUI() -> initChat() behind
+// `await hydrateBackend()`, so neither the first chatSince nor DI-169's cache
+// replay could happen until a ~100KB getAll had paid the Apps Script cold
+// start. boottest.mjs §10 owns the TIMELINE half of this fix; this section
+// owns the four correctness questions the review raised about starting
+// before the hydrated snapshot exists:
+//
+//   A. the epoch the cache is checked against is the STALE one;
+//   B. the chatEnabled the subscription is gated on is the STALE one;
+//   C. two entry points must not produce two subscriptions — or worse, tear
+//      down an in-flight cold-boot read and start it again;
+//   D. starting earlier makes a cold-start head:0 answer MORE likely, which
+//      is RG-100's exact input — it must still relay zero pushes.
+//
+// A/B model "the hydrate landed" by changing the value the seam returns
+// (saveSetting) between the two calls, which is precisely what a hydrate does
+// to these two reads. Nothing here needs the mirror itself.
+console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, stale chatEnabled, one subscription, no push storm…');
+{
+  // ── A. The hydrated epoch is NEWER than the cached one. ──
+  // Decision under test (stated in chat.js's readAndPrimeEventsCache() note):
+  // replaying against the stale epoch is SAFE, because isHiddenByEpoch() is a
+  // RENDER-time filter applied unconditionally inside getMessages(),
+  // isUnreadFor() and latestNotifying() — so events folded under the old
+  // watermark disappear the instant the real one lands, with no un-folding.
+  // What is NOT safe, and is what _applyEpochLocally() now handles, is
+  // letting those events ride in _eventsCacheBuf into the next cache write.
+  resetAll();
+  const preEpoch = Array.from({ length: 20 }, (_, i) => mkEv(i + 1, { id: 'g10a_' + (i + 1), author: 'p2', notify: true }));
+  seedCache({ epoch: 0, head: 20, events: preEpoch });
+  storage.saveSetting('chatEpochSeq', 0);          // stale/local value, as read BEFORE hydrate
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  let headA = 20;
+  const callsA = installFetch(() => headA, 'g10a_');
+
+  chat.startChatTransport('p1');                   // ← pre-hydrate: subscription + cache replay only
+  assert(chat.getMessages({ tag: 'all' }).length === 20,
+    `fixture: the pre-hydrate replay renders all 20 cached messages at once, with no hydrated snapshot in existence — got ${chat.getMessages({ tag: 'all' }).length}`);
+  assert(chat.chatStatus().head === 20, `fixture: and adopts the cached head as the poll cursor — got ${chat.chatStatus().head}`);
+
+  // …the hydrate lands, and the commissioner had cleared the room at seq 20
+  // while this device was closed.
+  storage.saveSetting('chatEpochSeq', 20);
+  chat.initChat('p1');                             // ← post-hydrate: epoch heal + outbox + flush
+  await settle();
+
+  assert(chat.getMessages({ tag: 'all' }).length === 0,
+    `every pre-epoch event the early replay folded is hidden the moment the real epoch arrives — getMessages() returns ${chat.getMessages({ tag: 'all' }).length}, expected 0 (isHiddenByEpoch is a RENDER-time filter, which is the whole reason replaying before hydrate is safe)`);
+  assert(chat.unreadCount('p1', 'all') === 0,
+    `and they badge nothing — unread ${chat.unreadCount('p1', 'all')}, expected 0 (isUnreadFor() applies the same filter)`);
+  assert(chat.chatStatus().head === 20,
+    `while the poll cursor is NOT rewound — still ${chat.chatStatus().head} — so the heal never re-downloads the 20 events it just hid`);
+  assert(store.get(K_EVENTS_CACHE) === undefined,
+    'and the superseded cache entry is removed from localStorage by the epoch heal itself');
+
+  // The part that only a WRITE can prove: the in-memory buffer was dropped
+  // too, so the next caught-up delivery cannot re-persist pre-epoch chatter
+  // under the NEW epoch (where it would pass DI-169e's check forever after,
+  // invisible but occupying the 500-event/300KB budget the real room needs).
+  headA = 25;
+  await chat.forceRefresh();
+  await settle();
+  const writtenA = JSON.parse(store.get(K_EVENTS_CACHE) || 'null');
+  assert(writtenA && writtenA.epoch === 20,
+    `fixture: a live delivery after the heal does write a fresh cache, stamped with the NEW epoch — got ${writtenA ? writtenA.epoch : 'nothing written'}`);
+  assert(writtenA && writtenA.events.every(e => e.seq > 20),
+    `and it contains ONLY post-epoch events — seqs [${writtenA ? writtenA.events.map(e => e.seq).join(', ') : ''}] (pre-fix: all 20 pre-epoch events ride along, hidden forever but never evictable)`);
+  note(`  requests: [${callsA.map(c => c.action + (c.action === 'chatSince' ? ':' + c.seq : '')).join(', ')}]`);
+
+  // ── B. The hydrated chatEnabled disagrees with the stale one. ──
+  // Both directions. app.js calls refreshChatEnabled() immediately after
+  // hydrate for exactly this window (boottest §10E pins that it is there).
+  resetAll();
+  storage.saveSetting('chatEnabled', true);        // stale local value says ON
+  seedCache({ epoch: 0, head: 6, events: Array.from({ length: 6 }, (_, i) => mkEv(i + 1, { id: 'g10b_' + (i + 1) })) });
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  const callsB = installFetch(() => 6, 'g10b_');
+  chat.startChatTransport('p1');
+  assert(chat._isPollingActiveForTest() === true, 'a device whose last-known setting says chat is ON starts polling immediately, before hydrate');
+  await settle();
+
+  storage.saveSetting('chatEnabled', false);       // the hydrate says the commissioner turned it OFF
+  chat.refreshChatEnabled();
+  const callsAtOff = callsB.length;
+  assert(chat._isPollingActiveForTest() === false,
+    'refreshChatEnabled() after hydrate stops the early subscription — a remote chat-off cannot outlive the hydrate window');
+  await settle();
+  await settle();
+  assert(callsB.length === callsAtOff,
+    `and zero further network activity follows it — ${callsB.length - callsAtOff} extra requests after the toggle, expected 0`);
+
+  // …and the opposite skew: stale OFF, hydrate says ON.
+  resetAll();
+  storage.saveSetting('chatEnabled', false);
+  seedCache({ epoch: 0, head: 6, events: Array.from({ length: 6 }, (_, i) => mkEv(i + 1, { id: 'g10b2_' + (i + 1) })) });
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  const callsB2 = installFetch(() => 6, 'g10b2_');
+  const startedB2 = chat.startChatTransport('p1');
+  assert(startedB2 === false && chat._isPollingActiveForTest() === false && chat.getMessages({ tag: 'all' }).length === 0,
+    'a stale OFF starts nothing and replays nothing — chat OFF still means no chat, not merely no polling');
+  assert(callsB2.length === 0, `fixture: and issues no requests — got [${callsB2.map(c => c.action).join(', ')}]`);
+  storage.saveSetting('chatEnabled', true);
+  chat.refreshChatEnabled();
+  assert(chat._isPollingActiveForTest() === true,
+    'and the OFF->ON direction still recovers through the same post-hydrate call — the early start is never a latch');
+  await waitFor(() => chat.getMessages({ tag: 'all' }).length === 6);
+  assert(chat.getMessages({ tag: 'all' }).length === 6, `and the room arrives normally afterwards — got ${chat.getMessages({ tag: 'all' }).length} of 6`);
+  storage.saveSetting('chatEnabled', true);
+
+  // ── C. Two entry points, ONE subscription — and the in-flight cold-boot
+  //    read survives the second one. ──
+  // This is the assertion that pins the SHAPE of the fix, not just its
+  // effect. initChat()'s _subscribeNow() is unconditional by design (it
+  // unsubscribes first), so calling it over a live early subscription would
+  // abandon the cold boot's in-flight first read — 8-26s of Apps Script cold
+  // start, thrown away and started again, which is the exact delay this whole
+  // fix removes. The hanging-fetch deferral below makes that observable: the
+  // first read is STILL IN FLIGHT when initChat() runs.
+  resetAll();
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  let releaseFirst = null;
+  const callsC = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    const seq = Number(u.searchParams.get('seq') || 0);
+    callsC.push({ action, seq });
+    if (callsC.length === 1) {
+      await new Promise(r => { releaseFirst = r; });      // the cold start: answers only when we say so
+    }
+    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: 4 }) };
+    const r = honestSince(() => 4, seq, 500, 'g10c_');
+    return { ok: true, status: 200, json: async () => r };
+  };
+
+  chat.startChatTransport('p1');                    // tick #1 leaves, and hangs
+  await settle();
+  const callsBeforeInit = callsC.length;
+  assert(callsBeforeInit === 1, `fixture: exactly one request is in flight when hydrate finishes — got ${callsBeforeInit}`);
+
+  chat.initChat('p1');                              // ← the post-hydrate call, over a live subscription
+  await settle();
+  assert(callsC.length === 1,
+    `initChat() does NOT re-subscribe over the early subscription — still ${callsC.length} request in flight, not a second one (pre-fix: _subscribeNow() ran unconditionally, tearing down the in-flight cold read and paying the cold start twice)`);
+  assert(chat._isPollingActiveForTest() === true, 'and exactly one subscription is live afterwards');
+
+  releaseFirst && releaseFirst();                   // the cold instance finally answers the ORIGINAL request
+  await waitFor(() => chat.getMessages({ tag: 'all' }).length === 4);
+  assert(chat.getMessages({ tag: 'all' }).length === 4,
+    `and the answer to that original, in-flight request still lands in the fold — ${chat.getMessages({ tag: 'all' }).length} of 4 messages (proof the subscription that issued it was never torn down)`);
+
+  // ── D. RG-100's input, made more likely by starting earlier. ──
+  // The c3c2 shape from notifytest.mjs §12b, driven through the EARLY entry
+  // point instead of initChat(): a cold-start `{events:[], head:0}` artifact
+  // ahead of a real, already-populated room. Asserted HERE rather than in
+  // notifytest.mjs only because notifytest.mjs is outside the files this fix
+  // was scoped to edit — the path exercised is the same real one
+  // (notifications.js's wireChatNotifications() + a registered push adapter).
+  resetAll();
+  const capturedD = [];
+  notif.registerPushAdapter({ isConfigured: () => true, send: async r => { capturedD.push(r); return { ok: true }; } });
+  notif.wireChatNotifications();
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  let headD = 0;                                    // the sheet's getLastRow() has not warmed up
+  const callsD = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    const action = u.searchParams.get('action');
+    const seq = Number(u.searchParams.get('seq') || 0);
+    callsD.push({ action, seq });
+    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: headD }) };
+    if (headD === 0) return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: 0 }) };
+    const r = honestSince(() => headD, seq, 500, 'g10d_');
+    return { ok: true, status: 200, json: async () => r };
+  };
+
+  chat.startChatTransport('p1');                    // no device cache here — the first read IS the head:0 artifact
+  await settle();
+  assert(chat.chatStatus().head === 0 && chat.chatStatus().caughtUp === false,
+    `fixture: the early read got the head:0 artifact and did NOT latch caughtUp (RG-100 F2) — head ${chat.chatStatus().head}, caughtUp ${chat.chatStatus().caughtUp}`);
+  assert(store.get(K_EVENTS_CACHE) === undefined,
+    'and it wrote no device-local cache entry for a head:0 answer (RG-100 × DI-169, §7 above — still true from the early entry point)');
+
+  headD = 18;                                       // the sheet warms up: 18 real messages were there all along
+  chat.initChat('p1');                              // hydrate lands mid-way, as it would on a real boot
+  await chat.forceRefresh();
+  await waitFor(() => chat.chatStatus().head === 18);
+  await settle();
+
+  const dHistory = capturedD.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
+  assert(chat.getMessages({ tag: 'all' }).length === 18,
+    `fixture: the real 18-message room folded completely after the artifact — got ${chat.getMessages({ tag: 'all' }).length}`);
+  assert(dHistory === 0,
+    `an early head:0 read followed by the real backfill relays ZERO pushes — got ${dHistory} (the unguarded shape is 90 = 18 × 5, and starting before hydrate makes this read MORE likely, not less)`);
+  const dTrips = notif._chatRelayBurstTripsForTest?.() || [];
+  assert(dTrips.length === 0, `and that zero is CLASSIFICATION, not the burst cap swallowing it — trips ${dTrips.length}`);
+  assert(notif._chatWatermarkForTest?.() === 18,
+    `the watermark ends at the true head 18, not stuck at the artifact's 0 — got ${notif._chatWatermarkForTest?.()}`);
+
+  headD = 19;                                       // a genuinely new message, after reconciliation
+  await chat.forceRefresh();
+  await settle();
+  const dLive = capturedD.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length - dHistory;
+  assert(dLive === players.length - 1,
+    `and a genuinely new message after reconciliation DOES relay, to every other active player — got ${dLive}, expected ${players.length - 1}`);
+  notif._clearPushAdapterForTest();
+  resetAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [11] BUG-G F1 (reviewer BLOCK, 2026-09-11) — startChatTransport() is NOT
+//      guaranteed to be the first thing that subscribes.
+// ═══════════════════════════════════════════════════════════════════════════
+// §10 above drives startChatTransport() as the first subscriber after a bare
+// reset. That is the FIRST-EVER-DEVICE shape (primedKeys === 0). The shape
+// every returning player actually boots is different: app.js calls
+// navigateTo('dashboard') when the mirror is primed, and navigateTo() ends
+// with refreshChatEnabled(), which SUBSCRIBES. Against the first version of
+// this fix that meant startChatTransport() hit `if (S.unsub) return true`
+// before priming anything and did nothing at all — the cached room still
+// waited for hydrate, in the majority case, while §10 stayed green.
+//
+// Two independent fixes, asserted separately below because either one alone
+// leaves a hole:
+//   F1a (chat.js) — primeEventsCacheOnce() moved ABOVE that early return, so
+//        the replay happens whatever subscribed first.
+//   F1b (app.js)  — the early phase moved ABOVE the navigateTo() call, so
+//        nothing else subscribes first in the first place, and the very first
+//        tick therefore has a cursor and takes the incremental branch.
+console.log('\n[11] BUG-G F1 — a subscription that already exists (navigateTo → refreshChatEnabled) must not skip the cache…');
+{
+  // ── A. THE WRONG ORDER (what F1a defends): something subscribed first. ──
+  resetAll();
+  const cachedA = Array.from({ length: 12 }, (_, i) => mkEv(i + 1, { id: 'g11a_' + (i + 1) }));
+  seedCache({ epoch: 0, head: 12, events: cachedA });
+  storage.saveSetting('chatEpochSeq', 0);
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  // A RECORDING hanging stub, not installFetch(): §11A asserts only synchronous
+  // state, and a request that actually resolves here would deliver §11A's
+  // events into §11B's fold (an unsubscribed in-flight tick still settles its
+  // own promise chain) — which is precisely how this section first went red.
+  const callsA = [];
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url));
+    callsA.push({ action: u.searchParams.get('action') });
+    return new Promise(() => {});
+  };
+
+  chat.refreshChatEnabled();                       // navigateTo('dashboard')'s tail — subscribes with S.head 0
+  assert(chat._isPollingActiveForTest() === true,
+    'fixture: refreshChatEnabled() has already subscribed before the early phase runs (S.head 0, no cache, no subscriber)');
+  const callsBefore = callsA.length;
+
+  chat.startChatTransport('p1');                   // the early phase, arriving second
+  assert(chat.getMessages({ tag: 'all' }).length === 12,
+    `the cached room STILL renders synchronously — got ${chat.getMessages({ tag: 'all' }).length} of 12 (pre-F1a: 0, because the already-subscribed early return ran before the prime)`);
+  assert(chat.chatStatus().head === 12,
+    `and the cursor is still primed from the cache — got ${chat.chatStatus().head} (pre-F1a: 0, so the next tick re-read the whole room)`);
+  // N5 (reviewer) — `if (S.unsub) return true` survived deletion green before
+  // this. One subscription means one poll loop: a second would issue its own
+  // tick immediately, so the request COUNT is the honest discriminator.
+  assert(callsA.length === callsBefore,
+    `and arriving second issues NO second tick — ${callsA.length - callsBefore} extra requests, expected 0 (delete the S.unsub early return and this goes to 1: two poll loops on one device, double quota forever)`);
+  assert(chat._isPollingActiveForTest() === true, 'and exactly one subscription is still live');
+
+  // ── B. THE REAL app.js ORDER (what F1b buys on top): early phase first. ──
+  // This is the order boottest §10F measures end to end; here it is isolated
+  // to the one property that only the ORDER can give — the first tick sees a
+  // non-zero cursor, so it takes the cheap chatHead probe + incremental
+  // chatSince(cachedHead) branch instead of RG-91's full chatSince(0, 500).
+  resetAll();
+  const cachedB = Array.from({ length: 12 }, (_, i) => mkEv(i + 1, { id: 'g11b_' + (i + 1) }));
+  seedCache({ epoch: 0, head: 12, events: cachedB });
+  storage.saveSetting('chatEpochSeq', 0);
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  let headB = 15;                                  // 3 arrived while the app was closed
+  const callsB = installFetch(() => headB, 'g11b_');
+
+  chat.startChatTransport('p1');                   // app.js: early phase FIRST
+  assert(chat.getMessages({ tag: 'all' }).length === 12, 'fixture: cached room rendered at t=0');
+  chat.refreshChatEnabled();                       // then navigateTo('dashboard') — must be a no-op
+  assert(chat._isPollingActiveForTest() === true, 'the later refreshChatEnabled() leaves the single live subscription alone');
+
+  await waitFor(() => chat.chatStatus().head === headB);
+  const sinceB = callsB.filter(c => c.action === 'chatSince');
+  assert(sinceB.length > 0 && sinceB[0].seq === 12,
+    `the FIRST chatSince asks for the cached head (12) — an incremental read — got seq ${sinceB.length ? sinceB[0].seq : 'none'} (wrong order: seq 0, a full 500-row cold read)`);
+  assert(!sinceB.some(c => c.seq === 0),
+    `and no chatSince(0) ever happens on this boot — seqs [${sinceB.map(c => c.seq).join(', ')}]`);
+  assert(chat.getMessages({ tag: 'all' }).length === 15,
+    `and the 3 messages that arrived while closed land on top of the cached 12 — got ${chat.getMessages({ tag: 'all' }).length}`);
+
+  // ── C. The OTHER thing refreshChatEnabled() does pre-hydrate: flushOutbox().
+  // The binding constraint says the outbox must not be flushed before hydrate
+  // (RG-49: stale chatter re-sent into a freshly-cleared room). navigateTo()
+  // reaches flushOutbox() through refreshChatEnabled() at app.js's primed-
+  // mirror boot, BEFORE hydrate — and that predates BUG-G. It is safe, but by
+  // an invariant that is invisible unless stated: S.outbox is only ever
+  // POPULATED from localStorage by loadOutbox(), which runs in initChat() —
+  // the LATE phase. Until then the queue is empty and flushOutbox() returns at
+  // its first line. Asserted rather than argued, because "the early half must
+  // not flush" is one refactor away from being false.
+  resetAll();
+  const staleEv = { id: 'g11c_stale', seq: null, ts: 1, type: 'message', author: 'p1', body: 'stale test chatter', notify: true };
+  store.set('cfbp_chat_outbox2', JSON.stringify([staleEv]));   // a queued send persisted by a PREVIOUS session
+  storage.saveSetting('chatEpochSeq', 0);
+  backend.setBackendConfig(URL_FAKE, 'tok');                   // device-local key — already true at boot on a returning device
+  const appends = [];
+  globalThis.fetch = async (url, opts = {}) => {
+    const u = new URL(String(url));
+    let body = null;
+    if (opts.body) { try { body = JSON.parse(opts.body); } catch {} }
+    const action = u.searchParams.get('action') || body?.action || '';
+    if (action === 'chatAppend') { appends.push(body); return { ok: true, status: 200, json: async () => ({ ok: true, assigned: [] }) }; }
+    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: 0 }) };
+    return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: 0 }) };
+  };
+
+  chat.refreshChatEnabled();          // navigateTo('dashboard'), pre-hydrate — reaches flushOutbox()
+  chat.startChatTransport('p1');      // the early phase, pre-hydrate
+  await settle();
+  assert(appends.length === 0,
+    `NOTHING is appended before hydrate — ${appends.length} chatAppend requests, expected 0 (the persisted outbox has not been deserialized yet; loadOutbox() is in the late phase, and that is the whole reason the early half is seam-safe)`);
+  assert(store.get('cfbp_chat_outbox2') === JSON.stringify([staleEv]),
+    'and the persisted queue is untouched — nothing lost, nothing sent');
+
+  chat.initChat('p1');                // the LATE phase: loadOutbox() + flushOutbox()
+  await settle();
+  assert(appends.length === 1,
+    `and the SAME queued send does flush once hydrate has happened — ${appends.length} chatAppend, expected 1 (proving §11C's zero is ordering, not a broken fixture)`);
+  resetAll();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [12] BUG-G F-2 — the teaser that now renders at t=0 must be a LIVE tap
+//      target, not a dead one.
+// ═══════════════════════════════════════════════════════════════════════════
+// #page-dashboard is statically `.active` in index.html, so dashboardPageActive()
+// is TRUE during the first paint — which means the early phase's cache replay
+// inserts the dashboard chat teaser, carrying `data-open-chat`, before hydrate.
+// The delegated click listener that gives that attribute meaning used to be
+// registered only in the late phase. Visible-but-dead for the whole hydrate
+// window is a worse failure than absent: the player taps the preview, nothing
+// happens, and concludes chat is broken — the report BUG-G exists to close.
+//
+// Driven through the REAL handler registered by the REAL initChatUI(), not a
+// re-implementation: the handler is an anonymous closure, so the only honest
+// way to test it is to capture what it registered on `document` and invoke it.
+console.log('\n[12] BUG-G F-2 — after the EARLY phase alone, a tap on the teaser opens chat…');
+{
+  resetAll();
+  docListeners.clear();
+  const prevQS = querySelectorHook;
+  let navClicks = 0;
+  querySelectorHook = sel => (sel === '.nav-item[data-tab="chat"]' ? { click() { navClicks++; } } : null);
+
+  const cached = Array.from({ length: 5 }, (_, i) => mkEv(i + 1, { id: 'g12_' + (i + 1) }));
+  seedCache({ epoch: 0, head: 5, events: cached });
+  storage.saveSetting('chatEpochSeq', 0);
+  storage.saveSetting('chatEnabled', true);
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  installHangingFetch();
+
+  // ── EARLY PHASE ONLY — hydrate has not happened and may never happen. ──
+  chatUi.initChatUI({ phase: 'early' });
+  assert(chat.getMessages({ tag: 'all' }).length === 5,
+    `fixture: the early phase replayed the cached room, so the teaser has something to render — got ${chat.getMessages({ tag: 'all' }).length} of 5`);
+  assert(chatUi._delegatedChatClicksWiredForTest() === true,
+    'the delegated click listener is wired by the EARLY phase (pre-fix: only by the late one, i.e. only after hydrate)');
+
+  // A tap on the teaser's [data-open-chat] region, delivered to EVERY click
+  // listener on document — which is what a real click does. Counting raw
+  // listeners would measure the wrong thing: the late phase's
+  // wireRevealCloser() legitimately registers its own (unrelated) document
+  // click handler, with its own latch. What must be exactly one is the number
+  // of handlers that RESPOND to this tap.
+  const fakeOpenChatEl = { dataset: {} };
+  const tap = () => {
+    let prevented = 0;
+    const before = navClicks;
+    (docListeners.get('click') || []).forEach(h => h({
+      target: { closest: sel => (sel === '[data-open-chat]' ? fakeOpenChatEl : null) },
+      preventDefault() { prevented++; },
+    }));
+    return { responders: navClicks - before, prevented };
+  };
+
+  const early = tap();
+  assert(early.responders === 1,
+    `and tapping it actually navigates to chat — ${early.responders} handler(s) responded, expected 1 (pre-fix: 0, for the whole 8-26s hydrate window and forever on a failed hydrate)`);
+  assert(early.prevented === 1, 'and the tap is consumed (preventDefault), not left to fall through');
+
+  // ── LATE PHASE — must not register a SECOND delegated chat listener. ──
+  // Two would mean two navToChat() calls per tap (and two openGameChatSheet()
+  // calls per game bubble) — the reason the latch exists.
+  chatUi.initChatUI();
+  assert(chatUi._delegatedChatClicksWiredForTest() === true, 'the latch is still set after the late phase');
+  const both = tap();
+  assert(both.responders === 1,
+    `one tap after BOTH phases still produces exactly ONE navigation — got ${both.responders} (without the latch: 2, every tap firing twice)`);
+  assert(both.prevented === 1,
+    `and preventDefault is called once, not once per duplicate registration — got ${both.prevented}`);
+
+  querySelectorHook = prevQS;
+  docListeners.clear();
   resetAll();
 }
 

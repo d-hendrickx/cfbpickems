@@ -70,7 +70,7 @@
  */
 
 import {
-  initChat, onChat, chatStatus, getMessages, getMessage, resolveTag,
+  initChat, startChatTransport, onChat, chatStatus, getMessages, getMessage, resolveTag,
   sendMessage, sendEvent, editMessage, deleteMessage, toggleReact, pinMessage,
   sendGameReact, retryFailed, isFailed, isPending,
   unreadCount, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
@@ -2258,6 +2258,18 @@ function maybeMentionMenu(input) {
 }
 
 // ── Prefs panel (identity + notifications) ────────────────────────────────────
+//
+// Build 3, Group D (2026-09-11, DI-D4) — this panel is the player-settings
+// surface DI-D4 names as the entry point for "My SCRIBE File": it is where
+// `chatNick` and `accent` are edited. It already early-returns '' for an
+// anonymous viewer (`if (!self) return ''`, one line down), so the new button
+// is hidden while signed out with no second gate needed — the same
+// `_playerPref` no-op-without-session pattern the DI cites.
+//
+// The button's CLICK is wired in js/app.js, delegated on `document`, for two
+// reasons: this panel is re-rendered on every prefs change (a directly-bound
+// listener would go stale), and importing app.js here would make chat-ui.js
+// depend on the module that already imports it.
 function prefsPanelHTML() {
   const self = me();
   if (!self) return '';
@@ -2281,8 +2293,19 @@ function prefsPanelHTML() {
       </select></div>
     <div class="chat-prefs-row"><label>Sound</label><input type="checkbox" id="pref-sound" ${prefs.sound ? 'checked' : ''}></div>
     <div class="chat-prefs-row"><label>League events</label><input type="checkbox" id="pref-sys" ${prefs.systemEvents ? 'checked' : ''}></div>
+    <!-- Build 3, Group D (2026-09-11, DI-D4) — the entry point to "My SCRIBE
+         File." Rationale in the JS comment above this function; note that
+         this markup lives inside a template literal, so no backticks. -->
+    <div class="chat-prefs-row"><label>SCRIBE</label>
+      <button class="btn btn-secondary btn-sm" id="scribe-file-btn" data-scribe-file="1">📁 My SCRIBE File</button></div>
   </div>`;
 }
+// Test-only seam (same convention as `_quoteHTMLForTest`/`_messageHTMLForTest`)
+// — DI-D4's "signed out hides the entry point entirely" is a claim about
+// what this function RENDERS, and groupdtest.mjs asserts it against the real
+// output rather than against a grep of the source (RG-27).
+export const _prefsPanelHTMLForTest = prefsPanelHTML;
+
 function bindPrefsPanel() {
   document.getElementById('pref-nick')?.addEventListener('change', e => { setChatNick(e.target.value); renderChatPage(); });
   document.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
@@ -2902,7 +2925,75 @@ function handleChatEvent(kind, detail) {
 export const _handleChatEventForTest = handleChatEvent;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-export function initChatUI() {
+/**
+ * Delegated chat clicks — registered by BOTH boot phases, exactly once.
+ *
+ * BUG-G F-2 (reviewer, 2026-09-11). This listener used to be registered only
+ * in the late phase, i.e. after `await hydrateBackend()`. That was invisible
+ * until BUG-G, because nothing chat-related was on screen before then. It is
+ * not invisible now: #page-dashboard is statically `.active` in index.html, so
+ * dashboardPageActive() is true at t=0, so the early phase's cache replay
+ * inserts the dashboard teaser — carrying `data-open-chat` — during the first
+ * paint. Without this, that preview sat there looking tappable and did nothing
+ * for the entire hydrate window (8-26s, or forever on a failed hydrate). A
+ * control that is visible but dead is worse than one that is absent: the
+ * player taps it, nothing happens, and concludes chat is broken — the exact
+ * report BUG-G exists to close.
+ *
+ * A module latch rather than an `if` at each call site: document-level
+ * listeners do not de-duplicate, so a second registration would fire
+ * navToChat() twice per tap (and openGameChatSheet() twice per game bubble).
+ * Idempotent by construction, not by caller discipline.
+ */
+let _delegatedChatClicksWired = false;
+function wireDelegatedChatClicks() {
+  if (_delegatedChatClicksWired) return;
+  _delegatedChatClicksWired = true;
+  document.addEventListener('click', e => {
+    const gameBtn = e.target.closest?.('[data-chat-game]');
+    if (gameBtn) { e.preventDefault(); openGameChatSheet(gameBtn.dataset.chatGame); return; }
+    const openChat = e.target.closest?.('[data-open-chat]');
+    if (openChat) { e.preventDefault(); navToChat(); }
+  });
+}
+
+/** Test hook (F-2): how many times the delegated click listener was actually
+ *  registered on `document`. The latch is module-private and the listener is
+ *  anonymous, so this is the only way to assert "exactly once across both
+ *  phases" from outside — same precedent as chat.js's
+ *  _isPollingActiveForTest() for its private S.unsub. */
+export function _delegatedChatClicksWiredForTest() { return _delegatedChatClicksWired; }
+
+/**
+ * BUG-G (2026-09-11) — TWO-PHASE. app.js calls this twice per boot:
+ *
+ *   initChatUI({ phase: 'early' })  BEFORE `await hydrateBackend()`
+ *   initChatUI()                    after it, exactly as before
+ *
+ * The early phase registers the UI subscriber and starts the transport +
+ * device-local cache replay (chat.js's startChatTransport(), which is reads-
+ * only through the storage seam). It deliberately does NOT run the rest of
+ * this function: maybeAnniversary() can fire a SCRIBE trigger, i.e. a chat
+ * SEND, and the outbox/epoch half of boot has to wait for the hydrated
+ * settings blob. Everything below stays where it was.
+ *
+ * Both phases call onChat(handleChatEvent) with the same module-level
+ * function reference and S.subs is a Set, so the second registration is a
+ * no-op — the subscriber cannot end up wired twice.
+ */
+export function initChatUI(opts = {}) {
+  if (opts.phase === 'early') {
+    // Register BEFORE starting the engine, for the same reason the full path
+    // does below: the cache replay notifies synchronously, into whatever
+    // subscriber set exists at that instant.
+    onChat(handleChatEvent);
+    // F-2 — BEFORE the replay that renders the teaser, so the tap target is
+    // live from the instant it exists rather than from the end of hydrate.
+    wireDelegatedChatClicks();
+    startChatTransport(me());
+    updateChatBadges();
+    return;
+  }
   // v0.17.5 (caught in review): initChat() was called FIRST, but it synchronously
   // fires notify('epochApplied') via _applyEpochLocally() — into an empty
   // subscriber set. And because that call also stamps cfbp_chat_epoch_applied,
@@ -2918,13 +3009,10 @@ export function initChatUI() {
   // Boot the engine LAST — everything above is now listening.
   initChat(me());
 
-  // Delegated clicks that survive any re-render
-  document.addEventListener('click', e => {
-    const gameBtn = e.target.closest?.('[data-chat-game]');
-    if (gameBtn) { e.preventDefault(); openGameChatSheet(gameBtn.dataset.chatGame); return; }
-    const openChat = e.target.closest?.('[data-open-chat]');
-    if (openChat) { e.preventDefault(); navToChat(); }
-  });
+  // Delegated clicks — already wired by the early phase on a normal boot; the
+  // latch makes this a no-op there and a real registration on any path that
+  // never ran an early phase (F-2).
+  wireDelegatedChatClicks();
 
   // Rebind the teaser's dismiss control whenever the dashboard re-renders it
   // (renderDashboard() replaces #page-dashboard's innerHTML wholesale, which

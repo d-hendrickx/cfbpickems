@@ -1643,12 +1643,19 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     'scribeInteractiveEnabled', 'scribeWebSearchEnabled',
     // Build 2b, E4 (2026-09-10, UN-162, correction #9): the Trainer-learnings
     // runtime kill switch. Same trivially-bounded boolean shape as the pair
-    // above. (`scribeFrequency` is D1's own field, Build 3, not yet written
-    // by any saveSetting() call in this codebase — added to this list only
-    // once D1 actually ships it, per this guard's own "judge before it
-    // ships" purpose; listing it now would be reviewing a field that does
-    // not exist yet.)
+    // above.
     'scribeLearningsEnabled',
+    // Build 3, Group D (2026-09-11, correction #9): the frequency dial and
+    // the autonomous client gate. SIZE JUDGED, which is what this list is
+    // for: `scribeFrequency` is one of five fixed level names (the longest
+    // is 'balanced', 8 chars) — it can never grow, because
+    // js/scribeLines.js's FREQUENCY_LEVELS is the closed set it is validated
+    // against on read, on BOTH sides of the wire. `scribeAutonomousEnabled`
+    // is a boolean. Both are listed now, ahead of pass 2's Comm -> Settings
+    // dial writing them, deliberately: the guard's purpose is to have the
+    // size judgment ON THE RECORD before the field ships, and this list has
+    // never required that a listed key already have a call site.
+    'scribeFrequency', 'scribeAutonomousEnabled',
     // small maps/arrays, bounded by a fixed real-world count
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players

@@ -2272,11 +2272,52 @@ assert(submitRenderIdx30 > -1 && submitScrollIdx30 > -1 && submitRenderIdx30 < s
 // never fire again. Registering after meant the chat-ui half of DI-112b never
 // ran on any device except Drew's own (where startFreshChat calls it post-boot).
 console.log('\n[30b] Epoch heal — subscriber registered before the engine boots…');
-const initUiSrc = (chatUiSrc.match(/export function initChatUI\(\)[\s\S]*?\n\}/) || [''])[0];
-const onChatAt = initUiSrc.indexOf('onChat(');
-const initChatAt = initUiSrc.indexOf('initChat(me())');
+// BUG-G (2026-09-11) — the signature is now initChatUI(opts = {}) (two-phase
+// boot), so this match is on the PARAMETER LIST, not on a literal `()`. It
+// silently stopped matching when the signature changed, which cost this guard
+// nothing in strength but everything in coverage for one run — matched loosely
+// here so the next signature change cannot repeat that.
+const initUiSrc = (chatUiSrc.match(/export function initChatUI\([^)]*\) \{[\s\S]*?\n\}/) || [''])[0];
+assert(initUiSrc.length > 0, 'initChatUI() function body located (guards the two order assertions below)');
+// SCOPED TO THE LATE BLOCK (reviewer F-1, 2026-09-11). BUG-G's early phase
+// registers its own onChat() ABOVE the late block, so a whole-function
+// indexOf('onChat(') matched THAT one and the comparison below became
+// unfailable: the reviewer mutated the late phase into the literal RG-22
+// defect order (initChat(me()) first, onChat second) and this file stayed
+// 1391/0. A guard that cannot go red is worse than no guard, because it reads
+// as coverage. Slice from wireRevealCloser() — the first statement of the late
+// block — so both indices below come from the block the assertion is about.
+const lateAnchor = initUiSrc.indexOf('wireRevealCloser()');
+assert(lateAnchor > -1,
+  'initChatUI()\'s LATE block anchor (wireRevealCloser()) located — protocol 52: a source-slice guard asserts its own anchor matched, or it silently measures nothing');
+const lateSrc = initUiSrc.slice(lateAnchor);
+const onChatAt = lateSrc.indexOf('onChat(');
+const initChatAt = lateSrc.indexOf('initChat(me())');
 assert(onChatAt > -1 && initChatAt > -1 && onChatAt < initChatAt,
-  'initChatUI registers its onChat subscriber BEFORE calling initChat(me())');
+  'initChatUI\'s LATE phase registers its onChat subscriber BEFORE calling initChat(me()) — initChat() fires notify(\'epochApplied\') synchronously and idempotently (RG-22)');
+// BUG-G — the SAME hazard, one phase earlier and worse: the early phase's
+// startChatTransport() replays the device-local events cache SYNCHRONOUSLY
+// (DI-169), so a subscriber registered after it would miss the entire cached
+// room — the exact "notifies into an empty subscriber set" failure this
+// section was written for, now with a render attached to it.
+//
+// Its OWN slice, for the same reason the late block has one: the first version
+// of this compared an index taken from the early phase against indices taken
+// from the late block, which is not a comparison of anything. Each phase is
+// measured inside its own boundaries.
+const earlySrc = initUiSrc.slice(0, lateAnchor);
+const earlyOnChatAt = earlySrc.indexOf('onChat(');
+const startTransportAt = earlySrc.indexOf('startChatTransport(me())');
+const earlyWireAt = earlySrc.indexOf('wireDelegatedChatClicks()');
+assert(earlyOnChatAt > -1 && startTransportAt > -1 && earlyOnChatAt < startTransportAt,
+  "initChatUI's EARLY phase registers its onChat subscriber BEFORE startChatTransport(me()) — the cache replay fires synchronously inside it");
+// F-2 (reviewer, 2026-09-11) — and the delegated click listener is wired
+// before that replay too: the replay renders the dashboard teaser (
+// #page-dashboard is statically .active in index.html), and a teaser whose
+// data-open-chat has no handler is a dead tap target for the whole hydrate
+// window.
+assert(earlyWireAt > -1 && earlyWireAt < startTransportAt,
+  "initChatUI's EARLY phase wires the delegated chat clicks BEFORE the cache replay that renders the tappable teaser");
 
 // 30c. F3 — a failed chat clear during factory reset must NOT un-hide chat.
 // resetToDemo() writes DEFAULT_SETTINGS, resetting chatEpochSeq to 0. If the
@@ -8951,6 +8992,72 @@ console.log('\n[78] cachetest.mjs — spawned as a subprocess, exit code + print
     assert(summaryMatch78[1] === '✅ ALL PASS', `cachetest.mjs itself reports ALL PASS (got: ${summaryMatch78[0]})`);
     assert(Number(summaryMatch78[3]) === 0, `cachetest.mjs reports zero failed assertions (got ${summaryMatch78[3]} failed, ${summaryMatch78[2]} passed)`);
     assert(Number(summaryMatch78[2]) >= 20, `cachetest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch78[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 79. memorytest.mjs — spawned as a subprocess, same shape as [68] ────────
+// Build 3, Group D (2026-09-11, DI-D1/DI-D2). Same "clean process" reasoning
+// section [67]/[68] give: memorytest.mjs loads backend/Code.gs into its OWN
+// fresh `vm` context (twice over, for its two source mutations).
+console.log('\n[79] memorytest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['memorytest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `memorytest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch79 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch79, `memorytest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch79 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch79) {
+    assert(summaryMatch79[1] === '✅ ALL PASS', `memorytest.mjs itself reports ALL PASS (got: ${summaryMatch79[0]})`);
+    assert(Number(summaryMatch79[3]) === 0, `memorytest.mjs reports zero failed assertions (got ${summaryMatch79[3]} failed, ${summaryMatch79[2]} passed)`);
+    assert(Number(summaryMatch79[2]) >= 100, `memorytest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch79[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 80. scoringtest.mjs — spawned as a subprocess, same shape as [79] ───────
+// Build 3, DI-D1. Own process because its [12] mutation section imports
+// MUTATED copies of js/scribeLines.js as data: URLs — doing that inside THIS
+// already-populated module graph is the "dirty state" false-pass class
+// section [67] names.
+console.log('\n[80] scoringtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['scoringtest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `scoringtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch80 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch80, `scoringtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch80 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch80) {
+    assert(summaryMatch80[1] === '✅ ALL PASS', `scoringtest.mjs itself reports ALL PASS (got: ${summaryMatch80[0]})`);
+    assert(Number(summaryMatch80[3]) === 0, `scoringtest.mjs reports zero failed assertions (got ${summaryMatch80[3]} failed, ${summaryMatch80[2]} passed)`);
+    assert(Number(summaryMatch80[2]) >= 60, `scoringtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch80[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 81. groupdtest.mjs — spawned as a subprocess, same shape as [79]/[80] ───
+// Build 3, Group D pass 2 (2026-09-11, DI-D1 UI / DI-D3 / DI-D4). Own process
+// for the reason [67]/[68] give AND one of its own: it drives the REAL
+// commissioner-settings writes, the REAL week-signal ledger, and app.js's
+// module-level memory cache, all of which would otherwise leave settings,
+// localStorage keys and module state behind for every suite after it here.
+console.log('\n[81] groupdtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['groupdtest.mjs'], { cwd, encoding: 'utf8' });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `groupdtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch81 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch81, `groupdtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch81 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch81) {
+    assert(summaryMatch81[1] === '✅ ALL PASS', `groupdtest.mjs itself reports ALL PASS (got: ${summaryMatch81[0]})`);
+    assert(Number(summaryMatch81[3]) === 0, `groupdtest.mjs reports zero failed assertions (got ${summaryMatch81[3]} failed, ${summaryMatch81[2]} passed)`);
+    assert(Number(summaryMatch81[2]) >= 100, `groupdtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch81[2]} — a near-zero count would mean the guard is vacuous)`);
   }
 }
 

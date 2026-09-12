@@ -40,14 +40,20 @@
  * same trigger simultaneously, the server's id-dedupe collapses them to one row.
  */
 
-import { sendEvent, whenAppended } from './chat.js';
+import { sendEvent, whenAppended, getMessages } from './chat.js';
 // Build 2, Group C (2026-09-10, UN-150…154) — the @scribe mention branch now
 // calls the interactive (LLM-backed) runtime instead of posting a canned
 // line unconditionally. One-directional import (scribeAgent.js never imports
 // this module) so there is no cycle: scribeAgent.js is a thin backend relay
 // + settings gate, this module owns the pool/fallback/dedup mechanics it
 // already owned before this build.
-import { isScribeInteractiveEnabled, scribeAskRemote } from './scribeAgent.js';
+import {
+  isScribeInteractiveEnabled, scribeAskRemote,
+  // Build 3, Group D (2026-09-11) — the autonomous path's settings gate and
+  // its two relays. Same one-directional import as Build 2: scribeAgent.js
+  // never imports this module, so there is no cycle.
+  getScribeFrequency, isScribeAutonomousReady, scribeAutonomousRemote, scribeClassifyRemote,
+} from './scribeAgent.js';
 
 // UN-160 (E2) — a hand-bumped constant, analogous to APP_VERSION (js/app.js):
 // bump it alongside a SCRIBE_POOLS content edit so a feedback record can tell
@@ -376,6 +382,16 @@ async function fireScribeMention({ gameTag, author, authorName, triggerMessageId
  */
 export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, bucketMin = 10, notify = false, quote = null, triggerMessageId = null } = {}) {
   if (!SCRIBE_POOLS[trigger]) return false;
+  // Build 3, D1 — EVERY detector feeds the opportunity score here, at the one
+  // choke point they all already pass through, so no detector call site
+  // changes (chat-ui.js is untouched by this build). `considerAutonomous` is
+  // free and synchronous; it returns false for all but a genuinely
+  // high-value candidate, and on this deployment it returns false outright
+  // until the transport is wired. When it DOES fire it reserves the SCRIBE
+  // cooldown, so the `rateLimited()` check three lines below drops this
+  // tier-0 line by the existing, unmodified mechanism — one event, one SCRIBE
+  // message, the better line. See considerAutonomous's own note.
+  considerAutonomous(trigger, { subject, gameTag });
   // Direct-mention replies bypass the rate limit (spec); everything else is
   // rationed — the restraint IS the character.
   const direct = trigger === 'mention';
@@ -428,6 +444,16 @@ export function scribeInspectMessage({ author, authorName, body, gameTag = '', s
     // fire-and-forget in production exactly as before, just now awaitable.
     return fireScribeMention({ gameTag, author, authorName, triggerMessageId });
   }
+  // 1b. Build 3, D-2 (correction #6) — CHAT REACTIVITY. A non-@scribe human
+  // message that clears the FREE keyword/shape prefilter buys one capped
+  // `claude-haiku-4-5` classify call, whose points feed the same opportunity
+  // score every other signal goes through. Ordinary chat never reaches the
+  // network: the prefilter is a local regex/substring pass, and
+  // `considerClaim` is a no-op unless autonomy is ready on this device.
+  // Fire-and-forget — this function's synchronous contract is unchanged.
+  if (chatClaimPrefilter(body)) {
+    considerClaim({ triggerMessageId, gameTag, author });
+  }
   // 2. Drink debt vocabulary
   if (/\bdrink|owes?\b|\bbalance|\bbeer|\bsapporo\b/.test(low)) {
     return scribeTrigger('drinkDebt', { gameTag, subject: 'debt', triggerMessageId });
@@ -446,4 +472,760 @@ export function scribeInspectMessage({ author, authorName, body, gameTag = '', s
     return scribeTrigger('lastPlaceTaunt', { gameTag, subject: author, vars: { name: authorName }, triggerMessageId });
   }
   return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── Build 3, Group D (2026-09-11) — DI-D1: opportunity scoring + the
+//    frequency dial. THE CHEAP HALF OF THE GATE.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Everything below is deterministic, free, and runs on the device. No model
+// call, no network, no storage write. Its ONLY job is to answer "is this
+// worth speaking about?" — the expensive "what should I say?" step lives
+// entirely server-side (backend/Code.gs's `scribeAutonomous`), is reached
+// only by a candidate that already cleared the threshold here, and re-checks
+// this verdict against the league's own settings before it spends a cent.
+//
+// Tier 0 is untouched. The pools, the ledger, `pickLine()`, `scribeTrigger`'s
+// body — all byte-identical to Build 2. D1 is a SECOND, PARALLEL evaluation
+// layered on top (DI-D1: "additive").
+
+/** The dial, re-exported from data-model.js (N-3: js/scribeAgent.js needs it
+ *  too and cannot import this module — scribeLines imports scribeAgent, so
+ *  that direction would be a cycle). One numeric threshold on a 0-100 scale;
+ *  a candidate speaks when its score is >= the threshold (exact-threshold
+ *  FIRES — DI-D1's own wording, and scoringtest.mjs asserts both sides).
+ *
+ *  MUST agree with SCRIBE_FREQUENCY_THRESHOLDS_ in backend/Code.gs. There is
+ *  no import across THAT boundary (separate runtime), so scoringtest.mjs
+ *  parses both sources and asserts the tables match — a one-sided edit fails
+ *  a test instead of silently splitting client and server onto two different
+ *  definitions of "Balanced." */
+export const FREQUENCY_LEVELS = SCRIBE_FREQUENCY_LEVELS;
+export const FREQUENCY_DEFAULT = SCRIBE_FREQUENCY_DEFAULT;
+
+/** Drew's D-1 ruling: expose all five. Copy is FINAL, from
+ *  `SCRIBE_COPY_GROUP_D_091126.md` §5 — product voice, one line per level.
+ *  Exported here (rather than inlined in app.js) so pass 2's Comm -> Settings
+ *  dial imports the approved strings instead of retyping them. Order is the
+ *  order the dial renders: loudest-to-quietest is wrong for a control whose
+ *  default sits in the middle, so it reads quiet -> unhinged. */
+export const FREQUENCY_COPY = [
+  { level: 'quiet',     label: 'Quiet',     description: 'Speaks only for the truly exceptional moments.' },
+  { level: 'reserved',  label: 'Reserved',  description: 'Chimes in when something genuinely earns it.' },
+  { level: 'balanced',  label: 'Balanced',  description: 'The default. Present, but never the main character.' },
+  { level: 'active',    label: 'Active',    description: 'Talks like a real seventh member of the group chat.' },
+  { level: 'unhinged',  label: 'Unhinged',  description: 'Maximum SCRIBE. You asked for this.' },
+];
+
+/** DI-D4 copy, final, same source document (§1, §2, §4). Exported for pass
+ *  2's "My SCRIBE File" modal so the approved strings live in exactly one
+ *  place. Product voice, not SCRIBE's — these are the app talking ABOUT
+ *  SCRIBE, which SCRIBE.md's register deliberately does not govern. */
+export const MEMORY_COPY = {
+  sectionBody: 'What SCRIBE has recorded about you, in plain language. Delete anything you told it — no explanation needed. Facts it works out from the standings refresh on their own.',   // amended 2026-09-11 (coordinator, pass 2 review F3): computed rows are read-only, so the promise is scoped to what the player told SCRIBE
+  emptyState: 'Nothing recorded yet — that builds as SCRIBE gets to know you.',
+  unconfirmedTag: "SCRIBE thinks this but isn't sure — delete it if it's wrong.",
+};
+
+/** DI-D1's scoring table, verbatim. These are CALIBRATION TARGETS, not
+ *  constants of nature: E3's Trainer replays `scoreOpportunity` against every
+ *  👁 weigh-in-flagged message and proposes threshold changes as experiments,
+ *  which stay pending until a human approves them (DI-D1's calibration loop).
+ *
+ *  `claim` is deliberately 0. Text-based signals score ONLY via the
+ *  `claude-haiku-4-5` classifier's own returned points (correction #6) — a
+ *  keyword prefilter match is a reason to ASK, never a reason to speak. */
+export const SIGNAL_POINTS = {
+  backdoorBust: 50,
+  chartLeadChange: 45,
+  milestone: 40,
+  streak: 35,
+  loneWolfWin: 30,
+  unanimous: 25,
+  drinkDebt: 15,
+  verbosity: 10,
+  claim: 0,
+};
+
+// ── FINDING 1 (reviewer, round 3; DI-D1 amendment #3) — THE COMBINER ───────
+//
+// The score used to be a flat sum of every entry handed in. Two defects in
+// one line:
+//   CARDINALITY. A realistic 10-game finalize emits one `unanimous`, one
+//   `loneWolfWin` and three `streak` signals; summed, 160 — clearing Quiet
+//   (85) twice over. Twenty `verbosity` entries summed to 200 and posted on
+//   the quietest setting the dial has.
+//   DISCRIMINATION. If any busy week clears every level, the dial is not a
+//   dial: Quiet and Unhinged behave identically on exactly the weeks a
+//   league would notice.
+//
+// Two changes, mirrored byte-for-byte in backend/Code.gs's
+// `scribeCollapseSignals_`/`scribeCombineSignalPoints_` (scoringtest runs
+// BOTH implementations over the same fixtures and asserts they agree):
+//   1. COLLAPSE BY NAME — each distinct signal counts at most once, whatever
+//      its instance count. Three streaks are "a streak week," not three
+//      times as interesting. Capped at 8 distinct names.
+//   2. DIMINISHING RETURNS — `top + 0.5 x (second + third)` over the three
+//      highest DISTINCT signals; everything past the third contributes
+//      nothing. A week is interesting because of its best moment and some
+//      corroboration, not because a lot of small things happened.
+//
+// The gradient this produces (asserted in scoringtest, and the reason these
+// numbers are not arbitrary):
+//   ordinary week      35 + 30 + 25 -> 62.5   Balanced/Active/Unhinged only
+//   lead-change week   45 + 35 + 30 -> 77.5   Reserved yes, Quiet no
+//   big week           50 + 45 + 35 -> 90     even Quiet
+//   lone contradiction 50           -> 50     Balanced
+//   guarantee + noise  45 + 10      -> 50
+//
+// SIGNAL_POINTS and the threshold table are UNCHANGED: the defect was the
+// combiner, and re-tuning points on top of a new combiner would make the
+// calibration loop's replays incomparable across the change.
+const MAX_DISTINCT_SIGNALS = 8;
+
+/** One entry per signal NAME (the highest points wins between instances),
+ *  sorted by points descending with the name as a stable tiebreak, capped at
+ *  8. Pure. */
+function collapseSignals(list) {
+  const byName = new Map();
+  for (const raw of list) {
+    const s = (typeof raw === 'string') ? { signal: raw } : (raw || {});
+    const name = String(s.signal || '');
+    if (!name) continue;
+    // F-A — the RG-07 null trap, and the server's guard is the correct one.
+    // `Number(null)` is 0 and `Number.isFinite(0)` is true, so a
+    // `points:null` entry used to read as an EXPLICIT zero and suppress the
+    // table value — the two runtimes then scored the same signal list
+    // differently (Code.gs checks `!== null` first and falls through to the
+    // table). `points` is "a number the caller supplied"; null and undefined
+    // are both "the caller supplied nothing."
+    const explicit = Number(s.points);
+    const hasExplicit = s.points !== undefined && s.points !== null && Number.isFinite(explicit);
+    const pts = hasExplicit ? explicit
+      : (Object.prototype.hasOwnProperty.call(SIGNAL_POINTS, name) ? SIGNAL_POINTS[name] : 0);
+    const prev = byName.get(name);
+    if (prev === undefined || pts > prev) byName.set(name, pts);
+  }
+  return [...byName.entries()]
+    .map(([signal, points]) => ({ signal, points }))
+    .sort((a, b) => (b.points - a.points) || String(a.signal).localeCompare(String(b.signal)))
+    .slice(0, MAX_DISTINCT_SIGNALS);
+}
+
+/** `top + 0.5 x (second + third)` over an already-collapsed, descending
+ *  list. Fractional scores are expected and fine — thresholds are integers
+ *  and the comparison is `>=`. */
+function combineSignalPoints(collapsed) {
+  const a = collapsed[0] ? Number(collapsed[0].points) || 0 : 0;
+  const b = collapsed[1] ? Number(collapsed[1].points) || 0 : 0;
+  const c = collapsed[2] ? Number(collapsed[2].points) || 0 : 0;
+  return a + 0.5 * (b + c);
+}
+
+/**
+ * PURE. Same input, same output, every time — no clock, no storage, no
+ * network. E3's Trainer replays this exact algorithm server-side against
+ * flagged messages, so it must be safe to call with a fixture and nothing
+ * else (DI-D1: "expose the pure scoring function for E3 to call").
+ *
+ * @param signals  array of `{ signal, points?, ts? }` (a bare string is
+ *                 accepted as `{signal}`). An explicit finite `points`
+ *                 overrides the table — that is how the classifier's verdict
+ *                 enters the score.
+ * @param level    a FREQUENCY_LEVELS key; anything unrecognized reads as
+ *                 Balanced (never as 0 — a malformed value must make SCRIBE
+ *                 quieter-or-equal, never open the gate).
+ * @param now      optional. When supplied, only signals in the SAME 10-minute
+ *                 bucket as `now` are considered (DI-D1's bucket rule, as
+ *                 amended: same bucket means they COMBINE, not that they add). A
+ *                 signal with no `ts` belongs to `now`'s bucket.
+ * @returns { score, threshold, clears, level, counted } — `counted` is the
+ *          COLLAPSED list, one entry per name, which is exactly what the
+ *          prompt's "contributing signals" line is built from.
+ */
+export function scoreOpportunity(signals, { level = FREQUENCY_DEFAULT, now = null } = {}) {
+  const lvl = String(level || '').toLowerCase();
+  const threshold = Object.prototype.hasOwnProperty.call(FREQUENCY_LEVELS, lvl)
+    ? FREQUENCY_LEVELS[lvl] : FREQUENCY_LEVELS[FREQUENCY_DEFAULT];
+  const list = Array.isArray(signals) ? signals : (signals ? [signals] : []);
+  const wantBucket = now == null ? null : bucket(now);
+  const inBucket = list.filter(raw => {
+    const s = (typeof raw === 'string') ? { signal: raw } : (raw || {});
+    return !(wantBucket !== null && s.ts != null && bucket(s.ts) !== wantBucket);
+  });
+  const counted = collapseSignals(inBucket);
+  const score = combineSignalPoints(counted);
+  return { score, threshold, clears: score >= threshold, level: lvl || FREQUENCY_DEFAULT, counted };
+}
+
+/**
+ * Stage one of the chat-reactive gate (correction #6) — FREE, local, and
+ * deliberately loose. A match only buys the message a ~$0.001 classifier
+ * call; a miss costs nothing and is the overwhelmingly common case, so
+ * ordinary chat still costs exactly zero. Being slightly over-inclusive here
+ * is the cheap error; being under-inclusive means the thesis case ("Koby says
+ * something confident -> one sentence back") never fires at all.
+ */
+// Note 11 (reviewer) — WORD BOUNDARIES. A bare substring match on 'lock'
+// fires on "picks lock at noon," "locked in," "unlock" — the most ordinary
+// sentences in this chat, every one of them buying a paid classifier call.
+// Each entry is matched as a whole word (or whole phrase), so "lock" hits
+// and "locked"/"unlock"/"clock" do not. Being slightly over-inclusive is
+// still the cheap error here; being over-inclusive on the single most common
+// word in a pick'em chat is not.
+const CLAIM_KEYWORDS = [
+  // 'locks' is deliberately ABSENT while 'lock' is present: "it's a lock" is
+  // the claim idiom, but "the week locks at noon" is scheduling, and that
+  // sentence appears in this chat every single week.
+  'guarantee', 'guaranteed', 'lock of the week', 'lock', 'no way', 'book it',
+  "can't lose", 'cant lose', 'easy money', 'free money', 'mortal lock',
+  'calling it now', 'trust me', 'i promise',
+];
+const CLAIM_KEYWORD_RES = CLAIM_KEYWORDS.map(kw =>
+  new RegExp('(^|[^a-z0-9])' + kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^a-z0-9])', 'i'));
+export function chatClaimPrefilter(body) {
+  const low = String(body || '').toLowerCase();
+  if (!low.trim()) return false;
+  if (/(^|[^a-z0-9])100\s*%/.test(low)) return true;      // "100%"
+  if (/(^|[^a-z0-9])\d{2,3}\s*%/.test(low)) return true;  // any number + % — a confident figure
+  for (const re of CLAIM_KEYWORD_RES) { if (re.test(low)) return true; }
+  return false;
+}
+
+// ── The autonomous candidate gate ──────────────────────────────────────────
+//
+// Module state, device-local and intentionally NOT persisted: a bucket of
+// signals (so concurrent detectors in the same 10 minutes COMBINE — see
+// scoreOpportunity for what "combine" means since amendment #3), the set of
+// bucket ids this device has already fired (so a second detector in the same
+// bucket cannot double-fire), and an "autonomy is off server-side" latch.
+const signalBuckets = new Map();     // `${gameTag}|${bucket}` -> [{signal, points, ts}]
+const firedBuckets = new Set();      // deterministic post ids already attempted
+let autonomyOffUntil = 0;            // ms timestamp; see the latch note below
+const AUTONOMY_OFF_LATCH_MS = 30 * 60 * 1000;
+// BLOCK-2 — the league-wide autonomous floor. Stored in the SAME device-local
+// map as the per-room cooldowns (one key, not a second storage concept) under
+// a key no gameTag can collide with: `lastPosts()` keys are '' -> 'main' or a
+// gameId, and a gameId cannot contain a colon-prefixed reserved word.
+const AUTONOMOUS_ALL_KEY = ':autonomous_all';
+const AUTONOMOUS_GLOBAL_COOLDOWN_MS = 10 * 60 * 1000;
+// F-G (client half) — the stamp carries a sub-millisecond nonce so "is this
+// stamp still MINE?" is answerable. Two candidates can reserve inside the
+// same millisecond; with a bare `Date.now()` they are indistinguishable, and
+// a rolled-back failure would then clear a cooldown that belongs to the
+// other one. The fraction is far below the 10-minute window, so every
+// comparison that treats this as a timestamp still behaves identically.
+let autonomousStampSeq = 0;
+
+/** Test seam, same convention as chat.js's `_resetForTest`. Note 14
+ *  (reviewer) — `classifyInFlight` MUST be reset here too: it is set before
+ *  an await and cleared in a `.finally`, so a test that does not await the
+ *  round trip leaves it stuck true and every later test in the file silently
+ *  skips the classifier, passing for the wrong reason. */
+export function _resetAutonomousStateForTest() {
+  signalBuckets.clear(); firedBuckets.clear(); autonomyOffUntil = 0; classifyInFlight = false;
+}
+
+/**
+ * The consecutive-post guard (DI-D1), client side: no two AUTONOMOUS SCRIBE
+ * messages back-to-back in the same `gameTag` without an intervening human
+ * message. Checked against the already-hydrated fold — no new read, no
+ * network. The server re-checks the identical rule against CFBP_MESSAGES
+ * (authoritative: this fold can be a poll interval stale, and six devices can
+ * each believe they are first).
+ *
+ * A tier-0 canned line or an @mention reply does NOT block: those are
+ * different in kind (free, or directly asked for) and the 10-minute general
+ * cooldown already rations them.
+ */
+function autonomousConsecutiveBlocked(gameTag) {
+  let msgs;
+  // BLOCK-2 — `null` means EVERY room, which is what the main chat actually
+  // renders (`getMessages({tag:'all'})`). A string, including '' for the
+  // main room, scopes the check to one thread.
+  const tag = (gameTag === null || gameTag === undefined) ? 'all' : (gameTag || '');
+  try { msgs = getMessages({ tag }); } catch { return false; }
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.type !== 'message') continue;
+    if (m.author === 'scribe') { if (m.meta && m.meta.autonomous) return true; continue; }
+    if (m.author === 'system') continue;
+    return false;                      // a human spoke most recently — clear to speak
+  }
+  return false;
+}
+
+/**
+ * D1's decision function. Called by `scribeTrigger` for every detector (so
+ * every existing trigger feeds it without any call site changing) and
+ * directly by signals that have no tier-0 pool at all (`milestone`,
+ * `streak`, and the classifier-backed `claim`).
+ *
+ * GATE ORDER — cheapest first, and nothing here touches the network until
+ * every free check has passed:
+ *   1. never for `mention` (that is Group C's path, and it is never silent)
+ *   2. autonomy READY on this device (client setting on AND transport wired)
+ *      + the off-latch — see the reservation note below for why this must be
+ *      checked BEFORE anything is reserved
+ *   3. cooldown floor — the existing GENERAL_COOLDOWN (10 min) /
+ *      GAME_COOLDOWN (60 min), unchanged, at EVERY frequency level. The dial
+ *      moves the score threshold, never the cooldown (SCRIBE.md §14).
+ *   4. consecutive-post guard
+ *   5. the score, summed over the 10-minute bucket
+ *   6. once per (trigger, subject, bucket) per device
+ *
+ * THE RESERVATION, AND WHY IT IS ROLLED BACK — the one genuinely non-obvious
+ * decision in this file, flagged for review:
+ *
+ * DI-D1 AMENDMENT, inline (proposed AD-50 — coordinator-proposed,
+ * reviewer-endorsed 2026-09-11; Drew has not ruled on it yet) —
+ * the DI says D1 is "parallel, additive" and "does not touch the Tier-0
+ * path." Taken literally that produces TWO SCRIBE messages for one event: a
+ * canned line now and an LLM line fifteen seconds later, back to back, which
+ * SCRIBE.md §14's rate limit exists to prevent. The amendment: the tier-0
+ * CODE is untouched (not one line of `scribeTrigger`'s body changed), but an
+ * autonomous candidate that clears reserves the shared cooldown, so tier-0's
+ * OWN, pre-existing rate limiter drops the canned line — "dropped, not
+ * queued," this file's original behaviour. Additive in mechanism, exclusive
+ * in outcome.
+ *
+ * A single event must produce ONE SCRIBE message, not two. `scribeTrigger`
+ * calls this BEFORE it picks a tier-0 line, and a candidate that clears calls
+ * `noteRate(gameTag)` — which makes the tier-0 attempt immediately following
+ * it hit the EXISTING, UNMODIFIED rate limiter and drop, exactly as a
+ * rate-limited trigger has always dropped ("dropped, not queued", this file's
+ * header). So the better line wins and tier-0's code is untouched.
+ *
+ * The hazard that creates: if the autonomous post then never happens (the
+ * server property is off, the budget is spent, Anthropic is down), the event
+ * produced NO post at all, and worse, a 10-minute cooldown that silences the
+ * free lines too. Three things bound it:
+ *   - gate 2 — a device that cannot post autonomously at all never reserves,
+ *     so the transport being unwired (its state for all of pass 1) has
+ *     precisely zero effect on tier-0;
+ *   - the rollback — any non-post outcome restores the previous cooldown
+ *     timestamp (only if nothing else has written it since);
+ *   - the latch — a server that says "autonomy is disabled" stops this device
+ *     from reserving for 30 minutes, so a deployment with the Script Property
+ *     off cannot cost more than one canned line per half hour.
+ *
+ * Returns synchronously (`scribeTrigger` and `scribeInspectMessage` are
+ * synchronous and stay that way): `{ fired, id?, score, threshold, promise? }`.
+ * `promise` resolves once the server has answered — tests await it; nothing
+ * in the app does.
+ */
+export function considerAutonomous(trigger, { subject = '', gameTag = '', weekId = '', playerId = '', signals = null, triggerMessageId = '', now = Date.now() } = {}) {
+  if (!trigger || trigger === 'mention') return { fired: false, reason: 'not_a_candidate', score: 0, threshold: 0 };
+  if (!isScribeAutonomousReady()) return { fired: false, reason: 'not_ready', score: 0, threshold: 0 };
+  if (now < autonomyOffUntil) return { fired: false, reason: 'server_off_latch', score: 0, threshold: 0 };
+
+  // BLOCK-2 (reviewer, round 2) — THE LEAGUE-WIDE FLOOR, checked before the
+  // per-room one. Every bound in this file used to be partitioned by
+  // gameTag, which reads as correct and is not: the main chat renders
+  // `getMessages({tag:'all'})`, so three game threads finalizing at once
+  // produced three autonomous posts in one reader's stream, each of them
+  // individually inside its own room's 10-minute floor. SCRIBE.md §14's
+  // rate limit is about the reader, not the room. The server enforces the
+  // same bound authoritatively (six devices each think they are first); this
+  // copy exists so a device refuses before paying a round trip.
+  const globalLast = lastPosts()[AUTONOMOUS_ALL_KEY] || 0;
+  const globalBlocked = (now - globalLast) < AUTONOMOUS_GLOBAL_COOLDOWN_MS;
+
+  const bucketKey = `${gameTag || ''}|${bucket(now)}`;
+  const list = signalBuckets.get(bucketKey) || [];
+  const incoming = Array.isArray(signals) && signals.length
+    ? signals.map(s => (typeof s === 'string' ? { signal: s, ts: now } : { ts: now, ...s }))
+    : [{ signal: trigger, ts: now }];
+  for (const s of incoming) list.push(s);
+  signalBuckets.set(bucketKey, list);
+  // Bounded: one entry per bucket key, and a bucket key is 10 minutes wide.
+  // Drop anything older than two buckets so a long session cannot grow this
+  // map without limit (RG-55's lesson applied to module state).
+  for (const k of signalBuckets.keys()) {
+    const b = Number(k.split('|')[1]);
+    if (Number.isFinite(b) && b < bucket(now) - 1) signalBuckets.delete(k);
+  }
+
+  const level = getScribeFrequency();
+  const scored = scoreOpportunity(list, { level, now });
+
+  // Cooldown and the consecutive-post guard are checked AFTER the score is
+  // computed but BEFORE anything is reserved, so a blocked candidate still
+  // reports its real score — that is what E3's calibration loop reads.
+  if (globalBlocked) return { fired: false, reason: 'global_cooldown', ...scored };
+  if (rateLimited(gameTag)) return { fired: false, reason: 'cooldown', ...scored };
+  if (autonomousConsecutiveBlocked(gameTag)) return { fired: false, reason: 'consecutive', ...scored };
+  if (autonomousConsecutiveBlocked(null)) return { fired: false, reason: 'consecutive_all', ...scored };
+  if (!scored.clears) return { fired: false, reason: 'below_threshold', ...scored };
+
+  const id = `scribe_auto_${trigger}_${subject || 'x'}_${bucket(now)}`.replace(/[^a-zA-Z0-9_:-]/g, '');
+  if (firedBuckets.has(id)) return { fired: false, reason: 'already_fired', ...scored };
+  firedBuckets.add(id);
+
+  // Reserve the cooldown (see the long note above), remembering the exact
+  // prior value so the rollback can tell "nothing else wrote this" from
+  // "someone else did."
+  const roomKey = gameTag || 'main';
+  const before = lastPosts()[roomKey] || 0;
+  noteRate(gameTag);
+  // BLOCK-2 — the league-wide stamp is reserved in the same breath as the
+  // room one, and rolled back the same way.
+  const globalStamp = now + (autonomousStampSeq++ % 997) / 1000;
+  const lpReserve = lastPosts();
+  lpReserve[AUTONOMOUS_ALL_KEY] = globalStamp;
+  saveLastPosts(lpReserve);
+  const reservedAt = lastPosts()[roomKey];
+  const rollback = () => {
+    const lp = lastPosts();
+    if (lp[roomKey] === reservedAt) { lp[roomKey] = before; }
+    if (lp[AUTONOMOUS_ALL_KEY] === globalStamp) { lp[AUTONOMOUS_ALL_KEY] = globalLast; }
+    saveLastPosts(lp);
+  };
+
+  const promise = scribeAutonomousRemote({
+    trigger, subject, playerId,
+    evidence: { signal: trigger, points: scored.counted, score: scored.score, gameTag, weekId,
+                ...(triggerMessageId ? { triggerMessageId } : {}) },
+  }).then(r => {
+    if (r && r.posted === true) return r;
+    // F4 (reviewer, Build 3 pass 1) — A DEDUPE IS A POST. `deduped:true`
+    // means ANOTHER DEVICE'S call already produced the autonomous message
+    // (the deterministic id collapsed six clients to one). Rolling back on
+    // it — which is what this did — released the cooldown on five of six
+    // devices, and the very next detector on any of them could fire a tier-0
+    // canned line seconds after the autonomous post: back-to-back SCRIBE
+    // messages, which SCRIBE.md §14 forbids at every frequency level. The
+    // reservation is KEPT here precisely because a message did land in the
+    // room; this device simply was not the one that sent it.
+    if (r && r.deduped === true) return r;
+    const skipped = r && r.skipped;
+    const reason = r && r.reason;
+    // The 30-minute latch is for states that will still be true in a minute:
+    // the Script Property is off, no API key is configured, or the month's
+    // budget is gone. Re-asking on every detector for the rest of the season
+    // would burn a canned line each time (see the rollback note above).
+    // A THROTTLE is deliberately NOT latched — it clears on the hour, and
+    // latching it would silence autonomy for 30 minutes over a 4-per-hour
+    // cap that had simply filled up.
+    if (skipped === 'disabled_autonomous' || skipped === 'disabled_interactive' || skipped === 'disabled_client' ||
+        reason === 'not_configured' || reason === 'budget') {
+      autonomyOffUntil = Date.now() + AUTONOMY_OFF_LATCH_MS;
+    }
+    rollback();
+    return r;
+  }).catch(err => { rollback(); return { ok: false, error: String(err && err.message ? err.message : err) }; });
+
+  return { fired: true, id, ...scored, promise };
+}
+
+/**
+ * The chat-reactive path (correction #6). Called by `scribeInspectMessage`
+ * for every non-@scribe human message that clears the free prefilter.
+ * Fire-and-forget and bounded: at most ONE in-flight classify call per
+ * device at a time, so a burst of confident typing cannot fan out into a
+ * burst of paid calls (the server's own daily cap is the hard bound; this is
+ * the polite one).
+ */
+let classifyInFlight = false;
+function considerClaim({ triggerMessageId, gameTag, author }) {
+  if (!triggerMessageId || classifyInFlight) return null;
+  if (!isScribeAutonomousReady()) return null;
+  if (Date.now() < autonomyOffUntil) return null;   // Note 11 — the latch gates the CALL, not just the post
+  classifyInFlight = true;
+  return scribeClassifyRemote({ messageId: triggerMessageId })
+    .then(r => {
+      // Note 11 (reviewer) — the classifier has its OWN way of learning that
+      // the server is off, and without this it never used it: every message
+      // clearing the prefilter paid a full round trip to be told "disabled"
+      // again. The same 30-minute latch `considerAutonomous` uses is set
+      // here, so a deployment with SCRIBE_AUTONOMOUS_ENABLED unset costs one
+      // wasted request per half hour instead of one per confident sentence.
+      const skipped = r && r.skipped;
+      if (skipped === 'disabled_autonomous' || skipped === 'disabled_interactive' ||
+          skipped === 'disabled_client' || skipped === 'not_configured') {
+        autonomyOffUntil = Date.now() + AUTONOMY_OFF_LATCH_MS;
+      }
+      const points = Number(r && r.points) || 0;
+      if (!points) return null;
+      return considerAutonomous('claim', {
+        subject: author || triggerMessageId, gameTag, playerId: author,
+        signals: [{ signal: 'claim', points }], triggerMessageId,
+      });
+    })
+    .catch(() => null)
+    .finally(() => { classifyInFlight = false; });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── F3 (reviewer, Build 3 pass 1) — THE MISSING PRODUCERS.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// DI-D1's scoring table names eight signals. Six of them — backdoorBust,
+// chartLeadChange, milestone, streak, loneWolfWin, unanimous — had NO
+// producer anywhere in the app: `SCRIBE_POOLS` carries lines for four of
+// them and nothing has ever called `scribeTrigger` with those keys, and
+// `milestone`/`streak` did not exist at all. Only `drinkDebt` (15) and
+// `verbosity` (10) actually fire today, so the highest score the gate could
+// ever reach without the classifier was 25 — below Balanced's 45. The
+// feature was unreachable by construction. That is a planning defect in the
+// DI, not an execution defect, and the coordinator amended the DI to build
+// the producers here.
+//
+// These are PURE. They take data and return signals; they do not read
+// storage, call the network, or post anything. Pass 2 wires the call sites
+// in app.js (week lock -> unanimous; week finalize -> the rest), which is
+// why `considerWeekSignals` below is the only impure wrapper.
+//
+// DEFERRED, named rather than faked: `backdoorBust` (50 points, the single
+// highest-value signal). A backdoor cover is a LIVE in-game event — a
+// pick that was covering inside the final minutes and stopped covering on
+// the last score — and nothing in this app retains in-game state: the
+// 60-second poll overwrites `homeScore`/`awayScore` in place and keeps no
+// history, so at finalize there is no way to know whether a cover flipped at
+// the gun or in the first quarter. Detecting it honestly needs a stored
+// snapshot of the score at, say, two minutes remaining. That is a data-model
+// change, out of scope for this pass, and inventing it from final scores
+// alone would be exactly the fabricated-stat failure SCRIBE.md §9 forbids.
+
+import { calculateAtsWinner, evaluatePick } from './scoring.js';
+import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
+
+/** Round-number career/season correct-pick counts worth noticing. RAW
+ *  counts, never the weighted tally — a milestone is "you have been right
+ *  100 times," which is a count of games, not a score (CONVENTIONS #22). */
+export const MILESTONE_MARKS = [25, 50, 100, 150, 200, 250, 300];
+const STREAK_MIN = 3;
+
+/**
+ * RAW correct count for a standings row, or `null` when the row does not
+ * carry one.
+ *
+ * FINDING 5 (reviewer, round 3) — there is NO fallback to `totalCorrect`.
+ * That field is the WEIGHTED tally (CONVENTIONS #22), so the fallback meant
+ * a standings shape without raw counts silently announced "50 correct picks"
+ * off a multiplied number — a milestone that never happened, stated as fact,
+ * which is precisely what SCRIBE.md §9's no-fabrication rule forbids. A
+ * missing raw count now means no milestone signal at all: absent beats
+ * wrong. An ABSENT row (a player with no prior standings entry) is a
+ * legitimate 0 — that is a new player, not missing data.
+ */
+function rawCorrect(row) {
+  if (!row) return 0;
+  const raw = Number(row.totalCorrectCount);
+  return Number.isFinite(raw) ? raw : null;
+}
+
+/**
+ * Every graded pick for one player, in true chronological order.
+ *
+ * The ordering rule is the same one backend/Code.gs's
+ * `scribeOrderedGradedPicks_` uses, for the same reason (F2): a streak is an
+ * ordered claim, and an unordered list produces a confidently wrong number.
+ * Here the sort key is the game's own `kickoff` (games carry ISO kickoffs, so
+ * week order falls out of it) with `gameId` as a stable final tiebreak.
+ *
+ * `complete:false` means at least one graded pick could not be placed —
+ * missing game, missing or unparseable kickoff. The caller must then emit no
+ * streak at all: a sequence with a hole is worse than no sequence.
+ */
+export function orderedGradedResults(playerId, games, picks, weeks = null) {
+  const gameById = new Map();
+  for (const g of games || []) { if (g && g.gameId) gameById.set(g.gameId, g); }
+  // N-5 — the SAME comparator backend/Code.gs's scribeOrderedGradedPicks_
+  // uses: (season, weekNumber) first, then kickoff, then gameId. Supplying
+  // `weeks` is how the two runtimes agree exactly; with no week list the
+  // ordering degrades to kickoff-only, which is identical whenever kickoffs
+  // are correct and is why a pick whose week is UNKNOWN to a supplied list
+  // marks the sequence incomplete rather than being silently ranked 0.
+  const weekRank = new Map();
+  if (Array.isArray(weeks)) {
+    [...weeks].filter(Boolean).sort((a, b) =>
+      String(a.season || '').localeCompare(String(b.season || '')) ||
+      ((Number(a.weekNumber) || 0) - (Number(b.weekNumber) || 0))
+    ).forEach((w, i) => weekRank.set(String(w.weekId), i));
+  }
+  const out = [];
+  let complete = true;
+  for (const p of picks || []) {
+    if (!p || p.playerId !== playerId) continue;
+    const game = gameById.get(p.gameId);
+    if (!game) { complete = false; continue; }
+    const result = evaluatePick(p, game);
+    if (result !== 'win' && result !== 'loss') continue;          // graded only
+    const ms = game.kickoff ? Date.parse(game.kickoff) : NaN;
+    const rank = weekRank.size ? weekRank.get(String(p.weekId)) : 0;
+    if (!Number.isFinite(ms) || rank === undefined) { complete = false; continue; }
+    out.push({ weekId: p.weekId, gameId: p.gameId, result, ms, rank });
+  }
+  out.sort((a, b) => (a.rank - b.rank) || (a.ms - b.ms) || String(a.gameId).localeCompare(String(b.gameId)));
+  return { results: out, complete };
+}
+
+function runLength(results) {
+  if (!results.length) return { run: 0, result: null };
+  const last = results[results.length - 1].result;
+  let run = 0;
+  for (let i = results.length - 1; i >= 0; i--) { if (results[i].result === last) run++; else break; }
+  return { run, result: last };
+}
+
+/**
+ * The detectors. Returns `[{ signal, subject, gameTag, evidence }]` — never
+ * posts, never scores, never decides anything. An input that is absent
+ * simply means its detector contributes nothing, so the same function is
+ * safe to call at lock (picks only) and at finalize (everything).
+ *
+ * @param weekId          the week being locked/finalized
+ * @param games           games for that week (season-wide is fine and is what
+ *                        `streak` wants — it filters by what it needs)
+ * @param picks           picks, same latitude
+ * @param players         active players, for the "everyone submitted" test
+ * @param resultsBefore/After   weekly results, currently unused by any
+ *                        detector; accepted so the call site (pass 2) has one
+ *                        stable signature and a later detector needing them
+ *                        is additive
+ * @param standingsBefore/After season standings either side of the finalize
+ */
+export const UNANIMOUS_VISIBLE_STATUSES = ['locked', 'live', 'final'];
+
+export function detectWeekSignals({
+  weekId, weekStatus = null, games = [], picks = [], players = [], weeks = null,
+  resultsBefore = null, resultsAfter = null,
+  standingsBefore = null, standingsAfter = null,
+} = {}) {
+  const signals = [];
+  const weekGames = (games || []).filter(g => g && (!weekId || g.weekId === weekId));
+  const weekPicks = (picks || []).filter(p => p && (!weekId || p.weekId === weekId));
+  const activeIds = new Set((players || []).filter(p => p && p.active !== false).map(p => p.playerId));
+
+  // ── unanimous — at lock. Every player who submitted this week took the
+  // same side of one game. Requires at least two submitters, and requires
+  // that EVERY submitter picked this specific game: five of six agreeing
+  // while the sixth abstained is not unanimity, it is a small sample.
+  // N-4 (reviewer, round 2) — THE BLIND RULE, AT THE SIGNAL LEVEL. "All six
+  // of you took the same side" is a statement about every player's pick. If
+  // the week is still OPEN that is a straight violation — it tells a player
+  // who has not submitted yet exactly where everyone else is. The signal is
+  // therefore not merely unsuitable for posting while the week is open, it
+  // must not be DETECTED: a detected signal is scored, recorded in the
+  // evidence, and sent to the model. Gated on the week's status, and the
+  // default when no status is supplied is NOT to detect it.
+  const unanimousAllowed = UNANIMOUS_VISIBLE_STATUSES.includes(String(weekStatus || ''));
+  const submitters = new Set(weekPicks.map(p => p.playerId).filter(id => !activeIds.size || activeIds.has(id)));
+  if (unanimousAllowed && submitters.size >= 2) {
+    for (const game of weekGames) {
+      const gp = weekPicks.filter(p => p.gameId === game.gameId && submitters.has(p.playerId));
+      if (gp.length !== submitters.size) continue;
+      const team = gp[0].selectedTeam;
+      if (!team || !gp.every(p => p.selectedTeam === team)) continue;
+      signals.push({ signal: 'unanimous', subject: game.gameId, gameTag: game.gameId,
+        evidence: { gameId: game.gameId, team, count: gp.length, weekId } });
+    }
+  }
+
+  // ── loneWolfWin — at finalize. Exactly one player on the ATS-winning side,
+  // everyone else on the other. Uses the SAME calculateAtsWinner the
+  // standings use (CONVENTIONS #21), never a second reading of the spread.
+  for (const game of weekGames) {
+    if (game.status !== 'final') continue;
+    const ats = (game.atsWinner !== undefined && game.atsWinner !== null) ? game.atsWinner : calculateAtsWinner(game);
+    if (!ats || ats === 'no_decision') continue;
+    const gp = weekPicks.filter(p => p.gameId === game.gameId);
+    const winners = gp.filter(p => p.selectedTeam === ats);
+    const losers = gp.filter(p => p.selectedTeam !== ats);
+    if (winners.length === 1 && losers.length >= 2) {
+      signals.push({ signal: 'loneWolfWin', subject: winners[0].playerId, gameTag: game.gameId,
+        evidence: { gameId: game.gameId, playerId: winners[0].playerId, team: ats, against: losers.length, weekId } });
+    }
+  }
+
+  // ── chartLeadChange — at finalize. A different name is on top than was.
+  if (Array.isArray(standingsBefore) && Array.isArray(standingsAfter) && standingsBefore.length && standingsAfter.length) {
+    const from = standingsBefore[0].playerId, to = standingsAfter[0].playerId;
+    if (from && to && from !== to) {
+      signals.push({ signal: 'chartLeadChange', subject: to, gameTag: '',
+        evidence: { from, to, weekId } });
+    }
+  }
+
+  // ── milestone — at finalize. A round-number RAW correct-pick count crossed
+  // this week. `before < M <= after` so it fires once, on the crossing, and
+  // never again for that mark.
+  if (Array.isArray(standingsBefore) && Array.isArray(standingsAfter)) {
+    const beforeById = new Map(standingsBefore.map(r => [r.playerId, r]));
+    for (const after of standingsAfter) {
+      const prev = rawCorrect(beforeById.get(after.playerId));
+      const now = rawCorrect(after);
+      // FINDING 5 — a milestone is a count of GAMES. Without a raw count on
+      // either side there is nothing to count, and the weighted tally is not
+      // a substitute for it.
+      if (prev === null || now === null) continue;
+      for (const mark of MILESTONE_MARKS) {
+        if (prev < mark && now >= mark) {
+          signals.push({ signal: 'milestone', subject: after.playerId, gameTag: '',
+            evidence: { playerId: after.playerId, milestone: mark, total: now, weekId } });
+        }
+      }
+    }
+  }
+
+  // ── streak — at finalize. Reached/extended to 3+, or broken at 3+.
+  // Chronological by kickoff (see orderedGradedResults); a player whose
+  // history cannot be fully ordered is SKIPPED rather than guessed at.
+  const streakIds = new Set(weekPicks.map(p => p.playerId));
+  for (const playerId of streakIds) {
+    const { results, complete } = orderedGradedResults(playerId, games, picks, weeks);
+    if (!complete || results.length < STREAK_MIN) continue;
+    const current = runLength(results);
+    const prior = runLength(results.filter(r => r.weekId !== weekId));
+    if (current.run >= STREAK_MIN) {
+      signals.push({ signal: 'streak', subject: playerId, gameTag: '',
+        evidence: { playerId, run: current.run, kind: current.result === 'win' ? 'covers' : 'misses',
+                    state: 'active', weekId } });
+    } else if (prior.run >= STREAK_MIN && prior.result && current.result !== prior.result) {
+      signals.push({ signal: 'streak', subject: playerId, gameTag: '',
+        evidence: { playerId, run: prior.run, kind: prior.result === 'win' ? 'covers' : 'misses',
+                    state: 'broken', weekId } });
+    }
+  }
+
+  return signals;
+}
+
+/**
+ * The one impure wrapper: detect, then offer ONE candidate to the same
+ * `considerAutonomous` gate every other signal uses. Pass 2 calls this from
+ * app.js at week lock and week finalize.
+ *
+ * BLOCK-2c (reviewer, round 2) — ONE CANDIDATE PER INVOCATION, not one per
+ * signal. This used to loop, and the loop was the defect: a three-game
+ * finalize detected three lone-wolf wins in three different game threads,
+ * and because every bound in this file was partitioned by gameTag, all three
+ * cleared at Active and three paid posts landed in one reader's stream
+ * simultaneously. The candidate is the HIGHEST-POINT signal — the most
+ * interesting thing that happened — and it carries the FULL detected set in
+ * its evidence, so the model still sees every fact that fired and can choose
+ * which to name. Nothing is lost except the duplicate posts.
+ *
+ * All detected signals go into one bucket and are COMBINED there — which,
+ * since DI-D1 amendment #3, is NOT a sum: distinct names are collapsed and
+ * scored `top + 0.5 x (second + third)` (see scoreOpportunity). Three
+ * `streak` signals from three players are one streak signal, and the fourth
+ * distinct thing that happened contributes nothing. NOTE the honest scope:
+ * buckets are per ROOM, so signals from two different game threads do not
+ * combine with each other — the league-wide cooldown, not the bucket, is
+ * what guarantees one post.
+ */
+export function considerWeekSignals(input) {
+  const detected = detectWeekSignals(input);
+  if (!detected.length) return { detected, outcomes: [], candidate: null };
+  const pointsOf = s => (Object.prototype.hasOwnProperty.call(SIGNAL_POINTS, s.signal) ? SIGNAL_POINTS[s.signal] : 0);
+  const candidate = detected.reduce((best, s) => (pointsOf(s) > pointsOf(best) ? s : best), detected[0]);
+  const outcome = considerAutonomous(candidate.signal, {
+    subject: candidate.subject, gameTag: candidate.gameTag || '', weekId: (input && input.weekId) || '',
+    playerId: (candidate.evidence && candidate.evidence.playerId) || '',
+    signals: detected.map(s => ({ signal: s.signal })),
+  });
+  return { detected, outcomes: [outcome], candidate };
 }

@@ -265,17 +265,25 @@ console.log('\n[1] Boot timeline — every wait between "app opens" and "the roo
   assert(healthy.calls.filter(c => c.action === 'chatHead').length === 0,
     'and it still skips the head probe entirely on a cold boot (RG-91) — one Apps Script cold start, not two');
 
-  // What app.js puts in FRONT of that, today: the chat subscription is not
-  // started until `await hydrateBackend()` resolves (js/app.js:294 -> :319).
-  // Reported to Drew, not fixed here — app.js is outside this agent's files.
+  // What app.js used to put in FRONT of that: the chat subscription was not
+  // started until `await hydrateBackend()` resolved (js/app.js:294 -> :319).
+  // That was BUG-G, reported from here on 2026-09-11 and fixed on 2026-09-11
+  // — §10 below is its reproduction and its guard. This note stays as the
+  // measurement that found it; the char positions it prints now show the
+  // early call AHEAD of the hydrate.
   const { readFileSync } = await import('node:fs');
   const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  const hydrateAt = appSrc.indexOf('await hydrateBackend()');
-  const initChatAt = appSrc.indexOf('initChatUI()');
+  // Semicolon deliberate — see §10E's note on the same match: app.js's own
+  // BUG-G comment quotes `await hydrateBackend()` above the real call.
+  const hydrateAt = appSrc.indexOf('await hydrateBackend();');
+  // The LATE phase specifically (`initChatUI(); updateChatBadges()`), not a
+  // bare 'initChatUI()' — which since BUG-G also matches this file's own
+  // prose about it a few lines earlier in app.js.
+  const initChatAt = appSrc.indexOf('initChatUI(); updateChatBadges()');
   note(`js/app.js boot order today: hydrate at char ${hydrateAt}, initChatUI at char ${initChatAt}` +
        ` — chat starts ${initChatAt > hydrateAt ? 'AFTER' : 'BEFORE'} the getAll completes`);
-  note('  so the first chatSince is issued only after getAll returns: + one full Apps Script');
-  note('  cold start (modelled 8s; 3 misroute attempts would make it ~26s) before anything above starts.');
+  const earlyAt1 = appSrc.indexOf("initChatUI({ phase: 'early' })");
+  note(`  and the EARLY phase (BUG-G, §10) is at char ${earlyAt1} — ${earlyAt1 > -1 && earlyAt1 < hydrateAt ? 'ahead of the getAll, so the first chatSince no longer waits on it' : 'MISSING or after the getAll'}.`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -617,6 +625,265 @@ console.log('\n[9] A fresh open of the installed PWA does not reload itself (sus
   assert(transientHttpStatus(new Error('HTTP 503')) === 503, '§8b message-text fallback classifies HTTP 503 without err.status');
   assert(transientHttpStatus(new Error('Unauthorized')) === 0, '§8b a non-HTTP error is not transient');
   assert(transientHttpStatus(null) === 0, '§8b null-safe');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [10] BUG-G — THE HYDRATE GATE. The other half of "chat stays blank."
+// ═══════════════════════════════════════════════════════════════════════════
+// §1 above MEASURED the defect and reported it (js/app.js started the chat
+// engine only after `await hydrateBackend()` resolved) but could not fail on
+// it, because it was outside that session's editable files. This section is
+// the reproduction, made permanent.
+//
+// The model, and it is deliberately the PESSIMISTIC one: Apps Script serves
+// this deployment from ONE instance, so a cold start is paid by whatever
+// request is in flight when it happens — not per request. `latency()` below
+// therefore resolves EVERY request issued before t=COLD_MS at t=COLD_MS, and
+// charges WARM_MS after that. The fix gets no credit at all for overlapping
+// the chat round trip with the getAll; what it gets credit for is
+//   (a) the cached room rendering at t=0 instead of t=(cold start), and
+//   (b) the first chat request being ISSUED at t=0, so it completes one cold
+//       start after boot instead of one cold start after the getAll.
+//
+// BROWSER-ONLY: the real cold-start latency, and whether the two requests
+// truly share one instance. Both are modelled here, never measured.
+console.log('\n[10] BUG-G — the chat engine must not wait on the hydrate getAll…');
+{
+  const chat = await import('./js/chat.js');
+  const storage = await import('./js/storage.js');
+  const K_EVENTS_CACHE = 'cfbp_chat_events_cache';
+
+  // Checked, not assumed: without this the whole section throws a TypeError on
+  // the pre-fix code and prints nothing, which is a crash rather than a
+  // measurement. With it, the "after" arm below simply behaves like the
+  // "before" arm and every delta assertion reports the real numbers it failed
+  // on — which is what makes this section a reproduction rather than a smoke
+  // alarm.
+  const hasEarly = typeof chat.startChatTransport === 'function';
+  assert(hasEarly, 'chat.js exposes startChatTransport() — the pre-hydrate half of boot, which reads the seam but never writes it');
+
+  const CACHED = 12;                 // events already on the device from last session
+  const SERVER_HEAD = CACHED + 3;    // 3 arrived while the app was closed
+  const cachedEvents = Array.from({ length: CACHED }, (_, i) => mkEv(i + 1));
+
+  /**
+   * Runs the REAL chat.js + chatTransport.js + backend.hydrate() through
+   * app.js's boot shape, in either order, on the fake clock.
+   *   early:false — v0.20.3: hydrate, THEN initChat()
+   *   early:true  — BUG-G:   startChatTransport(), hydrate, THEN initChat()
+   * Everything measured is read off the virtual clock.
+   */
+  async function bootSim({ early, getAllMs = COLD_MS, seedCache = true, hydrateThrows = false, primedMirror = false }) {
+    installFakeClock();
+    chat._resetForTest();
+    store.clear();
+    storage.setBackendMode('local');
+    if (seedCache) store.set(K_EVENTS_CACHE, JSON.stringify({ epoch: 0, head: CACHED, events: cachedEvents }));
+
+    const warmAt = getAllMs;                       // the shared instance is warm from here on
+    const calls = [];
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = new URL(String(url), 'https://example.invalid/');
+      let body = null;
+      if (opts.body) { try { body = JSON.parse(opts.body); } catch {} }
+      const action = u.searchParams.get('action') || body?.action || '';
+      const seq = Number(u.searchParams.get('seq') || 0);
+      calls.push({ action, seq, at: NOW });
+      await sleep(action === 'getAll' ? getAllMs : Math.max(WARM_MS, warmAt - NOW));
+      if (action === 'getAll') {
+        if (hydrateThrows) return { ok: false, status: 503, json: async () => ({}) };
+        return { ok: true, status: 200, json: async () => ({ ok: true, data: { cfbp_settings: { chatEnabled: true } } }) };
+      }
+      if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: SERVER_HEAD }) };
+      if (action === 'chatSince') {
+        const cap = Math.max(0, SERVER_HEAD - seq);
+        const events = [];
+        for (let s = seq + 1; s <= seq + cap; s++) events.push(mkEv(s));
+        return { ok: true, status: 200, json: async () => ({ ok: true, events, head: SERVER_HEAD }) };
+      }
+      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    };
+    backend.setBackendConfig(URL_FAKE, 'tok');
+
+    const t = { firstRender: null, roomComplete: null, hydrateAt: null, bannerAt: null };
+    // The UI subscriber is attached WHEN app.js attaches it, not at t=0 — that
+    // is the whole difference the primed-mirror arm turns on. In v0.20.3 the
+    // only onChat() registration is inside initChatUI(), which runs after
+    // hydrate; a delivery landing before it fires notify() into an EMPTY
+    // subscriber set and renders nothing, however full the fold already is.
+    // So "first render" is the first moment a subscriber exists AND the fold
+    // is non-empty — hence attachUi() marks on attachment as well as on every
+    // later delivery (initChatUI()/navigateTo() both paint from whatever is
+    // already folded at that instant).
+    let off = () => {};
+    const mark = () => {
+      const n = chat.getMessages({ tag: 'all' }).length;
+      if (t.firstRender === null && n > 0) t.firstRender = NOW;
+      if (t.roomComplete === null && n >= SERVER_HEAD) t.roomComplete = NOW;
+    };
+    const attachUi = () => {
+      off = chat.onChat(kind => { if (kind === 'events') mark(); });
+      mark();
+    };
+
+    // ── app.js boot(), from primeFromMirror() onward ──
+    // BUG-G order:   early phase -> navigateTo('dashboard') -> hydrate -> late
+    // v0.20.3 order:                navigateTo('dashboard') -> hydrate -> late
+    if (early && hasEarly) { attachUi(); chat.startChatTransport('p1'); }
+    // app.js `if (primedKeys > 0) { navigateTo('dashboard'); }` — navigateTo()
+    // ends with refreshChatEnabled(), which SUBSCRIBES. On a returning
+    // player's device THIS, not initChat(), is what actually started the poll
+    // loop in v0.20.3: at S.head 0, with no cache and no subscriber attached.
+    if (primedMirror) chat.refreshChatEnabled();
+    let done = false;
+    const tail = (async () => {
+      try {
+        await backend.hydrate();
+        t.hydrateAt = NOW;
+        storage.setBackendMode('googleSheets');
+      } catch (e) { t.hydrateAt = NOW; t.bannerAt = NOW; }       // AD-06: app.js shows the red banner here
+      if (!(early && hasEarly)) attachUi();   // initChatUI()'s onChat() registration, at its v0.20.3 position
+      chat.initChat('p1');
+      done = true;
+    })();
+
+    for (let i = 0; i < 600 && !(done && t.roomComplete !== null); i++) await advance(250);
+    await tail;
+    const firstChat = calls.find(c => c.action === 'chatHead' || c.action === 'chatSince') || null;
+    off();
+    chat._resetForTest();
+    backend.clearBackendConfig();
+    storage.setBackendMode('local');
+    restoreClock();
+    return { ...t, calls, firstChatAt: firstChat ? firstChat.at : null, endedAt: NOW };
+  }
+
+  // ── A. The before/after timeline, same fixture, only the order changed ──
+  const before = await bootSim({ early: false });
+  const after  = await bootSim({ early: true });
+  note(`BEFORE (v0.20.3 order): first chat request at ${fmt(before.firstChatAt)}, room on screen at ${fmt(before.firstRender)}, complete at ${fmt(before.roomComplete)}`);
+  note(`AFTER  (BUG-G order):   first chat request at ${fmt(after.firstChatAt)}, room on screen at ${fmt(after.firstRender)}, complete at ${fmt(after.roomComplete)}`);
+
+  assert(before.firstChatAt !== null && before.firstChatAt >= COLD_MS,
+    `fixture/control: with the old order the first chat request cannot leave before the getAll returns — ${fmt(before.firstChatAt)} (this arm is the bug, and it still behaves like the bug)`);
+  assert(after.firstChatAt === 0,
+    `the first chat request is issued at t=0, before the getAll has even been sent — got ${fmt(after.firstChatAt)}`);
+  assert(after.firstRender === 0,
+    `and the CACHED room is on screen at t=0, synchronously, with no network at all — got ${fmt(after.firstRender)} (before: ${fmt(before.firstRender)})`);
+  // The COMPLETE room gains exactly one warm round trip, not a whole cold
+  // start — and that is the honest number under this section's pessimistic
+  // one-shared-instance model: the early chatHead is issued at t=0 but still
+  // cannot be ANSWERED until the instance is warm, so the fix buys the
+  // chatSince that follows it, not the cold start itself. The cold start is
+  // what the CACHED render (asserted above, 8.00s -> 0.00s) removes from the
+  // player's experience. Both are stated rather than one standing in for the
+  // other.
+  assert(after.roomComplete !== null && after.roomComplete < before.roomComplete,
+    `the complete, live room lands earlier — ${fmt(after.roomComplete)} vs ${fmt(before.roomComplete)}`);
+  assert(after.roomComplete <= COLD_MS + WARM_MS,
+    `and it lands one warm round trip after the instance warms (<= ${fmt(COLD_MS + WARM_MS)}), instead of queueing behind the getAll — got ${fmt(after.roomComplete)}`);
+  assert(after.calls[0]?.action === 'chatHead' && after.calls.some(c => c.action === 'getAll'),
+    `and chat goes FIRST: request order is [${after.calls.map(c => c.action).join(', ')}]`);
+
+  // ── B. The misroute-retry case Drew actually hit (~26s of getAll) ──
+  const slowBefore = await bootSim({ early: false, getAllMs: 26000 });
+  const slowAfter  = await bootSim({ early: true,  getAllMs: 26000 });
+  note(`26s getAll (3 misroute attempts): blank until ${fmt(slowBefore.firstRender)} before, ${fmt(slowAfter.firstRender)} after`);
+  assert(slowAfter.firstRender === 0 && slowBefore.firstRender >= 26000,
+    `a slow getAll no longer holds the room hostage — ${fmt(slowBefore.firstRender)} -> ${fmt(slowAfter.firstRender)}`);
+
+  // ── C. A device with NO cache still wins, just later: nothing to replay,
+  //    but the first chat round trip still overlaps the getAll instead of
+  //    queueing behind it. ──
+  const coldNoCache = await bootSim({ early: true, seedCache: false });
+  const oldNoCache  = await bootSim({ early: false, seedCache: false });
+  note(`no device cache: room on screen at ${fmt(oldNoCache.firstRender)} before, ${fmt(coldNoCache.firstRender)} after`);
+  assert(coldNoCache.firstRender !== null && coldNoCache.firstRender < oldNoCache.firstRender,
+    `a first-ever device (empty cache) still sees the room sooner — ${fmt(oldNoCache.firstRender)} -> ${fmt(coldNoCache.firstRender)}`);
+  assert(coldNoCache.firstRender <= COLD_MS,
+    `and it sees it as soon as the instance answers AT ALL (<= ${fmt(COLD_MS)}), because its chatSince was issued at t=0 alongside the getAll rather than after it — got ${fmt(coldNoCache.firstRender)}`);
+  const slowNoCache = await bootSim({ early: true, seedCache: false, getAllMs: 26000 });
+  const slowNoCacheOld = await bootSim({ early: false, seedCache: false, getAllMs: 26000 });
+  assert(slowNoCache.firstRender < slowNoCacheOld.firstRender,
+    `and the slower the getAll, the bigger that gap gets rather than smaller — ${fmt(slowNoCacheOld.firstRender)} -> ${fmt(slowNoCache.firstRender)} at a 26s getAll`);
+
+  // ── D. A FAILED hydrate is still loud, and chat starting early neither
+  //    masks it nor is masked by it (AD-06). ──
+  const failed = await bootSim({ early: true, hydrateThrows: true });
+  assert(failed.bannerAt !== null,
+    'a failing hydrate still throws to app.js\'s catch — the red banner path is untouched by the early chat start (AD-06)');
+  assert(failed.firstRender === 0 && failed.roomComplete !== null,
+    `and chat still works through it: cached room at ${fmt(failed.firstRender)}, live room at ${fmt(failed.roomComplete)} — a dead getAll no longer means a dead chat`);
+
+  // ── F. THE BOOT SHAPE DREW ACTUALLY HAS (reviewer, 2026-09-11) ──────────
+  // Everything above models primedKeys === 0: a first-ever open, or one after
+  // a storage clear. Every RETURNING player boots with a primed mirror, and
+  // that path runs navigateTo('dashboard') — whose tail, refreshChatEnabled(),
+  // subscribes on its own. Measuring only the unprimed shape is how the first
+  // version of this fix passed its own tests while doing nothing at all for
+  // the majority case (chat.js's `if (S.unsub) return true` fired before the
+  // cache was primed). The numbers below are the ones that describe Drew's
+  // phone.
+  const pBefore = await bootSim({ early: false, primedMirror: true });
+  const pAfter  = await bootSim({ early: true,  primedMirror: true });
+  note(`PRIMED MIRROR, BEFORE: first request ${pBefore.calls[0]?.action}:${pBefore.calls[0]?.seq} at ${fmt(pBefore.calls[0]?.at)}, room on screen at ${fmt(pBefore.firstRender)}`);
+  note(`PRIMED MIRROR, AFTER:  first request ${pAfter.calls[0]?.action}:${pAfter.calls[0]?.seq} at ${fmt(pAfter.calls[0]?.at)}, room on screen at ${fmt(pAfter.firstRender)}`);
+
+  assert(pBefore.calls[0]?.action === 'chatSince' && pBefore.calls[0]?.seq === 0,
+    `fixture/control: on v0.20.3 a returning player's FIRST request is already at t=0 — but it is navigateTo()'s accidental chatSince(0), a full cold read with no cursor — got ${pBefore.calls[0]?.action}:${pBefore.calls[0]?.seq}`);
+  assert(pBefore.firstRender !== null && pBefore.firstRender >= COLD_MS,
+    `and the room is STILL blank until hydrate, because the answer to it is delivered into an empty subscriber set — ${fmt(pBefore.firstRender)} (this is the symptom Drew reported, on the device he reported it from)`);
+
+  assert(pAfter.firstRender === 0,
+    `with BUG-G the cached room is on screen at t=0 on that same device — got ${fmt(pAfter.firstRender)} (a subscriber now exists before anything can deliver, and the cache is replayed into it)`);
+  assert(pAfter.calls[0]?.action === 'chatHead',
+    `and the first request is the CHEAP head probe, not a 500-row cold read — got ${pAfter.calls[0]?.action} (this one is bought by the early phase running ABOVE navigateTo, not by startChatTransport() alone)`);
+  const pSince = pAfter.calls.filter(c => c.action === 'chatSince');
+  assert(pSince.length > 0 && pSince[0].seq === CACHED && !pSince.some(c => c.seq === 0),
+    `and every chatSince is incremental from the cached cursor ${CACHED} — seqs [${pSince.map(c => c.seq).join(', ')}], never RG-91's chatSince(0)`);
+  // THE ONE THING THIS FIX MAKES (slightly) SLOWER, stated rather than hidden.
+  // v0.20.3's accidental chatSince(0, 500) fetches the whole room in ONE round
+  // trip. The cache-primed boot takes the pre-existing two-phase path instead
+  // (cheap chatHead probe, then an incremental chatSince(cachedHead)) — two
+  // trips, so full reconciliation lands one warm round trip later in this
+  // model. That model is deliberately pessimistic about it: it charges the
+  // tiny head probe the same cold start as a 500-row read, which on a real
+  // instance it would not pay. And the player's actual experience is the
+  // opposite of a regression — the cached room is on screen at 0.00s instead
+  // of 8.00s of blank. Bounded here so the trade can never silently grow.
+  assert(pAfter.roomComplete !== null && pAfter.roomComplete <= pBefore.roomComplete + WARM_MS,
+    `while full live reconciliation costs at most ONE extra warm round trip for the incremental read — ${fmt(pAfter.roomComplete)} vs ${fmt(pBefore.roomComplete)} (bounded trade, see comment)`);
+  note(`  trade: reconciliation ${fmt(pBefore.roomComplete)} -> ${fmt(pAfter.roomComplete)} (+1 round trip, incremental instead of a 500-row cold read), room ON SCREEN ${fmt(pBefore.firstRender)} -> ${fmt(pAfter.firstRender)}`);
+
+  // And the same device with a slow (misrouted) getAll: the gap is the whole
+  // cold start, not a warm round trip.
+  const pSlowBefore = await bootSim({ early: false, primedMirror: true, getAllMs: 26000 });
+  const pSlowAfter  = await bootSim({ early: true,  primedMirror: true, getAllMs: 26000 });
+  assert(pSlowAfter.firstRender === 0 && pSlowBefore.firstRender >= 26000,
+    `primed mirror + 26s getAll: ${fmt(pSlowBefore.firstRender)} -> ${fmt(pSlowAfter.firstRender)}`);
+
+  // ── E. The boot ORDER is in app.js, not just in this simulation. ──
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const earlyAt   = src.indexOf("initChatUI({ phase: 'early' })");
+  // The SEMICOLON matters: this file's own BUG-G comment block quotes
+  // "await hydrateBackend()" a few lines above the real call, and indexOf
+  // would otherwise match the prose and invert the comparison below.
+  const hydrateAt = src.indexOf('await hydrateBackend();');
+  const lateAt    = src.indexOf('initChatUI(); updateChatBadges()');
+  const refreshAt = src.indexOf('try { refreshChatEnabled(); } catch {}', hydrateAt);
+  assert(earlyAt > -1 && earlyAt < hydrateAt,
+    `js/app.js starts the chat engine BEFORE \`await hydrateBackend()\` (early at char ${earlyAt}, hydrate at ${hydrateAt})`);
+  assert(lateAt > hydrateAt,
+    'and the LATE phase (epoch heal + outbox flush + UI wiring) still runs after it — the seam-hazard half never moved');
+  assert(refreshAt > hydrateAt && refreshAt < lateAt,
+    'and refreshChatEnabled() runs the moment hydrate lands, so a stale local chatEnabled cannot outlive the hydrate window');
+  // F1b (reviewer BLOCK) — the early phase must also be above the ONE other
+  // thing in boot() that subscribes: navigateTo('dashboard'), whose tail is
+  // refreshChatEnabled(). Position, not just presence.
+  const navAt = src.indexOf("if (primedKeys > 0) { navigateTo('dashboard')");
+  assert(navAt > -1 && earlyAt < navAt,
+    `and it runs ABOVE navigateTo('dashboard') (early at char ${earlyAt}, navigateTo at ${navAt}) — navigateTo()'s own refreshChatEnabled() subscribes, and a subscription that starts before the cache is primed spends its first tick on RG-91's chatSince(0, 500) and delivers into an empty subscriber set`);
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────

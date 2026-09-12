@@ -270,6 +270,38 @@ function _applyEpochLocally(epochSeq) {
   S.failed.clear();
   persistOutbox();
   putLastSeen({ seq: epochSeq, byTag: {} });
+  // BUG-G (2026-09-11) — the DEVICE-LOCAL EVENTS CACHE is superseded by an
+  // epoch bump for the same reason the outbox and the read cursor are, and it
+  // is cleared here for the same reason: this function is the one place that
+  // knows device-local chat state has just been invalidated.
+  //
+  // Before BUG-G this was masked by ORDER — initChat() healed the epoch first
+  // and only then read the cache, so readAndPrimeEventsCache()'s own mismatch
+  // check (DI-169e) always saw the NEW epoch and dropped it, leaving
+  // _eventsCacheBuf empty. Two things break that:
+  //   1. BUG-G primes the cache BEFORE hydrate, so the buffer can already
+  //      hold pre-epoch events by the time the heal runs;
+  //   2. startFreshChat() calls this directly, MID-SESSION, on the
+  //      commissioner's own device — where _eventsCacheBuf is full of the
+  //      very test chatter the clear exists to erase, and the next caught-up
+  //      delivery would re-persist all of it under the NEW epoch. It would
+  //      never RENDER (isHiddenByEpoch), but it would sit in a 500-event /
+  //      300KB budget, crowding out the real post-clear room the cache is
+  //      supposed to make instant. Latent in v0.20.3; fixed here because
+  //      BUG-G would otherwise extend it from one device to all six.
+  //
+  // SCOPE, precisely (reviewer note N1, 2026-09-11): this closes the
+  // buffer-AT-HEAL-TIME half only. A device whose cursor is BEHIND the epoch
+  // (no cache, S.head 0) still reads pre-epoch events off the wire on its next
+  // cold chatSince and caches them under the current epoch — pre-existing,
+  // unchanged by BUG-G, and budget-only: they can never render, because
+  // getMessages()/isUnreadFor()/latestNotifying() all filter by epoch at read
+  // time. The one-line cure would be filtering at the buffer push in
+  // _subscribeNow(); deliberately NOT taken here, because an untested
+  // behaviour change smuggled into a BLOCK fix is worth less than a stated
+  // known cost. Raised separately for Drew.
+  _eventsCacheBuf = [];
+  try { localStorage.removeItem(K_EVENTS_CACHE); } catch {}
   try { localStorage.setItem(K_EPOCH_APPLIED, String(epochSeq)); } catch {}
   notify('epochApplied', { epochSeq });
 }
@@ -843,13 +875,39 @@ function writeEventsCache(head) {
 }
 
 /**
- * DI-169d/e — read policy + invalidation. Called once, from initChat(),
- * BEFORE _subscribeNow()/flushOutbox() reach the network. Epoch mismatch (a
- * commissioner "Clear Chat History" on another device since this cache was
- * written) drops the whole cache — boots with nothing until live data
- * arrives, same as today's behaviour, never a stale or partial replay.
- * Corrupt JSON: ignore, warn, boot as if no cache existed (same shape
- * loadOutbox() already uses for its own guarded parse).
+ * BUG-G (2026-09-11) — the cache is primed exactly ONCE per session, whichever
+ * of the two boot entry points gets there first. startChatTransport() (pre-
+ * hydrate) and initChat() (post-hydrate) both want the replay, and whichever
+ * runs first is the one that should own it: a second read after the hydrated
+ * epoch lands would re-seed `_eventsCacheBuf` from a cache the epoch heal is
+ * about to invalidate. Reset in _resetForTest() alongside _eventsCacheBuf.
+ */
+let _cachePrimed = false;
+function primeEventsCacheOnce() {
+  if (_cachePrimed) return;
+  _cachePrimed = true;
+  readAndPrimeEventsCache();
+}
+
+/**
+ * DI-169d/e — read policy + invalidation. Called once per session, via
+ * primeEventsCacheOnce() (above), BEFORE _subscribeNow()/flushOutbox() reach
+ * the network. Epoch mismatch (a commissioner "Clear Chat History" on another
+ * device since this cache was written) drops the whole cache — boots with
+ * nothing until live data arrives, same as today's behaviour, never a stale
+ * or partial replay. Corrupt JSON: ignore, warn, boot as if no cache existed
+ * (same shape loadOutbox() already uses for its own guarded parse).
+ *
+ * BUG-G — this now runs BEFORE hydrate on the normal boot path, so the epoch
+ * it compares against is the LAST-KNOWN (device-local/mirror) epoch, not the
+ * freshly hydrated one. That is safe, and deliberately so: a commissioner
+ * clear that happened while this device was closed lands moments later with
+ * the hydrate, and `isHiddenByEpoch()` is a RENDER-time filter applied
+ * unconditionally inside getMessages()/isUnreadFor()/latestNotifying() — so
+ * every event this replay folded below the new watermark becomes invisible
+ * the instant the real epoch arrives, without needing to be un-folded. What
+ * the replay must NOT do is carry those events forward into the next cache
+ * write; _applyEpochLocally() drops the buffer for exactly that reason.
  */
 function readAndPrimeEventsCache() {
   let parsed;
@@ -892,9 +950,16 @@ function readAndPrimeEventsCache() {
   ingest(parsed.events, parsed.head, { caughtUp: false, fromCache: true });
 }
 
-/** Force-(re)subscribes regardless of current subscription state — used by
- *  initChat() (selfId may have changed on re-login) and by the enabled-toggle
- *  when going from OFF to ON. Unconditional: callers gate on isChatEnabled(). */
+/** Force-(re)subscribes regardless of current subscription state. Unconditional
+ *  by construction (it unsubscribes first); every caller gates on both
+ *  isChatEnabled() and, since BUG-G, on there being no live subscription
+ *  already — startChatTransport(), initChat() and refreshChatEnabled() all
+ *  check S.unsub before calling it, because re-subscribing over a live
+ *  subscription abandons whatever read is in flight on it (on a cold boot,
+ *  that is the 8-26s Apps Script round trip the player is waiting on). The
+ *  old note here said initChat() called it unguarded "since selfId may have
+ *  changed on re-login" — nothing in this closure captures selfId (it closes
+ *  over ingest, roomMode and S.head), so that was never a reason. */
 function _subscribeNow() {
   if (S.unsub) S.unsub();
   const sub = subscribe(
@@ -967,6 +1032,67 @@ export async function forceRefresh() {
   if (!ok) throw new Error('Chat refresh failed');
 }
 
+/**
+ * BUG-G (2026-09-11) — the EARLY half of boot. Starts the poll subscription
+ * and replays the device-local cache, and does NOTHING ELSE.
+ *
+ * Why it exists: app.js gated initChatUI() -> initChat() behind
+ * `await hydrateBackend()`, so on a cold Apps Script instance the first
+ * chatSince could not be issued — and DI-169's cache could not even render —
+ * until a ~100KB getAll had finished paying the cold start (8s modelled, ~26s
+ * with misroute retries). Chat has NO data dependency on the hydrated
+ * snapshot: its log lives in a separate Messages sheet reached only through
+ * chatTransport.js (AD-16), and the seam holds nothing it needs to start.
+ *
+ * Why it is not simply "initChat(), earlier" (binding review constraint):
+ * loadOutbox(), _applyEpochLocally() and flushOutbox() all read and WRITE
+ * device-local chat state whose correctness depends on the SYNCED settings
+ * blob (settings.chatEpochSeq) — and app.js only calls
+ * setBackendMode('googleSheets') after hydrate on a device with no primed
+ * mirror. Healing the epoch or flushing the outbox against a stale local read
+ * is the RG-49 class of hazard: stale test chatter re-sent into a
+ * freshly-cleared room. Those three stay in initChat(), after hydrate.
+ *
+ * What this function reads through the seam is READS ONLY, of the same
+ * last-known values the dashboard is already painted from at this point in
+ * boot (AD-08 fast boot):
+ *   - isChatEnabled(): stale local value. If the commissioner turned chat OFF
+ *     remotely while this device was closed, initChat()/refreshChatEnabled()
+ *     stops the subscription the moment the real value lands — app.js calls
+ *     refreshChatEnabled() immediately after hydrate for exactly this.
+ *   - getChatEpochSeq() (inside the cache read): see
+ *     readAndPrimeEventsCache()'s own note on why a stale epoch here is safe.
+ * `selfId` comes from the SESSION key, which is in DEVICE_LOCAL_KEYS — it
+ * reads identically before and after hydrate, so there is no early/late skew.
+ *
+ * Returns true when a subscription is live after the call.
+ */
+export function startChatTransport(selfId) {
+  S.selfId = selfId || S.selfId;
+  if (!isChatEnabled()) return false;
+  // BEFORE the early return, not after it (reviewer BLOCK, 2026-09-11). This
+  // function is NOT guaranteed to be the first thing that subscribes:
+  // navigateTo() ends with refreshChatEnabled(), which subscribes on its own,
+  // and app.js calls navigateTo('dashboard') during boot on any device with a
+  // primed mirror — i.e. every returning player. With the prime below the
+  // return, that device took the `S.unsub` branch and did NOTHING: no replay,
+  // cursor still 0, cached room still waiting on hydrate — the exact defect
+  // BUG-G exists to remove, surviving in the majority case. (v0.20.3 masked it
+  // because initChat() re-subscribed unconditionally; guarding that in this
+  // same change is what exposed it.) app.js now also runs the early phase
+  // ahead of that navigateTo(), so the two fixes are belt and braces: the
+  // ordering is correct AND this function no longer depends on it.
+  //
+  // Priming after a subscription already exists is still worth doing and
+  // still safe: `getKnownHead` is a live closure over S.head, so the cursor
+  // steers the next tick even if the first one is already in flight, and
+  // ingest() is idempotent (AD-10) so the overlap folds once.
+  primeEventsCacheOnce();
+  if (S.unsub) return true;        // already subscribed — never double-subscribe (see initChat())
+  _subscribeNow();
+  return true;
+}
+
 export function initChat(selfId) {
   S.selfId = selfId || S.selfId;
   // UN-112 (DI-112b) — device-local self-heal, MUST run before loadOutbox()/
@@ -993,13 +1119,31 @@ export function initChat(selfId) {
     // INSIDE the isChatEnabled() gate (reviewer note, 2026-09-11): chat OFF
     // must mean no chat, not just no polling — replaying a cache into the
     // fold with chat disabled would repopulate badges and message lists for a
-    // player who turned it off. Runs after the epoch heal above, so a cache
-    // written under a just-superseded epoch is compared against the CURRENT
-    // settings.chatEpochSeq and correctly dropped; its position relative to
-    // loadOutbox() is a readability choice, not a correctness one (ingest()
-    // is order-independent, AD-10).
-    readAndPrimeEventsCache();
-    _subscribeNow();
+    // player who turned it off. Its position relative to loadOutbox() is a
+    // readability choice, not a correctness one (ingest() is order-
+    // independent, AD-10).
+    //
+    // BUG-G amended the epoch reasoning that used to sit here. It read:
+    // "Runs after the epoch heal above, so a cache written under a
+    // just-superseded epoch is compared against the CURRENT
+    // settings.chatEpochSeq and correctly dropped." That is still true of
+    // THIS call — but it is no longer the only caller: startChatTransport()
+    // primes the same cache before hydrate, against the last-known epoch, and
+    // primeEventsCacheOnce() means whichever ran first wins. The heal above
+    // therefore no longer relies on ORDER to invalidate a superseded cache;
+    // _applyEpochLocally() now drops the buffer and the key itself, which
+    // holds whichever way round the two calls happen — and holds for
+    // startFreshChat()'s mid-session call, where order never helped at all.
+    primeEventsCacheOnce();
+    // BUG-G — subscribe only if startChatTransport() has not already done it.
+    // _subscribeNow() is UNCONDITIONAL by design (it unsubscribes first), and
+    // calling it over a live early subscription would throw away the cold
+    // boot's in-flight first read and restart the poll ladder from scratch —
+    // re-creating exactly the delay this fix removes. Nothing in the
+    // subscription closure captures selfId (it closes over ingest, roomMode
+    // and S.head only), so there is no re-login case that needs the forced
+    // resubscribe here; refreshChatEnabled() remains the OFF->ON path.
+    if (!S.unsub) _subscribeNow();
     flushOutbox();
   }
   else if (S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; }
@@ -1314,6 +1458,7 @@ export function _resetForTest() {
   S.offline = false; S.staleDeployment = false;
   S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;
   _eventsCacheBuf = [];                                   // DI-169 — no leaking raw events into the next test section's writes
+  _cachePrimed = false;                                   // BUG-G — the once-per-session prime latch is session state, same lifecycle as the buffer above
   // DI-169 — UNLIKE K_LASTSEEN/K_OUTBOX/K_EPOCH_APPLIED above (whose
   // persistence across _resetForTest() is harmless — they're read on demand
   // by specific functions, not unconditionally on every initChat()), a stale

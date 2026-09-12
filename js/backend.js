@@ -454,7 +454,7 @@ const MISROUTE_RETRY_DELAYS = [400, 1200];   // up to 3 attempts total
  * two), app.js's Comm→Data handler toasts `err.message`. Both now name
  * misrouting instead of blaming sync.
  */
-const NO_RETRY_ACTIONS = { scribeAsk: 1, runTrainer: 1 };
+const NO_RETRY_ACTIONS = { scribeAsk: 1, runTrainer: 1, scribeAutonomous: 1, scribeClassify: 1 };   // Build 3 pass 1: both spend money — one attempt only
 
 /**
  * True when `data` is a reply to some OTHER request than `action`.
@@ -1018,4 +1018,60 @@ export async function scribeAskRemote({ triggerMessageId, playerId, weekId = '',
 // try/catch; do not write `if (!result.ok)` and expect it to fire.
 export async function runTrainerRemote({ adminPasswordHash = '' } = {}) {
   return call('runTrainer', { adminPasswordHash });
+}
+
+// ── Build 3, Group D (2026-09-11) — the two D1 relays ─────────────────────
+// Same shape as scribeAskRemote/runTrainerRemote: thin, paid, one attempt
+// (NO_RETRY_ACTIONS). The gate chain (kill switch, threshold re-check,
+// budget, hourly bucket, consecutive-post guard, deterministic id) is
+// entirely server-side in Code.gs's scribeAutonomous / scribeClassify.
+export async function scribeAutonomousRemote({ trigger, subject = '', evidence = {}, playerId = '' } = {}) {
+  return call('scribeAutonomous', { trigger, subject, evidence, playerId });
+}
+export async function scribeClassifyRemote({ messageId } = {}) {
+  return call('scribeClassify', { messageId });
+}
+
+// ── Build 3, Group D pass 2 (2026-09-11) — the four SCRIBE-memory relays ──
+//
+// Same thin shape as scribeAskRemote / scribeAutonomousRemote above: every
+// decision (ownership, kind restrictions, provenance forcing, true row
+// delete, the approved-fact sweep) lives server-side in backend/Code.gs.
+// This file only knows the action names and the body shape.
+//
+// DELIBERATELY NOT on NO_RETRY_ACTIONS — unlike scribeAsk/runTrainer/
+// scribeAutonomous/scribeClassify, none of these four spends a cent at
+// Anthropic, and each is safe to repeat:
+//   scribeMemoryList    a read, no side effect;
+//   scribeMemoryUpsert  server-deduped on (playerId, kind, key) — a repeat
+//                       rewrites the same row rather than appending a second;
+//   scribeMemoryDelete  keyed on the row id — a repeat answers
+//                       {deleted:false, reason:'not_found'};
+//   scribeMemorySync    idempotent by construction (an applied fact row is
+//                       stamped `memoryAppliedAt`; a second sync reports 0).
+// So they inherit `call()`'s ordinary misroute/transient-HTTP retry, which
+// is what a flaky Apps Script redirect leg (BUG-E) needs.
+//
+// EVERY call passes the CURRENT player's `playerId`. The server treats it as
+// the REQUESTER (scribeMemoryOwnershipOk_) and narrows or refuses anything
+// that is not about him — best-effort in exactly the sense Code.gs's own
+// comment states, since a PIN-gated app has no authenticated identity.
+// Commissioner-scoped actions (scribeMemorySync) carry the admin password
+// hash instead, the same credential runTrainer requires.
+//
+// These rows are NOT in the KV store and must never be read or written
+// through js/storage.js — they live in their own CFBP_SCRIBE_MEMORY sheet
+// precisely so a row can be physically deleted (DI-D2). The UI keeps them in
+// a module-level cache with an explicit refresh, never in `load()`/`save()`.
+export async function scribeMemoryListRemote({ playerId, kinds = null } = {}) {
+  return call('scribeMemoryList', { playerId, ...(kinds && kinds.length ? { kinds } : {}) });
+}
+export async function scribeMemoryUpsertRemote(record = {}) {
+  return call('scribeMemoryUpsert', { playerId: record.playerId, record });
+}
+export async function scribeMemoryDeleteRemote({ id, playerId } = {}) {
+  return call('scribeMemoryDelete', { id, playerId });
+}
+export async function scribeMemorySyncRemote({ adminPasswordHash = '' } = {}) {
+  return call('scribeMemorySync', { adminPasswordHash });
 }
