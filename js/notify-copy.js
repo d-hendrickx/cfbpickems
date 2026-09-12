@@ -70,12 +70,42 @@ export const ALLOWED_META_KEYS = Object.freeze({
   PICKS_LOCKING_SOON_ALL_IN:   ['weekN', 'totalPlayers'],
   PICKS_LOCKED:                ['weekN', 'submittedCount', 'totalPlayers'],
   RESULTS_FINALIZED:           ['weekN', 'weekWinnerName', 'weekLoserName'],
-  RESULTS_FINALIZED_YOU_WON:   ['weekN'],
-  OBLIGATION_CREATED:          ['weekN'],
-  // F7 remediation — the refreshed pool has a {weekN} line; widened from []
-  // (notifyObligationSettled() now supplies weekN when ob.weekId is set,
-  // exactly like notifyObligationCreated() already did).
-  OBLIGATION_SETTLED:          ['weekN'],
+  // N1 / UN-204 (2026-09-12) — RESULTS_FINALIZED_YOU_WON IS RETIRED, not
+  // replaced (coordinator ruling O3). Its three lines were second person ("you
+  // took it") and a league-wide room cannot carry a second-person line: five of
+  // the six people reading it did not win. The RESULTS_FINALIZED pool already
+  // names the winner AND the loser, and both are public on Standings. The key
+  // is removed from ALLOWED_META_KEYS, POOLS, FALLBACK and TITLES together —
+  // leaving any one of them behind would let a future caller resurrect it by
+  // name and post "you took it" to the whole league.
+  //
+  // N1 / DI-N2 + the copy rulings (2026-09-12) — the two obligation events are
+  // now posted LEAGUE-WIDE, naming both parties (ruling O4: an obligation is
+  // already public on the Standings/obligations surface, so naming exposes
+  // nothing new). buildCopy() drops every fact outside the event's own list
+  // BEFORE substitution, so an un-widened list here would silently produce the
+  // flat fallback forever rather than fail loudly. None of the three new keys
+  // is — or could be — in FORBIDDEN_META_KEYS: they carry identity and a
+  // commissioner-typed prize description, never a selection, spread,
+  // tiebreaker or Extra-Point value.
+  //
+  // THE MAPPING NOTE (the pools below refer to this). There is no `label` field
+  // on an obligation. The caller supplies:
+  //   {debtorName}      <- nameOf(ob.payerPlayerId)
+  //   {creditorName}    <- nameOf(ob.recipientPlayerId)
+  //   {weekN}           <- getWeek(ob.weekId)?.weekNumber  (absent on manual obligations)
+  //   {obligationLabel} <- ob.note || ob.amountOrPrize || settings.weeklyPrize
+  // That last expression is the one the commissioner panel already renders an
+  // obligation's description from — not a fourth invented source. It may be a
+  // noun ("1 drink", the manual default) or a whole SENTENCE ("Loser buys
+  // winner a consolation prize", the shipped weeklyPrize default), which is
+  // exactly why every template below sets it off with an em dash instead of
+  // inlining it as a direct object. "Kevin owes Drew - Loser buys winner a
+  // consolation prize." reads; "Kevin owes Drew Loser buys winner..." does not.
+  // The obligations table already solves it the same way. Do NOT "improve" a
+  // template by making {obligationLabel} grammatical: it breaks on the default.
+  OBLIGATION_CREATED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
+  OBLIGATION_SETTLED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
 });
 
 // Module-load-time deny-by-default structural scan — fails the day a future
@@ -183,31 +213,35 @@ const POOLS = {
     "Week {weekN} is over. {weekWinnerName} won. {weekLoserName} didn't.",
     "That's Week {weekN}. {weekWinnerName} takes it, {weekLoserName} takes the loss.",
   ],
-  // Personalized "you won" variant — recipientWon is a plain boolean fact the
-  // caller computes FROM calculateWeeklyResults()'s own return value
-  // (SCRIBE.md §9.1 boundary — never independently re-derived here).
-  RESULTS_FINALIZED_YOU_WON: [
-    'Week {weekN} final — you took it. Your mother would be proud.',
-    "You won Week {weekN}. Don't let it go to your head.",
-    "Week {weekN} is yours. Enjoy it, it won't last.",
-  ],
+  // N1 (UN-204 / DI-N2, DI-N6) — obligations post LEAGUE-WIDE, so these
+  // pools are THIRD PERSON and name both parties. They replace the
+  // second-person pools ("You're on the hook…"), which had no remaining
+  // caller once the notify*() call sites moved to chat and which would be a
+  // live trap if left in the file: posting one into the main room addresses
+  // five people who don't owe anything.
+  //
+  // An obligation is a fact of the standings, not a verdict on the debtor.
+  // No line taunts the person who owes, no line invents an amount, and
+  // {obligationLabel} is ALWAYS set off with an em dash — it is free
+  // commissioner text that may be a noun ("1 drink") or a whole sentence
+  // ("Loser buys winner a consolation prize"). See the mapping note.
+  //
+  // Slot coverage is deliberate: buildCopy() drops any template whose
+  // placeholders aren't all present, so each pool descends from all-four-slots
+  // to a {debtorName}+{creditorName}-only floor line that can always render.
+  // Without that floor, a manual obligation (no weekId) with no note would
+  // fall through to the flat non-SCRIBE fallback every time.
   OBLIGATION_CREATED: [
-    'New balance on the ledger for Week {weekN}. Pay up.',
-    "You're on the hook for Week {weekN}. Pay up.",
-    'Added to the tab: Week {weekN}. You know what to do.',
-    'Week {weekN} obligation is in. Settle up.',
-    'New IOU logged for Week {weekN}.',
-    'Week {weekN}: you owe. Pay up.',
-    'The tab just grew. Week {weekN}. Handle it.',
+    'New on the ledger for Week {weekN}: {debtorName} owes {creditorName} — {obligationLabel}.',
+    'Week {weekN} ledger: {debtorName} owes {creditorName}. The tab is open.',
+    '{debtorName} owes {creditorName} — {obligationLabel}. On the books now.',
+    'One for the ledger: {debtorName} owes {creditorName}.',
   ],
   OBLIGATION_SETTLED: [
-    'Balance settled. The ledger is clean.',
-    'Paid up. Week {weekN} is squared away.',
-    "Debt cleared for Week {weekN}. We're even.",
-    'Settled. Nobody owes anybody for Week {weekN} anymore.',
-    "That's paid. Week {weekN} obligation closed.",
-    "Ledger's clean on Week {weekN}. For now.",
-    'Paid in full. Week {weekN} is done.',
+    'Week {weekN} is clean: {debtorName} settled with {creditorName} — {obligationLabel}.',
+    '{debtorName} and {creditorName} are square for Week {weekN}.',
+    '{debtorName} settled with {creditorName} — {obligationLabel}. Off the ledger.',
+    '{debtorName} settled with {creditorName}. The ledger is clean again.',
   ],
 };
 
@@ -227,9 +261,15 @@ const FALLBACK = {
   PICKS_LOCKING_SOON_ALL_IN:  (m) => m.weekN != null ? `Week ${m.weekN} is set.` : 'This week is set.',
   PICKS_LOCKED:                (m) => m.weekN != null ? `Week ${m.weekN} picks are locked.` : 'Picks are locked.',
   RESULTS_FINALIZED:           (m) => m.weekN != null ? `Week ${m.weekN} results are final.` : 'The week is final.',
-  RESULTS_FINALIZED_YOU_WON:   (m) => m.weekN != null ? `Week ${m.weekN} final — you won.` : 'You won this week.',
-  OBLIGATION_CREATED:          (m) => m.weekN != null ? `A new obligation was created for Week ${m.weekN}.` : 'A new obligation was created.',
-  OBLIGATION_SETTLED:          (m) => m.weekN != null ? `The Week ${m.weekN} obligation was settled.` : 'A balance was settled.',
+  // N1 — both sides are named here too. DI-N6 specified "<Name> owes for Week
+  // <N>."; a league-wide room needs to know who is OWED, or the flat fallback
+  // says less than the table two taps away already does.
+  OBLIGATION_CREATED: (m) => m.debtorName && m.creditorName
+    ? `${m.debtorName} owes ${m.creditorName}${m.weekN != null ? ` for Week ${m.weekN}` : ''}.`
+    : (m.weekN != null ? `A new obligation was created for Week ${m.weekN}.` : 'A new obligation was created.'),
+  OBLIGATION_SETTLED: (m) => m.debtorName && m.creditorName
+    ? `${m.debtorName} settled with ${m.creditorName}${m.weekN != null ? ` for Week ${m.weekN}` : ''}.`
+    : (m.weekN != null ? `The Week ${m.weekN} obligation was settled.` : 'A balance was settled.'),
 };
 
 // Plain-language, non-SCRIBE title per event — Notification Center row format
@@ -243,7 +283,6 @@ const TITLES = {
   PICKS_LOCKING_SOON_ALL_IN:  'Locking soon',
   PICKS_LOCKED:                'Picks locked',
   RESULTS_FINALIZED:           'Week final',
-  RESULTS_FINALIZED_YOU_WON:   'Week final',
   OBLIGATION_CREATED:          'New balance',
   OBLIGATION_SETTLED:          'Balance settled',
 };

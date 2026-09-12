@@ -87,6 +87,8 @@ if (!globalThis.crypto?.randomUUID) globalThis.crypto = { randomUUID: () => 'u' 
 if (typeof globalThis.btoa !== 'function') globalThis.btoa = s => Buffer.from(String(s), 'binary').toString('base64');
 if (typeof globalThis.atob !== 'function') globalThis.atob = s => Buffer.from(String(s), 'base64').toString('binary');
 
+import { readFile } from 'node:fs/promises';
+
 let pass = 0, fail = 0;
 function assert(cond, label) {
   if (cond) { pass++; console.log('  ✅', label); }
@@ -678,6 +680,225 @@ console.log('\n[8] THE PICKS OUTGROW ONE CELL — and the chunking backend now S
   w2.off();
   be.cacheSet('cfbp_picks', []);    // teardown: release the quarantine
   await be.flushPush();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[9] N1 / DI-N3 — R10: a push-active device shows no in-app toast (UN-204)…');
+{
+  // Drew, 2026-09-12, verbatim: *"if push notifications are set up then all in
+  // app notifications should be that"* — and, about the banner he actually saw
+  // at lock, *"Now that we have push notifications that should have been a push
+  // and not an in app banner."*
+  //
+  // THE ROOT CAUSE WAS NOT ONESIGNAL. wireForegroundSuppression() only
+  // preventDefault()s when the push's destination tab equals the tab you are
+  // already on, which is correct. The floating card he saw was chat-ui.js's own
+  // showToast(), raised by emitPickRevealEvent() with `{force:true}` — a flag
+  // that bypassed the player's own toasts preference. So the fix is a DELIVERY
+  // DECISION, not a display tweak: if this device is genuinely being reached by
+  // push, the push IS the delivery and the in-app card stands down.
+  //
+  // THIS DRIVES THE REAL showToast(), through its exported test seam, for the
+  // reason that seam exists (chat-ui.js's own note): asserting against a
+  // re-implementation of the predicate would pass while the shipped function
+  // did something else.
+  const chatUi = await import('./js/chat-ui.js');
+  const { _showToastForTest, _toastQueueDepth, _resetToastsForTest } = chatUi;
+
+  // Count what actually reaches the DOM, so "no toast" means "nothing was
+  // rendered", not merely "the queue happened to be empty".
+  let appended = 0;
+  const realAppend = globalThis.document.body.appendChild;
+  globalThis.document.body.appendChild = function (...args) { appended++; return realAppend.apply(this, args); };
+
+  const raise = (n = 2) => {
+    _resetToastsForTest();
+    appended = 0;
+    for (let i = 0; i < n; i++) _showToastForTest({ author: 'system', body: `notice ${i}` });
+    return { depth: _toastQueueDepth(), appended };
+  };
+
+  // ── Push INACTIVE: today's behaviour, exactly. UN-N3 — not having push must
+  //    never be the same as going blind. ──
+  storage.setPushActive(false);
+  const off = raise(2);
+  assert(off.appended >= 1,
+    `9-1: push INACTIVE -> the toast is rendered, exactly as it is today (${off.appended} toast node(s) appended)`);
+  assert(off.depth === 1,
+    `9-2: …and the second notice queues behind the first rather than being dropped (queue depth ${off.depth})`);
+
+  // ── Push ACTIVE: the phone is already telling you. ──
+  storage.setPushActive(true);
+  const on = raise(2);
+  assert(on.appended === 0,
+    `9-3: push ACTIVE -> NOTHING is rendered in the app; the push is the delivery (${on.appended} toast nodes appended)`);
+  assert(on.depth === 0,
+    `9-4: …and nothing is queued either, so it cannot surface later when the flag flips (queue depth ${on.depth})`);
+
+  // ── The forced toast obeys it too. This is THE one Drew saw. ──
+  _resetToastsForTest(); appended = 0;
+  _showToastForTest({ author: 'system', body: '🔓 Week 3 picks revealed' }, { force: true });
+  assert(appended === 0 && _toastQueueDepth() === 0,
+    `9-5: even a {force:true} toast is suppressed on a push-active device — the R10 check runs BEFORE the force escape hatch, deliberately, because the banner Drew reported WAS a forced one (appended ${appended})`);
+
+  storage.setPushActive(false);
+  _resetToastsForTest(); appended = 0;
+  _showToastForTest({ author: 'system', body: '🔓 Week 3 picks revealed' }, { force: true });
+  assert(appended === 1,
+    '9-6: …and on a push-inactive device force still works, so a system announcement is not lost to a player who simply turned toasts off');
+
+  // ── The reveal emitter itself no longer forces. ──
+  const chatUiSrc9 = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  const revealSrc9 = (chatUiSrc9.match(/export function emitPickRevealEvent\([\s\S]*?\n\}/) || [''])[0];
+  assert(revealSrc9.length > 0, '9-7: fixture check — emitPickRevealEvent() was located in js/chat-ui.js');
+  const revealToast9 = (revealSrc9.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+    .match(/showToast\([^\n]*/) || [''])[0];
+  assert(revealToast9.includes('picks revealed'), '9-8: fixture check — its showToast() call was located inside that function');
+  assert(!/force/.test(revealToast9),
+    `9-9: the pick-reveal toast no longer passes {force:true}. Forcing past a player's own getNotifPrefs().toasts preference was the thing Drew actually saw, and it is gone regardless of push state (got: ${revealToast9.trim()})`);
+
+  // ── The flag itself fails CLOSED. ──
+  localStorage.removeItem('cfbp_push_active');
+  assert(storage.getPushActive() === false,
+    '9-10: an ABSENT push-active flag reads FALSE — "push is not carrying this device". A false TRUE would swallow every in-app notice on a device receiving nothing, which is UN-N3\'s exact failure');
+  localStorage.setItem('cfbp_push_active', JSON.stringify('true'));
+  assert(storage.getPushActive() === false,
+    '9-11: …and so does a non-boolean value; the accessor tests `=== true`, never truthiness, so a stringly-typed write cannot silence a device');
+  localStorage.setItem('cfbp_push_active', 'not json at all');
+  assert(storage.getPushActive() === false, '9-12: …and so does unparseable garbage');
+  storage.setPushActive(false);
+
+  // ── It is DEVICE-LOCAL. One phone's answer must never silence a laptop: the
+  //    same player's laptop has no push at all and must keep its toasts. ──
+  const storageSrc9 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
+  assert(/PUSH_ACTIVE:\s*'cfbp_push_active'/.test(storageSrc9),
+    '9-13: the flag is a real KEYS entry (AD-02 / CONVENTIONS #8), not an ad-hoc string');
+  const deviceLocal9 = (storageSrc9.match(/const DEVICE_LOCAL_KEYS = new Set\(\[[\s\S]*?\]\);/) || [''])[0];
+  assert(/KEYS\.PUSH_ACTIVE/.test(deviceLocal9) && /KEYS\.LIFECYCLE_POSTED/.test(deviceLocal9),
+    '9-13b: …and both N1 keys are in DEVICE_LOCAL_KEYS — push-active describes THIS handset (a laptop with no push must keep its toasts), and the lifecycle ledger records what THIS device already tried (the server id-dedupe is the league-wide authority)');
+  assert(!/localStorage\.(getItem|setItem)\(\s*['"]cfbp_push_active/.test(chatUiSrc9),
+    '9-14: …and chat-ui.js reads it through getPushActive(), never localStorage directly — the toast path is synchronous, which is exactly why the async predicate is cached rather than inlined (CONVENTIONS #9)');
+
+  globalThis.document.body.appendChild = realAppend;
+}
+
+console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-active flag at boot…');
+{
+  // Three findings from the N1 review, all inside R10's blast radius. [9]
+  // above proved the gate does what Drew asked for; these three are the places
+  // it went one step too far, one step short, and one step stale.
+  const chatUi10 = await import('./js/chat-ui.js');
+  const chatUiSrc10 = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  const appSrc10 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  let appended10 = 0;
+  const realAppend10 = globalThis.document.body.appendChild;
+  globalThis.document.body.appendChild = function (...args) { appended10++; return realAppend10.apply(this, args); };
+
+  // ── (c) RECEIPTS. "Rewrite saved." is a confirmation of the VIEWER'S OWN
+  //      action. No push will ever carry it, so "the push is the delivery"
+  //      (R10's own rationale) is not true for it, and R10 silenced it — a
+  //      submit button that does nothing visible on a push-active phone.
+  //      The fix is not a hole in the gate: own-action receipts belong on the
+  //      APP-LEVEL toast (app.js's showToast, the one every other "saved"
+  //      confirmation in the app already uses), which was never a
+  //      notification surface and never gated. chat-ui.js's showToast() keeps
+  //      exactly its two gates. ──
+  const receipts10 = [];
+  const realWindowToast = globalThis.showToast;
+  globalThis.showToast = (msg, kind) => { receipts10.push({ msg, kind }); };
+
+  storage.setPushActive(true);
+  assert(typeof chatUi10._showReceiptForTest === 'function',
+    '10-1: chat-ui.js has ONE named path for own-action receipts (the window.showToast bridge, same pattern as redirectChatDisabled) — one path is what makes "which toasts are receipts?" answerable');
+  if (typeof chatUi10._showReceiptForTest === 'function') {
+    receipts10.length = 0; appended10 = 0;
+    chatUi10._showReceiptForTest('Rewrite saved.');
+    assert(receipts10.length === 1 && /Rewrite saved\./.test(receipts10[0].msg),
+      `10-2: push ACTIVE -> an own-action receipt STILL renders, via the app toast (got ${receipts10.length}). A receipt is not a notification: nothing else is going to tell this player their rewrite landed`);
+  }
+
+  chatUi10._resetToastsForTest(); appended10 = 0;
+  chatUi10._showToastForTest({ author: 'system', body: 'someone else posted' }, { force: true });
+  assert(appended10 === 0,
+    `10-3: …while a NOTICE about something elsewhere stays suppressed on the same device, force or not (got ${appended10} toast node(s)) — [9]'s ruling is untouched`);
+
+  storage.setPushActive(false);
+  if (typeof chatUi10._showReceiptForTest === 'function') {
+    receipts10.length = 0;
+    chatUi10._showReceiptForTest('Rewrite saved.');
+    assert(receipts10.length === 1,
+      '10-4: …and on a push-inactive device the receipt is unchanged too — this is one delivery path, not a push-conditional one');
+  }
+  globalThis.showToast = realWindowToast;
+  if (realWindowToast === undefined) delete globalThis.showToast;
+
+  // The call site itself, and the enumeration behind it: after this change the
+  // only showToast() calls left in chat-ui.js are NOTICES, so none of them
+  // needs the force escape hatch to reach a push-active device.
+  const rewriteLine10 = (chatUiSrc10.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
+    .match(/[^\n]*Rewrite saved[^\n]*/) || [''])[0];
+  assert(/showReceipt\(/.test(rewriteLine10) && !/force/.test(rewriteLine10),
+    `10-5: the rewrite confirmation goes through the receipt path, not showToast(..., {force:true}) — got: ${rewriteLine10.trim()}`);
+  const toastCalls10 = (chatUiSrc10.split('\n')
+    .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .filter(l => /[^.\w]showToast\(/.test(l) && !/function showToast|_showToastForTest|window\.showToast/.test(l)));
+  assert(toastCalls10.length === 2 && toastCalls10.every(l => !/force/.test(l)),
+    `10-6: …and the ENUMERATION holds — the ${toastCalls10.length} remaining showToast() call sites in chat-ui.js are both notices (the pick reveal and an incoming message) and neither forces past the gate`);
+
+  // ── (f) THE BLIP. showToast() stood down on a push-active device; playBlip()
+  //      did not, so the phone buzzed AND the app chirped for the same message.
+  //      Drew: "all in app notifications should be that." ──
+  // The sound preference lives on the PLAYER record (per-player preferences,
+  // CLAUDE.md architecture bullet 4), so the fixture needs a signed-in player.
+  storage.savePlayer({ playerId: 'pt10', displayName: 'Blip Tester', active: true, preferences: {} });
+  storage.setSession('pt10', false, true);
+  storage.setNotifPrefs({ sound: true });
+  assert(storage.getNotifPrefs().sound === true, '10-7: fixture — the sound preference is ON for the two assertions below');
+  let audioCtors = 0;
+  const realAudioCtx = globalThis.AudioContext;
+  globalThis.AudioContext = class {
+    constructor() { audioCtors++; this.currentTime = 0; this.destination = {}; }
+    createOscillator() { return { frequency: {}, type: '', connect: () => ({ connect: () => {} }), start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => ({ connect: () => {} }) }; }
+  };
+  assert(typeof chatUi10._playBlipForTest === 'function',
+    '10-8: chat-ui.js exposes the real playBlip() through a test seam — the gate has to be asserted on the shipped function, not a copy of it');
+  if (typeof chatUi10._playBlipForTest === 'function') {
+    storage.setPushActive(false);
+    audioCtors = 0; chatUi10._playBlipForTest();
+    assert(audioCtors === 1,
+      `10-9: push INACTIVE -> the blip still plays for a player who asked for sound (got ${audioCtors}) — UN-N3, unchanged`);
+    storage.setPushActive(true);
+    audioCtors = 0; chatUi10._playBlipForTest();
+    assert(audioCtors === 0,
+      `10-10: push ACTIVE -> NO blip (got ${audioCtors}). The phone already made a sound for this message; R10 covers the audible in-app notification as much as the visible one`);
+  }
+  if (realAudioCtx === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = realAudioCtx;
+  storage.setNotifPrefs({ sound: false });
+  storage.clearSession();
+  storage.setPushActive(false);
+
+  // ── (e) THE STALE FLAG AT BOOT. KEYS.PUSH_ACTIVE is device-local and
+  //      PERSISTED, so a phone that revoked notification permission between
+  //      sessions boots reading last session's `true` and swallows every
+  //      in-app notice until refreshPushActiveFlag() resolves — which waits on
+  //      the SDK (up to its 12s ready timeout, and forever if init never
+  //      settles). Structural, and labelled: boot() needs a live DOM and a
+  //      hydrate this harness has no business building (the [9] precedent). ──
+  const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,4000}?refreshPushActiveFlag\(\);/) || [''])[0];
+  assert(bootBlock10.length > 0, '10-11: fixture check — the notifications boot-wiring block was located in js/app.js');
+  const clearAt10 = bootBlock10.indexOf('setPushActive(false)');
+  // The `.then(` matters, for boottest.mjs §10E's reason: the comment beside
+  // the clear NAMES ensureOneSignalInit() in prose a few lines above the real
+  // call, and a bare indexOf would match the sentence and invert this.
+  const initAt10  = bootBlock10.indexOf('ensureOneSignalInit().then(');
+  assert(clearAt10 > -1,
+    '10-12: boot clears the persisted push-active flag before it recomputes it — the stale window now fails CLOSED, which is what the comment beside refreshPushActiveFlag() already claims ("a device that has not computed it yet reads FALSE")');
+  assert(clearAt10 > -1 && initAt10 > -1 && clearAt10 < initAt10,
+    `10-13: …and it clears BEFORE ensureOneSignalInit(), not inside its .then() — an init that never settles (no App ID, offline, SDK blocked) would otherwise leave last session's TRUE standing for the whole session (clear at ${clearAt10}, init at ${initAt10})`);
+
+  globalThis.document.body.appendChild = realAppend10;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

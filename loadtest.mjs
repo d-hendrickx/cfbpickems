@@ -4509,41 +4509,73 @@ console.log('\n[45] UN-124 — "What\'s new": collapsed by default, renders noth
   assert(app45.APP_VERSION && app45.renderWhatsNewCardHTML().length > 0,
     'the default WHATS_NEW (no argument) renders non-empty for the current release');
 
-  // 45f — LAST CARD IN EVERY STATE. The DOM stub can't drive renderPicksPage()
-  // end-to-end (document.getElementById returns null), so — same technique
-  // as suite [30] — assert on the real function body: renderWhatsNewCardHTML()
-  // is appended unconditionally as the FINAL statement of BOTH branches: the
-  // historical-week branch (which otherwise returns early) and the
-  // current-week branch (after the footer's conditional, which is NOT
-  // unconditional — that asymmetry is exactly the bug DI-124 guards against).
+  // 45f — REACHES EVERY STATE. UN-124's need is unchanged: the card must reach
+  // a player in every branch of the Picks page, including one who stays logged
+  // in. What CARRIES it changed in v0.21.1 (FEAT-8b / DI-177c, UN-177+UN-178):
+  // the two `insertAdjacentHTML('beforeend', renderWhatsNewCardHTML())` calls
+  // and the `if (!playerActivelyInPicks)` footer conditional are GONE, replaced
+  // by one `#picks-head-slot` per branch that fillPicksHeadSlot() fills with
+  // What's New + recap, directly under the week header. The four assertions
+  // that used to live here described that retired mechanism literally (call
+  // ordering inside renderPicksPage's source), so they were re-pointed at the
+  // property rather than at the implementation — deliberately, and recorded
+  // here rather than deleted.
+  //
+  // UN-124's own ledger row warns that one of these placement assertions once
+  // passed against the very regression it existed to catch, because it read too
+  // narrow a source window. So the REAL coverage now lives in layouttest.mjs,
+  // which drives window.navigateTo('picks') and reads the emitted DOM in all
+  // five branches. What stays here is the structural half: exactly one call
+  // site, unconditional, on both dispatcher paths.
   const picksPageSrc45 = (appJsSrc.match(/function renderPicksPage\(\) \{[\s\S]*?\n\}/) || [''])[0];
   assert(picksPageSrc45.length > 0, 'renderPicksPage() located');
   const histCallIdx45 = picksPageSrc45.indexOf('renderHistoricalPicksView(c, viewWeek, currentWeek);');
-  const histWhatsNewIdx45 = picksPageSrc45.indexOf("c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());");
+  const histFillIdx45 = picksPageSrc45.indexOf('fillPicksHeadSlot(c,', histCallIdx45);
   const histReturnIdx45 = picksPageSrc45.indexOf('return;', histCallIdx45);
-  assert(histCallIdx45 > -1 && histWhatsNewIdx45 > -1 && histReturnIdx45 > -1 &&
-    histCallIdx45 < histWhatsNewIdx45 && histWhatsNewIdx45 < histReturnIdx45,
-    "the historical-week branch appends the What's New card BEFORE its early return — it would otherwise never reach it");
+  assert(histCallIdx45 > -1 && histFillIdx45 > -1 && histReturnIdx45 > -1 &&
+    histCallIdx45 < histFillIdx45 && histFillIdx45 < histReturnIdx45,
+    'the historical-week branch fills the head slot BEFORE its early return — it would otherwise never reach it');
 
-  const footerIfIdx45 = picksPageSrc45.indexOf('if (!playerActivelyInPicks)');
-  const footerCallIdx45 = picksPageSrc45.indexOf('renderPicksFooterHTML(currentWeek));');
-  const secondWhatsNewIdx45 = picksPageSrc45.lastIndexOf("c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());");
-  assert(footerIfIdx45 > -1 && footerCallIdx45 > -1 && secondWhatsNewIdx45 > histWhatsNewIdx45,
-    "a SECOND, distinct What's New call exists for the current-week branch (not reusing the historical one)");
-  // The critical property: the second call is OUTSIDE the
-  // `if (!playerActivelyInPicks) { ... }` block — it must run whether or not
-  // that block ran, so a player who stays logged in (and never sees the
-  // footer) still reaches it. Captures the FULL block body (up to its own
-  // closing brace), not a fixed-width window past the footer call — a
-  // narrower window would miss a call re-inserted anywhere else inside the
-  // same block.
-  const ifBlockEndIdx45 = picksPageSrc45.indexOf('\n  }', footerIfIdx45);
-  assert(ifBlockEndIdx45 > -1 && ifBlockEndIdx45 > footerCallIdx45, "the conditional's closing brace located");
-  const ifBlockSrc45 = picksPageSrc45.slice(footerIfIdx45, ifBlockEndIdx45);
-  assert(!/renderWhatsNewCardHTML/.test(ifBlockSrc45),
-    "the What's New call is OUTSIDE the playerActivelyInPicks conditional — unconditional, unlike the recap footer");
-  assert(secondWhatsNewIdx45 > footerCallIdx45,
-    "the current-week What's New call comes AFTER the conditional footer block — genuinely last");
+  const currentFillIdx45 = picksPageSrc45.lastIndexOf('fillPicksHeadSlot(c,');
+  assert(currentFillIdx45 > histFillIdx45,
+    'a SECOND, distinct head-slot fill exists for the current-week branch (not reusing the historical one)');
+
+  // Unconditional: no surviving `if` gates either fill, and the retired
+  // playerActivelyInPicks suppression is really gone (UN-178 — Drew asked for
+  // the recap under the blurb for signed-in players too).
+  // Comment lines are stripped first: the new code legitimately NAMES the
+  // retired suppression in prose to explain what superseded it, which would
+  // false-positive a naive substring scan (the same trap livestatustest's
+  // runAutoRefreshTick guard documents).
+  const appCodeOnly45 = appJsSrc.split('\n')
+    .filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*'))
+    .join('\n');
+  // COORDINATOR RULING 2 (2026-09-12, after the F1 review). This used to assert
+  // that the name `playerActivelyInPicks` was gone from app.js entirely. That
+  // was the right assertion for one day: UN-178 removed the suppression from the
+  // RECAP, and the ruling then put it back — deliberately and only — on the 2K25
+  // Permanent Record, which returns to the END of the Picks page under its
+  // pre-F1 audience (signed-out visitors and the commissioner, never a signed-in
+  // non-admin). So the property to hold is no longer "the name is absent" but
+  // "it cannot reach the recap", which is what these two assert.
+  const picksPageCode45 = (appCodeOnly45.match(/function renderPicksPage\(\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(picksPageCode45.length > 0, 'renderPicksPage() located in the comment-stripped source');
+  assert(/if \(!recapHtml && !playerActivelyInPicks\) \{\s*\n\s*c\.insertAdjacentHTML\('beforeend', renderSeasonSummaryHTML\(currentWeek\)\);/.test(picksPageCode45),
+    'the ONLY surviving playerActivelyInPicks gate wraps renderSeasonSummaryHTML at the page end — its pre-F1 placement, audience and fall-through, per coordinator ruling 2');
+  assert((picksPageCode45.match(/playerActivelyInPicks/g) || []).length === 2,
+    'playerActivelyInPicks appears exactly twice in renderPicksPage() — one declaration, one gate — so it cannot have crept back onto the recap');
+  assert(!/renderPicksFooterHTML/.test(appCodeOnly45),
+    'renderPicksFooterHTML() is no longer called anywhere in app.js — the head slot takes renderPrevWeekRecapHTML() directly, which is what stops an 8-line 2K25 card landing between the blurb and the games (reviewer F1 finding 1)');
+  const fillLines45 = picksPageSrc45.split('\n').filter(l => l.includes('fillPicksHeadSlot(c,'));
+  assert(fillLines45.length === 2 && fillLines45.every(l => /^\s*fillPicksHeadSlot\(c,/.test(l)),
+    'both head-slot fills are bare unconditional statements — neither sits behind an if / && / ternary');
+
+  // FEAT-3 contract: exactly ONE call site of renderWhatsNewCardHTML() in the
+  // whole app now (the slot fill), and its "nothing to show -> ''" behaviour is
+  // untouched (asserted in 45a above).
+  const whatsNewCalls45 = (appCodeOnly45.match(/renderWhatsNewCardHTML\(/g) || []).length;
+  assert(whatsNewCalls45 === 2,
+    `renderWhatsNewCardHTML has exactly one definition + one call site after DI-177c (found ${whatsNewCalls45} in code)`);
 }
 
 // ── 46. RG-10 — every commissioner card must declare its tab ────────────────
@@ -8973,6 +9005,79 @@ console.log('\n[77b] RG-98 F1 — a tick that could not attempt a request must n
   backend77b.clearBackendConfig();
 }
 
+// ── [77c] ────────────────────────────────────────────────────────────────────
+// BUG-12 (2026-09-12) — Drew: "When I receive a push notification it doesn't
+// show up in the chat for at least 30 seconds after the notification. When I
+// click the push, I should be able to see the message in the chat."
+//
+// boottest.mjs §11 measures the timing and the bound on a fake clock;
+// cachetest.mjs §13 drives wakeChat() end to end through the chat engine. What
+// belongs HERE, in the harness every batch runs, is the SEAM: that the fast
+// path exists on the subscription, that it reuses the same tick, that the bound
+// holds, and that DI-168's manual button is not caught by it. Hand-driven
+// scheduler, [77b]'s technique — no real time passes.
+console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and separate from the manual refresh)…');
+{
+  const transport77c = mods['chatTransport'], backend77c = mods['backend'], chat77c = mods['chat'];
+  const _realFetch77c = globalThis.fetch, _realST77c = globalThis.setTimeout, _realCT77c = globalThis.clearTimeout;
+  const scheduled77c = [];
+  globalThis.setTimeout = (fn, ms) => { scheduled77c.push({ ms, fn }); return scheduled77c.length; };
+  globalThis.clearTimeout = () => {};
+  let fetchCalls77c = 0;
+  globalThis.fetch = async () => { fetchCalls77c++; return { ok: true, json: async () => ({ ok: true, head: 5, events: [] }) }; };
+  backend77c.setBackendConfig('https://example.invalid/exec', 'tok77c');
+  document.hidden = false;
+
+  const drain77c = async (n = 20) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
+  try {
+    const sub77c = transport77c.subscribe(() => {}, { getMode: () => 'closed', getKnownHead: () => 5 });
+    await drain77c();                    // the automatic first tick
+    assert(typeof sub77c.wake === 'function',
+      'subscribe() exposes wake() alongside forceTick()/unsubscribe — the push tap, the foreground push and the resume all enter the transport here');
+
+    fetchCalls77c = 0;
+    const w1 = sub77c.wake();
+    await drain77c();
+    assert(fetchCalls77c === 1,
+      `a wake issues its round trip IMMEDIATELY rather than waiting for the scheduled poll (got ${fetchCalls77c} request(s)) — the scheduled tick for this room would have been 60s out`);
+    await w1;
+
+    // Still inside the wake window (the stubbed clock never fires its timer):
+    // a second wake must not add traffic, and must not hang either.
+    const before77c = fetchCalls77c;
+    const w2 = sub77c.wake();
+    await drain77c();
+    assert(fetchCalls77c === before77c,
+      `a second wake inside the window adds NO second round trip (got ${fetchCalls77c - before77c}) — bounded, so a flapping tab cannot hammer the backend`);
+
+    // …while the MANUAL refresh (DI-168's button) is a player action and is
+    // deliberately not bounded by the wake window.
+    const beforeManual77c = fetchCalls77c;
+    const t77c = sub77c.forceTick();
+    await drain77c();
+    await t77c;
+    assert(fetchCalls77c > beforeManual77c,
+      `the 🔄 button still makes its round trip inside the wake window (got ${fetchCalls77c - beforeManual77c}) — bounding a button the player is watching would make it look broken, which is what DI-168 existed to fix`);
+
+    sub77c.unsubscribe();
+    await drain77c();
+    const settled77c = await Promise.race([w2.then(() => 'settled'), Promise.resolve().then(() => 'pending')]);
+    assert(settled77c === 'settled' || (await w2) !== undefined,
+      'a deferred wake still ANSWERS its caller when the subscription is torn down — app.js\'s deep link awaits this promise, and a wake that never settles is a dead tap');
+
+    // chat.js's seam: the ONE function app.js calls, safe when nothing is subscribed.
+    chat77c._resetForTest();
+    assert(typeof chat77c.wakeChat === 'function', 'chat.js exports wakeChat() — the single call site app.js wires the two OneSignal hooks and the deep link to');
+    const idle77c = await chat77c.wakeChat();
+    assert(idle77c === false,
+      `wakeChat() with no live subscription answers false instead of throwing (got ${idle77c}) — a push tap on a device with chat off must be a no-op`);
+  } finally {
+    globalThis.fetch = _realFetch77c; globalThis.setTimeout = _realST77c; globalThis.clearTimeout = _realCT77c;
+    backend77c.clearBackendConfig();
+    chat77c._resetForTest();
+  }
+}
+
 // ── [78] ─────────────────────────────────────────────────────────────────────
 // DI-169 (2026-09-11). Own process, like [73]/[76]: cachetest.mjs drives real
 // chat.js/chatTransport.js/chat-ui.js code through several full cache-primed
@@ -9059,6 +9164,812 @@ console.log('\n[81] groupdtest.mjs — spawned as a subprocess, exit code + prin
     assert(Number(summaryMatch81[3]) === 0, `groupdtest.mjs reports zero failed assertions (got ${summaryMatch81[3]} failed, ${summaryMatch81[2]} passed)`);
     assert(Number(summaryMatch81[2]) >= 100, `groupdtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch81[2]} — a near-zero count would mean the guard is vacuous)`);
   }
+}
+
+// ── 82. FEAT-3 (UN-200 / UN-201) — the release post and the version history ──
+//
+// DI-200/DI-201 + Amendment 1's test plan (A1.7 items 1-8), plus the two ⭐
+// suppressions and the 📋 affordance, all asserted against RENDERED OUTPUT
+// rather than source text (RG-27).
+console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release notes (UN-201)…');
+{
+  const app82 = mods['app'];
+  const scribeLines82 = mods['scribeLines'];
+  const chatUi82 = mods['chat-ui'];
+  const backend82 = mods['backend'];
+  const { renderWhatsNewCardHTML, renderReleaseNotesCardHTML, checkWhatsNewPostDue } = app82;
+
+  // ── Fixtures. Deliberately NOT the shipped constant: these assert the
+  //    MECHANISM, and a fixture that changes every release would make the
+  //    counts below churn.
+  const NEWEST = { version: 'v9.9.1', date: '2026-09-12', added: ['A one', 'A two', 'A three'], fixed: ['F one'] };
+  const CATCH  = { version: 'v9.9.0', date: '2026-09-11', expanded: true, added: ['B one', 'B two'], fixed: ['G one', 'G two', 'G three'] };
+  const OLDER  = { version: 'v9.8.0', date: '2026-09-01', added: ['C one'], fixed: [] };
+  const EMPTY  = { version: 'v9.7.0', date: '2026-08-01', expanded: true, added: [], fixed: [] };
+
+  // ── A1.7 item 2 — BYTE-IDENTICAL single-release output. ──
+  // The v0.21.0 implementation, reproduced verbatim here as the oracle. This is
+  // the assertion that makes UN-124's whole existing suite (45a-45e) meaningful
+  // after the reshape: if the one-release rendering drifts by a single byte,
+  // every one of those placement assertions is quietly testing new markup.
+  const esc82 = x => !x ? '' : String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  function legacyCard82(data) {
+    const added = data?.added || [];
+    const fixed = data?.fixed || [];
+    if (!added.length && !fixed.length) return '';
+    const group = (label, items) => !items.length ? '' : `
+          <div class="text-xs text-muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:8px">${label}</div>
+          <ul class="rules-list">${items.map(i => `<li>${esc82(i)}</li>`).join('')}</ul>`;
+    return `
+    <div class="card mb-md">
+      <details>
+        <summary style="cursor:pointer;font-weight:600;font-size:.85rem">🆕 What's new${data?.version ? ` in ${esc82(data.version)}` : ''}</summary>
+        <div>${group('New', added)}${group('Fixed', fixed)}</div>
+      </details>
+    </div>`;
+  }
+  for (const fx of [NEWEST, CATCH, OLDER, { version: 'v1', added: ['<script>x</script>'], fixed: [] }, { added: ['no version'], fixed: [] }]) {
+    assert(renderWhatsNewCardHTML(fx) === legacyCard82(fx),
+      `82-1: a BARE release object renders byte-identically to the pre-FEAT-3 card (${fx.version || 'no version'}) — no subheading, same summary, same groups`);
+  }
+  assert(renderWhatsNewCardHTML([NEWEST]) === legacyCard82(NEWEST),
+    '82-2: a ONE-ELEMENT ARRAY renders identically too — the normal state from v0.21.2 on, when the catch-up flag is removed');
+
+  // ── A1.7 items 1, 3, 4, 5 — the multi-release card. ──
+  const card82 = renderWhatsNewCardHTML([NEWEST, CATCH, OLDER, EMPTY]);
+  assert(card82.includes("🆕 What's new — v9.9.1 and v9.9.0"),
+    '82-3: the two-release summary reads "🆕 What\'s new — {newest} and {older}", exactly');
+  assert(/<details>/.test(card82) && !/<details open>/.test(card82),
+    '82-4: the outer <details> is still CLOSED by default — FEAT-8b put this card at the top of the Picks page, so its cost above the fold stays one line');
+  const subs82 = [...card82.matchAll(/margin-top:10px">([^<]*)</g)].map(m => m[1]);
+  assert(subs82.length === 2 && subs82[0].startsWith('v9.9.1') && subs82[1].startsWith('v9.9.0'),
+    `82-5: one version subheading per release, newest first (got ${subs82.join(' | ')})`);
+  assert(subs82[0] === 'v9.9.1 · Sep 12' && subs82[1] === 'v9.9.0 · Sep 11',
+    '82-6: the subheading is "{version} · {Mon D}" — hand-parsed from the ISO date, so it reads the same in every time zone');
+  assert(card82.includes('A one') && card82.includes('B one') && card82.includes('G three'),
+    '82-7: both releases\' bullets are INSIDE the card — Drew\'s "include these items as well as the 21 items", not behind a second expander');
+  assert(!card82.includes('C one'),
+    '82-8: a third, NON-expanded older release is absent from the Picks card — `expanded: true` is a per-release flag, not "show everything"');
+  assert(!card82.includes('v9.7.0'),
+    '82-9: an `expanded` release with two empty lists is skipped even so — "never an empty shell" outranks the flag');
+
+  // ── DI-201 — the Rules history. A1.7 items 4 and 8. ──
+  const rules82 = renderReleaseNotesCardHTML([NEWEST, CATCH, OLDER, EMPTY]);
+  assert(rules82.includes('🆕 Release notes'), '82-10: the Rules card is headed 🆕 Release notes');
+  const entries82 = [...rules82.matchAll(/<details class="release-entry" data-release="([^"]+)"( open)?>/g)];
+  assert(entries82.length === 3 && entries82.map(m => m[1]).join(',') === 'v9.9.1,v9.9.0,v9.8.0',
+    `82-11: every non-empty release gets a <details data-release> entry, newest first, the empty one skipped (got ${entries82.map(m => m[1]).join(',')})`);
+  assert(!!entries82[0][2] && !entries82[1][2] && !entries82[2][2],
+    '82-12: newest OPEN, every other one CLOSED — including the one flagged `expanded`, proving that flag does not leak across surfaces (A1.7 item 8)');
+  assert(rules82.includes('C one'),
+    '82-13: the older release the Picks card omits IS here — this card is the reason UN-201 exists');
+  assert(rules82.includes('Release notes start with v9.8.0. Anything before that isn\'t recorded here.'),
+    '82-14: the footer names the OLDEST release present, verbatim — "no backfill" made visible instead of looking like data loss');
+  assert(rules82.includes('3 new · 1 fixed') && rules82.includes('2 new · 3 fixed'),
+    '82-15: each summary carries "{n} new · {m} fixed"');
+  assert(renderReleaseNotesCardHTML([OLDER]).includes('1 new') && !renderReleaseNotesCardHTML([OLDER]).includes('fixed'),
+    '82-16: …with either half omitted at zero — no "0 fixed"');
+  assert(renderReleaseNotesCardHTML([]) === '' && renderReleaseNotesCardHTML([EMPTY]) === '' &&
+         renderWhatsNewCardHTML([]) === '' && renderWhatsNewCardHTML([EMPTY]) === '',
+    '82-17: zero renderable releases -> \'\' on BOTH surfaces. Never an empty card, never a zero-height gap in the Picks head slot');
+
+  // ── DI-200j — ONE body renderer behind both surfaces. ──
+  // Grab exactly the two labelled groups for the SAME release on each surface:
+  // from the "New" label (the only `margin-top:8px` div, vs the card's
+  // subheading at 10px) through the end of the Fixed list.
+  const grabBody82 = html => {
+    const i = html.indexOf('B one');
+    return html.slice(html.lastIndexOf('margin-top:8px', i), html.indexOf('</ul>', html.indexOf('G three')) + 5);
+  };
+  const bodyInCard82  = grabBody82(card82);
+  const bodyInRules82 = grabBody82(rules82);
+  assert(bodyInCard82.includes('<ul class="rules-list">') && bodyInCard82.includes('G three') && bodyInCard82 === bodyInRules82,
+    '82-18: the same release renders byte-identical group markup on the Picks card and in the Rules history — one renderWhatsNewBodyHTML(), not two copies that can drift');
+
+  // ── XSS: hand-authored content, escaped anyway. ──
+  const evil82 = renderReleaseNotesCardHTML([{ version: '<b>v1</b>', date: '2026-09-12', added: ['<script>x</script>'], fixed: [] }]);
+  assert(!evil82.includes('<script>x</script>') && evil82.includes('&lt;script&gt;') && evil82.includes('data-release="&lt;b&gt;v1&lt;/b&gt;"'),
+    '82-19: every string on the release-notes surface goes through escHtml() — items, version, and the data-release attribute');
+
+  // ── SCRIBE copy: deterministic selection, both variant sets. ──
+  const tpl82 = scribeLines82.WHATS_NEW_POST_TEMPLATES;
+  assert(tpl82.single.length === 4 && tpl82.catchUp.length === 4,
+    '82-20: both template sets hold 4 lines — equal lengths, so ONE index derived from the version string is valid against either');
+  assert(tpl82.single.every(t => /\{version\}/.test(t) && /\{nAdded\}/.test(t) && /\{nFixed\}/.test(t) && /\{headline\}/.test(t)) &&
+         tpl82.catchUp.every(t => /\{version\}/.test(t) && /\{nAdded\}/.test(t) && /\{nFixed\}/.test(t) && /\{headline\}/.test(t) && /\{alsoVersion\}/.test(t)),
+    '82-21: line 1 of every template names the version and both counts; only catchUp consumes {alsoVersion}');
+  assert(tpl82.single.every(t => !/\{alsoVersion\}/.test(t)),
+    '82-22: …and no `single` template can render an empty {alsoVersion} into a dangling clause');
+  const lineA82 = scribeLines82.whatsNewPostLine({ version: 'v9.9.1', nAdded: 5, nFixed: 4, headline: 'A one', alsoVersion: 'v9.9.0' });
+  const lineB82 = scribeLines82.whatsNewPostLine({ version: 'v9.9.1', nAdded: 5, nFixed: 4, headline: 'A one', alsoVersion: 'v9.9.0' });
+  assert(lineA82 === lineB82,
+    '82-23: selection is DETERMINISTIC for a given version — six devices build the same optimistic body before the server picks a winner (never Math.random)');
+  assert(lineA82.includes('v9.9.1') && lineA82.includes('v9.9.0') && lineA82.includes('5') && lineA82.includes('4') &&
+         lineA82.split('\n').length === 2 && lineA82.split('\n')[1].endsWith('A one'),
+    '82-24: the catch-up body names both versions, carries both counts, and its second line ends with the verbatim headline');
+  assert(!/!/.test(lineA82) && !/[\u{1F300}-\u{1FAFF}]/u.test(lineA82),
+    '82-25: no exclamation marks and no emoji in the post body — SCRIBE.md §9.1 (the 📋 belongs to the button, which is not SCRIBE copy)');
+  assert(tpl82.catchUp.every(t => /shipped earlier|from before|older|finally getting its notes/.test(t)),
+    '82-26: every catch-up template says the older release is being caught up on — none of them claims it shipped today (A1.4)');
+
+  // ── The headline: verbatim, truncated on a word boundary. ──
+  const longItem82 = 'A' + ' word'.repeat(40);
+  // (82-27 was deleted 2026-09-12, F3 review finding 3: it asserted
+  //  `x || true`, which is a constant expression — it could never fail — over a
+  //  ternary whose two branches were the same value. The real, falsifiable
+  //  headline-truncation assertion is 82-43, through the actual emit below.)
+
+  // ══ THE EMIT ══
+  const { getWhatsNewPosted } = storage;
+  const K82 = 'cfbp_whatsnew_posted';
+  const priorCfg82 = backend82.getBackendConfig?.() || null;
+  const countPosts82 = () => chat.getMessages({ tag: 'all' }).filter(m => m.meta?.kind === 'whatsNew').length;
+  // MUTATION-DRIVEN HARDENING (2026-09-12): counting the FOLD cannot see a
+  // duplicate send. Deleting the device-ledger check entirely left this section
+  // green, because the second attempt carries the same deterministic id and
+  // chat.js's own ingest dedupes it away — the exact dedupe the design relies on
+  // downstream, hiding the bug upstream. What the gates actually control is
+  // whether an event is QUEUED, so every gate below is asserted on the outbox
+  // delta: the number of events this one call put in the outbox.
+  const attempt82 = opts => {
+    const before = chat.chatStatus().outbox;
+    checkWhatsNewPostDue(opts);
+    return chat.chatStatus().outbox - before;
+  };
+  const resetLedger82 = () => localStorage.removeItem(K82);
+
+  storage.addPlayer({ playerId: 'wn_p1', displayName: 'WNTester', active: true });
+  storage.setSession('wn_p1', false, true);
+  storage.saveSetting('chatEnabled', true);
+  backend82.setBackendConfig('https://example.invalid/exec', 'tok');
+  resetLedger82();
+  const before82 = countPosts82();
+
+  const REL82 = [NEWEST, CATCH, OLDER];
+  const queued82 = attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 });
+  const posts82 = chat.getMessages({ tag: 'all' }).filter(m => m.meta?.kind === 'whatsNew');
+  assert(queued82 === 1 && posts82.length === before82 + 1,
+    `82-28: exactly ONE release post is queued, and exactly one lands in the room (queued ${queued82}, new in fold ${posts82.length - before82})`);
+  const post82 = posts82[posts82.length - 1];
+  assert(post82.id === 'sys_whatsnew_v9_9_1',
+    `82-29: the id is the sanitised version — AD-11 deterministic, so six devices collapse to one row at the server (got ${post82.id})`);
+  assert(post82.type === 'message' && post82.author === 'scribe' && post82.gameTag === '' && post82.notify === true,
+    '82-30: type:message (a system event is never relayed to push), author:scribe, main room, notify on');
+  assert(post82.meta?.kind === 'whatsNew' && post82.meta.version === 'v9.9.1' && post82.meta.source === 'tier0',
+    '82-31: meta carries kind/version/source — the three fields every downstream suppression keys off');
+
+  // A1.7 item 6 — the counts and the card are computed from the SAME list.
+  const shownAdded82 = NEWEST.added.length + CATCH.added.length;
+  const shownFixed82 = NEWEST.fixed.length + CATCH.fixed.length;
+  assert(post82.meta.nAdded === shownAdded82 && post82.meta.nFixed === shownFixed82,
+    `82-32: the post's counts are SUMMED across exactly the releases the card renders (${post82.meta.nAdded}/${post82.meta.nFixed} vs ${shownAdded82}/${shownFixed82})`);
+  const cardBullets82 = (renderWhatsNewCardHTML(REL82).match(/<li>/g) || []).length;
+  assert(post82.meta.nAdded + post82.meta.nFixed === cardBullets82,
+    `82-33: …and they equal the number of bullets the card actually emits (${cardBullets82}) — if the post says 5 and the card shows 9, the post is lying`);
+  assert(post82.body.includes('v9.9.1') && post82.body.includes('v9.9.0') && post82.body.includes(String(shownAdded82)),
+    '82-34: the v0.21.1-shaped post NAMES the older release it is catching up on (coordinator Q5)');
+  assert(post82.body.endsWith('A one'),
+    '82-35: the body ends with the newest release\'s FIRST item, verbatim — SCRIBE does not summarise it and there is no model call in this path');
+
+  // The ledger, and the gates.
+  assert(getWhatsNewPosted().includes('v9.9.1'),
+    '82-36: the device ledger is written AT QUEUE TIME through the storage seam — sendEvent() persists to the outbox, so a successful queue is the commit point');
+  assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 }) === 0,
+    '82-37: a SECOND call QUEUES NOTHING — the version is in the device ledger. Asserted on the outbox, not the fold: the id dedupe would swallow a duplicate send and the ledger could rot away unnoticed'); 
+
+  resetLedger82();
+  assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: [{ version: 'v9.9.1', added: [], fixed: [] }] }) === 0 &&
+         !getWhatsNewPosted().includes('v9.9.1'),
+    '82-38: CONTENT GATE — nothing to announce posts nothing AND leaves the ledger unwritten, so a later real release still announces');
+
+  assert(attempt82({ version: 'v9.9.5', date: '2026-09-12', releases: REL82 }) === 0 &&
+         !getWhatsNewPosted().includes('v9.9.5'),
+    "82-39: CURRENT VERSION ONLY — a constant that disagrees with APP_VERSION posts nothing rather than announcing one version while counting another's bullets");
+
+  storage.saveSetting('chatEnabled', false);
+  assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 }) === 0 &&
+         !getWhatsNewPosted().includes('v9.9.1'),
+    '82-40: chat disabled by the commissioner posts nothing AND leaves the ledger UNWRITTEN — it announces on the first navigation after chat comes back');
+  storage.saveSetting('chatEnabled', true);
+
+  storage.clearSession();
+  assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 }) === 0 &&
+         !getWhatsNewPosted().includes('v9.9.1'),
+    '82-41: SESSION GATE (Q4) — a device that merely cleared the site PIN does not announce a release to the league');
+  storage.setSession('wn_p1', true, false);
+  backend82.clearBackendConfig();
+  assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 }) === 0,
+    '82-42: …and neither does a device with no backend configured, even as the commissioner');
+  backend82.setBackendConfig('https://example.invalid/exec', 'tok');
+
+  // The truncated headline, through the real emit.
+  resetLedger82();
+  const LONG82 = [{ version: 'v9.9.2', date: '2026-09-12', added: [longItem82], fixed: [] }];
+  checkWhatsNewPostDue({ version: 'v9.9.2', date: '2026-09-12', releases: LONG82 });
+  const longPost82 = chat.getMessage('sys_whatsnew_v9_9_2');
+  assert(!!longPost82 && longPost82.body.includes('…') && longPost82.body.length < longItem82.length + 120,
+    '82-43: a long first item is truncated on a word boundary with … rather than dumped whole into the room');
+
+  // ── The two ⭐ suppressions, asserted against RENDERED OUTPUT (DI-200i). ──
+  storage.saveSetting('scribeFeedbackEnabled', true);
+  const wnMsg82 = chat.getMessage('sys_whatsnew_v9_9_1');
+  assert(!!wnMsg82, '82-44: fixture check — the release post is in the fold and can be rendered');
+  const wnHtml82 = chatUi82._messageHTMLForTest(wnMsg82, 'wn_p1', false);
+  const plainScribe82 = chatUi82._messageHTMLForTest(
+    { id: 'wn_plain', type: 'message', author: 'scribe', gameTag: '', body: 'An ordinary line.', ts: Date.now(), reactions: {} },
+    'wn_p1', false);
+  assert(/chat-act-feedback/.test(plainScribe82) && /chat-fb-star/.test(plainScribe82),
+    '82-45: fixture check — an ORDINARY SCRIBE message renders BOTH ⭐ affordances, so the two assertions below are not vacuous');
+  assert(!/chat-act-feedback/.test(wnHtml82),
+    '82-46: suppression 1 of 2 — the release post renders NO ⭐ Rate button in .chat-actions (feedbackButtonHTML)');
+  assert(!/chat-fb-star/.test(wnHtml82),
+    '82-47: suppression 2 of 2 — and NO persistent ⭐ in the bubble footer either (persistentStarHTML). Fixing one and not the other is the exact failure shape the retention filter had');
+
+  // ── The 📋 affordance (DI-200f). ──
+  const btnTag82 = (wnHtml82.match(/<button[^>]*chat-whatsnew-link[^>]*>/) || [''])[0];
+  assert(!!btnTag82, '82-48: the 📋 button renders on the release post');
+  assert(/data-whatsnew="v9\.9\.1"/.test(btnTag82),
+    '82-49: …carrying data-whatsnew set to the post\'s version, which is what deepLinkTo() opens in the Rules history');
+  assert(wnHtml82.includes('📋 See everything that changed'),
+    '82-50: the label is VISIBLE TEXT, exactly as specified');
+  assert(/aria-label="See everything that changed in v9\.9\.1"/.test(btnTag82) && !/\btitle=/.test(btnTag82),
+    '82-51: the aria-label mirrors the label with the version, and there is NO title attribute — tooltips do not fire on touch');
+  assert(!/chat-whatsnew-link/.test(plainScribe82),
+    '82-52: an ordinary SCRIBE message grows no 📋 button — the affordance is keyed to meta.kind, not to the author');
+  const cssSrc82 = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const linkRule82 = (cssSrc82.match(/^\.chat-whatsnew-link\{[^}]*\}/m) || [''])[0];
+  assert(/min-height:44px/.test(linkRule82) && /min-width:44px/.test(linkRule82),
+    '82-53: .chat-whatsnew-link carries the 44px override — .btn-sm bases at 34px, under the tap-target floor (the #notif-priming-btn precedent, not a global .btn-sm change)');
+  assert(/^\.release-summary\{[^}]*min-height:44px/m.test(cssSrc82),
+    '82-54: the release-notes summary row is itself a 44px tap target — it is the control, not body text');
+  assert(!/#[0-9A-Fa-f]{3,8}\b/.test(linkRule82 + (cssSrc82.match(/^\.release-summary\{[^}]*\}/m) || [''])[0]),
+    '82-55: neither new rule contains a hex literal — colour comes from :root tokens only');
+  // F3 review finding 3 — the disclosure affordance. A <summary> with
+  // list-style:none and no replacement glyph reads as a heading, not as
+  // something you can open; every other collapsible in this app (.avail-group-
+  // header, .gr-league-summary) supplies its own ▾. Asserted on the ::before
+  // rule specifically, because suppressing the marker without replacing it is
+  // exactly the half-change this guards against.
+  assert(/^\.release-summary::before\{[^}]*content:'[^']+'/m.test(cssSrc82)
+      && /^\.release-entry:not\(\[open\]\) \.release-summary::before\{[^}]*rotate\(-90deg\)/m.test(cssSrc82),
+    '82-62: .release-summary supplies its own ::before disclosure glyph and rotates it when the release is closed — the .avail-group-header treatment, scoped to this summary and not to the Picks card\'s');
+
+  // ── F3 review finding 1 — THE PLACEHOLDER INTERLOCK. ──
+  // WHATS_NEW_RELEASES is player-visible on three surfaces, and one of them is a
+  // PERMANENT chat post (append-only, deterministic id — AD-09/AD-11). A
+  // placeholder bullet shipped at bump time would read "RELEASE-EDIT:
+  // coordinator fills at bump." to six real people, forever. The two states are
+  // interlocked rather than merely documented: either the post CANNOT fire
+  // (WHATS_NEW_RELEASES[0].version is not the running APP_VERSION, which is how
+  // the tree sits between a feature landing and its bump), or no shipped bullet
+  // contains a placeholder. deploy.sh carries the same stop at staging time.
+  const live82 = app82._whatsNewForTest();
+  const rel82 = live82.releases;
+  assert(Array.isArray(rel82) && rel82.length > 0 && Array.isArray(live82.shown),
+    `82-59: fixture check — the REAL WHATS_NEW_RELEASES constant and the REAL display rule are both reachable (an interlock asserted against a fixture proves nothing about what ships) — ${Array.isArray(rel82) ? rel82.length : 'not an array'} releases`);
+  const shippedBullets82 = live82.shown
+    .flatMap(r => [...(r.added || []), ...(r.fixed || [])]);
+  const postCanFire82 = rel82[0]?.version === app82.APP_VERSION;
+  assert(!postCanFire82 || !shippedBullets82.some(b => /RELEASE-EDIT/.test(String(b))),
+    `82-60: INTERLOCK — either the release post cannot fire (WHATS_NEW_RELEASES[0].version ${rel82[0]?.version} !== APP_VERSION ${app82.APP_VERSION}) or no shipped bullet carries a RELEASE-EDIT placeholder`);
+  assert(!postCanFire82 || rel82[0]?.date === app82.APP_VERSION_DATE,
+    '82-61: …and when the two versions DO agree, the release date agrees with APP_VERSION_DATE too — one release, one date, on every surface');
+
+  // ── SCRIBE.md §14 — not dial-gated, no autonomous budget spent. ──
+  const postDueSrc82 = (appJsSrc.match(/export function checkWhatsNewPostDue\([\s\S]*?\n\}/) || [''])[0];
+  assert(postDueSrc82.length > 0, '82-56: checkWhatsNewPostDue() located');
+  assert(/sendChatEvent\(/.test(postDueSrc82) && !/scribeTrigger|considerAutonomous|noteRate/.test(postDueSrc82),
+    '82-57: the emit calls sendEvent() directly and never enters scribeTrigger()/considerAutonomous() — the release note is not an interjection, and Quiet must not mean "don\'t tell me the app changed" (SCRIBE.md §14)');
+  const navSrc82 = (appJsSrc.match(/function navigateTo\(tab\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(/checkPickRevealDue\(\);[\s\S]{0,400}checkWhatsNewPostDue\(\);/.test(navSrc82),
+    '82-58: it is called from navigateTo(), immediately after checkPickRevealDue() — the one chokepoint every client passes through, with no new timer');
+
+  // Restore everything this section touched.
+  backend82.clearBackendConfig();
+  if (priorCfg82?.url) backend82.setBackendConfig(priorCfg82.url, priorCfg82.token);
+  resetLedger82();
+  storage.clearSession();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 83. FEAT-2 (UN-175) — game requests: the four STRUCTURAL facts the feature
+//     dies quietly without. The behaviour lives in requesttest.mjs; these are
+//     the ones that belong with the harness because they guard seam-level
+//     declarations no functional test can reach.
+//
+//     The module import list above is UNCHANGED on purpose: every line of this
+//     feature landed in storage.js / backend.js / app.js / styles.css. No new
+//     JS module exists, so there is nothing to add to it.
+//
+//     RG-10 is NOT re-checked here — [46]'s generic .admin-section scanner
+//     already catches the new commissioner card automatically, and a bespoke
+//     duplicate would rot.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[83] FEAT-2 — cfbp_game_requests: seam declarations…');
+{
+  const storageSrc83 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
+  const backendSrc83 = await readFile(new URL('./js/backend.js', import.meta.url), 'utf8');
+  const cssSrc83     = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+
+  // ── (a) The key exists in KEYS, and is NOT device-local. ──
+  const keysBlock83 = (storageSrc83.match(/const KEYS = \{[\s\S]*?\n\};/) || [''])[0];
+  assert(keysBlock83.length > 0, '83-1: fixture check — storage.js\'s KEYS object literal was located');
+  assert(/GAME_REQUESTS:\s*'cfbp_game_requests'/.test(keysBlock83),
+    '83-2: KEYS carries GAME_REQUESTS: \'cfbp_game_requests\' — every read/write for this feature goes through the seam (AD-02)');
+
+  const devLocal83 = (storageSrc83.match(/const DEVICE_LOCAL_KEYS = new Set\(\[[\s\S]*?\]\);/) || [''])[0];
+  assert(devLocal83.length > 0, '83-3: fixture check — the DEVICE_LOCAL_KEYS set was located');
+  assert(!/GAME_REQUESTS/.test(devLocal83),
+    '83-4: …and GAME_REQUESTS is NOT in it. A device-local request is a request the commissioner never sees, which is the whole feature');
+  assert(/GAME_REQUESTS/.test(devLocal83.replace(/\]\);$/, '  KEYS.GAME_REQUESTS,\n]);')),
+    '83-5: canary — the DEVICE_LOCAL_KEYS scan DOES fire against an added entry (a guard that cannot fail is not a guard, RG-27)');
+
+  // ── (b) Nothing seeds it. An unseeded key cannot mistake a failed hydrate
+  //        for an empty league (RG-12's whole class of failure). ──
+  const seedFn83 = (storageSrc83.match(/export function ensureSeedData\([\s\S]*?\n\}/) || [''])[0];
+  assert(seedFn83.length > 0, '83-6: fixture check — ensureSeedData() was located');
+  assert(!/GAME_REQUESTS/.test(seedFn83),
+    '83-7: ensureSeedData() never seeds cfbp_game_requests — absent reads as [] through the accessor instead');
+  assert(/GAME_REQUESTS/.test(seedFn83 + '\n  seed(KEYS.GAME_REQUESTS, []);'),
+    '83-8: canary — the seed scan DOES fire against an added seed line');
+
+  // ── (c) THE HIGHEST-RISK LINE IN THE BUILD (DI-175d failure mode #1).
+  //        Without this entry, a request made on Kevin's phone is destroyed the
+  //        next time another device pushes a stale mirror — the exact bug Drew
+  //        reported on 2026-09-01 about feedback going missing, and it would go
+  //        unnoticed for weeks. ──
+  const appendOnly83 = (backendSrc83.match(/const _APPEND_ONLY_ID = \{[^}]*\};/) || [''])[0];
+  assert(appendOnly83.length > 0, '83-9: fixture check — backend.js\'s _APPEND_ONLY_ID map was located');
+  assert(/cfbp_game_requests:\s*'id'/.test(appendOnly83),
+    '83-10: _APPEND_ONLY_ID includes cfbp_game_requests — the union merge (remote rows first, then local-only) is what keeps six devices from eating each other\'s requests');
+  const neutered83 = appendOnly83.replace(/,\s*cfbp_game_requests:\s*'id'/, '');
+  assert(neutered83 !== appendOnly83 && !/cfbp_game_requests/.test(neutered83),
+    '83-11: canary — the scan DOES fire on removal: deleting the entry from a copy of the real line makes the assertion above fail');
+  assert(/cfbp_feedback:\s*'id'/.test(appendOnly83) && /cfbp_notifications:\s*'id'/.test(appendOnly83),
+    '83-12: …and the two existing append-only keys are untouched by this batch');
+
+  // ── (d) Tap targets. .btn-sm bases at 34px — under the CONVENTIONS #17
+  //        floor — so every control in this card takes a SCOPED override,
+  //        never a global .btn-sm change. ──
+  const rule83 = (name) => (cssSrc83.match(new RegExp('^\\' + name + '\\{[^}]*\\}', 'm')) || [''])[0];
+  const satChip83 = rule83('.gr-sat-chip');
+  assert(satChip83.length > 0 && /min-height:44px/.test(satChip83),
+    '83-13: the Saturday quick chips carry min-height:44px');
+  const rowBtn83 = rule83('.gr-row-action .btn-sm');
+  assert(rowBtn83.length > 0 && /min-height:44px/.test(rowBtn83),
+    '83-14: every Request / Withdraw button in a request row carries the 44px override');
+  const checkRow83 = rule83('.gr-check-row');
+  assert(checkRow83.length > 0 && /min-height:44px/.test(checkRow83),
+    '83-15: the chat opt-in\'s whole LABEL ROW is the hit area at 44px — not a bare 16px checkbox');
+  const leagueSum83 = rule83('.gr-league-summary,.gr-comm-summary');
+  assert(leagueSum83.length > 0 && /min-height:44px/.test(leagueSum83),
+    '83-16: both <summary> disclosures are 44px tap targets — they are controls, not body text');
+  assert(!/#[0-9A-Fa-f]{3,8}\b/.test(satChip83 + rowBtn83 + checkRow83 + leagueSum83 + rule83('.gr-chip') + rule83('.gr-count-chip')),
+    '83-17: no new rule contains a hex literal — colour comes from :root tokens, so all seven themes are covered for free');
+  // F3 review finding (2026-09-12) — REBUILT in the 83-5/83-8/83-11 shape. The
+  // previous 83-18 tested a regex against a string literal written two inches
+  // away: a constant expression that could not observe a change to the real CSS
+  // at all, which is exactly the RG-27 failure the other three canaries exist to
+  // avoid. It now mutates a copy of the REAL extracted rule — strip the override
+  // out of the real `.gr-sat-chip` text and the real assertion above must fail.
+  const satChipNeutered83 = satChip83.replace(/min-height:44px;?/, '');
+  assert(satChipNeutered83 !== satChip83 && !/min-height:44px/.test(satChipNeutered83),
+    '83-18: canary — the 44px scan DOES fire on removal: stripping the override from a copy of the REAL .gr-sat-chip rule makes 83-13 fail');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 84. FEAT-5 (UN-202 / UN-203) — checkWagersDue(): the bounded sweep, and the
+//     structural NO-LLM property. The rendering half lives in groupdtest [14],
+//     the server half in memorytest [28], the scoring isolation in
+//     scoringtest [25]; this is the emitter, which belongs with the harness for
+//     the same reason [82]'s emit does — it queues a PERMANENT post.
+//
+//     Every gate is asserted on the OUTBOX DELTA, not on the fold. [82] learned
+//     that the hard way: counting the fold cannot see a duplicate send, because
+//     the deterministic id dedupes it away on ingest — the exact dedupe the
+//     design relies on downstream, hiding the bug upstream.
+//
+//     The module import list above is UNCHANGED on purpose: every line of this
+//     feature landed in storage.js / chat-ui.js / scribeLines.js / app.js /
+//     Code.gs / styles.css. No new JS module exists.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails closed, spends nothing…');
+{
+  const app84 = mods['app'];
+  const backend84 = mods['backend'];
+  const { checkWagersDue, _setWagerCacheForTest } = app84;
+  const K84 = 'cfbp_wager_resurfaced';
+  const priorCfg84 = backend84.getBackendConfig?.() || null;
+  const DAY = 86400000;
+
+  const wk84 = (id, n, status, mode) => ({ weekId: id, season: '2026', weekNumber: n, label: `Week ${n}`,
+    startDate: '2026-10-01', endDate: '2026-10-03', status, dataSourceMode: mode || 'espn',
+    picksOpenAt: null, picksLockAt: null });
+  storage.saveWeek(wk84('wg_locked', 21, 'locked'));
+  storage.saveWeek(wk84('wg_open', 22, 'open'));
+  storage.saveWeek(wk84('wg_demo', 23, 'locked', 'demo'));
+  storage.addPlayer({ playerId: 'wg_prop', displayName: 'Brayden', active: true });
+  storage.addPlayer({ playerId: 'wg_other', displayName: 'Kevin', active: true });
+  storage.addPlayer({ playerId: 'wg_me', displayName: 'Drew', active: true });
+  storage.setSession('wg_me', false, true);
+  storage.saveSetting('chatEnabled', true);
+  backend84.setBackendConfig('https://example.invalid/exec', 'tok');
+
+  const NOW84 = Date.parse('2026-10-05T12:00:00.000Z');
+  const wagerRow = (id, { weekId = 'wg_locked', reviewAt = '2026-10-03T23:59:59.000Z',
+                          claim = 'USC is not ranked by week 7', other = 'wg_other' } = {}) => ({
+    id: 'mem_' + id, playerId: 'wg_prop', kind: 'wager', key: `wager:${id}`,
+    value: JSON.stringify({ c: claim, o: other, w: weekId, b: 'wg_me' }),
+    provenance: 'player-stated', confidence: 1, reviewAt, sourceMessageId: `m_src_${id}` });
+  const ackRow = (id, reply, who = 'wg_other') => ({
+    id: 'mem_ack_' + id, playerId: who, kind: 'wager', key: `wagerack:${id}`,
+    value: JSON.stringify({ w: id, r: reply }), provenance: 'player-stated', confidence: 1,
+    reviewAt: '', sourceMessageId: `scribe_wager_${id}` });
+
+  const resetLedger84 = () => localStorage.removeItem(K84);
+  // RG-120 (2026-09-12) — `rows` is passed EXPLICITLY, which pins the row set
+  // and suppresses the pre-post server refresh. That is deliberate for [14]-[17]
+  // below: those cases are about SELECTION and BOUNDS, and a fixture-driven
+  // selection test must test its fixture, not a network call to
+  // example.invalid. The refresh itself is exercised against a wired transport
+  // in [18] at the end of this section, where it is the subject rather than
+  // scenery.
+  const attempt84 = async (rows, opts = {}) => {
+    _setWagerCacheForTest(rows);
+    const before = chat.chatStatus().outbox;
+    await checkWagersDue({ now: NOW84, rows, ...opts });
+    return chat.chatStatus().outbox - before;
+  };
+  const lastWagerPost = () => chat.getMessages({ tag: 'all' }).filter(m => m.meta?.kind === 'wagerDue').slice(-1)[0] || null;
+
+  // ── 14. The post itself, one per status. ──
+  resetLedger84();
+  const qA = await attempt84([wagerRow('wa1'), ackRow('wa1', 'accepted')]);
+  const postA = lastWagerPost();
+  assert(qA === 1 && postA?.id === 'scribe_wagerdue_wa1',
+    `84-1: exactly ONE event is queued, under the deterministic id scribe_wagerdue_<wagerId> — six devices collapse to one row at the server's id dedupe (AD-11). Queued ${qA}, id ${postA?.id}`);
+  assert(postA?.author === 'scribe' && postA?.meta?.kind === 'wagerDue' && postA?.meta?.status === 'accepted',
+    '84-2: …authored by SCRIBE, meta.kind wagerDue, meta.status ACCEPTED when a wagerack row says so');
+  assert(postA?.replyTo === 'm_src_wa1',
+    '84-3: …threaded under the ORIGINAL claim, so the receipt sits with the evidence');
+  assert(postA?.body.includes('USC is not ranked by week 7') && postA?.body.includes('Brayden') && postA?.body.includes('Kevin') && postA?.body.includes('Week 21'),
+    `84-4: …restating the claim VERBATIM and naming both sides and the week (got: ${postA?.body})`);
+  assert(!/\bWeek 21 —|Oct 1|Oct 3/.test(postA?.body || ''),
+    '84-5: …with the week NAME only — formatWeekLabelParts(week).name, never formatWeekLabel(), which appends a date range and turns the sentence into a run-on');
+  assert(!/won|lost|owes|off the hook|should be honored/i.test(postA?.body || ''),
+    '84-6: …and NO verdict: SCRIBE reports what was claimed, who took it and when it was due. The room settles it (SCRIBE.md §9.1, DI-202i)');
+
+  resetLedger84();
+  const qD = await attempt84([wagerRow('wd1'), ackRow('wd1', 'declined')]);
+  assert(qD === 1 && lastWagerPost()?.meta?.status === 'declined' && /passed|declined|didn|pass/i.test(lastWagerPost()?.body || ''),
+    '84-7: a DECLINED wager uses the declined pool — the other side passed, so nothing is riding on it');
+  resetLedger84();
+  const qS = await attempt84([wagerRow('ws1')]);
+  const postS = lastWagerPost();
+  assert(qS === 1 && postS?.meta?.status === 'silent',
+    '84-8: NO wagerack row at all = SILENT. There is no stored third state — silence is the absence of a record, which is exactly what silence is');
+  assert(/nobody|no one|nothing was accepted|the record shows/i.test(postS?.body || '')
+      && !/off the hook|owes|so he wins|so he loses/i.test(postS?.body || ''),
+    `84-9: …and the silent line states the GAP and stops. Drew declined to set a rule here ("it either should be honored or doesnt necessarily need to be honored"), so the copy must not pick one (got: ${postS?.body})`);
+
+  // ── 15. Idempotence. ──
+  resetLedger84();
+  const rows15 = [wagerRow('wi1')];
+  const first15 = await attempt84(rows15);
+  const second15 = await attempt84(rows15);
+  assert(first15 === 1 && second15 === 0,
+    `84-10: a SECOND call queues NOTHING — the wagerId is in the device ledger. Asserted on the outbox, not the fold: the id dedupe would swallow a duplicate send and let the ledger rot away unnoticed (got ${first15} then ${second15})`);
+  resetLedger84();
+  localStorage.setItem(K84, JSON.stringify(['wi2']));
+  assert(await attempt84([wagerRow('wi2')]) === 0,
+    '84-11: a PRE-SEEDED ledger queues nothing — the ledger is read through the storage seam (KEYS.WAGER_RESURFACED in DEVICE_LOCAL_KEYS), never raw localStorage in app.js');
+
+  // ── 16. The bounds, each one FAILING CLOSED. ──
+  resetLedger84();
+  assert(await attempt84([wagerRow('wb1', { weekId: 'wg_open' })]) === 0,
+    '84-12: the due week has NOT reached lock -> nothing posts, and the wager stays a candidate. It fails QUIET rather than wrong');
+  assert(localStorage.getItem(K84) === null,
+    '84-13: …and the ledger is left UNWRITTEN, so the callback still fires on the first navigation after that week locks');
+  resetLedger84();
+  assert(await attempt84([wagerRow('wb2', { reviewAt: '2026-09-15T23:59:59.000Z' })]) === 0,
+    '84-14: a deadline more than 14 days past -> nothing posts, permanently. A device with a fresh ledger cannot backfill a season of callbacks');
+  resetLedger84();
+  assert(await attempt84([wagerRow('wb3', { reviewAt: '' })]) === 0 && await attempt84([wagerRow('wb4', { reviewAt: 'not a date' })]) === 0,
+    '84-15: an ABSENT or UNPARSEABLE reviewAt FAILS CLOSED — never a candidate. Collapsing "no stamp" with "old stamp" poisoned a ledger once already (fireScribeWeekSignals\' Number.isFinite guard)');
+  resetLedger84();
+  assert(await attempt84([wagerRow('wb5', { weekId: 'wg_demo' })]) === 0,
+    '84-16: a DEMO week posts nothing, matching every other week-scoped emitter in this app');
+  resetLedger84();
+  assert(await attempt84([{ ...wagerRow('wb6'), value: '{"c":"half a ro' }]) === 0,
+    '84-17: a wager whose envelope cannot be parsed is INERT — never rendered, never resurfaced, never guessed at');
+  resetLedger84();
+  storage.saveSetting('chatEnabled', false);
+  assert(await attempt84([wagerRow('wb7')]) === 0 && localStorage.getItem(K84) === null,
+    '84-18: chat turned OFF by the commissioner queues nothing AND leaves the ledger UNWRITTEN — it resurfaces on the first navigation after chat comes back');
+  storage.saveSetting('chatEnabled', true);
+  resetLedger84();
+  storage.clearSession();
+  assert(await attempt84([wagerRow('wb8')]) === 0,
+    '84-19: SESSION GATE — a device that merely cleared the site PIN does not post to the league');
+  storage.setSession('wg_me', false, true);
+  resetLedger84();
+  backend84.clearBackendConfig();
+  assert(await attempt84([wagerRow('wb9')]) === 0,
+    '84-20: …and neither does a device with no backend configured');
+  backend84.setBackendConfig('https://example.invalid/exec', 'tok');
+
+  // ── 17. ONE PER INVOCATION — the bound that holds even if every other one
+  //        were wrong. ──
+  resetLedger84();
+  const rows17 = [wagerRow('wz1'), wagerRow('wz2', { reviewAt: '2026-10-02T23:59:59.000Z' }), wagerRow('wz3')];
+  const q17a = await attempt84(rows17);
+  assert(q17a === 1,
+    `84-21: THREE wagers due at once queue exactly ONE post. A single nav tap can post one message, not a season's backlog — a genuine backlog drains within seconds of normal use (got ${q17a})`);
+  const q17b = await attempt84(rows17);
+  const q17c = await attempt84(rows17);
+  const q17d = await attempt84(rows17);
+  assert(q17b === 1 && q17c === 1 && q17d === 0,
+    `84-22: …and it drains one at a time, in deadline order, then stops (got ${q17b}, ${q17c}, ${q17d})`);
+  assert(JSON.parse(localStorage.getItem(K84) || '[]').length === 3,
+    '84-23: …with all three recorded in the device ledger');
+
+  // ── STRUCTURAL: no LLM is reachable from ANY wager code path (DI-202i #1). ──
+  const chatUiSrc84 = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  const scribeLinesSrc84 = await readFile(new URL('./js/scribeLines.js', import.meta.url), 'utf8');
+  const wagerFns84 = [
+    (appJsSrc.match(/export async function checkWagersDue\([\s\S]*?\n\}/) || [''])[0],
+    (appJsSrc.match(/export async function logWager\([\s\S]*?\n\}/) || [''])[0],
+    (appJsSrc.match(/export async function answerWager\([\s\S]*?\n\}/) || [''])[0],
+    (appJsSrc.match(/export async function refreshWagerCache\([\s\S]*?\n\}/) || [''])[0],
+    (appJsSrc.match(/export async function openWagerModal\([\s\S]*?\n\}/) || [''])[0],
+    (appJsSrc.match(/export function renderWagerModalBodyHTML\([\s\S]*?\n\}/) || [''])[0],
+    (chatUiSrc84.match(/function wagerActionHTML\([\s\S]*?\n\}/) || [''])[0],
+    (chatUiSrc84.match(/function wagerAckHTML\([\s\S]*?\n\}/) || [''])[0],
+    (scribeLinesSrc84.match(/export function wagerLine\([\s\S]*?\n\}/) || [''])[0],
+  ];
+  assert(wagerFns84.every(src => src.length > 0),
+    `84-24: fixture check — all nine wager functions were located across the three modules (a failed match would make the scan below vacuous)`);
+  const wagerCode84 = wagerFns84.join('\n').split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/scribeAskRemote|scribeAutonomousRemote|scribeClassifyRemote|scribeInvoke|anthropic/i.test(wagerCode84),
+    '84-25: NO LLM ANYWHERE IN THE PATH — not at log time, not at accept, not at callback. Zero marginal cost per wager and, more importantly, ZERO INVENTION SURFACE: there is no generative step in which a fabricated result could appear. Drew\'s own example ("USC isn\'t ranked by week 7") is unanswerable from app data — there is no AP poll in this app');
+  assert(!/scribeTrigger|considerAutonomous|pickLine|noteRate/.test(wagerCode84),
+    '84-26: …and none of it enters scribeTrigger()/considerAutonomous()/pickLine(): not dial-gated, no autonomous budget decremented, no league-wide cooldown stamped, and a receipt can never be dropped by the 14-day no-repeat ledger (SCRIBE.md §14, AD-50 not engaged)');
+  assert(/sendChatEvent\(/.test(wagerFns84[0]) && /sendChatEvent\(/.test(wagerFns84[1]),
+    '84-27: both posts go out through sendEvent() directly, with deterministic ids');
+  assert(!/getPicks\(|getTiebreaker|calculateSeasonStandings|calculateWeeklyResults/.test(wagerCode84),
+    '84-28: BLIND RULE, structurally: no wager code path reads a pick, a tiebreaker or a standing. The claim is a player-authored sentence from the public room, never a pick record');
+  const navSrc84 = (appJsSrc.match(/function navigateTo\(tab\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(/checkWhatsNewPostDue\(\);[\s\S]{0,900}checkWagersDue\(\)/.test(navSrc84),
+    '84-29: it rides the navigateTo() chokepoint, immediately after the other two bounded sweeps — one place every client passes through, with no new timer');
+  // RG-120 restated this one rather than dropping it. DI-202g's rule was never
+  // "this function contains no await" — it was "a NAVIGATION costs no round
+  // trip." What enforces that is the synchronous early-out: the first
+  // selectDueWager() runs against scribeMemoryCache.wagers BEFORE any await, and
+  // returns when nothing is due, which is every navigation on almost every day.
+  // 84-33 below proves it behaviourally against a counting transport.
+  {
+    const body84 = wagerFns84[0];
+    const firstAwait = body84.indexOf('await ');
+    const firstSelect = body84.indexOf('selectDueWager(');
+    assert(firstSelect > 0 && firstAwait > 0 && firstSelect < firstAwait,
+      '84-30: the CACHE selection happens before the first await — a navigation with nothing due issues no round trip, which is what DI-202g refused to leave implied');
+    assert(!/scribeMemoryTransport/.test(body84),
+      '84-30b: …and it never reaches the transport directly; the one refresh it does make goes through refreshWagerCache(), the single wager-read wrapper');
+  }
+
+  // ── 18. RG-120 — THE PRE-POST SERVER RE-READ (F5 reviewer BLOCK, 2026-09-12).
+  //
+  //   The defect: the acceptance status was read from a cache refreshed at chat
+  //   boot and after this device's OWN writes, and nowhere else. A device whose
+  //   session predated the counterparty's wagerack row posted "silent" over a
+  //   recorded acceptance — under a DETERMINISTIC id, so the wrong line wins
+  //   the server's dedupe and the right one can never be written. The same
+  //   staleness resurfaced a wager its proposer had DELETED (an AD-49 breach:
+  //   a player's delete has to stick).
+  //
+  //   These three cases drive the REAL checkWagersDue() with NO pinned rows, so
+  //   the pre-post refresh actually runs, against a wired transport that counts
+  //   its own calls.
+  {
+    const { _wireScribeMemoryTransportForTest, _restoreScribeMemoryTransportForTest,
+            _resetWagerCacheLoadedForTest } = app84;
+    let listCalls84 = 0;
+    const wireServer = (records) => {
+      listCalls84 = 0;
+      _wireScribeMemoryTransportForTest({
+        list: async () => { listCalls84++; return { ok: true, records }; },
+      });
+      _resetWagerCacheLoadedForTest();
+    };
+
+    // (a) THE ACCEPTANCE THE DEVICE NEVER SAW.
+    resetLedger84();
+    wireServer([wagerRow('wr1'), ackRow('wr1', 'accepted')]);   // the server knows
+    _setWagerCacheForTest([wagerRow('wr1')]);                    // this device does not
+    const beforeA = chat.chatStatus().outbox;
+    await checkWagersDue({ now: NOW84 });
+    const postR1 = lastWagerPost();
+    assert(chat.chatStatus().outbox - beforeA === 1 && postR1?.id === 'scribe_wagerdue_wr1',
+      '84-31: a stale cache still posts the callback exactly once');
+    assert(postR1?.meta?.status === 'accepted',
+      `84-31b: …and it reads ACCEPTED, from the server, not "silent" from the stale cache. This is RG-120: under a deterministic id the wrong line is permanent, because the right one can never be written afterwards (got ${postR1?.meta?.status})`);
+    assert(listCalls84 === 1,
+      `84-31c: …at the cost of exactly ONE list call, paid only because a post was actually about to happen (got ${listCalls84})`);
+
+    // (b) THE WAGER THE PROPOSER DELETED (AD-49).
+    resetLedger84();
+    wireServer([]);                                              // the server has nothing
+    _setWagerCacheForTest([wagerRow('wr2')]);                    // this device still holds it
+    const beforeB = chat.chatStatus().outbox;
+    await checkWagersDue({ now: NOW84 });
+    assert(chat.chatStatus().outbox - beforeB === 0,
+      '84-32: a wager the server no longer has posts NOTHING — a player deleting his own row (AD-49) must actually stop the callback, not merely stop the next device from learning about it');
+    assert(localStorage.getItem(K84) === null,
+      '84-32b: …and the ledger is left UNWRITTEN for it, so nothing is silently marked done on the strength of a row that does not exist');
+
+    // (c) THE COMMON PATH STILL COSTS NOTHING (DI-202g's actual rule).
+    resetLedger84();
+    wireServer([wagerRow('wr3')]);
+    _setWagerCacheForTest([wagerRow('wr3', { weekId: 'wg_open' })]);   // nothing due: week not locked
+    const beforeC = chat.chatStatus().outbox;
+    await checkWagersDue({ now: NOW84 });
+    assert(chat.chatStatus().outbox - beforeC === 0 && listCalls84 === 0,
+      `84-33: a navigation with nothing due issues ZERO list calls and posts nothing — the synchronous early-out is what keeps DI-202g's "no request per navigation" rule true (got ${listCalls84} calls)`);
+
+    _restoreScribeMemoryTransportForTest();
+    _resetWagerCacheLoadedForTest();
+  }
+
+  // RG-120's second half — a device that booted SIGNED OUT and signed in later
+  // never got a wager list at all (refreshWagerCache early-returns with no
+  // playerId and leaves its latch false), so no callback could ever fire on it.
+  {
+    const resyncSrc84 = (appJsSrc.match(/function resyncPlayerPreferences\(\) \{[\s\S]*?\n\}/) || [''])[0];
+    assert(resyncSrc84.length > 0,
+      '84-34: fixture check — resyncPlayerPreferences() was located in js/app.js');
+    assert(/refreshWagerCache\(\{\s*force:\s*true\s*\}\)/.test(resyncSrc84),
+      '84-34b: the app\'s ONE session chokepoint (login / logout / player switch) refreshes the wager cache — without it, signing in after a signed-out boot leaves the cache empty for the whole session');
+  }
+
+  // Restore everything this section touched.
+  backend84.clearBackendConfig();
+  if (priorCfg84?.url) backend84.setBackendConfig(priorCfg84.url, priorCfg84.token);
+  resetLedger84();
+  _setWagerCacheForTest([]);
+  storage.clearSession();
+}
+
+console.log('\n[85] N1 / FEAT-11 — lifecycle notices: coverage + dial independence (UN-204)…');
+{
+  const app85 = mods['app'];
+  const notif85 = mods['notifications'];
+  const copy85 = mods['notify-copy'] || await import('./js/notify-copy.js');
+  const { LIFECYCLE_EVENTS, CATEGORY_OF_EVENT } = notif85;
+
+  // ── 85a. EVERY LIFECYCLE EVENT HAS A DECIDED DELIVERY SURFACE ─────────────
+  //
+  // This is the guard for the class of defect N1 exists to fix. Before it, an
+  // event's delivery surface was an ACCIDENT of which pipeline happened to
+  // build it — which is how "locking soon" ended up in the bell while the pick
+  // reveal ended up as a forced in-app toast. The rule now: for every key in
+  // LIFECYCLE_EVENTS, the surface is either a chat post (a named emitter in
+  // js/app.js) or an explicitly listed push-only exception with a reason. A new
+  // event added to the vocabulary with neither fails here, on the day it is
+  // written, rather than on the day a player notices it went nowhere.
+  // Comment BODIES are blanked (line/column structure preserved) before every
+  // scan below, so prose describing a rule can never satisfy it — the RG-27
+  // false-coverage shape. These sections document themselves heavily, and
+  // several of them name the exact identifiers being scanned FOR.
+  const blank85 = src => src
+    .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+    .replace(/(^|[^:'"\\/])\/\/[^\n]*/g, (m, pre) => pre + ' '.repeat(m.length - pre.length));
+  const appCode85 = blank85(appJsSrc);
+  const lifecycleSrc85 = (appJsSrc.match(/export function emitLifecyclePost\([\s\S]*?\n\}/) || [''])[0];
+  const lifecycleCode85 = blank85(lifecycleSrc85);
+  assert(lifecycleSrc85.length > 0,
+    '85-1: fixture check — emitLifecyclePost() was located in js/app.js (a failed match would make every scan below vacuous)');
+
+  // Each entry names the emitter that posts it, or the reason it does not.
+  const SURFACE_85 = {
+    PICKS_OPENED:              { emitter: 'postPicksOpenedNotice' },
+    PICKS_LOCKED:              { emitter: 'postPicksLockedNotice' },
+    RESULTS_FINALIZED:         { emitter: 'postResultsFinalizedNotice' },
+    OBLIGATION_CREATED:        { emitter: 'postObligationCreatedNotice' },
+    OBLIGATION_SETTLED:        { emitter: 'postObligationSettledNotice' },
+    COMMISSIONER_ANNOUNCEMENT: { emitter: 'postCommissionerAnnouncement' },
+    // Server-authored: no browser is open at 7am, so scanReminders()
+    // (backend/Code.gs) writes this chat row itself under the SAME deterministic
+    // id, marked meta.origin:'server' so the client relay does not push it twice.
+    PICKS_LOCKING_SOON:        { serverEmitted: true },
+    // The ONE event with no chat row, stated rather than hidden (ruling O6): it
+    // is an action item addressed to ONE person, not a league notice. Up to 18
+    // posts a week naming individual non-submitters is a public roll-call. Its
+    // push deep-links to Picks — the thing you have to do — not to the room.
+    PICKS_REMINDER:            { pushOnly: 'action item addressed to one player; deep-links to Picks' },
+    // Not a lifecycle notice at all — it IS the chat.
+    CHAT_MESSAGE_CREATED:      { isChatItself: true },
+  };
+  const uncovered85 = Object.keys(LIFECYCLE_EVENTS).filter(k => !SURFACE_85[k]);
+  assert(uncovered85.length === 0,
+    `85-2: every LIFECYCLE_EVENTS key has a decided delivery surface — a chat mapping, or an explicitly reasoned push-only/server exception (uncovered: ${uncovered85.join(', ') || 'none'})`);
+  const stale85 = Object.keys(SURFACE_85).filter(k => !LIFECYCLE_EVENTS[k]);
+  assert(stale85.length === 0,
+    `85-3: …and this table names no event that no longer exists — a stale row here is a standing permission attached to a name (stale: ${stale85.join(', ') || 'none'})`);
+
+  const missingEmitters85 = Object.entries(SURFACE_85)
+    .filter(([, v]) => v.emitter)
+    .filter(([, v]) => !new RegExp(`export function ${v.emitter}\\(`).test(appJsSrc))
+    .map(([k]) => k);
+  assert(missingEmitters85.length === 0,
+    `85-4: every named chat emitter actually exists in js/app.js — the table cannot claim coverage a function does not provide (missing: ${missingEmitters85.join(', ') || 'none'})`);
+
+  // The server half must be real too, or PICKS_LOCKING_SOON's "covered" is a lie.
+  const codeGs85 = await readFile(new URL('./backend/Code.gs', import.meta.url), 'utf8');
+  const scanRemindersSrc85 = (codeGs85.match(/function scanReminders\(\)[\s\S]*?\n\}/) || [''])[0];
+  assert(scanRemindersSrc85.length > 0, '85-5: fixture check — scanReminders() was located in backend/Code.gs');
+  assert(/chatAppend\(/.test(scanRemindersSrc85) && /sys_lc_PICKS_LOCKING_SOON_/.test(scanRemindersSrc85),
+    "85-6: scanReminders() writes the locking-soon chat row ITSELF, under the same deterministic sys_lc_<EVENT>_<weekId> id — a client-emitted row would only appear when someone next opened the app, i.e. AFTER lock");
+  assert(/origin:\s*'server'/.test(scanRemindersSrc85),
+    "85-7: …marked meta.origin:'server', which is what stops the client relay pushing it a second time (the scan already pushed it through its own master×category gate)");
+
+  // ── 85b. NOT DIAL-GATED, SPENDS NO AUTONOMOUS BUDGET (SCRIBE.md §14) ──────
+  const emitterFns85 = [lifecycleSrc85].concat(
+    Object.values(SURFACE_85).filter(v => v.emitter).map(v =>
+      (appJsSrc.match(new RegExp(`export function ${v.emitter}\\([\\s\\S]*?\\n\\}`)) || [''])[0]),
+    [(appJsSrc.match(/export function checkLifecyclePostDue\([\s\S]*?\n\}/) || [''])[0]]);
+  assert(emitterFns85.every(src => src.length > 0),
+    '85-8: fixture check — every lifecycle emitter plus the nav sweep was located (a failed match would make the scan below vacuous)');
+  const emitterCode85 = emitterFns85.join('\n').split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/scribeTrigger|considerAutonomous|pickLine|noteRate/.test(emitterCode85),
+    '85-9: NO lifecycle emitter reaches scribeTrigger()/considerAutonomous()/pickLine()/noteRate(): not dial-gated, no autonomous budget decremented, no league-wide cooldown stamped. A commissioner on Quiet is not saying "don\'t tell me the week locked" (SCRIBE.md §14, AD-50 not engaged)');
+  assert(!/scribeAskRemote|scribeAutonomousRemote|scribeClassifyRemote|anthropic/i.test(emitterCode85),
+    '85-10: …and no LLM is reachable from any of it — every body is template substitution over a fact object, so there is no generative step in which a fabricated fact could appear');
+  assert(!/getPicks\(|getTiebreaker|selectedTeam|extraPoint/.test(emitterCode85),
+    '85-11: BLIND RULE, structurally: no lifecycle emitter reads a pick, a tiebreaker or an Extra-Point value. Bodies are built by buildCopy(), which is deny-by-default on pick content');
+
+  // ── 85c. THE SHAPE (DI-N1) ────────────────────────────────────────────────
+  assert(/type:\s*'message'/.test(lifecycleSrc85),
+    "85-12: lifecycle posts are type:'message' — the ONLY type _scanNewChatMessages() relays. Every legacy sys_* emitter is type:'system' and so could never push, which is the structural half of BUG-10");
+  assert(/notify:\s*true/.test(lifecycleSrc85), '85-13: …and notify:true, so they badge and relay like any other message');
+  assert(/gameTag:\s*''/.test(lifecycleSrc85),
+    '85-14: …and gameTag:\'\' — the main room, always. One chat key, one room (AD-09/AD-17): a lifecycle notice is a FIELD on a message, never a channel');
+  assert(/kind:\s*'lifecycle'/.test(lifecycleSrc85), '85-15: …carrying meta.kind:\'lifecycle\', which is what the relay\'s category gate keys off');
+  assert(app85.lifecycleChatId('PICKS_LOCKED', 'wk_9') === 'sys_lc_PICKS_LOCKED_wk_9',
+    `85-16: the id is the deterministic AD-11 shape sys_lc_<EVENT>_<scopeId> (got ${app85.lifecycleChatId('PICKS_LOCKED', 'wk_9')})`);
+  assert(app85.lifecycleChatId('PICKS_LOCKED', 'wk 9/x') === 'sys_lc_PICKS_LOCKED_wk_9_x',
+    '85-17: …with the scope id sanitised the same way checkWhatsNewPostDue() sanitises a version — a stray character must not mint a SECOND row for the same event');
+  assert(!/Date\.now\(\)|Math\.random|crypto\.randomUUID/.test(lifecycleCode85),
+    '85-18: nothing time- or random-seeded reaches the id or the copy selection: six devices detecting one transition must build the same id AND the same words, or the five losers flash different text before the server dedupe resolves');
+
+  // ── 85d. RETIRED SURFACES STAY RETIRED ───────────────────────────────────
+  assert(!/RESULTS_FINALIZED_YOU_WON/.test(blank85(await readFile(new URL('./js/notify-copy.js', import.meta.url), 'utf8'))),
+    '85-19: RESULTS_FINALIZED_YOU_WON is gone from js/notify-copy.js entirely — pool, allow-list, fallback and title together. Leaving any one behind would let a future caller resurrect "you took it" into a room where five of the six readers did not win (ruling O3)');
+  assert(copy85._knownEvents().indexOf('RESULTS_FINALIZED_YOU_WON') === -1,
+    '85-20: …and the module no longer reports it as a known event');
+  for (const ev of ['OBLIGATION_CREATED', 'OBLIGATION_SETTLED']) {
+    const keys = copy85.ALLOWED_META_KEYS[ev] || [];
+    assert(['weekN', 'debtorName', 'creditorName', 'obligationLabel'].every(k => keys.includes(k)),
+      `85-21: ${ev} allows all four league-wide facts — buildCopy() drops every fact outside the event's own list BEFORE substitution, so an un-widened list silently produces the flat fallback forever instead of failing loudly`);
+    const out = copy85.buildCopy(ev, { weekN: 3, debtorName: 'Kevin', creditorName: 'Drew', obligationLabel: '1 drink' }, `dk_${ev}`);
+    assert(out.scribeVoiced === true && out.body.includes('Kevin') && out.body.includes('Drew'),
+      `85-22: …and it renders a SCRIBE line naming BOTH parties (ruling O4 — an obligation is already public on Standings), not the flat fallback (got "${out.body}")`);
+    assert(!/\byou\b|\byour\b|You're/i.test(out.body),
+      `85-23: …with no second-person wording left anywhere in the ${ev} pool: it is broadcast to six people, five of whom are not in it (got "${out.body}")`);
+  }
+
+  // ── 85e. THE BELL IS SETTINGS, AND CARRIES NO LIST ────────────────────────
+  const indexSrc85 = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  assert(/aria-label="Notification settings"/.test(indexSrc85),
+    '85-24: the bell\'s aria-label says "Notification settings" — the control now opens settings, and a screen reader must not still announce a notification list');
+  assert(!/notif-bell-badge/.test(indexSrc85),
+    '85-25: the bell\'s unread badge span is gone from index.html — the chat pill is the app\'s one unread counter now (Drew: "We can keep the badges on the chat icon")');
+  assert(!/notif-bell-badge/.test(appCode85),
+    '85-26: …and nothing in js/app.js writes a count to it any more');
+  assert(!/getNotificationsForPlayer|markNotificationRead|unreadLifecycleCount|pollNotifyLog/.test(appCode85),
+    '85-27: js/app.js no longer reads the stored notification list, the read state, or the server notify log as EXECUTABLE code — DI-N5 retires the Notification Center list. The data is untouched on the Sheet; nothing renders it');
+  assert(/unreadLifecycleCount/.test(appJsSrc) && !/unreadLifecycleCount/.test(appCode85)
+         && appCode85.length === appJsSrc.length,
+    '85-28: non-vacuity — the comment blanker is genuinely blanking (js/app.js DOES still mention unreadLifecycleCount in prose, and does not in code) and preserves length, so 85-26/85-27 cannot be passing because the scan matched nothing at all');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

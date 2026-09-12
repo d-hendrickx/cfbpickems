@@ -69,6 +69,7 @@ const S = {
   selfId: null,
   unsub: null,
   forceTick: null,           // DI-168 — set alongside S.unsub by _subscribeNow(); see forceRefresh()
+  wake: null,                // BUG-12 — likewise; the event-driven (push tap / foreground push / resume) forced fetch. See wakeChat()
   subs: new Set(),
   backfillLow: null,
   // BUG-C (2026-09-11) — has the transport reached the server's TRUE head at
@@ -1006,6 +1007,7 @@ function _subscribeNow() {
   // call it as `S.unsub()`); S.forceTick is new, DI-168's addition.
   S.unsub = sub.unsubscribe;
   S.forceTick = sub.forceTick;
+  S.wake = sub.wake;          // BUG-12 — the event-driven fast path, same lifecycle as forceTick
 }
 
 /**
@@ -1030,6 +1032,37 @@ export async function forceRefresh() {
   const ok = await S.forceTick();
   if (ok === null) return;              // coalesced no-op — see doc comment above
   if (!ok) throw new Error('Chat refresh failed');
+}
+
+/**
+ * BUG-12 (2026-09-12) — Drew: "When I receive a push notification it doesn't
+ * show up in the chat for at least 30 seconds after the notification. When I
+ * click the push, I should be able to see the message in the chat."
+ *
+ * The EVENT-driven sibling of forceRefresh(): same transport, same tick(), one
+ * different caller. app.js wires it to the three moments that mean "a message
+ * exists and the player is looking" — the notification deep link, the
+ * foreground push hook, and the transport's own resume events (which call
+ * wake() directly, since they fire inside the transport).
+ *
+ * Three deliberate differences from forceRefresh():
+ *   • it never throws. A failed wake is not a player action awaiting a verdict;
+ *     nothing renders Checking/Failed for it, and the scheduled poll is still
+ *     running underneath. The deep link must navigate either way.
+ *   • it is BOUNDED by the transport's wake window (chatTransport.js's
+ *     WAKE_MIN_GAP_MS) — a flapping tab cannot hammer the backend.
+ *   • it resolves only once the fetch it is answerable for has completed, so
+ *     app.js's deepLinkTo() can await it before scrolling to a message that
+ *     may not have been in the room when the tap happened.
+ *
+ * Returns true when a forced round trip actually succeeded, false otherwise
+ * (not subscribed, chat off, the tick failed, or the subscription was torn
+ * down while the wake was deferred). Callers use it as a hint, never a gate.
+ */
+export async function wakeChat() {
+  if (!S.wake) return false;            // not subscribed (chat off, or not yet booted) — nothing to wake
+  try { return (await S.wake()) === true; }
+  catch { return false; }
 }
 
 /**
@@ -1146,7 +1179,7 @@ export function initChat(selfId) {
     if (!S.unsub) _subscribeNow();
     flushOutbox();
   }
-  else if (S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; }
+  else if (S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; S.wake = null; }
 }
 
 /**
@@ -1160,7 +1193,7 @@ export function initChat(selfId) {
 export function refreshChatEnabled() {
   const enabled = isChatEnabled();
   if (enabled && !S.unsub) { _subscribeNow(); flushOutbox(); }
-  else if (!enabled && S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; }
+  else if (!enabled && S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; S.wake = null; }
 }
 
 export async function backfill(limit = 100) {
@@ -1454,6 +1487,7 @@ export function chatDigest(startMs, endMs, ctx = {}) {
 export function _resetForTest() {
   if (S.unsub) { S.unsub(); S.unsub = null; }             // no dangling timers across test sections
   S.forceTick = null;                                     // DI-168 — same lifecycle as S.unsub, above
+  S.wake = null;                                          // BUG-12 — same lifecycle again
   S.items.clear(); S.buffered.clear(); S.head = 0; S.outbox = []; S.failed.clear();
   S.offline = false; S.staleDeployment = false;
   S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;

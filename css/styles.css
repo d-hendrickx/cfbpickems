@@ -177,6 +177,13 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .team-rank{font-size:.7rem;color:var(--gold);font-weight:700;font-family:'Oswald',sans-serif}
 .team-name{font-family:'Oswald',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text-primary);line-height:1.2}
 .team-conf{font-size:.7rem;color:var(--text-muted)}
+/* BUG-4 — "your pick" marker on the READ-ONLY (submitted) game card. The pick
+   buttons that carry .selected are not rendered there, so the matchup row
+   carries the state instead. Same maroon selected-state language as
+   .pick-btn.selected, one weight down: this is a record of a choice, not a
+   tappable control, so it must not read as a button. */
+.team.team-picked{background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:var(--btn-radius);padding:6px 4px}
+.team-pick-flag{font-family:'Oswald',sans-serif;font-size:.68rem;font-weight:700;color:var(--maroon);text-transform:uppercase;letter-spacing:.04em}
 .vs-divider{font-family:'Oswald',sans-serif;font-size:.85rem;color:var(--text-muted);font-weight:500}
 .spread-row{display:flex;align-items:center;justify-content:center;gap:8px;font-size:.8rem;border-top:1px solid var(--border);padding-top:10px}
 .spread-badge{background:var(--maroon-pale);color:var(--maroon);font-weight:700;font-family:'Oswald',sans-serif;font-size:.85rem;padding:2px 10px;border-radius:20px;border:1px solid var(--maroon-tint)}
@@ -517,9 +524,21 @@ body[data-tab="chat"] .app-header{display:none}
 .tz-btn{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);color:rgba(255,255,255,.7);font-family:'Oswald',sans-serif;font-size:.62rem;font-weight:700;letter-spacing:.04em;padding:3px 7px;border-radius:6px;cursor:pointer;transition:all .15s}
 .tz-btn.active,.tz-btn:hover{background:var(--gold);color:#1C1410;border-color:var(--gold)}
 
-/* Groups A/B (2026-09-10, DI-A3) — bell icon, .header-right, between
-   #header-identity and #sync-badge. Same 40px tap-target floor as
-   .header-identity/.header-feedback-icon right next to it (CONVENTIONS #17). */
+/* Bell icon, .header-right, between #header-identity and #sync-badge. Same
+   40px tap-target floor as .header-identity/.header-feedback-icon right next
+   to it (CONVENTIONS #17: 40 is the floor, 44 the ideal).
+
+   N1 / DI-N5 (2026-09-12) — TAP TARGET VERIFIED AFTER THE BADGE WAS REMOVED,
+   and the box is unchanged: .notif-bell-badge was `position:absolute`, so it
+   never contributed to the button's layout box in the first place. The button
+   is still 40x40 minimum, which is what every sibling in this header strip is;
+   raising only the bell to 44 would make it the tallest item in a flex row and
+   grow the whole header by 4px, which is a header change, not a bell change.
+   Flagged for Drew in the N1 handoff rather than done unilaterally.
+
+   .notif-row* below is now UNUSED — DI-N5 retired the Notification Center list.
+   Kept, not deleted, for the same reason the stored records are kept: nothing
+   about this change is destructive, and the rules are three lines. */
 .notif-bell-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;
   background:none;border:none;cursor:pointer;padding:8px 6px;min-height:40px;min-width:40px;
   font-size:1.1rem;line-height:1;-webkit-tap-highlight-color:transparent}
@@ -966,6 +985,27 @@ label[for="week-show-history"],label:has(#week-show-history){
    already caps this at ~14 chars; white-space:nowrap is the defensive belt
    ensuring the chip itself never wraps to a second line (UN-119 density). */
 .dc-status.dc-live-detail{background:transparent;color:var(--maroon-mid);white-space:nowrap}
+
+/* FEAT-7 (UN-174) — red-zone mark. One visual, two surfaces:
+   .rz-mark        inline span inside the matrix's .game-info-meta flex-wrap row
+                   and on its own line in the Picks card's live block
+   .dc-redzone     the compact layout's own chip, never merged into another chip
+   Both tokens are declared once in :root and are NOT overridden by any of the
+   seven themes, so the mark is identical in all seven by construction.
+   --loss on --live-bg measures 5.91:1 (AA with margin). Do NOT substitute
+   var(--live) for the text colour: 4.41:1, which FAILS AA (the RG-42/RG-44
+   lesson, applied at design time). No hex literals here, deliberately.
+   No animation of its own — the pulsing .live-dot is already in the same row,
+   and a second pulsing element beside it is noise; that also means the
+   prefers-reduced-motion block needs no new rule. Not tappable, no hover, no
+   title attribute: the meaning is carried by the visible text plus aria-label
+   plus the conditional legend under the card. */
+.rz-mark{display:inline-flex;align-items:center;font-family:'Oswald',sans-serif;font-size:.66rem;
+  font-weight:600;letter-spacing:.03em;padding:1px 7px;border-radius:10px;
+  background:var(--live-bg);color:var(--loss);white-space:nowrap}
+.dc-status.dc-redzone{background:var(--live-bg);color:var(--loss);white-space:nowrap}
+.rz-line{margin-top:4px}
+.rz-legend{margin-top:6px}
 
 /* Player chips inside a compact game card */
 .dc-chips{display:flex;flex-wrap:wrap;gap:6px}
@@ -1593,6 +1633,31 @@ label[for="week-show-history"],label:has(#week-show-history){
    thing across every surface. Presentation only: the value is absent from the
    markup, not hidden with CSS. */
 .ep-admin-guess-blind strong{color:var(--text-muted);font-family:'Courier New',monospace;letter-spacing:.1em;font-weight:400}
+
+/* FEAT-9 (UN-176) — 🎯 Extra Point Ledger on Standings. Reuses .ep-row/.ep-name
+   for LAYOUT only so the card looks like the EP results block players already
+   know from the recap; it deliberately does NOT reuse the coloured
+   .ep-{outcome} modifiers (those carry three hardcoded hex values that predate
+   this feature — surfaced to §6, not touched here). Nothing new below uses a
+   hex literal. Rows are not interactive; the 44px floor is here so the card
+   stays scannable one-handed, not because anything is tappable. */
+.ep-ledger-row{align-items:center;min-height:44px}
+.ep-ledger-right{display:flex;flex-direction:column;align-items:flex-end;gap:2px;text-align:right}
+.ep-ledger-wins{font-family:'Oswald',sans-serif;font-weight:700;font-size:1.05rem;color:var(--text-primary);line-height:1.1}
+.ep-ledger-detail{white-space:normal}
+/* The "Weeks won" column heading is always in the markup for screen readers
+   and is revealed visually at >=600px, where there is room for it. */
+.ep-ledger-head{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+  clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}
+@media (min-width:600px){
+  /* One line at tablet width and up: the detail sits to the LEFT of the win
+     count instead of under it. No extra data is revealed. */
+  .ep-ledger-right{flex-direction:row;align-items:baseline;gap:10px}
+  .ep-ledger-head{position:static;width:auto;height:auto;margin:0;padding:5px 2px;overflow:visible;
+    clip:auto;clip-path:none;border-bottom:1px dashed var(--bg-input)}
+  .ep-ledger-head .ep-ledger-wins{font-size:.7rem;font-weight:600;color:var(--text-muted);
+    text-transform:uppercase;letter-spacing:.04em}
+}
 
 /* ── FAQ lifecycle + permissions ── */
 .faq-lifecycle{display:flex;flex-direction:column;gap:10px;margin-top:6px}
@@ -2412,4 +2477,229 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 @media (min-width:600px){
   .scribe-freq-opt{flex-direction:row;align-items:baseline;gap:10px}
   .scribe-freq-label{flex:0 0 92px}
+}
+
+/* ═══ FEAT-8a / UN-179 (2026-09-12) — per-player section order ═══════════════
+   Drew: "Each box ... should be able to be moved around like iphone apps. It
+   shouldnt move accidentally scrolling, only with intentionality." The
+   intentionality is the MODE, not a gesture — nothing below responds to touch
+   movement at all, so there is no scroll-adjacent gesture that can misfire.
+
+   `.layout-section` is the layout-neutral wrapper each reorderable block gets.
+   DI-179c named it `.page-section`; that class is ALREADY the six top-level
+   page containers in index.html (`.page-section{display:none}` at :100, with
+   navigateTo() toggling `.active` on every match), so reusing the name would
+   have hidden every section on both pages. Class name only — behaviour and the
+   persisted `data-section-id` values are exactly as the DI specifies.
+
+   NO margin/padding/border/background here on purpose: the children already
+   carry their own `mb-md`, so a player who never opens the editor sees a page
+   that is visually identical to v0.21.0.
+   Colors: only var(--maroon)/(--maroon-tint)/(--bg-input)/(--text-muted) — all
+   seven themes swap, no hex (CONVENTIONS #13). Icons are plain unicode
+   ⇅ ▲ ▼ ↺ ✓ (CONVENTIONS #16). No `title` attributes anywhere — tooltips do
+   not fire on touch. Nothing animates, so there is no reduced-motion story. */
+.layout-section{display:block}
+
+/* The page title bar becomes a flex row so the control sits opposite the
+   heading. SCOPED to the two pages that have the control — `.section-header`
+   itself is used on several other pages and is deliberately untouched. */
+.section-header-layout{display:flex;justify-content:space-between;align-items:flex-start;
+  flex-wrap:wrap;gap:8px}
+.section-header-layout .section-header-main{min-width:0}
+/* CONVENTIONS #17 — `.btn-sm`'s base min-height is 34px, under the 40px floor.
+   Scoped override on these two classes, never a global `.btn-sm` change, which
+   would reflow every compact row in the app (same narrow approach
+   #notif-priming-btn and #chat-search-btn already take). */
+.layout-edit-btn,.layout-reset-btn{min-height:44px;min-width:44px;flex-shrink:0}
+
+.layout-edit-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  margin-bottom:14px;padding:10px 12px;background:var(--bg-input);
+  border-left:3px solid var(--maroon);border-radius:var(--card-radius)}
+.layout-edit-hint{flex:1 1 200px;margin:0;font-size:.76rem;line-height:1.4;
+  color:var(--text-secondary)}
+/* The aria-live region is visually hidden, not display:none — a display:none
+   region is not announced. */
+.layout-live{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);
+  clip-path:inset(50%);white-space:nowrap}
+
+/* Edit mode. The dashed outline reuses .col-drop-target's existing "this is
+   rearrangeable" vocabulary (that rule is at line ~1172 of this file, NOT 1144
+   as DI-179h said) so the cue already means something in this app.
+   CORRECTED 2026-09-12 (F2 review): this shipped as var(--maroon-tint), which
+   measures 1.2-1.4:1 against a white card in all seven themes — the outline was
+   there and nobody could see it. var(--maroon-light) clears 3:1 in all seven and
+   is the token .col-drop-target itself uses, so "reuses the same vocabulary" is
+   now true of the colour as well as the dash. */
+.layout-editing .layout-section{outline:2px dashed var(--maroon-light);outline-offset:3px;
+  border-radius:8px;margin-bottom:18px}
+/* The bar sits at the TOP of each section so a section can be moved without
+   first scrolling past its whole body. */
+.section-move-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;
+  padding:2px 4px}
+.section-move-label{flex:1;min-width:0;font-family:'Oswald',sans-serif;font-size:.74rem;
+  font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--maroon);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.section-move-actions{display:flex;gap:6px;flex-shrink:0}
+/* 44×44 — the ideal, not the 40px floor. These sit directly above body text on
+   a phone, which is exactly where an undersized target gets missed (RG-34). */
+.section-move-btn{width:44px;height:44px;min-width:44px;min-height:44px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--bg-input);border:1.5px solid var(--border);
+  border-radius:var(--btn-radius);color:var(--maroon);font-size:.95rem;
+  line-height:1;cursor:pointer}
+.section-move-btn:hover:not(:disabled){border-color:var(--maroon)}
+/* Disabled at the ends, never hidden — a control that disappears reflows the
+   row under the thumb mid-tap. */
+.section-move-btn:disabled{opacity:.35;cursor:default;color:var(--text-muted)}
+
+@media (min-width:600px){
+  /* DI-179h asked for the move bar to sit INLINE on each section's own header
+     row on desktop, to recover ~40px of vertical space per section. Built as a
+     PARTIAL, deliberately: each of the ten sections owns a different header
+     (.card-header, .admin-section-title, a <details><summary>, or none at all),
+     so there is no generic way for a wrapper-level bar to join a header it does
+     not own. The honest options were an absolutely-positioned overlay — which
+     on `dash-picks` would land on top of the Standard/Compact toggle that
+     already occupies that corner — or this: the bar keeps its own row and
+     tightens, right-aligned so it reads as chrome rather than content. The
+     vertical saving is partial. Reported rather than faked.
+     Button sizes are unchanged; 44px is a floor, not a phone special case. */
+  .section-move-bar{justify-content:flex-end;gap:10px;margin-bottom:2px;padding:0 4px}
+  .section-move-label{flex:0 1 auto}
+}
+
+/* ── FEAT-3 / DI-200f + DI-201b (UN-200/UN-201, 2026-09-12) ────────────────
+   The 📋 affordance on SCRIBE's release post, and the Rules-tab history.
+
+   `.btn.btn-ghost.btn-sm` is reused for the button (extend, don't invent), and
+   .btn-sm's 34px base is under both the 40px CONVENTIONS #17 floor and this
+   control's own 44px target — so it gets the SAME scoped override precedent as
+   #notif-priming-btn and #chat-refresh-btn above, rather than raising .btn-sm
+   globally and reflowing every compact row in the app. */
+.chat-whatsnew-row{margin-top:6px}
+.chat-whatsnew-link{min-height:44px;min-width:44px}
+
+/* One <details> per release. The summary row IS the tap target — its siblings
+   in .rules-list are text, this is not — so it carries the 44px floor itself
+   rather than relying on its line box. */
+.release-entry{border-top:1px solid var(--border)}
+.release-entry:first-of-type{border-top:none}
+.release-summary{display:flex;align-items:center;flex-wrap:wrap;gap:8px;
+  min-height:44px;padding:4px 0;cursor:pointer;font-family:'Oswald',sans-serif;
+  font-size:.82rem;font-weight:600;letter-spacing:.03em;color:var(--maroon);
+  list-style:none}
+/* F3 review finding 3 (2026-09-12) — the SAME three-line disclosure treatment
+   .avail-group-header uses (≈861-864): the default OS triangle is suppressed and
+   replaced with a ▾ that rotates to ▸ when the parent <details> is closed. Every
+   OTHER collapsible in this app announces its own state that way; this one shipped
+   without it, so a release row read as a heading rather than as something you can
+   open. Scoped to .release-summary — the Picks card's own summary is untouched. */
+.release-summary::-webkit-details-marker{display:none}
+.release-summary::before{content:'▾';font-size:.7rem;margin-right:2px;opacity:.55;transition:transform .15s ease}
+.release-entry:not([open]) .release-summary::before{transform:rotate(-90deg)}
+.release-counts{font-family:inherit;font-weight:400}
+.release-notes-foot{margin-top:10px}
+
+/* ── FEAT-2 / DI-175b (UN-175, 2026-09-12) — 🙋 Request a Game ──────────────
+   The Rules-page player card and the Comm → Games commissioner card. Phone
+   first; the ONE @media (min-width:600px) block at the end is enhancement.
+
+   TAP TARGETS: `.btn-sm` bases at 34px, which is under the 40px CONVENTIONS
+   #17 floor and well under this card's 44px target, so every control here
+   takes a SCOPED override — the #notif-priming-btn / .chat-whatsnew-link
+   precedent — rather than raising .btn-sm globally and reflowing every
+   compact row in the app.
+
+   No hex literals: every colour is an existing :root token, so all seven
+   themes are covered without adding a variable. */
+.gr-card-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
+.gr-title{color:var(--maroon);font-size:.95rem;margin:0}
+.gr-count-chip{border:1px solid var(--gold);background:var(--gold-pale);color:var(--gold-text);
+  border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;letter-spacing:.02em}
+.gr-day{margin-bottom:10px}
+.gr-day-row{display:flex;flex-direction:column;gap:8px}
+.gr-date-input{min-height:44px}
+.gr-find-btn{min-height:44px}
+.gr-cta{min-height:44px}
+.gr-sat-chips{display:flex;gap:8px;overflow-x:auto;margin-top:8px;padding-bottom:2px;-webkit-overflow-scrolling:touch}
+.gr-sat-chip{flex:0 0 auto;min-height:44px;border:1px solid var(--border-strong);background:var(--bg-card);
+  border-radius:999px;padding:6px 14px;font-size:.78rem;font-weight:600;color:var(--text-secondary);
+  cursor:pointer;box-sizing:border-box}
+.gr-sat-chip:active{background:var(--maroon-pale);border-color:var(--maroon-light);color:var(--maroon)}
+.gr-check-row{display:flex;align-items:center;gap:10px;min-height:44px;cursor:pointer;
+  font-size:.78rem;color:var(--text-secondary);margin:4px 0}
+.gr-check-text{display:flex;flex-direction:column;gap:1px}
+.gr-check-help{font-weight:400}
+.gr-filter{margin:4px 0 8px;min-height:44px}
+.gr-cap-note{color:var(--loss);background:var(--loss-bg);border-radius:var(--btn-radius);padding:6px 10px;margin:0 0 8px}
+.gr-result-list,.gr-mine{display:flex;flex-direction:column}
+.gr-row,.gr-mine-row,.gr-comm-row{display:flex;align-items:center;gap:10px;
+  padding:8px 0;border-top:1px solid var(--border)}
+.gr-row:first-child,.gr-comm-row:first-child{border-top:none}
+.gr-row-main{flex:1 1 auto;min-width:0}
+.gr-row-matchup{font-weight:600;font-size:.82rem;color:var(--text-primary)}
+.gr-row-time,.gr-row-note{margin-top:2px}
+.gr-row-action{flex:0 0 auto;display:flex;align-items:center;gap:8px}
+.gr-row-action .btn-sm{min-height:44px}
+.gr-state-chip{display:inline-flex;align-items:center;min-height:44px;padding:0 10px;
+  font-size:.72rem;font-weight:600;color:var(--text-muted)}
+.gr-state-done{color:var(--win)}
+.gr-status-chip{display:inline-flex;align-items:center;border-radius:999px;padding:3px 9px;
+  font-size:.68rem;font-weight:700;border:1px solid var(--border-strong);
+  background:var(--bg-card-alt);color:var(--text-secondary)}
+.gr-status-onSlate{border-color:var(--win);background:var(--win-bg);color:var(--win)}
+.gr-status-withdrawn{color:var(--text-muted)}
+.gr-league{margin-top:10px;border-top:1px solid var(--border)}
+.gr-league-summary,.gr-comm-summary{display:flex;align-items:center;min-height:44px;cursor:pointer;
+  font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.03em;color:var(--maroon)}
+.gr-league-row{font-size:.78rem;color:var(--text-secondary);padding:5px 0;border-top:1px solid var(--border)}
+.gr-league-row:first-child{border-top:none}
+/* The count-only marker on the three existing Games-tab render paths. Names
+   live as visible text in the Player Requests card — never behind a tooltip,
+   which does not fire on touch. */
+.gr-chip{display:inline-flex;align-items:center;gap:2px;border-radius:999px;padding:1px 7px;margin-left:6px;
+  font-size:.66rem;font-weight:700;border:1px solid var(--gold);background:var(--gold-pale);color:var(--gold-text)}
+.gr-comm-details{border-top:1px solid var(--border);margin-top:8px}
+.gr-add-btn{min-height:44px}
+
+@media (min-width:600px){
+  /* The date field and Find button share a row; a result row collapses to one
+     baseline. Nothing else changes, and no new breakpoint is introduced. */
+  .gr-day-row{flex-direction:row;align-items:center}
+  .gr-date-input{flex:1 1 auto}
+  .gr-row-main{display:flex;align-items:baseline;gap:12px}
+  .gr-row-time,.gr-row-note{margin-top:0}
+}
+
+/* ── FEAT-5 / DI-202b, DI-202f (UN-202, 2026-09-12) — 🤝 wager memory ────────
+   The logging modal and the accept/decline controls on SCRIBE's acknowledgment
+   post. Phone first; the ONE @media (min-width:600px) block at the end is
+   enhancement, and it is the existing breakpoint, not a new one.
+
+   TAP TARGETS: `.btn-sm` bases at 34px — under the CONVENTIONS #17 floor and
+   well under this feature's 44px target — so every control here takes a SCOPED
+   override (the #notif-priming-btn / .chat-whatsnew-link / .gr-add-btn
+   precedent) rather than raising .btn-sm globally and reflowing every compact
+   row in the app.
+
+   No hex literals: every colour is an existing :root token, so all seven themes
+   are covered without adding a variable. */
+.chat-wager-row{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:6px}
+.chat-wager-ack{min-height:44px;min-width:44px}
+.chat-wager-note{color:var(--text-muted)}
+
+.wager-body .form-group{margin-bottom:12px}
+.wager-claim-input{min-height:72px;resize:vertical}
+.wager-counter{text-align:right;margin-top:2px}
+.wager-select{min-height:44px}
+.wager-error{color:var(--loss);margin-top:4px}
+/* Stacked full-width at 375px — the phone case — and side by side at the
+   existing 600px breakpoint. Both ≥44px either way. */
+.wager-actions{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.wager-btn{min-height:44px;width:100%}
+
+@media (min-width:600px){
+  .wager-actions{flex-direction:row;justify-content:flex-end}
+  .wager-btn{width:auto;min-width:120px}
 }

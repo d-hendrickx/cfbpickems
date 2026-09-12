@@ -45,8 +45,9 @@
  *   (b) `<x>.spread` / `<x>.lockedSpread` READ — carries an ALREADY-resolved
  *       sign forward; derives nothing new. (applyWeekStatusChange() and
  *       tickAutoTransition() freezing lockedSpread from the live spread;
- *       renderAvailableGamesList() carrying an ESPN-resolved spread into an
- *       add-to-slate payload.)
+ *       availAddPayloadJSON() carrying an ESPN-resolved spread into an
+ *       add-to-slate payload — extracted out of renderAvailableGamesList()
+ *       by F4, 2026-09-12, so both "+ Add" buttons share one payload.)
  *   (c) THE FAVORITE-MARGIN LADDER — the commissioner's game modal
  *       (showGameModal): CLAUDE.md's mandated UI is Favorite (Home/Away/PK)
  *       + positive Margin, sign computed on save. Verified by finding >= 2
@@ -389,7 +390,15 @@ console.log('\n[SS] [structural] every spread-sign write in the source is favori
     'data-provider.js:parseAndReport', // holds extractSpread()'s destructured write
     'app.js:applyWeekStatusChange',  // manual OPEN->LOCKED freeze
     'app.js:tickAutoTransition',     // auto OPEN->LOCKED freeze — the SECOND lock path
-    'app.js:renderAvailableGamesList', // carry-forward into an add-to-slate payload
+    // F4 (2026-09-12) — the add-to-slate payload's `spread:game.spread`
+    // carry-forward was EXTRACTED out of renderAvailableGamesList() into
+    // availAddPayloadJSON(), so the Player Requests card's "+ Add to slate"
+    // could reuse the add path byte-for-byte. The surface that WRITES a spread
+    // sign moved with it, so the required region moves with it too. This is a
+    // rename of the same write, not a relaxation: the entry still names a real
+    // region, and dropping it (or naming a region that carries no spread
+    // occurrence) still fails this assertion.
+    'app.js:availAddPayloadJSON',    // carry-forward into an add-to-slate payload
     'data-model.js:createGame',      // the null defaults every game starts from
     'data-model.js:DEMO_GAMES',      // the exempted, previously-wrong fixture array
     'data-model.js:HISTORICAL_DEMO_GAMES',

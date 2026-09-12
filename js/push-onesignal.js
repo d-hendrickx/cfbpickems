@@ -397,6 +397,48 @@ export async function subscriptionState() {
   return 'never-asked';
 }
 
+/**
+ * N1 / DI-N3 (UN-204, Drew's R10, 2026-09-12) — "OneSignal reports opted-in",
+ * the second of the three terms in app.js's pushActive predicate.
+ *
+ * WHY IT IS SEPARATE FROM subscriptionState(). That function deliberately stops
+ * at the browser's own synchronous `Notification.permission` and says so in its
+ * docstring ("OneSignal is only consulted, by the caller, separately, for finer
+ * subscription detail once granted"). This IS that separate consultation, and
+ * it answers a genuinely different question: permission granted means the
+ * BROWSER will allow a notification; opted-in means THIS DEVICE currently has a
+ * live subscription record OneSignal can actually send to. They diverge in
+ * exactly the case that matters here — a player who granted permission on a
+ * phone whose subscription was later revoked, un-installed or logged out would
+ * otherwise be told "push is carrying this device" while nothing arrives, and
+ * R10 would then swallow the in-app toast as well. That is UN-N3's failure
+ * (not having push must never be the same as going blind), so this fails
+ * CLOSED: any SDK absence, throw or timeout resolves FALSE.
+ *
+ * Never throws. Never waits forever — the deferred queue may never drain on a
+ * browser where the SDK 404'd, so the read is raced against a short timeout,
+ * the same shape ensureOneSignalInit() already uses.
+ */
+const OPTED_IN_TIMEOUT_MS = 3000;
+export async function isPushOptedIn() {
+  try {
+    if (typeof window === 'undefined') return false;
+    if (!(await isPushConfigured())) return false;
+    const read = new Promise((resolve) => {
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      window.OneSignalDeferred.push((OneSignal) => {
+        try { resolve(OneSignal?.User?.PushSubscription?.optedIn === true); }
+        catch { resolve(false); }
+      });
+    });
+    const timer = new Promise((resolve) => {
+      const t = setTimeout(() => resolve(false), OPTED_IN_TIMEOUT_MS);
+      t?.unref?.();   // node-only; keeps test harnesses from hanging on the timer
+    });
+    return await Promise.race([read, timer]);
+  } catch { return false; }
+}
+
 /** Triggers the native permission prompt — must be called from a genuine user
  *  gesture (DI-A2's "Turn On" button handler), never on first paint. */
 /** Turn an SDK throw into one of our reasons. Deliberately prefers the LIVE
@@ -486,14 +528,31 @@ export async function requestPushPermission() {
  * js/notifications.js's `destinationFor` here from app.js at boot. Kept as an
  * injected function rather than an import so this module never depends on
  * notifications.js (one-directional dependency graph: app.js wires both).
+ *
+ * BUG-12 (2026-09-12) — `onForegroundPush(event)` is the second, optional
+ * injected callback: "a push landed while this app is open." app.js passes the
+ * chat engine's wakeChat(), which is why this module still depends on nothing
+ * (it does not know what a chat fetch is, and AD-16's single chat-backend
+ * caller is unchanged). It runs BEFORE and INDEPENDENTLY of the suppression
+ * rule below, on purpose:
+ *   • a payload with no `event` in additionalData still means a message
+ *     exists — the fetch must not be gated on copy metadata;
+ *   • the SUPPRESSED case (player already on the destination tab) is exactly
+ *     the case where the room is the only surface the notice has, so it is the
+ *     one that most needs to be current.
  */
-export function wireForegroundSuppression(destinationForEvent) {
+export function wireForegroundSuppression(destinationForEvent, onForegroundPush) {
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   window.OneSignalDeferred.push(async (OneSignal) => {
     try {
       OneSignal.Notifications.addEventListener('foregroundWillDisplay', (e) => {
         try {
           const event = e?.notification?.additionalData?.event;
+          // BUG-12 — fetch first, unconditionally. Its own try/catch: a failed
+          // wake must never cost the player the banner.
+          if (typeof onForegroundPush === 'function') {
+            try { onForegroundPush(event || null); } catch (err) { console.warn('[push-onesignal] foreground fetch hook failed', err); }
+          }
           if (!event || typeof destinationForEvent !== 'function') return;
           const dest = destinationForEvent(event);
           const activeTab = document.body?.dataset?.tab;
@@ -503,6 +562,41 @@ export function wireForegroundSuppression(destinationForEvent) {
         } catch { /* never let a suppression bug block a real notification */ }
       });
     } catch (err) { console.warn('[push-onesignal] foreground hook failed', err); }
+  });
+}
+
+/**
+ * BUG-12 (2026-09-12) — THE TAP, for the case where the app is already running.
+ *
+ * Drew: "When I click the push, I should be able to see the message in the
+ * chat." There are two tap paths and they are not the same path:
+ *
+ *   COLD / relaunch — the SDK's own merged service worker opens the payload's
+ *     `url` (backend/Code.gs buildDestinationUrl -> "?ntab=chat&nparams=…"),
+ *     app.js's boot parses it and calls deepLinkTo(), which is where the forced
+ *     fetch and the wait for it live. Nothing here is involved.
+ *   WARM — the app is already open; the SDK focuses/navigates the existing
+ *     page. Whether that re-runs boot (and therefore the ?ntab parse) is not
+ *     something this side can know, and on an installed iOS PWA a resume does
+ *     not reliably fire visibilitychange either (boottest.mjs §5's stated
+ *     unknown). THIS hook is the signal that does not depend on either.
+ *
+ * Deliberately does NOT route the tap: the SDK's URL open already owns
+ * navigation (correction #1 — we never hand-author notificationclick
+ * handling), and a second router here would be a second answer to the same
+ * question. Its only job is "something arrived; go look now."
+ */
+export function wireNotificationClicks(onClick) {
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try {
+      OneSignal.Notifications.addEventListener('click', (e) => {
+        try {
+          const data = e?.notification?.additionalData || null;
+          if (typeof onClick === 'function') onClick(data?.event || null, data);
+        } catch (err) { console.warn('[push-onesignal] click hook failed', err); }
+      });
+    } catch (err) { console.warn('[push-onesignal] click wiring failed', err); }
   });
 }
 

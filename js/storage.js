@@ -74,6 +74,78 @@ const KEYS = {
   SCRIBE_LEARNINGS: 'cfbp_scribe_learnings',
   SCRIBE_CANON:     'cfbp_scribe_canon',
   SCRIBE_REPORTS:   'cfbp_scribe_reports',
+  // FEAT-3 / DI-200c (UN-200, 2026-09-12) — the device ledger of release
+  // versions this device has already announced in the Locker Room. Array of
+  // version strings, newest appended, last 20 kept. DEVICE-LOCAL (below): six
+  // devices each attempt the post and the server's id dedupe (AD-11) collapses
+  // them to one row, so this is a per-device "did I already try" record, not
+  // league state. checkPickRevealDue()'s `cfbp_reveal_emitted` is the same
+  // shape but reaches raw localStorage; this one routes through load()/save()
+  // like everything else in this file (AD-02) — the better of the two
+  // precedents, chosen deliberately.
+  WHATS_NEW_POSTED: 'cfbp_whatsnew_posted',
+  // FEAT-2 / DI-175d (UN-175, 2026-09-12) — player game requests. ONE flat,
+  // APPEND-ONLY array holding two row kinds ('request' and its 'withdraw'
+  // tombstone). Shared league data, so it is deliberately NOT in
+  // DEVICE_LOCAL_KEYS below — a request made on Kevin's phone has to reach
+  // Drew's Games tab or the feature does nothing.
+  //
+  // NOT SEEDED, by construction rather than by exemption: absent reads as []
+  // through getGameRequestRows(), so there is nothing for ensureSeedData() to
+  // fill and therefore no RG-12 seeding surface at all (contrast NOTIFICATIONS
+  // /SCRIBE_* above, which ARE seeded because their accessors wanted a real
+  // array present). A key that never seeds cannot mistake a failed hydrate for
+  // an empty league.
+  //
+  // Every mutable property of a request — withdrawn / on the slate / missed /
+  // passed — is DERIVED AT READ TIME by foldGameRequests() and never written.
+  // That is not a style preference: js/backend.js's _unionById() (which this
+  // key joins, MANDATORY, see that file) silently reverts a local field flip on
+  // a row the remote also holds. A stored status field would look correct on
+  // the device that set it and wrong everywhere else.
+  GAME_REQUESTS: 'cfbp_game_requests',
+  // FEAT-5 / DI-202g bound 3 (UN-202, 2026-09-12) — the device ledger of wagers
+  // this device has already resurfaced in the Locker Room. Array of wagerIds,
+  // newest appended, last 50 kept. DEVICE-LOCAL (below), the same shape and the
+  // same reasoning as WHATS_NEW_POSTED: six devices each attempt the callback
+  // and the server's id dedupe (AD-11, `scribe_wagerdue_<wagerId>`) collapses
+  // them to one row, so this records what THIS device tried, not league state.
+  WAGER_RESURFACED: 'cfbp_wager_resurfaced',
+  // ── N1 / FEAT-11 (UN-204, DI-N1 gate 3, 2026-09-12) ──────────────────────
+  // The device ledger of lifecycle notices this device has already posted to
+  // the Locker Room. Array of the DETERMINISTIC chat ids it emitted
+  // (`sys_lc_<EVENT>_<scopeId>`), newest appended, last 50 kept. DEVICE-LOCAL
+  // (below), the same shape and the same reasoning as WHATS_NEW_POSTED and
+  // WAGER_RESURFACED: six devices may each detect the same transition, the
+  // server's id dedupe (AD-11) collapses them onto one row, and this only
+  // records what THIS device already tried.
+  //
+  // Storing the ID rather than the event name is deliberate — it is the exact
+  // string the server dedupes on, so "have I posted this?" and "is this the
+  // same row?" can never drift apart, and a week-scoped and an
+  // obligation-scoped entry cannot collide.
+  LIFECYCLE_POSTED: 'cfbp_lifecycle_posted',
+  // ── N1 / FEAT-11 (UN-204, DI-N3 — Drew's R10), 2026-09-12 ────────────────
+  // "If push notifications are set up then all in app notifications should be
+  // that." Whether push is genuinely ACTIVE **on this device, right now**:
+  // permission granted AND OneSignal reports the device opted in AND the
+  // player's master push toggle is on. A boolean, recomputed at boot and after
+  // any permission or master-toggle change.
+  //
+  // DEVICE-LOCAL because it describes THIS device exactly as SESSION does — the
+  // same player's other phone may have push off, and one device's answer must
+  // never suppress the other's toast. It is cached rather than computed on
+  // demand because the real predicate (subscriptionState(), OneSignal's opted-in
+  // report) is ASYNC and chat-ui.js's showToast() is not: CONVENTIONS #9 says
+  // wrap async, never expose it, and this is the wrapper.
+  //
+  // DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent/garbage reads as FALSE, i.e.
+  // "push is not carrying this device." That direction is chosen, not
+  // inherited — a false FALSE shows a toast the player may not have needed; a
+  // false TRUE silently swallows every in-app notice on a device that is not
+  // actually receiving pushes, which is UN-N3's exact failure (not enabling
+  // push must never be the same as going blind).
+  PUSH_ACTIVE: 'cfbp_push_active',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -120,6 +192,27 @@ const DEVICE_LOCAL_KEYS = new Set([
   KEYS.SESSION,
   KEYS.SITE_UNLOCK,
   KEYS.AVAIL_GAMES,
+  // FEAT-3 / DI-200c — see the KEYS comment above. Device-local by design, and
+  // for the same reason SESSION is: it records what THIS device did, not what
+  // the league knows. Putting it on the Sheet would be worse than useless — the
+  // first device to post would suppress the other five, which the server-side
+  // id dedupe already handles without a shared write.
+  KEYS.WHATS_NEW_POSTED,
+  // FEAT-5 / DI-202g bound 3 — see the KEYS comment above. Device-local for the
+  // same reason WHATS_NEW_POSTED is: putting it on the Sheet would let the first
+  // device to post suppress the other five, which the server-side id dedupe
+  // already handles without a shared write.
+  KEYS.WAGER_RESURFACED,
+  // N1 / DI-N1 gate 3 — see the KEYS comment above. Device-local for the same
+  // reason WHATS_NEW_POSTED is: on the Sheet, the first device to post would
+  // suppress the other five, which the server-side id dedupe already handles
+  // without a shared write.
+  KEYS.LIFECYCLE_POSTED,
+  // N1 / DI-N3 (R10) — device-local for the same reason SESSION is: it is a
+  // fact about THIS handset's push subscription. Writing it to the Sheet would
+  // let a phone with push on silence the in-app toast on the same player's
+  // laptop, which has no push at all.
+  KEYS.PUSH_ACTIVE,
   'cfbp_backend_config',
 ]);
 
@@ -261,6 +354,12 @@ export function resetToDemo() {
   save(KEYS.FEEDBACK, []);
   save(KEYS.FEEDBACK_EXCLUDED, []);
   save(KEYS.COMMENTS, []);
+  // FEAT-2 / DI-175d — the ONE shrinking write this key has, and it is the
+  // same accepted residual backend.js already documents for cfbp_feedback: a
+  // device holding a pre-reset mirror can union old rows back until it
+  // re-hydrates. A full factory reset that left months of requests pointing
+  // at wiped games would be the worse outcome.
+  save(KEYS.GAME_REQUESTS, []);
   save(KEYS.ACTIVE_WEEK, REAL_WEEK_1_2026.weekId);
   save(KEYS.FETCH_PROOF, null);
   save(KEYS.NOTIFICATIONS, []);
@@ -392,6 +491,50 @@ export function getNotifyCategoryPrefs() {
 }
 export function setNotifyCategoryPref(category, on) {
   _setPlayerPref('notifyCategories', { ...getNotifyCategoryPrefs(), [category]: !!on });
+}
+
+// ── FEAT-8a / UN-179 (2026-09-12, DI-179d) — per-player section order ────────
+//
+// `player.preferences.sectionOrder = { dashboard: [...], standings: [...] }` —
+// ONE preference key holding BOTH pages, so a future third page is an entry
+// rather than a new key (and `clearSectionOrder('dashboard')` provably cannot
+// touch Standings, which is an assertion in layouttest.mjs).
+//
+// Deliberately on the PLAYER RECORD via _playerPref/_setPlayerPref — the same
+// pair tz/theme/accent/chatNick/notif all go through — and deliberately NOT on
+// `settings.*`. `settings` is one league-shared blob synced to the Sheet: one
+// player's write is every player's read. That is the trap UN-124 documented,
+// and `settings.dashboardColumnOrder` (app.js, a DIFFERENT and older feature)
+// is still sitting in it. UN-179 does not extend that pattern.
+//
+// CONVENTIONS #10 (default-when-missing): absent `sectionOrder`, or a record
+// written before this release, reads as `[]`, which app.js's effectiveOrder()
+// resolves to the shipped default order byte-for-byte. Every player record in
+// the Sheet today is already in that state, so UN-22/RG-01's locked dashboard
+// order is unaffected for anyone who has not opted in.
+//
+// Anonymous: _playerPref returns undefined and _setPlayerPref no-ops when
+// nobody is signed in, so an anonymous viewer reads [] (the default order) and
+// can persist nothing — UN-127's shared-device ruling, same shape as theme/tz.
+// Defense in depth; app.js also renders no control while signed out (DI-179g).
+export function getSectionOrder(pageKey) {
+  const all = _playerPref('sectionOrder') || {};
+  const ids = all[pageKey];
+  // Coerce at the boundary (CONVENTIONS #7) — this blob round-trips through a
+  // Google Sheet cell and a hand-editable JSON export.
+  return Array.isArray(ids) ? ids.filter(id => typeof id === 'string') : [];
+}
+export function setSectionOrder(pageKey, ids) {
+  if (!pageKey) return;
+  const all = { ...(_playerPref('sectionOrder') || {}) };
+  all[pageKey] = (Array.isArray(ids) ? ids : []).filter(id => typeof id === 'string');
+  _setPlayerPref('sectionOrder', all);
+}
+export function clearSectionOrder(pageKey) {
+  if (!pageKey) return;
+  const all = { ...(_playerPref('sectionOrder') || {}) };
+  delete all[pageKey];
+  _setPlayerPref('sectionOrder', all);
 }
 
 // ANY-player reads — the policy layer (js/notifications.js) resolves whether a
@@ -899,6 +1042,334 @@ export function getScribeReports() { return load(KEYS.SCRIBE_REPORTS) || []; }
 // card/modal without spinning up the full Apps Script harness for a
 // client-side render test. No production call site.
 export function _setScribeReportsForTest(list) { save(KEYS.SCRIBE_REPORTS, list || []); }
+
+// ─── WHAT'S NEW — DEVICE POST LEDGER (FEAT-3 / DI-200c, UN-200) ──────────────
+// The accessor pair CONVENTIONS #8 requires for every new stored thing: load()
+// and save() are module-private, so a caller in app.js physically cannot reach
+// this key any other way — which is the point of the seam.
+//
+// DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent/garbage reads as the empty
+// list, i.e. "this device has announced nothing yet". That direction is safe in
+// exactly one way and unsafe in the other, so it is chosen rather than
+// inherited: a false EMPTY costs one extra queued event that the server's id
+// dedupe (AD-11) discards; a false NON-EMPTY would silently suppress the
+// announcement of a release forever, on that device, with no way to notice.
+export function getWhatsNewPosted() {
+  const v = load(KEYS.WHATS_NEW_POSTED);
+  return Array.isArray(v) ? v : [];
+}
+/** Appends `version` if new and keeps the last 20 — the same bound (and the
+ *  same reason: an unbounded device ledger is a slow leak) as
+ *  checkPickRevealDue()'s own `.slice(-20)`. */
+export function setWhatsNewPosted(version) {
+  if (!version) return;
+  const list = getWhatsNewPosted();
+  if (list.includes(version)) return;
+  list.push(version);
+  save(KEYS.WHATS_NEW_POSTED, list.slice(-20));
+}
+
+// ─── WAGER RESURFACE — DEVICE LEDGER (FEAT-5 / DI-202g, UN-202) ─────────────
+// The accessor pair CONVENTIONS #8 requires. `load()`/`save()` are
+// module-private, so app.js physically cannot reach this key any other way.
+//
+// DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent or garbage reads as the empty
+// list — "this device has resurfaced nothing yet". That direction is chosen,
+// not inherited: a false EMPTY costs one extra queued event that the server's
+// id dedupe (AD-11) discards; a false NON-EMPTY would silently suppress a
+// wager's callback forever, on that device, with nothing to notice.
+export function getWagerResurfaced() {
+  const v = load(KEYS.WAGER_RESURFACED);
+  return Array.isArray(v) ? v : [];
+}
+/** Appends `wagerId` if new and keeps the last 50 — bounded for the same reason
+ *  WHATS_NEW_POSTED and `cfbp_reveal_emitted` are: an unbounded device ledger is
+ *  a slow leak. 50 is a season's worth of wagers at this league's size. */
+export function setWagerResurfaced(wagerId) {
+  if (!wagerId) return;
+  const list = getWagerResurfaced();
+  if (list.includes(wagerId)) return;
+  list.push(wagerId);
+  save(KEYS.WAGER_RESURFACED, list.slice(-50));
+}
+
+// ─── LIFECYCLE POSTS — DEVICE LEDGER (N1 / FEAT-11, UN-204, DI-N1 gate 3) ────
+// The accessor pair CONVENTIONS #8 requires. `load()`/`save()` are
+// module-private, so app.js physically cannot reach this key any other way.
+//
+// DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent or garbage reads as the empty
+// list — "this device has posted nothing yet". Chosen in that direction for the
+// same reason as its two siblings above: a false EMPTY costs one extra queued
+// event that the server's id dedupe (AD-11) discards, while a false NON-EMPTY
+// would silently suppress a lifecycle notice forever, on that device, with
+// nothing to notice.
+export function getLifecyclePosted() {
+  const v = load(KEYS.LIFECYCLE_POSTED);
+  return Array.isArray(v) ? v : [];
+}
+/** Appends the deterministic chat id if new and keeps the last 50 — bounded for
+ *  the same reason WHATS_NEW_POSTED and WAGER_RESURFACED are: an unbounded
+ *  device ledger is a slow leak. 50 covers a full season of week transitions
+ *  plus obligations at this league's size. */
+export function setLifecyclePosted(chatId) {
+  if (!chatId) return;
+  const list = getLifecyclePosted();
+  if (list.includes(chatId)) return;
+  list.push(chatId);
+  save(KEYS.LIFECYCLE_POSTED, list.slice(-50));
+}
+
+// ─── PUSH-ACTIVE, PER DEVICE (N1 / FEAT-11, UN-204, DI-N3 — Drew's R10) ──────
+// The accessor pair CONVENTIONS #8 requires. Read SYNCHRONOUSLY by
+// chat-ui.js's showToast(); written by app.js's refreshPushActiveFlag(), which
+// owns the async half (subscriptionState() + OneSignal's opted-in report) and
+// never exposes it (CONVENTIONS #9).
+//
+// The coercion is deliberate: `=== true`, not truthiness. A half-written value,
+// a string 'false' from some future migration, or a null from a failed read all
+// have to resolve to "push is NOT carrying this device," because the failure
+// that matters is a device that shows no toast while receiving no push.
+export function getPushActive() { return load(KEYS.PUSH_ACTIVE) === true; }
+export function setPushActive(on) { save(KEYS.PUSH_ACTIVE, !!on); }
+
+// ─── GAME REQUESTS (FEAT-2 / UN-175, DI-175d, 2026-09-12) ────────────────────
+// A player flags a game they want on a future slate; the commissioner sees it
+// on Comm → Games while he is building the week whose dates contain it.
+//
+// TWO ROW KINDS in one append-only array (KEYS.GAME_REQUESTS above):
+//   { id:'gr_<epochMs>_<rand5>', kind:'request', playerId, playerName,
+//     espnEventId, espnSport, homeTeam, awayTeam, homeMascot, awayMascot,
+//     homeRank, awayRank, kickoff, gameDate:'YYYY-MM-DD', season, createdAt,
+//     appVersion }
+//   { id:'gr_…', kind:'withdraw', targetRequestId, playerId, createdAt }
+//
+// NOTHING IS EVER EDITED OR REMOVED. A withdrawal is a new tombstone row, the
+// same event-log shape chat already uses, because backend.js's _unionById()
+// merge is only safe for a list with no per-row delete and no per-row field
+// mutation (see that file's `cfbp_comments` exclusion for the inverse hazard).
+//
+// DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent/garbage reads as [] — "nobody
+// has asked for anything", which renders an empty card. The opposite direction
+// does not exist here: there is no field to default, because status is derived.
+export const GAME_REQUEST_CAP = 3;          // open requests per player (coordinator ruling Q3)
+export const GAME_REQUEST_RETENTION_DAYS = 21;
+
+/**
+ * A calendar date key ('YYYY-MM-DD') in AMERICA/CHICAGO, for any Date or ISO
+ * string. Central-pinned DELIBERATELY and load-bearing: data-provider.js groups
+ * the commissioner's Available Games pool by Central date and getTimeWindow()
+ * is Central too, so a request has to bucket the same way or an 11pm Eastern /
+ * 8pm Pacific Saturday kickoff lands in the wrong week from the one surface
+ * that has to match it.
+ */
+export function centralDateKey(value = new Date()) {
+  const d = (value instanceof Date) ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(d);
+  const get = (t) => parts.find(p => p.type === t)?.value || '';
+  const y = get('year'), m = get('month'), day = get('day');
+  return (y && m && day) ? `${y}-${m}-${day}` : '';
+}
+
+/** Whole days from `fromKey` to `toKey`, both 'YYYY-MM-DD'. Parsed as UTC noon
+ *  so the arithmetic can never be moved by a DST boundary. */
+function _dayDelta(fromKey, toKey) {
+  const ms = (k) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(k || ''));
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], 12) : NaN;
+  };
+  const a = ms(fromKey), b = ms(toKey);
+  if (Number.isNaN(a) || Number.isNaN(b)) return NaN;
+  return Math.round((b - a) / 86400000);
+}
+
+/** The raw stored array. Never filtered — retention hiding happens in the fold. */
+export function getGameRequestRows() {
+  const v = load(KEYS.GAME_REQUESTS);
+  return Array.isArray(v) ? v : [];
+}
+
+/** The ONLY writer. Appends; never rewrites an existing row. */
+function _appendGameRequestRow(row) {
+  const all = getGameRequestRows();
+  all.push(row);
+  save(KEYS.GAME_REQUESTS, all);
+  return row;
+}
+
+/**
+ * Does a request belong to `week`? TWO RULES, OR'd (DI-175e):
+ *   1. gameDate falls inside week.startDate…week.endDate, INCLUSIVE both ends
+ *      (plain string compare — both are commissioner-entered calendar dates).
+ *   2. the request's espnEventId is present in this week's fetched pool.
+ * Rule 2 exists because ESPN reschedules: kickoff/gameDate is a snapshot taken
+ * when the player asked, possibly months earlier, and rule 1 alone would drop a
+ * moved game out of the very week being built.
+ */
+export function gameRequestMatchesWeek(req, week, availPool = []) {
+  if (!req || !week) return false;
+  const d = String(req.gameDate || '');
+  const s = String(week.startDate || ''), e = String(week.endDate || '');
+  if (d && s && e && d >= s && d <= e) return true;
+  const id = req.espnEventId != null ? String(req.espnEventId) : '';
+  if (!id) return false;
+  return (Array.isArray(availPool) ? availPool : []).some(
+    g => g?.espnEventId != null && String(g.espnEventId) === id);
+}
+
+/**
+ * THE FOLD. Returns a NEW array of request rows, each with a derived `status`,
+ * newest-stored-order preserved. The input array is never touched — that
+ * property is what keeps _unionById() safe for this key, and requesttest [2]
+ * deep-equals the input before and after to prove it.
+ *
+ *   withdrawn  a 'withdraw' row exists for this id FROM THE SAME playerId
+ *   onSlate    any game in cfbp_games (any week) carries this espnEventId
+ *   pending    otherwise, and gameDate >= today (Central)
+ *   missed     otherwise, and the week containing gameDate exists and is
+ *              locked / live / final
+ *   passed     otherwise (gameDate is behind us with no such week)
+ *
+ * RETENTION IS A READ-TIME FILTER, never a delete: a row whose gameDate is more
+ * than 21 days past is omitted from this result and left untouched in storage.
+ * Deleting would be a shrinking write, which is exactly what the append-only
+ * union merge cannot survive (notifications.js set the same precedent).
+ */
+export function foldGameRequests({ rows = null, games = null, weeks = null, today = null } = {}) {
+  const all   = Array.isArray(rows)  ? rows  : getGameRequestRows();
+  const slate = Array.isArray(games) ? games : getGames();
+  const wks   = Array.isArray(weeks) ? weeks : getWeeks();
+  const todayKey = today || centralDateKey();
+
+  const withdrawn = new Set();
+  for (const r of all) {
+    if (!r || r.kind !== 'withdraw' || !r.targetRequestId) continue;
+    const target = all.find(x => x && x.kind === 'request' && x.id === r.targetRequestId);
+    // A withdraw only counts from the row's own author — one player cannot
+    // retract another's ask.
+    if (target && target.playerId === r.playerId) withdrawn.add(target.id);
+  }
+
+  const onSlateIds = new Set(
+    (slate || []).map(g => g?.espnEventId).filter(v => v != null).map(String));
+
+  const out = [];
+  for (const row of all) {
+    if (!row || row.kind !== 'request' || !row.id) continue;
+    const gameDate = String(row.gameDate || '');
+    const age = _dayDelta(gameDate, todayKey);
+    if (!Number.isNaN(age) && age > GAME_REQUEST_RETENTION_DAYS) continue;   // hidden, not deleted
+    let status;
+    if (withdrawn.has(row.id)) status = 'withdrawn';
+    else if (row.espnEventId != null && onSlateIds.has(String(row.espnEventId))) status = 'onSlate';
+    else if (!gameDate || gameDate >= todayKey) status = 'pending';
+    else {
+      const wk = wks.find(w => {
+        const s = String(w?.startDate || ''), e = String(w?.endDate || '');
+        return s && e && gameDate >= s && gameDate <= e;
+      });
+      const st = wk ? String(getEffectiveWeekStatus(wk) || wk.status || '') : '';
+      status = (st === 'locked' || st === 'live' || st === 'final') ? 'missed' : 'passed';
+    }
+    out.push({ ...row, status });
+  }
+  return out;
+}
+
+/**
+ * Collapse folded requests to ONE ROW PER GAME, keyed on espnEventId (falling
+ * back to the matchup when an id is somehow absent). Requester names come out
+ * in a stable order — oldest ask first — so the commissioner's "requested by
+ * Drew, Kevin" does not reshuffle between renders.
+ */
+export function groupGameRequests(list) {
+  const sorted = (list || []).slice().sort((a, b) =>
+    String(a?.createdAt || '').localeCompare(String(b?.createdAt || '')));
+  const groups = new Map();
+  for (const r of sorted) {
+    const key = r?.espnEventId != null && r.espnEventId !== ''
+      ? 'e:' + String(r.espnEventId)
+      : 'm:' + String(r?.awayTeam || '') + '@' + String(r?.homeTeam || '');
+    if (!groups.has(key)) groups.set(key, { key, espnEventId: r?.espnEventId ?? null, sample: r, requests: [], names: [], playerIds: [] });
+    const g = groups.get(key);
+    g.requests.push(r);
+    if (!g.playerIds.includes(r.playerId)) {
+      g.playerIds.push(r.playerId);
+      g.names.push(r.playerName || r.playerId || '');
+    }
+  }
+  return [...groups.values()];
+}
+
+/** Open = still actionable. onSlate / missed / passed / withdrawn rows are
+ *  settled and deliberately do NOT count against the cap. */
+export function countOpenGameRequests(playerId, folded = null) {
+  const list = Array.isArray(folded) ? folded : foldGameRequests();
+  return list.filter(r => r.playerId === playerId && r.status === 'pending').length;
+}
+
+/**
+ * Create a request. Returns `{ ok, reason, request }` — every refusal is a
+ * named reason the caller turns into the exact DI-175g copy string, so the
+ * three blocked states (on the slate / duplicate / at the cap) can be asserted
+ * without a DOM.
+ */
+export function submitGameRequest(fields = {}) {
+  const { playerId, playerName = '', espnEventId, homeTeam = '', awayTeam = '',
+          homeMascot = '', awayMascot = '', homeRank = null, awayRank = null,
+          kickoff = null, gameDate = null, season = null, appVersion = '' } = fields;
+  if (!playerId) return { ok: false, reason: 'signedOut', request: null };
+  if (espnEventId == null || espnEventId === '') return { ok: false, reason: 'noEvent', request: null };
+  const eid = String(espnEventId);
+
+  // Already on a slate → blocked by construction. This is also the one place
+  // the blind rule could have been pressured (announcing interest in a game
+  // that is live on an OPEN slate), and it is removed rather than mitigated.
+  if (getGames().some(g => g?.espnEventId != null && String(g.espnEventId) === eid)) {
+    return { ok: false, reason: 'onSlate', request: null };
+  }
+  const folded = foldGameRequests();
+  if (folded.some(r => r.playerId === playerId && r.status === 'pending' && String(r.espnEventId) === eid)) {
+    return { ok: false, reason: 'duplicate', request: null };
+  }
+  if (countOpenGameRequests(playerId, folded) >= GAME_REQUEST_CAP) {
+    return { ok: false, reason: 'cap', request: null };
+  }
+
+  const row = {
+    id: 'gr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    kind: 'request',
+    playerId, playerName,
+    espnEventId: eid,
+    espnSport: 'college-football',   // forward-compat; v1 only ever writes this
+    homeTeam, awayTeam, homeMascot, awayMascot, homeRank, awayRank,
+    kickoff,
+    gameDate: gameDate || centralDateKey(kickoff || new Date()),
+    season,
+    createdAt: new Date().toISOString(),
+    appVersion,
+  };
+  _appendGameRequestRow(row);
+  return { ok: true, reason: null, request: row };
+}
+
+/** Withdraw = APPEND a tombstone. The original row stays exactly as written. */
+export function withdrawGameRequest(requestId, playerId) {
+  if (!requestId || !playerId) return { ok: false, reason: 'signedOut' };
+  const target = getGameRequestRows().find(r => r && r.kind === 'request' && r.id === requestId);
+  if (!target) return { ok: false, reason: 'missing' };
+  if (target.playerId !== playerId) return { ok: false, reason: 'notYours' };
+  _appendGameRequestRow({
+    id: 'gr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    kind: 'withdraw',
+    targetRequestId: requestId,
+    playerId,
+    createdAt: new Date().toISOString(),
+  });
+  return { ok: true, reason: null };
+}
 
 // ─── FEEDBACK EXPORT EXCLUSIONS ───────────────────────────────────────────────
 // Item 10 (DI-B1) — per-feedback-id "leave this out of the next CSV export"

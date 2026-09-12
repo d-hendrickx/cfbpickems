@@ -1794,6 +1794,47 @@ function scanReminders() {
       facts2 = { weekN: week.weekNumber, totalPlayers: players.length };
       body2 = scribeBuildCopy_(SCRIBE_PICKS_LOCKING_SOON_ALL_IN_POOL, SCRIBE_PICKS_LOCKING_SOON_ALL_IN_FALLBACK, facts2, lockingSoonDedupBase);
     }
+    // ── N1 / FEAT-11 edit (UN-204, DI-N1 / DI-N4, 2026-09-12) ──────────────
+    // THE LOCKING-SOON NOTICE GOES IN THE LOCKER ROOM, AND ONLY THIS SIDE CAN
+    // PUT IT THERE. Drew: "the 'locking soon notification this morning' should
+    // have been in the chat not in the bell icon."
+    //
+    // Every other lifecycle notice is emitted by a browser. This one cannot be:
+    // it fires on a 15-minute time trigger an hour before lock, which on a
+    // Saturday morning is a time when no device is open. A client-emitted row
+    // would appear only when someone NEXT opened the app — i.e. after lock,
+    // announcing that picks were about to close when they already had.
+    //
+    // TWO PROPERTIES MAKE IT SAFE TO CALL ON EVERY SCAN IN THE WINDOW:
+    //   1. The id is the SAME deterministic sys_lc_<EVENT>_<weekId> scheme the
+    //      client uses, and chatAppend() dedupes on id. So the ~4 scans inside
+    //      the one-hour window append once and no-op three times, and a client
+    //      that ever emitted the same id would collapse onto this row rather
+    //      than duplicate it (AD-11).
+    //   2. meta.origin:'server' tells js/notifications.js's
+    //      _scanNewChatMessages() to SKIP its own push relay for this row.
+    //      Without it every device would push it a second time — this scan
+    //      already sends its own push, through its own per-player
+    //      master x category gate (applyReminderScanCandidates_ below).
+    //
+    // The body is byte-identical to the push body (same `body2`, built from the
+    // same pool by the same scribeBuildCopy_), so the phone and the room can
+    // never say two different things about the same deadline.
+    //
+    // It runs BEFORE applyReminderScanCandidates_ deliberately: that function
+    // takes withNotifyLock, chatAppend takes its own script lock, and there is
+    // no reason to nest them. Wrapped in try/catch because a chat failure must
+    // never cost the league its push — the notice exists to be delivered.
+    try {
+      chatAppend([{
+        id: 'sys_lc_PICKS_LOCKING_SOON_' + String(week.weekId).replace(/[^a-zA-Z0-9_:-]/g, '_'),
+        type: 'message', author: 'scribe', gameTag: '', notify: true, body: body2,
+        meta: { kind: 'lifecycle', event: 'PICKS_LOCKING_SOON', weekId: week.weekId,
+                category: 'leagueUpdates', origin: 'server' },
+      }]);
+    } catch (chatErr) {
+      Logger.log('scanReminders: locking-soon chat row failed (push is unaffected): ' + chatErr);
+    }
     players.forEach(function (p) {
       candidates.push({
         playerId: p.playerId, dedupKey: lockingSoonDedupBase + p.playerId,
@@ -6162,7 +6203,13 @@ var SCRIBE_MEMORY_HEADER = ['id', 'playerId', 'kind', 'key', 'value', 'provenanc
 // DI-D2's record shape, enforced rather than documented: an unknown kind is
 // rejected at the boundary, not stored and discovered later by a reader that
 // does not handle it.
-var SCRIBE_MEMORY_KINDS_ = { fact: 1, relation: 1, hardline: 1, roastTolerance: 1 };
+// FEAT-5 / DI-202o edit 1 of 4 (UN-202, 2026-09-12) — 'wager' is the FIFTH
+// kind. Unlike the other four it is a two-party EVENT with a due date rather
+// than an attribute of one player: `reviewAt` (already in the header above,
+// written by nothing until now) carries that date. See scribeMemoryList's
+// carve-out and scribeMemoryFor_'s exclusion further down — both are part of
+// the same four-edit change and shipping this line alone degrades @scribe.
+var SCRIBE_MEMORY_KINDS_ = { fact: 1, relation: 1, hardline: 1, roastTolerance: 1, wager: 1 };
 var SCRIBE_MEMORY_PROVENANCE_ = { computed: 1, 'player-stated': 1, 'commissioner-set': 1, 'trainer-proposed': 1 };
 // "NEVER free-form prose longer than ~200 chars (this is a fact store, not a
 // second chat log)" — DI-D2, enforced on write.
@@ -6348,8 +6395,12 @@ function scribeMemoryUpsert(req) {
     if (!requester || requester !== String(rec.playerId || '')) {
       return { ok: false, error: 'Unauthorized — a player may only write memory about himself' };
     }
-    if (rec.kind !== 'hardline' && rec.kind !== 'roastTolerance') {
-      return { ok: false, error: 'Unauthorized — a player may only set hard-lines and roast tolerance' };
+    // FEAT-5 / DI-202o edit 2 of 4 — 'wager' joins the two kinds a player may
+    // write himself. The provenance/confidence forcing two lines below is
+    // UNCHANGED and now applies to wagers too, which is correct: a wager is a
+    // player-stated claim, never a computed inference.
+    if (rec.kind !== 'hardline' && rec.kind !== 'roastTolerance' && rec.kind !== 'wager') {
+      return { ok: false, error: 'Unauthorized — a player may only set hard-lines, roast tolerance and wagers' };
     }
     rec.provenance = 'player-stated';
     rec.confidence = 1;
@@ -6402,13 +6453,34 @@ function scribeMemoryList(req) {
   } else if (req && req.playerId) {
     ids.push(String(req.playerId));
   }
+  // FEAT-5 / DI-202o edit 3 of 4 (UN-202, coordinator ruling Q6, 2026-09-12) —
+  // THE ONE READ CARVE-OUT, and it is scoped to exactly one kind.
+  //
+  // GROUNDS, written here so the next reader does not mistake it for a hole:
+  // a wager was made OUT LOUD IN THE PUBLIC ROOM, in front of everyone. The
+  // memory row is a pointer to a public chat message plus a date — it is not a
+  // private inference about a person. 'fact', 'relation', 'hardline' and
+  // 'roastTolerance' — the kinds F5's narrowing was actually protecting — are
+  // untouched, and memorytest.mjs asserts that both a kinds:['fact'] request
+  // and an UNFILTERED request still narrow to the requester.
+  //
+  // WHY IT IS REQUIRED: resurfacing a wager needs every player's wager rows —
+  // the counterparty has to see the proposer's row, and any device may be the
+  // one that posts the callback. The only alternative was a new privileged
+  // server action, i.e. strictly more Apps Script for the commissioner to paste.
+  // A requester is STILL required; anonymous reads stay refused.
+  var wagerOnly = !!(req && req.kinds && req.kinds.length === 1 && String(req.kinds[0]) === 'wager');
   if (!scribeTrainerCredentialOk_(req)) {
     var requester = String(req && req.playerId || '');
     if (!requester) return { ok: false, error: 'Unauthorized — a playerId is required to read memory' };
-    for (var q = 0; q < ids.length; q++) {
-      if (ids[q] !== requester) return { ok: false, error: 'Unauthorized — that memory belongs to another player' };
+    if (wagerOnly) {
+      ids = [];                             // league-wide, wagers ONLY
+    } else {
+      for (var q = 0; q < ids.length; q++) {
+        if (ids[q] !== requester) return { ok: false, error: 'Unauthorized — that memory belongs to another player' };
+      }
+      if (!ids.length) ids.push(requester);   // never "every row in the league"
     }
-    if (!ids.length) ids.push(requester);   // never "every row in the league"
   }
   var kinds = (req && req.kinds && req.kinds.length) ? req.kinds : null;
   var minConfidence = (req && req.minConfidence !== undefined) ? Number(req.minConfidence) : 0;
@@ -6457,7 +6529,21 @@ function scribeMemoryFor_(playerIds, opts) {
   opts = opts || {};
   var minConfidence = (opts.minConfidence !== undefined) ? Number(opts.minConfidence) : SCRIBE_MEMORY_CONTEXT_MIN_CONFIDENCE_;
   var maxItems = (opts.maxItems !== undefined) ? Number(opts.maxItems) : SCRIBE_MEMORY_CONTEXT_MAX_ITEMS_;
-  return scribeMemoryFilter_(scribeMemoryAll_(), playerIds || [], opts.kinds || null, minConfidence, maxItems);
+  var kinds = opts.kinds || null;
+  var rows = scribeMemoryAll_();
+  // FEAT-5 / DI-202o edit 4 of 4 (DI-202e) — WAGERS ARE NOT MODEL CONTEXT.
+  // Wager rows are written at confidence 1.0, so without this they would clear
+  // the 0.5 floor, enter every @scribe prompt, and — because the cap is 8 items
+  // in INSERTION order — progressively displace the real facts about a player.
+  // That is a silent quality regression in the interactive runtime caused by a
+  // feature that has nothing to do with it. Excluded from the DEFAULT set only:
+  // a caller that names 'wager' in opts.kinds still gets them.
+  if (!kinds) {
+    var kept = [];
+    for (var w = 0; w < rows.length; w++) { if (rows[w].kind !== 'wager') kept.push(rows[w]); }
+    rows = kept;
+  }
+  return scribeMemoryFilter_(rows, playerIds || [], kinds, minConfidence, maxItems);
 }
 
 /**

@@ -327,9 +327,13 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
     `3a: fixture check: .live-score is a 3-column grid stacked under it — got "${liveScoreRule}"`);
 
   // 3b — the .matchup DOM order: away block first, then the @ divider, then home.
-  const matchupBlock = (APP_SRC.match(/<div class="matchup">[\s\S]*?<div class="vs-divider">[\s\S]*?<\/div>\s*<div class="team home">/) || [''])[0];
-  assert(/<div class="team away">/.test(matchupBlock) &&
-         matchupBlock.indexOf('class="team away"') < matchupBlock.indexOf('class="team home"'),
+  // Locator note (2026-09-12, BUG-4): the `.team` divs now carry an optional
+  // ` team-picked` modifier, so these match the class-attribute PREFIX rather
+  // than the whole literal `<div class="team away">`. The property under test
+  // is unchanged — away block first, @ divider, then home.
+  const matchupBlock = (APP_SRC.match(/<div class="matchup">[\s\S]*?<div class="vs-divider">[\s\S]*?<\/div>\s*<div class="team home/) || [''])[0];
+  assert(/<div class="team away/.test(matchupBlock) &&
+         matchupBlock.indexOf('class="team away') < matchupBlock.indexOf('class="team home'),
     '3b: fixture check: the game card renders the AWAY team in grid column 1 and HOME in column 3');
 
   // 3c — THE BUG, on the shared score-block source Drew named. Item 2

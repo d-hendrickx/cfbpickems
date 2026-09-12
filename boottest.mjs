@@ -81,6 +81,15 @@ globalThis.document = {
 };
 function fireVisibilityChange() { (listeners.get('visibilitychange') || new Set()).forEach(fn => { try { fn(); } catch {} }); }
 globalThis.window = globalThis;
+// BUG-12 (2026-09-12) — the transport also wakes on a window `focus` event now
+// (§11: an iOS standalone resume from a notification tap does not reliably
+// fire visibilitychange), so the window half of the stub has to hold and fire
+// listeners too. Node's globalThis has no addEventListener of its own, which
+// is exactly why the production code guards the registration.
+const winListeners = new Map();
+globalThis.addEventListener = (type, fn) => { if (!winListeners.has(type)) winListeners.set(type, new Set()); winListeners.get(type).add(fn); };
+globalThis.removeEventListener = (type, fn) => { winListeners.get(type)?.delete(fn); };
+function fireFocus() { (winListeners.get('focus') || new Set()).forEach(fn => { try { fn(); } catch {} }); }
 if (!globalThis.crypto?.randomUUID) globalThis.crypto = { randomUUID: () => 'u' + Math.random().toString(36).slice(2) };
 
 let pass = 0, fail = 0;
@@ -884,6 +893,179 @@ console.log('\n[10] BUG-G — the chat engine must not wait on the hydrate getAl
   const navAt = src.indexOf("if (primedKeys > 0) { navigateTo('dashboard')");
   assert(navAt > -1 && earlyAt < navAt,
     `and it runs ABOVE navigateTo('dashboard') (early at char ${earlyAt}, navigateTo at ${navAt}) — navigateTo()'s own refreshChatEnabled() subscribes, and a subscription that starts before the cache is primed spends its first tick on RG-91's chatSince(0, 500) and delivers into an empty subscriber set`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [11] BUG-12 (Drew, 2026-09-12) — "When I receive a push notification it
+// doesn't show up in the chat for at least 30 seconds after the notification.
+// When I click the push, I should be able to see the message in the chat."
+//
+// The poll cadence is chosen by ROOM ACTIVITY (INTERVALS above): a player who
+// is not sitting in the room is 'idle' (45s) or 'closed' (60s). That is the
+// right clock for "nothing has told us anything changed" — and a push is
+// precisely something telling us that. Nothing in the push-tap, the
+// foreground-push or the app-resume path forced a fetch, so the message the
+// banner announced sat unrequested until the next scheduled poll, and the
+// notification deep link ran its scroll against a room that did not hold the
+// message yet ("no-op if outside the loaded window", fired prematurely).
+//
+// The fix is ONE mechanism in the layer that owns cadence: a wake() fast path
+// on the subscription, BOUNDED to one forced fetch per WAKE_MIN_GAP_MS. A wake
+// inside the window is DEFERRED to the end of it, never dropped — a dropped
+// wake is this bug again, one flap later.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[11] BUG-12 — a push tap / foreground push / resume forces one immediate fetch…');
+{
+  const WAKE_GAP_EXPECTED = 5000;   // mirrors chatTransport.js's WAKE_MIN_GAP_MS
+
+  /** A subscription that has ALREADY seen the room, so the boot ladder is spent
+   *  and the next scheduled poll is a full room interval away — the steady
+   *  state Drew was actually in when the push landed. */
+  async function liveRoom({ mode = 'closed' } = {}) {
+    installFakeClock();
+    let head = 20;
+    const calls = [];
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url), 'https://example.invalid/');
+      const action = u.searchParams.get('action');
+      const seq = Number(u.searchParams.get('seq') || 0);
+      calls.push({ action, seq, at: NOW });
+      await sleep(WARM_MS);
+      if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head }) };
+      const events = [];
+      for (let s = seq + 1; s <= head; s++) events.push(mkEv(s));
+      return { ok: true, status: 200, json: async () => ({ ok: true, events, head }) };
+    };
+    backend.setBackendConfig(URL_FAKE, 'tok');
+    const folded = new Map();
+    let known = 0;
+    const sub = transport.subscribe((events, h) => {
+      (events || []).forEach(e => folded.set(e.id, e));
+      if (typeof h === 'number' && h > known) known = h;
+    }, { getMode: () => mode, getKnownHead: () => known });
+    await advance(5000);                     // the boot tick lands; the room is SEEN
+    return {
+      sub, calls, folded,
+      post: (n = 1) => { head += n; return head; },
+      wake: () => (typeof sub.wake === 'function' ? sub.wake() : Promise.resolve(false)),
+      since: t => calls.filter(c => c.at >= t).length,
+      stop: () => { try { sub.unsubscribe(); } finally { restoreClock(); backend.clearBackendConfig(); document.hidden = false; } },
+    };
+  }
+
+  // ── A. The interface: cadence is a transport concern, so the fast path lives
+  //      here, next to the interval and the visibilitychange hook it reuses. ──
+  {
+    const room = await liveRoom();
+    assert(typeof room.sub.wake === 'function',
+      'the subscription exposes wake() — the event-driven forced fetch (push tap, foreground push, resume) lives in the transport, beside the interval it overrides');
+    room.stop();
+  }
+
+  // ── B. THE REPRODUCTION. A message is posted, a push is tapped, and the
+  //      fetch must be issued NOW rather than at the next scheduled poll. ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    room.post();                                   // the message the push is about
+    const t0 = NOW;
+    const before = room.calls.length;
+    const p = room.wake();                         // ← the push tap
+    await advance(1500);
+    const issued = room.calls.length - before;
+    assert(issued >= 1,
+      `a push tap issues a chat fetch within 1.5s — got ${issued} request(s) in that window (before the fix the room was not asked again until the next ${(60000 / 1000).toFixed(0)}s poll, which is Drew's "at least 30 seconds")`);
+    await advance(3000);      // let the round trip (head probe + page) finish on the fake clock
+    await p;
+    assert(room.folded.has('b21'),
+      'and the message is IN THE FOLD by the time wake() resolves — which is what lets the deep link wait for the fetch instead of scrolling to an element that does not exist yet');
+    note(`  tap at ${fmt(t0)}; next SCHEDULED poll would have been a ${fmt(60000)} room interval away`);
+    room.stop();
+  }
+
+  // ── C. The old behaviour, stated as a number: with no wake, the message
+  //      waits for the room interval. (Drives the same live room, but never
+  //      calls wake() — this is the "do nothing" control.) ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    room.post();
+    const before = room.calls.length;
+    await advance(30000);
+    assert(room.calls.length === before,
+      `CONTROL: with nothing forcing a fetch, 30 SECONDS pass with zero requests — the defect measured, not asserted away (got ${room.calls.length - before})`);
+    room.stop();
+  }
+
+  // ── D. BOUNDED. A flapping tab (iOS fires visibility pairs while the app
+  //      switcher is scrubbed) must not hammer the transport. ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    const t0 = NOW;
+    for (let i = 0; i < 10; i++) {
+      document.hidden = true;  fireVisibilityChange();
+      await advance(200);
+      document.hidden = false; fireVisibilityChange();
+      await advance(800);
+    }
+    const forced = room.since(t0);
+    assert(forced >= 1,
+      `a resume still forces a fetch — the visibility fast path is not lost to the bound (got ${forced})`);
+    assert(forced <= 3,
+      `…and 10 visibility flaps in 10s cost at most one forced fetch per ${WAKE_GAP_EXPECTED / 1000}s — got ${forced} requests, i.e. ${forced > 3 ? 'one per flap' : 'bounded'}`);
+    note(`  10 flaps / 10s -> ${forced} forced fetch(es)`);
+    room.stop();
+  }
+
+  // ── E. Bounded, NOT dropped. A wake that lands inside the window is the
+  //      only signal we have that a message exists; losing it re-creates the
+  //      bug. It is deferred to the end of the window and still resolves. ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    // NB: every await of a wake()/forceTick() promise has to be sandwiched by
+    // advance() — the fake clock only fires the stubbed round trip's timers
+    // when time is moved by hand, so awaiting one bare would deadlock.
+    const w0 = room.wake(); await advance(1500); await w0;   // opens the window
+    room.post();                               // a second push arrives INSIDE it
+    const before = room.calls.length;
+    let settled = false;
+    const p = room.wake().then(() => { settled = true; });
+    await advance(WAKE_GAP_EXPECTED + 2000);
+    await p;
+    assert(room.calls.length > before,
+      `a wake inside the cooldown window is DEFERRED to the end of it, not dropped — got ${room.calls.length - before} request(s) after the window`);
+    assert(settled && room.folded.has('b21'),
+      'and the deferred wake still resolves with the message in hand, so a deep link that awaits it lands on the message');
+    room.stop();
+  }
+
+  // ── F. Focus, not just visibilitychange. §5 above already notes that iOS
+  //      standalone may never fire visibilitychange on a resume; `focus` is
+  //      the second signal, and costs nothing when both arrive (the bound
+  //      collapses them into one fetch). ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    await advance(WAKE_GAP_EXPECTED + 500);    // outside any window left by boot
+    room.post();
+    const before = room.calls.length;
+    fireFocus();
+    await advance(1500);
+    assert(room.calls.length > before,
+      `a window 'focus' event forces a fetch too — got ${room.calls.length - before} request(s)`);
+    room.stop();
+  }
+
+  // ── G. The MANUAL refresh (DI-168's 🔄 button) is a player action, not an
+  //      event, and stays unthrottled. A bound on the button would make it
+  //      look broken — the exact complaint DI-168 was built to answer. ──
+  {
+    const room = await liveRoom({ mode: 'closed' });
+    const w1 = room.wake(); await advance(1500); await w1;   // window is now open
+    const before = room.calls.length;
+    const t1 = room.sub.forceTick(); await advance(1500); const r1 = await t1;
+    const t2 = room.sub.forceTick(); await advance(1500); const r2 = await t2;
+    assert(r1 === true && r2 === true && room.calls.length - before >= 2,
+      `two taps of the manual refresh button inside the wake window still make two round trips (DI-168 unchanged) — got ${room.calls.length - before}`);
+    room.stop();
+  }
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────

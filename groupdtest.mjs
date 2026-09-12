@@ -785,6 +785,250 @@ console.log('\n[13] Structural — memory rows never enter the KV seam; the defa
     'the four memory actions are deliberately NOT on NO_RETRY_ACTIONS — none spends money and each is idempotent, so a flaky Apps Script redirect leg is retried like every other read/write');
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// 14. FEAT-5 (UN-202 / UN-203, DI-202) — the UI half of wager memory.
+//     RENDERED OUTPUT, never a source grep (RG-27): a source-grep test passes
+//     when the guard it claims to protect is reverted.
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[14] FEAT-5 — 🤝 wager memory: action, modal, ack controls, ⭐ suppressions, file rows…');
+{
+  const { _messageHTMLForTest, _wagerActionHTMLForTest, _wagerAckHTMLForTest } = chatUi;
+  const { renderWagerModalBodyHTML, buildWagerValue, wagerReviewAtFor, wagerSettleWeeks,
+          _setWagerCacheForTest, scribeWagerAnswer } = app;
+  const msg = (o = {}) => ({ id: 'm_claim', type: 'message', author: 'p2', gameTag: '', ts: Date.now(),
+                             body: 'I bet USC is not ranked by week 7', reactions: {}, meta: null, ...o });
+
+  // ── 8. THE 🤝 ACTION (DI-202a). ──
+  const human = _messageHTMLForTest(msg(), 'p1', false);
+  assert(/data-wager="m_claim"/.test(human) && human.includes('🤝'),
+    '14-1: 🤝 renders in .chat-actions on an ordinary human message for a signed-in viewer');
+  assert(human.indexOf('data-wager=') > human.indexOf('data-reply='),
+    '14-2: …among the "do something durable with this" controls (after reply/react), not ahead of them');
+  assert(!/title=/.test(_wagerActionHTMLForTest(msg(), 'p1')),
+    '14-3: …with NO title attribute — tooltips do not fire on touch, which is the only input this app has');
+  assert(/aria-label="Log this as a wager"/.test(_wagerActionHTMLForTest(msg(), 'p1')),
+    '14-4: …and the meaning is carried by aria-label instead');
+  assert(_wagerActionHTMLForTest(msg({ author: 'scribe' }), 'p1') === '',
+    '14-5: ABSENT on a SCRIBE message — you cannot log SCRIBE into a bet');
+  assert(_wagerActionHTMLForTest(msg({ author: 'system' }), 'p1') === '',
+    '14-6: ABSENT on a system message');
+  assert(_wagerActionHTMLForTest(msg({ deleted: true }), 'p1') === '',
+    '14-7: ABSENT on a withdrawn message — its text is a tombstone, not evidence');
+  assert(_wagerActionHTMLForTest(msg(), '') === '',
+    '14-8: ABSENT signed out — a signed-out reader gets no dead control (the persistentStarHTML precedent)');
+  assert(!/data-wager="/.test(_messageHTMLForTest(msg({ author: 'scribe' }), 'p1', false)),
+    '14-9: …and the absence holds through the REAL messageHTML(), not just the helper in isolation');
+
+  // ── 9. THE MODAL (DI-202b), every field and its exact copy. ──
+  const wk = (n, id) => ({ weekId: id, season: '2026', weekNumber: n, label: `Week ${n}`,
+                           startDate: `2026-10-0${n}`, endDate: `2026-10-0${n}`, status: 'draft', dataSourceMode: 'espn' });
+  const WEEKS14 = [wk(5, 'wk5'), wk(6, 'wk6'), wk(7, 'wk7')];
+  const modal = renderWagerModalBodyHTML({ message: msg(), players: storage.getPlayers(), weeks: WEEKS14, currentWeek: WEEKS14[0] });
+  assert(modal.includes('The claim') && modal.includes('chat-quote-static') && modal.includes('I bet USC is not ranked by week 7'),
+    '14-10: field 1 — the source message is quoted read-only, with chat\'s OWN quote markup (it is evidence, not an editable field)');
+  assert(/<textarea[^>]*id="wager-claim"[^>]*maxlength="110"/.test(modal) && modal.includes('/110'),
+    '14-11: field 2 — the bet is a 110-char textarea with a live counter');
+  assert(modal.includes('Keep it short. SCRIBE reads this back later.'),
+    '14-12: …carrying its helper line (one character off DI-202b verbatim — see the note at WAGER_COPY.betHelp)');
+  assert(modal.includes("Who's on the other side?") && /<option value="" selected>Open to the room<\/option>/.test(modal),
+    '14-13: field 3 — the counterparty select DEFAULTS to "Open to the room"');
+  assert(!/<option value="p2"/.test(modal) && /<option value="p1"/.test(modal) && /<option value="p3"/.test(modal),
+    '14-14: …and the claim\'s own author is excluded from it — a man cannot be his own counterparty');
+  assert(modal.includes('Settle by') && /<option value="wk6" selected>/.test(modal),
+    '14-15: field 4 — Settle by defaults to the NEXT week, not the current one');
+  assert(modal.includes('>End of the season</option>') && /<option value="wk7">End of the season<\/option>/.test(modal),
+    '14-16: …with a final "End of the season" option resolving to the highest-numbered eligible week');
+  assert(!/wk5"/.test(modal.split('id="wager-week"')[1].split('</select>')[0]) === false,
+    '14-17: fixture check — the Settle-by list really was extracted from the emitted markup');
+  assert(/id="wager-cancel"[^>]*>Cancel</.test(modal) && /id="wager-log"[^>]*>Log it</.test(modal),
+    '14-18: Cancel and Log it, with the approved labels');
+  assert(/class="btn btn-ghost wager-btn"/.test(modal) && /class="btn btn-primary wager-btn"/.test(modal),
+    '14-19: …both carrying .wager-btn, which is where the 44px floor lives');
+  const cssSrc14 = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const rule14 = name => (cssSrc14.match(new RegExp('^\\' + name + '\\{[^}]*\\}', 'm')) || [''])[0];
+  assert(/min-height:44px/.test(rule14('.wager-btn')) && /min-height:44px/.test(rule14('.chat-wager-ack')) && /min-height:44px/.test(rule14('.wager-select')),
+    '14-20: every control in this feature carries a SCOPED 44px override — .btn-sm bases at 34px and is never raised globally');
+  assert(!/#[0-9A-Fa-f]{3,8}\b/.test(rule14('.wager-btn') + rule14('.chat-wager-ack') + rule14('.chat-wager-row') + rule14('.wager-error')),
+    '14-21: no hex literal in any new rule — colour comes from :root tokens, so all seven themes are covered for free');
+
+  // The 200-char PRE-SEND assertion. A slice landing mid-JSON is unparseable
+  // forever (memorytest 28-18 proves the server really does slice), so this is
+  // checked BEFORE the request leaves the device.
+  const longIds = buildWagerValue({ claim: '"'.repeat(110), counterpartyId: 'p'.repeat(20),
+                                    weekId: 'w'.repeat(24), loggedBy: 'q'.repeat(20) });
+  assert(!!longIds && longIds.length <= 200,
+    `14-22: the SERIALISED envelope is guaranteed ≤200 chars even with a fully JSON-escaped 110-char claim and 64 chars of ids (got ${longIds ? longIds.length : 'null'})`);
+  let reparsed = null;
+  try { reparsed = JSON.parse(longIds); } catch { reparsed = null; }
+  assert(!!reparsed && reparsed.o === 'p'.repeat(20) && reparsed.w === 'w'.repeat(24),
+    '14-23: …and it still parses, with the ids intact — the claim is what gives way, never the envelope');
+  assert(wagerReviewAtFor({ endDate: '2026-10-11' }) === new Date('2026-10-11T23:59:59').toISOString()
+      && wagerReviewAtFor({ startDate: '', endDate: '' }) === '',
+    '14-24: reviewAt is the due week\'s own date; a week with NO date yields \'\' and is excluded from Settle-by entirely, because a wager that can never resurface must not be loggable');
+  assert(wagerSettleWeeks([...WEEKS14, wk(8, 'wkdemo')].map(w => w.weekId === 'wkdemo' ? { ...w, dataSourceMode: 'demo' } : w), WEEKS14[0])
+          .every(w => w.weekId !== 'wkdemo'),
+    '14-25: a demo week is never offered as a settle-by target');
+
+  // ── 10. THE ACK CONTROLS (DI-202f viewer table). ──
+  const logged = (o = {}) => ({ id: 'scribe_wager_w1', type: 'message', author: 'scribe', gameTag: '', ts: Date.now(),
+    body: 'Logged. Brayden against Kevin, due by Week 7.', reactions: {},
+    meta: { kind: 'wagerLogged', wagerId: 'w1', dueWeekId: 'wk7', counterpartyId: 'p3', proposerId: 'p2', source: 'tier0' }, ...o });
+  _setWagerCacheForTest([]);
+  assert(/data-wager-ack="accepted"/.test(_wagerAckHTMLForTest(logged(), 'p3')) && /data-wager-ack="declined"/.test(_wagerAckHTMLForTest(logged(), 'p3')),
+    '14-26: the NAMED COUNTERPARTY with no answer yet gets both controls');
+  assert(_wagerAckHTMLForTest(logged(), 'p3').includes("🤝 I'm in") && _wagerAckHTMLForTest(logged(), 'p3').includes("🙅 I'm not"),
+    '14-27: …with the exact approved copy');
+  assert(_wagerAckHTMLForTest(logged(), 'p2').includes('Waiting on Kevin.') && !/data-wager-ack/.test(_wagerAckHTMLForTest(logged(), 'p2')),
+    '14-28: the PROPOSER gets no buttons and the waiting line instead — he cannot take his own bet');
+  assert(_wagerAckHTMLForTest(logged(), 'p1').includes('Waiting on Kevin.') && !/data-wager-ack/.test(_wagerAckHTMLForTest(logged(), 'p1')),
+    '14-29: a THIRD PARTY gets the same muted waiting line and no controls');
+  assert(_wagerAckHTMLForTest(logged(), '') === '',
+    '14-30: SIGNED OUT gets neither a control nor a waiting line');
+  const openRoom = logged({ meta: { ...logged().meta, counterpartyId: '' } });
+  assert(/data-wager-ack="accepted"/.test(_wagerAckHTMLForTest(openRoom, 'p1')) && /data-wager-ack="accepted"/.test(_wagerAckHTMLForTest(openRoom, 'p3')),
+    '14-31: OPEN TO THE ROOM — any signed-in player may answer (coordinator ruling Q9)');
+  assert(_wagerAckHTMLForTest(openRoom, 'p2').includes('Open to the room.') && !/data-wager-ack/.test(_wagerAckHTMLForTest(openRoom, 'p2')),
+    '14-32: …except the proposer, who still gets the muted line');
+  _setWagerCacheForTest([{ id: 'mem_ack', playerId: 'p3', kind: 'wager', key: 'wagerack:w1',
+                           value: JSON.stringify({ w: 'w1', r: 'accepted' }), provenance: 'player-stated', confidence: 1 }]);
+  assert(scribeWagerAnswer('w1')?.reply === 'accepted' && scribeWagerAnswer('w1')?.playerId === 'p3',
+    '14-33: the answer is derived from the counterparty-owned `wagerack:` row — attested by the man who accepted, not asserted by the man who benefits');
+  assert(_wagerAckHTMLForTest(logged(), 'p3').includes('You&#39;re in.') && !/data-wager-ack/.test(_wagerAckHTMLForTest(logged(), 'p3')),
+    '14-34: after answering, the buttons are replaced IN PLACE by a static line — one action, one message, no second chat post');
+  _setWagerCacheForTest([{ id: 'mem_ack', playerId: 'p3', kind: 'wager', key: 'wagerack:w1',
+                           value: JSON.stringify({ w: 'w1', r: 'declined' }), provenance: 'player-stated', confidence: 1 }]);
+  assert(_wagerAckHTMLForTest(logged(), 'p3').includes('You passed.'),
+    '14-35: …and a decline reads "You passed." — declining is not a character flaw');
+  _setWagerCacheForTest([]);
+  assert(scribeWagerAnswer('w1') === null,
+    '14-36: AD-49 — with the ack row deleted the answer is gone and the status reverts to SILENT, because the record of acceptance was withdrawn');
+
+  // ── 11. THE TWO ⭐ SUPPRESSIONS, asserted SEPARATELY (DI-202f). ──
+  const ordinary = _messageHTMLForTest({ id: 'sc_1', type: 'message', author: 'scribe', gameTag: '', ts: Date.now(),
+    body: 'An ordinary SCRIBE line.', reactions: {}, meta: null }, 'p1', false);
+  assert(/data-fb-open="sc_1"/.test(ordinary) && /chat-fb-star/.test(ordinary),
+    '14-37: fixture check — an ORDINARY SCRIBE message renders BOTH ⭐ affordances, so the two assertions below are not vacuous');
+  const loggedHTML = _messageHTMLForTest(logged(), 'p1', false);
+  const dueHTML = _messageHTMLForTest({ id: 'scribe_wagerdue_w1', type: 'message', author: 'scribe', gameTag: '',
+    ts: Date.now(), body: 'Week 7. Brayden said "…".', reactions: {}, meta: { kind: 'wagerDue', wagerId: 'w1', status: 'silent' } }, 'p1', false);
+  assert(!/chat-act-feedback/.test(loggedHTML) && !/chat-act-feedback/.test(dueHTML),
+    '14-38: suppression 1 of 2 — neither wager post renders ⭐ Rate in .chat-actions (feedbackButtonHTML)');
+  assert(!/chat-fb-star/.test(loggedHTML) && !/chat-fb-star/.test(dueHTML),
+    '14-39: suppression 2 of 2 — and neither renders the persistent ⭐ in the bubble footer either (persistentStarHTML). Fixing one and not the other is the exact failure shape the retention filter had');
+
+  // ── 12. MY SCRIBE FILE (DI-202k). ──
+  const wagerRow = { id: 'mem_w1', playerId: 'p1', kind: 'wager', key: 'wager:w1',
+    value: JSON.stringify({ c: 'USC is not ranked by week 7', o: 'p3', w: 'wk7', b: 'p2' }),
+    provenance: 'player-stated', confidence: 1, createdAt: '2026-09-12T00:00:00.000Z',
+    reviewAt: '2026-10-11T23:59:59.000Z', sourceMessageId: 'm_claim' };
+  const ackRow = { ...wagerRow, id: 'mem_a1', key: 'wagerack:w1', sourceMessageId: 'scribe_wager_w1',
+    value: JSON.stringify({ w: 'w1', r: 'accepted' }) };
+  const brokenRow = { ...wagerRow, id: 'mem_w2', key: 'wager:w2', value: '{"c":"half a row' };
+  storage.saveWeek({ ...wk(7, 'wk7'), weekId: 'wk7' });
+  _setScribeMemoryCacheForTest('p1', [wagerRow, ackRow, brokenRow]);
+  const fileHTML = renderScribeFileBodyHTML({ profile: getPlayerProfile('p1') });
+  const wagerCard = rowHTMLById(fileHTML, 'mem_w1');
+  assert(wagerCard.includes('Wager') && !wagerCard.includes('Wager — your answer'),
+    '14-40: a proposer row is labelled "Wager"');
+  assert(wagerCard.includes('USC is not ranked by week 7') && wagerCard.includes('with Kevin') && wagerCard.includes('settle by Week 7'),
+    '14-41: …and its value reads back in plain language: the claim, who is on the other side, and the deadline');
+  assert(wagerCard.includes('data-mem-del="mem_w1"') && wagerCard.includes('🗑'),
+    '14-42: …and it keeps its 🗑 — provenance is player-stated, never computed, which is the half of AD-49 that has to hold');
+  assert(wagerCard.includes('data-jump="m_claim"'),
+    '14-43: …and sourceMessageId gives "↩ Jump to the message" with no new code');
+  assert(rowHTMLById(fileHTML, 'mem_a1').includes('Wager — your answer') && rowHTMLById(fileHTML, 'mem_a1').includes('Accepted'),
+    '14-44: the counterparty-owned ack row is labelled "Wager — your answer"');
+  const brokenCard = rowHTMLById(fileHTML, 'mem_w2');
+  assert(brokenCard.includes('{&quot;c&quot;:&quot;half a row') && brokenCard.includes('data-mem-del="mem_w2"'),
+    '14-45: a row whose JSON cannot be parsed falls back to the RAW STORED STRING and stays deletable — the headToHead precedent, verbatim, rather than guessing at a value');
+  assert(fileHTML.includes("Wagers you've logged live here too. Delete one and SCRIBE forgets it."),
+    '14-46: the approved footnote sentence renders in the file, where the wager rows actually are');
+  assert(getPlayerProfile('p1').wagers.length === 3 && getPlayerProfile('p3').wagers.length === 0,
+    '14-47: the profile carries ONLY the viewer\'s own wager rows — the league-wide read the resurfacing path needs never reaches this screen (DI-202l)');
+  // ── 12b. logWager()/answerWager() — DI-202l's write states, through the REAL
+  //        functions and the REAL transport seam. ──
+  const chat14 = await import('./js/chat.js');
+  const backend14 = await import('./js/backend.js');
+  chat14._resetForTest?.();
+  chat14.ingest?.([{ seq: 1, id: 'm_claim', ts: Date.now(), type: 'message', author: 'p2', gameTag: '',
+                     body: 'I bet USC is not ranked by week 7', targetId: '', replyTo: '', meta: null }]);
+  storage.saveWeek({ ...wk(7, 'wk7'), status: 'draft' });
+  storage.saveSetting('chatEnabled', true);
+  storage.setSession('p1', false, true);
+  _setWagerCacheForTest([]);
+  _setScribeMemoryCacheForTest('p1', []);
+
+  // Offline: the memory write goes STRAIGHT to Apps Script — there is no outbox
+  // behind it — so the copy must not pretend there is a queue (AD-06).
+  backend14.clearBackendConfig();
+  const offline = await app.logWager({ messageId: 'm_claim', claim: 'USC is not ranked', counterpartyId: 'p3', dueWeekId: 'wk7' });
+  assert(offline.ok === false && offline.skipped === 'offline'
+      && offline.message === "Not connected — a wager can't be logged right now.",
+    '14-48: backend unreachable -> the write is REFUSED with the honest line. A memory write has no durable outbox, and the copy must not imply one (AD-06)');
+  backend14.setBackendConfig('https://example.invalid/exec', 'tok');
+
+  // Server rejects (e.g. Apps Script not yet redeployed: unknown kind "wager").
+  let sent = null;
+  _wireScribeMemoryTransportForTest({ upsert: async () => ({ ok: false, error: 'scribeMemoryUpsert: unknown kind "wager"' }),
+                                      list: async () => ({ ok: true, records: [] }) });
+  const rejected = await app.logWager({ messageId: 'm_claim', claim: 'USC is not ranked', counterpartyId: 'p3', dueWeekId: 'wk7' });
+  assert(rejected.ok === false && rejected.message === "Couldn't log that wager — nothing was saved. Try again.",
+    '14-49: a server refusal (Apps Script not redeployed yet) says nothing was saved — correct behaviour, and the exact reason DI-202o says SERVER FIRST');
+  assert(chat14.getMessages({ tag: 'all' }).every(m => m.meta?.kind !== 'wagerLogged'),
+    '14-50: …and NO acknowledgment post went out. A post announcing a wager that was never stored would be permanent, and the wager it names would never resurface');
+
+  // Success.
+  _wireScribeMemoryTransportForTest({
+    upsert: async rec => { sent = rec; return { ok: true, record: { id: 'mem_new', ...rec } }; },
+    list: async () => ({ ok: true, records: sent ? [{ id: 'mem_new', ...sent }] : [] }),
+  });
+  const okRes = await app.logWager({ messageId: 'm_claim', claim: 'USC is not ranked by week 7', counterpartyId: 'p3', dueWeekId: 'wk7' });
+  assert(okRes.ok === true && okRes.message === 'Logged. SCRIBE will bring it back up.',
+    '14-51: a successful log reports the approved toast copy');
+  assert(sent.playerId === 'p2' && sent.kind === 'wager' && sent.key === `wager:${okRes.wagerId}`
+      && sent.provenance === 'player-stated' && Number(sent.confidence) === 1,
+    '14-52: the row is owned by the PROPOSER (the author of the quoted message) — which is what lets HIM delete it, AD-49\'s non-negotiable');
+  assert(sent.sourceMessageId === 'm_claim' && !!sent.reviewAt && Date.parse(sent.reviewAt) > 0,
+    '14-53: …carrying the source message and a parseable reviewAt (an unparseable one can never resurface, so it is computed at log time, not later)');
+  assert(JSON.parse(sent.value).b === 'p1' && JSON.parse(sent.value).o === 'p3',
+    '14-54: …and the envelope records WHO LOGGED IT separately from whose claim it is — Drew\'s worked example is a third party logging Brayden\'s bet');
+  const ackPost = chat14.getMessages({ tag: 'all' }).find(m => m.meta?.kind === 'wagerLogged');
+  assert(ackPost?.id === `scribe_wager_${okRes.wagerId}` && ackPost?.replyTo === 'm_claim' && ackPost?.author === 'scribe',
+    '14-55: the acknowledgment post lands under the deterministic id, threaded beneath the claim');
+  assert(ackPost?.body.includes('Brayden') && ackPost?.body.includes('Kevin') && ackPost?.body.includes('Week 7')
+      && !/Oct|—\s*\w+\s*\d/.test(ackPost?.body || ''),
+    `14-56: …naming both sides and the week NAME only (got: ${ackPost?.body})`);
+  const dupe = await app.logWager({ messageId: 'm_claim', claim: 'again', counterpartyId: '', dueWeekId: 'wk7' });
+  assert(dupe.ok === false && dupe.message === "That one's already logged.",
+    '14-57: logging the SAME message twice is refused — no second row, no second post');
+
+  // The answer write.
+  let ackSent = null;
+  _wireScribeMemoryTransportForTest({
+    upsert: async rec => { ackSent = rec; return { ok: true, record: { id: 'mem_ack', ...rec } }; },
+    list: async () => ({ ok: true, records: [{ id: 'mem_ack', ...(ackSent || {}) }] }),
+  });
+  storage.setSession('p3', false, true);
+  const ansRes = await app.answerWager({ wagerId: okRes.wagerId, reply: 'accepted' });
+  assert(ansRes.ok === true && ackSent.playerId === 'p3' && ackSent.key === `wagerack:${okRes.wagerId}`
+      && JSON.parse(ackSent.value).r === 'accepted',
+    '14-58: the answer is written as the COUNTERPARTY\'s own row — "accepted" is attested by the man who accepted, not asserted by the man who benefits from it');
+  assert(ackSent.sourceMessageId === `scribe_wager_${okRes.wagerId}`,
+    '14-59: …pointing back at the acknowledgment post it was tapped on');
+  assert(chat14.getMessages({ tag: 'all' }).filter(m => m.meta?.kind === 'wagerLogged').length === 1
+      && chat14.getMessages({ tag: 'all' }).every(m => m.meta?.kind !== 'wagerDue'),
+    '14-60: …and answering posts NOTHING to the room — one action, one message');
+  const badReply = await app.answerWager({ wagerId: okRes.wagerId, reply: 'maybe' });
+  assert(badReply.ok === false && badReply.skipped === 'unknown_reply',
+    '14-61: there are exactly two answers. A third value is refused at the boundary rather than stored and discovered later by a reader that does not handle it');
+
+  _restoreScribeMemoryTransportForTest();
+  backend14.clearBackendConfig();
+  storage.clearSession();
+  _setScribeMemoryCacheForTest(null, []);
+  _setWagerCacheForTest([]);
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

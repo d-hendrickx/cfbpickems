@@ -1175,7 +1175,7 @@ assert(/try\s*\{\s*await backfill\(100\)/.test(loadOlderBlock), 'the handler wra
 //     showToast() with {force:true} — structural, on the call site's own
 //     source text
 // ═════════════════════════════════════════════════════════════════════════
-console.log('\n[26] Structural — the real rewrite-submit branch (chat-ui.js ~1016) calls showToast(..., {force:true})…');
+console.log('\n[26] Structural — the real rewrite-submit branch raises its receipt on the UNGATED app toast…');
 {
   // §15 above proves the MECHANISM: _showToastForTest(msg, {force:true})
   // really bypasses chat-page suppression. It never reads the PRODUCTION
@@ -1183,30 +1183,49 @@ console.log('\n[26] Structural — the real rewrite-submit branch (chat-ui.js ~1
   // not extracted from chat-ui.js. That is exactly how the reviewer's
   // finding happened: {force:true} was dropped from the real branch and
   // every existing assertion, including §15, stayed green.
-  const REWRITE_SUBMIT_LINE = `    if (category === 'rewrite') showToast({ author: 'system', body: 'Rewrite saved.' }, { force: true });`;
+  //
+  // N1 follow-up (c), 2026-09-12 — THE FINDING IS UNCHANGED; ITS ANSWER MOVED.
+  // The reviewer's finding was that a RECEIPT for the player's own action was
+  // being raised through a path that silently suppressed it. `{force:true}`
+  // answered that against chat-ui's two page-suppression gates. Then R10
+  // (DI-N3) added a gate that force does NOT bypass — deliberately, it runs
+  // first — so on a push-active device the same receipt became a silent no-op
+  // again, by a different route. The ruling: a receipt is not a notification,
+  // so it does not belong on the notification toast at all. It now goes to
+  // app.js's own showToast() over chat-ui's window.* bridge (showReceipt()),
+  // which has never been gated by anything. This section pins THAT, and keeps
+  // the same shape of proof — including the mutation.
+  const REWRITE_SUBMIT_LINE = `    if (category === 'rewrite') showReceipt('Rewrite saved.');`;
   assert(chatUiSrc.includes(REWRITE_SUBMIT_LINE),
     'fixture check: the exact rewrite-submit branch text is present in chat-ui.js (an unindented/reworded line would silently no-op this scan)');
   assert(chatUiSrc.split(REWRITE_SUBMIT_LINE).length - 1 === 1,
     'fixture check: the branch text is UNIQUE in chat-ui.js — not accidentally matching a second call site');
 
-  const scanShowToastOpts = src => {
-    const m = src.match(/if\s*\(category === 'rewrite'\)\s*showToast\(\{[^}]*\},\s*(\{[^}]*\})\)/);
+  const scanRewriteCall = src => {
+    const m = src.match(/if\s*\(category === 'rewrite'\)\s*([A-Za-z_$][\w$]*)\(/);
     return m ? m[1] : null;
   };
-  const realOpts = scanShowToastOpts(chatUiSrc);
-  assert(realOpts !== null, 'fixture check: the scan regex actually located the rewrite-submit call\'s options argument (not vacuous)');
-  assert(/force\s*:\s*true/.test(realOpts || ''),
-    'STRUCTURAL: the real rewrite-submit branch calls showToast() with {force:true} — the reviewer BLOCK finding (force:true silently dropped, suite stayed green) cannot recur unnoticed');
+  const realCallee = scanRewriteCall(chatUiSrc);
+  assert(realCallee !== null, 'fixture check: the scan regex actually located the rewrite-submit call (not vacuous)');
+  assert(realCallee === 'showReceipt',
+    `STRUCTURAL: the real rewrite-submit branch raises its confirmation through showReceipt(), not the gated showToast() — got ${realCallee}(). A receipt that renders on some devices and not others is the reviewer's original finding wearing R10's clothes`);
 
-  // Mutation proof — an in-memory scratch copy of the exact line with
-  // {force:true} dropped (the reviewer's reported regression, reproduced
-  // verbatim), never written to any file.
-  const mutatedLine = `    if (category === 'rewrite') showToast({ author: 'system', body: 'Rewrite saved.' });`;
+  // …and showReceipt() itself has to reach the APP toast. If it were ever
+  // pointed back at chat-ui's own showToast(), every assertion above would
+  // still pass while the receipt went silent on exactly the devices this
+  // change was about.
+  const receiptSrc26 = (chatUiSrc.match(/function showReceipt\(text\) \{[\s\S]*?\n\}/) || [''])[0];
+  assert(/window\.showToast\(/.test(receiptSrc26) && !/[^.\w]showToast\(\{/.test(receiptSrc26),
+    `STRUCTURAL: showReceipt() delivers through the window.showToast bridge (app.js's ungated toast), not chat-ui's own gated showToast — got: ${receiptSrc26.replace(/\s+/g, ' ').slice(0, 160)}`);
+
+  // Mutation proof — an in-memory scratch copy with the branch reverted to the
+  // OLD gated call (the exact regression this section now guards against),
+  // never written to any file.
+  const mutatedLine = `    if (category === 'rewrite') showToast({ author: 'system', body: 'Rewrite saved.' }, { force: true });`;
   assert(mutatedLine !== REWRITE_SUBMIT_LINE, 'fixture check: the scratch mutation actually changed the text');
   const mutatedSrc = chatUiSrc.replace(REWRITE_SUBMIT_LINE, mutatedLine);
-  const mutantOpts = scanShowToastOpts(mutatedSrc);
-  assert(mutantOpts === null || !/force\s*:\s*true/.test(mutantOpts || ''),
-    'MUTATION CONFIRMED: against a scratch copy with {force:true} dropped, this same scan no longer finds it — the guard is capable of failing, not vacuous (RG-27)');
+  assert(scanRewriteCall(mutatedSrc) === 'showToast',
+    'MUTATION CONFIRMED: against a scratch copy reverted to showToast({…},{force:true}), this same scan sees the gated call — the guard is capable of failing, not vacuous (RG-27)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════

@@ -4,60 +4,239 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.21.0';
-export const APP_VERSION_DATE = '2026-09-11';
+export const APP_VERSION = 'v0.21.1';
+export const APP_VERSION_DATE = '2026-09-12';
 
 /**
- * UN-124 — "What's new" card content, hand-maintained per release. NOT
- * ledger-derived (docs/ never deploys) and NOT feedback-derived (feedback
- * records incoming reports, not confirmed fixes) — update this by hand
- * alongside APP_VERSION when shipping. Rendered as the LAST card on the
- * Picks tab in EVERY render branch — see renderWhatsNewCardHTML() below and
- * both call sites in renderPicksPage(). If both lists are empty for a
- * release, the card renders nothing (never an empty shell).
+ * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
+ * hand-maintained per release, NEWEST FIRST.
+ *
+ * Was a single object overwritten at every version bump, which is exactly why
+ * FEAT-3 exists: the previous release's notes stopped existing the moment a new
+ * one shipped. It is now a LIST. Still NOT ledger-derived (docs/ never deploys)
+ * and NOT feedback-derived (feedback records incoming reports, not confirmed
+ * fixes) — update it by hand alongside APP_VERSION when shipping.
+ *
+ * SHAPE: { version, date: 'YYYY-MM-DD', added: [], fixed: [], expanded?: true }
+ *
+ * AT VERSION-BUMP TIME:
+ *   1. PREPEND the new release. `WHATS_NEW_RELEASES[0]` is what the Picks card
+ *      and the SCRIBE release post both read as "this release".
+ *   2. `expanded: true` IS A ONE-RELEASE FLAG. It exists so v0.21.1 can also
+ *      show v0.21.0, which shipped before this feature and never got announced.
+ *      REMOVE IT FROM v0.21.0 WHEN v0.21.2 SHIPS. If it is left in place the
+ *      Picks card carries three releases, then four.
+ *   3. Keep at most the LAST 12 releases — drop the oldest by hand in the same
+ *      edit. app.js is over 11,000 lines already.
+ *
+ * NO BACKFILL, and that is Drew's own scope ruling ("moving forward, does not
+ * need to be retrospective"): the list starts at v0.21.0. Nothing earlier is
+ * reconstructed, and the Rules → Release notes card says so out loud rather
+ * than looking like missing data.
+ *
+ * A release whose `added` and `fixed` are BOTH empty renders nothing anywhere —
+ * no card, no `<details>`, no shell, and no chat post either.
  */
-const WHATS_NEW = {
-  version: APP_VERSION,
-  added: [
-    'SCRIBE can speak up on its own. When something worth a line happens — a lead change, a lone-wolf cover, a broken streak, a unanimous slate, a bold claim in the room — it can post one message about it. The commissioner sets how often under Comm → Settings → SCRIBE Participation, from Quiet to Unhinged. Direct @scribe questions are answered regardless.',
-    'My SCRIBE File. Chat → prefs → 📁 My SCRIBE File shows what SCRIBE has recorded about you in plain language. Delete anything you told it, add hard-limit topics it will never bring up, and set your roast tolerance. Facts it works out from the standings refresh on their own.',
-    'The Locker Room opens instantly. The room now shows what you last saw on this device the moment the app opens, before the league data even loads, then catches up.',
-    'You can talk to SCRIBE. Type @scribe in the Locker Room with a real question — a standing, a matchup, a pick record, whether a starter is playing — and it answers with the actual numbers first, banter second. While it looks things up you\'ll see "SCRIBE is looking into it…"; if it\'s throttled or the budget is spent, it says so and falls back to a canned line instead of guessing. Six questions per person per hour.',
-    'SCRIBE is learning from you. Every week the Trainer reads your ⭐ ratings, rewrites, 📌 flags and 👁 weigh-ins, works out what landed and what didn\'t, and posts a short out-of-character report to the room, with the full write-up under Rules → SCRIBE Training. Strong patterns adjust how SCRIBE talks; anything shaky waits for the commissioner.',
-    'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
-  ],
-  fixed: [
-    'Talking to SCRIBE works now. Your @scribe question was being sent to SCRIBE a split second before the message itself reached the room, so it could never find what you asked and fell back to a canned line every time. It now waits for your message to land first. Questions from before this fix keep their canned reply; ask a fresh one.',
-    'The Locker Room fills on open. Two fixes: a fresh open no longer waits up to a minute after a slow first connection, and the room now remembers what you last saw on this device and shows it instantly while it checks for anything new.',
-    'A 🔄 button in the chat header. Tap it to check for new messages right now instead of waiting for the next automatic check.',
-    'Sync and SCRIBE stopped answering the wrong question. The server could occasionally reply to a request with its health check instead of an answer; the app took that as success, which showed up as "Sync refused" on a perfectly healthy league, @scribe falling back to canned lines, and a Trainer run that never ran. Every reply is now checked against the request it belongs to, and the server refuses to answer an empty one.',
-    'The Locker Room no longer opens blank and stays blank. Two ways that could happen are gone: a long season\'s log is now read in pages until the room is caught up, and sending a message from an empty room no longer convinces the app it has already seen everything.',
-    'No push storm on a cold open. Reading history in pages could have pushed every old message to everyone; history is now told apart from live messages before any push goes out, with a hard cap underneath.',
-    'SCRIBE\'s answers about picks respect the blind rule harder than the app itself: while a week is open it won\'t repeat anyone\'s pick in the room — including your own.',
-  ],
-};
+const WHATS_NEW_RELEASES = [
+  {
+    // v0.21.1 — the 2026-09-12 feedback batch (docs/SESSION_LOG_091226.md).
+    // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
+    version: 'v0.21.1',
+    date: '2026-09-12',
+    added: [
+      'Request a game. Rules → 🙋 Request a Game: pick a Saturday, find the matchup, and flag it for the commissioner — even for a week that hasn\'t been built yet. He sees every request when he builds that week. Post it to the Locker Room if you want the room to know; withdraw it any time; three open requests each.',
+      'League notices live in the Locker Room now. Picks opened, locking soon, locked, results, obligations — one place, posted by SCRIBE. If your phone has push set up you get a push instead of an in-app card; if it doesn\'t, the in-app card stays. The 🔔 now opens your notification settings.',
+      'Red zone on the dashboard. During live games a 🔴 RZ mark shows which team has the ball inside the 20 — on the All Picks matrix, the compact view, and your own picks cards — so you can see when a close spread is about to move. It clears itself when the drive ends.',
+      'Extra Point Ledger on Standings. A season tally of everyone\'s longest-field-goal blackjack results — weeks won, blackjacks, busts, entries — so it\'s all in one place for the end of the season. It never affects the standings. Commissioner: a season CSV under Comm → Data.',
+      'Edit your layout. On Dashboard and Standings, tap ⇅ Edit layout, move any section up or down with ▲/▼, then ✓ Done. Your layout is saved to your account and follows you to any device; ↺ resets it. Nothing moves while you scroll.',
+      'The Picks tab reads top-down. Week blurb, then What\'s New, then last week\'s recap, then the games — and the recap now shows for everyone, not just visitors and the commissioner.',
+      'Release notes in the room. SCRIBE posts a short note in the Locker Room whenever the app updates, with a 📋 button to the full list. Rules → 🆕 Release notes keeps every release from v0.21.0 on.',
+      'Log a wager. Tap 🤝 on any message in the Locker Room to put a bet on the record — the claim, who\'s on the other side, and when it settles. SCRIBE confirms it, the other side can accept or decline, and when the week arrives SCRIBE brings it back up and says who was in. It never rules on who won, and it never touches the standings. Your wagers appear in My SCRIBE File and can be deleted there.',
+    ],
+    fixed: [
+      'Tapping a push opens the chat with the message already there. The room only checked for new messages on its own schedule, so a tap could land before the message it announced; a push tap, a push arriving while the app is open, or coming back to the app now checks right away.',
+      '"Picks are in" no longer pops an in-app banner on a phone that has push — the push is the delivery. And lifecycle pushes actually go out now: the app was only relaying player messages, never its own notices. SCRIBE\'s pushes are titled SCRIBE.',
+      'Your submitted picks show which team you picked. The card only ever marked your pick on the buttons, and those aren\'t drawn once you\'ve submitted — at any status, not just live. Every card now carries a "✓ Your pick" on the team you took.',
+      'Alma Mater Watch and Alma Mater Rankings sort by the current AP rank, and re-sort as the polls change. Schools on a bye sit at the bottom of the Watch.',
+      'Alma Mater Rankings lists everyone who claims a school — Texas A&M now reads "Drew, Kihoon", not just Drew.',
+      'Demo-week ranks no longer leak into the alma mater badges (a fictional #8 and #7 were reaching the Standings page, and a rankless demo game was erasing a real #20).',
+    ],
+  },
+  {
+    // Moved VERBATIM from the single-slot WHATS_NEW constant this replaced —
+    // do NOT rewrite this copy. It shipped; it is the record of what shipped.
+    // `expanded: true` is the one-release catch-up flag described above: v0.21.0
+    // predates the release post, so v0.21.1 carries it along. Remove at v0.21.2.
+    version: 'v0.21.0',
+    date: '2026-09-11',
+    expanded: true,
+    added: [
+      'SCRIBE can speak up on its own. When something worth a line happens — a lead change, a lone-wolf cover, a broken streak, a unanimous slate, a bold claim in the room — it can post one message about it. The commissioner sets how often under Comm → Settings → SCRIBE Participation, from Quiet to Unhinged. Direct @scribe questions are answered regardless.',
+      'My SCRIBE File. Chat → prefs → 📁 My SCRIBE File shows what SCRIBE has recorded about you in plain language. Delete anything you told it, add hard-limit topics it will never bring up, and set your roast tolerance. Facts it works out from the standings refresh on their own.',
+      'The Locker Room opens instantly. The room now shows what you last saw on this device the moment the app opens, before the league data even loads, then catches up.',
+      'You can talk to SCRIBE. Type @scribe in the Locker Room with a real question — a standing, a matchup, a pick record, whether a starter is playing — and it answers with the actual numbers first, banter second. While it looks things up you\'ll see "SCRIBE is looking into it…"; if it\'s throttled or the budget is spent, it says so and falls back to a canned line instead of guessing. Six questions per person per hour.',
+      'SCRIBE is learning from you. Every week the Trainer reads your ⭐ ratings, rewrites, 📌 flags and 👁 weigh-ins, works out what landed and what didn\'t, and posts a short out-of-character report to the room, with the full write-up under Rules → SCRIBE Training. Strong patterns adjust how SCRIBE talks; anything shaky waits for the commissioner.',
+      'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
+    ],
+    fixed: [
+      'Talking to SCRIBE works now. Your @scribe question was being sent to SCRIBE a split second before the message itself reached the room, so it could never find what you asked and fell back to a canned line every time. It now waits for your message to land first. Questions from before this fix keep their canned reply; ask a fresh one.',
+      'The Locker Room fills on open. Two fixes: a fresh open no longer waits up to a minute after a slow first connection, and the room now remembers what you last saw on this device and shows it instantly while it checks for anything new.',
+      'A 🔄 button in the chat header. Tap it to check for new messages right now instead of waiting for the next automatic check.',
+      'Sync and SCRIBE stopped answering the wrong question. The server could occasionally reply to a request with its health check instead of an answer; the app took that as success, which showed up as "Sync refused" on a perfectly healthy league, @scribe falling back to canned lines, and a Trainer run that never ran. Every reply is now checked against the request it belongs to, and the server refuses to answer an empty one.',
+      'The Locker Room no longer opens blank and stays blank. Two ways that could happen are gone: a long season\'s log is now read in pages until the room is caught up, and sending a message from an empty room no longer convinces the app it has already seen everything.',
+      'No push storm on a cold open. Reading history in pages could have pushed every old message to everyone; history is now told apart from live messages before any push goes out, with a hard cap underneath.',
+      'SCRIBE\'s answers about picks respect the blind rule harder than the app itself: while a week is open it won\'t repeat anyone\'s pick in the room — including your own.',
+    ],
+  },
+];
+
+/** The current release. Kept so every existing reference (and the mental model
+ *  of "the What's New constant") still resolves to one object. */
+const WHATS_NEW = WHATS_NEW_RELEASES[0];
+
+/** A release with nothing in it is not a release, on any surface. */
+function whatsNewHasContent(r) {
+  return !!((r?.added?.length) || (r?.fixed?.length));
+}
 
 /**
- * UN-124 — collapsed-by-default "what's new" card. Takes an optional data
- * object (defaults to WHATS_NEW) so it's directly unit-testable without
- * touching the module-level constant. Renders NOTHING when both lists are
- * empty. No dismiss / "seen it" flag — settings.* is one shared league-wide
- * blob, so one player dismissing it would hide it for everyone (Drew's
- * explicit call).
+ * The releases the PICKS CARD shows: the newest, plus any older one carrying
+ * `expanded: true` (A1.2), in array position, empties dropped.
+ *
+ * Accepts an ARRAY or a SINGLE release object. The single-object shape is the
+ * call UN-124's own regression suite makes, and it must keep working unchanged
+ * — so it is wrapped rather than rejected.
+ *
+ * The SCRIBE release post reads this same function, so the post's counts and
+ * the card's bullets are computed from one list and cannot disagree (A1.4).
  */
-export function renderWhatsNewCardHTML(data = WHATS_NEW) {
-  const added = data?.added || [];
-  const fixed = data?.fixed || [];
-  if (!added.length && !fixed.length) return '';
+function whatsNewDisplayList(data = WHATS_NEW_RELEASES) {
+  const arr = Array.isArray(data) ? data : [data];
+  return arr.filter((r, i) => (i === 0 || r?.expanded === true) && whatsNewHasContent(r));
+}
+
+/**
+ * TEST SEAM (F3 review finding 1, 2026-09-12) — `WHATS_NEW_RELEASES` and
+ * `whatsNewDisplayList()` are both module-private, which is right: nothing in
+ * the app should reach past `renderWhatsNewCardHTML()`/`checkWhatsNewPostDue()`.
+ * loadtest [82]'s placeholder interlock has to read the REAL constant and the
+ * REAL display rule, though — an interlock asserted against a fixture proves
+ * nothing about what ships — so this returns both, read-only, and has no
+ * production call site.
+ *
+ * The literal placeholder token is deliberately NOT spelled out in this
+ * comment: deploy.sh greps this whole FILE for it and hard-stops, so a comment
+ * mentioning it by name would jam the gate permanently once the bullets are
+ * filled in — a guard that always fires is a guard nobody reads.
+ */
+export function _whatsNewForTest() {
+  return { releases: WHATS_NEW_RELEASES, shown: whatsNewDisplayList() };
+}
+
+/** 'YYYY-MM-DD' → 'Sep 11'. Hand-parsed, never `new Date(str)`: the Date
+ *  constructor reads a bare date as UTC midnight and would print the day before
+ *  for anyone west of Greenwich (RG-38). Returns '' for anything unparseable. */
+const WHATS_NEW_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function whatsNewShortDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return '';
+  const mon = WHATS_NEW_MONTHS[Number(m[2]) - 1];
+  return mon ? `${mon} ${Number(m[3])}` : '';
+}
+
+/** `3 new · 5 fixed`, either half omitted at zero (DI-201e). */
+function whatsNewCountsLabel(r) {
+  const parts = [];
+  if (r?.added?.length) parts.push(`${r.added.length} new`);
+  if (r?.fixed?.length) parts.push(`${r.fixed.length} fixed`);
+  return parts.join(' · ');
+}
+
+/**
+ * DI-200j — the ONE renderer of a release's two labelled groups, shared by the
+ * Picks card and the Rules → Release notes history. Two copies of this markup
+ * is how the two surfaces would drift.
+ */
+function renderWhatsNewBodyHTML(release) {
+  const added = release?.added || [];
+  const fixed = release?.fixed || [];
   const group = (label, items) => !items.length ? '' : `
           <div class="text-xs text-muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:8px">${label}</div>
           <ul class="rules-list">${items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>`;
+  return `${group('New', added)}${group('Fixed', fixed)}`;
+}
+
+/**
+ * UN-124 (+ A1.3) — collapsed-by-default "what's new" card, ONE call site:
+ * fillPicksHeadSlot() (FEAT-8b). Renders NOTHING when there is nothing to show.
+ * No dismiss / "seen it" flag — settings.* is one shared league-wide blob, so
+ * one player dismissing it would hide it for everyone (Drew's explicit call).
+ *
+ * Takes an optional array OR a single release object (defaults to the module
+ * constant) so it stays directly unit-testable.
+ *
+ * ONE RELEASE → BYTE-IDENTICAL TO v0.21.0's OUTPUT: same summary sentence, no
+ * version subheading. That is a hard requirement, not a nicety — it is what
+ * keeps UN-124's existing regression assertions meaningful. The subheading and
+ * the "— A and B" summary appear only when the card genuinely holds more than
+ * one release, which from v0.21.2 onward it normally will not.
+ *
+ * The outer <details> stays CLOSED either way: FEAT-8b put this card at the TOP
+ * of the Picks page, so its cost above the fold must stay one line.
+ */
+export function renderWhatsNewCardHTML(data = WHATS_NEW_RELEASES) {
+  const releases = whatsNewDisplayList(data);
+  if (!releases.length) return '';
+  const multi = releases.length > 1;
+  const names = releases.map(r => escHtml(r?.version || ''));
+  const summary = !multi
+    ? (releases[0]?.version ? ` in ${names[0]}` : '')
+    : ` — ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+  const subhead = r => {
+    const d = whatsNewShortDate(r?.date);
+    return `
+          <div class="text-xs text-muted" style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-top:10px">${escHtml(r?.version || '')}${d ? ` · ${escHtml(d)}` : ''}</div>`;
+  };
+  const body = releases.map(r => `${multi ? subhead(r) : ''}${renderWhatsNewBodyHTML(r)}`).join('');
   return `
     <div class="card mb-md">
       <details>
-        <summary style="cursor:pointer;font-weight:600;font-size:.85rem">🆕 What's new${data?.version ? ` in ${escHtml(data.version)}` : ''}</summary>
-        <div>${group('New', added)}${group('Fixed', fixed)}</div>
+        <summary style="cursor:pointer;font-weight:600;font-size:.85rem">🆕 What's new${summary}</summary>
+        <div>${body}</div>
       </details>
+    </div>`;
+}
+
+/**
+ * DI-201 (UN-201) — the Rules-tab release history, immediately above the
+ * version/date footer. Every release in the constant, newest first, newest
+ * OPEN and the rest collapsed.
+ *
+ * `expanded: true` has NO effect here, deliberately: that flag is the Picks
+ * card's catch-up mechanism. This card's job is lookup, and a second pre-opened
+ * accordion in a reference list is just a longer scroll.
+ *
+ * Renders in full for signed-out visitors — the Rules tab is public and release
+ * notes contain no player data. No loading state and no error state exist, by
+ * construction: the source is a module constant, not a fetch.
+ */
+export function renderReleaseNotesCardHTML(data = WHATS_NEW_RELEASES) {
+  const list = (Array.isArray(data) ? data : [data]).filter(whatsNewHasContent);
+  if (!list.length) return '';
+  const oldest = list[list.length - 1]?.version || '';
+  return `
+    <div class="card">
+      <h3 style="color:var(--maroon);margin-bottom:8px;font-size:.95rem">🆕 Release notes</h3>
+      ${list.map((r, i) => {
+        const d = whatsNewShortDate(r?.date);
+        const counts = whatsNewCountsLabel(r);
+        return `
+      <details class="release-entry" data-release="${escHtml(r?.version || '')}"${i === 0 ? ' open' : ''}>
+        <summary class="release-summary">${escHtml(r?.version || '')}${d ? ` · ${escHtml(d)}` : ''}${counts ? `<span class="text-muted text-xs release-counts">${escHtml(counts)}</span>` : ''}</summary>
+        <div>${renderWhatsNewBodyHTML(r)}</div>
+      </details>`;
+      }).join('')}
+      <p class="text-muted text-xs release-notes-foot">Release notes start with ${escHtml(oldest)}. Anything before that isn't recorded here.</p>
     </div>`;
 }
 
@@ -115,6 +294,20 @@ import {
   getNotifyPushMaster, setNotifyPushMaster, getNotifyCategoryPrefs, setNotifyCategoryPref,
   // Build 2b, E3-E5 (2026-09-10, UN-161…163) — SCRIBE Trainer output
   getScribeLearnings, setScribeLearnings, getScribeCanon, setScribeCanon, getScribeReports,
+  // FEAT-8a (2026-09-12, UN-179, DI-179d) — per-player Dashboard/Standings section order
+  getSectionOrder, setSectionOrder, clearSectionOrder,
+  // FEAT-3 (2026-09-12, UN-200, DI-200c) — device ledger of announced releases
+  getWhatsNewPosted, setWhatsNewPosted,
+  // FEAT-2 (2026-09-12, UN-175, DI-175d) — player game requests. Append-only
+  // rows in, derived status out; nothing here ever writes a status.
+  // FEAT-5 (2026-09-12, UN-202, DI-202g) — device ledger of resurfaced wagers
+  getWagerResurfaced, setWagerResurfaced,
+  // N1 (2026-09-12, UN-204, DI-N1 gate 3 / DI-N3) — the lifecycle device ledger
+  // and the per-device push-active flag. Both device-local; see storage.js.
+  getLifecyclePosted, setLifecyclePosted, setPushActive,
+  GAME_REQUEST_CAP, centralDateKey, foldGameRequests,
+  groupGameRequests, gameRequestMatchesWeek, countOpenGameRequests,
+  submitGameRequest, withdrawGameRequest,
 } from './storage.js';
 
 import {
@@ -152,8 +345,11 @@ import {
   resumeChatAfterLogin,
   chatDigest,
   setChatSyncStatus,
+  // FEAT-5 / DI-202b — the wager modal quotes the source message with the SAME
+  // markup chat's own reply quote uses, not a second copy of it.
+  staticQuoteHTML,
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendGameReact, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled } from './chat.js';
+import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat } from './chat.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
   getScribeFrequency, isScribeAutonomousEnabled } from './scribeAgent.js';
@@ -162,27 +358,43 @@ import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearnings
 // week-signal wrapper pass 1 built for these two call sites. Imported rather
 // than retyped so the dial's five level descriptions and the memory modal's
 // body/empty-state strings exist in exactly one place.
-import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, MEMORY_COPY, considerWeekSignals } from './scribeLines.js';
+import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, MEMORY_COPY, considerWeekSignals,
+         whatsNewPostLine,
+         // FEAT-5 (2026-09-12, UN-202) — the four approved wager pools, their
+         // deterministic selector, and THE one claim truncation (DI-202n item 5).
+         wagerLine, wagerClaimTruncate, WAGER_CLAIM_MAX } from './scribeLines.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
 import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
-import { renderPicksFooterHTML, renderWeekRecapCardHTML } from './recap.js';
+import { renderPrevWeekRecapHTML, renderSeasonSummaryHTML, renderWeekRecapCardHTML } from './recap.js';
 import {
   detectLongestFieldGoal, gradeWeekExtraPoint, gradeExtraPoint,
   renderExtraPointResultsHTML, EP_OUTCOME_LABEL,
+  seasonExtraPointTally, isCountedExtraPointWeek,
 } from './extra-point.js';
 
 // ── Groups A/B — in-app + push notifications (UN-139…UN-148, 2026-09-10) ─────
+//
+// N1 / FEAT-11 (UN-204, 2026-09-12) — THE notify*() ORCHESTRATORS ARE NO LONGER
+// IMPORTED HERE, and that is the change, not an oversight. Every lifecycle
+// notice is now a Locker Room chat post (emitLifecyclePost() below); firing
+// both pipelines would double-push, so the call sites were REPLACED, not
+// duplicated (DI-N1). The functions themselves stay in js/notifications.js —
+// they are tested, and notifytest.mjs diffs their copy pools against Code.gs's
+// manual port — they simply have no production caller on this side any more.
+// getNotificationsForPlayer / unreadLifecycleCount / markNotificationRead and
+// pollNotifyLog go with them: DI-N5 retires the Notification Center LIST, so
+// nothing renders the stored records or the folded server log. The stored data
+// is left exactly where it is (no migration, destructive or otherwise).
 import {
   wireChatNotifications, destinationFor,
-  notifyPicksOpened, notifyPicksLocked, notifyResultsFinalized,
-  notifyObligationCreated, notifyObligationSettled, notifyCommissionerAnnouncement,
-  getNotificationsForPlayer, unreadLifecycleCount, markNotificationRead,
+  LIFECYCLE_EVENTS, CATEGORY_OF_EVENT,
   registerPushAdapter, OneSignalRelayAdapter,
-  pollNotifyLog,
 } from './notifications.js';
+import { buildCopy } from './notify-copy.js';
 import {
   ensureOneSignalInit, loginOneSignal, logoutOneSignal, wireForegroundSuppression,
-  subscriptionState, requestPushPermission,
+  wireNotificationClicks,
+  subscriptionState, requestPushPermission, isPushOptedIn,
 } from './push-onesignal.js';
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
@@ -194,10 +406,30 @@ export const state = {
   dashboardWeekId: null,
   picksWeekId: null,      // v0.16.0 — non-null when viewing a previous locked/closed week on the Picks tab
   draftExtraPoint: null,  // v0.16.0 — Ischemic Extra Point guess (longest FG, yards)
+  // FEAT-8a / UN-179 — which page (if any) is currently in layout EDIT MODE:
+  // null | 'dashboard' | 'standings'. TRANSIENT by design (DI-179j): the
+  // ORDER is persisted on the player record, the mode never is — a player who
+  // reloads mid-edit comes back to a normal page, not to a page with move
+  // bars on it. Cleared on every session change in resyncPlayerPreferences().
+  layoutEditing: null,
+  // The one-shot aria-live string for the move just made; consumed (and
+  // cleared) by the bind pass right after the re-render.
+  layoutAnnounce: null,
   // Active tab within the Commissioner panel (week / games / players / settings / data)
   commTab: 'week',
   lastFetchResult: null,
   recalcAllResult: null, // DI-H — set by #recalc-all-weeks-btn, read by renderRecalculateFinalizedWeeksAdminSectionHTML()
+  // FEAT-2 / UN-175 — the Rules-page request card's TRANSIENT search state.
+  // Nothing here is persisted: the search is a lookup, and the only durable
+  // artefact is the appended request row itself.
+  gameRequest: {
+    date: '',            // 'YYYY-MM-DD' the player is searching
+    results: [],         // parsed ESPN games for that single day
+    loading: false,
+    error: '',           // '' | 'empty' | 'network'
+    filter: '',          // free-text team filter over `results`
+    postToChat: true,    // coordinator ruling Q2 — checkbox defaults ON
+  },
   // Available-games filter (commissioner panel). Persists within a session.
   availFilter: {
     groupBy: 'date',      // 'date' | 'day' | 'conference' | 'region' | 'rank' | 'none'
@@ -388,9 +620,27 @@ async function boot() {
   // panel. Idempotent (wires once) and boot-inert: it reads nothing, writes
   // nothing and fetches nothing until a player actually taps it.
   try { wireScribeFileEntry(); } catch (e) { console.warn('[scribe] file entry wiring failed', e); }
+  // FEAT-5 / DI-202g — the ONE wager-list fetch per session, at chat boot. A
+  // read, nothing else: it seeds nothing and writes nothing, so it adds no
+  // surface to the boot path RG-12 is about. Fire-and-forget with its own catch
+  // — a failure here must never hold up the room opening.
+  try { refreshWagerCache().catch(() => {}); } catch (e) { console.warn('[wager] boot cache failed', e); }
 
   // ── Groups A/B — notifications boot wiring (2026-09-10) ──────────────────
   try {
+    // N1 follow-up (e), 2026-09-12 — CLEAR THE PERSISTED PUSH-ACTIVE FLAG
+    // FIRST. KEYS.PUSH_ACTIVE is device-local AND persisted, so a phone whose
+    // notification permission was revoked between sessions (or a handset handed
+    // to another player) boots reading LAST session's `true` and swallows every
+    // in-app toast and blip until refreshPushActiveFlag() below resolves — which
+    // waits on the OneSignal SDK, i.e. up to its 12s ready timeout, and forever
+    // if init never settles at all (no App ID, offline, SDK blocked). Clearing
+    // it here, ABOVE ensureOneSignalInit() rather than inside its .then(), makes
+    // that window fail CLOSED — "push is NOT carrying this device", the same
+    // safe direction refreshPushActiveFlag() itself fails to, and the direction
+    // the comment below already claims. Costs one write and at most one
+    // redundant toast on a device that really does have push.
+    try { setPushActive(false); } catch {}
     registerPushAdapter(new OneSignalRelayAdapter());   // §4 — provider isolation: absent adapter is also a valid state, never required
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
     setupNotifBell();
@@ -398,17 +648,29 @@ async function boot() {
     const sess0 = getSession();
     ensureOneSignalInit().then(() => {
       if (sess0?.playerId) loginOneSignal(sess0.playerId);
-      wireForegroundSuppression(destinationFor);          // §3 step 3 — client-side-only foreground suppression
+      // BUG-12 (2026-09-12) — "When I receive a push notification it doesn't show
+      // up in the chat for at least 30 seconds after the notification." Both
+      // OneSignal hooks now also force ONE chat fetch through the chat engine's
+      // seam (chat.js wakeChat() -> the transport's bounded wake()); the third
+      // trigger, an app resume, fires inside the transport itself where the
+      // visibilitychange listener already lived. Fire-and-forget here — nothing
+      // on this path is waiting on a verdict, and wakeChat() never throws.
+      wireForegroundSuppression(destinationFor, () => { wakeChat(); });   // §3 step 3 — client-side-only foreground suppression, + BUG-12's foreground fetch
+      wireNotificationClicks(() => { wakeChat(); });                      // BUG-12 — a tap with the app already running (no fresh boot, no ?ntab re-parse)
+      // N1 / DI-N3 (R10) — compute the device's push-active flag AFTER init, so
+      // OneSignal's opted-in report is meaningful rather than a guess against an
+      // SDK that has not drained its queue yet. Fire-and-forget: showToast()
+      // reads the CACHED value synchronously and a device that has not computed
+      // it yet reads FALSE, i.e. "keep showing the toast" — the safe direction
+      // (UN-N3: not having push must never be the same as going blind).
+      refreshPushActiveFlag();
     });
-    // F2/F4 remediation (2026-09-10) — fold the server-fired reminder/
-    // locking-soon log (PICKS_REMINDER/PICKS_LOCKING_SOON are push-only from
-    // the client's perspective — Code.gs's scanReminders fires them entirely
-    // server-side) into the Notification Center at hydrate, then re-render
-    // the bell so its count reflects them immediately rather than waiting
-    // for the first auto-refresh tick.
-    if (sess0?.playerId) {
-      pollNotifyLog(sess0.playerId, { force: true }).then(() => renderNotifBell()).catch(() => {});
-    }
+    // N1 / DI-N5 — pollNotifyLog() IS GONE FROM BOOT. It folded the server's
+    // CFBP_NOTIFY_LOG into the Notification Center list; nothing renders that
+    // list any more. The server keeps writing the log as an audit trail
+    // (Code.gs unchanged there); this side simply stops reading it, which also
+    // removes a network round trip from boot and a 60-second background poll
+    // from the refresh tick.
   } catch (e) { console.warn('[notifications] boot wiring failed', e); }
 
   // DI-A5 — deep-link landing. Mirrors index.html's own "?access=scribe"
@@ -591,6 +853,639 @@ export function checkPickRevealDue() {
   try { localStorage.setItem(key, JSON.stringify(done.slice(-20))); } catch {}
 }
 
+/**
+ * FEAT-3 / DI-200c (UN-200, 2026-09-12) — SCRIBE announces a new release in the
+ * Locker Room, once per version, league-wide.
+ *
+ * MODELLED ON checkPickRevealDue() ABOVE, DELIBERATELY, because the failure mode
+ * is identical: a permanent, un-take-back-able post into an append-only log in
+ * front of six real people. Its bounds, each one load-bearing:
+ *
+ *   1. CURRENT VERSION ONLY. It can only ever post for APP_VERSION, and it
+ *      refuses when the newest displayed release is not APP_VERSION. It never
+ *      walks the history. A device installing fresh at v0.25.0 therefore cannot
+ *      backfill four release posts — the older entries are unreachable from this
+ *      path by construction, not by a filter.
+ *   2. DEVICE LEDGER through the storage seam (KEYS.WHATS_NEW_POSTED, registered
+ *      in DEVICE_LOCAL_KEYS), not raw localStorage. checkPickRevealDue()'s
+ *      `cfbp_reveal_emitted` predates that rule; this is the better precedent.
+ *   3. CONTENT GATE. Nothing to show → nothing posted. The same rule
+ *      renderWhatsNewCardHTML() applies, computed by the same function, so the
+ *      card and the post can never disagree about whether this release exists.
+ *   4. SESSION GATE (coordinator ruling Q4): a verified player session or the
+ *      commissioner, chat enabled, backend configured. A device that merely
+ *      cleared the site PIN does not announce a release to the league.
+ *   5. LEDGER WRITTEN AT QUEUE, NOT AT ACK. sendEvent() queues into the
+ *      persisted outbox, which survives a reload and flushes when chat or the
+ *      backend comes back — so a successful QUEUE is the commit point. If a gate
+ *      refuses, the ledger is NOT written and the next navigation tries again.
+ *
+ * Six devices may each attempt it; chatAppend() dedupes on the deterministic id
+ * (AD-11), so exactly one row exists and the five losers reconcile onto it. No
+ * Apps Script change was needed for any of that.
+ *
+ * SCRIBE.md §14: this is NOT dial-gated and consumes no autonomous budget. It
+ * calls sendEvent() directly and never enters scribeTrigger(), so no signal is
+ * scored, no frequency threshold is consulted and no cooldown is stamped. A
+ * commissioner setting the dial to Quiet is not saying "don't tell me the app
+ * changed". Residual, accepted rather than hidden (Q3): carrying no
+ * meta.autonomous means an autonomous line could land straight after it.
+ *
+ * BLIND RULE: not engaged. The body is drawn exclusively from
+ * WHATS_NEW_RELEASES — no pick, no selection, no tiebreaker, no standing can
+ * reach it. There is no week dependency of any kind, by design.
+ *
+ * Parameters exist for the harness only; every production call passes nothing.
+ */
+export function checkWhatsNewPostDue({ version = APP_VERSION, date = APP_VERSION_DATE,
+                                       releases = WHATS_NEW_RELEASES } = {}) {
+  if (!version) return;
+  if (getWhatsNewPosted().includes(version)) return;          // bound 2
+  const shown = whatsNewDisplayList(releases);
+  if (!shown.length) return;                                  // bound 3
+  // bound 1, the strict half: the announcement must describe the build that is
+  // actually running. A constant that has not caught up with APP_VERSION (or has
+  // run ahead of it, as it does between a feature landing and the version bump)
+  // means silence, not a post naming one version and counting another's bullets.
+  if (shown[0]?.version !== version) return;
+  const sess = getSession();
+  if (!(sess?.playerVerified || sess?.isAdmin)) return;        // bound 4
+  if (!isChatEnabled()) return;
+  if (!isBackendConfigured()) return;
+
+  // A1.4 — counts are SUMMED across exactly the releases the card renders. If
+  // the post says "3 new" and the card shows nine, the post is lying; both are
+  // computed from `shown` for that reason.
+  const nAdded = shown.reduce((n, r) => n + (r.added?.length || 0), 0);
+  const nFixed = shown.reduce((n, r) => n + (r.fixed?.length || 0), 0);
+  const body = whatsNewPostLine({
+    version, nAdded, nFixed,
+    headline: whatsNewHeadline(shown[0]),
+    alsoVersion: shown.length > 1 ? (shown[1]?.version || '') : '',
+  });
+  sendChatEvent({
+    id: `sys_whatsnew_${version.replace(/[^a-zA-Z0-9_:-]/g, '_')}`,
+    type: 'message', author: 'scribe', gameTag: '', notify: true, replyTo: '',
+    body,
+    meta: { kind: 'whatsNew', version, date, nAdded, nFixed, source: 'tier0' },
+  });
+  setWhatsNewPosted(version);                                 // bound 5
+}
+
+/** The newest release's FIRST item, verbatim — the top of `added`, or of `fixed`
+ *  when `added` is empty. Truncated at 90 chars on a word boundary. SCRIBE does
+ *  not summarise it and there is no model call anywhere in this path. */
+function whatsNewHeadline(release) {
+  const raw = String(release?.added?.[0] || release?.fixed?.[0] || '');
+  if (raw.length <= 90) return raw;
+  const cut = raw.slice(0, 90);
+  const sp = cut.lastIndexOf(' ');
+  return `${(sp > 40 ? cut.slice(0, sp) : cut).trimEnd()}…`;
+}
+
+
+/**
+ * FEAT-5 / DI-202g (UN-202, 2026-09-12) — "the appropriate time frame": SCRIBE
+ * brings a logged wager back up when its due week arrives.
+ *
+ * MODELLED ON checkPickRevealDue() / checkWhatsNewPostDue() ABOVE, DELIBERATELY,
+ * because the failure mode is identical and has already been paid for twice: a
+ * permanent, un-take-back-able post into an append-only log, in front of six
+ * real people, from a device with a fresh ledger. Its bounds, each load-bearing:
+ *
+ *   1. ONE PER INVOCATION. At most one wager resurfaces per call. Even if every
+ *      other bound were wrong, a single nav tap can post one message, not a
+ *      season's backlog. A genuine backlog of two drains within seconds of
+ *      normal use, because this runs on every navigation.
+ *   2. DUE, AND NOT INDEFINITELY OVERDUE. Due = the wager's week has reached
+ *      status `locked` or later (coordinator ruling Q7: "by week 7" means when
+ *      week 7 ARRIVES, not after it is graded — and lock is the app's one
+ *      guaranteed weekly all-hands moment). It stays a candidate for
+ *      WAGER_DUE_WINDOW_DAYS after the stored `reviewAt`; older never posts. An
+ *      absent or unparseable `reviewAt` FAILS CLOSED — it is never a candidate.
+ *      Same instinct as checkPickRevealDue()'s "a week with no endDate fails
+ *      closed" and fireScribeWeekSignals()'s Number.isFinite(at) guard, which
+ *      exists because collapsing "no stamp" with "old stamp" poisoned a ledger
+ *      once already.
+ *   3. DEVICE LEDGER through the storage seam (KEYS.WAGER_RESURFACED, registered
+ *      in DEVICE_LOCAL_KEYS), never raw localStorage. The server's id-dedupe on
+ *      `scribe_wagerdue_<wagerId>` is the league-wide authority (AD-11); this
+ *      only stops THIS device re-attempting.
+ *   4. NEVER ON A DEMO WEEK, matching every other week-scoped emitter here.
+ *   5. GATES: a verified player session (or the commissioner), chat enabled,
+ *      backend configured. A device that merely cleared the site PIN does not
+ *      post to the league. A refused gate leaves the ledger UNWRITTEN, so the
+ *      next navigation after the gate clears tries again.
+ *
+ * THE READ THAT FEEDS IT IS A CACHE, NEVER A REQUEST. A scribeMemoryList call on
+ * every navigation would be a network round trip per nav tap. The wager list is
+ * fetched ONCE per session at chat boot and again after any wager write
+ * (refreshWagerCache below); this function reads `scribeMemoryCache.wagers` and
+ * issues no request of any kind. A wager logged on another device becomes
+ * visible here on the next session or the next write — acceptable for a due
+ * date measured in weeks.
+ *
+ * NO LLM IS REACHABLE FROM THIS PATH. Not scribeAskRemote, not
+ * scribeAutonomousRemote, not scribeClassifyRemote — there is no generative step
+ * in which a fabricated result could appear, which matters because Drew's own
+ * example ("USC isn't ranked by week 7") is unanswerable from app data: there is
+ * no AP poll in this app. SCRIBE echoes the claim and the recorded status and
+ * stops (SCRIBE.md §9.1, DI-202i).
+ *
+ * SCRIBE.md §14: NOT dial-gated and consumes no autonomous budget. It calls
+ * sendEvent() directly with a deterministic id and never enters scribeTrigger(),
+ * so no signal is scored, no FREQUENCY_LEVELS threshold is consulted, no hourly
+ * limit is decremented and no cooldown is stamped. AD-50 is not engaged: no
+ * detector fires, so there is no Tier-0 line to suppress.
+ *
+ * BLIND RULE: not engaged, and the reason is structural rather than a judgement
+ * call. The stored claim is a player-authored sentence from the public room; it
+ * is never a pick record. No code path in this feature reads getPicks(). The
+ * post carries no selection, no tiebreaker and no standing.
+ *
+ * Parameters exist for the harness only; every production call passes nothing.
+ */
+export const WAGER_DUE_WINDOW_DAYS = 14;
+const WAGER_DUE_WEEK_STATUSES = ['locked', 'live', 'final'];
+
+/** True once the week has reached lock. Consults the EFFECTIVE status and the
+ *  stored one, the same belt-and-braces canPlayerSubmitPicks() uses — with
+ *  Auto-Open set and Auto-Lock blank, getEffectiveWeekStatus() reports 'open'
+ *  for a week the app itself advanced to locked (the RG this codebase already
+ *  paid for). Either saying "locked or later" is enough. */
+function wagerWeekReachedLock(week) {
+  if (!week) return false;
+  let eff = '';
+  try { eff = String(getEffectiveWeekStatus(week) || ''); } catch { eff = ''; }
+  return WAGER_DUE_WEEK_STATUSES.includes(eff) || WAGER_DUE_WEEK_STATUSES.includes(String(week.status || ''));
+}
+
+/** `{"c":claim,"o":counterpartyId,"w":dueWeekId,"b":loggedBy}` or null. A row
+ *  whose envelope cannot be parsed is inert everywhere — never rendered, never
+ *  resurfaced — rather than guessed at (SCRIBE.md §9's no-fabrication rule
+ *  applied one layer down). */
+export function parseWagerValue(row) {
+  try {
+    const v = JSON.parse(String(row?.value || ''));
+    if (!v || typeof v !== 'object') return null;
+    return { claim: String(v.c || ''), counterpartyId: String(v.o || ''),
+             weekId: String(v.w || ''), loggedBy: String(v.b || '') };
+  } catch { return null; }
+}
+
+/** 'wager:w1abc' -> 'w1abc'. '' for anything that is not a wager key. */
+function wagerIdFromKey(key, prefix) {
+  const k = String(key || '');
+  return k.startsWith(prefix) ? k.slice(prefix.length) : '';
+}
+
+/** Every `wagerack:` row in the cache, keyed by wagerId. The ANSWER is attested
+ *  by the person who gave it — the row is owned by, and deletable by, the
+ *  counterparty (AD-49): deleting it reverts the wager's status to `silent`,
+ *  which is honest, because the record of acceptance was withdrawn. */
+function wagerAnswerIndex(rows) {
+  const out = new Map();
+  for (const row of rows || []) {
+    if (!row || row.kind !== 'wager') continue;
+    const id = wagerIdFromKey(row.key, 'wagerack:');
+    if (!id) continue;
+    let reply = '';
+    try { reply = String(JSON.parse(String(row.value || '')).r || ''); } catch { reply = ''; }
+    if (reply !== 'accepted' && reply !== 'declined') continue;
+    out.set(id, { playerId: String(row.playerId || ''), reply, rowId: row.id });
+  }
+  return out;
+}
+
+/** The counterparty's answer for one wager, or null. Exposed on `window` for
+ *  chat-ui.js's accept/decline controls, which cannot import this module. */
+export function scribeWagerAnswer(wagerId) {
+  return wagerAnswerIndex(scribeMemoryCache.wagers || []).get(String(wagerId || '')) || null;
+}
+
+/**
+ * PURE CANDIDATE SELECTION — the single wager this device would post next
+ * against a given row set, or null. Extracted from checkWagersDue() by RG-120
+ * (2026-09-12) so the SAME selection can be run twice: once synchronously
+ * against the cache (the cheap early-out that keeps navigation free of network
+ * calls), and once again against freshly-fetched rows immediately before a post
+ * actually happens. Two call sites, one definition — never two readings of
+ * "which wager is due" that could disagree.
+ *
+ * Bounds 2, 3 and 4 (see checkWagersDue's docstring) all live in here.
+ */
+export function selectDueWager({ now = Date.now(), rows = [], done = [] } = {}) {
+  const cutoffMs = WAGER_DUE_WINDOW_DAYS * 86400000;
+  const due = [];
+  for (const row of rows) {
+    if (!row || row.kind !== 'wager') continue;
+    const wagerId = wagerIdFromKey(row.key, 'wager:');
+    if (!wagerId || done.includes(wagerId)) continue;
+    const v = parseWagerValue(row);
+    if (!v || !v.claim) continue;                               // unparseable envelope: inert
+    const week = v.weekId ? getWeek(v.weekId) : null;
+    if (!week || week.dataSourceMode === 'demo') continue;      // bound 4
+    if (!wagerWeekReachedLock(week)) continue;                  // bound 2, first half
+    const at = row.reviewAt ? Date.parse(row.reviewAt) : NaN;
+    if (!Number.isFinite(at)) continue;                         // bound 2, FAILS CLOSED
+    if (now > at + cutoffMs) continue;                          // bound 2, second half
+    due.push({ row, wagerId, v, week, at });
+  }
+  if (!due.length) return null;
+  // Oldest deadline first, wagerId as a stable tiebreak — six devices must
+  // choose the SAME candidate, or two different wagers resurface at once.
+  due.sort((a, b) => (a.at - b.at) || (a.wagerId < b.wagerId ? -1 : a.wagerId > b.wagerId ? 1 : 0));
+  return due[0];                                                // bound 1 — ONE per invocation
+}
+
+/**
+ * RG-120 (2026-09-12, F5 reviewer BLOCK) — WHY THIS IS ASYNC NOW.
+ *
+ * The defect: this function read `scribeMemoryCache.wagers`, which is refreshed
+ * at chat boot and after this device's own wager writes — and nowhere else. So
+ * a device whose session predates the counterparty's `wagerack:` row held a
+ * cache that said "silent" while the server said "accepted", and it posted
+ * `wagerDueSilent` over a recorded acceptance. Under a DETERMINISTIC id that is
+ * permanent: the wrong line wins the server's dedupe and the right one can
+ * never be written. The same staleness resurfaced a wager the proposer had
+ * since DELETED, which is an AD-49 violation — a player's delete has to stick.
+ *
+ * The fix keeps DI-202g's actual rule ("no request per navigation") intact,
+ * because that rule is about the COMMON path, not the rare one:
+ *
+ *   1. Select synchronously from the cache. Nothing due — which is every
+ *      navigation on almost every day — returns here, having issued no request.
+ *      Navigation still costs nothing.
+ *   2. Only once a post is genuinely about to happen (a few times a season) do
+ *      we pay for one `refreshWagerCache({force:true})` round trip.
+ *   3. Re-run the SAME selection, and rebuild the answer index, against the
+ *      fresh rows. Whatever the server says now is what gets posted.
+ *   4. If the wager is gone from the server, nothing posts AND the ledger is
+ *      not written for it. A deleted wager is deleted.
+ *
+ * `rows` remains a harness-only pin: when a caller supplies a row set it is
+ * authoritative and no refresh is issued, so a fixture-driven test is testing
+ * its fixture. Production passes nothing.
+ */
+export async function checkWagersDue({ now = Date.now(), rows = null } = {}) {
+  const sess = getSession();
+  if (!(sess?.playerVerified || sess?.isAdmin)) return;        // bound 5
+  if (!isChatEnabled()) return;
+  if (!isBackendConfigured()) return;
+  const pinned = Array.isArray(rows);
+  const cached = pinned ? rows : (scribeMemoryCache.wagers || []);
+  if (!cached.length) return;
+  // Step 1 — the synchronous early-out. No network call on a navigation that
+  // has nothing to post.
+  if (!selectDueWager({ now, rows: cached, done: getWagerResurfaced() })) return;
+
+  // Steps 2 and 3 — one round trip, then decide again on what came back.
+  let source = cached;
+  if (!pinned) {
+    await refreshWagerCache({ force: true });
+    source = scribeMemoryCache.wagers || [];
+  }
+  const done = getWagerResurfaced();                            // bound 3, re-read after the await
+  const picked = selectDueWager({ now, rows: source, done });
+  if (!picked) return;                                          // step 4 — gone, or no longer due
+  const { row, wagerId, v, week } = picked;
+  // The answer index is built from the SAME fresh rows the candidate came from,
+  // so the posted status can never describe a different snapshot than the
+  // candidate does.
+  const ans = wagerAnswerIndex(source).get(wagerId) || null;
+  const status = ans ? ans.reply : 'silent';
+  const pool = status === 'accepted' ? 'wagerDueAccepted'
+             : status === 'declined' ? 'wagerDueDeclined'
+             : 'wagerDueSilent';
+  const body = wagerLine(pool, {
+    wagerId,
+    proposer: getPlayer(row.playerId)?.displayName || 'Somebody',
+    counterparty: ans ? (getPlayer(ans.playerId)?.displayName || 'Somebody') : 'the room',
+    claim: v.claim,
+    weekLabel: formatWeekLabelParts(week).name,
+  });
+  if (!body) return;                                            // an empty pool posts nothing
+
+  sendChatEvent({
+    id: `scribe_wagerdue_${wagerId}`,
+    type: 'message', author: 'scribe', gameTag: '', notify: true,
+    replyTo: row.sourceMessageId || '',
+    body,
+    meta: { kind: 'wagerDue', wagerId, status },
+  });
+  setWagerResurfaced(wagerId);                                  // ledger written at QUEUE
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * N1 / FEAT-11 — LIFECYCLE NOTICES LIVE IN THE LOCKER ROOM (UN-204, DI-N1…N7)
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ * Drew, 2026-09-12: *"IT's all lifecycle notices, there should be one place for
+ * notifications and it should be the chat."*
+ *
+ * WHAT WAS WRONG BEFORE, IN ONE SENTENCE: the app had three delivery surfaces
+ * (the Notification Center list, the in-app toast, the OS push) fed by two
+ * independent pipelines (js/notifications.js's lifecycle events and the chat
+ * relay), and NOTHING arbitrated between them — so the surface an event landed
+ * on was an accident of which pipeline happened to build it. "Locking soon"
+ * ended up in the bell because it was a notifyLog row; the pick reveal ended up
+ * as a forced toast; PICKS_LOCKED ended up as both a bell row and a push. The
+ * class of defect is: DELIVERY SURFACE WAS NOT A DESIGNED PROPERTY OF AN EVENT.
+ * It is now. There is one surface — the room — and push is how the room reaches
+ * a phone.
+ *
+ * THE SHAPE, FIXED FOR EVERY LIFECYCLE POST (DI-N1):
+ *     type    'message'      <- REQUIRED. _scanNewChatMessages() relays ONLY
+ *                               type:'message'; every legacy sys_* emitter is
+ *                               type:'system' and so could never push. That is
+ *                               the structural half of BUG-10.
+ *     author  'scribe'       <- except COMMISSIONER_ANNOUNCEMENT, which posts
+ *                               under the commissioner's own playerId and is
+ *                               never SCRIBE-attributed (a structural rule).
+ *     notify  true
+ *     gameTag ''             <- main room, always. One chat key, one room (AD-09,
+ *                               AD-17): a lifecycle notice is a FIELD on a
+ *                               message, never a channel.
+ *     meta    { kind:'lifecycle', event, weekId, category, origin:'client' }
+ *     id      sys_lc_<EVENT>_<scopeId>
+ *
+ * IT RENDERS AS AN ORDINARY SCRIBE BUBBLE. No new card, no new CSS class, no new
+ * colour — identical to the FEAT-3 release post. `meta.kind:'lifecycle'` exists
+ * for the relay's category gate and for tests, NOT for a visual variant.
+ *
+ * SCRIBE.md §14 — NOT DIAL-GATED, CONSUMES NO AUTONOMOUS BUDGET. Every function
+ * below calls sendChatEvent() directly and never enters scribeTrigger(), so no
+ * signal is scored, no FREQUENCY_LEVELS threshold is consulted, no hourly limit
+ * is decremented and no cooldown is stamped. Same reasoning FEAT-3 and FEAT-5
+ * recorded: a commissioner who set the dial to Quiet is not saying "don't tell
+ * me the week locked." loadtest.mjs asserts this structurally — a lifecycle
+ * emitter that reached scribeTrigger() would fail the suite.
+ *
+ * BLIND RULE — STRUCTURAL, NOT A JUDGEMENT CALL. Every body is built by
+ * buildCopy() from js/notify-copy.js, which is deny-by-default on pick content
+ * (FORBIDDEN_META_KEYS plus a module-load scan plus assertMetaIsBlindSafe()).
+ * No post here carries a selection, a spread, a tiebreaker or an Extra-Point
+ * value. The ONE permitted exception is unchanged and lives server-side:
+ * PICKS_LOCKING_SOON may name who has not submitted — identity of
+ * non-submission, never content.
+ */
+
+/** Deterministic AD-11 id. Six devices may each detect the same transition;
+ *  chatAppend() dedupes on id, so exactly one row exists and the five losers
+ *  reconcile onto it. The sanitiser mirrors checkWhatsNewPostDue()'s — an id is
+ *  a sheet cell key, and a stray character in a scope id must not produce a
+ *  SECOND row for the same event. */
+export function lifecycleChatId(event, scopeId) {
+  return `sys_lc_${event}_${String(scopeId ?? '').replace(/[^a-zA-Z0-9_:-]/g, '_')}`;
+}
+
+/** DI-N1 gate 2 — a verified player session or the commissioner, chat on,
+ *  backend configured. A device that merely cleared the site PIN does not
+ *  announce anything to the league. Identical to checkWhatsNewPostDue()'s and
+ *  checkWagersDue()'s gate, deliberately: three features, one rule. */
+function lifecycleGatesOpen() {
+  const sess = getSession();
+  if (!(sess?.playerVerified || sess?.isAdmin)) return false;
+  if (!isChatEnabled()) return false;
+  if (!isBackendConfigured()) return false;
+  return true;
+}
+
+/**
+ * THE one emitter. Every lifecycle call site below routes through here rather
+ * than hand-rolling a sendChatEvent() — the same "one place" rule DI-A1 applied
+ * to the old policy layer, moved to the surface that replaced it.
+ *
+ * Returns the chat id it queued, or null if any gate refused. A refused gate
+ * leaves the device ledger UNWRITTEN on purpose (DI-N1 gate 4): sendChatEvent()
+ * queues into chat.js's persisted outbox, so a successful QUEUE is the commit
+ * point, and a refusal means the next navigation tries again.
+ *
+ * @param {object}      opts
+ * @param {string}      opts.event     a LIFECYCLE_EVENTS key
+ * @param {string|null} opts.scopeId   weekId / obligationId; null = no deterministic id (uuid)
+ * @param {string|null} [opts.weekId]  recorded on the row; also the demo-week probe
+ * @param {object}      [opts.facts]   the fact object handed to buildCopy()
+ * @param {string}      [opts.author]  'scribe' unless the commissioner owns the words
+ * @param {string|null} [opts.copyEvent] pool to voice with, when it differs from `event`
+ * @param {string|null} [opts.bodyOverride] verbatim body — commissioner announcements only
+ * @param {object|null} [opts.week]    the week record, when the caller already holds it
+ */
+export function emitLifecyclePost({ event, scopeId, weekId = null, facts = {}, author = 'scribe',
+                                    copyEvent = null, bodyOverride = null, week = null }) {
+  if (!LIFECYCLE_EVENTS[event]) return null;                 // unknown event: never post
+  // DI-N1 gate 1 — NEVER A DEMO WEEK. Checked here as well as at every call
+  // site, belt and braces, matching this codebase's existing demo discipline
+  // (finalizeWeek / reconcileWeeklyObligation / notifyPicksOpened all do the
+  // same). A demo week is the commissioner rehearsing; the league must not
+  // watch him rehearse.
+  const w = week || (weekId ? getWeek(weekId) : null);
+  if (w?.dataSourceMode === 'demo') return null;
+  if (!lifecycleGatesOpen()) return null;                    // DI-N1 gate 2
+
+  const id = scopeId === null || scopeId === undefined ? null : lifecycleChatId(event, scopeId);
+  // `id || event` as the selection seed, never Date.now(): buildCopy() picks a
+  // pool member by stableIndex(dedupKey), so six devices optimistically render
+  // the SAME text before the server's id dedupe picks a winner (AD-11). A
+  // time-based seed would make the five losers briefly show different wording.
+  const body = bodyOverride != null ? String(bodyOverride) : buildCopy(copyEvent || event, facts, id || event).body;
+  if (!body) return null;                                    // an empty pool posts nothing
+
+  sendChatEvent({
+    ...(id ? { id } : {}),
+    type: 'message', author, gameTag: '', notify: true, replyTo: '',
+    body,
+    meta: {
+      kind: 'lifecycle', event, weekId: weekId || null,
+      // Recorded for the record and for tests. The relay does NOT trust it — it
+      // looks the category up from meta.event through CATEGORY_OF_EVENT, so a
+      // malformed row cannot hand itself a category that silences nothing.
+      category: CATEGORY_OF_EVENT[event] ?? null,
+      origin: 'client',
+    },
+  });
+  if (id) setLifecyclePosted(id);                            // DI-N1 gate 4 — at QUEUE, not at ack
+  return id;
+}
+
+/** DRAFT -> OPEN. League-wide, count-free. */
+export function postPicksOpenedNotice(week) {
+  if (!week) return null;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.PICKS_OPENED, scopeId: week.weekId, weekId: week.weekId, week,
+    facts: { weekN: week.weekNumber },
+  });
+}
+
+/** -> LOCKED. League-wide and COUNT-ONLY — never named. "The moment has
+ *  passed" (UN-46): naming who missed the deadline after it has passed is a
+ *  pile-on, and the locking-soon notice already did the useful version of it. */
+export function postPicksLockedNotice(week) {
+  if (!week) return null;
+  const active = getPlayers().filter(p => p.active);
+  const submittedCount = active.filter(p => hasPlayerSubmitted(week.weekId, p.playerId)).length;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.PICKS_LOCKED, scopeId: week.weekId, weekId: week.weekId, week,
+    facts: { weekN: week.weekNumber, submittedCount, totalPlayers: active.length },
+  });
+}
+
+/**
+ * -> FINAL. ONE league-wide post naming the winner and the loser.
+ *
+ * `weekWinnerName`/`weekLoserName` MUST come from calculateWeeklyResults()'s own
+ * return value (SCRIBE.md §9.1 boundary) — this function reads only what
+ * finalizeWeek() hands it and never re-derives a winner. They are coerced to
+ * `undefined`, never `null`: buildCopy() treats undefined as "fact not
+ * supplied" and drops any template needing it, whereas a `null` used to be
+ * substituted verbatim and render "null took it" (the 2026-09-10 BLOCKING #2).
+ *
+ * The personalized RESULTS_FINALIZED_YOU_WON variant is RETIRED here (ruling
+ * O3) — a league-wide room cannot carry a second-person line, and the winner is
+ * already named in this one.
+ */
+export function postResultsFinalizedNotice(week, weekWinnerName, weekLoserName) {
+  if (!week) return null;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.RESULTS_FINALIZED, scopeId: week.weekId, weekId: week.weekId, week,
+    facts: {
+      weekN: week.weekNumber,
+      weekWinnerName: weekWinnerName || undefined,
+      weekLoserName: weekLoserName || undefined,
+    },
+  });
+}
+
+/**
+ * The four facts an obligation post can carry. `{obligationLabel}` is the app's
+ * OWN three-step fallback — the identical expression the commissioner panel
+ * already renders an obligation's description from. Do not invent a fourth
+ * source: a weekly obligation gets settings.weeklyPrize (shipped default: the
+ * whole sentence "Loser buys winner a consolation prize"), a manual one gets the
+ * commissioner's note (default "1 drink"). That is precisely why every template
+ * in the pool sets the label off with an em dash instead of inlining it.
+ *
+ * `weekN` is absent for a manual obligation (weekId null) — buildCopy() then
+ * drops the templates that need it and uses the pool's weekN-free floor lines.
+ */
+function obligationFacts(ob) {
+  const week = ob?.weekId ? getWeek(ob.weekId) : null;
+  const label = ob?.note || ob?.amountOrPrize || getSettings().weeklyPrize || '';
+  return {
+    ...(week ? { weekN: week.weekNumber } : {}),
+    debtorName: getPlayer(ob?.payerPlayerId)?.displayName || undefined,
+    creditorName: getPlayer(ob?.recipientPlayerId)?.displayName || undefined,
+    obligationLabel: label || undefined,
+  };
+}
+
+/** A new balance. LEAGUE-WIDE, naming both parties (coordinator ruling O4):
+ *  an obligation is already public on the Standings/obligations surface, so
+ *  naming exposes nothing new — and the ledger is the league's running joke.
+ *  Naming is not licence to needle; the copy pool carries no taunt. */
+export function postObligationCreatedNotice(ob) {
+  if (!ob?.obligationId || !ob.payerPlayerId) return null;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.OBLIGATION_CREATED, scopeId: ob.obligationId,
+    weekId: ob.weekId || null, facts: obligationFacts(ob),
+  });
+}
+
+/** A balance settled. Same audience, same reasoning. */
+export function postObligationSettledNotice(ob) {
+  if (!ob?.obligationId) return null;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.OBLIGATION_SETTLED, scopeId: ob.obligationId,
+    weekId: ob.weekId || null, facts: obligationFacts(ob),
+  });
+}
+
+/**
+ * The commissioner's own words, VERBATIM, under his OWN playerId — never
+ * SCRIBE-attributed and never category-gated (D3). Both halves are structural:
+ * there is no COMMISSIONER_ANNOUNCEMENT pool in js/notify-copy.js at all, so
+ * this physically cannot render SCRIBE-voiced, and CATEGORY_OF_EVENT maps it to
+ * null, so resolveIntent() never silences it.
+ *
+ * The ONE lifecycle post with a non-deterministic id (scopeId null -> uuid).
+ * That is correct rather than an omission: an announcement is a single-device
+ * action with free text, so there is no transition for six clients to
+ * independently detect and nothing to collapse. Two announcements with the same
+ * words are two announcements.
+ */
+export function postCommissionerAnnouncement(body, commissionerPlayerId) {
+  const trimmed = String(body || '').trim();
+  if (!trimmed) return null;
+  return emitLifecyclePost({
+    event: LIFECYCLE_EVENTS.COMMISSIONER_ANNOUNCEMENT, scopeId: null,
+    author: commissionerPlayerId || 'system', bodyOverride: trimmed,
+  });
+}
+
+/**
+ * THE NAVIGATION SWEEP (DI-N1 gate 3, DI-N7).
+ *
+ * MODELLED ON checkPickRevealDue() / checkWhatsNewPostDue() / checkWagersDue()
+ * ABOVE, DELIBERATELY, because the failure mode is the one this codebase has now
+ * paid for three times: a permanent, un-take-back-able post into an append-only
+ * log, in front of six real people, from a device with a fresh ledger.
+ *
+ * WHY IT EXISTS AT ALL. applyWeekStatusChange() covers the commissioner pressing
+ * a status button. It does NOT cover AUTO-lock, which tickAutoTransition()
+ * performs on whichever device happens to be open — and on no device at all if
+ * everyone's app is closed. Without this sweep, a week that auto-locked
+ * overnight would simply never announce itself.
+ *
+ * ITS BOUNDS, EACH ONE LOAD-BEARING:
+ *   1. THE ACTIVE WEEK ONLY. It never walks getWeeks(). A device installing
+ *      fresh in week 9 cannot post weeks 1–8 — they are unreachable from this
+ *      path BY CONSTRUCTION, not by a filter that a later edit could weaken.
+ *      This is the single most important line in the function.
+ *   2. ONE POST PER INVOCATION. Even if every other bound were wrong, one nav
+ *      tap can post one message, not a season's worth. This runs on every
+ *      navigation, so a genuine backlog of two drains within seconds.
+ *   3. DEVICE LEDGER through the storage seam (KEYS.LIFECYCLE_POSTED, registered
+ *      in DEVICE_LOCAL_KEYS), never raw localStorage. The server's id dedupe is
+ *      the league-wide authority (AD-11); this only stops THIS device
+ *      re-attempting between hydrates.
+ *   4. NEVER A DEMO WEEK, never signed out — via emitLifecyclePost's own gates.
+ *   5. ONLY THE TWO WEEK-STATUS EVENTS. RESULTS_FINALIZED belongs to
+ *      finalizeWeek() (which is where the results actually get computed) and
+ *      obligations belong to their create/settle hooks. Widening this sweep to
+ *      them would mean re-deriving a winner here, which SCRIBE.md §9.1 forbids.
+ *
+ * STATUS IS READ THE BELT-AND-BRACES WAY — the EFFECTIVE status and the stored
+ * one, the same pair canPlayerSubmitPicks() and wagerWeekReachedLock() consult.
+ * With Auto-Open set and Auto-Lock blank, getEffectiveWeekStatus() reports
+ * 'open' for a week the app itself advanced to locked; either saying "locked"
+ * is enough.
+ */
+export function checkLifecyclePostDue() {
+  const week = getCurrentWeek();
+  if (!week || week.dataSourceMode === 'demo') return;       // bound 1 + bound 4
+  if (!lifecycleGatesOpen()) return;
+  const done = getLifecyclePosted();                          // bound 3
+
+  let eff = '';
+  try { eff = String(getEffectiveWeekStatus(week) || ''); } catch { eff = ''; }
+  const stored = String(week.status || '');
+  const reached = (statuses) => statuses.includes(eff) || statuses.includes(stored);
+
+  const opened = reached([WEEK_STATUS.OPEN, WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL]);
+  const locked = reached([WEEK_STATUS.LOCKED, WEEK_STATUS.LIVE, WEEK_STATUS.FINAL]);
+
+  // Chronological order, so a device that missed BOTH transitions posts them in
+  // the order they happened rather than announcing the lock before the open.
+  if (opened && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_OPENED, week.weekId))) {
+    postPicksOpenedNotice(week);
+    return;                                                   // bound 2 — ONE per invocation
+  }
+  if (locked && !done.includes(lifecycleChatId(LIFECYCLE_EVENTS.PICKS_LOCKED, week.weekId))) {
+    postPicksLockedNotice(week);
+  }
+}
+
 // ── Item A: commissioner chat on/off toggle — nav + live watch ───────────────
 /** Shows/hides the bottom-nav Chat entry. `.nav-item` is `flex:1` in a `flex`
  *  row (css/styles.css), so `display:none` on one item redistributes the
@@ -643,9 +1538,24 @@ function navigateTo(tab) {
   try { setPollMode(tab === 'chat' ? 'active' : 'passive'); updateChatBadges(); } catch {}
   try { refreshChatEnabled(); } catch {}
   try { checkPickRevealDue(); } catch {}
-  // F4 remediation (2026-09-10) — the bell badge used to go stale between
-  // whatever call sites happened to remember it; navigation is a natural,
-  // cheap chokepoint to keep it honest (mirrors updateChatBadges() above).
+  // FEAT-3 / DI-200c — the release post rides the same navigation chokepoint as
+  // the reveal ritual, and for the same reason: it is the one place every client
+  // passes through, on every device, without a new timer.
+  try { checkWhatsNewPostDue(); } catch {}
+  // FEAT-5 / DI-202g — the wager callback rides the same navigation chokepoint,
+  // for the same reason, and with the same one-post-per-invocation bound.
+  // RG-120 — it is ASYNC now (it re-reads the server before it posts), so the
+  // rejection has to be caught explicitly: a bare try/catch around a call that
+  // returns a promise catches nothing, and an unhandled rejection in a nav
+  // handler is a console error on every tap.
+  try { Promise.resolve(checkWagersDue()).catch(e => console.warn('[wager] due sweep failed', e)); } catch {}
+  // N1 / DI-N1 gate 3 (UN-204) — and so does the lifecycle sweep, which is what
+  // catches an AUTO-lock that happened while every device was closed. Same
+  // chokepoint, same one-post-per-invocation bound, active week only.
+  try { checkLifecyclePostDue(); } catch {}
+  // N1 / DI-N5 — the bell no longer carries a badge, so this is now visibility
+  // only. Kept on navigation because the bell's visibility is still session-
+  // dependent and this is the cheapest honest place to refresh it.
   try { renderNotifBell(); } catch {}
 }
 
@@ -853,6 +1763,14 @@ function applyTheme(themeKey) {
  * devices and don't get clobbered by whoever logged in last.
  */
 function resyncPlayerPreferences() {
+  // FEAT-8a / UN-179, DI-179f — layout EDIT MODE is transient per-session UI
+  // state, and this function is the app's one chokepoint on every session
+  // change (login / logout / player switch). Without this line, a player who
+  // logged out mid-edit would hand the next person a page still wearing move
+  // bars, wired to a pageKey whose order they can no longer write. Same
+  // pattern the OneSignal login/logout correction uses two lines below.
+  state.layoutEditing = null;
+  state.layoutAnnounce = null;
   applyTheme(getTheme());
   renderTzToggle();
   renderThemeToggle();
@@ -864,6 +1782,19 @@ function resyncPlayerPreferences() {
   // when push isn't configured (empty App ID) or off-browser (loadtest/node).
   const sess = getSession();
   if (sess?.playerId) loginOneSignal(sess.playerId); else logoutOneSignal();
+  // RG-120 (2026-09-12) — REFRESH THE WAGER CACHE ON SIGN-IN. refreshWagerCache()
+  // early-returns when there is no playerId and leaves its `wagerCacheLoaded`
+  // latch false, so a device that booted SIGNED OUT and signed in afterwards
+  // never got a wager list at all this session: no callback could ever fire on
+  // it, and the one it did fire would be against an empty cache. This is the
+  // app's one session chokepoint, which is exactly where that belongs.
+  if (sess?.playerId) { try { refreshWagerCache({ force: true }).catch(() => {}); } catch {} }
+  // N1 / DI-N3 — the master toggle lives on the PLAYER record
+  // (player.preferences.notifyPushMaster), so a login / logout / player switch
+  // changes one of pushActive's three terms without any push event firing.
+  // Recomputed here, at the app's one session chokepoint, for the same reason
+  // the OneSignal login/logout correction sits two lines above.
+  refreshPushActiveFlag();
   renderNotifBell();
 }
 
@@ -897,54 +1828,100 @@ export function renderThemeToggle() {
   });
 }
 
-// ─── GROUPS A/B — NOTIFICATION CENTER (UN-139…UN-148, DI-A2/A3/A4/A5/B5) ──────
+// ─── THE BELL — NOTIFICATION SETTINGS (N1 / UN-204, DI-N5) ────────────────────
+//
+// Drew, 2026-09-12: *"The bell icon is ok for notification settings until we
+// create a settings button."*
+//
+// WHAT THIS USED TO BE: the Notification Center (Groups A/B, UN-139…UN-148,
+// DI-A2/A3/A4/A5/B5) — a modal holding the priming card, the prefs card, a
+// chat-summary row and a scrolling LIST of stored per-player lifecycle records,
+// with an unread badge on the bell itself.
+//
+// WHAT IT IS NOW: the priming card and the prefs card. Nothing else. Every
+// lifecycle notice lives in the Locker Room, so a second list of the same
+// notices in a second place is exactly the "three habits" problem UN-N1 exists
+// to end — and the chat pill already carries unread, which is why the bell's
+// own badge is gone rather than merged.
+//
+// REVERSAL FORENSICS, STATED FOR THE RECORD: the Center list shipped in
+// v0.19.0, two days ago. This is GENUINE ITERATION — Drew judged a working
+// design after live use — not an execution or planning defect.
+//
+// NOTHING STORED IS DELETED. `cfbp_notifications` stays on the Sheet, stops
+// being written (its emitters lost their callers) and stops being read;
+// `cfbp_notify_log_cache` and `cfbp_notif_readstate` stay in localStorage,
+// unread. There is no migration here, destructive or otherwise — if the list
+// ever comes back, its history is still there.
+//
 // Reuses .modal-overlay/.modal/.modal-header/.modal-close verbatim (the game
-// modal / edit-player modal precedent) and .card for rows — no new sheet
-// component invented (DI-A3's own reuse note).
+// modal / edit-player modal precedent) — no new sheet component invented.
 
-const NOTIF_ICON = {
-  PICKS_OPENED: '🏈', PICKS_REMINDER: '⏰', PICKS_LOCKING_SOON: '⏳', PICKS_LOCKED: '🔒',
-  RESULTS_FINALIZED: '🏆', OBLIGATION_CREATED: '💵', OBLIGATION_SETTLED: '✅',
-  COMMISSIONER_ANNOUNCEMENT: '🎙',
-};
-
-function relTime(iso) {
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return '';
-  const diffMin = Math.floor((Date.now() - t) / 60000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const h = Math.floor(diffMin / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-/** Bell badge: bound once at boot (idempotent). Click opens the Center. */
+/** Bound once at boot (idempotent). Click opens notification SETTINGS. */
 function setupNotifBell() {
   const btn = document.getElementById('notif-bell-btn');
   if (!btn || btn.dataset.bound) return;
   btn.dataset.bound = '1';
-  btn.addEventListener('click', () => { openNotificationCenter(); });
+  btn.addEventListener('click', () => { openNotificationSettings(); });
 }
 
-/** Re-render the bell's visibility + unread count. Call on session change and
- *  whenever a notification is created/read (mirrors updateChatBadges()'s role
- *  for the chat pill — a SEPARATE counter, never merged, per Q4). */
+/**
+ * N1 / DI-N3 (UN-204, Drew's R10, 2026-09-12) — THE ASYNC HALF OF pushActive.
+ *
+ * *"If push notifications are set up then all in app notifications should be
+ * that."* "Set up" is three facts, and all three have to be true, on THIS
+ * device, right now:
+ *
+ *   subscriptionState() === 'granted'   the browser will allow a notification
+ *   isPushOptedIn()                     OneSignal has a live subscription for it
+ *   getNotifyPushMaster()               the player has not switched push off
+ *
+ * The third is the one people forget: master OFF means no push is coming, so
+ * the in-app toast has to keep working, or the player is silenced on both
+ * surfaces at once. That is UN-N3's failure, and it is why this is an AND of
+ * three and not a permission check.
+ *
+ * WHY IT IS CACHED RATHER THAN COMPUTED ON DEMAND. chat-ui.js's showToast() is
+ * synchronous and cannot become async — it is called from render and event
+ * paths all over the module — while two of the three terms are async. So this
+ * is the wrapper CONVENTIONS #9 asks for: the async work happens here, at the
+ * three moments the answer can change (boot-after-init, a permission grant, a
+ * master-toggle flip), and the result lands in a device-local key the toast
+ * path reads with a plain load().
+ *
+ * FAILS CLOSED. Any throw, any absent SDK, any unconfigured league resolves
+ * FALSE — "push is NOT carrying this device" — because a false TRUE swallows
+ * every in-app notice on a device that is receiving nothing.
+ *
+ * Returns the computed boolean for tests; production callers ignore it.
+ */
+export async function refreshPushActiveFlag() {
+  let active = false;
+  try {
+    if (getNotifyPushMaster()) {
+      const state = await subscriptionState();
+      if (state === 'granted') active = await isPushOptedIn();
+    }
+  } catch (e) {
+    console.warn('[push] could not resolve push-active state; treating this device as push-INACTIVE', e);
+    active = false;
+  }
+  try { setPushActive(active); } catch {}
+  return active;
+}
+
+/** N1 / DI-N5 — VISIBILITY ONLY. The unread badge is gone: `#notif-bell-badge`
+ *  is no longer in index.html and nothing here writes a count. The chat pill
+ *  (updateChatBadges()) is the app's single unread counter, which is the whole
+ *  point of "one place." unreadLifecycleCount() keeps existing in
+ *  js/notifications.js; it simply has no caller. */
 function renderNotifBell() {
   const btn = document.getElementById('notif-bell-btn');
-  const badge = document.getElementById('notif-bell-badge');
   if (!btn) return;
-  // DI-A4 — signed OUT still reaches the bell (an anonymous viewer sees the
-  // Center's public chat-summary row, just no push settings/priming card,
-  // handled inside renderNotifCenterBodyHTML). Only the UNREAD COUNT is
-  // player-specific — an anonymous viewer has no lifecycle notifications of
-  // their own, so the badge simply stays empty for them.
+  // Reachable signed OUT too: an anonymous viewer gets the same settings modal,
+  // which renders its own "sign in" empty state (there is no player identity to
+  // attach a push subscription to).
   btn.hidden = false;
-  const sess = getSession();
-  if (!badge) return;
-  const n = sess?.playerId ? unreadLifecycleCount(sess.playerId) : 0;
-  if (n > 0) { badge.hidden = false; badge.textContent = n > 99 ? '99+' : String(n); }
-  else { badge.hidden = true; badge.textContent = ''; }
 }
 
 function renderPrimingCardHTML(pushState) {
@@ -990,45 +1967,28 @@ function renderNotifPrefsCardHTML() {
   </div>`;
 }
 
-function notifRowHTML(n) {
-  const unread = !n.readAt;
-  const icon = NOTIF_ICON[n.event] || '🔔';
-  return `<div class="card notif-row${unread ? ' notif-row-unread' : ''}" data-notif-id="${escHtml(n.id)}">
-    <span class="notif-row-icon">${icon}</span>
-    <span class="notif-row-body">
-      <span class="notif-row-title">${escHtml(n.title)}</span>
-      <span class="notif-row-sub">${escHtml(n.body)}</span>
-    </span>
-    <span class="notif-row-time">${escHtml(relTime(n.createdAt))}</span>
-  </div>`;
-}
-
-async function renderNotifCenterBodyHTML(playerId, pushState) {
-  // DI-A4 — signed OUT (playerId null): no priming card, no prefs card
-  // ("no player identity to attach a subscription to"), no lifecycle rows
-  // (those are per-player records) — ONLY the public chat-summary row.
-  const primingHTML = playerId ? renderPrimingCardHTML(pushState) : '';
-  const prefsHTML = playerId ? renderNotifPrefsCardHTML() : '';
-  const notifs = playerId ? getNotificationsForPlayer(playerId) : [];
-  let chatUnread = 0;
-  try { chatUnread = isChatEnabled() ? unreadCount(playerId, 'all') : 0; } catch {}
-  const chatRowHTML = chatUnread > 0
-    ? `<div class="card notif-row" id="notif-chat-summary-row">
-         <span class="notif-row-icon">💬</span>
-         <span class="notif-row-body"><span class="notif-row-title">${chatUnread} unread in the Locker Room →</span></span>
-       </div>` : '';
-  if (!notifs.length && !chatRowHTML) {
-    return `${primingHTML}${prefsHTML}<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Nothing yet. We'll let you know when something happens.</p>`;
+/**
+ * N1 / DI-N5 — the settings body: the priming card and the prefs card, and
+ * NOTHING else. No lifecycle list on any path, including the signed-out branch.
+ *
+ * Signed OUT (playerId null) renders neither card — there is no player identity
+ * to attach a push subscription to, and the category toggles live on the player
+ * record — so it gets one line of copy instead of a modal that looks broken.
+ */
+export async function renderNotifSettingsBodyHTML(playerId, pushState) {
+  if (!playerId) {
+    return `<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Sign in on the Picks tab to choose what you get notified about.</p>`;
   }
-  return `${primingHTML}${prefsHTML}${chatRowHTML}${notifs.map(notifRowHTML).join('')}`;
+  return `${renderPrimingCardHTML(pushState)}${renderNotifPrefsCardHTML()}`;
 }
 
-/** DI-A3's error state — the red sync banner already covers backend hydrate
- *  failure app-wide (AD-06); this just names it instead of showing an empty
- *  state that could be mistaken for "nothing happened." */
+/** The brief skeleton shown while subscriptionState() resolves (it is async and
+ *  the modal opens synchronously). The red sync banner already covers backend
+ *  hydrate failure app-wide (AD-06); this just names it instead of showing an
+ *  empty state that could be mistaken for "nothing happened." */
 function renderNotifCenterSkeletonHTML() {
   if (document.getElementById('backend-error-banner')) {
-    return `<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Can't load notifications right now — see the sync banner above.</p>`;
+    return `<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Can't load notification settings right now — see the sync banner above.</p>`;
   }
   return `<div class="card" style="height:52px;opacity:.5"></div><div class="card" style="height:52px;opacity:.35"></div><div class="card" style="height:52px;opacity:.2"></div>`;
 }
@@ -1042,6 +2002,22 @@ function deepLinkTo(destination) {
   if (!destination?.tab) { navigateTo('dashboard'); return; }
   navigateTo(destination.tab);
   const params = destination.params || {};
+  // BUG-12 (2026-09-12) — THE TAP, on the path that actually happens most: the
+  // SDK opens "?ntab=chat&nparams={messageId}" and boot() lands here. The tab
+  // switch stays immediate (the player tapped; something must happen at once),
+  // but the message lookup below has to wait for a forced fetch, because on a
+  // cold open the room has not been read yet this session and on a warm one the
+  // next scheduled poll can be a full room interval away. Running the lookup
+  // first is what made the "message no longer in retention / outside the loaded
+  // window" fallback fire prematurely — it landed on the tab and not on the
+  // message, which is exactly what Drew reported.
+  //
+  // wakeChat() never throws and is bounded by the transport (one forced fetch
+  // per wake window), so this cannot hang the deep link or hammer the backend;
+  // a wake that is deferred into an open window still resolves when ITS fetch
+  // lands. Non-chat destinations do not wait at all.
+  const ready = (destination.tab === 'chat' && params.messageId) ? wakeChat() : Promise.resolve(false);
+  ready.then(() => {
   setTimeout(() => {
     if (destination.tab === 'chat' && params.messageId) {
       const safeId = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(params.messageId) : params.messageId;
@@ -1049,8 +2025,20 @@ function deepLinkTo(destination) {
       if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('chat-flash'); setTimeout(() => el.classList.remove('chat-flash'), 1200); }
     } else if (destination.tab === 'leaderboard' && params.section === 'obligations') {
       document.getElementById('obligations-section')?.scrollIntoView({ block: 'start' });
+    } else if (destination.tab === 'rules' && params.whatsNew) {
+      // FEAT-3 / DI-200f — the 📋 button on SCRIBE's release post. Reuses this
+      // existing mechanism rather than inventing a router: open the Rules tab,
+      // expand THAT version's entry in the release-notes card, scroll to it.
+      // A version no longer in the constant (trimmed at the 12-release cap)
+      // simply lands on the Rules tab, same graceful degradation the chat
+      // message-id case already has. No flash animation — .chat-flash is
+      // chat-scoped and stays there.
+      const safeV = (typeof CSS !== 'undefined' && CSS.escape) ? CSS.escape(params.whatsNew) : params.whatsNew;
+      const el = document.querySelector(`[data-release="${safeV}"]`);
+      if (el) { el.open = true; el.scrollIntoView({ block: 'start' }); }
     }
   }, 60);
+  });
 }
 
 /**
@@ -1094,7 +2082,7 @@ function pushFailureMessage(res) {
   }[reason] || "Could not enable push — see the console for details.";
 }
 
-function bindNotifCenterBody(ov, playerId) {
+function bindNotifSettingsBody(ov, playerId) {
   ov.querySelector('#notif-priming-btn')?.addEventListener('click', async (ev) => {
     // Reviewer ruling (2026-09-10): requestPushPermission() can be in flight for
     // as long as the native sheet is on screen (up to PROMPT_TIMEOUT_MS), and
@@ -1109,9 +2097,14 @@ function bindNotifCenterBody(ov, playerId) {
     try {
       const res = await requestPushPermission();
       showToast(res.ok ? '✅ Push enabled' : pushFailureMessage(res), res.ok ? 'success' : 'error');
-      await refreshNotifCenterBody(ov, playerId);
+      // N1 / DI-N3 — a permission change is one of the two events that can flip
+      // pushActive, so the device flag is recomputed here rather than left to
+      // the next boot. Without this, a player who just tapped Turn On would
+      // keep getting in-app toasts for notices their phone is now also pushing.
+      refreshPushActiveFlag();
+      await refreshNotifSettingsBody(ov, playerId);
     } finally {
-      // refreshNotifCenterBody() re-renders the card, so this usually re-enables
+      // refreshNotifSettingsBody() re-renders the card, so this usually re-enables
       // a detached node — harmless, and it is what keeps the button usable when
       // the state did NOT change (a dismissed prompt is still 'never-asked').
       btn.disabled = false;
@@ -1119,47 +2112,44 @@ function bindNotifCenterBody(ov, playerId) {
   });
   ov.querySelector('#notif-master-toggle')?.addEventListener('change', (e) => {
     setNotifyPushMaster(e.target.checked);
+    // N1 / DI-N3 — the master toggle is the OTHER event that flips pushActive.
+    // Master off means no push, which means the in-app toast has to come back
+    // on this device; that has to take effect now, not at the next boot.
+    refreshPushActiveFlag();
     ov.querySelectorAll('[data-cat-row]').forEach(row => row.classList.toggle('notif-prefs-row-dim', !e.target.checked));
   });
   ov.querySelectorAll('.notif-cat-toggle').forEach(cb => {
     cb.addEventListener('change', (e) => setNotifyCategoryPref(e.target.dataset.cat, e.target.checked));
   });
-  ov.querySelector('#notif-chat-summary-row')?.addEventListener('click', () => { ov.remove(); navigateTo('chat'); });
-  ov.querySelectorAll('[data-notif-id]').forEach(row => {
-    row.addEventListener('click', () => {
-      const id = row.dataset.notifId;
-      const n = getNotificationsForPlayer(playerId).find(x => x.id === id);
-      markNotificationRead(id, playerId);
-      renderNotifBell();
-      ov.remove();
-      if (n) deepLinkTo(n.destination);
-    });
-  });
 }
 
-async function refreshNotifCenterBody(ov, playerId) {
+async function refreshNotifSettingsBody(ov, playerId) {
   const body = ov.querySelector('#notif-center-body');
   if (!body) return;
   const st = await subscriptionState();
-  body.innerHTML = await renderNotifCenterBodyHTML(playerId, st);
-  bindNotifCenterBody(ov, playerId);
+  body.innerHTML = await renderNotifSettingsBodyHTML(playerId, st);
+  bindNotifSettingsBody(ov, playerId);
 }
 
-async function openNotificationCenter() {
-  // DI-A4 — signed OUT still opens the Center; it just renders ONLY the
-  // public chat-summary row (no push settings, no lifecycle history — see
-  // renderNotifCenterBodyHTML's playerId-null branch).
+/** N1 / DI-N5 — the bell opens SETTINGS directly. There is no list, no
+ *  chat-summary row and no unread number, on any path.
+ *
+ *  Exported for lifecycletest.mjs, the same rationale as this codebase's other
+ *  exported render paths: protocol step 29 / RG-27 — "no list" has to be
+ *  asserted against RENDERED OUTPUT, because a source-grep test still passes on
+ *  the day someone puts the list back. */
+export async function openNotificationSettings() {
   const sess = getSession();
   const playerId = sess?.playerId || null;
   const ov = document.createElement('div'); ov.className = 'modal-overlay centered';
   ov.innerHTML = `<div class="modal">
-    <div class="modal-header"><h3>Notifications</h3><button class="modal-close" id="notif-close">✕</button></div>
+    <div class="modal-header"><h3>Notification Settings</h3><button class="modal-close" id="notif-close">✕</button></div>
     <div id="notif-center-body">${renderNotifCenterSkeletonHTML()}</div>
   </div>`;
   document.body.appendChild(ov);
   ov.querySelector('#notif-close')?.addEventListener('click', () => ov.remove());
   ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
-  await refreshNotifCenterBody(ov, playerId);
+  await refreshNotifSettingsBody(ov, playerId);
 }
 
 // ═══ BUILD 3, GROUP D pass 2 (2026-09-11) — "MY SCRIBE FILE" ════════════════
@@ -1261,7 +2251,12 @@ export function _restoreScribeMemoryTransportForTest() {
 export function _scribeMemoryTransportDefaultsForTest() { return SCRIBE_MEMORY_TRANSPORT_DEFAULTS; }
 
 // ── Module-level cache (explicitly refreshed on modal open) ─────────────────
-const scribeMemoryCache = { playerId: null, rows: [], loading: false, error: '' };
+// `wagers` (FEAT-5 / DI-202g) is a SEPARATE slot from `rows`, not a filter over
+// it: `rows` is "my own file" (narrowed to the signed-in player, DI-D4), while
+// `wagers` is the league-wide wager+wagerack set the kinds:['wager'] carve-out
+// returns. Collapsing them would leak other players' wager rows into My SCRIBE
+// File, which DI-202l explicitly forbids.
+const scribeMemoryCache = { playerId: null, rows: [], wagers: [], loading: false, error: '' };
 /** Inline write error (DI-D4's error state), SCOPED to the control that
  *  failed — `{ scope:'row'|'hardline'|'tolerance'|'file', id, message }` or
  *  null. Item 9: a delete that fails must say so ON THAT ROW, not in a
@@ -1271,12 +2266,18 @@ let scribeFileRowError = null;
 export function _scribeMemoryCacheForTest() { return scribeMemoryCache; }
 /** The current scoped inline error, for groupdtest's item-9 assertions. */
 export function _scribeFileRowErrorForTest() { return scribeFileRowError; }
-export function _setScribeMemoryCacheForTest(playerId, rows = []) {
+export function _setScribeMemoryCacheForTest(playerId, rows = [], wagers = null) {
   scribeMemoryCache.playerId = playerId;
   scribeMemoryCache.rows = rows.slice();
+  if (wagers) scribeMemoryCache.wagers = wagers.slice();
   scribeMemoryCache.loading = false;
   scribeMemoryCache.error = '';
   scribeFileRowError = null;
+}
+/** FEAT-5 — the league-wide wager slot, set directly for the harness. */
+export function _setWagerCacheForTest(wagers = []) {
+  scribeMemoryCache.wagers = wagers.slice();
+  wagerCacheLoaded = true;
 }
 
 /**
@@ -1354,6 +2355,10 @@ export function getPlayerProfile(playerId, { rows = null, withStats = false } = 
   const facts = mine.filter(r => r.kind === 'fact');
   const relations = mine.filter(r => r.kind === 'relation');
   const hardlines = mine.filter(r => r.kind === 'hardline');
+  // FEAT-5 / DI-202k — the player's own wager rows (proposer-owned `wager:` and
+  // counterparty-owned `wagerack:`). Only ever HIS: `mine` is already narrowed
+  // above, so the league-wide read the resurfacing path needs cannot leak here.
+  const wagers = mine.filter(r => r.kind === 'wager');
   const toleranceRow = mine.find(r => r.kind === 'roastTolerance') || null;
   return {
     playerId: id,
@@ -1372,6 +2377,7 @@ export function getPlayerProfile(playerId, { rows = null, withStats = false } = 
     facts,
     relations,
     hardlines,
+    wagers,
     // DI-D4's "Episode pointer" — a recorded row that points back at the
     // message it came from (`sourceMessageId`, written by the Trainer from
     // the 📌 `remember_this` source set) — is not a separate collection.
@@ -1410,6 +2416,9 @@ function scribeMemoryRowLabel(row) {
     const other = otherId ? (getPlayer(otherId)?.displayName || otherId) : '';
     return other ? `Head-to-head vs ${other}` : 'Head-to-head';
   }
+  // FEAT-5 / DI-202k — two row kinds, two labels. A wager IS a memory fact about
+  // a player, so it appears in his own file and it is deletable (AD-49).
+  if (row?.kind === 'wager') return key.startsWith('wagerack:') ? 'Wager — your answer' : 'Wager';
   if (row?.kind === 'hardline') return 'Off limits';
   if (row?.kind === 'roastTolerance') return 'Roast tolerance';
   if (SCRIBE_FACT_LABELS[key]) return SCRIBE_FACT_LABELS[key];
@@ -1435,6 +2444,25 @@ function scribeMemoryRowValue(row) {
       if (!Number.isFinite(Number(v.gamesCompared))) return String(row.value || '');
       return `${v.gamesCompared} games compared · agreed ${v.agreed} · you right ${mine} · them right ${theirs}`;
     } catch { return String(row.value || ''); }
+  }
+  // FEAT-5 / DI-202k — the stored envelope, read back in plain language. ON
+  // PARSE FAILURE FALL BACK TO THE RAW STORED STRING — the headToHead precedent
+  // directly above, verbatim and for the same reason: a row whose value cannot
+  // be parsed is shown as it is rather than guessed at, and it stays deletable.
+  if (row?.kind === 'wager') {
+    const v = parseWagerValue(row);
+    if (key.startsWith('wagerack:')) {
+      let reply = '';
+      try { reply = String(JSON.parse(String(row.value || '')).r || ''); } catch { reply = ''; }
+      if (reply === 'accepted') return 'Accepted';
+      if (reply === 'declined') return 'Declined';
+      return String(row.value || '');
+    }
+    if (!v || !v.claim) return String(row.value || '');
+    const other = v.counterpartyId ? (getPlayer(v.counterpartyId)?.displayName || v.counterpartyId) : 'the room';
+    const week = v.weekId ? getWeek(v.weekId) : null;
+    const when = week ? formatWeekLabelParts(week).name : v.weekId;
+    return `"${v.claim}" · with ${other} · settle by ${when}`;
   }
   return String(row?.value || '');
 }
@@ -1529,8 +2557,11 @@ export function renderScribeFileBodyHTML({ profile = null, loading = false, erro
   if (error) {
     return `<p class="text-muted text-sm scribe-file-error" role="alert">${escHtml(error)}</p>${footnote}`;
   }
-  const p = profile || { facts: [], relations: [], hardlines: [], roastTolerance: null, isEmpty: true };
-  const knows = [...(p.facts || []), ...(p.relations || [])];
+  const p = profile || { facts: [], relations: [], hardlines: [], wagers: [], roastTolerance: null, isEmpty: true };
+  // FEAT-5 / DI-202k — wagers join "What SCRIBE knows". They are player-stated,
+  // never computed, so scribeMemoryIsComputed() is false and every one of them
+  // keeps its 🗑 — which is the half of AD-49's promise that has to hold.
+  const knows = [...(p.facts || []), ...(p.relations || []), ...(p.wagers || [])];
   const knowsHTML = knows.length
     ? knows.map(row => scribeMemoryRowHTML(row, errAt('row', row.id))).join('')
     : `<p class="text-muted text-sm scribe-mem-empty">${escHtml(MEMORY_COPY.emptyState)}</p>`;
@@ -1549,6 +2580,7 @@ export function renderScribeFileBodyHTML({ profile = null, loading = false, erro
     <div class="scribe-file-section">
       <h4 class="scribe-file-h">What SCRIBE knows</h4>
       <p class="text-muted text-xs">${escHtml(SCRIBE_SECTION1_BODY)}</p>
+      <p class="text-muted text-xs scribe-mem-wager-note">${escHtml(MEMORY_COPY.wagerFootnote)}</p>
       <div class="scribe-file-rows">${knowsHTML}</div>
     </div>
     <div class="scribe-file-section">
@@ -1588,6 +2620,12 @@ export async function scribeFileDeleteRow(id) {
     const r = await scribeMemoryTransport.remove({ id, playerId });
     if (r && r.ok === false) throw new Error(r.error || 'delete failed');
     scribeMemoryCache.rows = (scribeMemoryCache.rows || []).filter(x => x.id !== id);
+    // FEAT-5 / AD-49, exactly: a proposer deleting his `wager:` row means SCRIBE
+    // NEVER brings it back, and a counterparty deleting his `wagerack:` row
+    // reverts the status to `silent`. Both fall out of dropping the row from the
+    // league-wide slot as well — a stale cache would keep resurfacing a wager
+    // its owner deleted, which is the one thing AD-49 forbids.
+    scribeMemoryCache.wagers = (scribeMemoryCache.wagers || []).filter(x => x.id !== id);
     scribeFileRowError = null;
     return { ok: true, id };
   } catch (err) {
@@ -1780,6 +2818,381 @@ export function wireScribeFileEntry() {
   });
 }
 
+// ═══ FEAT-5 (UN-202 / UN-203, DI-202) — SCRIBE wager memory, Phase A ═══════
+//
+// A player logs a bet made in the room, SCRIBE acknowledges it, the other side
+// answers on the record, and SCRIBE reads the whole thing back when the due
+// week arrives. ZERO LLM CALLS anywhere in this block — no scribeAskRemote, no
+// scribeAutonomousRemote, no scribeClassifyRemote — which is both the cost
+// story (zero marginal cost per wager) and the safety story (zero invention
+// surface: there is no generative step in which a fabricated result could
+// appear). DI-202i, enforced by construction rather than by instruction.
+//
+// Wagers touch scoring NOWHERE. They live only in CFBP_SCRIBE_MEMORY, a sheet
+// js/scoring.js does not read and structurally cannot reach; no field is added
+// to any pick, game, week, result or obligation record; calculateWeeklyResults()
+// and calculateSeasonStandings() are untouched. scoringtest.mjs [25] proves it
+// rather than asserting it (DI-202j).
+
+/** DI-202l — the exact copy for every state the modal can be in. One place, so
+ *  a toast and an inline line can never drift apart. */
+const WAGER_COPY = {
+  title: '🤝 Log a wager',
+  claimLabel: 'The claim',
+  betLabel: 'The bet',
+  // DEVIATION FROM DI-202b, one character, reported rather than absorbed: the
+  // design input writes this helper as "Keep it short — SCRIBE reads this back
+  // later." The em-dash form trips loadtest [65]'s app-wide v2.1 retired-tic
+  // scan, whose `— SCRIBE` rule is deliberately blunt (UN-77: no per-file
+  // exceptions — a scan with an allow-list is how a survivor hides). Same
+  // words, same meaning, punctuation changed instead of weakening the guard.
+  betHelp: 'Keep it short. SCRIBE reads this back later.',
+  otherLabel: "Who's on the other side?",
+  openToRoom: 'Open to the room',
+  weekLabel: 'Settle by',
+  endOfSeason: 'End of the season',
+  cancel: 'Cancel',
+  submit: 'Log it',
+  offline: "Not connected — a wager can't be logged right now.",
+  rejected: "Couldn't log that wager — nothing was saved. Try again.",
+  duplicate: "That one's already logged.",
+  success: 'Logged. SCRIBE will bring it back up.',
+  noWeeks: 'No dated week to settle by — ask the commissioner to set the week dates.',
+};
+
+/** The JSON envelope the server stores. `value` is hard-sliced at 200 chars
+ *  server-side and a slice landing mid-JSON is unparseable FOREVER, so this is
+ *  the one place the envelope is built and the one place its length is checked. */
+const WAGER_VALUE_MAX_CHARS = 200;
+
+/**
+ * Builds `{"c":…,"o":…,"w":…,"b":…}` and GUARANTEES it fits.
+ *
+ * The claim is already capped at 110 characters at entry, but 110 is a cap on
+ * the claim BEFORE JSON-escaping and before three ids of unknown length are
+ * added: a claim full of quotes doubles in the envelope, and an unusually long
+ * playerId/weekId eats the headroom. This shortens the claim until the SERIALISED
+ * envelope fits, and returns null if even an empty claim would not — which
+ * cannot happen at this league's id lengths, and is still refused rather than
+ * sent. THE CHECK IS THE POINT: without it the row is silently corrupted on the
+ * server and nothing on any device can ever read it back.
+ */
+export function buildWagerValue({ claim = '', counterpartyId = '', weekId = '', loggedBy = '' } = {}) {
+  let c = wagerClaimTruncate(claim);
+  let out = JSON.stringify({ c, o: String(counterpartyId || ''), w: String(weekId || ''), b: String(loggedBy || '') });
+  while (out.length > WAGER_VALUE_MAX_CHARS && c.length > 0) {
+    c = c.slice(0, c.length - 1).trimEnd();
+    out = JSON.stringify({ c, o: String(counterpartyId || ''), w: String(weekId || ''), b: String(loggedBy || '') });
+  }
+  if (out.length > WAGER_VALUE_MAX_CHARS) return null;
+  return out;
+}
+
+/** `reviewAt` — the due week's own date, as an ISO instant. endDate when the
+ *  week has one, startDate otherwise. A week with NEITHER yields '' and is not
+ *  offered in the Settle-by list at all, because a wager whose reviewAt cannot
+ *  be parsed can never resurface (checkWagersDue's bound 2 fails closed) and
+ *  logging one would be a silent dead end. */
+export function wagerReviewAtFor(week) {
+  const raw = String(week?.endDate || week?.startDate || '');
+  const t = raw ? new Date(`${raw}T23:59:59`).getTime() : NaN;
+  return Number.isFinite(t) ? new Date(t).toISOString() : '';
+}
+
+/** DI-202b field 4 — non-demo weeks from the current one forward that carry a
+ *  usable date, oldest first. */
+export function wagerSettleWeeks(weeks = null, currentWeek = null) {
+  const cur = currentWeek || getCurrentWeek();
+  const floor = Number(cur?.weekNumber);
+  return (weeks || getWeeks())
+    .filter(w => w && w.dataSourceMode !== 'demo')
+    .filter(w => !Number.isFinite(floor) || Number(w.weekNumber) >= floor)
+    .filter(w => !!wagerReviewAtFor(w))
+    .sort((a, b) => (Number(a.weekNumber) || 0) - (Number(b.weekNumber) || 0));
+}
+
+/**
+ * The modal body — PURE, state in / HTML out, no DOM — which is what makes
+ * DI-202b's fields and DI-202l's states assertable against RENDERED OUTPUT in
+ * groupdtest.mjs rather than only in source (RG-27: a source-grep test passes
+ * when the guard is reverted).
+ *
+ * `.modal-overlay.centered .modal` is reused verbatim (the game modal /
+ * Notification Center / My SCRIBE File precedent) — no new sheet component, no
+ * new overlay mechanism. Every control carries a scoped ≥44px floor in CSS (the
+ * #notif-priming-btn precedent), never a global .btn-sm change.
+ */
+export function renderWagerModalBodyHTML({ message = null, players = null, weeks = null,
+                                           currentWeek = null, error = '' } = {}) {
+  const author = String(message?.author || '');
+  const prefill = wagerClaimTruncate(message?.body || '');
+  const roster = (players || getPlayers()).filter(p => p.active && p.playerId !== author);
+  const settle = wagerSettleWeeks(weeks, currentWeek);
+  const defaultWeekId = settle[1]?.weekId || settle[0]?.weekId || '';   // "the next week" when there is one
+  const lastWeekId = settle.length ? settle[settle.length - 1].weekId : '';
+  const weekOptions = settle.length
+    ? settle.map(w => `<option value="${escHtml(w.weekId)}"${w.weekId === defaultWeekId ? ' selected' : ''}>${escHtml(formatWeekLabel(w))}</option>`).join('')
+        + `<option value="${escHtml(lastWeekId)}">${escHtml(WAGER_COPY.endOfSeason)}</option>`
+    : `<option value="">${escHtml(WAGER_COPY.noWeeks)}</option>`;
+  return `
+    <div class="wager-body">
+      <div class="form-group">
+        <label class="form-label">${escHtml(WAGER_COPY.claimLabel)}</label>
+        ${staticQuoteHTML(author, message?.body || '', 160)}
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="wager-claim">${escHtml(WAGER_COPY.betLabel)}</label>
+        <textarea class="form-input wager-claim-input" id="wager-claim" rows="3" maxlength="${WAGER_CLAIM_MAX}">${escHtml(prefill)}</textarea>
+        <div class="text-muted text-xs wager-counter"><span id="wager-count">${prefill.length}</span>/${WAGER_CLAIM_MAX}</div>
+        <p class="text-muted text-xs">${escHtml(WAGER_COPY.betHelp)}</p>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="wager-other">${escHtml(WAGER_COPY.otherLabel)}</label>
+        <select class="form-input wager-select" id="wager-other">
+          <option value="" selected>${escHtml(WAGER_COPY.openToRoom)}</option>
+          ${roster.map(p => `<option value="${escHtml(p.playerId)}">${escHtml(p.displayName)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="wager-week">${escHtml(WAGER_COPY.weekLabel)}</label>
+        <select class="form-input wager-select" id="wager-week">${weekOptions}</select>
+      </div>
+      <p class="text-muted text-xs wager-error" id="wager-error" role="alert"${error ? '' : ' hidden'}>${escHtml(error)}</p>
+      <div class="wager-actions">
+        <button type="button" class="btn btn-ghost wager-btn" id="wager-cancel">${escHtml(WAGER_COPY.cancel)}</button>
+        <button type="button" class="btn btn-primary wager-btn" id="wager-log">${escHtml(WAGER_COPY.submit)}</button>
+      </div>
+    </div>`;
+}
+
+/** `w` + base36 epoch + 3 random base36 ≈ 12 chars, well inside the server's
+ *  40-char printable-ASCII key cap once prefixed with `wager:`. */
+function newWagerId() {
+  return 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+}
+
+/**
+ * THE LOG WRITE. Returns a result object rather than touching the DOM, so the
+ * harness drives the real function.
+ *
+ * The memory write goes STRAIGHT to Apps Script — it is not a chat event and
+ * there is no durable outbox behind it. When the backend is not reachable this
+ * refuses and says so (loud-fail, AD-06): the copy must not pretend there is a
+ * queue, because there is not one.
+ *
+ * ORDER MATTERS: the row is written FIRST and the acknowledgment post is sent
+ * only after the server confirms. A post announcing a wager that was never
+ * stored would be permanent and un-take-back-able (AD-09/AD-11), and the wager
+ * it names would never resurface.
+ */
+export async function logWager({ messageId = '', claim = '', counterpartyId = '', dueWeekId = '' } = {}) {
+  const sess = getSession();
+  // RG-120 item (xi), defence in depth (2026-09-12) — align with chat-ui.js's
+  // me() rule (`playerId && (playerVerified || isAdmin)`), which is what gates
+  // the 🤝 control that calls this, and with checkWagersDue()'s own gate below.
+  // A bare `playerId` is a session that exists, not a session that has been
+  // verified; three places agreeing on one rule is the point.
+  const self = (sess?.playerId && (sess?.playerVerified || sess?.isAdmin)) ? sess.playerId : '';
+  if (!self) return { ok: false, skipped: 'no_session' };
+  const msg = getChatMessage(messageId);
+  if (!msg) return { ok: false, skipped: 'no_message' };
+  if (!isChatEnabled() || !isBackendConfigured()) return { ok: false, skipped: 'offline', message: WAGER_COPY.offline };
+  const already = (scribeMemoryCache.wagers || []).some(r =>
+    r && r.kind === 'wager' && String(r.key || '').startsWith('wager:') && String(r.sourceMessageId || '') === String(messageId));
+  if (already) return { ok: false, skipped: 'duplicate', message: WAGER_COPY.duplicate };
+
+  const week = dueWeekId ? getWeek(dueWeekId) : null;
+  const reviewAt = wagerReviewAtFor(week);
+  if (!week || !reviewAt) return { ok: false, skipped: 'no_week', message: WAGER_COPY.noWeeks };
+
+  const proposerId = String(msg.author || '');
+  const wagerId = newWagerId();
+  const value = buildWagerValue({ claim, counterpartyId, weekId: dueWeekId, loggedBy: self });
+  // Belt and braces with buildWagerValue's own loop. If this is ever false the
+  // row would be sliced mid-JSON on the server and become unreadable forever,
+  // so it refuses instead of sending. memorytest [28] proves the server slice;
+  // groupdtest [14] proves this guard holds against long ids.
+  if (!value || value.length > WAGER_VALUE_MAX_CHARS) {
+    return { ok: false, skipped: 'too_long', message: WAGER_COPY.rejected };
+  }
+
+  // playerId is the PROPOSER — the author of the quoted message — because the
+  // record is about HIM and because AD-49 must let HIM delete it. The logger is
+  // preserved in the envelope's `b` field. Provenance and confidence are forced
+  // server-side for a non-commissioner write; they are sent so the request is
+  // well-formed and the intent readable at the call site, never relied on.
+  const record = {
+    playerId: proposerId, kind: 'wager', key: `wager:${wagerId}`, value,
+    provenance: 'player-stated', confidence: 1,
+    reviewAt, sourceMessageId: String(messageId),
+  };
+  // RG-120 item (xii), THE COUPLING, NAMED (2026-09-12). Third-party 🤝 works —
+  // Kevin logging a wager about Drew's claim, with `playerId: proposerId` —
+  // only because backend.js's scribeMemoryUpsertRemote() derives the requester
+  // FROM THE RECORD rather than sending the true actor. The server's
+  // non-commissioner branch then checks that requester against the row it is
+  // writing, and they match by construction. That is a real property of the
+  // relay, not an accident of this call site, but it is invisible from either
+  // end. ANYONE HARDENING THAT RELAY TO SEND THE TRUE ACTOR MUST ADD A
+  // SERVER-SIDE `kind === 'wager'` CARVE-OUT IN THE SAME CHANGE, or every
+  // third-party wager starts failing "that memory belongs to another player".
+  // The twin note lives at js/backend.js's scribeMemoryUpsertRemote().
+  try {
+    const r = await scribeMemoryTransport.upsert(record);
+    if (r && r.ok === false) throw new Error(r.error || 'save failed');
+    const stored = (r && r.record) || record;
+    mergeIntoWagerCache(stored);
+    await refreshWagerCache({ force: true });
+    const body = wagerLine('wagerLogged', {
+      wagerId,
+      proposer: getPlayer(proposerId)?.displayName || 'Somebody',
+      counterparty: counterpartyId ? (getPlayer(counterpartyId)?.displayName || 'Somebody') : 'the room',
+      dueWeek: formatWeekLabelParts(week).name,
+    });
+    // DETERMINISTIC ID + sendEvent() DIRECTLY (AD-11). Never scribeTrigger()/
+    // pickLine(): a receipt must not be dropped by the 14-day no-repeat ledger,
+    // it is not dial-gated, it spends no autonomous budget, and six devices must
+    // build byte-identical text before chatAppend's id-dedupe picks a winner.
+    sendChatEvent({
+      id: `scribe_wager_${wagerId}`,
+      type: 'message', author: 'scribe', gameTag: '', notify: true,
+      replyTo: String(messageId),
+      body,
+      meta: { kind: 'wagerLogged', wagerId, dueWeekId: String(dueWeekId),
+              counterpartyId: String(counterpartyId || ''), proposerId, source: 'tier0' },
+    });
+    return { ok: true, wagerId, record: stored, message: WAGER_COPY.success };
+  } catch (err) {
+    console.warn('[wager] log failed', err);
+    return { ok: false, error: String(err && err.message ? err.message : err), message: WAGER_COPY.rejected };
+  }
+}
+
+/**
+ * THE ANSWER WRITE (UN-203). The counterparty's own device writes the
+ * counterparty's OWN row — the existing authorization boundary, untouched:
+ * "accepted" is attested by the person who accepted rather than asserted by the
+ * person who benefits from it. There is no stored third state; SILENCE IS THE
+ * ABSENCE OF A ROW, which is exactly what silence is.
+ *
+ * One action, one message: this posts NOTHING to the room.
+ */
+export async function answerWager({ wagerId = '', reply = '' } = {}) {
+  // RG-120 item (xi) — same alignment as logWager() above. This one writes the
+  // ANSWER row under `self`, so an unverified session writing it would attest
+  // an acceptance in someone's name.
+  const sess0 = getSession();
+  const self = (sess0?.playerId && (sess0?.playerVerified || sess0?.isAdmin)) ? sess0.playerId : '';
+  if (!self) return { ok: false, skipped: 'no_session' };
+  if (!wagerId) return { ok: false, skipped: 'no_wager' };
+  if (reply !== 'accepted' && reply !== 'declined') return { ok: false, skipped: 'unknown_reply' };
+  if (!isChatEnabled() || !isBackendConfigured()) return { ok: false, skipped: 'offline' };
+  const record = {
+    playerId: self, kind: 'wager', key: `wagerack:${wagerId}`,
+    value: JSON.stringify({ w: String(wagerId), r: reply }),
+    provenance: 'player-stated', confidence: 1,
+    reviewAt: '', sourceMessageId: `scribe_wager_${wagerId}`,
+  };
+  try {
+    const r = await scribeMemoryTransport.upsert(record);
+    if (r && r.ok === false) throw new Error(r.error || 'save failed');
+    mergeIntoWagerCache((r && r.record) || record);
+    await refreshWagerCache({ force: true });
+    return { ok: true, wagerId, reply };
+  } catch (err) {
+    console.warn('[wager] answer failed', err);
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
+}
+
+function mergeIntoWagerCache(record) {
+  if (!record) return;
+  const rows = (scribeMemoryCache.wagers || []).slice();
+  const at = rows.findIndex(r => (record.id && r.id === record.id) ||
+    (String(r.playerId) === String(record.playerId) && r.kind === record.kind && r.key === record.key));
+  if (at >= 0) rows[at] = record; else rows.push(record);
+  scribeMemoryCache.wagers = rows;
+  // The same row also belongs in MY file when it is mine, so the modal does not
+  // need a second round trip to show it.
+  if (String(record.playerId) === String(scribeMemoryCache.playerId || '')) mergeIntoMemoryCache(record);
+}
+
+/**
+ * DI-202g's cost control, stated as a rule rather than left implied: the wager
+ * list is fetched ONCE PER SESSION at chat boot, and again after any wager
+ * write. checkWagersDue() reads the cache and never issues a request, so
+ * navigation costs nothing.
+ *
+ * This is the ONLY kinds:['wager'] call in the app, and it is the reason the
+ * server carve-out exists: resurfacing needs every player's wager rows. It is a
+ * READ — it writes nothing, seeds nothing, and is never called during the
+ * pre-hydrate boot path (RG-12's lesson, generalized).
+ */
+let wagerCacheLoaded = false;
+export async function refreshWagerCache({ force = false } = {}) {
+  const playerId = getSession()?.playerId || '';
+  if (!playerId) return scribeMemoryCache.wagers;
+  if (wagerCacheLoaded && !force) return scribeMemoryCache.wagers;
+  if (!isChatEnabled() || !isBackendConfigured()) return scribeMemoryCache.wagers;
+  try {
+    const r = await scribeMemoryTransport.list({ playerId, kinds: ['wager'] });
+    const rows = (r && r.records) || [];
+    scribeMemoryCache.wagers = rows.filter(row => row && row.kind === 'wager');
+    wagerCacheLoaded = true;
+  } catch (err) {
+    // Quiet, deliberately: this is an auxiliary read of non-authoritative data.
+    // A failure means a callback waits for the next session — it FAILS QUIET
+    // rather than wrong, and the latch stays false so the next write retries.
+    console.warn('[wager] cache refresh failed', err);
+  }
+  return scribeMemoryCache.wagers;
+}
+export function _resetWagerCacheLoadedForTest() { wagerCacheLoaded = false; }
+
+/** DI-202b's surface. Same `.modal-overlay.centered .modal` shell as My SCRIBE
+ *  File; the body is the pure function above. */
+export async function openWagerModal(messageId) {
+  const self = getSession()?.playerId || '';
+  if (!self) return null;
+  const message = getChatMessage(messageId);
+  if (!message) { showToast("That message isn't in the room any more.", 'error'); return null; }
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>${escHtml(WAGER_COPY.title)}</h3><button class="modal-close" id="wager-close">✕</button></div>
+    <div id="wager-modal-body">${renderWagerModalBodyHTML({ message })}</div>
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#wager-close')?.addEventListener('click', close);
+  ov.querySelector('#wager-cancel')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  const input = ov.querySelector('#wager-claim');
+  const counter = ov.querySelector('#wager-count');
+  input?.addEventListener('input', () => { if (counter) counter.textContent = String((input.value || '').length); });
+  const showError = msg => {
+    const el = ov.querySelector('#wager-error');
+    if (!el) return;
+    el.textContent = msg;
+    el.removeAttribute('hidden');
+  };
+  ov.querySelector('#wager-log')?.addEventListener('click', async () => {
+    const btn = ov.querySelector('#wager-log');
+    if (btn) btn.disabled = true;
+    const res = await logWager({
+      messageId,
+      claim: ov.querySelector('#wager-claim')?.value || '',
+      counterpartyId: ov.querySelector('#wager-other')?.value || '',
+      dueWeekId: ov.querySelector('#wager-week')?.value || '',
+    });
+    if (res.ok) { showToast(res.message, 'success'); close(); return; }
+    if (btn) btn.disabled = false;
+    if (res.skipped === 'offline' || res.skipped === 'no_week') showError(res.message);
+    else if (res.message) showToast(res.message, 'error');
+  });
+  return ov;
+}
+
 // ─── PICK PERMISSION ──────────────────────────────────────────────────────────
 
 /**
@@ -1879,37 +3292,99 @@ export function canViewOtherPicks(week) {
 
 // ─── PICKS PAGE ───────────────────────────────────────────────────────────────
 
+/**
+ * FEAT-8b / DI-177c (UN-177 + UN-178, 2026-09-12) — the head slot.
+ *
+ * Every branch of the Picks page emits one empty `<div id="picks-head-slot">`
+ * immediately after its week-header cluster (blurb, plus the lock countdown /
+ * picks-timing line where that branch has one). This fills it, once, for every
+ * branch:
+ *
+ *   nav -> blurb -> [countdown / timing] -> What's New -> recap -> primary content
+ *
+ * Why a slot rather than insertAdjacentHTML: both cards used to be appended
+ * `beforeend`, i.e. after the submit bar, where a player who came to pick has
+ * already left the page. `afterbegin` cannot replace that — it would land them
+ * ABOVE the blurb, which lives inside each branch's own template.
+ *
+ * The `slot ? … : beforeend` fallback is deliberate. If a future branch is
+ * added without a slot, the cards still render — at the bottom, visibly wrong,
+ * but NEVER missing. layouttest.mjs asserts all five branches carry the slot,
+ * so the fallback should not fire in practice.
+ *
+ * Order inside the slot is D-1's ruling: What's New ABOVE the recap. What's New
+ * is a collapsed <details>, one ~44px line; the recap is an expanded card of
+ * five to eight lines. A player scanning for the games passes one line, not a
+ * block, before deciding whether to keep reading. The lock countdown / picks
+ * timing stays ABOVE both (D-3) — v0.17.2's ruling that the deadline is the
+ * single best reason to sign in is not reversed by a release-notes card.
+ *
+ * FEAT-3 contract: renderWhatsNewCardHTML() keeps returning '' when there is
+ * nothing to show, and this is now its ONE call site. Its signature and
+ * internals are untouched. When it returns '' and there is no recap, the slot
+ * is removed entirely — no empty shell, no gap.
+ */
+function fillPicksHeadSlot(c, recapHtml) {
+  const head = renderWhatsNewCardHTML() + (recapHtml || '');
+  const slot = c.querySelector('#picks-head-slot');
+  if (slot) slot.outerHTML = head;
+  else c.insertAdjacentHTML('beforeend', head);
+}
+
 function renderPicksPage() {
   // v0.16.0 dispatcher — supports viewing previous locked/closed weeks
-  // (read-only) and appends the week-nav + recap footer around every branch
+  // (read-only) and fills the head slot (What's New + recap) for every branch
   // of the current-week renderer.
   const c = document.getElementById('page-picks'); if (!c) return;
   const currentWeek = getCurrentWeek();
   const viewWeek = state.picksWeekId ? getWeek(state.picksWeekId) : null;
   if (viewWeek && currentWeek && viewWeek.weekId !== currentWeek.weekId) {
     renderHistoricalPicksView(c, viewWeek, currentWeek);
-    // UN-124 — last card in EVERY state, including the historical-week branch
-    // (this branch returns early, so it needs its own append).
-    c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());
+    // Branch A shows THAT week's own recap (it is the week being read), not the
+    // previous week's — and it moves from the bottom of the page into the slot.
+    fillPicksHeadSlot(c, viewWeek.status === 'final' ? renderWeekRecapCardHTML(viewWeek) : '');
     return;
   }
   state.picksWeekId = null;
   renderPicksPageCurrent();
   c.insertAdjacentHTML('afterbegin', renderPicksWeekNav(currentWeek, currentWeek));
   bindPicksWeekNav();
-  // Hide the permanent-record / previous-recap footer when a logged-in player
-  // is actively engaged with THIS week (picking or reviewing their picks). The
-  // permanent record is context for outsiders and the commissioner — a signed-in
-  // player's picks tab should stay focused on the games at hand.
+  // UN-178 (Drew, 2026-09-12, verbatim): "in addition to the whats new being
+  // before the picks, I also want the previous week recap before the picks and
+  // under the blurb."
+  //
+  // This REPLACES the former `playerActivelyInPicks` suppression, which hid the
+  // recap/permanent-record footer from any signed-in non-admin player on the
+  // reasoning that "a signed-in player's picks tab should stay focused on the
+  // games at hand" (UN-72's class). Drew's instruction reads on the page a
+  // signed-in player sees, and it is later and more specific, so the recap now
+  // renders in the head slot in ALL FIVE branches — signed out, picking,
+  // submitted, locked-signed-in and historical alike. Superseded, dated, not
+  // silently dropped.
+  //
+  // COORDINATOR RULING 2 (2026-09-12, after the F1 review) — the head slot holds
+  // the PREVIOUS-WEEK RECAP ONLY. It used to be filled with
+  // renderPicksFooterHTML(), which falls back to the 2K25 Permanent Record
+  // whenever there is no finalized previous week — so on any Monday or Tuesday
+  // before finalize, an 8-line season-summary card sat between the blurb and the
+  // games for every player. A planning gap, not an execution defect: the design
+  // input said "the recap" and never specified the no-recap state.
+  //
+  // The season summary keeps its PRE-F1 placement and its PRE-F1 audience: the
+  // END of the page, and only where the old footer rule allowed it — signed-out
+  // visitors and the commissioner, never a signed-in non-admin player. The
+  // `!recapHtml` half preserves the old fall-through exactly: renderPicksFooterHTML
+  // returned the recap OR the summary, never both, so a week with a recap shows
+  // no summary, same as before. Net effect: Drew's ask (recap under the blurb,
+  // for everyone) is met, and the season-summary card is neither promoted above
+  // the fold nor deleted.
+  const recapHtml = renderPrevWeekRecapHTML(currentWeek);
+  fillPicksHeadSlot(c, recapHtml);
   const session = getSession();
   const playerActivelyInPicks = session?.playerVerified && session?.playerId && !session?.isAdmin;
-  if (!playerActivelyInPicks) {
-    c.insertAdjacentHTML('beforeend', renderPicksFooterHTML(currentWeek));
+  if (!recapHtml && !playerActivelyInPicks) {
+    c.insertAdjacentHTML('beforeend', renderSeasonSummaryHTML(currentWeek));
   }
-  // UN-124 — last card on the Picks tab in EVERY state: signed-out (login
-  // screen), signed-in mid-form, submitted, and locked-week. Unconditional —
-  // unlike the footer above, this must reach a player who stays logged in.
-  c.insertAdjacentHTML('beforeend', renderWhatsNewCardHTML());
 }
 
 /** Weeks a player may browse on the Picks tab: current week + anything locked/live/final. Demo weeks are commissioner-only. */
@@ -1989,8 +3464,8 @@ function renderHistoricalPicksView(c, week, currentWeek) {
   c.innerHTML = `
     ${renderPicksWeekNav(week, currentWeek)}
     ${renderWeekBanner(week)}
-    ${body}
-    ${week.status === 'final' ? renderWeekRecapCardHTML(week) : ''}`;
+    <div id="picks-head-slot"></div>
+    ${body}`;
   bindPicksWeekNav();
 }
 
@@ -2017,6 +3492,7 @@ function renderPicksPageCurrent() {
     const ep = week ? getPicks(week.weekId, session.playerId) : [];
     c.innerHTML = `
       ${renderWeekBanner(week)}
+      <div id="picks-head-slot"></div>
       <div class="week-status-card">
         <div class="week-status-icon">🔒</div>
         <div class="week-status-body">
@@ -2045,6 +3521,7 @@ function renderPicksPageCurrent() {
   c.innerHTML = `
     ${renderWeekBanner(week)}
     ${renderPicksTiming(week, games)}
+    <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
       <span class="text-muted text-sm"> — ${state.editingPicks?'update your picks':'make your picks'}</span></div>
@@ -2129,6 +3606,7 @@ function renderLoginScreen(week) {
   return `
     ${renderWeekBanner(week)}
     ${renderLockCountdownHTML(week, games)}
+    <div id="picks-head-slot"></div>
     <div class="card">
       <div class="card-header"><span class="card-title">👤 Who Are You?</span></div>
       <p class="text-secondary text-sm mb-md">Select your name and enter your PIN.</p>
@@ -2257,6 +3735,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
   c.innerHTML = `
     ${renderWeekBanner(week)}
     ${renderPicksTiming(week, games)}
+    <div id="picks-head-slot"></div>
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
       <span class="text-muted text-sm"> — picks submitted ✓</span></div>
@@ -2473,9 +3952,18 @@ function renderGamesList(games, week) {
   c.innerHTML = html || '<p class="text-muted text-center mt-lg">No games on the slate yet.</p>';
 }
 
-// DI-7 — this is the SHARED player-facing card (Picks page + Dashboard). It
-// intentionally gets NO national-TV badge — a deliberate scope boundary, not
-// an oversight. Do not mirror the alma badge's footprint here.
+// DI-7 — the player-facing game card. It intentionally gets NO national-TV
+// badge — a deliberate scope boundary, not an oversight. Do not mirror the alma
+// badge's footprint here.
+//
+// CORRECTED 2026-09-12 (BUG-4 review note): this comment used to call the card
+// "SHARED (Picks page + Dashboard)". It is not, and the error is not cosmetic —
+// BUG-4's whole blind-rule argument for showing WHICH team you picked rests on
+// renderGameCard() being reachable ONLY from the Picks page, where `pickedTeam`
+// is always the VIEWER's own pick. Both call sites are in this file and both are
+// Picks-page renderers (the submitted read-only list and the draft picks list);
+// the Dashboard renders its own matrix/compact views, never this card. If a
+// future surface calls this with someone else's selection, that marker leaks.
 // Item 2 Pass B — the score/status block shared by renderGameCard's initial
 // render AND updatePicksLiveStatusInPlace()'s surgical DI-2 refresh below.
 // Single source of markup so the two paths can never drift (mirrors the
@@ -2488,12 +3976,19 @@ function renderLiveScoreBlockHTML(game) {
   const liveEntry = game.status===GAME_STATUS.LIVE ? liveStatusById.get(game.gameId) : null;
   const liveDisp  = liveEntry ? liveStatusDisplay(liveEntry) : null;
   const noPulseCls = liveDisp && liveDisp.pulse===false ? ' score-status-no-pulse' : '';
+  // FEAT-7 / DI-174d (APPROVED) — the red-zone mark reaches this card too. Same
+  // phone, same Map, same live block: omitting it here would mean the same
+  // player, five seconds apart, sees the mark on one tab and not the other,
+  // which reads as a bug. Long form ("🔴 Red zone · Arkansas") because this
+  // surface has the room the matrix does not. updatePicksLiveStatusInPlace()
+  // needs NO change — it replaces this whole block.
+  const rz = redZoneDisplay(liveEntry, game, { short: false });
   return `<div class="live-block">
     <div class="live-score">
       <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${game.awayScore}</div>
       <div class="score-status${noPulseCls}">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
       <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
-    </div>${liveDisp ? `<div class="live-status-detail text-xs text-muted text-center">${escHtml(liveDisp.text)}</div>` : ''}
+    </div>${liveDisp ? `<div class="live-status-detail text-xs text-muted text-center">${escHtml(liveDisp.text)}</div>` : ''}${rz ? `<div class="rz-line text-center"><span class="rz-mark" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span></div>` : ''}
   </div>`;
 }
 
@@ -2589,6 +4084,36 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
   const homeCls = `pick-btn ${getBtnClass(game.homeTeam,pickedTeam,result,showResult,game)}`;
   const awayCls = `pick-btn ${getBtnClass(game.awayTeam,pickedTeam,result,showResult,game)}`;
 
+  // BUG-4 (fb_1788576195078_ejmps, Drew, 2026-09-05) — "You can see the live
+  // scores in the picks tab and can see if you're covering, but cant aee who
+  // you picked." The picked team was indicated ONLY by `.pick-btn.selected`
+  // (and its live-covering / locked-win variants), and the whole
+  // `.pick-buttons` block below is omitted whenever showResult is true — which
+  // is EVERY card in the submitted view, at every status. The read-only card
+  // therefore showed the score, the ⚡ Covering badge and the W/L badge, but
+  // nothing saying WHICH team you took.
+  //
+  // The marker goes on the `.matchup` row, not in the header and not in the
+  // live block, for two reasons: .matchup is the one region every status
+  // renders, and it is the one region updatePicksLiveStatusInPlace() never
+  // rewrites (that patch replaces `.live-block` wholesale on every 60s tick,
+  // so a marker living there would blink out mid-game).
+  //
+  // Gated on showResult so the two indicators stay mutually exclusive: the
+  // draft view keeps exactly one (the selected button) and never grows a
+  // second. pickedTeam here is always the VIEWER's own pick — renderGameCard
+  // is called from the Picks page only, never from a surface that shows
+  // another player's selections — so this cannot touch the blind rule.
+  // `!pickedTeam` is checked explicitly (BUG-4 review note, 2026-09-12) rather
+  // than relying on the two equality tests to fail: a card whose game record is
+  // missing a team name would otherwise match `undefined === undefined` and flag
+  // a side nobody picked. Cheap, and it states the intent — no pick, no marker.
+  const pickedSide = (!showResult || !pickedTeam) ? null
+    : pickedTeam === game.homeTeam ? 'home'
+    : pickedTeam === game.awayTeam ? 'away'
+    : null;
+  const pickFlag = '<div class="team-pick-flag">✓ Your pick</div>';
+
   return `<div class="game-card${game.isAlmaMaterGame?' alma-mater':''}" data-game-id="${game.gameId}">
     <div class="game-card-header">
       <div class="flex gap-sm flex-center">
@@ -2605,16 +4130,18 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
     </div>
     <div class="game-card-body">
       <div class="matchup">
-        <div class="team away">
+        <div class="team away${pickedSide==='away'?' team-picked':''}">
           ${awayRk?`<div class="team-rank">${awayRk}</div>`:''}
           <div class="team-name">${escHtml(game.awayTeam)}${awayMasc?` <span class="team-mascot">(${escHtml(awayMasc)})</span>`:''}</div>
           <div class="team-conf">${escHtml(game.awayConference||'')}</div>
+          ${pickedSide==='away'?pickFlag:''}
         </div>
         <div class="vs-divider">@</div>
-        <div class="team home">
+        <div class="team home${pickedSide==='home'?' team-picked':''}">
           ${homeRk?`<div class="team-rank">${homeRk}</div>`:''}
           <div class="team-name">${escHtml(game.homeTeam)}${homeMasc?` <span class="team-mascot">(${escHtml(homeMasc)})</span>`:''}</div>
           <div class="team-conf">${escHtml(game.homeConference||'')}</div>
+          ${pickedSide==='home'?pickFlag:''}
         </div>
       </div>
       ${liveScore}
@@ -2797,6 +4324,93 @@ export function claimedAlmaMaters() {
 }
 
 /**
+ * BUG-1 (fb_1788538501410_9egx9, Drew 2026-09-04, verbatim: "Under alma
+ * mater watch, the order should be in order of the ranking. For example,
+ * right now TAMU is 8 and Oklahoma is 10, so TAMU should be first. If the
+ * rankings change halfway through the season, the order should adjust
+ * accordingly.")
+ *
+ * THE ordering both alma-mater surfaces use — `renderAlmaMaterWatch()` (the
+ * week page's slate card) and `renderAlmaMaterRankings()` (the Standings
+ * page). Before this, BOTH walked `claimedAlmaMaters()` and never sorted, so
+ * the displayed order was an artifact of who joined the league first.
+ *
+ * Pure by design (the `seasonStandingsRows()` pattern): it takes entries that
+ * already carry their resolved rank, reads no storage, mutates nothing, and
+ * returns a NEW array — so it is testable directly from Node without
+ * standing up either renderer's dependency closure (almatest.mjs §17k-o).
+ *
+ * Tiers, in order:
+ *   0. RANKED and playing this week — ascending by AP rank (#1, #8, #10)
+ *   1. UNRANKED and playing this week — no rank to sort by
+ *   2. On BYE (Watch only) — within the tier, schools whose most recent game
+ *      across `getGames()` carried a rank sort ascending by that LAST KNOWN
+ *      rank, then the ones never ranked anywhere.
+ *
+ * Why BYE is its own tier rather than folding a stale rank into tier 0: a
+ * school that is not playing this week should not outrank one that is. The
+ * last known rank still orders rows INSIDE the BYE tier, which is what makes
+ * a BYE row land somewhere meaningful instead of wherever the roster put it.
+ *
+ * `renderAlmaMaterRankings()` passes no `onBye` at all — it is a season-wide
+ * list with no slate and therefore no BYE concept, so it exercises tiers 0
+ * and 1 only. That is the one intentional difference between the two
+ * surfaces' output; the comparator is identical.
+ *
+ * Ties inside a tier keep the incoming `claimedAlmaMaters()` order. The
+ * original index is the FINAL comparator key rather than a reliance on
+ * `Array.prototype.sort` being stable — cheap, and it makes the guarantee
+ * something almatest.mjs can assert instead of something we hope the engine
+ * provides.
+ *
+ * Nothing here is cached. Ranks are re-derived from current game data on
+ * every render, which is what satisfies "if the rankings change halfway
+ * through the season, the order should adjust." `week.lockedAlmaMaters` is
+ * the tiebreaker Auto-Calc's roster frozen at LOCK (AD-34 / F4,
+ * `almaMatersForAutoCalc()` above) and is NEVER read for display order.
+ */
+export function sortAlmaMaterEntries(entries) {
+  const list = Array.isArray(entries) ? entries : [];
+  // Defensive coercion at the boundary (CONVENTIONS #7) — homeRank/awayRank
+  // arrive from ESPN and can be null, 0, or a numeric string.
+  const rankKey = e => {
+    const n = Number(e && e.rank);
+    return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY;
+  };
+  const tierOf = e => (e && e.onBye ? 2 : (rankKey(e) === Number.POSITIVE_INFINITY ? 1 : 0));
+  return list
+    .map((e, _i) => ({ e, _i }))
+    .sort((a, b) => (tierOf(a.e) - tierOf(b.e)) || (rankKey(a.e) - rankKey(b.e)) || (a._i - b._i))
+    .map(x => x.e);
+}
+
+/**
+ * BUG-6 (fb_1788651890158_fva84, Drew 2026-09-05, verbatim: "In the alma
+ * mater rankings it only lists drew by tamu and not kihoon. If there are too
+ * people with the same alma mater, both should be listed")
+ *
+ * EVERY ACTIVE player claiming `alma`, in roster order. This is the ONE
+ * claimant predicate — `renderAlmaMaterRankings()` and
+ * `renderAlmaMaterSettingsCard()` both call it, so the F5 note below
+ * (2026-09-04: "all three now agree") stays true by construction rather than
+ * by three hand-kept copies. Rankings previously used
+ * `getPlayers().find(p => p.active && ...)`, and `.find()` structurally
+ * returns at most ONE player — Texas A&M, claimed by both Drew and Kihoon,
+ * could only ever name one of them no matter how the predicate was written.
+ *
+ * Normalisation (trim + case-insensitive) matches `claimedAlmaMaters()`
+ * exactly, because the `alma` string passed in IS a `claimedAlmaMaters()`
+ * entry — it has already been trimmed, while the player record it came from
+ * still holds whatever casing/whitespace was typed.
+ */
+export function almaMaterClaimants(alma, players) {
+  const key = (alma || '').trim().toLowerCase();
+  if (!key) return [];
+  const list = Array.isArray(players) ? players : getPlayers();
+  return list.filter(p => p && p.active && (p.almaMater || '').trim().toLowerCase() === key);
+}
+
+/**
  * `game.isAlmaMaterGame` is computed once, at ESPN-parse time (or in the
  * Game Modal on manual add/edit) — a player claiming/unclaiming a school
  * does NOT retroactively touch it on its own. Called right after a
@@ -2900,23 +4514,82 @@ export function almaMatersForAutoCalc(week) {
   return claimedAlmaMaters();
 }
 
+/**
+ * Games eligible to resolve a school's CURRENT or LAST KNOWN AP rank, MOST
+ * RECENT FIRST.
+ *
+ * Reviewer note on the BUG-1/BUG-6 pass (2026-09-12): both alma-mater rank
+ * lookups — renderAlmaMaterRankings()'s reverse-find and
+ * renderAlmaMaterWatch()'s BYE fallback — read every game in storage with no
+ * demo filter, unlike the five other consumers that already have one
+ * (seasonStandingsRows(), renderLeaderboard()'s visible-week set, the
+ * weekly-history week list, currentSeasonObligations(), the demo-obligation
+ * purge). resetToDemo() writes GAMES as [...REAL_WEEK_1_2026_KNOWN_GAMES,
+ * ...DEMO_GAMES], so the fictional slate sits at the END of the array and a
+ * reverse-find hits it FIRST: the Standings page showed "#8 AP" for Texas A&M
+ * and "#7 AP" for Notre Dame, numbers that exist nowhere but the fixture. It
+ * cuts the other way too — the rankless demo Purdue game erases a real rank.
+ * The Historical Demo Week (weekId 'hw1') is dataSourceMode 'demo' as well, so
+ * the same week-id set covers it with no second rule.
+ *
+ * ONE helper rather than a filter at each site, so the two surfaces cannot be
+ * fixed on one and forgotten on the other (the same reasoning as
+ * sortAlmaMaterEntries()). The reverse happens HERE, once per render — the
+ * callers used to build `[...games].reverse()` once per school, which is what
+ * renderAlmaMaterWatch()'s "once per render (not once per school)" comment had
+ * always claimed but did not do.
+ */
+function almaMaterRankLookupGames() {
+  const demoWeekIds = new Set(getWeeks().filter(w => w.dataSourceMode === 'demo').map(w => w.weekId));
+  return getGames().filter(g => !demoWeekIds.has(g.weekId)).reverse();
+}
+
 export function renderAlmaMaterWatch(weekId, games) {
   const slateGames = games || getGames(weekId);
   const almaMaters = claimedAlmaMaters();
-  const rows = almaMaters.map(alma => {
+
+  // BUG-1 — resolve each school's game and CURRENT AP rank FIRST, sort, then
+  // render. Previously this mapped straight to HTML in claimedAlmaMaters()
+  // (player-roster) order with no sort at all. See sortAlmaMaterEntries()
+  // above for the tier rules.
+  //
+  // A school on BYE has no game on this slate, so there is no current rank to
+  // sort it by. Rather than dumping every BYE row in roster order, fall back
+  // to the most recent NON-DEMO game across all weeks for a LAST KNOWN rank —
+  // the same shared lookup renderAlmaMaterRankings() uses (see
+  // almaMaterRankLookupGames() above, which owns both the demo exclusion and
+  // the most-recent-first ordering). Read lazily, and genuinely once per
+  // render rather than once per school, and only when a BYE row actually
+  // exists, so the common no-BYE week costs nothing extra.
+  let allGamesForBye = null;
+  const entries = almaMaters.map(alma => {
     const game = slateGames.find(g =>
       getAlmaMaterMatch(g.homeTeam, almaMaters) === alma || getAlmaMaterMatch(g.awayTeam, almaMaters) === alma
     );
+    if (!game) {
+      if (allGamesForBye === null) allGamesForBye = almaMaterRankLookupGames();
+      const lastGame = allGamesForBye.find(g =>
+        getAlmaMaterMatch(g.homeTeam, almaMaters) === alma || getAlmaMaterMatch(g.awayTeam, almaMaters) === alma
+      );
+      const lastRank = lastGame
+        ? (getAlmaMaterMatch(lastGame.homeTeam, almaMaters) === alma ? lastGame.homeRank : lastGame.awayRank)
+        : null;
+      return { alma, game: null, isHome: false, rank: lastRank, onBye: true };
+    }
+    // Use precise matching to decide which side is the alma mater (avoid Arkansas/Arkansas State false positives)
+    const isHome = getAlmaMaterMatch(game.homeTeam, almaMaters) === alma;
+    return { alma, game, isHome, rank: isHome ? game.homeRank : game.awayRank, onBye: false };
+  });
+
+  const rows = sortAlmaMaterEntries(entries).map(({ alma, game, isHome, rank }) => {
     if (!game) {
     return `<div class="alma-watch-row">
         <span class="alma-watch-team">${escHtml(alma)}</span>
         <span class="alma-watch-bye">BYE</span>
       </div>`;
     }
-    // Use precise matching to decide which side is the alma mater (avoid Arkansas/Arkansas State false positives)
-    const isHome  = getAlmaMaterMatch(game.homeTeam, almaMaters) === alma;
     const opp     = isHome ? teamSchool(game,'away') : teamSchool(game,'home');
-    const myRank  = isHome ? game.homeRank : game.awayRank;
+    const myRank  = rank;
     const oppRank = isHome ? game.awayRank : game.homeRank;
     const rankStr = myRank ? `#${myRank} ` : '';
     const oppStr  = oppRank ? `#${oppRank} ${opp}` : opp;
@@ -3013,6 +4686,286 @@ export function initScrollFades(root) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   FEAT-8a / UN-179 (2026-09-12) — PER-PLAYER SECTION ORDER
+   ═══════════════════════════════════════════════════════════════════════════
+
+   Drew, verbatim: "Users should be able to customize the layout of their
+   dashboard and standings tabs. Each box containing things like the actual
+   game dashboard or alma mater watch, should be able to be moved around like
+   iphone apps. It shouldnt move accidentally scrolling, only with
+   intentionality."
+
+   MECHANISM (DI-179a, coordinator-approved 2026-09-12): an explicit
+   `⇅ Edit layout` MODE plus ▲/▼ move buttons. **No drag, deliberately.** The
+   iPhone home screen's intentionality comes from the MODE, not from the drag:
+   you cannot move an icon until you have entered jiggle mode. The mode gate
+   alone satisfies Drew's constraint, and it satisfies it STRUCTURALLY —
+   nothing here listens to touchmove at any time, so there is no scroll-
+   adjacent gesture that could misfire. A touch drag would also have been
+   untestable in Node and in a desktop browser (see RG-34 and the three
+   shipped-but-never-device-verified touch handlers the ledger records).
+
+   WHY A REGISTRY EXISTS AT ALL. Before this, a "section" was not a thing in
+   this codebase: both pages were one template literal with hard-coded blocks
+   and numbered HTML comments, so page order was structure rather than data
+   and could not be a preference. DEFAULT_SECTIONS is that missing registry.
+
+   THE ORDER IS APPLIED DURING STRING ASSEMBLY, never by moving DOM nodes
+   after binding (DI-179c). Every addEventListener, initScrollFades() call and
+   deep-link target in both renderers still runs after innerHTML is assigned,
+   exactly as before — so no existing handler, fade or scroll anchor changes
+   behavior no matter where the player put its section.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The single registry. Order here IS the league default order.
+ *
+ * `dashboard` is UN-22/RG-01's locked order, unchanged — a player who never
+ * opens the editor sees byte-identical output to v0.21.0, which is what keeps
+ * VT-22 meaningful (asserted in layouttest §A3).
+ *
+ * NAMING IS LOAD-BEARING: every id below is a PERSISTED STORAGE VALUE, written
+ * into `player.preferences.sectionOrder`. Renaming one after ship is a data
+ * migration, not a refactor — a saved order would silently lose that section
+ * to the unknown-id rule in effectiveOrder(). Add ids; do not rename them.
+ */
+export const DEFAULT_SECTIONS = Object.freeze({
+  dashboard: Object.freeze(['dash-picks', 'dash-alma', 'dash-summary', 'dash-tiebreaker']),
+  // `stand-extrapoint` is FEAT-9's Extra Point Ledger (UN-176), which pass F1
+  // hard-coded between Season Summary and Alma Mater Rankings. Registering it
+  // at default index 2 reproduces that exact position for every player who has
+  // not customized, and makes it movable for everyone who has.
+  standings: Object.freeze(['stand-season', 'stand-extrapoint', 'stand-alma',
+                            'stand-history', 'stand-2025-open', 'stand-2025-record']),
+});
+
+/** Short human labels for the move bar and its aria-labels (DI-179i). */
+export const SECTION_LABELS = Object.freeze({
+  'dash-picks': 'All Picks by Game',
+  'dash-alma': 'Alma Mater Watch',
+  'dash-summary': 'This Week Score Summary',
+  'dash-tiebreaker': 'Tiebreaker',
+  'stand-season': 'Season Summary',
+  'stand-extrapoint': 'Extra Point Ledger',
+  'stand-alma': 'Alma Mater Rankings',
+  'stand-history': 'Weekly History',
+  'stand-2025-open': '2K25 Outstanding',
+  'stand-2025-record': '2K25 Historical Record',
+});
+
+/**
+ * DI-179e — the merge rule. PURE and exported so layouttest.mjs can prove it
+ * without a DOM. This is where an order feature goes wrong, so the rule is
+ * spelled out rather than left to `saved.length ? saved : default`:
+ *
+ *   1. Start from DEFAULT_SECTIONS[pageKey].
+ *   2. Read the saved order.
+ *   3. Drop ids that are no longer in the registry (a retired section). Silent
+ *      — a retired id is not the player's problem. Duplicates de-duplicate,
+ *      first occurrence wins.
+ *   4. Any registry id MISSING from the saved order is inserted immediately
+ *      after the last default-predecessor of that id which IS present. With no
+ *      present predecessor it goes to index 0.
+ *   5. Therefore the result NEVER contains fewer ids than the registry does.
+ *
+ * Step 4 is the one that matters and it is deliberately NOT "append to the
+ * bottom". Worked example: default [dash-picks, dash-alma, dash-summary,
+ * dash-tiebreaker]; a player saved [dash-alma, dash-picks, dash-summary,
+ * dash-tiebreaker]; v0.22 adds `dash-newthing` at default index 2. Its
+ * predecessor dash-alma sits at position 0 of the saved order, so the result
+ * is [dash-alma, dash-newthing, dash-picks, …] — the new card lands where the
+ * default put it RELATIVE TO ITS NEIGHBOUR, and the player's two deliberate
+ * moves survive. Appending would have buried a card designed to sit near the
+ * top under four cards, for all six players, silently, on every release.
+ *
+ * Step 5 is the property that makes "a bad saved order can never hide a
+ * section" true, and it is an assertion in layouttest.mjs, not a comment.
+ */
+export function effectiveOrder(pageKey) {
+  const def = DEFAULT_SECTIONS[pageKey] || [];
+  const saved = getSectionOrder(pageKey) || [];
+  const out = [];
+  for (const id of saved) {
+    if (def.includes(id) && !out.includes(id)) out.push(id);
+  }
+  for (let d = 0; d < def.length; d++) {
+    const id = def[d];
+    if (out.includes(id)) continue;
+    let insertAt = 0;
+    for (let p = d - 1; p >= 0; p--) {
+      const at = out.indexOf(def[p]);
+      if (at >= 0) { insertAt = at + 1; break; }
+    }
+    out.splice(insertAt, 0, id);
+  }
+  return out;
+}
+
+/**
+ * PURE — move `sectionId` one place up/down THROUGH THE VISIBLE LIST.
+ *
+ * `visible` matters: a section whose HTML is empty this week (no tiebreaker
+ * question, say) stays in the order array but is not on screen (DI-179f). If
+ * ▲ swapped with the raw neighbour, a tap could land the section on the far
+ * side of something invisible and read as "the button did nothing". Swapping
+ * with the nearest VISIBLE neighbour keeps the hidden section's own relative
+ * slot, so it returns where the player would expect once it has content.
+ */
+export function reorderedSections(order, visible, sectionId, dir) {
+  const out = (order || []).slice();
+  const vis = (visible || []).filter(v => out.includes(v));
+  const vi = vis.indexOf(sectionId);
+  if (vi < 0) return out;
+  const target = dir === 'up' ? vis[vi - 1] : vis[vi + 1];
+  if (!target) return out;                    // already at the end — ▲/▼ is disabled there anyway
+  const a = out.indexOf(sectionId);
+  const b = out.indexOf(target);
+  out[a] = target; out[b] = sectionId;
+  return out;
+}
+
+/**
+ * THE move. The ▲/▼ click handler calls exactly this, with exactly these
+ * arguments; layouttest.mjs drives the same function rather than a copy of it.
+ * Returns the new order (also persisted to the player record through the seam).
+ */
+export function moveSection(pageKey, sectionId, dir, visibleIds) {
+  const order = effectiveOrder(pageKey);
+  const next = reorderedSections(order, visibleIds && visibleIds.length ? visibleIds : order, sectionId, dir);
+  setSectionOrder(pageKey, next);
+  return next;
+}
+
+/**
+ * DI-179g — who gets the control at all. Signed in (player OR commissioner,
+ * they are the same thing here) yes; anonymous no, and with no device-level
+ * fallback. UN-127 decided this exact question for theme and timezone: a
+ * shared phone passed around pregame would otherwise let whoever touched it
+ * last re-lay-out the app for the next anonymous viewer. Same shape as
+ * renderThemeToggle()'s `if (!getSession()?.playerId)` gate.
+ */
+function canCustomizeLayout() {
+  return !!getSession()?.playerId;
+}
+
+/** DI-179i — the `⇅ Edit layout` / `✓ Done` toggle that lives in the page's .section-header. */
+function layoutEditButtonHTML(pageKey) {
+  if (!canCustomizeLayout()) return '';
+  const editing = state.layoutEditing === pageKey;
+  return `<button class="btn btn-ghost btn-sm layout-edit-btn" data-layout-page="${pageKey}">${
+    editing ? '✓ Done' : '⇅ Edit layout'}</button>`;
+}
+
+/**
+ * The instruction strip + Reset, shown only while editing. The aria-live node
+ * is emitted EMPTY and filled by bindLayoutEditHandlers() after the re-render,
+ * so the assistive-tech announcement is a change to an existing region rather
+ * than a region that arrives pre-populated.
+ */
+function layoutEditStripHTML(pageKey) {
+  if (state.layoutEditing !== pageKey || !canCustomizeLayout()) return '';
+  return `<div class="layout-edit-strip">
+    <p class="layout-edit-hint">Move a section with ▲ or ▼. Your layout is saved to your account and follows you to any device.</p>
+    <button class="btn btn-ghost btn-sm layout-reset-btn" data-layout-page="${pageKey}">↺ Reset to default</button>
+    <div class="layout-live" id="layout-live-region" aria-live="polite"></div>
+  </div>`;
+}
+
+/**
+ * Compose a page's reorderable sections into markup, in the player's order.
+ *
+ * `parts` maps section id -> already-built HTML. A part that is empty after
+ * trimming is OMITTED FROM THE DOM ENTIRELY — no wrapper, no move bar (an
+ * empty movable slot is a phantom) — while keeping its place in the order
+ * array, so it comes back to where the player put it once it has content.
+ *
+ * Returns `{ html, visible }`; `visible` is what the move handlers close over.
+ */
+function composeSections(pageKey, parts) {
+  const order = effectiveOrder(pageKey);
+  const visible = order.filter(id => String(parts[id] ?? '').trim() !== '');
+  const editing = state.layoutEditing === pageKey && canCustomizeLayout();
+  const html = visible.map((id, i) => {
+    const label = SECTION_LABELS[id] || id;
+    const bar = !editing ? '' : `<div class="section-move-bar">
+        <span class="section-move-label">${escHtml(label)}</span>
+        <div class="section-move-actions">
+          <button class="section-move-btn" data-layout-page="${pageKey}" data-move-id="${id}" data-move-dir="up"
+            aria-label="Move ${escHtml(label)} up"${i === 0 ? ' disabled' : ''}>▲</button>
+          <button class="section-move-btn" data-layout-page="${pageKey}" data-move-id="${id}" data-move-dir="down"
+            aria-label="Move ${escHtml(label)} down"${i === visible.length - 1 ? ' disabled' : ''}>▼</button>
+        </div>
+      </div>`;
+    // NOTE: `.layout-section`, NOT `.page-section`. DI-179c named the wrapper
+    // class `.page-section` — that class is ALREADY TAKEN in this app by the
+    // six top-level <section> page containers in index.html, and it carries
+    // `display:none` unless `.active` (styles.css:100) while navigateTo()
+    // toggles `.active` across every element matching it (app.js:640). Reusing
+    // the name would have hidden every dashboard and standings section on the
+    // page. Declared deviation, class name only; the persisted `data-section-id`
+    // values and every behaviour the DI specifies are exactly as written.
+    return `<section class="layout-section" data-section-id="${id}">${bar}${parts[id]}</section>`;
+  }).join('');
+  return { html, visible };
+}
+
+/**
+ * Bind the edit-mode controls. Called after innerHTML on both pages, with the
+ * `visible` list the compose pass just produced — so the handlers never have
+ * to re-derive visibility from the DOM and cannot disagree with what rendered.
+ */
+function bindLayoutEditHandlers(c, pageKey, visible, rerender) {
+  // DI-179f — the page itself carries the mode, so the dashed "this is
+  // rearrangeable" outline is one descendant rule rather than a class repeated
+  // on every section (and rather than :has(), which this stylesheet uses
+  // nowhere else).
+  try { c.classList.toggle('layout-editing', state.layoutEditing === pageKey); } catch {}
+  c.querySelectorAll('.layout-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.layoutEditing = state.layoutEditing === pageKey ? null : pageKey;
+      rerender();
+    });
+  });
+  c.querySelectorAll('.layout-reset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      clearSectionOrder(pageKey);
+      // Reset gets a toast because it is the one destructive action here and
+      // its result may be entirely off-screen. Individual moves deliberately
+      // do NOT — four moves would be four toasts, and the re-render IS the
+      // feedback. No confirm() either: reserved for money-affecting
+      // commissioner actions, and this is one tap to undo by hand.
+      // DECLARED COPY DEVIATION (2026-09-12). DI-179i's exact string was
+      // '↺ Layout reset to the default order'. UN-77 retired "order/orders" as
+      // league vocabulary and loadtest.mjs [8d] greps EVERY user-facing string
+      // literal in app.js for it — the DI's string fails that guard, and the
+      // instruction strip's "Your order is saved" only escaped it because the
+      // grep is line-scoped and that literal wraps. Rather than weaken a
+      // shipped guard to fit new copy, both strings say "layout", which is the
+      // same meaning in this feature's own vocabulary. If the coordinator wants
+      // the DI's literal wording back, it needs a UN-77 carve-out, not a
+      // silent edit here.
+      showToast('↺ Layout reset to the default', 'success');
+      rerender();
+    });
+  });
+  c.querySelectorAll('.section-move-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.moveId;
+      const next = moveSection(pageKey, id, btn.dataset.moveDir, visible);
+      const nowVisible = next.filter(x => visible.includes(x));
+      state.layoutAnnounce = `${SECTION_LABELS[id] || id} moved to position ${
+        nowVisible.indexOf(id) + 1} of ${nowVisible.length}.`;
+      rerender();
+    });
+  });
+  if (state.layoutAnnounce) {
+    const live = c.querySelector('.layout-live') || document.getElementById('layout-live-region');
+    if (live) live.textContent = state.layoutAnnounce;
+    state.layoutAnnounce = null;
+  }
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
 
 /**
@@ -3050,6 +5003,14 @@ function renderDashboard() {
 
 function renderDashboardInner() {
   const c=document.getElementById('page-dashboard'); if(!c)return;
+  // F2 review note (h), 2026-09-12 — every early return below replaces the page
+  // with an empty state that has no sections, no move bars and no edit strip,
+  // but the host element kept `.layout-editing` from the previous render, so the
+  // dashed "rearrangeable" outline and its 18px section spacing survived onto a
+  // card with nothing to rearrange. Cleared here, at the single entry point;
+  // bindLayoutEditHandlers() re-applies it at the end of a full render when the
+  // page genuinely is in edit mode.
+  try { c.classList.remove('layout-editing'); } catch {}
   const session=getSession();
   const isCommissioner = !!session?.isAdmin;
   // Demo weeks are commissioner-only; so are drafts. Filter them out of the
@@ -3097,22 +5058,14 @@ function renderDashboardInner() {
     </select>
   </div>`:'';
 
-  c.innerHTML=`
-    <div class="section-header">
-      <h2 class="week-heading">${escHtml(formatWeekLabelParts(week).name)}${
-        formatWeekLabelParts(week).dates
-          ? `<span class="week-heading-dates">${escHtml(formatWeekLabelParts(week).dates)}</span>`
-          : ''}</h2>
-      <div class="subtitle">Dashboard · <span class="badge badge-${week.status}">${week.status}</span></div>
-    </div>
-    ${weekSelector}
-    <div class="refresh-bar">
-      <span>${ps.lastScoreRefresh?`Scores: ${new Date(ps.lastScoreRefresh).toLocaleTimeString()}`:'Not refreshed'}</span>
-      <button class="refresh-btn-mini" id="manual-refresh-btn">↻ Refresh</button>
-    </div>
-
-    <!-- 1. ALL PICKS BY GAME — primary section per requirements (DI-22) -->
-    <div class="card mb-md">
+  // FEAT-8a / UN-179 — the four reorderable Dashboard sections, built into a
+  // map keyed by their PERSISTED data-section-id and composed in the player's
+  // own order below. The markup inside each is byte-identical to v0.21.0; the
+  // numbered comments are kept because they are how UN-22's default order has
+  // been documented in this file since v0.11.
+  const dashSections = {
+    // 1. ALL PICKS BY GAME — primary section per requirements (DI-22)
+    'dash-picks': `<div class="card mb-md">
       <div class="card-header card-header-row">
         <span class="card-title">📋 All Picks by Game</span>
         <div class="layout-toggle" role="group" aria-label="View density">
@@ -3138,13 +5091,29 @@ function renderDashboardInner() {
       ${(getSettings().dashboardLayout==='compact')
         ? `<div class="dashboard-compact">${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`
         : `<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
-    </div>
+      ${/* FEAT-7 / DI-174e — the legend is the touch-accessible replacement for
+            the tooltip this design is not allowed to use (tooltips do not fire
+            on touch). Conditional so it is not permanent clutter: it appears on
+            a Saturday when a mark is actually on screen and is absent the rest
+            of the week. Same muted treatment as the blind-cell note above. */''}
+      ${/* F3 review finding (2026-09-12) — GATE ON THE SAME CONDITION THE TABLE
+            USES. renderDashboardTable()/renderDashboardCompact() answer "No picks
+            submitted yet." and render no matrix at all when nobody has submitted
+            — but this legend sat outside that branch, so a live Saturday with an
+            empty slate of picks printed "🔴 RZ = that team has the ball inside
+            the 20." under an empty state explaining a mark that is nowhere on
+            screen. `submittedRaw.length` is the table's own test, computed here
+            from the same two inputs. */''}
+      ${anyRedZoneOnScreen(games) && players.some(p => allPicks.some(pk => pk.playerId === p.playerId))
+        ? '<p class="text-muted text-xs rz-legend">🔴 RZ = that team has the ball inside the 20.</p>'
+        : ''}
+    </div>`,
 
-    <!-- 2. ALMA MATER WATCH -->
-    ${renderAlmaMaterWatch(week.weekId, games)}
+    // 2. ALMA MATER WATCH
+    'dash-alma': renderAlmaMaterWatch(week.weekId, games),
 
-    <!-- 3. THIS WEEK SCORE SUMMARY (tiebreaker question card now appears below this) -->
-    <div class="card mb-md">
+    // 3. THIS WEEK SCORE SUMMARY (tiebreaker question card now appears below this)
+    'dash-summary': `<div class="card mb-md">
       <div class="card-header"><span class="card-title">This Week Score Summary</span></div>
       <table class="leaderboard-table">
         <thead><tr><th>#</th><th>Player</th><th>✅</th><th>❌</th><th>Tiebreaker</th></tr></thead>
@@ -3152,15 +5121,48 @@ function renderDashboardInner() {
           ${renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB)}
         </tbody>
       </table>
-    </div>
+    </div>`,
 
-    <!-- 4. TIEBREAKER QUESTION (moved below summary per Priority 11) -->
-    ${week.tiebreakerQuestion?`<div class="tiebreaker-card tiebreaker-dashboard">
+    // 4. TIEBREAKER QUESTION (moved below summary per Priority 11).
+    // Falsy question -> '' -> composeSections() omits the wrapper AND the move
+    // bar entirely (DI-179f: an empty movable slot is a phantom), while the id
+    // stays in effectiveOrder() so it returns to the player's chosen position
+    // the week a question exists again.
+    'dash-tiebreaker': week.tiebreakerQuestion?`<div class="tiebreaker-card tiebreaker-dashboard">
       <span class="tiebreaker-label">🎯 Tiebreaker: ${escHtml(week.tiebreakerQuestion)}</span>
       ${actualTB!==null?`<div class="tb-actual">Actual: <strong>${actualTB}</strong></div>`:'<div class="text-muted text-xs">Actual answer not entered yet.</div>'}
-    </div>`:''}
+    </div>`:'',
+  };
+  const dashComposed = composeSections('dashboard', dashSections);
+
+  c.innerHTML=`
+    <div class="section-header section-header-layout">
+      <div class="section-header-main">
+        <h2 class="week-heading">${escHtml(formatWeekLabelParts(week).name)}${
+          formatWeekLabelParts(week).dates
+            ? `<span class="week-heading-dates">${escHtml(formatWeekLabelParts(week).dates)}</span>`
+            : ''}</h2>
+        <div class="subtitle">Dashboard · <span class="badge badge-${week.status}">${week.status}</span></div>
+      </div>
+      ${layoutEditButtonHTML('dashboard')}
+    </div>
+    ${layoutEditStripHTML('dashboard')}
+    ${/* PINNED, and not by omission (DI-179c): the week selector decides WHICH
+          week everything below it describes, and the refresh bar stamps the
+          freshness of those same scores. Either one below its own data is a
+          defect, not a preference. The chat teaser is pinned above all of this
+          by renderDashboard(), because chat-ui.js replaces that node in place
+          on live activity and would otherwise have to know where the player
+          moved it. */''}
+    ${weekSelector}
+    <div class="refresh-bar">
+      <span>${ps.lastScoreRefresh?`Scores: ${new Date(ps.lastScoreRefresh).toLocaleTimeString()}`:'Not refreshed'}</span>
+      <button class="refresh-btn-mini" id="manual-refresh-btn">↻ Refresh</button>
+    </div>
+${dashComposed.html}
 `;
 
+  bindLayoutEditHandlers(c, 'dashboard', dashComposed.visible, renderDashboard);
   document.getElementById('week-selector')?.addEventListener('change',e=>{state.dashboardWeekId=e.target.value;renderDashboard();});
   // Standard / Compact view toggle for the All-Picks-by-Game card. Persists
   // in settings.dashboardLayout so a user's mobile preference sticks across reloads.
@@ -3459,6 +5461,12 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     </th>`;
   }).join('');
 
+  // FEAT-7 / DI-174e — the matrix's red-zone mark names the team with a <=4-char
+  // abbreviation from the SAME shared helper the compact chips use, so the two
+  // dashboard layouts can never abbreviate the same school differently.
+  const rzAbbrMap = buildAbbrMap(games);
+  const shortTeam = (name) => rzAbbrMap.get(name) || (name || '').slice(0,4).toUpperCase();
+
   const rows=games.map(game=>{
     const sv=game.lockedSpread!==null?game.lockedSpread:game.spread;
     const spreadStr=sv!==null?fmtSpread(sv,game.favorite,game):(game.status===GAME_STATUS.FINAL?'Final':'TBD');
@@ -3480,7 +5488,15 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
       const liveDisp = liveStatusDisplay(liveStatusById.get(game.gameId));
       const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
       const detailText = liveDisp ? ` · ${escHtml(liveDisp.text)}` : '';
-      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${game.awayScore}–${game.homeScore}${detailText}</span>`;
+      // FEAT-7 / DI-174c — red-zone mark, appended AFTER the LIVE pill as its
+      // own inline span inside the existing .game-info-meta flex-wrap row. It
+      // is deliberately NOT pinned inside the pill (that row is nowrap and
+      // would push the score off a 320px screen) and deliberately NOT placed
+      // in any pick cell: the mark describes the GAME, not anybody's pick, so
+      // it renders once per row and never inside the blinded •••/▲/▽ language.
+      const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortTeam });
+      const rzMark = rz ? `<span class="rz-mark" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
+      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${game.awayScore}–${game.homeScore}${detailText}</span>${rzMark}`;
     }
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -3894,7 +5910,13 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       const liveDisp = liveStatusDisplayShort(liveStatusById.get(game.gameId));
       const dotCls = liveDisp && liveDisp.pulse===false ? ' live-dot-static' : '';
       const detailChip = liveDisp ? `<span class="dc-status dc-live-detail">${escHtml(liveDisp.text)}</span>` : '';
-      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${game.awayScore}–${game.homeScore}</span>${detailChip}`;
+      // FEAT-7 / DI-174c — a SEPARATE chip, never appended into another chip's
+      // text (the Item 2 DI-5 precedent): a long label can then never push the
+      // score chip around. A player on the compact layout must not silently
+      // lose the feature.
+      const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortLabel });
+      const rzChip = rz ? `<span class="dc-status dc-redzone" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
+      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${game.awayScore}–${game.homeScore}</span>${detailChip}${rzChip}`;
     }
     const statusInfo = `<span class="dc-status dc-scheduled">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -3959,6 +5981,82 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
 
 // ─── LEADERBOARD / STANDINGS ──────────────────────────────────────────────────
 
+/**
+ * FEAT-9 / UN-176 — 🎯 Extra Point Ledger, the season-long view of a contest
+ * the app has only ever shown one week at a time.
+ *
+ * AD-33 is enforced STRUCTURALLY here, not by comment: this function computes
+ * its own local order, returns markup, and feeds nothing. It never reads
+ * s.currentRank, never writes anything back, and js/scoring.js keeps zero
+ * Extra-Point references (asserted in eptest.mjs §1). The sub-line says the
+ * separation out loud so a player never has to infer it.
+ *
+ * No rank numbers, no 👑, no 🤡 — those are rank semantics from the table
+ * above, and reusing them here is the visual equivalent of adding a column.
+ *
+ * Exported for eptest.mjs, same rationale as renderLeaderboard() itself.
+ */
+export function renderExtraPointLedgerHTML() {
+  const players = getPlayers().filter(p => p.active);
+  // The SAME predicate object both this card and exportExtraPointCSV() pass,
+  // and THE app's one definition of the blind rule — not a copy of its logic.
+  const tally = seasonExtraPointTally(getWeeks(), players, { canViewOtherPicks });
+
+  let body;
+  if (!tally.rows.length) {
+    // Unreachable in practice — the Standings page renders nothing meaningful
+    // without players — so it carries no copy of its own.
+    body = '';
+  } else if (tally.consideredWeeks > 0 && tally.enabledWeeks === 0) {
+    body = `<p class="text-muted text-sm">The Extra Point isn't running this season yet.</p>`;
+  } else if (tally.gradedWeeks === 0) {
+    // Worded to the BLIND GATE, not to `final`: the numbers appear once the
+    // games are underway, which is when canViewOtherPicks() opens. A player
+    // checking on a locked Saturday morning would otherwise file a bug.
+    body = `<p class="text-muted text-sm">No Extra Point results yet. Weeks appear here once the games are underway and the commissioner posts the longest made field goal.</p>`;
+  } else {
+    const n = tally.gradedWeeks;
+    body = tally.rows.map(r => {
+      // Each of the first three segments is omitted when its count is 0;
+      // "entered" always shows, so a player with nothing yet still reads
+      // "0 of 6 entered" rather than an empty line.
+      const seg = [];
+      if (r.blackjacks) seg.push(`${r.blackjacks} 🂡`);
+      if (r.busts)      seg.push(`${r.busts} 💥`);
+      seg.push(`${r.entries} of ${n} entered`);
+      return `<div class="ep-row ep-ledger-row">
+        <span class="ep-name">${escHtml(r.displayName)}</span>
+        <span class="ep-ledger-right">
+          <span class="ep-ledger-wins">${r.wins}</span>
+          <span class="ep-ledger-detail text-muted text-xs">${escHtml(seg.join(' · '))}</span>
+        </span>
+      </div>`;
+    }).join('');
+  }
+
+  // F1 review note F4 (2026-09-12) — copy was "still waiting on a result", which
+  // is only one of the two reasons a week sits here. The other is the blind gate:
+  // a week can be fully played and graded and still be excluded from this ledger
+  // until its picks are public. "Isn't counted yet" is true under BOTH, and
+  // leaks neither — it never tells a player whether the result exists.
+  const pending = tally.pendingWeeks > 0
+    ? `<p class="text-muted text-xs mt-sm">${tally.pendingWeeks === 1
+        ? `${tally.pendingWeeks} week isn't counted yet.`
+        : `${tally.pendingWeeks} weeks aren't counted yet.`}</p>`
+    : '';
+
+  return `
+    <div class="admin-section-title">🎯 Extra Point Ledger</div>
+    <div class="card mb-md">
+      <p class="text-muted text-xs mb-sm">Longest made field goal, blackjack rules. Tracked all season — it never affects the standings.</p>
+      ${tally.gradedWeeks > 0 && tally.rows.length
+        ? `<div class="ep-row ep-ledger-head"><span class="ep-name">Player</span><span class="ep-ledger-right"><span class="ep-ledger-wins">Weeks won</span></span></div>`
+        : ''}
+      ${body}
+      ${pending}
+    </div>`;
+}
+
 /* Exported for loadtest.mjs — UN-118/UN-125's Weekly History collapse (one
    row per competitive-week group) is only meaningfully tested against the
    markup a commissioner/player actually sees, same rationale as every other
@@ -4017,10 +6115,18 @@ export function renderLeaderboard() {
     groupRows.push({ gid, label:formatWeekGroupLabel(memberWeeks.length>1?memberWeeks:[w]), winner, loser });
   }
 
-  c.innerHTML=`
-    <div class="section-header"><h2>Standings</h2><div class="subtitle">Season ${settings.season}</div></div>
-
-    <div class="admin-section-title">Season Summary</div>
+  // FEAT-8a / UN-179 — the six reorderable Standings sections. Two of them
+  // (`stand-season`, `stand-history`) are NOT cards: each is a bare
+  // .admin-section-title followed by a SIBLING .dashboard-scroll wrapper, and
+  // two siblings cannot move as one unit. Each part below is therefore wrapped
+  // by composeSections() in a layout-neutral <section> with no margin, padding,
+  // border or background — the children already carry their own mb-md, so the
+  // rendered page is visually identical for a player who never customizes.
+  // Deliberately NOT converted into .card: CONVENTIONS #15 governs NEW
+  // sections, and restyling two existing tables is a density change nobody
+  // asked for.
+  const standSections = {
+    'stand-season': `<div class="admin-section-title">Season Summary</div>
     <div class="dashboard-scroll mb-md">
       <table class="dashboard-table">
         <thead><tr><th>#</th><th>Player</th><th>✅ Correct</th><th>❌ Wrong</th><th>Win %</th><th>Wk W</th><th>Wk L</th></tr></thead>
@@ -4039,19 +6145,37 @@ export function renderLeaderboard() {
           :'<tr><td colspan="8" style="text-align:center;padding:20px;color:var(--text-muted)">No finalized weeks yet.</td></tr>'}
         </tbody>
       </table>
-    </div>
+    </div>`,
 
-    <div class="admin-section-title">⭐ Alma Mater Rankings</div>
+    /* FEAT-9 / DI-176a (UN-176) — its OWN card, deliberately not columns in
+       the table above. Three reasons, all checkable: that table already
+       carries seven columns inside a horizontal scroller that overflows at
+       375px (which is why initScrollFades()/UN-105a exists), so EP columns
+       would sit off the right edge by default; a column in a ranking table
+       READS as a ranking input, and the 2K25 record table further down this
+       very page really does score EP into its season total, so the confusion
+       is live rather than theoretical (AD-33); and CONVENTIONS #15 says a new
+       section is a card. A separate card makes AD-33 structural instead of a
+       promise in a comment.
+       Pass F1 hard-coded its position between Season Summary and Alma Mater
+       Rankings; FEAT-8a now registers it as `stand-extrapoint` at default
+       index 2, which reproduces that exact position for an uncustomized
+       player and makes it movable for everyone else. */
+    'stand-extrapoint': renderExtraPointLedgerHTML(),
+
+    'stand-alma': `<div class="admin-section-title">⭐ Alma Mater Rankings</div>
     <div class="card mb-md">
       <p class="text-muted text-xs mb-sm">Rankings sourced from ESPN when available. Fetch ESPN data in the Commissioner panel to update.</p>
       ${renderAlmaMaterRankings()}
-    </div>
+    </div>`,
 
-    <!-- Groups A/B (2026-09-10, DI-A5): the obligation deep-link destination
-         for OBLIGATION_CREATED/OBLIGATION_SETTLED — Weekly History IS the
-         player-facing obligations view (each row carries its own
-         obligationActionsHTML). No new page; this id is the scroll target. -->
-    <div class="admin-section-title" id="obligations-section">Weekly History</div>
+    /* Groups A/B (2026-09-10, DI-A5): the obligation deep-link destination
+       for OBLIGATION_CREATED/OBLIGATION_SETTLED — Weekly History IS the
+       player-facing obligations view (each row carries its own
+       obligationActionsHTML). No new page; this id is the scroll target, and
+       it stays a valid one wherever the player moves this section: the id
+       travels with the markup and the scroll happens after render. */
+    'stand-history': `<div class="admin-section-title" id="obligations-section">Weekly History</div>
     ${groupRows.length?`<div class="dashboard-scroll mb-md">
       <table class="dashboard-table">
         <thead><tr><th>Week</th><th>🏆 Winner</th><th>💀 Loser</th><th>Status</th></tr></thead>
@@ -4090,12 +6214,23 @@ export function renderLeaderboard() {
           }).join('')}
         </tbody>
       </table>
-    </div>`:'<p class="text-muted text-sm mb-md">Weekly history appears after weeks are finalized.</p>'}
+    </div>`:'<p class="text-muted text-sm mb-md">Weekly history appears after weeks are finalized.</p>'}`,
 
-    ${renderSeason2025OutstandingSection()}
-    ${renderSeason2025RecordSection()}
+    'stand-2025-open': renderSeason2025OutstandingSection(),
+    'stand-2025-record': renderSeason2025RecordSection(),
+  };
+  const standComposed = composeSections('standings', standSections);
+
+  c.innerHTML=`
+    <div class="section-header section-header-layout">
+      <div class="section-header-main"><h2>Standings</h2><div class="subtitle">Season ${settings.season}</div></div>
+      ${layoutEditButtonHTML('standings')}
+    </div>
+    ${layoutEditStripHTML('standings')}
+${standComposed.html}
   `;
 
+  bindLayoutEditHandlers(c, 'standings', standComposed.visible, renderLeaderboard);
   bindSeason2025Sections(c);
   // UN-105a — edge-fade cue for both season-summary/weekly-history
   // .dashboard-scroll wrappers above AND the two nested inside the collapsed
@@ -4111,11 +6246,20 @@ export function renderLeaderboard() {
 }
 
 export function renderAlmaMaterRankings() {
-  // Pull rankings from the most recent fetched games that include alma mater teams
-  const allGames = getGames();
+  // Pull rankings from the most recent NON-DEMO fetched games that include
+  // alma mater teams — demo weeks carry fictional AP ranks (and rankless demo
+  // games erase real ones), so they are excluded at the shared lookup, which
+  // also does the most-recent-first reverse ONCE instead of once per school.
+  const rankLookupGames = almaMaterRankLookupGames();
   const almaMaters = claimedAlmaMaters();
-  const rows = almaMaters.map(alma => {
-    const game = [...allGames].reverse().find(g =>
+  const allPlayers = getPlayers();
+
+  // BUG-1 — resolve every school's rank first, then sort through the SAME
+  // comparator Alma Mater Watch uses (sortAlmaMaterEntries(), above), so the
+  // two surfaces agree. This page is season-wide and has no slate, so it
+  // passes no `onBye` — tiers 0 and 1 only.
+  const entries = almaMaters.map(alma => {
+    const game = rankLookupGames.find(g =>
       getAlmaMaterMatch(g.homeTeam, almaMaters) === alma || getAlmaMaterMatch(g.awayTeam, almaMaters) === alma
     );
     let rank = null;
@@ -4123,19 +6267,27 @@ export function renderAlmaMaterRankings() {
       if (getAlmaMaterMatch(game.homeTeam, almaMaters) === alma) rank = game.homeRank;
       else rank = game.awayRank;
     }
+    return { alma, rank };
+  });
+
+  const rows = sortAlmaMaterEntries(entries).map(({ alma, rank }) => {
     const rankStr = rank ? `<span class="rank-badge">#${rank} AP</span>` : '<span class="text-muted text-xs">Unranked</span>';
-    // F5 (2026-09-04) — was `p.almaMater === alma`: case-sensitive AND not
-    // filtered to active, unlike claimedAlmaMaters() (which produced `alma`
-    // in the first place) and the Settings-tab card's claimantsOf(). Could
-    // attribute a school to a DEACTIVATED player (a stale byline next to a
-    // school someone else, or nobody, actively claims) or fail to show a
-    // real claimant purely over casing. Same shape as claimantsOf() below —
-    // all three now agree.
-    const player  = getPlayers().find(p => p.active && (p.almaMater || '').trim().toLowerCase() === alma.toLowerCase());
+    // BUG-6 (2026-09-05) — was `getPlayers().find(...)`, which can only ever
+    // return ONE player: Texas A&M is claimed by both Drew and Kihoon and the
+    // row named only Drew. Now the shared almaMaterClaimants() predicate (see
+    // its docstring by claimedAlmaMaters()), which the Settings-tab card
+    // below also calls — F5's "all three predicates agree" is now structural
+    // instead of three hand-kept copies. F5's own rules are unchanged and
+    // live inside the helper: ACTIVE only (never a deactivated claimant) and
+    // trim/case-insensitive (a claim stored as "  texas a&m  " still matches
+    // the trimmed roster entry).
+    const claimants = almaMaterClaimants(alma, allPlayers);
     const almaDisplay = ALMA_MATER_DISPLAY[alma] || alma;
+    // The .alma-rank-player span is ALWAYS emitted, even empty — UN-74/DI-74's
+    // flex-layout rule (.alma-rank-player{flex:1} carries the row's spacing).
     return `<div class="alma-rank-row">
       <span class="alma-rank-school">${escHtml(almaDisplay)}</span>
-      <span class="alma-rank-player text-muted text-xs">${player ? escHtml(player.displayName) : ''}</span>
+      <span class="alma-rank-player text-muted text-xs">${claimants.map(p => escHtml(p.displayName)).join(', ')}</span>
       <span class="alma-rank-value">${rankStr}</span>
     </div>`;
   });
@@ -4161,8 +6313,12 @@ export function renderAlmaMaterRankings() {
  */
 export function renderAlmaMaterSettingsCard() {
   const almaMaters = claimedAlmaMaters();
-  const activePlayers = getPlayers().filter(p => p.active);
-  const claimantsOf = am => activePlayers.filter(p => (p.almaMater || '').trim().toLowerCase() === am.toLowerCase());
+  // BUG-6 (2026-09-05) — this card's claimantsOf() was already correct (a
+  // .filter(), so it always listed every claimant); it is now the SHARED
+  // almaMaterClaimants() predicate that renderAlmaMaterRankings() also calls,
+  // so the two can no longer drift apart.
+  const allPlayers = getPlayers();
+  const claimantsOf = am => almaMaterClaimants(am, allPlayers);
   return `
       <div class="admin-section" data-comm-tab="settings">
         <div class="admin-section-title">⭐ Alma Maters</div>
@@ -4486,6 +6642,13 @@ function renderCommPage() {
         </div>`);
     }
 
+    // FEAT-2 / DI-175e (UN-175) — Player Requests, IMMEDIATELY ABOVE the
+    // Available Games pool so it is read before the pool it comments on.
+    // Pushed unconditionally: the pool section below is gated on
+    // availGames.length, and a request for a week nobody has fetched yet is
+    // exactly the case this card exists for.
+    sections.push(renderGameRequestsAdminSectionHTML(week, availGames, games));
+
     // Available Games Pool
     if (availGames.length) {
       sections.push(`
@@ -4542,6 +6705,7 @@ function renderCommPage() {
             <button class="btn btn-secondary btn-sm" id="export-standings-csv-btn">🏆 Season Standings CSV</button>
             <button class="btn btn-secondary btn-sm" id="export-weekly-results-csv-btn">📅 All Weekly Results CSV</button>
             <button class="btn btn-secondary btn-sm" id="export-obligations-csv-btn">💵 Obligations CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-extra-point-csv-btn">🎯 Extra Point Season CSV</button>
           </div>
           <div class="divider"></div>
           <div class="card-title mb-sm">Full Backup</div>
@@ -5056,13 +7220,13 @@ function renderDemoBatchGrid(games) {
  * so a game already on the slate always shows "✓ On Slate" instead of a
  * button that would otherwise insert a duplicate slate row.
  */
-function renderSuggestedGameRow(game, i, currentSlate, dismissable) {
+function renderSuggestedGameRow(game, i, currentSlate, dismissable, folded = null) {
   const onSlate = currentSlate.some(g => g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
   const spreadStr = game.spread!==null ? fmtSpread(game.spread,game.favorite,game) : 'TBD';
   const sKey = suggestionKeyOf(game);
   return `<div class="suggested-game-row${onSlate?' on-slate':''}">
     <span class="suggested-num">${i+1}</span>
-    <span class="suggested-matchup">${escHtml(matchup(game))}</span>
+    <span class="suggested-matchup">${escHtml(matchup(game))}${gameRequestChipHTML(game, folded)}</span>
     <span class="suggested-spread text-muted text-xs">${spreadStr}</span>
     <span class="suggested-time text-muted text-xs">${fmtTime(game.kickoff,game)}</span>
     <div class="flex gap-sm flex-center">
@@ -5102,13 +7266,20 @@ export function renderSuggestedSlatePreview({suggested, shortlist, almaCount, mo
     !closingAnchorFilled ? `<div class="text-muted text-xs suggested-anchor-note">No Saturday games this week — closing slot not filled automatically.</div>` : '',
   ].join('');
 
+  // F3 review finding (2026-09-12) — FOLD ONCE, PASS IT DOWN. This row renderer
+  // ran foldGameRequests() PER ROW through gameRequestChipHTML's `folded ||
+  // foldGameRequests()` default — a full read-and-fold of the whole append-only
+  // request log up to 20 times per render of this box. The other two chip call
+  // sites already hand a folded list down; this one was the outlier. Behaviour
+  // is unchanged — it is the same list, computed once.
+  const foldedRequests = foldGameRequests();
   return `<div class="suggested-slate-box">
     <div class="card-title mb-sm">⭐ Suggested 10-Game Slate <span class="text-muted text-xs">(✕ to dismiss a suggestion)</span></div>
     ${budgetBanner}${anchorNotes}
-    ${suggested.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, true)).join('')}
+    ${suggested.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, true, foldedRequests)).join('')}
     ${(shortlist||[]).length ? `
     <div class="card-title mb-sm mt-md">📋 Next Best — tap + to swap in</div>
-    ${shortlist.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, false)).join('')}
+    ${shortlist.map((game, i) => renderSuggestedGameRow(game, i, currentSlate, false, foldedRequests)).join('')}
     ` : ''}
   </div>`;
 }
@@ -5319,37 +7490,52 @@ function bindAvailGroupHandlers(week, currentSlate) {
   });
 }
 
+/**
+ * The `data-game` payload behind every `.add-avail-game-btn`, escaped for a
+ * single-quoted attribute. EXTRACTED from renderAvailableGamesList() (FEAT-2 /
+ * DI-175e) so the Player Requests card's `+ Add to slate` can reuse the add
+ * path BYTE-FOR-BYTE rather than hand-copying twenty-five fields and losing one
+ * of them — which is precisely the DI-7 failure this payload already documents
+ * below. Both call sites pass the POOLED ESPN game object, never a stored
+ * request snapshot, so the slate always gets ESPN's current spread and kickoff.
+ */
+function availAddPayloadJSON(game, week) {
+  const payload = JSON.stringify({
+    homeTeam:game.homeTeam, awayTeam:game.awayTeam,
+    homeMascot:game.homeMascot||'', awayMascot:game.awayMascot||'',
+    homeRank:game.homeRank, awayRank:game.awayRank,
+    homeConference:game.homeConference, awayConference:game.awayConference,
+    kickoff:game.kickoff, timeWindow:game.timeWindow,
+    // Same DI-7 gap as nationalTV below: createGame() defaults these to
+    // false/false, which is the "neither confirmed nor date-only" state that
+    // renders as "Time TBD". Omit them and every game added from this list
+    // shows Time TBD forever, however correct the parser is.
+    kickoffConfirmed:game.kickoffConfirmed, kickoffDateOnly:game.kickoffDateOnly,
+    spread:game.spread, favorite:game.favorite,
+    spreadSource:game.spreadSource||null, oddsProvider:game.oddsProvider||null,
+    espnEventId:game.espnEventId, isAlmaMaterGame:game.isAlmaMaterGame,
+    // DI-7 — this hand-built payload does NOT spread the whole game object
+    // (unlike "Apply Suggested 10" / "Add suggested individually", which
+    // carry these fields free). Miss this and a game added from Available
+    // Games silently loses its TV tag while the same game added from the
+    // suggested card keeps it.
+    nationalTV:game.nationalTV, broadcastNetwork:game.broadcastNetwork||null,
+    homeScore:game.homeScore, awayScore:game.awayScore,
+    status:game.status, actualWinner:game.actualWinner,
+    dataQuality:game.dataQuality||'partial',
+    dataSource:week?.dataSourceMode||'espn_historical',
+    venue:game.venue||null, neutralSite:game.neutralSite||false,
+    lastUpdated:new Date().toISOString(),
+  });
+  return payload.replace(/'/g,"&#39;");
+}
+
 export function renderAvailableGamesList(availGames, currentSlate, week) {
+  // ONE fold per list render rather than one per row (FEAT-2 / DI-175e chip).
+  const grFolded = foldGameRequests();
   return availGames.map(game => {
     const onSlate = currentSlate.some(g => g.espnEventId&&g.espnEventId===game.espnEventId || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
     const spreadStr = game.spread!==null ? `${fmtSpread(game.spread,game.favorite,game)} ${game.spreadSource==='espn'?'(ESPN)':'(Manual)'}` : '⚠️ TBD';
-    const payload = JSON.stringify({
-      homeTeam:game.homeTeam, awayTeam:game.awayTeam,
-      homeMascot:game.homeMascot||'', awayMascot:game.awayMascot||'',
-      homeRank:game.homeRank, awayRank:game.awayRank,
-      homeConference:game.homeConference, awayConference:game.awayConference,
-      kickoff:game.kickoff, timeWindow:game.timeWindow,
-      // Same DI-7 gap as nationalTV below: createGame() defaults these to
-      // false/false, which is the "neither confirmed nor date-only" state that
-      // renders as "Time TBD". Omit them and every game added from this list
-      // shows Time TBD forever, however correct the parser is.
-      kickoffConfirmed:game.kickoffConfirmed, kickoffDateOnly:game.kickoffDateOnly,
-      spread:game.spread, favorite:game.favorite,
-      spreadSource:game.spreadSource||null, oddsProvider:game.oddsProvider||null,
-      espnEventId:game.espnEventId, isAlmaMaterGame:game.isAlmaMaterGame,
-      // DI-7 — this hand-built payload does NOT spread the whole game object
-      // (unlike "Apply Suggested 10" / "Add suggested individually", which
-      // carry these fields free). Miss this and a game added from Available
-      // Games silently loses its TV tag while the same game added from the
-      // suggested card keeps it.
-      nationalTV:game.nationalTV, broadcastNetwork:game.broadcastNetwork||null,
-      homeScore:game.homeScore, awayScore:game.awayScore,
-      status:game.status, actualWinner:game.actualWinner,
-      dataQuality:game.dataQuality||'partial',
-      dataSource:week?.dataSourceMode||'espn_historical',
-      venue:game.venue||null, neutralSite:game.neutralSite||false,
-      lastUpdated:new Date().toISOString(),
-    });
     // If on slate, find the matching slate game so we can offer a one-click remove.
     const slateMatch = currentSlate.find(g => (g.espnEventId&&game.espnEventId&&g.espnEventId===game.espnEventId) || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
     return `<div class="game-admin-card" style="${onSlate?'opacity:.65':''}">
@@ -5360,13 +7546,14 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
           ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge ml-sm">⭐</span>':''}
           ${game.nationalTV?`<span class="national-tv-badge ml-sm">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
+          ${gameRequestChipHTML(game, grFolded)}
         </div>
         ${onSlate
           ? `<div class="flex gap-sm flex-center">
                <span class="badge badge-open">✓ On Slate</span>
                <button class="btn btn-danger btn-sm avail-remove-btn" data-game-id="${slateMatch?slateMatch.gameId:''}" title="Remove from slate">✕ Remove</button>
              </div>`
-          : `<button class="btn btn-primary btn-sm add-avail-game-btn" data-game='${payload.replace(/'/g,"&#39;")}'>+ Add</button>`}
+          : `<button class="btn btn-primary btn-sm add-avail-game-btn" data-game='${availAddPayloadJSON(game, week)}'>+ Add</button>`}
       </div>
       <div class="game-admin-meta">
         <span>${fmtTime(game.kickoff, game)}</span>
@@ -5380,6 +7567,9 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
 
 export function renderAdminGamesList(games, week, overrides) {
   if (!games.length) return `<div class="info-box">No games on the slate. Fetch ESPN data and add games above, or add manually.</div>`;
+  // ONE fold per list render (FEAT-2 / DI-175e chip) — a requested game that
+  // has been added reads as satisfied right here, in the slate.
+  const grSlateFolded = foldGameRequests();
   return games.sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff)).map(game => {
     const mu = overrides[game.gameId]==='unlocked';
     const sv = game.lockedSpread!==null?game.lockedSpread:game.spread;
@@ -5401,6 +7591,7 @@ export function renderAdminGamesList(games, week, overrides) {
           ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge">⭐</span>':''}
           ${game.nationalTV?`<span class="national-tv-badge">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
+          ${gameRequestChipHTML(game, grSlateFolded)}
           ${renderSourceBadge(game)}
         </div>
         <div class="flex gap-sm">
@@ -5586,8 +7777,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       announceBtn.disabled = true; announceBtn.textContent = 'Sending…';
       try {
         const sess = getSession();
-        notifyCommissionerAnnouncement(text, sess?.playerId || null, getPlayers());
-        renderNotifBell();
+        // N1 / DI-N1 — REPLACES notifyCommissionerAnnouncement(). Posts into the
+        // Locker Room under the commissioner's OWN playerId, body verbatim,
+        // never SCRIBE-attributed, never category-gated (D3).
+        postCommissionerAnnouncement(text, sess?.playerId || null);
         showToast('✅ Announcement sent', 'success');
         if (announceBody) announceBody.value = '';
       } catch (e) {
@@ -5977,6 +8170,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('export-week-bundle-btn')?.addEventListener('click', ()=>exportWeekBundle(week));
   document.getElementById('export-players-csv-btn')?.addEventListener('click', exportPlayersCSV);
   document.getElementById('export-standings-csv-btn')?.addEventListener('click', exportStandingsCSV);
+  document.getElementById('export-extra-point-csv-btn')?.addEventListener('click', exportExtraPointCSV);
   document.getElementById('export-weekly-results-csv-btn')?.addEventListener('click', exportAllWeeklyResultsCSV);
   document.getElementById('export-obligations-csv-btn')?.addEventListener('click', exportObligationsCSV);
   document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
@@ -6513,7 +8707,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const ob=createObligation(null,payer,recip,note||'1 drink','manual');
     ob.note=note||'manual entry'; ob.weekLabel='manual';
     saveObligation(ob);
-    try { notifyObligationCreated(ob); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-created hook failed', e); }
+    try { postObligationCreatedNotice(ob); } catch (e) { console.warn('[lifecycle] obligation-created hook failed', e); }
     showToast('✅ Obligation added','success'); renderCommPage();
   });
   document.querySelectorAll('.ob-delete-btn').forEach(btn=>{
@@ -7150,12 +9344,12 @@ function handleObligationAction(obId, action) {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
     // Groups A/B (2026-09-10, DI-B4) — "settled," both parties.
-    try { notifyObligationSettled(settled); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-settled hook failed', e); }
+    try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
     showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
   } else if (action === 'confirm') {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
-    try { notifyObligationSettled(settled); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-settled hook failed', e); }
+    try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
     showToast(`Confirmed — ${escHtml(payerName)} paid ${escHtml(recipientName)}.`, 'success');
   } else if (action === 'undo') {
     saveObligation({ ...ob, status: next, paidAt: null });
@@ -8173,6 +10367,490 @@ function showResetPinModal(playerId, displayName) {
 
 // ─── RULES PAGE ───────────────────────────────────────────────────────────────
 
+// ═══ GAME REQUESTS (FEAT-2 / UN-175, DI-175a–h, 2026-09-12) ══════════════════
+// A player asks for a game on a FUTURE slate; the commissioner meets that ask
+// on Comm → Games while he is building the week whose dates contain it.
+//
+// Everything mutable about a request is derived in storage.js's
+// foldGameRequests() — this file only renders and appends. Nothing here writes
+// a status, and nothing here edits a stored row.
+
+/** Date input ceiling. Six months is "way ahead of time" (Drew) without
+ *  offering dates ESPN has no concept of yet. */
+const GAME_REQUEST_MAX_DAYS_AHEAD = 180;
+
+/** 'YYYY-MM-DD' + n days, done in UTC-noon arithmetic so no DST boundary can
+ *  move it. Same shape as storage.js's _dayDelta(), deliberately. */
+function grDateAdd(key, days) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return '';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12) + days * 86400000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())}`;
+}
+
+/**
+ * A calendar-date key rendered for humans. Formatted from the date PARTS in
+ * UTC rather than from a local Date, because `gameDate` is already pinned to
+ * Central (storage.js centralDateKey) — re-interpreting it in the viewer's
+ * zone is how a Saturday game starts calling itself Friday on the west coast.
+ */
+function grDayLabel(key, { chip = false } = {}) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''));
+  if (!m) return 'Date TBD';
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], 12));
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric',
+  }).formatToParts(d);
+  const get = (t) => parts.find(p => p.type === t)?.value || '';
+  // Chip form drops the comma: "Sat Sep 26" (DI-175g), row form keeps it:
+  // "Sat, Nov 28".
+  return chip ? `${get('weekday')} ${get('month')} ${get('day')}`
+              : `${get('weekday')}, ${get('month')} ${get('day')}`;
+}
+
+/** The next `n` Saturdays (today counts if today IS Saturday), Central. */
+function grNextSaturdays(n = 4, fromKey = centralDateKey()) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(fromKey || ''));
+  if (!m) return [];
+  const base = Date.UTC(+m[1], +m[2] - 1, +m[3], 12);
+  const delta = (6 - new Date(base).getUTCDay() + 7) % 7;
+  return Array.from({ length: n }, (_, i) => grDateAdd(fromKey, delta + i * 7));
+}
+
+/** 'Michigan at Ohio State' — school names only, from the request snapshot. */
+function grMatchupLabel(row) {
+  return `${row?.awayTeam || '?'} at ${row?.homeTeam || '?'}`;
+}
+
+const GAME_REQUEST_STATUS_CHIP = {
+  pending:   '⏳ Pending',
+  onSlate:   '✅ On the slate',
+  missed:    '⌛ Week built without it',
+  passed:    '⌛ Game has passed',
+  withdrawn: '↩ Withdrawn',
+};
+function grStatusChipHTML(status) {
+  const label = GAME_REQUEST_STATUS_CHIP[status] || '⏳ Pending';
+  return `<span class="gr-status-chip gr-status-${escHtml(String(status || 'pending'))}">${escHtml(label)}</span>`;
+}
+
+/**
+ * The 🙋 marker for the three commissioner render paths (Available Games,
+ * suggested/shortlist rows, Selected Slate rows). COUNT ONLY — the requester
+ * names live as VISIBLE TEXT in the Player Requests card above, because
+ * tooltips do not fire on touch. There is deliberately no `title` attribute;
+ * the aria-label carries the names for assistive tech only.
+ */
+export function gameRequestChipHTML(game, folded = null) {
+  const eid = game?.espnEventId != null ? String(game.espnEventId) : '';
+  if (!eid) return '';
+  const list = Array.isArray(folded) ? folded : foldGameRequests();
+  const hits = list.filter(r => (r.status === 'pending' || r.status === 'onSlate') && String(r.espnEventId) === eid);
+  if (!hits.length) return '';
+  const names = [...new Set(hits.map(r => r.playerName || r.playerId || ''))].filter(Boolean);
+  return `<span class="gr-chip" aria-label="Requested by ${escHtml(names.join(', '))}">🙋 ${hits.length}</span>`;
+}
+
+// ── Rules-page card ─────────────────────────────────────────────────────────
+
+/**
+ * The whole player-facing surface. Rendered on the Rules page immediately
+ * ABOVE `.feedback-card` — a request is the same KIND of act as feedback (a
+ * player sending the commissioner something to act on), so it extends an
+ * existing vocabulary in the place that already holds it.
+ *
+ * NOT on the Picks page: UN-72 ("the picks page stays focused on picking") is
+ * locked, and the coordinator ruled Q1 = no Picks entry point.
+ * NOT on the Dashboard: renderDashboardInner() returns early with the "Submit
+ * Your Picks First" empty state for exactly the player most likely to want
+ * this — someone staring at an open week with their game missing.
+ */
+export function renderGameRequestCardHTML() {
+  const session = getSession();
+  const meId = (session.playerId && session.playerVerified) ? session.playerId : null;
+  const folded = foldGameRequests();
+  // The SAME set the league block below shows — see openLeagueRequestGroups().
+  const openCount = openLeagueRequestGroups(folded, meId).reduce((sum, grp) => sum + grp.requests.length, 0);
+  return `<div class="card gr-card">
+    <div class="gr-card-head">
+      <h3 class="gr-title">🙋 Request a Game</h3>
+      ${openCount ? `<span class="gr-count-chip">${openCount} open</span>` : ''}
+    </div>
+    <p class="text-muted text-xs mb-sm">Want a game on an upcoming slate? Flag it for the commissioner now — even for a week that hasn't been built yet.</p>
+    ${meId
+      ? renderGameRequestFormHTML(meId, folded) + renderGameRequestMineHTML(meId, folded)
+      : `<p class="text-secondary text-sm mb-sm">Log in on the Picks tab to request a game.</p>
+         <button class="btn btn-primary btn-sm gr-cta" id="gr-goto-picks">Go to Picks</button>`}
+    ${renderGameRequestLeagueHTML(folded, meId)}
+  </div>`;
+}
+
+function renderGameRequestFormHTML(meId, folded) {
+  const g = state.gameRequest;
+  const today = centralDateKey();
+  const sats = grNextSaturdays(4, today);
+  return `
+    <div class="form-group gr-day">
+      <label class="form-label" for="gr-date">Game day</label>
+      <div class="gr-day-row">
+        <input class="form-input gr-date-input" id="gr-date" type="date"
+          min="${escHtml(today)}" max="${escHtml(grDateAdd(today, GAME_REQUEST_MAX_DAYS_AHEAD))}"
+          value="${escHtml(g.date || '')}" />
+        <button class="btn btn-primary btn-sm gr-find-btn" id="gr-find"${g.loading ? ' disabled' : ''}>🔎 Find games</button>
+      </div>
+      <div class="gr-sat-chips" id="gr-sat-chips">
+        ${sats.map((d, i) => `<button type="button" class="gr-sat-chip" data-date="${escHtml(d)}">${escHtml(i === 0 ? 'This Sat' : grDayLabel(d, { chip: true }))}</button>`).join('')}
+      </div>
+    </div>
+    <div class="gr-results" id="gr-results"${g.loading ? ' aria-busy="true"' : ''}>${renderGameRequestResultsHTML(meId, folded)}</div>`;
+}
+
+/** The results block — every state DI-175f enumerates, and no cheerful
+ *  substitutes for the two failure states. */
+function renderGameRequestResultsHTML(meId, folded = null) {
+  const g = state.gameRequest;
+  if (g.loading) return `<p class="text-secondary text-sm">Checking ESPN for that day…</p>`;
+  if (g.error === 'network') return `<p class="text-secondary text-sm">Couldn't reach ESPN just now. Tap Find games to try again.</p>`;
+  // F3 review finding (2026-09-12) — THIS STATE IS TWO STATES AND THE COPY MUST
+  // SAY SO. data-provider.js's resilientFetch() RETURNS `{games:[], error}`
+  // rather than throwing, and fetchByDateRange() overwrites the quality report,
+  // so an online device whose ESPN proxies are all down lands here — not in the
+  // 'network' branch — and used to be told the schedule "hasn't been published
+  // yet," which is a confident wrong answer about somebody else's server. The
+  // upstream shape is not ours to change (DI-175c forbids touching
+  // data-provider.js), so the copy names both possibilities instead of picking
+  // the flattering one.
+  if (g.error === 'empty') return `<p class="text-secondary text-sm">No games found for that date. ESPN may not have published the schedule yet, or couldn't be reached — try again, or try a date closer to game week.</p>`;
+  if (!g.results.length) return '';
+
+  const list = Array.isArray(folded) ? folded : foldGameRequests();
+  const q = (g.filter || '').trim().toLowerCase();
+  const rows = g.results.filter(x => !q || [x.homeTeam, x.awayTeam, x.homeMascot, x.awayMascot]
+    .filter(Boolean).join(' ').toLowerCase().includes(q));
+  const slateIds = new Set(getGames().map(x => x?.espnEventId).filter(v => v != null).map(String));
+  const atCap = countOpenGameRequests(meId, list) >= GAME_REQUEST_CAP;
+
+  return `
+    <label class="gr-check-row" for="gr-chat-toggle">
+      <input type="checkbox" id="gr-chat-toggle"${g.postToChat ? ' checked' : ''} />
+      <span class="gr-check-text">📣 Post to the Locker Room when I request
+        <span class="text-muted text-xs gr-check-help">Lets everyone else see what you're after.</span></span>
+    </label>
+    <input class="form-input gr-filter" id="gr-filter" type="search" placeholder="🔎 Filter by team" value="${escHtml(g.filter || '')}" />
+    ${atCap ? `<p class="gr-cap-note text-xs">You have ${GAME_REQUEST_CAP} open requests. Withdraw one before adding another.</p>` : ''}
+    <div class="gr-result-list">${rows.map(x => grResultRowHTML(x, { meId, folded: list, slateIds, atCap })).join('')}</div>`;
+}
+
+function grResultRowHTML(game, { meId, folded, slateIds, atCap }) {
+  const eid = game?.espnEventId != null ? String(game.espnEventId) : '';
+  const onSlate = eid && slateIds.has(eid);
+  const mine = folded.some(r => r.playerId === meId && r.status === 'pending' && String(r.espnEventId) === eid);
+  const others = [...new Set(folded
+    .filter(r => r.status === 'pending' && String(r.espnEventId) === eid && r.playerId !== meId)
+    .map(r => r.playerName || r.playerId || ''))].filter(Boolean);
+  const action = onSlate
+    ? `<span class="gr-state-chip">On the slate</span>`
+    : mine
+      ? `<span class="gr-state-chip gr-state-done">✅ Requested</span>`
+      : `<button class="btn btn-primary btn-sm gr-request-btn" data-event-id="${escHtml(eid)}"${atCap ? ' disabled' : ''}>Request</button>`;
+  return `<div class="gr-row">
+    <div class="gr-row-main">
+      <div class="gr-row-matchup">${game.awayRank ? `#${escHtml(String(game.awayRank))} ` : ''}${escHtml(td(game, 'away'))}
+        <span class="text-muted">@</span>
+        ${game.homeRank ? `#${escHtml(String(game.homeRank))} ` : ''}${escHtml(td(game, 'home'))}</div>
+      <div class="gr-row-time text-muted text-xs">${escHtml(fmtTime(game.kickoff, game))}</div>
+      ${others.length ? `<div class="gr-row-note text-muted text-xs">🙋 also wanted by ${escHtml(others.join(', '))}</div>` : ''}
+    </div>
+    <div class="gr-row-action">${action}</div>
+  </div>`;
+}
+
+function renderGameRequestMineHTML(meId, folded) {
+  const mine = folded.filter(r => r.playerId === meId)
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+  return `<div class="gr-mine">
+    <div class="card-title mb-sm mt-md">Your requests</div>
+    ${mine.length ? mine.map(r => `<div class="gr-mine-row">
+      <div class="gr-row-main">
+        <div class="gr-row-matchup">${escHtml(grMatchupLabel(r))}</div>
+        <div class="text-muted text-xs">${escHtml(grDayLabel(r.gameDate))}</div>
+      </div>
+      <div class="gr-row-action">${grStatusChipHTML(r.status)}${
+        r.status === 'pending'
+          ? `<button class="btn btn-ghost btn-sm gr-withdraw-btn" data-request-id="${escHtml(r.id)}">Withdraw</button>`
+          : ''}</div>
+    </div>`).join('') : `<p class="text-muted text-sm">You haven't requested any games yet.</p>`}
+  </div>`;
+}
+
+/**
+ * The league-wide block. Visible to EVERYONE including signed-out (coordinator
+ * ruling Q6) — it carries no pick data, only who asked for which game, and it
+ * is what makes the feature discoverable to someone who missed the chat post.
+ */
+/**
+ * THE ONE DEFINITION of "open requests from the league", shared by the league
+ * block and the header chip (F3 review finding, 2026-09-12).
+ *
+ * D5 hides a group in which the viewer is the ONLY requester — the block is
+ * "from the league," and a man does not need to be told what he himself asked
+ * for. The header chip counted every pending row instead, so a sole requester
+ * with three open requests read "3 open" at the top of the card and "Nobody has
+ * an open request right now." two inches below it, on the same card. Two
+ * surfaces answering the same question must compute it once (RG-19's lesson,
+ * applied to a count rather than a read cursor).
+ */
+export function openLeagueRequestGroups(folded, meId) {
+  const open = (folded || []).filter(r => r.status === 'pending');
+  return groupGameRequests(open).filter(grp => !meId || grp.playerIds.some(id => id !== meId));
+}
+
+function renderGameRequestLeagueHTML(folded, meId) {
+  const groups = openLeagueRequestGroups(folded, meId);
+  const n = groups.reduce((sum, grp) => sum + grp.requests.length, 0);
+  return `<details class="gr-league">
+    <summary class="gr-league-summary">Open requests from the league (${n})</summary>
+    <div class="gr-league-body">
+      ${groups.length
+        ? groups.map(grp => `<div class="gr-league-row">${escHtml(grMatchupLabel(grp.sample))} · ${escHtml(grDayLabel(grp.sample.gameDate))} · ${escHtml(grp.names.join(', '))}</div>`).join('')
+        : `<p class="text-muted text-sm">Nobody has an open request right now.</p>`}
+    </div>
+  </details>`;
+}
+
+// ── Rules-page card: behaviour ──────────────────────────────────────────────
+
+/** Repaint just the results block — used by the filter input so the keystroke
+ *  doesn't cost the player their focus (the #avail-search pattern). */
+function repaintGameRequestResults() {
+  const el = document.getElementById('gr-results');
+  if (!el) return;
+  const session = getSession();
+  const meId = (session.playerId && session.playerVerified) ? session.playerId : null;
+  el.innerHTML = renderGameRequestResultsHTML(meId);
+  bindGameRequestRows();
+}
+
+function bindGameRequestRows() {
+  document.querySelectorAll('.gr-request-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleGameRequestSubmit(btn.dataset.eventId));
+  });
+}
+
+function bindGameRequestCard() {
+  document.getElementById('gr-goto-picks')?.addEventListener('click', () => navigateTo('picks'));
+  document.getElementById('gr-date')?.addEventListener('change', e => { state.gameRequest.date = e.target.value || ''; });
+  document.querySelectorAll('#gr-sat-chips .gr-sat-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      state.gameRequest.date = chip.dataset.date || '';
+      const input = document.getElementById('gr-date');
+      if (input) input.value = state.gameRequest.date;
+    });
+  });
+  document.getElementById('gr-find')?.addEventListener('click', runGameRequestSearch);
+  document.getElementById('gr-chat-toggle')?.addEventListener('change', e => { state.gameRequest.postToChat = !!e.target.checked; });
+  let filterTimer = null;
+  const filterEl = document.getElementById('gr-filter');
+  filterEl?.addEventListener('input', e => {
+    clearTimeout(filterTimer);
+    const val = e.target.value;
+    filterTimer = setTimeout(() => {
+      state.gameRequest.filter = val;
+      repaintGameRequestResults();
+      const again = document.getElementById('gr-filter');
+      if (again) { again.focus(); again.setSelectionRange?.(val.length, val.length); }
+    }, 200);
+  });
+  document.querySelectorAll('.gr-withdraw-btn').forEach(btn => {
+    btn.addEventListener('click', () => handleGameRequestWithdraw(btn.dataset.requestId));
+  });
+  bindGameRequestRows();
+}
+
+/**
+ * ONE single-day ESPN fetch through the EXISTING fetchByDateRange(), unchanged
+ * (DI-175c). A date-scoped fetch is what gives the request a real
+ * `espnEventId` at creation time, which is what makes the commissioner-side
+ * match exact instead of a school-name guess — the guess that inverted ~5% of
+ * spreads and was deleted on 2026-09-03.
+ *
+ * KNOWN LIMIT, stated rather than hidden: fetchByDateRange() collapses "ESPN
+ * answered with nothing" and "ESPN could not be reached" into the same return
+ * shape (both come back as `ESPN returned 0 events…`), and DI-175c forbids
+ * changing that function. So the two states are told apart by the only signals
+ * available on this side of the seam — a thrown error, or the browser
+ * reporting itself offline. An all-proxies outage while the device is online
+ * therefore reads as the "not published yet" state. Reported, not papered over.
+ */
+async function runGameRequestSearch() {
+  const g = state.gameRequest;
+  const date = (document.getElementById('gr-date')?.value || g.date || '').trim();
+  if (!date) { showToast('Pick a game day first', 'error'); return; }
+  g.date = date; g.loading = true; g.error = ''; g.results = []; g.filter = '';
+  renderRulesPage();
+  try {
+    // F6 (2026-09-12) — `almaMaters:` is passed here for the same reason every
+    // other fetchByDateRange() call site passes it: the ⭐ alma-mater flag is
+    // computed at PARSE time inside data-provider.js, so a fetch that omits the
+    // list returns rows whose `isAlmaMaterGame` is false regardless of the
+    // truth. A requested game would then be the one surface in the app where a
+    // player's own school does not carry the star. almatotaltest.mjs's scan
+    // enforces "every call site, no exceptions" precisely so a NEW call site
+    // cannot quietly reintroduce that split.
+    const res = await fetchByDateRange({ startDate: date, endDate: date, almaMaters: claimedAlmaMaters() });
+    const games = (res?.games || []).filter(x => x?.espnEventId != null);
+    g.results = games;
+    g.error = games.length ? '' : (typeof navigator !== 'undefined' && navigator.onLine === false ? 'network' : 'empty');
+  } catch (e) {
+    console.warn('[GameRequest] ESPN search failed:', e);
+    g.results = []; g.error = 'network';
+  }
+  g.loading = false;
+  renderRulesPage();
+}
+
+function handleGameRequestSubmit(eventId) {
+  const session = getSession();
+  const meId = (session.playerId && session.playerVerified) ? session.playerId : null;
+  if (!meId) { showToast('Log in on the Picks tab to request a game.', 'error'); return; }
+  const game = state.gameRequest.results.find(x => String(x.espnEventId) === String(eventId));
+  if (!game) { showToast('Could not match that game', 'error'); return; }
+  const res = submitGameRequest({
+    playerId: meId,
+    playerName: getPlayer(meId)?.displayName || '',
+    espnEventId: game.espnEventId,
+    homeTeam: game.homeTeam || '', awayTeam: game.awayTeam || '',
+    homeMascot: game.homeMascot || '', awayMascot: game.awayMascot || '',
+    homeRank: game.homeRank ?? null, awayRank: game.awayRank ?? null,
+    kickoff: game.kickoff || null,
+    gameDate: centralDateKey(game.kickoff || new Date()),
+    season: getCurrentWeek()?.season ?? null,
+    appVersion: APP_VERSION,
+  });
+  if (!res.ok) {
+    const msg = res.reason === 'onSlate' ? 'That game is already on this week\'s slate.'
+      : res.reason === 'duplicate' ? 'You already requested that one.'
+      : res.reason === 'cap' ? `You have ${GAME_REQUEST_CAP} open requests. Withdraw one before adding another.`
+      : 'Could not save that request.';
+    showToast(msg, 'error');
+    renderRulesPage();
+    return;
+  }
+  // The optional chat post. PLAYER-VOICED through the existing sendMessage()
+  // (coordinator ruling Q2) — not SCRIBE: the player did this, and attributing
+  // it to the house persona would drag in AD-50's one-event-one-message
+  // reservation and SCRIBE.md §9.5 for a line that is honestly theirs.
+  // EXACTLY ONE message per request, and the request itself is already saved
+  // through the seam whether or not the post ever flushes.
+  if (state.gameRequest.postToChat) {
+    try {
+      sendChatMessage({
+        body: `🙋 Requested a game for the slate: ${grMatchupLabel(res.request)} — ${grDayLabel(res.request.gameDate)}.`,
+        author: meId,
+      });
+    } catch (e) { console.warn('[GameRequest] chat post failed (the request itself is saved):', e); }
+  }
+  showToast('🙋 Requested — the commissioner sees it when that week gets built.', 'success');
+  renderRulesPage();
+}
+
+function handleGameRequestWithdraw(requestId) {
+  const session = getSession();
+  const meId = (session.playerId && session.playerVerified) ? session.playerId : null;
+  if (!meId || !requestId) return;
+  const res = withdrawGameRequest(requestId, meId);
+  if (!res.ok) { showToast('Could not withdraw that request.', 'error'); return; }
+  showToast('Request withdrawn.', 'success');
+  renderRulesPage();
+}
+
+// ── Commissioner surface (Comm → Games) ─────────────────────────────────────
+
+/**
+ * `🙋 Player Requests (N)` — a `data-comm-tab="games"` section (RG-10: a card
+ * without that attribute renders on ALL FIVE tabs) rendered IMMEDIATELY ABOVE
+ * `📋 Available Games`, so it is read before the pool it comments on.
+ *
+ * "Appears in the slate for the commissioner" is the week-BUILDING surface,
+ * never auto-insertion into cfbp_games (coordinator ruling Q4, and Drew's own
+ * "they know to consider/add it").
+ */
+export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateGames = []) {
+  const folded = foldGameRequests();
+  const pool = Array.isArray(availGames) ? availGames : [];
+  const slate = Array.isArray(slateGames) ? slateGames : [];
+  const live = folded.filter(r => r.status === 'pending' || r.status === 'onSlate');
+  const thisWeek = week ? live.filter(r => gameRequestMatchesWeek(r, week, pool)) : [];
+  const later = live.filter(r => !(week && gameRequestMatchesWeek(r, week, pool)));
+  const past = folded.filter(r => r.status === 'withdrawn' || r.status === 'missed' || r.status === 'passed');
+  const st = week ? String(getEffectiveWeekStatus(week) || week.status || '') : '';
+  const readOnly = st === 'locked' || st === 'live' || st === 'final';
+  const slateIds = new Set(slate.map(x => x?.espnEventId).filter(v => v != null).map(String));
+
+  const rowHTML = (grp) => {
+    const eid = grp.espnEventId != null ? String(grp.espnEventId) : '';
+    const onSlate = (eid && slateIds.has(eid)) || grp.requests.some(r => r.status === 'onSlate');
+    const pooled = eid ? pool.find(x => x?.espnEventId != null && String(x.espnEventId) === eid) : null;
+    // The add path is the EXACT `.add-avail-game-btn` path, built from the
+    // POOLED game object — never from the request snapshot, which may be
+    // months old and carry a stale spread/kickoff.
+    const action = onSlate
+      ? `<span class="badge badge-open">✅ On slate</span>`
+      : readOnly
+        ? ''
+        : pooled
+          ? `<button class="btn btn-primary btn-sm add-avail-game-btn gr-add-btn" data-game='${availAddPayloadJSON(pooled, week)}'>+ Add to slate</button>`
+          : `<span class="text-muted text-xs">Fetch ESPN for these dates to add</span>`;
+    return `<div class="gr-comm-row">
+      <div class="gr-row-main">
+        <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
+        <div class="text-muted text-xs">${escHtml(fmtTime(grp.sample.kickoff))} · requested by ${escHtml(grp.names.join(', '))}</div>
+      </div>
+      <div class="gr-row-action">${action}</div>
+    </div>`;
+  };
+
+  const detailsBlock = (label, rows) => `<details class="gr-comm-details">
+    <summary class="gr-comm-summary">${escHtml(label)} (${rows.length})</summary>
+    <div class="gr-comm-details-body">${rows.join('')}</div>
+  </details>`;
+
+  const laterRows = groupGameRequests(later).map(grp => {
+    const wk = getWeeks().find(w => {
+      const s = String(w?.startDate || ''), e = String(w?.endDate || '');
+      const d = String(grp.sample.gameDate || '');
+      return s && e && d >= s && d <= e;
+    });
+    return `<div class="gr-comm-row">
+      <div class="gr-row-main">
+        <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
+        <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · ${escHtml(wk ? formatWeekLabel(wk) : 'no week created yet')} · requested by ${escHtml(grp.names.join(', '))}</div>
+      </div>
+    </div>`;
+  });
+  const pastRows = groupGameRequests(past).map(grp => `<div class="gr-comm-row">
+    <div class="gr-row-main">
+      <div class="gr-row-matchup">${escHtml(grMatchupLabel(grp.sample))}</div>
+      <div class="text-muted text-xs">${escHtml(grDayLabel(grp.sample.gameDate))} · requested by ${escHtml(grp.names.join(', '))}</div>
+    </div>
+    <div class="gr-row-action">${grStatusChipHTML(grp.requests[0]?.status)}</div>
+  </div>`);
+
+  return `
+      <div class="admin-section" data-comm-tab="games">
+        <div class="admin-section-title">🙋 Player Requests (${thisWeek.length})</div>
+        <div class="card">
+          ${readOnly ? `<p class="text-secondary text-sm mb-sm">This week is locked — requests below are for the record.</p>` : ''}
+          ${thisWeek.length
+            ? groupGameRequests(thisWeek).map(rowHTML).join('')
+            : `<p class="text-muted text-sm">No player requests for this week's dates.</p>`}
+          ${detailsBlock('Requests for later weeks', laterRows)}
+          ${detailsBlock('Past requests', pastRows)}
+        </div>
+      </div>`;
+}
+
 export function renderRulesPage() {
   const c=document.getElementById('page-rules'); if(!c)return;
   const rules=getSettings().customRules||DEFAULT_RULES;
@@ -8276,6 +10954,13 @@ export function renderRulesPage() {
          collide with the locked Chat/Locker-Room split otherwise). -->
     ${renderScribeTrainingCardHTML()}
 
+    ${/* FEAT-2 / DI-175a (UN-175) — the game-request card sits immediately
+         ABOVE the feedback card: the same KIND of act (a player sending the
+         commissioner something to act on), in the place that already holds
+         that vocabulary. The release-notes card stays below, above the
+         version footer. */''}
+    ${renderGameRequestCardHTML()}
+
     <div class="card feedback-card">
       <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
       <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
@@ -8306,6 +10991,14 @@ export function renderRulesPage() {
       </div>
     </div>
 
+    ${/* FEAT-3 / DI-201a (UN-201) — the release history, immediately above the
+         version/date footer: the number and its history belong within a thumb's
+         reach of each other, at the bottom of a tab players reach deliberately.
+         Not on the Picks tab — FEAT-8b already puts the CURRENT release at the
+         top of that page, and a growing accordion under a week blurb fights it
+         for the same job. */''}
+    ${renderReleaseNotesCardHTML()}
+
     <div class="app-version-footer" title="Build version">
       CFB Pickems ${escHtml(APP_VERSION)} · ${escHtml(APP_VERSION_DATE)}
     </div>`;
@@ -8314,6 +11007,7 @@ export function renderRulesPage() {
   document.getElementById('fb-submit-btn')?.addEventListener('click', submitFeedback);
   bindFeedbackKindToggle();
   bindScribeReportRowHandlers();   // Build 2b, E5a
+  bindGameRequestCard();           // FEAT-2 / UN-175
 }
 
 /**
@@ -9346,22 +12040,21 @@ export function applyWeekStatusChange(week, to) {
   if(to==='final'){upd.finalizedAt=new Date().toISOString();}
   saveWeek(upd);
   if(to==='final')finalizeWeek(upd);
-  // Groups A/B (2026-09-10, DI-B2) — the two CLIENT-triggered lifecycle
-  // events this chokepoint owns. Both are single-commissioner-device fires
-  // (this function only runs from the Week tab's status buttons / auto-
-  // transition), so the per-recipient dedupKey (js/notifications.js) is
-  // exactly enough to make a stray double-click or a second commissioner
-  // device harmless — never a second notification. Demo weeks never fire
-  // (guarded inside notifyPicksOpened/notifyPicksLocked themselves too, but
-  // checked here first to avoid the wasted getPlayers()/getPicks() work).
+  // N1 / DI-N1 (UN-204, 2026-09-12) — REPLACES the notifyPicksOpened()/
+  // notifyPicksLocked() pair that used to fire here. Replaced, NOT duplicated:
+  // running both pipelines would push twice for one transition. The two
+  // CLIENT-triggered lifecycle events this chokepoint owns now post to the
+  // Locker Room under a deterministic id, so a stray double-click, a second
+  // commissioner device, and the nav sweep arriving a moment later all collapse
+  // onto ONE row server-side (AD-11). Demo weeks never fire (guarded inside
+  // emitLifecyclePost() too, but checked here first to skip the wasted
+  // getPlayers()/getPicks() work).
   if (upd.dataSourceMode !== 'demo') {
     try {
       if (to === WEEK_STATUS.OPEN && week.status === WEEK_STATUS.DRAFT) {
-        notifyPicksOpened(upd, getPlayers());
+        postPicksOpenedNotice(upd);
       } else if (to === WEEK_STATUS.LOCKED) {
-        const activePlayers = getPlayers().filter(p => p.active);
-        const submittedCount = activePlayers.filter(p => hasPlayerSubmitted(upd.weekId, p.playerId)).length;
-        notifyPicksLocked(upd, activePlayers, submittedCount, activePlayers.length);
+        postPicksLockedNotice(upd);
         // DI-D1 AMENDMENT (coordinator, 2026-09-11, reviewer finding F2):
         // there is NO SCRIBE call site here. The DI named week-lock as one of
         // two, on the assumption that a locked week's picks are shareable.
@@ -9371,8 +12064,7 @@ export function applyWeekStatusChange(week, to) {
         // worse than no call site: it reads as coverage. `unanimous` fires
         // from the FINALIZE site instead, where the field is public anyway.
       }
-      renderNotifBell();   // instant feedback if the ACTING commissioner is also a recipient
-    } catch (e) { console.warn('[notifications] week-status hook failed', e); }
+    } catch (e) { console.warn('[lifecycle] week-status hook failed', e); }
   }
   // Attached AFTER saveWeek() — storage.js's saveWeek() does `{...week}` at
   // call time, so mutating `upd` past this point can never leak into what
@@ -9424,7 +12116,7 @@ function reconcileWeeklyObligation(weekId, payerPlayerId, recipientPlayerId, pri
     // settled only).
     const ob = createObligation(weekId, payerPlayerId, recipientPlayerId, prize);
     saveObligation(ob);
-    try { notifyObligationCreated(ob); renderNotifBell(); } catch (e) { console.warn('[notifications] obligation-created hook failed', e); }
+    try { postObligationCreatedNotice(ob); } catch (e) { console.warn('[lifecycle] obligation-created hook failed', e); }
     return;
   }
   const alreadyFlagged = existing.some(o =>
@@ -9663,9 +12355,12 @@ export function finalizeWeek(week) {
     try {
       const winner = results.find(r=>r.isWinner);
       const loser = results.find(r=>r.isLoser);
-      notifyResultsFinalized(week, winner?.displayName || undefined, loser?.displayName || undefined, players);
-      renderNotifBell();
-    } catch (e) { console.warn('[notifications] results-finalized hook failed', e); }
+      // N1 / DI-N1 — REPLACES notifyResultsFinalized(). ONE league-wide post
+      // naming both, under a deterministic id so a re-finalize (which this
+      // codebase explicitly supports for corrections, RG-30 territory) can never
+      // mint a second announcement of the same week.
+      postResultsFinalizedNotice(week, winner?.displayName || undefined, loser?.displayName || undefined);
+    } catch (e) { console.warn('[lifecycle] results-finalized hook failed', e); }
     // DI-D1's ONE call site (see fireScribeWeekSignals for why the DI's
     // second, lock-phase one was removed) — the `notifyResultsFinalized`
     // seam the DI names, with its own try/catch so a SCRIBE failure can
@@ -9754,18 +12449,14 @@ export function setupAutoRefresh() {
  * re-render Picks; it re-renders only the dashboard, which is safe to rebuild.
  */
 export async function runAutoRefreshTick() {
-  // F2/F4 remediation (2026-09-10) — server-fired reminders (PICKS_REMINDER/
-  // PICKS_LOCKING_SOON) have NO client-side trigger point at all — Code.gs's
-  // scanReminders fires them independently of any tab/week-mode state — so
-  // this poll must run BEFORE the demo/manual early-returns below, on every
-  // tick, for whoever is signed in. pollNotifyLog() is internally throttled
-  // to ≤60s and skips a hidden tab on its own, so it's safe to call every
-  // tick unconditionally.
-  try {
-    const sess = getSession();
-    if (sess?.playerId) { await pollNotifyLog(sess.playerId); renderNotifBell(); }
-  } catch (e) { console.warn('[notifications] notifyLog poll failed', e); }
-
+  // N1 / DI-N5 (UN-204, 2026-09-12) — THE pollNotifyLog() TICK IS GONE. It
+  // existed to fold the server-fired reminder/locking-soon log into the
+  // Notification Center list; DI-N5 retires that list, so this was a 60-second
+  // background network poll feeding a surface nobody looks at. The two
+  // server-fired events are unaffected: PICKS_REMINDER stays push-only
+  // (deep-linking to Picks — it is an action item addressed to you, not a
+  // league notice), and PICKS_LOCKING_SOON now arrives in the Locker Room
+  // because scanReminders() writes the chat row itself.
   // Auto-transition check runs EVERY tick regardless of active tab or week
   // mode (demo weeks are skipped inside the helper). Transitions affect all
   // users so whichever device ticks first writes the new status to the
@@ -9957,6 +12648,88 @@ export function liveStatusDisplayShort(entry, nowMs = Date.now()) {
     ? source
     : source.slice(0, Math.max(0, LIVE_STATUS_SHORT_BUDGET - 1)) + '…';
   return { text, pulse };
+}
+
+// ─── RED ZONE (FEAT-7 / UN-174, 2026-09-12) ──────────────────────────────────
+// Third member of the live-status helper family, deliberately its own function
+// rather than extra text appended into liveStatusDisplay(): the two have
+// DIFFERENT staleness rules (3 minutes vs <=2 poll cycles) and merging them
+// would force one to adopt the other's, wrongly.
+//
+// DI-174b — the staleness rule is the load-bearing decision. A quarter/clock
+// can be shown stale with a caveat; a red-zone flag cannot. Possession inside
+// the 20 resolves in about four plays, so a 3-minute-old mark is not "slightly
+// behind" — it is very likely an assertion that is simply FALSE, on the one
+// surface a player uses to decide whether a close spread is threatened. The
+// honest render for a stale red-zone flag is no flag at all: it is DROPPED,
+// never caveated.
+//
+//   RED_ZONE_STALE_MS = max(90s, 2 x autoRefreshInterval)
+//
+// At 30s/60s polling that is 90s/120s. At the 5-minute setting it is 10
+// minutes, which is correct rather than a bug — that is the freshness the
+// commissioner chose, and there is no honest tighter bound available. With the
+// interval Off (0) nothing is polling at all, so the 90s floor clears the mark
+// within a minute and a half of the last manual refresh.
+const RED_ZONE_STALE_FLOOR_MS = 90 * 1000;
+
+export function redZoneStaleMs(intervalSec) {
+  const sec = Number(intervalSec);
+  const safe = Number.isFinite(sec) && sec > 0 ? sec : 0;
+  return Math.max(RED_ZONE_STALE_FLOOR_MS, 2 * safe * 1000);
+}
+
+/**
+ * Pure, DOM-free. `entry` is a liveStatusById value (or undefined/null).
+ * Returns null — caller renders NOTHING — in every state except an in-play,
+ * fresh, genuinely-in-the-red-zone live game.
+ *
+ *   no entry / not LIVE / isRedZone !== true        -> null
+ *   STATUS_HALFTIME or STATUS_END_PERIOD            -> null (ESPN commonly
+ *       leaves the last snap's `situation` attached through a period break, so
+ *       a team that reached the 12 as the quarter expired would otherwise read
+ *       as "in the red zone" for the whole break)
+ *   older than redZoneStaleMs()                     -> null (dropped, not caveated)
+ *   possessionSide resolved                         -> "🔴 RZ · ARK"
+ *   possessionSide null (ESPN sent the flag but no
+ *       resolvable possession)                      -> "🔴 RZ"
+ *
+ * Options object rather than DI-174b's four positional params — CONVENTIONS
+ * #4 (destructure past two arguments). `teamLabel` is the SURFACE's own
+ * abbreviation helper (buildAbbrMap on the dashboard, identity on the Picks
+ * card) so the name here matches the pick chips beside it exactly; `short`
+ * picks between the dashboard's "RZ" and the Picks card's "Red zone". All four
+ * copy strings live in this one function so no surface can drift.
+ *
+ * Exported for livestatustest.mjs, same rationale as its two siblings.
+ */
+export function redZoneDisplay(entry, game, { nowMs = Date.now(), intervalSec = null, short = true, teamLabel = null } = {}) {
+  if (!entry || !game) return null;
+  if (game.status !== GAME_STATUS.LIVE) return null;
+  if (entry.isRedZone !== true) return null;
+  if (entry.name === 'STATUS_HALFTIME' || entry.name === 'STATUS_END_PERIOD') return null;
+  const interval = intervalSec === null || intervalSec === undefined
+    ? getSettings().autoRefreshInterval
+    : intervalSec;
+  const ageMs = nowMs - (entry.capturedAt ?? nowMs);
+  if (ageMs > redZoneStaleMs(interval)) return null;
+  const side   = entry.possessionSide === 'home' || entry.possessionSide === 'away' ? entry.possessionSide : null;
+  const school = side ? teamSchool(game, side) : '';
+  const shown  = school ? (teamLabel ? teamLabel(school) : school) : '';
+  const label = short
+    ? (shown ? `🔴 RZ · ${shown}` : '🔴 RZ')
+    : (shown ? `🔴 Red zone · ${shown}` : '🔴 Red zone');
+  const ariaLabel = school
+    ? `${school} has the ball in the red zone`
+    : 'A team has the ball in the red zone';
+  return { label, ariaLabel, side };
+}
+
+/** True when at least one game on screen currently carries a red-zone mark.
+ *  Asks redZoneDisplay() itself rather than re-testing its conditions, so the
+ *  conditional legend and the marks can never disagree about what is showing. */
+function anyRedZoneOnScreen(games) {
+  return (games || []).some(g => !!redZoneDisplay(liveStatusById.get(g.gameId), g));
 }
 
 export async function doRefreshScores(week,games) {
@@ -10197,6 +12970,60 @@ function exportStandingsCSV() {
   }
   downloadFile(toCsv(rows), `standings_season.csv`);
   showToast('📥 Standings CSV exported','success');
+}
+
+/**
+ * League-wide — the season Extra Point, at AUDIT granularity: one row per
+ * player per COUNTED week, so the ledger card's numbers are derivable from
+ * this file rather than asserted by it (eptest.mjs sums these rows and
+ * compares them to the card).
+ *
+ * FEAT-9 / DI-176h. Two deliberate decisions live here:
+ *
+ *  1. `standings_season.csv` gains NO Extra Point columns. Its header row is
+ *     the standings' audit trail, and EP columns in it are the easiest possible
+ *     way for a future reader — human or agent — to conclude EP is a standings
+ *     input. That is what AD-33 exists to prevent. Separate contest, separate
+ *     file.
+ *  2. `Outcome` emits the RAW outcome key (blackjack/win/push-win/bust/
+ *     no-entry), never the EP_OUTCOME_LABEL display string — the same rule the
+ *     obligations export follows for o.status, because an audit trail has to be
+ *     greppable.
+ *
+ * The inclusion predicate is isCountedExtraPointWeek() — literally the same
+ * function the card calls, blind gate included, so an OPEN week with a result
+ * on file is absent from both. It is NOT a copy of exportStandingsCSV()'s
+ * filter: that one is missing the demo clause (inherited open item I-11, not
+ * fixed here and deliberately not copied).
+ */
+/* Exported for eptest.mjs, same rationale as buildObligationsCsvRows(): the
+   rows are the audit artifact, and "the exported rows sum to what the card
+   says" is only assertable against the rows themselves. */
+export function buildExtraPointCsvRows(weeks, players) {
+  const rows=[['Week','Week Id','Player','Guess (yd)','Actual (yd)','Outcome','Delta','Winner']];
+  const ordered=(weeks||[]).slice().sort((a,b)=>a.weekNumber-b.weekNumber);
+  for(const w of ordered){
+    if(!isCountedExtraPointWeek(w,{ canViewOtherPicks })) continue;
+    const graded=gradeWeekExtraPoint(w,players);
+    if(!graded) continue;
+    for(const r of graded.rows){
+      rows.push([
+        formatWeekLabel(w), w.weekId, r.displayName,
+        r.guess??'', graded.actual,
+        r.outcome,
+        r.delta??'',
+        graded.winners.includes(r.playerId)?'yes':'',
+      ]);
+    }
+  }
+  return rows;
+}
+
+function exportExtraPointCSV() {
+  const players=getPlayers().filter(p=>p.active);
+  const rows=buildExtraPointCsvRows(getWeeks(), players);
+  downloadFile(toCsv(rows), `extra_point_season.csv`);
+  showToast(rows.length>1?'📥 Extra Point season CSV exported':'📥 Extra Point CSV exported — no counted weeks yet','success');
 }
 
 /** League-wide — all weekly results across every visible week */
@@ -10562,3 +13389,15 @@ window.navigateTo=navigateTo;
 //     rather than re-deriving covering/trailing in chat-ui.js.
 window.showToast=showToast;
 window.livePickStatus=livePickStatus;
+// FEAT-3 / DI-200f — the 📋 "See everything that changed" button on SCRIBE's
+// release post is rendered and bound inside chat-ui.js, which cannot import
+// app.js. Same bridge, same reason as the two above.
+window.deepLinkTo=deepLinkTo;
+// FEAT-5 / DI-202a, DI-202f — the 🤝 action and the accept/decline controls are
+// rendered and bound inside chat-ui.js, which cannot import app.js. Same bridge,
+// same reason as the three above. `scribeWagerAnswer` is a pure READ of the
+// module cache — chat-ui.js needs the answer state to choose between buttons and
+// a static line, and an absent bridge reads as "no answer yet".
+window.openWagerModal=openWagerModal;
+window.answerWager=answerWager;
+window.scribeWagerAnswer=scribeWagerAnswer;

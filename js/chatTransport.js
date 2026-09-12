@@ -324,6 +324,41 @@ const BOOT_RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000];
 const CATCHUP_DELAY = 1000;
 const MAX_FAST_CATCHUPS = 5;
 
+/**
+ * BUG-12 (2026-09-12) — Drew, verbatim: "When I receive a push notification it
+ * doesn't show up in the chat for at least 30 seconds after the notification.
+ * When I click the push, I should be able to see the message in the chat."
+ *
+ * The interval above is chosen by ROOM ACTIVITY, and a player who is not
+ * sitting in the room is 'idle' (45s) or 'closed' (60s). That is the right
+ * clock for "nothing has told us anything changed" — and a push is exactly
+ * something telling us that. Nothing in the push-tap, foreground-push or
+ * app-resume paths asked this transport to look, so the message the banner had
+ * already announced sat unrequested until the next scheduled poll.
+ *
+ * wake() below is that ask — the SAME tick()/drainSince() path the interval,
+ * the visibilitychange fast path and DI-168's manual refresh all use, never a
+ * second fetch path (AD-16: this module stays the only one that talks to the
+ * chat backend, and it now owns one more reason to poll rather than exporting
+ * the machinery to do it elsewhere).
+ *
+ * BOUNDED, for the reason every other accelerated path here is bounded: iOS
+ * fires visibility pairs while the app switcher is scrubbed, and an unbounded
+ * wake is one flap away from a quota bug. One forced fetch per gap.
+ *
+ * NOT DROPPED, though — and that half is load-bearing. A wake is the only
+ * signal we have that a message exists; discarding one because another arrived
+ * four seconds ago re-creates this exact bug one flap later. A wake inside the
+ * window is DEFERRED to the end of it and still resolves to its caller, which
+ * is what lets the notification deep link await the fetch instead of scrolling
+ * to an element that does not exist yet.
+ *
+ * 5s = INTERVALS.hot: the fastest cadence this app already considers
+ * acceptable for a room someone is actively watching. A push tap is at least
+ * that interesting, and never more expensive.
+ */
+const WAKE_MIN_GAP_MS = 5000;
+
 export function subscribe(onEvents, opts = {}) {
   let timer = null, stopped = false, fails = 0, backoff = 0;
   let seenRoom = false;      // a caught-up delivery reporting a real head has landed
@@ -338,6 +373,13 @@ export function subscribe(onEvents, opts = {}) {
   // it here fixes it for both triggers, since both now go through the same
   // guard on the same function.
   let inFlight = false;
+  // BUG-12 (2026-09-12) — the wake bound. `wakeTimer` non-null IS the open
+  // window; `wakePending` records a wake that landed inside it (deferred, never
+  // dropped); `wakeWaiters` are the callers awaiting that deferred fetch. See
+  // WAKE_MIN_GAP_MS above for why bounded and why not dropped.
+  let wakeTimer = null;
+  let wakePending = false;
+  let wakeWaiters = [];
   // RG-98 F1 (reviewer finding, 2026-09-11) — true only for a tick that
   // actually reached the network (past the isBackendConfigured()/hidden
   // early-return, below). delay() must not spend a BOOT_RETRY_DELAYS rung on
@@ -475,8 +517,51 @@ export function subscribe(onEvents, opts = {}) {
 
   function schedule() { if (!stopped) timer = setTimeout(tick, delay()); }
 
-  const onVis = () => { if (typeof document !== 'undefined' && !document.hidden && !inFlight) { clearTimeout(timer); tick(); } };
+  /**
+   * BUG-12 — the event-driven forced fetch. Returns a promise that settles when
+   * the fetch this wake is answerable for has actually completed (immediately
+   * for the wake that runs now; at the end of the window for one that was
+   * deferred into it), so a caller that must not act until the room is current
+   * — the notification deep link — can await it.
+   */
+  function wake() {
+    if (stopped) { settleWakeWaiters(false); return Promise.resolve(false); }
+    // Inside the window, or a round trip is already running: fold into the one
+    // fetch at the end of the window rather than adding a second.
+    if (wakeTimer !== null || inFlight) {
+      wakePending = true;
+      openWakeWindow();
+      return new Promise(res => wakeWaiters.push(res));
+    }
+    openWakeWindow();
+    clearTimeout(timer);
+    const p = tick();
+    p.then(ok => settleWakeWaiters(ok), () => settleWakeWaiters(false));
+    return p;
+  }
+  function openWakeWindow() {
+    if (wakeTimer !== null) return;
+    wakeTimer = setTimeout(() => {
+      wakeTimer = null;
+      if (wakePending) { wakePending = false; wake(); }
+    }, WAKE_MIN_GAP_MS);
+    wakeTimer?.unref?.();   // never hold a Node test harness open (push-onesignal.js precedent)
+  }
+  function settleWakeWaiters(v) {
+    const waiting = wakeWaiters;
+    wakeWaiters = [];
+    for (const res of waiting) { try { res(v); } catch { /* a waiter's own failure is not this transport's problem */ } }
+  }
+
+  // BUG-12 — the resume half. visibilitychange was already here (and already
+  // forced a tick); it now goes through wake() so it inherits the bound, and
+  // `focus` joins it because an iOS standalone resume does not reliably fire
+  // visibilitychange at all (boottest.mjs §5's stated unknown). Both arriving
+  // costs one fetch, not two — that is what the bound is for.
+  const onVis = () => { if (typeof document !== 'undefined' && !document.hidden) wake(); };
+  const onFocus = () => { if (typeof document === 'undefined' || !document.hidden) wake(); };
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis);
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') window.addEventListener('focus', onFocus);
   tick();
 
   /**
@@ -511,9 +596,13 @@ export function subscribe(onEvents, opts = {}) {
   const unsubscribe = () => {
     stopped = true;
     clearTimeout(timer);
+    clearTimeout(wakeTimer); wakeTimer = null; wakePending = false;
+    settleWakeWaiters(false);   // BUG-12 — a deferred wake on a torn-down subscription answers, rather than leaving its caller hanging
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVis);
+    if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') window.removeEventListener('focus', onFocus);
   };
   unsubscribe.unsubscribe = unsubscribe;
   unsubscribe.forceTick = forceTick;
+  unsubscribe.wake = wake;      // BUG-12 — chat.js hands this to the push-tap / foreground-push paths via wakeChat()
   return unsubscribe;
 }

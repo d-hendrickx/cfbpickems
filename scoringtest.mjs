@@ -1037,6 +1037,101 @@ console.log('\n[12] Mutation-proofs — in-memory source copies only, never the 
     `MUTANT: without the name collapse, twenty verbosity signals score ${spam6.score} and post on QUIET — cardinality buys volume, the second half of FINDING 1`);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// [25] FEAT-5 / DI-202j (UN-202, 2026-09-12) — WAGERS NEVER TOUCH SCORING.
+//
+// Drew, verbatim: "they should not influence pickem scores." That was not
+// merely dropped as a non-feature — it was converted into a NEGATIVE design
+// input with a proof. A comment is not verification; this is.
+//
+// Two halves, and both are needed. The BEHAVIOURAL half computes the money
+// numbers with a store that has wagers all over it and with the identical store
+// that has none, and requires the two to be BYTE-IDENTICAL. The STRUCTURAL half
+// shows why that is not a coincidence: js/scoring.js cannot reach the memory
+// sheet at all.
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n[25] FEAT-5 / DI-202j — wagers never influence pickem scores…');
+{
+  const scoring = await import('./js/scoring.js');
+
+  const players25 = [
+    { playerId: 'w_p1', displayName: 'Drew', active: true },
+    { playerId: 'w_p2', displayName: 'Brayden', active: true },
+    { playerId: 'w_p3', displayName: 'Kevin', active: true },
+  ];
+  const week25 = { weekId: 'w_wk1', season: '2026', weekNumber: 1, status: 'final',
+                   startDate: '2026-09-05', endDate: '2026-09-06', actualTiebreakerValue: 51 };
+  const games25 = [];
+  const picks25 = [];
+  for (let i = 1; i <= 4; i++) {
+    games25.push({ gameId: 'w_g' + i, weekId: 'w_wk1', status: 'final',
+      homeTeam: 'Home' + i, awayTeam: 'Away' + i, kickoff: `2026-09-0${i}T17:00:00Z`,
+      homeScore: 30, awayScore: 20, spread: -3, lockedSpread: -3, favorite: 'home',
+      multiplier: i === 1 ? 2 : 1 });
+    picks25.push({ pickId: `w_k1_${i}`, weekId: 'w_wk1', playerId: 'w_p1', gameId: 'w_g' + i, selectedTeam: 'Home' + i, tiebreakerGuess: 50 });
+    picks25.push({ pickId: `w_k2_${i}`, weekId: 'w_wk1', playerId: 'w_p2', gameId: 'w_g' + i, selectedTeam: 'Away' + i, tiebreakerGuess: 44 });
+    picks25.push({ pickId: `w_k3_${i}`, weekId: 'w_wk1', playerId: 'w_p3', gameId: 'w_g' + i, selectedTeam: i <= 2 ? 'Home' + i : 'Away' + i, tiebreakerGuess: 60 });
+  }
+  const compute25 = () => {
+    const weekly = scoring.calculateWeeklyResults('w_wk1', players25, picks25, games25, week25.actualTiebreakerValue);
+    const season = scoring.calculateSeasonStandings(players25, weekly, [week25]);
+    return JSON.stringify({ weekly, season });
+  };
+
+  // ── A store with NO wagers anywhere. ──
+  localStorage.removeItem('cfbp_wager_resurfaced');
+  const before25 = compute25();
+  assert(before25.length > 200 && /correctPicks/.test(before25) && /correctCount/.test(before25),
+    '25-1: fixture check — the baseline really computed both tallies (weighted for standings, raw for audit), so the comparison below is not comparing two empty objects');
+
+  // ── The SAME store, now with wagers on every surface this feature touches:
+  //    the device ledger (the ONE KV key the feature adds), the proposer and
+  //    counterparty memory rows, and both SCRIBE posts sitting in the room. ──
+  storage.setWagerResurfaced('wA');
+  storage.setWagerResurfaced('wB');
+  const wagerRows25 = [
+    { id: 'mem_wA', playerId: 'w_p1', kind: 'wager', key: 'wager:wA',
+      value: JSON.stringify({ c: 'Home1 covers by 30', o: 'w_p2', w: 'w_wk1', b: 'w_p3' }),
+      provenance: 'player-stated', confidence: 1, reviewAt: '2026-09-06T23:59:59.000Z', sourceMessageId: 'm_a' },
+    { id: 'mem_aA', playerId: 'w_p2', kind: 'wager', key: 'wagerack:wA',
+      value: JSON.stringify({ w: 'wA', r: 'accepted' }), provenance: 'player-stated', confidence: 1 },
+    { id: 'mem_wB', playerId: 'w_p3', kind: 'wager', key: 'wager:wB',
+      value: JSON.stringify({ c: 'Nobody goes 4-0', o: '', w: 'w_wk1', b: 'w_p3' }),
+      provenance: 'player-stated', confidence: 1, reviewAt: '2026-09-06T23:59:59.000Z', sourceMessageId: 'm_b' },
+  ];
+  chat._resetForTest?.();
+  chat.ingest?.([
+    { seq: 1, id: 'scribe_wager_wA', ts: Date.now(), type: 'message', author: 'scribe', gameTag: '',
+      body: 'Logged. Drew against Brayden, due by Week 1.', targetId: '', replyTo: 'm_a',
+      meta: { kind: 'wagerLogged', wagerId: 'wA', proposerId: 'w_p1', counterpartyId: 'w_p2' } },
+    { seq: 2, id: 'scribe_wagerdue_wA', ts: Date.now(), type: 'message', author: 'scribe', gameTag: '',
+      body: 'Week 1, as promised.', targetId: '', replyTo: 'm_a',
+      meta: { kind: 'wagerDue', wagerId: 'wA', status: 'accepted' } },
+  ]);
+  const after25 = compute25();
+  assert(after25 === before25,
+    '25-2: BYTE-IDENTICAL weekly results and season standings with wagers present and absent — a logged wager, an accepted answer, both SCRIBE posts and a written device ledger move no number that decides who owes whom money');
+  assert(storage.getWagerResurfaced().length === 2 && wagerRows25.length === 3,
+    '25-3: fixture check — the wagers really were present for that comparison (ledger written, rows built), so 25-2 is not passing on an empty second half');
+
+  // ── STRUCTURAL: why 25-2 is not a coincidence. ──
+  const scoringSrc25 = await readFile(fileURLToPath(new URL('./js/scoring.js', import.meta.url)), 'utf8');
+  assert(!/from '\.\/(scribeAgent|backend|scribeLines|chat|chat-ui)\.js'/.test(scoringSrc25),
+    '25-4: js/scoring.js imports NOTHING from scribeAgent / backend / scribeLines / chat — the memory sheet is not merely unused by it, it is unreachable from it');
+  const scoringCode25 = scoringSrc25.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/wager/i.test(scoringCode25),
+    '25-5: …and the word "wager" appears nowhere in its live code — no field, no branch, no tally');
+  const storageSrc25 = await readFile(fileURLToPath(new URL('./js/storage.js', import.meta.url)), 'utf8');
+  const keys25 = (storageSrc25.match(/const KEYS = \{[\s\S]*?\n\};/) || [''])[0];
+  const wagerKeys25 = (keys25.match(/^\s*\w*WAGER\w*\s*:/gim) || []);
+  assert(wagerKeys25.length === 1 && /WAGER_RESURFACED/.test(wagerKeys25[0]),
+    `25-6: the KV surface gained EXACTLY ONE key for this whole feature — the device ledger — and nothing else (found ${wagerKeys25.length})`);
+  const devLocal25 = (storageSrc25.match(/const DEVICE_LOCAL_KEYS = new Set\(\[[\s\S]*?\]\);/) || [''])[0];
+  assert(/KEYS\.WAGER_RESURFACED/.test(devLocal25),
+    '25-7: …and that one key is DEVICE-LOCAL, so it never reaches the Sheet the scoring data lives in');
+  localStorage.removeItem('cfbp_wager_resurfaced');
+}
+
 console.log('\n══════════════════════════════════════════════════');
 console.log(fail === 0 ? `✅ ALL PASS — ${pass} passed, ${fail} failed` : `❌ FAILURES — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

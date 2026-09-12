@@ -575,8 +575,20 @@ function _newId() {
  * @param {object}  [opts.meta]       facts — MUST already exclude forbidden keys (asserted below regardless)
  * @param {object}  [opts.copyOverride] { title, body } — bypasses SCRIBE (CHAT_MESSAGE_CREATED, COMMISSIONER_ANNOUNCEMENT)
  * @param {boolean} [opts.writeInApp=true] false for CHAT_MESSAGE_CREATED (§2 — no stored record, ever)
+ * @param {string|null} [opts.categoryOverride] N1 / DI-N4 — the preference
+ *   category to gate on, when it is NOT the one this `event` maps to. Exactly
+ *   one caller passes it: the chat relay, for a LIFECYCLE post. Such a post is
+ *   relayed AS `CHAT_MESSAGE_CREATED` (so the push deep-links to the message in
+ *   the room — "one place" includes where the tap lands, and so the dedupKey
+ *   shape is unchanged across all six devices), but it must still be silenced
+ *   by the category the player actually turned off: a player who silenced
+ *   League Updates and left Chat on would otherwise start receiving
+ *   locking-soon pushes again the moment those notices moved into chat. That is
+ *   a silent reversal of DI-A4, which is why this is an explicit parameter
+ *   rather than a lookup buried in the relay. `undefined` = use the event's own
+ *   category; `null` = never silenceable (the D3 shape).
  */
-function _fireOne({ event, actor, playerId, weekId = null, threshold = '', meta = {}, copyOverride = null, writeInApp = true }) {
+function _fireOne({ event, actor, playerId, weekId = null, threshold = '', meta = {}, copyOverride = null, writeInApp = true, categoryOverride = undefined }) {
   assertMetaIsBlindSafe(meta);
   const dedupKey = makeDedupKey({ event, weekId, threshold, playerId });
 
@@ -594,7 +606,7 @@ function _fireOne({ event, actor, playerId, weekId = null, threshold = '', meta 
     _rememberSessionFiredDedupKey(dedupKey);
   }
 
-  const category = CATEGORY_OF_EVENT[event];
+  const category = categoryOverride !== undefined ? categoryOverride : CATEGORY_OF_EVENT[event];
   const intent = resolveIntent({ playerId, category });
   if (!intent.inApp && !intent.push) return { fired: false, reason: 'preferences' };
 
@@ -717,7 +729,6 @@ export function notifyPicksLocked(week, players, submittedCount, totalPlayers) {
 export function notifyResultsFinalized(week, weekWinnerName, weekLoserName, players) {
   if (!week || week.dataSourceMode === 'demo') return [];
   return _activePlayers(players).map(p => {
-    const won = !!(weekWinnerName && p.displayName === weekWinnerName);
     const event = LIFECYCLE_EVENTS.RESULTS_FINALIZED;
     // BLOCKING #2 remediation (2026-09-10) — REPLACES the `|| null` coercion.
     // An absent winner/loser name must resolve to `undefined`, never `null`:
@@ -731,9 +742,15 @@ export function notifyResultsFinalized(week, weekWinnerName, weekLoserName, play
     // fixes every future one).
     const meta = { weekN: week.weekNumber, weekWinnerName: weekWinnerName || undefined, weekLoserName: weekLoserName || undefined };
     const dedupKey = makeDedupKey({ event, weekId: week.weekId, playerId: p.playerId });
-    const copy = won
-      ? buildCopy('RESULTS_FINALIZED_YOU_WON', { weekN: week.weekNumber }, dedupKey)
-      : buildCopy(event, meta, dedupKey);
+    // N1 / UN-204 (2026-09-12, coordinator ruling O3) — the personalized
+    // RESULTS_FINALIZED_YOU_WON variant is RETIRED, not replaced. Every player
+    // now gets the same league-wide line, which already names the winner and
+    // the loser (both public on Standings anyway). The pool, its allow-list
+    // entry, its fallback and its title are gone from js/notify-copy.js in the
+    // same change, so this branch cannot be revived by accident: asking
+    // buildCopy() for that event now yields the generic 'Something happened.'
+    // fallback rather than a second-person line broadcast to six people.
+    const copy = buildCopy(event, meta, dedupKey);
     return _fireOne({ event, actor: { kind: 'scribe', playerId: null }, playerId: p.playerId, weekId: week.weekId, meta, copyOverride: copy });
   });
 }
@@ -886,11 +903,59 @@ function _scanNewChatMessages() {
     return;
   }
   for (const m of fresh) {
+    // ── N1 / DI-N4 (UN-204, 2026-09-12) — LIFECYCLE ROWS IN THE RELAY ───────
+    // Lifecycle notices are now ordinary `type:'message'` rows in the Locker
+    // Room (that is the ONLY type this scan relays — every legacy `sys_*`
+    // emitter is `type:'system'` and therefore could never push, which is the
+    // structural half of BUG-10). Two things must change for them, and only
+    // for them:
+    //
+    //   1. SKIP anything the SERVER already pushed. `scanReminders()`
+    //      (backend/Code.gs) writes the PICKS_LOCKING_SOON row itself, marked
+    //      `meta.origin:'server'`, because no browser is open at 7am — and it
+    //      sends its own push through its own per-player master×category gate
+    //      (applyReminderScanCandidates_). Without this skip every device's
+    //      relay would push it a SECOND time. `origin:'client'` rows are the
+    //      only ones this side is responsible for.
+    //   2. GATE on the lifecycle event's own category, not on 'chat'. See
+    //      _fireOne's categoryOverride docstring for why this is an explicit
+    //      parameter. CATEGORY_OF_EVENT is consulted by EVENT NAME rather than
+    //      trusting the row's own `meta.category`, so a malformed or
+    //      hand-edited row cannot hand itself a category that silences nothing;
+    //      an unknown event name resolves to `undefined` and falls back to the
+    //      chat category, which is the safe direction (it can be silenced).
+    //      COMMISSIONER_ANNOUNCEMENT maps to null -> never silenceable (D3),
+    //      unchanged.
+    //
+    // Everything else is deliberately identical to a human message: same
+    // dedupKey (`CHAT_MESSAGE_CREATED|<messageId>||<playerId>`, identical on
+    // all six devices and collapsed server-side by CFBP_NOTIFY_SENT — AD-11 /
+    // AD-35 / DI-B1 payload shape untouched), same deep link into the room,
+    // same writeInApp:false, same sender exclusion. 'scribe' is not a player,
+    // so no subscriber is excluded from a SCRIBE-authored lifecycle post.
+    const lifecycle = m.meta?.kind === 'lifecycle' ? m.meta : null;
+    if (lifecycle?.origin === 'server') continue;
+    // N1 follow-up (d), 2026-09-12 — NO `?? null` HERE. The paragraph above
+    // states the rule: "an unknown event name resolves to `undefined` and falls
+    // back to the chat category, which is the safe direction (it can be
+    // silenced)." `?? null` did the opposite — a null category is D3's
+    // NEVER-SILENCEABLE shape, reserved for COMMISSIONER_ANNOUNCEMENT — so a
+    // malformed, hand-edited or not-yet-known lifecycle row overrode every
+    // preference on the device. A known event still resolves to its own
+    // category (COMMISSIONER_ANNOUNCEMENT's entry IS null, and that null is
+    // read from the table, which is where the exemption belongs).
+    const categoryOverride = lifecycle ? CATEGORY_OF_EVENT[lifecycle.event] : undefined;
     const senderId = m.author;
     const preview = (m.body || '').slice(0, 60);
     for (const p of players) {
       if (p.playerId === senderId) continue;   // sender never notifies self (mirrors isUnreadFor's m.author !== selfId rule)
-      const senderName = getPlayer(senderId)?.displayName || senderId;
+      // N1 follow-up (b), 2026-09-12 — a push is the ONE surface that does not
+      // render the author through chat-ui's nameOf(), so it is the one place
+      // the raw storage id can reach a player. 'scribe' is not a player record,
+      // so getPlayer() misses and the old fallback titled every SCRIBE-authored
+      // row — which, since N1, is every lifecycle notice — lowercase "scribe"
+      // on the lock screen. One branch; human senders keep displayName.
+      const senderName = senderId === 'scribe' ? 'SCRIBE' : (getPlayer(senderId)?.displayName || senderId);
       _fireOne({
         event: LIFECYCLE_EVENTS.CHAT_MESSAGE_CREATED,
         actor: { kind: senderId === 'scribe' ? 'scribe' : 'system', playerId: senderId === 'scribe' ? null : senderId },
@@ -904,6 +969,7 @@ function _scanNewChatMessages() {
         meta: { messageId: m.id },   // -> destinationFor's ctx.messageId (DI-A5)
         copyOverride: { title: senderName, body: `${senderName}: ${preview}` },
         writeInApp: false,
+        categoryOverride,
       });
     }
   }

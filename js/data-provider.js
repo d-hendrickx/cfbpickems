@@ -569,10 +569,71 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     // shared/synced Sheet. The map, keyed by event.id, is the `_rawEvents`
     // pattern applied correctly: it lives on the result wrapper, never on an
     // object that can be spread into a persisted record.
+    //
+    // FEAT-7 / DI-174a (UN-174, 2026-09-12) — RED ZONE. Two more transient
+    // fields on the SAME map entry, for the same reason and under the same
+    // rule: they are perishable per-poll facts about a game in progress and
+    // must never reach a persisted record.
+    //
+    //   isRedZone      ESPN's own boolean (competitions[0].situation.isRedZone).
+    //                  null when `situation` is absent, which is every
+    //                  scheduled and every final event.
+    //   possessionSide 'home' | 'away' | null. ESPN gives possession as an
+    //                  ESPN TEAM ID; our game records store team NAMES and no
+    //                  ESPN team id anywhere (createGame()'s field list). The
+    //                  id -> side mapping therefore happens HERE, the one
+    //                  scope that already holds competitors[] with both `id`
+    //                  and `homeAway`, and the raw id never leaves this file.
+    //                  Do NOT "fix" this by adding an ESPN team id to the
+    //                  game record.
+    //
+    // Getting this direction backwards is the worst failure this feature can
+    // have — it would tell a player his pick is safe while the other team is
+    // inside the 20 — so both directions are asserted in livestatustest.mjs.
+    // DI-174a AMENDMENT (COORDINATOR RULING 2, 2026-09-12 09:21 PDT, after the
+    // live capture in `weekly bug fixes and feedback/Feedback batch 091226/
+    // live-cfb-fixture.json`). The original spec read `situation.possession`
+    // and stopped. The real payload says that is not enough: FOUR of the eight
+    // captured in-progress events carried NO `situation.possession` at all —
+    // **including the one red-zone game in the capture** (WAKE @ PUR, Q1 5:51,
+    // whose `situation` keys were exactly `lastPlay, down, yardLine, distance,
+    // isRedZone, homeTimeouts, awayTimeouts`, because the last play was a
+    // timeout). Under the original spec the ONE case this feature exists for
+    // would have rendered the team-less "🔴 RZ" — technically correct, and a
+    // failure of the need ("which team", UN-174).
+    //
+    // In every such event `lastPlay.end.team.id` named the team in possession
+    // and matched a competitor id (WAKE = 154, consistent with that drive's
+    // "10 plays, 57 yards" ending at the PUR 16). So the resolution order is:
+    //
+    //   situation.possession                  — ESPN's explicit answer, always preferred
+    //   situation.lastPlay.end.team.id        — where the ball ENDED UP after the last snap
+    //   situation.lastPlay.team.id            — the team that RAN the last snap
+    //   null
+    //
+    // The order is not arbitrary. `end.team` is the post-play state and is the
+    // one that survives a change of possession on the play itself; `team` is
+    // the pre-play offense and is the fallback only when `end` is absent. Both
+    // are still mapped through competitors[] below — an id that matches neither
+    // side resolves to null rather than guessing, exactly as before, and the
+    // raw ESPN id still never leaves this file.
+    const situation    = comp.situation;
+    const possessionId = [
+      situation?.possession,
+      situation?.lastPlay?.end?.team?.id,
+      situation?.lastPlay?.team?.id,
+    ].map(v => (v != null && v !== '' ? String(v) : null)).find(Boolean) || null;
+    let possessionSide = null;
+    if (possessionId) {
+      if (home.id != null && String(home.id) === possessionId)      possessionSide = 'home';
+      else if (away.id != null && String(away.id) === possessionId) possessionSide = 'away';
+    }
     liveStatusByEventId.set(String(event.id), {
       name:        statusName || null,
       detail:      event.status?.type?.detail ?? null,
       shortDetail: event.status?.type?.shortDetail ?? null,
+      isRedZone:   typeof situation?.isRedZone === 'boolean' ? situation.isRedZone : null,
+      possessionSide,
     });
     return parsedGame;
   }).filter(Boolean);

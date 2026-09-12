@@ -1128,6 +1128,62 @@ console.log('\n[12] BUG-G F-2 — after the EARLY phase alone, a tap on the teas
 // ── Summary ──────────────────────────────────────────────────────────────────
 globalThis.fetch = async () => { throw new Error('network disabled after cachetest.mjs'); };
 resetAll();
+// ═══════════════════════════════════════════════════════════════════════════
+// [13] BUG-12 — wakeChat(): the push-driven forced fetch, through the REAL
+//      chat engine. boottest.mjs §11 pins the transport's bound and timing on
+//      a fake clock; this drives the seam app.js actually calls, on real
+//      timers, and asserts the thing the player cares about — that the message
+//      the push announced is IN THE ROOM by the time the wake resolves.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[13] BUG-12 — wakeChat() puts the pushed message in the room without waiting for the poll…');
+{
+  resetAll();
+  // ── A. Not subscribed (chat off, or boot has not reached initChat yet).
+  //      A tap must be a safe no-op, never a throw and never a stray request. ──
+  let strayCalls = 0;
+  globalThis.fetch = async () => { strayCalls++; return { ok: true, status: 200, json: async () => ({ ok: true }) }; };
+  const idleWake = await chat.wakeChat();
+  assert(idleWake === false && strayCalls === 0,
+    `13-1: wakeChat() with no live subscription answers false and issues no request (got ${idleWake}, ${strayCalls} request(s)) — a push tap on a device with chat off must not reach the backend`);
+
+  // ── B. THE BUG. A live, caught-up room; a message lands on the server; the
+  //      push tap forces the fetch instead of waiting for the next poll. ──
+  resetAll();
+  let serverHead = 12;
+  backend.setBackendConfig(URL_FAKE, 'tok');
+  const calls13 = installFetch(() => serverHead, 'w');
+  chat.initChat('p1');
+  const settled13 = await waitFor(() => chat.chatStatus().caughtUp === true);
+  assert(settled13, `fixture: the room is complete at head ${serverHead} before the push arrives`);
+
+  serverHead += 1;                                  // ← the message the push is about
+  const callsBefore = calls13.length;
+  const ok13 = await chat.wakeChat();
+  await settle();
+  assert(ok13 === true && calls13.length > callsBefore,
+    `13-2: a push tap forces a round trip immediately (${calls13.length - callsBefore} request(s), resolved ${ok13}) — the room's own cadence here is 45-60s, which is Drew's "at least 30 seconds"`);
+  assert(chat.getMessages({ tag: 'all' }).some(m => m.id === 'w13'),
+    '13-3: …and the pushed message is IN THE FOLD by the time wakeChat() resolves — this is what app.js\'s deepLinkTo() awaits before it scrolls, so the jump lands on the message instead of no-opping');
+
+  // ── C. Bounded, and still answers. A second tap inside the wake window
+  //      must not add a round trip — and must not hang the deep link either. ──
+  serverHead += 1;
+  const callsBefore2 = calls13.length;
+  const t0 = Date.now();
+  const second = await Promise.race([
+    chat.wakeChat(),
+    new Promise(r => setTimeout(() => r('HUNG'), 8000)),
+  ]);
+  assert(second !== 'HUNG',
+    `13-4: a second tap inside the wake window still RESOLVES (in ${Date.now() - t0}ms) — a deep link that awaits a wake which never answers is a dead tap`);
+  assert(calls13.length - callsBefore2 <= 2,
+    `13-5: …on at most one forced round trip's worth of requests, not one per tap (got ${calls13.length - callsBefore2}) — the bound that keeps a flapping tab off the Apps Script quota`);
+  note(`  requests: [${calls13.map(c => c.action + (c.action === 'chatSince' ? ':' + c.seq : '')).join(', ')}]`);
+
+  resetAll();
+  globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
+}
+
 console.log('\n' + '─'.repeat(70));
 console.log(`${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed`);
 console.log('─'.repeat(70));

@@ -240,8 +240,29 @@ function _rebaseRecords(local, remote, idField) {
  * above: a device holding a pre-reset mirror can union old rows back until
  * it re-hydrates, and read-time age pruning keeps any resurrected row out
  * of the visible window.
+ *
+ * `cfbp_game_requests` joined this map 2026-09-12 (FEAT-2 / UN-175, DI-175d),
+ * and WITHOUT IT THE FEATURE IS BROKEN IN THE QUIET WAY: a request made on
+ * Kevin's phone is destroyed the next time Drew's device pushes a stale mirror
+ * — the identical failure Drew reported on 2026-09-01 about feedback going
+ * missing, on the identical shape (immutable rows written by six people into
+ * one seam key).
+ *
+ * Its delete surface, CHECKED against js/storage.js rather than assumed:
+ *   - there is NO per-row delete. A withdrawal is an APPENDED 'withdraw'
+ *     tombstone row, so the union cannot resurrect the inverse of a deletion
+ *     the way it could for `cfbp_comments` above.
+ *   - there is NO per-row field mutation. Every mutable property (withdrawn /
+ *     onSlate / missed / passed) is DERIVED at read time by
+ *     foldGameRequests(), which returns copies and never rewrites an input row
+ *     — so there is no local field flip for this union to silently revert.
+ *   - read-time retention (21 days) HIDES old rows; it never shortens the array.
+ *   - the only shrinking write in the whole module is resetToDemo() — the same
+ *     accepted residual as cfbp_feedback above, and for the same reason: a
+ *     factory reset is rare, visible and repeatable; silently eating six
+ *     players' requests is none of those.
  */
-const _APPEND_ONLY_ID = { cfbp_feedback: 'id', cfbp_notifications: 'id' };
+const _APPEND_ONLY_ID = { cfbp_feedback: 'id', cfbp_notifications: 'id', cfbp_game_requests: 'id' };
 function _unionById(local, remote, idField) {
   if (!Array.isArray(local) || !Array.isArray(remote)) return local;
   const seen = new Set();
@@ -1066,6 +1087,24 @@ export async function scribeClassifyRemote({ messageId } = {}) {
 export async function scribeMemoryListRemote({ playerId, kinds = null } = {}) {
   return call('scribeMemoryList', { playerId, ...(kinds && kinds.length ? { kinds } : {}) });
 }
+/**
+ * RG-120 item (xii), THE COUPLING, NAMED (2026-09-12). `playerId` here is taken
+ * FROM THE RECORD, not from the signed-in session — so the requester the server
+ * authorises against is, by construction, the row's own owner.
+ *
+ * That is what makes a THIRD-PARTY wager work: Kevin taps 🤝 on Drew's claim and
+ * app.js's logWager() writes `{ playerId: proposerId }` (the record is ABOUT
+ * Drew, and AD-49 says Drew must be able to delete it), while Kevin is preserved
+ * only inside the envelope's `b` field. Code.gs's non-commissioner branch checks
+ * requester === row owner and passes.
+ *
+ * ANYONE HARDENING THIS RELAY TO SEND THE TRUE ACTOR (the obvious, and
+ * generally correct, security improvement) MUST ADD A SERVER-SIDE
+ * `kind === 'wager'` CARVE-OUT IN THE SAME CHANGE — otherwise every
+ * third-party 🤝 begins failing with "that memory belongs to another player,"
+ * and it will look like a wager bug rather than an auth change. The twin note
+ * lives at js/app.js's logWager().
+ */
 export async function scribeMemoryUpsertRemote(record = {}) {
   return call('scribeMemoryUpsert', { playerId: record.playerId, record });
 }

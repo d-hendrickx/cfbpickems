@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=21-0" />
+  <link rel="stylesheet" href="css/styles.css?v=21-1" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -133,16 +133,21 @@
              first. Empty + hidden until renderHeaderIdentity() (js/app.js) reads
              getSession() — never a flash of "Sign In" before session resolves. -->
         <button type="button" id="header-identity" class="header-identity" hidden></button>
-        <!-- DI-A3 (Groups A/B, 2026-09-10): bell goes immediately after
-             #header-identity, before #sync-badge — the header's own stated
-             ordering rule (most actionable state first). Starts hidden until
-             renderNotifBell() (js/app.js) runs at boot, purely so it never
-             flashes unstyled before JS attaches. Per DI-A4, the bell is
-             reachable SIGNED OUT too — an anonymous viewer sees the
-             Notification Center's public chat-summary row, just no push
-             settings or per-player history. -->
-        <button type="button" id="notif-bell-btn" class="notif-bell-btn" hidden aria-label="Notifications">
-          <span class="notif-bell-icon">🔔</span><span id="notif-bell-badge" class="notif-bell-badge" hidden></span>
+        <!-- Bell goes immediately after #header-identity, before #sync-badge —
+             the header's own stated ordering rule (most actionable state
+             first). Starts hidden until renderNotifBell() (js/app.js) runs at
+             boot, purely so it never flashes unstyled before JS attaches.
+             Reachable SIGNED OUT too; it just renders a "sign in" line.
+
+             N1 / DI-N5 (UN-204, 2026-09-12): THE UNREAD BADGE SPAN IS GONE and
+             the bell now opens notification SETTINGS, not the Notification
+             Center list. Drew: "The bell icon is ok for notification settings
+             until we create a settings button." Unread belongs to the chat
+             pill, which is the one counter now — a second badge for the same
+             notices was the "three habits" problem in miniature. Nothing
+             stored was deleted; see js/app.js's bell section. -->
+        <button type="button" id="notif-bell-btn" class="notif-bell-btn" hidden aria-label="Notification settings">
+          <span class="notif-bell-icon">🔔</span>
         </button>
         <span id="sync-badge" class="sync-badge"></span>
         <div id="tz-toggle" class="tz-toggle"></div>
@@ -207,7 +212,7 @@
 <div id="toast-container"></div>
 
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=21-0"></script>
+<script type="module" src="js/app.js?v=21-1"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -224,7 +229,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=21-0' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=21-1' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

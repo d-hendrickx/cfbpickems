@@ -203,6 +203,41 @@ export const SCRIBE_POOLS = {
     'Extra Point\'s done. {NAME} read the table correctly.',
     'The Extra Point has a winner. It also has casualties. Both are noted.',
   ],
+  // ── FEAT-5 (UN-202 / DI-202f, DI-202h) — wager memory. SCRIBE records a bet
+  // and reads it back on the due week. SCRIBE NEVER SETTLES IT (DI-202i):
+  // there is no data-derived slot in any line below — no score, no rank, no
+  // record, no standing — so there is nothing for a line to fill an outcome
+  // with. Adding one would be a visible change to the DI. {claim} is echoed
+  // verbatim from the stored value and escaped at render (escHtml).
+  //
+  // THESE FOUR POOLS NEVER GO THROUGH pickLine()/scribeTrigger(). Selection is
+  // wagerLine() below — a stable hash of the wagerId, so six devices build
+  // byte-identical text before chatAppend's id-dedupe picks a winner (AD-11),
+  // and a receipt is never silently dropped by the 14-day no-repeat ledger.
+  wagerLogged: [
+    'Logged. {proposer} against {counterparty}, due by {dueWeek}.',
+    '{proposer} versus {counterparty}, settle by {dueWeek}. On the record now.',
+    'On the record: {proposer} and {counterparty}, deadline {dueWeek}. I\'ll bring it back then.',
+    'That one\'s in the file — {proposer} against {counterparty}, due {dueWeek}. No opinion from me either way.',
+  ],
+  wagerDueAccepted: [
+    '{weekLabel}, as promised. {proposer} said "{claim}". {counterparty} took it. Settle it among yourselves.',
+    'Due date. {proposer}: "{claim}". {counterparty} accepted at the time. The room can sort out the rest.',
+    'Bringing this back for {weekLabel}. {proposer} claimed "{claim}", and {counterparty} said yes. Not my call.',
+    'From the file: {proposer} — "{claim}". {counterparty} took the other side. {weekLabel} is here; you two work it out.',
+  ],
+  wagerDueDeclined: [
+    '{weekLabel}. {proposer} said "{claim}". {counterparty} passed on it, so nothing is riding on this one.',
+    'Due today: "{claim}", from {proposer}. {counterparty} declined at the time — no stakes, just the statement.',
+    'For the record at {weekLabel}: {proposer} claimed "{claim}". {counterparty} took a pass, so there\'s nothing to collect either way.',
+    '{proposer} put this out before {weekLabel}: "{claim}". {counterparty} didn\'t take it, so nothing is on the line.',
+  ],
+  wagerDueSilent: [
+    '{weekLabel}. {proposer} said "{claim}". Nobody took the other side on the record, so what that\'s worth is up to you.',
+    'Resurfacing this one for {weekLabel}: {proposer} — "{claim}". No one ever went on record against it. Make of that what you want.',
+    '{proposer} claimed "{claim}" before {weekLabel}. The record shows nobody opposed it. Whether that still counts is the room\'s question, not mine.',
+    'Deadline is here for {weekLabel}. {proposer}: "{claim}". Nothing was accepted and nothing was declined — I\'m only reporting the gap.',
+  ],
 };
 
 // ── Rate limiting + no-repeat ledger ─────────────────────────────────────────
@@ -252,6 +287,134 @@ function pickLine(poolKey, vars = {}) {
 
 /** Time bucket for deterministic ids (10-minute granularity). */
 function bucket(ms = Date.now(), sizeMin = 10) { return Math.floor(ms / (sizeMin * 60000)); }
+
+// ── FEAT-3 (UN-200 / DI-200e, amended A1.4) — the once-per-deployment release
+// note SCRIBE posts to the main room. NOT part of SCRIBE_POOLS: this pool does
+// not route through scribeTrigger(), pickLine(), the 14-day no-repeat ledger,
+// or the rate limiter. Selection is deterministic by version string (see
+// whatsNewPostLine below).
+//
+// (The approved copy doc numbers these DI-170e / UN-170; the register
+// renumbered them to UN-200 / DI-200 at handoff. Same content, same rulings.)
+//
+// Slots: {version} {nAdded} {nFixed} {headline} — and {alsoVersion} in catchUp.
+// Line 1 always names the version and both counts. Line 2 is always {headline}.
+// Counts are worded count-agnostically on purpose: "3 new, 0 fixed" and
+// "1 new, 1 fixed" are both grammatical, so NO pluralization helper is needed.
+// Both sets are deliberately the same length (4) so ONE index derived from the
+// version string is valid against either.
+export const WHATS_NEW_POST_TEMPLATES = {
+  // One release on the card.
+  single: [
+    '{version} is live. {nAdded} new, {nFixed} fixed.\nTop of the list: {headline}',
+    '{version} just landed, {nAdded} new and {nFixed} fixed.\nFirst item: {headline}',
+    'New build is up. {version}, {nAdded} new, {nFixed} fixed.\nLeading it off: {headline}',
+    '{version} shipped. The count is {nAdded} new and {nFixed} fixed.\nStarting with: {headline}',
+  ],
+  // Two releases on the card — the newer one shipped today, {alsoVersion} did not.
+  catchUp: [
+    '{version} is live. {nAdded} new and {nFixed} fixed, and that count includes {alsoVersion}, which shipped earlier.\nToday\'s first item: {headline}',
+    '{version} is in, and {alsoVersion} is finally getting its notes. {nAdded} new and {nFixed} fixed between them.\nNewest item: {headline}',
+    'Two releases in one post. {version} today, {alsoVersion} from before, {nAdded} new and {nFixed} fixed combined.\nTop of the new list: {headline}',
+    '{version} shipped today. {nAdded} new, {nFixed} fixed across it and {alsoVersion}, which is older and is only catching up here.\nFrom the new one: {headline}',
+  ],
+};
+
+/**
+ * Deterministic template pick — NEVER Math.random().
+ *
+ * Six devices each build this body optimistically before the server's id-dedupe
+ * (AD-11, `sys_whatsnew_<version>`) picks a winner. A random pick means five of
+ * them briefly render a sentence that is not the one that actually landed, and
+ * then visibly change it when the real row arrives. Keyed to the version string
+ * so the same release reads the same on every device, forever, including after
+ * a reinstall.
+ *
+ * Reuses hashLine() — the module's existing string hash — rather than adding a
+ * second one; `.slice(1)` drops its 'h' prefix and the rest is base-36 digits.
+ */
+function whatsNewStableIndex(version, len) {
+  if (!len) return 0;
+  const n = parseInt(hashLine(String(version || '')).slice(1), 36);
+  return (Number.isFinite(n) ? n : 0) % len;
+}
+
+/**
+ * The body of the release post. Slot fill only — no model call, no invention,
+ * every word either a template above or a value computed from
+ * WHATS_NEW_RELEASES by the caller (app.js). `{alsoVersion}` selects the set:
+ * a non-empty one means the card is showing an older catch-up release too, and
+ * there is deliberately no template that renders an empty {alsoVersion} into a
+ * dangling clause.
+ */
+export function whatsNewPostLine({ version = '', nAdded = 0, nFixed = 0, headline = '', alsoVersion = '' } = {}) {
+  const set = alsoVersion ? WHATS_NEW_POST_TEMPLATES.catchUp : WHATS_NEW_POST_TEMPLATES.single;
+  const tpl = set[whatsNewStableIndex(version, set.length)] || set[0];
+  return tpl
+    .replace(/\{version\}/g, String(version))
+    .replace(/\{alsoVersion\}/g, String(alsoVersion))
+    .replace(/\{nAdded\}/g, String(nAdded))
+    .replace(/\{nFixed\}/g, String(nFixed))
+    .replace(/\{headline\}/g, String(headline));
+}
+
+// ── FEAT-5 (UN-202 / DI-202f, DI-202h, DI-202n item 5) — wager memory ───────
+//
+// THE ONE CLAIM TRUNCATION, used by the modal prefill, the stored `value`, and
+// both post bodies. DI-202n names it explicitly so a sixth surface cannot grow
+// a seventh truncation that drifts from this one.
+//
+// WHY 110 AND NOT 200: the stored `value` is a JSON envelope and
+// backend/Code.gs hard-slices `value` at SCRIBE_MEMORY_VALUE_MAX_CHARS_ = 200.
+// A slice landing mid-JSON produces an UNPARSEABLE row — silently, forever.
+// Envelope arithmetic: {"c":"","o":"","w":"","b":""} = 29 chars, plus a
+// playerId (≤20) + weekId (≤24) + playerId (≤20) = 93 worst case, leaving 107.
+// 110 is the cap this function applies to the RAW claim text. It is NOT a cap
+// "before JSON-escaping" — the DI's sentence said that and was wrong; the code
+// is right and this comment was the thing out of date (corrected 2026-09-12,
+// RG-120 item (xiii)). What actually guarantees the 200-char envelope is
+// app.js's buildWagerValue(): it serialises, then SHORTENS THE CLAIM ONE
+// CHARACTER AT A TIME until the serialised envelope itself fits, and returns
+// null if it still cannot — so escaping (a quote costing two characters, an
+// emoji costing more) is measured rather than estimated. 110 is the normal-case
+// cap; the loop is the guarantee. Both halves are build requirements, not advice.
+export const WAGER_CLAIM_MAX = 110;
+export function wagerClaimTruncate(text, max = WAGER_CLAIM_MAX) {
+  const raw = String(text === undefined || text === null ? '' : text).trim();
+  const cap = Number.isFinite(Number(max)) && Number(max) > 0 ? Number(max) : WAGER_CLAIM_MAX;
+  if (raw.length <= cap) return raw;
+  return raw.slice(0, cap).trimEnd();
+}
+
+/**
+ * Deterministic pool selection for the four wager pools — a stable hash of the
+ * wagerId, NEVER Math.random(), and NEVER via pickLine().
+ *
+ * pickLine() is wrong here twice over (copy doc §5): it enforces the 14-day
+ * no-repeat ledger and returns null when a pool is burned — a wager receipt
+ * must never be silently dropped — and it applies the 10-minute/1-hour rate
+ * limits. Six devices must build byte-identical text before chatAppend's
+ * id-dedupe picks a winner (AD-11), which a device-local ledger cannot promise.
+ *
+ * SLOTS, and only these: {proposer} {counterparty} {dueWeek} {claim}
+ * {weekLabel}. There is no data-derived slot in any line — no score, no rank,
+ * no record, no standing — which is the STRUCTURAL guarantee that SCRIBE cannot
+ * settle a bet (DI-202i #2). {dueWeek}/{weekLabel} must be
+ * formatWeekLabelParts(week).name ("Week 7"), never formatWeekLabel(week),
+ * which appends a date range and turns every line into a run-on.
+ */
+export function wagerLine(pool, { wagerId = '', proposer = '', counterparty = '', dueWeek = '', claim = '', weekLabel = '' } = {}) {
+  const set = SCRIBE_POOLS[pool] || [];
+  if (!set.length) return '';
+  const n = parseInt(hashLine(String(wagerId || '')).slice(1), 36);
+  const tpl = set[(Number.isFinite(n) ? n : 0) % set.length] || set[0];
+  return tpl
+    .replace(/\{proposer\}/g, String(proposer))
+    .replace(/\{counterparty\}/g, String(counterparty))
+    .replace(/\{dueWeek\}/g, String(dueWeek))
+    .replace(/\{weekLabel\}/g, String(weekLabel))
+    .replace(/\{claim\}/g, String(claim));
+}
 
 // ── Build 2, Group C (2026-09-10) — degraded-mode fallback for the
 // interactive @scribe mention ────────────────────────────────────────────
@@ -526,6 +689,13 @@ export const MEMORY_COPY = {
   sectionBody: 'What SCRIBE has recorded about you, in plain language. Delete anything you told it — no explanation needed. Facts it works out from the standings refresh on their own.',   // amended 2026-09-11 (coordinator, pass 2 review F3): computed rows are read-only, so the promise is scoped to what the player told SCRIBE
   emptyState: 'Nothing recorded yet — that builds as SCRIBE gets to know you.',
   unconfirmedTag: "SCRIBE thinks this but isn't sure — delete it if it's wrong.",
+  // FEAT-5 / DI-202k (UN-202, 2026-09-12) — the one sentence the wager feature
+  // adds to this surface, verbatim from the design input. A NEW KEY rather than
+  // an edit to `sectionBody`: that string is approved copy amended once already
+  // (2026-09-11) and rewriting it to carry a second subject would put two
+  // different approvals in one string. Rendered as its own line directly under
+  // the Section 1 body, where the wager rows themselves appear.
+  wagerFootnote: "Wagers you've logged live here too. Delete one and SCRIBE forgets it.",
 };
 
 /** DI-D1's scoring table, verbatim. These are CALIBRATION TARGETS, not

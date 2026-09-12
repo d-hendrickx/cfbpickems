@@ -180,10 +180,21 @@ console.log('\n[2] Blind-rule — negative case (full event/body matrix) + posit
     PICKS_LOCKING_SOON_ALL_IN: { weekN: 3 },
     PICKS_LOCKED: { weekN: 3, submittedCount: 6, totalPlayers: 6 },
     RESULTS_FINALIZED: { weekN: 3, weekWinnerName: 'Kihoon', weekLoserName: 'Koby' },
-    RESULTS_FINALIZED_YOU_WON: { weekN: 3 },
-    OBLIGATION_CREATED: { weekN: 3 },
-    OBLIGATION_SETTLED: { weekN: 3 },
+    PICKS_LOCKING_SOON_COUNT_ONLY: { weekN: 3, timeUntilLock: '1h', submittedCount: 4, totalPlayers: 6 },
+    // N1 / UN-204, copy ruling (d) (2026-09-12) — THESE FIXTURES USED TO BE
+    // `{ weekN: 3 }` AND THAT MADE THIS ASSERTION VACUOUS. With the league-wide
+    // third-person pools, weekN alone satisfies no template, so buildCopy()
+    // dropped to the flat fallback — and a fallback string trivially contains
+    // no forbidden literal. The SCRIBE lines themselves were never exercised.
+    // Supplying all four facts is what makes the check below mean something,
+    // and `scribeVoiced` is asserted immediately after so it can never silently
+    // go vacuous again.
+    OBLIGATION_CREATED: { weekN: 3, debtorName: 'Koby', creditorName: 'Kihoon', obligationLabel: '1 drink' },
+    OBLIGATION_SETTLED: { weekN: 3, debtorName: 'Koby', creditorName: 'Kihoon', obligationLabel: '1 drink' },
   };
+  // RESULTS_FINALIZED_YOU_WON is deliberately ABSENT — retired by ruling O3
+  // (see below). A league-wide room cannot carry a second-person line.
+  const MUST_BE_SCRIBE_VOICED = ['OBLIGATION_CREATED', 'OBLIGATION_SETTLED'];
   let matrixChecked = 0;
   for (const [event, meta] of Object.entries(fixtures)) {
     const out = copy.buildCopy(event, meta, 'dk_' + event);
@@ -191,8 +202,21 @@ console.log('\n[2] Blind-rule — negative case (full event/body matrix) + posit
     const lower = out.body.toLowerCase();
     const violated = FORBIDDEN_LITERALS.some(w => lower.includes(w));
     assert(!violated, `NEGATIVE CASE: ${event}'s body contains no spread/tiebreaker/Extra-Point literal (got: "${out.body}")`);
+    if (MUST_BE_SCRIBE_VOICED.includes(event)) {
+      assert(out.scribeVoiced === true,
+        `${event}: the fixture exercises a real SCRIBE TEMPLATE, not the flat fallback — otherwise the forbidden-literal check above passes vacuously (got scribeVoiced=${out.scribeVoiced}, body "${out.body}")`);
+      assert(out.body.includes('Koby') && out.body.includes('Kihoon'),
+        `${event}: …and the league-wide line names BOTH parties (ruling O4 — an obligation is already public on Standings; a room of six needs to know who is owed, not only who owes) (got "${out.body}")`);
+    }
   }
   assert(matrixChecked === Object.keys(fixtures).length, 'every known event was actually exercised in the matrix (non-vacuous)');
+  assert(matrixChecked === copy._knownEvents().length,
+    `the matrix covers EVERY event the module knows how to voice (${matrixChecked} fixtures vs ${copy._knownEvents().length} known events) — an event added to the pools without a fixture here would go unexercised`);
+  // Ruling O3 — retired, and retired everywhere at once.
+  assert(copy._knownEvents().indexOf('RESULTS_FINALIZED_YOU_WON') === -1,
+    'RESULTS_FINALIZED_YOU_WON is retired (ruling O3): its lines were second person ("you took it") and cannot be posted into a league-wide room where five of six readers did not win');
+  assert(copy.buildCopy('RESULTS_FINALIZED_YOU_WON', { weekN: 3 }, 'dk_gone').scribeVoiced === false,
+    '…and asking for it by name yields the generic non-SCRIBE fallback, never a resurrected second-person line');
 }
 
 console.log('\n[3] Dedup — double-fire, in-app and server-side…');
@@ -2497,15 +2521,23 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
       const releases = [];
       const btn = { disabled: false, addEventListener: (t, f) => { if (t === 'click') handler = f; } };
       const ov = { querySelector: () => btn };
-      new Function('ov', 'showToast', 'requestPushPermission', 'pushFailureMessage', 'refreshNotifCenterBody', 'playerId', src)(
-        ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, () => 'nope', async () => {}, 'p1');
+      // N1 (2026-09-12) — `refreshNotifCenterBody` became
+      // `refreshNotifSettingsBody` (DI-N5: the bell opens settings, there is no
+      // Center body left to refresh) and the handler now also calls
+      // `refreshPushActiveFlag()` (DI-N3: a permission grant is one of the two
+      // events that flip the device's push-active flag). Both are injected, so
+      // this still EXECUTES the real handler source rather than a copy of it.
+      let pushFlagRefreshes = 0;
+      new Function('ov', 'showToast', 'requestPushPermission', 'pushFailureMessage', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', src)(
+        ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, () => 'nope', async () => {},
+        () => { pushFlagRefreshes++; }, 'p1');
       const t1 = handler({ currentTarget: btn });
       const disabledDuring = btn.disabled;
       const t2 = handler({ currentTarget: btn });        // the impatient second tap
       await settle();
       releases.forEach(r => r({ ok: true, reason: 'granted' }));
       await Promise.all([t1, t2]); await settle();
-      return { calls, disabledDuring, toasts, enabledAfter: btn.disabled === false };
+      return { calls, disabledDuring, toasts, enabledAfter: btn.disabled === false, pushFlagRefreshes };
     };
 
     const real = await runTaps(handlerSrc);
@@ -2514,6 +2546,8 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
     assert(real.disabledDuring === true, '[25g] the button is disabled for the duration of the await');
     assert(real.toasts === 1, '[25g] …and exactly one toast is shown');
     assert(real.enabledAfter === true, '[25g] the button is re-enabled afterwards (a dismissed prompt leaves the card on never-asked, and it must stay tappable)');
+    assert(real.pushFlagRefreshes >= 1,
+      `[25g] N1/DI-N3: granting permission recomputes the device's push-active flag right there (got ${real.pushFlagRefreshes} calls) — without it a player who just tapped Turn On keeps getting in-app toasts for notices the phone is now also pushing, until the next boot`);
 
     const mutantHandler = handlerSrc.replace('btn.disabled = true;', '');
     assert(mutantHandler !== handlerSrc, '[25g] (the canary mutation is non-vacuous)');
@@ -2528,6 +2562,268 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
     assert(!!m && Number(m[1]) >= 44,
       `[25h] #notif-priming-btn has an explicit min-height ≥44px per DI-A2 (found ${m ? m[1] + 'px' : 'no rule'}) — .btn-sm's base 34px is under the floor, and a missed tap on the card's only action reads as "push is broken"`);
   }
+}
+
+console.log('\n[26] N1 / DI-N4 — lifecycle rows in the chat relay (UN-204)…');
+{
+  // N1 moved every lifecycle notice into the Locker Room as an ordinary
+  // `type:'message'` row (the ONLY type this relay pushes — every legacy sys_*
+  // emitter is `type:'system'`, which is why the whole event class never pushed
+  // at all: BUG-10's structural half). Two things must change for those rows,
+  // and ONLY those rows:
+  //
+  //   1. They are gated by the lifecycle event's OWN preference category, not
+  //      by 'chat'. Without this, a player who silenced League Updates and left
+  //      Chat on starts receiving locking-soon pushes again the moment the
+  //      notice moves into chat — a silent reversal of DI-A4.
+  //   2. A row the SERVER already pushed (meta.origin:'server') is skipped
+  //      entirely, or every device pushes it a second time.
+  const chat20 = await import('./js/chat.js');
+  const relayPlayers = storage.getPlayers().filter(p => p.active);
+
+  /** Ingest one confirmed row through the REAL relay and return what it pushed.
+   *  Mirrors [8]'s harness, including the priming backfill that seeds the
+   *  watermark from a real non-zero head (F1 / [12] CASE 2). */
+  let seq20 = 0;
+  const relay = async (row, { prep = null } = {}) => {
+    storage.setNotifications([]);
+    chat20._resetForTest();
+    chat20.initChat('p1');
+    seq20 = 0;
+    chat20.ingest([{ id: `prime_${++seq20}`, seq: seq20, ts: Date.now(), type: 'message', author: 'p1',
+                     gameTag: '', body: 'priming backfill', targetId: '', replyTo: '', notify: true, meta: null }]);
+    notif._resetChatWatermarkForTest();
+    const captured = [];
+    notif.registerPushAdapter({ isConfigured: () => true, async send(r) { captured.push(r); return { ok: true }; } });
+    notif.wireChatNotifications();
+    if (prep) prep();
+    chat20.ingest([{ seq: ++seq20, ts: Date.now(), type: 'message', gameTag: '', targetId: '', replyTo: '',
+                     notify: true, ...row }]);
+    await new Promise(r => setTimeout(r, 10));
+    notif._clearPushAdapterForTest();
+    return captured;
+  };
+
+  const lifecycleRow = (over = {}) => ({
+    id: 'sys_lc_PICKS_LOCKING_SOON_wk9', author: 'scribe', body: '4/6 in. 1h to lock.',
+    meta: { kind: 'lifecycle', event: 'PICKS_LOCKING_SOON', weekId: 'wk9', category: 'leagueUpdates', origin: 'client' },
+    ...over,
+  });
+
+  // ── 20a. It pushes at all, to EVERYONE, and stores nothing. ──────────────
+  const capA = await relay(lifecycleRow());
+  assert(capA.length === relayPlayers.length,
+    `26-1: a lifecycle post pushes to EVERY active player (${capA.length} of ${relayPlayers.length}). 'scribe' is not a player, so the sender-exclusion rule (AD-35 / DI-B1) excludes nobody — which is the point of a league-wide notice`);
+  assert(storage.getNotifications().length === 0,
+    '26-2: …and writes ZERO cfbp_notifications rows. The room IS the record now; a second stored copy in a list nothing renders is the "three habits" problem it replaced');
+  assert(capA.every(r => r.event === 'CHAT_MESSAGE_CREATED'),
+    '26-3: the push payload event stays CHAT_MESSAGE_CREATED, so the deep link opens the MESSAGE IN THE ROOM — "one place" includes where the tap lands (DI-N4)');
+  assert(capA.every(r => r.dedupKey === `CHAT_MESSAGE_CREATED|sys_lc_PICKS_LOCKING_SOON_wk9||${r.playerId}`),
+    `26-4: …and the dedupKey shape is untouched — identical on all six devices, collapsed server-side by CFBP_NOTIFY_SENT (AD-11 / AD-35 / DI-B1 payload shape unchanged). Got e.g. "${capA[0]?.dedupKey}"`);
+  assert(capA.every(r => r.destination?.tab === 'chat'),
+    '26-5: …landing on the chat tab, not on the bell or the dashboard');
+
+  // ── N1 follow-up (b), 2026-09-12 — WHO THE PUSH SAYS IT IS FROM. ────────
+  // The relay titles a push with `getPlayer(senderId)?.displayName || senderId`.
+  // 'scribe' is not a player, so getPlayer() misses and the fallback is the raw
+  // id — every SCRIBE-authored row, which since N1 is EVERY lifecycle notice,
+  // arrives on the lock screen titled lowercase "scribe". A push is the only
+  // surface where the author is not rendered by chat-ui's nameOf(), so this is
+  // the one place the id leaks to a player.
+  assert(capA.every(r => r.title === 'SCRIBE'),
+    `26-5a: a SCRIBE-authored row is titled "SCRIBE" on the lock screen, not the raw storage id — got "${capA[0]?.title}"`);
+  assert(capA.every(r => r.body.startsWith('SCRIBE: ')),
+    `26-5b: …and the body prefix matches the title rather than reading "scribe: 4/6 in." — got "${capA[0]?.body}"`);
+
+  // ── 20b. Category silence SURVIVES the move. ────────────────────────────
+  const silencedId = relayPlayers[3].playerId;
+  const setCats = (playerId, prefs) => {
+    const list = storage.getPlayers();
+    const i = list.findIndex(p => p.playerId === playerId);
+    list[i] = { ...list[i], preferences: prefs };
+    storage.savePlayer(list[i]);
+  };
+  const restoreCats = () => setCats(silencedId, {});
+
+  setCats(silencedId, { notifyPushMaster: true, notifyCategories: { leagueUpdates: false, chat: true } });
+  const capB = await relay(lifecycleRow({ id: 'sys_lc_PICKS_LOCKING_SOON_wk10', meta: { kind: 'lifecycle', event: 'PICKS_LOCKING_SOON', weekId: 'wk10', category: 'leagueUpdates', origin: 'client' } }));
+  assert(!capB.some(r => r.playerId === silencedId),
+    '26-6: a player who silenced LEAGUE UPDATES gets NO push for a lifecycle row whose event is PICKS_LOCKING_SOON — the category gate follows the notice into chat instead of collapsing to "chat"');
+  assert(capB.length === relayPlayers.length - 1,
+    `26-7: …and everybody else still does (${capB.length} of ${relayPlayers.length - 1} expected) — one player's preference silences one player`);
+
+  const capC = await relay({ id: 'human_msg_1', author: 'p1', body: 'anyone watching this game', meta: null });
+  assert(capC.some(r => r.playerId === silencedId),
+    '26-8: …and that SAME player still gets ordinary CHAT pushes, because Chat is a different toggle. Silencing League Updates must not silence the room');
+  const drewName = storage.getPlayers().find(p => p.playerId === 'p1')?.displayName;
+  assert(capC.every(r => r.title === drewName),
+    `26-8a: a HUMAN sender is still titled by displayName — the SCRIBE naming is one branch, not a rewrite of the title rule (expected "${drewName}", got "${capC[0]?.title}")`);
+  restoreCats();
+
+  // ── 20c. The server already pushed it. ─────────────────────────────────
+  const capD = await relay(lifecycleRow({
+    id: 'sys_lc_PICKS_LOCKING_SOON_wk11',
+    meta: { kind: 'lifecycle', event: 'PICKS_LOCKING_SOON', weekId: 'wk11', category: 'leagueUpdates', origin: 'server' },
+  }));
+  assert(capD.length === 0,
+    `26-9: a row marked meta.origin:'server' is NOT relayed at all (got ${capD.length} pushes). scanReminders() already pushed it through its own per-player master×category gate; without this skip, every device pushes the 7am locking-soon notice a SECOND time`);
+
+  // ── 20d. D3 — the commissioner is never silenceable. ───────────────────
+  setCats(silencedId, { notifyPushMaster: true, notifyCategories: { leagueUpdates: false, results: false, obligations: false, chat: false, pickReminders: false } });
+  const capE = await relay(lifecycleRow({
+    id: 'sys_lc_COMMISSIONER_ANNOUNCEMENT_abc', author: 'p1', body: 'Slate is up early this week.',
+    meta: { kind: 'lifecycle', event: 'COMMISSIONER_ANNOUNCEMENT', weekId: null, category: null, origin: 'client' },
+  }));
+  assert(capE.some(r => r.playerId === silencedId),
+    '26-10: a COMMISSIONER_ANNOUNCEMENT reaches a player with EVERY category switched off — CATEGORY_OF_EVENT maps it to null and resolveIntent() skips the category gate entirely (D3, unchanged by this move)');
+  assert(!capE.some(r => r.playerId === 'p1'),
+    '26-11: …but not the commissioner himself: it posts under HIS playerId, so the existing sender-exclusion rule applies and he is not pushed his own words');
+  setCats(silencedId, { notifyPushMaster: false, notifyCategories: {} });
+  const capF = await relay(lifecycleRow({
+    id: 'sys_lc_COMMISSIONER_ANNOUNCEMENT_def', author: 'p1', body: 'Second announcement.',
+    meta: { kind: 'lifecycle', event: 'COMMISSIONER_ANNOUNCEMENT', weekId: null, category: null, origin: 'client' },
+  }));
+  assert(!capF.some(r => r.playerId === silencedId),
+    '26-12: …and the MASTER toggle still governs it — D3\'s table is `category null -> push: !!master`, which this change does not touch');
+  restoreCats();
+
+  // ── 20e. An unknown/garbage lifecycle event fails to the SAFE side. ─────
+  const capG = await relay(lifecycleRow({
+    id: 'sys_lc_WHO_KNOWS_wk12',
+    meta: { kind: 'lifecycle', event: 'NOT_A_REAL_EVENT', weekId: 'wk12', category: 'leagueUpdates', origin: 'client' },
+  }));
+  assert(capG.length === relayPlayers.length,
+    '26-13: a row naming an event the vocabulary does not know still DELIVERS rather than being silently dropped — the category is read from CATEGORY_OF_EVENT by event NAME, so a hand-edited meta.category cannot grant itself an exemption');
+
+  // ── N1 follow-up (d), 2026-09-12 — WHICH WAY "unknown" FAILS. ───────────
+  // The comment above this branch in notifications.js says an unknown event
+  // "resolves to `undefined` and falls back to the chat category, which is the
+  // safe direction (it can be silenced)." The code said `?? null`, and a null
+  // category is D3's NEVER-SILENCEABLE shape — the one reserved for
+  // COMMISSIONER_ANNOUNCEMENT. A malformed or future row therefore overrode
+  // every preference on the device, which is the opposite of what was written
+  // and the opposite of safe. 26-13 above cannot see the difference (with all
+  // categories ON both shapes deliver); this is the assertion that can.
+  setCats(silencedId, { notifyPushMaster: true, notifyCategories: { chat: false, leagueUpdates: true } });
+  const capG2 = await relay(lifecycleRow({
+    id: 'sys_lc_WHO_KNOWS_wk13',
+    meta: { kind: 'lifecycle', event: 'NOT_A_REAL_EVENT', weekId: 'wk13', category: 'leagueUpdates', origin: 'client' },
+  }));
+  assert(!capG2.some(r => r.playerId === silencedId),
+    '26-14: …and it is SILENCEABLE — an unknown event falls back to the CHAT category, so a player who switched Chat off is not pushed. `?? null` would hand an unnamed event the never-silenceable exemption D3 reserves for the commissioner');
+  assert(capG2.length === relayPlayers.length - 1,
+    `26-15: …and silences exactly that one player, nobody else (got ${capG2.length} of ${relayPlayers.length - 1})`);
+  restoreCats();
+
+  chat20._resetForTest();
+  notif._resetChatWatermarkForTest();
+  notif._clearPushAdapterForTest();
+  storage.setNotifications([]);
+}
+
+console.log('\n[27] BUG-12 — a push that arrives (or is tapped) while the app is running forces a chat fetch…');
+{
+  // Drew, 2026-09-12: "When I receive a push notification it doesn't show up in
+  // the chat for at least 30 seconds after the notification. When I click the
+  // push, I should be able to see the message in the chat."
+  //
+  // boottest.mjs §11 owns the transport half (wake(), and its bound). This
+  // section owns the WIRING half: the two OneSignal hooks that have to call it,
+  // and app.js's deep link, which must not run its scroll until the forced
+  // fetch has resolved — otherwise the "no-op if outside the loaded window"
+  // fallback fires against a room that does not hold the message yet, which is
+  // the second half of what Drew saw.
+  const saved27 = { document: globalThis.document, OneSignalDeferred: globalThis.OneSignalDeferred };
+  const push27 = await import('./js/push-onesignal.js');
+
+  /** A minimal v16-shaped SDK: just the event bus the two hooks subscribe to. */
+  function fakeSdk() {
+    const handlers = new Map();
+    const sdk = { Notifications: {
+      addEventListener(type, fn) { if (!handlers.has(type)) handlers.set(type, []); handlers.get(type).push(fn); },
+    } };
+    globalThis.OneSignalDeferred = { push: (fn) => { fn(sdk); } };
+    return {
+      fire: (type, ev) => (handlers.get(type) || []).forEach(fn => fn(ev)),
+      count: type => (handlers.get(type) || []).length,
+    };
+  }
+  const notifEvent = (event, extra = {}) => ({
+    notification: { additionalData: { event, ...extra } },
+    preventDefault() { this._prevented = true; },
+  });
+
+  globalThis.document = { body: { dataset: { tab: 'dashboard' } } };
+
+  // ── A. FOREGROUND. A push landing while the app is open must fetch, whatever
+  //      tab the player is on and whether or not the payload names an event. ──
+  {
+    const sdk = fakeSdk();
+    const woke = [];
+    push27.wireForegroundSuppression(notif.destinationFor, (ev) => woke.push(ev));
+    const e1 = notifEvent('CHAT_MESSAGE_CREATED', { messageId: 'm1' });
+    sdk.fire('foregroundWillDisplay', e1);
+    assert(woke.length === 1,
+      `27-1: a foreground push triggers the injected chat fetch (wakeChat) — got ${woke.length} call(s). Before BUG-12 this hook did exactly one thing, suppress the banner, and the room still waited for the next poll`);
+    assert(e1._prevented !== true,
+      '27-2: …and the existing suppression rule is untouched — the player is on the dashboard, the push is for chat, so the OS banner is NOT suppressed');
+
+    globalThis.document.body.dataset.tab = 'chat';
+    const e2 = notifEvent('CHAT_MESSAGE_CREATED', { messageId: 'm2' });
+    sdk.fire('foregroundWillDisplay', e2);
+    assert(e2._prevented === true,
+      '27-3: …and still IS suppressed when the player is already looking at the destination tab (§3 step 3, unchanged)');
+    assert(woke.length === 2,
+      `27-4: …while STILL fetching — a suppressed banner is the case where the room is the only surface, so it is the case that most needs to be current (got ${woke.length})`);
+
+    const e3 = { notification: { additionalData: null }, preventDefault() { this._prevented = true; } };
+    sdk.fire('foregroundWillDisplay', e3);
+    assert(woke.length === 3,
+      `27-5: …and a payload with no \`event\` in additionalData STILL fetches (got ${woke.length}). The fetch must not depend on copy metadata: an unnamed push is still evidence a message exists`);
+  }
+
+  // ── B. THE TAP, with the app already running. ──
+  {
+    const sdk = fakeSdk();
+    const taps = [];
+    assert(typeof push27.wireNotificationClicks === 'function',
+      '27-6: push-onesignal.js exposes wireNotificationClicks() — the tap hook, alongside the foreground one (AD-16 untouched: it hands the tap to an injected callback, it does not touch the chat backend)');
+    if (typeof push27.wireNotificationClicks === 'function') {
+      push27.wireNotificationClicks((ev) => taps.push(ev));
+      sdk.fire('click', notifEvent('CHAT_MESSAGE_CREATED', { messageId: 'm9' }));
+      assert(taps.length === 1,
+        `27-7: tapping a push while the app is already open forces a fetch (got ${taps.length}) — the case where no fresh boot happens and no URL is re-parsed`);
+      let threw27 = false;
+      try { push27.wireNotificationClicks(() => { throw new Error('boom'); }); sdk.fire('click', notifEvent('X')); }
+      catch { threw27 = true; }
+      assert(!threw27,
+        '27-8: …and a callback that throws never escapes into the SDK handler — same defensive shape the foreground hook already has');
+    }
+  }
+
+  globalThis.document = saved27.document;
+  globalThis.OneSignalDeferred = saved27.OneSignalDeferred;
+  if (saved27.OneSignalDeferred === undefined) delete globalThis.OneSignalDeferred;
+
+  // ── C. app.js — the wiring and the ORDER. Structural, and labelled as such:
+  //      boot() and deepLinkTo() need a live DOM this harness has no business
+  //      building (the [25h]/boottest §10E precedent for source assertions). ──
+  const appSrc27 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  assert(/import \{[^}]*\bwakeChat\b[^}]*\} from '\.\/chat\.js'/s.test(appSrc27),
+    "27-9: app.js imports wakeChat from chat.js — the forced fetch goes through the chat engine's seam, not a second transport call site (AD-16)");
+  assert(/wireForegroundSuppression\(destinationFor,\s*[^)]/.test(appSrc27),
+    '27-10: boot() passes the fetch trigger as wireForegroundSuppression()\'s second argument');
+  assert(/wireNotificationClicks\(/.test(appSrc27),
+    '27-11: …and wires the tap hook at the same point in boot');
+  const deepLinkSrc27 = (appSrc27.match(/function deepLinkTo\(destination\)[\s\S]*?\n\}\n/) || [''])[0];
+  assert(/wakeChat\(/.test(deepLinkSrc27),
+    '27-12: deepLinkTo() forces a chat fetch for a chat destination — the deep link is the push TAP path on a cold open (?ntab=chat), where the room has never been read this session');
+  const wakeAt27 = deepLinkSrc27.indexOf('wakeChat(');
+  const midAt27  = deepLinkSrc27.indexOf('data-mid');
+  assert(wakeAt27 > -1 && midAt27 > -1 && wakeAt27 < midAt27,
+    `27-13: …and it AWAITS that fetch before looking the message up (wake at ${wakeAt27}, [data-mid] lookup at ${midAt27}) — scrolling first is how the "message not in the loaded window" fallback fired prematurely, which is Drew's "I should be able to see the message"`);
+  assert(/await\s+wakeChat\(|wakeChat\(\)[\s\S]{0,80}\.then\(|\.catch\([^)]*\)[\s\S]{0,40}\.then\(/.test(deepLinkSrc27),
+    '27-14: …by actually waiting on the promise, not fire-and-forget — a wake whose result nothing waits for leaves the same race in place');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

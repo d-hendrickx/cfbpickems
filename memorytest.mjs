@@ -387,7 +387,7 @@ console.log('\n[4] Ownership — best-effort, stated honestly, and actually enfo
   const spoof = env.gs.scribeMemoryUpsert({ playerId: 'p2', record: { playerId: 'p1', kind: 'hardline', key: 'topic', value: 'x', provenance: 'player-stated', confidence: 1 } });
   assert(spoof.ok === false && /only write memory about himself/.test(spoof.error), 'p2 cannot write a row about p1');
   const wrongKind = env.gs.scribeMemoryUpsert({ playerId: 'p1', record: { playerId: 'p1', kind: 'fact', key: 'job', value: 'CEO', provenance: 'computed', confidence: 1 } });
-  assert(wrongKind.ok === false && /hard-lines and roast tolerance/.test(wrongKind.error),
+  assert(wrongKind.ok === false && /hard-lines, roast tolerance and wagers/.test(wrongKind.error),
     'a player cannot inject a computed-provenance FACT about himself — only a hard-line or a roast tolerance');
   const hardline = env.gs.scribeMemoryUpsert({ playerId: 'p1', record: { playerId: 'p1', kind: 'hardline', key: 'topic', value: 'my knee surgery', provenance: 'computed', confidence: 0.1 } });
   assert(hardline.ok === true && hardline.record.provenance === 'player-stated' && hardline.record.confidence === 1,
@@ -1481,6 +1481,119 @@ console.log('\n[27] F-G — the stamp restore only puts back what is still ours�
   assert(outer.posted === false, 'fixture check: the outer candidate failed after it');
   const stamp = env.cacheStore.get('scribeAutoLast_all');
   assert(!!stamp, "the failed candidate did NOT roll back the live cooldown — it no longer owned the stamp, and clearing it would re-open the window FINDING 2 closed");
+}
+
+console.log('\n[28] FEAT-5 (UN-202) — the `wager` kind: the four Code.gs edits, end to end…');
+{
+  // The SERVER half of DI-202. Each of the four DI-202o edits is exercised
+  // against backend/Code.gs itself in a Node vm — the same file Drew pastes.
+  const env = buildSandbox();
+  const hash = seedCommissionerPassword(env);
+  const wagerValue = (o) => JSON.stringify({ c: 'USC is not ranked by week 7', o: o || '', w: 'wk7', b: 'p3' });
+
+  // ── 1. The new kind is accepted; an unknown kind is still rejected. ──
+  const ok1 = env.gs.scribeMemoryUpsert({ playerId: 'p1', record: { playerId: 'p1', kind: 'wager',
+    key: 'wager:w1abc', value: wagerValue('p2'), reviewAt: '2026-10-11T23:59:59.000Z', sourceMessageId: 'm_src' } });
+  assert(ok1.ok === true && ok1.record.kind === 'wager',
+    '28-1: edit 1 — SCRIBE_MEMORY_KINDS_ accepts the new `wager` kind (without it every log attempt dies at "unknown kind")');
+  const bogus1 = env.gs.scribeMemoryUpsert({ adminPasswordHash: hash, record: { playerId: 'p1', kind: 'wagerish',
+    key: 'k', value: 'v', provenance: 'commissioner-set', confidence: 1 } });
+  assert(bogus1.ok === false && /unknown kind/.test(bogus1.error),
+    '28-2: …and an unknown kind is STILL rejected at the boundary — the map was widened by one entry, not opened');
+
+  // ── 2. A player writes about himself; provenance/confidence are FORCED. ──
+  assert(ok1.record.provenance === 'player-stated' && Number(ok1.record.confidence) === 1,
+    '28-3: edit 2 — a non-commissioner wager write is forced to player-stated / 1.0, unchanged from the hard-line path (a wager is a claim a person made, never a computed inference)');
+  assert(ok1.record.reviewAt === '2026-10-11T23:59:59.000Z' && ok1.record.sourceMessageId === 'm_src',
+    '28-4: …and it carries reviewAt (the due date, a header column written by nothing until now) and sourceMessageId (which is what makes "↩ Jump to the message" free)');
+  const notMine = env.gs.scribeMemoryUpsert({ playerId: 'p2', record: { playerId: 'p1', kind: 'wager',
+    key: 'wager:w9', value: wagerValue('') } });
+  assert(notMine.ok === false && /only write memory about himself/.test(notMine.error),
+    '28-5: the OWNERSHIP check is untouched — edit 2 widened the allowed KINDS, it did not widen who a player may write about');
+
+  // ── 3. kinds:['wager'] reads LEAGUE-WIDE for a non-commissioner. ──
+  env.gs.scribeMemoryUpsert({ playerId: 'p2', record: { playerId: 'p2', kind: 'wager',
+    key: 'wagerack:w1abc', value: JSON.stringify({ w: 'w1abc', r: 'accepted' }), sourceMessageId: 'scribe_wager_w1abc' } });
+  env.gs.scribeMemoryUpsert({ adminPasswordHash: hash, record: { playerId: 'p2', kind: 'fact', key: 'job',
+    value: 'new job', provenance: 'commissioner-set', confidence: 1 } });
+  const leagueWide = env.gs.scribeMemoryList({ playerId: 'p3', kinds: ['wager'] });
+  assert(leagueWide.ok === true && leagueWide.records.length === 2
+      && leagueWide.records.every(r => r.kind === 'wager'),
+    `28-6: edit 3 — kinds:['wager'] returns EVERY player's wager rows to a non-commissioner (got ${leagueWide.records.length}). Without this there is no resurfacing at all: the counterparty could not see the proposer's row and no device could post the callback`);
+  assert(leagueWide.records.some(r => r.playerId === 'p1') && leagueWide.records.some(r => r.playerId === 'p2'),
+    '28-7: …both sides of the wager, proposer row and counterparty ack, reach the requester');
+
+  // ── 4. THE F5 REGRESSION GUARD. The carve-out is one kind wide. ──
+  const factRead = env.gs.scribeMemoryList({ playerId: 'p3', kinds: ['fact'] });
+  assert(factRead.ok === true && factRead.records.length === 0,
+    `28-8: F5 REGRESSION GUARD — kinds:['fact'] STILL narrows to the requester (p3 owns no facts, so 0; got ${factRead.records.length}). This is the assertion that proves the carve-out did not widen`);
+  const unfiltered = env.gs.scribeMemoryList({ playerId: 'p1' });
+  assert(unfiltered.ok === true && unfiltered.records.every(r => r.playerId === 'p1'),
+    '28-9: …and an UNFILTERED request is still narrowed to the requester, never answered with the whole league');
+  const twoKinds = env.gs.scribeMemoryList({ playerId: 'p3', kinds: ['wager', 'fact'] });
+  assert(twoKinds.ok === false || twoKinds.records.every(r => r.playerId === 'p3'),
+    "28-10: …and ['wager','fact'] is NOT the carve-out — it is EXACTLY ['wager'] or nothing, so a second kind cannot ride along");
+  const anon = env.gs.scribeMemoryList({ kinds: ['wager'] });
+  assert(anon.ok === false, '28-11: the carve-out still requires a requester — an anonymous read is refused');
+
+  // ── 5. Wagers never reach the model's context. ──
+  const ctx = env.gs.scribeMemoryFor_(['p1']);
+  assert(ctx.every(r => r.kind !== 'wager'),
+    '28-12: edit 4 — scribeMemoryFor_ EXCLUDES wagers from the default model context. They are written at confidence 1.0, so without this they clear the 0.5 floor and enter every @scribe prompt');
+  const named = env.gs.scribeMemoryFor_(['p1'], { kinds: ['wager'] });
+  assert(named.length === 1 && named[0].kind === 'wager',
+    '28-13: …excluded from the DEFAULT set only — a caller that names the kind still gets them');
+  {
+    // THE WAGERS ARE WRITTEN IN THE MIDDLE, deliberately. scribeMemoryFor_ caps
+    // at 8 items in SHEET (insertion) order, so wagers appended after eight
+    // facts would fall off the end anyway and this assertion would pass with the
+    // exclusion deleted — a test that proves nothing. Interleaved, an unexcluded
+    // wager genuinely displaces a real fact, which is the regression DI-202e is
+    // about.
+    const facts2 = buildSandbox();
+    const h2 = seedCommissionerPassword(facts2);
+    const writeFacts = (env, from, to) => {
+      for (let i = from; i < to; i++) {
+        env.gs.scribeMemoryUpsert({ adminPasswordHash: h2, record: { playerId: 'p1', kind: 'fact',
+          key: 'f' + i, value: 'fact ' + i, provenance: 'commissioner-set', confidence: 1 } });
+      }
+    };
+    writeFacts(facts2, 0, 8);
+    const before = facts2.gs.scribeMemoryFor_(['p1']).map(r => r.key).join(',');
+
+    const env2 = buildSandbox();
+    seedCommissionerPassword(env2);
+    writeFacts(env2, 0, 4);
+    for (let i = 0; i < 10; i++) {
+      env2.gs.scribeMemoryUpsert({ playerId: 'p1', record: { playerId: 'p1', kind: 'wager',
+        key: 'wager:z' + i, value: JSON.stringify({ c: 'c' + i, o: '', w: 'wk7', b: 'p1' }) } });
+    }
+    writeFacts(env2, 4, 8);
+    const after = env2.gs.scribeMemoryFor_(['p1']).map(r => r.key).join(',');
+    assert(before === after && before.split(',').length === 8,
+      `28-14: …and a store with TEN wagers written BETWEEN the facts surfaces the SAME eight facts it would without them — the 8-item cap is insertion-ordered, so an unexcluded wager progressively displaces the real facts about a player (got ${after})`);
+  }
+
+  // ── 6. Delete is a TRUE delete, and it is still ownership-checked. ──
+  const rowsBefore = memRows(env).length;
+  const notYours = env.gs.scribeMemoryDelete({ playerId: 'p3', id: ok1.record.id });
+  assert(notYours.ok === false && /belongs to another player/.test(notYours.error),
+    "28-15: a player cannot delete another player's wager row — the league-wide READ bought no write or delete power");
+  const gone = env.gs.scribeMemoryDelete({ playerId: 'p1', id: ok1.record.id });
+  assert(gone.ok === true && gone.deleted === true && memRows(env).length === rowsBefore - 1,
+    '28-16: the proposer deleting his own wager row is a TRUE deleteRow — AD-49: the wager is gone, and SCRIBE never brings it back');
+
+  // ── 7. The 200-char slice — the reason the client caps the claim at 110. ──
+  const env3 = buildSandbox();
+  const longEnvelope = JSON.stringify({ c: 'x'.repeat(250), o: 'p2', w: 'wk7', b: 'p3' });
+  const sliced = env3.gs.scribeMemoryUpsert({ playerId: 'p1', record: { playerId: 'p1', kind: 'wager',
+    key: 'wager:wlong', value: longEnvelope } });
+  assert(sliced.ok === true && sliced.record.value.length === 200,
+    `28-17: the server hard-slices \`value\` at 200 chars (got ${sliced.record.value.length})`);
+  let stillParses = true;
+  try { JSON.parse(sliced.record.value); } catch { stillParses = false; }
+  assert(stillParses === false,
+    '28-18: …and a slice landing MID-JSON leaves an UNPARSEABLE row, silently, forever — which is exactly why the client caps the claim at 110 and asserts the serialised envelope fits BEFORE it sends');
 }
 
 console.log('\n══════════════════════════════════════════════════');

@@ -89,6 +89,7 @@ import {
   getPicks, getEffectiveWeekStatus, arePicksPublic,
   getAccent, setAccent, getAccentFor, getChatNick, setChatNick, getChatNickFor,
   getNotifPrefs, setNotifPrefs,
+  getPushActive,
 } from './storage.js';
 import { formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE } from './data-model.js';
 import { calculateAtsWinner } from './scoring.js';
@@ -400,6 +401,14 @@ function gameThreadHeaderClass(pick, g) {
 // ── Notifications (TRIAL — no push) ───────────────────────────────────────────
 function playBlip() {
   try {
+    // N1 follow-up (f), 2026-09-12 — R10 COVERS THE SOUND TOO. showToast()
+    // stands down on a push-active device; this did not, so the phone buzzed
+    // AND the app chirped for the same message. Drew's words were "all in app
+    // notifications should be that" — a notification the player HEARS is one of
+    // them. Same predicate, same device-local flag, read the same synchronous
+    // way (storage.getPushActive()); nothing overrides it, exactly as in
+    // showToast(). A push-INACTIVE device is untouched (UN-N3).
+    if (getPushActive()) return;
     if (!getNotifPrefs().sound) return;
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator(), g = ctx.createGain();
@@ -425,10 +434,54 @@ function playBlip() {
  * predicate itself — not a re-implementation of it — gets exercised.
  */
 export function _toastWouldSuppress(force = false) {
+  // N1 / DI-N3 — the R10 gate is deliberately NOT folded in here. This
+  // predicate answers "is the same information already on screen?", which is a
+  // question about the CURRENT PAGE and which `force` may legitimately
+  // override. R10 answers "is this device already being told by its phone?",
+  // which nothing overrides. Two different questions, both enforced in
+  // showToast(); pushtest.mjs drives the real showToast() for exactly that
+  // reason rather than asserting against this seam.
   return !force && (chatPageActive() || dashboardPageActive());
 }
 
+/**
+ * N1 / DI-N3 (UN-204, Drew's R10, 2026-09-12) — "if push notifications are set
+ * up then all in app notifications should be that."
+ *
+ * READ IT IN ORDER, BECAUSE THE ORDER IS THE RULING. The push-active check runs
+ * FIRST, ahead of the `force` escape hatch, because Drew's words were "ALL in
+ * app notifications" and because the thing he actually saw — a banner in the
+ * app announcing that the picks were in — WAS a forced toast
+ * (emitPickRevealEvent below), not an OneSignal banner. Leaving `force` above
+ * this line would have left the one toast he complained about untouched while
+ * silencing the ones he never mentioned.
+ *
+ * THE PREDICATE IS PER DEVICE AND IS READ SYNCHRONOUSLY. `getPushActive()` is
+ * a device-local boolean (storage.js KEYS.PUSH_ACTIVE) written by app.js's
+ * refreshPushActiveFlag() at boot and after any permission/master-toggle
+ * change. It is a cache on purpose: the real predicate needs
+ * subscriptionState() and OneSignal's opted-in report, both async, and this
+ * path cannot await (CONVENTIONS #9 — wrap async, never expose it).
+ *
+ * WHAT SURVIVES ON A PUSH-ACTIVE DEVICE: the OS banner (that IS the delivery),
+ * wireForegroundSuppression()'s existing "you're already on that tab" rule, the
+ * chat unread badge, the dashboard teaser and the room itself. Drew, verbatim:
+ * "We can keep the badges on the chat icon for unread messages."
+ *
+ * WHAT IS UNCHANGED ON A PUSH-INACTIVE DEVICE: everything below this line —
+ * getNotifPrefs().toasts, the duration preference, the ✕, the blip, RG-25's
+ * shared acknowledgement watermark and RG-26's chat-page clear. UN-N3: not
+ * having push must never be the same as going blind, so a device that cannot
+ * receive a push keeps today's behaviour exactly.
+ *
+ * ACCEPTED RESIDUAL (coordinator ruling O5): whether an INSTALLED iOS PWA
+ * renders a foreground push banner is unverified. If it does not, a push-active
+ * iPhone with the app open shows nothing on screen for a moment — the chat
+ * badge and the room still carry the notice. The visibilityState fallback was
+ * considered and deliberately NOT built; Drew verifies on his phone.
+ */
 function showToast(msg, { force = false } = {}) {
+  if (getPushActive()) return;
   if (!force && !getNotifPrefs().toasts) return;
   if (_toastWouldSuppress(force)) return;
   // RG-25 — the player already acknowledged this message on the OTHER surface
@@ -453,6 +506,37 @@ function showToast(msg, { force = false } = {}) {
  * 552/552 suite. Both of these exist so that mutation goes red instead.
  */
 export function _showToastForTest(msg, opts) { return showToast(msg, opts); }
+/** N1 follow-up (f) — the blip's R10 gate is asserted on the SHIPPED function
+ *  (pushtest.mjs [10]), never on a copy of the predicate. */
+export const _playBlipForTest = playBlip;
+
+/**
+ * N1 follow-up (c), 2026-09-12 — OWN-ACTION RECEIPTS DO NOT GO THROUGH
+ * showToast().
+ *
+ * R10 (DI-N3) silences chat-ui's showToast() on a push-active device because
+ * "the push IS the delivery." That is true of a NOTICE about something that
+ * happened elsewhere. It is not true of a RECEIPT for the thing the viewer just
+ * did — no push will ever carry "Rewrite saved.", so on a push-active phone the
+ * submit button simply did nothing visible.
+ *
+ * The fix is not a hole in the gate (a `{receipt:true}` bypass would put two
+ * different jobs behind one predicate and invite the next forced toast to call
+ * itself a receipt). Receipts belong where every other "saved" confirmation in
+ * this app already lives: app.js's own showToast(), reached over the existing
+ * window.* bridge (the redirectChatDisabled() precedent, same reason — no
+ * circular import). That toast was never a notification surface and was never
+ * gated, so a receipt renders on every device, push or no push.
+ *
+ * THE ENUMERATION (pushtest.mjs [10-6] pins it): chat-ui.js raises exactly
+ * three toasts. "Rewrite saved." is the only receipt; the pick-reveal
+ * announcement and the incoming-message toast are both notices about something
+ * elsewhere and stay gated.
+ */
+function showReceipt(text) {
+  if (typeof window !== 'undefined' && typeof window.showToast === 'function') window.showToast(text, 'success');
+}
+export const _showReceiptForTest = showReceipt;
 export function _toastQueueDepth() { return U.toastQueue.length; }
 /**
  * Reset the toast machinery WITHOUT writing the acknowledgement watermark.
@@ -779,10 +863,20 @@ function bodyHTML(m) {
   return out;
 }
 
+/**
+ * The static quote visual — author + truncated body — extracted so the FEAT-5
+ * wager modal (app.js) renders the SAME markup rather than a second copy of it
+ * (CONVENTIONS #21). Byte-identical output to what quoteHTML() emitted inline
+ * before the extraction for the 120-char callout case.
+ */
+export function staticQuoteHTML(author, body, max = 120) {
+  return `<div class="chat-reply-quote chat-quote-static">↩ <strong>${esc(nameOf(author))}</strong>: ${esc(String(body || '').slice(0, max))}</div>`;
+}
+
 function quoteHTML(m) {
   const q = m.meta?.quote;
   if (q) {
-    return `<div class="chat-reply-quote chat-quote-static">↩ <strong>${esc(nameOf(q.author))}</strong>: ${esc((q.body || '').slice(0, 120))}</div>`;
+    return staticQuoteHTML(q.author, q.body, 120);
   }
   if (!m.replyTo) return '';
   const parent = getMessage(m.replyTo);
@@ -919,6 +1013,19 @@ function myFeedbackState(m, self) {
 }
 
 function feedbackButtonHTML(m, self) {
+  // FEAT-3 / DI-200i — SUPPRESSION 1 OF 2. A changelog is not a SCRIBE line to
+  // be rated: Hit/Mid/Too-much on it would feed the Trainer's learning loop with
+  // noise about copy nobody wrote in SCRIBE's voice. The second suppression is
+  // in persistentStarHTML() below — they are different functions and honouring
+  // only one is the exact failure shape the retention filter had (the stream
+  // obeyed it, the count didn't).
+  if (m.meta?.kind === 'whatsNew') return '';
+  // FEAT-5 / DI-202f — SUPPRESSION 1 OF 2, same trap, same two functions. A
+  // wager receipt or callback is a SCRIBE-authored MECHANISM, not a SCRIBE
+  // LINE: most of its text is a player's own words read back. Rating it
+  // Hit/Mid/Too-much would feed the Trainer noise about copy nobody wrote in
+  // SCRIBE's voice. The second suppression is in persistentStarHTML() below.
+  if (m.meta?.kind === 'wagerLogged' || m.meta?.kind === 'wagerDue') return '';
   if (m.author === 'scribe') {
     const { rating } = myFeedbackState(m, self);
     const label = { hit: '⭐ Hit', mid: '⭐ Mid', too_much: '⭐ Too much' }[rating] || '⭐ Rate';
@@ -965,6 +1072,12 @@ function feedbackButtonHTML(m, self) {
  * the rating is the value this control primarily collects.
  */
 function persistentStarHTML(m, self) {
+  // FEAT-3 / DI-200i — SUPPRESSION 2 OF 2 (see feedbackButtonHTML above).
+  if (m.meta?.kind === 'whatsNew') return '';
+  // FEAT-5 / DI-202f — SUPPRESSION 2 OF 2 for the wager posts. Fixing one of
+  // these two functions and not the other is the exact failure shape the
+  // retention filter had (the stream obeyed it, the count didn't).
+  if (m.meta?.kind === 'wagerLogged' || m.meta?.kind === 'wagerDue') return '';
   if (m.author !== 'scribe' || m.deleted || !self || !isScribeFeedbackEnabled()) return ''; // !self: a signed-out reader gets no dead control (reviewer 2026-09-10)
   const { rating, hasRewrite, rated } = myFeedbackState(m, self);
   const glyph = { hit: '🔥', mid: '😐', too_much: '🚫' }[rating] || (hasRewrite ? '✏️' : '⭐');
@@ -1219,10 +1332,121 @@ function openFeedbackTextModal({ targetId, category, title, placeholder, submitL
     // `undefined` and `.slice()` on it throws. `author:'system'` is the exact
     // short-circuit initialsOf()/nameOf() already have for this case (⚙ /
     // "League"), so this renders safely, not just "doesn't crash."
-    if (category === 'rewrite') showToast({ author: 'system', body: 'Rewrite saved.' }, { force: true });
+    //
+    // N1 follow-up (c), 2026-09-12 — RESOLVED, the other way round. The note
+    // that used to sit here flagged this toast as the one RECEIPT among
+    // chat-ui's notices and left it literal pending a ruling. The ruling:
+    // receipts are not notifications, so they do not belong on the gated
+    // notification toast at all. This now goes to the app-level toast every
+    // other "saved" confirmation in the app uses — see showReceipt() above for
+    // why that is the right layer rather than a bypass flag in showToast().
+    // The whole {force:true} / message-shaped-object dance goes with it: the
+    // app toast takes a plain string, so there is no initialsOf()/nameOf()
+    // hazard to guard against here any more.
+    if (category === 'rewrite') showReceipt('Rewrite saved.');
     renderFn();
   });
 }
+
+/**
+ * FEAT-3 / DI-200f — "It can include a button to route to the full what's new
+ * description of the version update." (Drew.) Rendered on the release post only.
+ *
+ * The label is VISIBLE TEXT and the aria-label mirrors it with the version. No
+ * `title` carrying meaning: tooltips do not fire on touch, which is the only
+ * input this app has. Tap target is raised to 44px by a scoped override in
+ * styles.css (the #notif-priming-btn precedent), not by touching .btn-sm, whose
+ * 34px base is shared by every compact row in the app.
+ *
+ * Destination is Rules → Release notes, not the Picks card (coordinator Q1):
+ * the Picks card shows only the current release, and a player tapping this three
+ * weeks later wants the release the post is about.
+ */
+function whatsNewLinkHTML(m) {
+  if (m.meta?.kind !== 'whatsNew') return '';
+  const v = String(m.meta?.version || '');
+  return `<div class="chat-whatsnew-row"><button class="btn btn-ghost btn-sm chat-whatsnew-link" data-whatsnew="${esc(v)}" aria-label="${esc(`See everything that changed in ${v}`)}">📋 See everything that changed</button></div>`;
+}
+
+// ── FEAT-5 (UN-202 / DI-202a, DI-202f) — wager memory, chat surface ─────────
+/**
+ * 🤝 on the per-message action row, between 📎 (callout) and 🏛 (pin) — among
+ * the "do something durable with this message" controls rather than among
+ * reply/react.
+ *
+ * ANYONE SIGNED IN MAY TAP IT (coordinator ruling Q9), including the person
+ * taking the other side: Drew's own worked example is Brayden making the claim
+ * and SOMEBODY ELSE deciding it should be held against him. That is also why a
+ * `/bet` prefix and an `@scribe remember this` command were both rejected —
+ * neither can express a bet recognised after the fact by a third party.
+ *
+ * ABSENT ENTIRELY (not hidden) on a SCRIBE/system/deleted message, on anything
+ * that is not a plain message, and for a signed-out reader — who gets no dead
+ * control, the persistentStarHTML precedent.
+ *
+ * No `title` attribute: tooltips do not fire on touch, which is the only input
+ * this app has. The emoji IS the label; aria-label carries the meaning.
+ */
+function wagerActionHTML(m, self) {
+  if (!self) return '';
+  if (m.type !== 'message' || m.deleted) return '';
+  if (m.author === 'system' || m.author === 'scribe') return '';
+  return `<button class="chat-act" data-wager="${esc(m.id)}" aria-label="Log this as a wager">🤝</button>`;
+}
+export const _wagerActionHTMLForTest = wagerActionHTML;
+
+/**
+ * The accept/decline controls on SCRIBE's wager acknowledgment post
+ * (`meta.kind === 'wagerLogged'`), per DI-202f's viewer table. Exact copy.
+ *
+ * The ANSWER STATE lives in app.js's `scribeMemoryCache.wagers`, which this
+ * module cannot import (app.js imports chat-ui.js; the reverse would be a
+ * cycle), so it comes over the same `window.*` bridge window.deepLinkTo and
+ * window.showToast already establish. An ABSENT bridge reads as "no answer
+ * yet" — the honest default: the buttons render, and a second tap upserts the
+ * identical row on the server rather than creating a second one.
+ *
+ * ONE ACTION, ONE MESSAGE: answering posts nothing to the room. It writes the
+ * counterparty's OWN `wagerack:` row and replaces these buttons in place.
+ *
+ * TWO DELIBERATE READINGS of DI-202f's table, both stated rather than assumed:
+ *   - The PROPOSER never gets buttons, even on a wager left open to the room.
+ *     Row 2 of the table ("anyone signed in, when counterpartyId is empty")
+ *     and row 4 ("the proposer, on his own wager — no buttons") overlap there;
+ *     the more specific rule wins, because a man cannot take his own bet.
+ *   - Once an answer EXISTS, a viewer who is not the answerer gets NO line at
+ *     all rather than the stale "Waiting on …". The table does not cover that
+ *     state; the alternative was inventing copy or leaving a small lie on
+ *     screen. The status is stated, in full, by the callback post at the due
+ *     week — which is what UN-203 actually asks for.
+ */
+function wagerAckHTML(m, self) {
+  if (m.meta?.kind !== 'wagerLogged' || m.deleted) return '';
+  if (!self) return '';                                  // signed out: no dead control, no waiting line
+  const wagerId = String(m.meta?.wagerId || '');
+  if (!wagerId) return '';
+  const proposerId = String(m.meta?.proposerId || '');
+  const counterpartyId = String(m.meta?.counterpartyId || '');
+  const state = (typeof window !== 'undefined' && typeof window.scribeWagerAnswer === 'function')
+    ? (window.scribeWagerAnswer(wagerId) || null) : null;
+  const answeredBy = String(state?.playerId || '');
+  const reply = String(state?.reply || '');
+  const note = txt => `<div class="chat-wager-row"><span class="text-muted text-xs chat-wager-note">${esc(txt)}</span></div>`;
+
+  if (answeredBy && answeredBy === self) return note(reply === 'declined' ? 'You passed.' : "You're in.");
+  if (answeredBy) return '';                             // someone else answered — the callback states it
+  if (self === proposerId) {
+    return note(counterpartyId ? `Waiting on ${nameOf(counterpartyId)}.` : 'Open to the room.');
+  }
+  if (counterpartyId && counterpartyId !== self) return note(`Waiting on ${nameOf(counterpartyId)}.`);
+  // The named counterparty with no answer yet, or anyone signed in on a wager
+  // left open to the room.
+  return `<div class="chat-wager-row">
+    <button class="btn btn-ghost btn-sm chat-wager-ack" data-wager-ack="accepted" data-wager-id="${esc(wagerId)}" aria-label="Take this wager">🤝 I'm in</button>
+    <button class="btn btn-ghost btn-sm chat-wager-ack" data-wager-ack="declined" data-wager-id="${esc(wagerId)}" aria-label="Pass on this wager">🙅 I'm not</button>
+  </div>`;
+}
+export const _wagerAckHTMLForTest = wagerAckHTML;
 
 function messageHTML(m, self, showNewDivider) {
   if (m.type === 'system') {
@@ -1264,11 +1488,14 @@ function messageHTML(m, self, showNewDivider) {
       ${quoteHTML(m)}
       <div class="chat-bubble">${m.deleted ? '<span class="chat-tombstone">🪦 message withdrawn</span>' : bodyHTML(m).replace(/\n/g, '<br>')}</div>
       ${reactionsHTML(m, self, persistentStarHTML(m, self))}
+      ${m.deleted ? '' : whatsNewLinkHTML(m)}
+      ${m.deleted ? '' : wagerAckHTML(m, self)}
       ${m.deleted ? '' : `<div class="chat-actions">
         ${isScribeFeedbackEnabled() ? feedbackButtonHTML(m, self) : ''}
         <button class="chat-act chat-act-react" data-react-open="${esc(m.id)}" title="React">➕</button>
         <button class="chat-act" data-reply="${esc(m.id)}" title="Reply">↩</button>
         ${calloutEligible(m) ? `<button class="chat-act" data-callout="${esc(m.id)}" title="Quote this next to the result">📎</button>` : ''}
+        ${wagerActionHTML(m, self)}
         <button class="chat-act" data-pin="${esc(m.id)}" title="${m.pinned ? 'Unpin from' : 'Pin to'} the Hall of Records">${m.pinned ? '📌' : '🏛'}</button>
         ${canEdit ? `<button class="chat-act" data-edit="${esc(m.id)}" title="Edit (5 min)">✏️</button>` : ''}
         ${mine ? `<button class="chat-act" data-del="${esc(m.id)}" title="Withdraw">🗑</button>` : ''}
@@ -1764,6 +1991,45 @@ function bindMessageActionButtons(host, renderFn, surface) {
     const self = me(); if (!self) return;
     if (confirm('Withdraw this message? A tombstone will remain. SCRIBE keeps the receipts.')) {
       deleteMessage(b.dataset.del, self); renderFn();
+    }
+  }));
+  // FEAT-3 / DI-200f — routes through the SAME deepLinkTo() the notification
+  // deep link and "↩ Jump to the message" already use. chat-ui.js cannot import
+  // app.js (app.js imports this module; the reverse would be a cycle), so it
+  // goes over the established window.* bridge, exactly like window.navigateTo
+  // and window.showToast above.
+  host?.querySelectorAll('[data-whatsnew]').forEach(b => b.addEventListener('click', () => {
+    const fn = (typeof window !== 'undefined') ? window.deepLinkTo : null;
+    if (typeof fn === 'function') fn({ tab: 'rules', params: { whatsNew: b.dataset.whatsnew } });
+    else if (typeof window !== 'undefined' && typeof window.navigateTo === 'function') window.navigateTo('rules');
+  }));
+  // FEAT-5 / DI-202a — 🤝 opens app.js's logging modal. Same window.* bridge,
+  // same reason, as [data-whatsnew] above: chat-ui.js cannot import app.js.
+  host?.querySelectorAll('[data-wager]').forEach(b => b.addEventListener('click', () => {
+    const self = me(); if (!self) return;
+    const fn = (typeof window !== 'undefined') ? window.openWagerModal : null;
+    if (typeof fn === 'function') fn(b.dataset.wager);
+  }));
+  // FEAT-5 / DI-202f — 🤝 I'm in / 🙅 I'm not. The SAVING and SAVE-FAILED states
+  // are owned here because they are properties of THIS control, not of the
+  // stored record: both buttons in the row disable, the tapped one's label
+  // becomes "Saving…", and a failure re-enables them and says so underneath.
+  host?.querySelectorAll('[data-wager-ack]').forEach(b => b.addEventListener('click', async () => {
+    const self = me(); if (!self) return;
+    const row = b.closest?.('.chat-wager-row') || null;
+    const siblings = row?.querySelectorAll?.('[data-wager-ack]') || [b];
+    const label = b.textContent;
+    siblings.forEach?.(x => { x.disabled = true; });
+    b.textContent = 'Saving…';
+    const fn = (typeof window !== 'undefined') ? window.answerWager : null;
+    let res = null;
+    try { res = (typeof fn === 'function') ? await fn({ wagerId: b.dataset.wagerId, reply: b.dataset.wagerAck }) : null; }
+    catch { res = null; }
+    if (res && res.ok) { renderFn(); return; }
+    siblings.forEach?.(x => { x.disabled = false; });
+    b.textContent = label;
+    if (row && typeof row.insertAdjacentHTML === 'function' && !row.querySelector?.('.chat-wager-note')) {
+      row.insertAdjacentHTML('beforeend', '<span class="text-muted text-xs chat-wager-note">Didn\'t save — tap again.</span>');
     }
   }));
   host?.querySelectorAll('[data-callout]').forEach(b => b.addEventListener('click', () => {
@@ -2710,7 +2976,14 @@ export function emitPickRevealEvent(week) {
     body: lines.join('\n'),
     meta: { kind: 'reveal', weekId: week.weekId, title: `${formatWeekLabel(week)} — the picks are in` },
   });
-  showToast({ author: 'system', body: `🔓 ${formatWeekLabel(week)} picks revealed` }, { force: true });
+  // N1 / DI-N3 (UN-204, 2026-09-12) — THE `{force:true}` IS GONE. This is the
+  // exact banner Drew reported ("League just sent a notification that the picks
+  // are in, and it popped up as a banner in the app"): forcing bypassed the
+  // player's own getNotifPrefs().toasts preference AND, before R10 existed,
+  // there was nothing else for it to bypass. Now the reveal rides the same two
+  // gates as every other toast — push-active devices get the push instead, and
+  // push-inactive devices get a toast only if they asked for toasts.
+  showToast({ author: 'system', body: `🔓 ${formatWeekLabel(week)} picks revealed` });
 }
 
 export function emitKickoffEvent(game) {

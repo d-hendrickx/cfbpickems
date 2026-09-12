@@ -183,6 +183,28 @@
  *      proves the trim, proves the cache still caches, proves the offline
  *      fallback still saves, and holds a bounded-size allow-list of every
  *      settings key app.js/storage.js writes
+ *  17  BUG-1 (fb_1788538501410_9egx9, 2026-09-12) — Alma Mater Watch AND
+ *      Alma Mater Rankings order by CURRENT AP rank, not player-roster
+ *      order: ranked ascending → unranked → BYE (BYE by last known rank),
+ *      ties keeping claimedAlmaMaters() order; the order re-derives on every
+ *      render when ranks change; week.lockedAlmaMaters (AD-34) is never read
+ *      for display order; plus direct unit coverage of the pure
+ *      sortAlmaMaterEntries() comparator both renderers share
+ *  18  BUG-6 (fb_1788651890158_fva84, 2026-09-12) — Alma Mater Rankings
+ *      lists EVERY active claimant of a shared school ("Drew, Kihoon"), not
+ *      just the first: renderAlmaMaterRankings()'s getPlayers().find() is
+ *      replaced by the shared almaMaterClaimants() predicate the Settings-
+ *      tab card also calls (keeping F5's "all three predicates agree" true
+ *      structurally). Confirms renderAlmaMaterWatch names no players at all
+ */
+
+/*
+ * WHAT CHANGED (2026-09-12) — §17 and §18 appended for BUG-1 and BUG-6, both
+ * filed by Drew via the in-app feedback form. Appended rather than
+ * renumbered into the render section (§5) so every existing section keeps
+ * its number; §5 still owns the claim-driven render wiring and F5's
+ * claimant-normalisation fixtures, §17/§18 own ORDER and MULTI-CLAIMANT.
+ * Both bugs live in the same two functions and share these fixtures.
  */
 
 // Node built-ins for §14's mutation battery — same tmpdir-copy discipline as
@@ -325,6 +347,30 @@ function freshPlayer(o = {}) {
     createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
     ...o,
   };
+}
+
+/**
+ * The FULL source text of a function — declaration through its own closing
+ * brace, located by brace matching, never by a fixed-length slice.
+ *
+ * Reviewer note 2 (2026-09-12): §17j used to slice a fixed 4000 characters
+ * from `export function renderAlmaMaterWatch`. That function's body grew to
+ * ~4.3k in the BUG-1 pass, so a `lockedAlmaMaters` read inserted at the TAIL
+ * of the body landed OUTSIDE the window and the guard stayed green against
+ * the exact mutation it exists to catch. Every source-window guard in this
+ * file that means "this whole function" now goes through here, and asserts
+ * that the window actually reached the closing brace.
+ */
+function fnBodySrc(src, decl) {
+  const start = src.indexOf(decl);
+  if (start < 0) return '';
+  let depth = 0;
+  for (let i = src.indexOf('{', start); i >= 0 && i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}' && --depth === 0) return src.slice(start, i + 1);
+  }
+  return '';
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1733,6 +1779,386 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
   assert(localStorage.getItem('cfbp_settings') === blobBeforeFailure,
     'the ESPN-failure path writes nothing at all to the settings blob — byte-identical before and after');
 }
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[17] BUG-1 — Alma Mater Watch / Rankings sort by CURRENT AP rank…');
+{
+  // BUG-1 (fb_1788538501410_9egx9, filed 2026-09-04 against v0.17.8). Drew,
+  // verbatim: "Under alma mater watch, the order should be in order of the
+  // ranking. For example, right now TAMU is 8 and Oklahoma is 10, so TAMU
+  // should be first. If the rankings change halfway through the season, the
+  // order should adjust accordingly."
+  //
+  // Before the fix BOTH renderers iterated claimedAlmaMaters() — i.e. active
+  // PLAYER-ROSTER order — and never sorted at all, so the displayed order was
+  // an artifact of who joined the league in what order.
+  //
+  // Coordinator's ruling (no prior spec existed): ranked schools first
+  // ascending by rank, then unranked, then BYE; ties inside a tier keep
+  // claimedAlmaMaters() order. Applied to Rankings too so the two surfaces
+  // agree (coordinator-directed consistency extension).
+  //
+  // FIXTURE DISCIPLINE #2 — nothing below is built in the order it is
+  // asserted back out. Roster insertion order is deliberately close to the
+  // REVERSE of the expected render order, and the two BYE schools are
+  // inserted so that roster order alone would put the rank-5 one ahead of the
+  // rank-3 one.
+  localStorage.clear();
+  storage.saveWeek(freshWeek({ weekId: 'ord_w' }));
+  storage.saveWeek(freshWeek({ weekId: 'ord_w0', weekNumber: 0, label: 'Week 0' }));
+
+  // This week's slate. Opponents are chosen to share no word with any claimed
+  // school, so getAlmaMaterMatch() can't attribute a row to the wrong side.
+  storage.saveGame(freshGame({ weekId: 'ord_w', gameId: 'ord_usc',  homeTeam: 'Vanderbilt', awayTeam: 'USC',        awayRank: null }));
+  storage.saveGame(freshGame({ weekId: 'ord_w', gameId: 'ord_ok',   homeTeam: 'Oklahoma',   awayTeam: 'Baylor',     homeRank: 10 }));
+  storage.saveGame(freshGame({ weekId: 'ord_w', gameId: 'ord_bama', homeTeam: 'Alabama',    awayTeam: 'Mercer',     homeRank: 1 }));
+  storage.saveGame(freshGame({ weekId: 'ord_w', gameId: 'ord_ark',  homeTeam: 'Arkansas',   awayTeam: 'Tulane',     homeRank: null }));
+  storage.saveGame(freshGame({ weekId: 'ord_w', gameId: 'ord_tamu', homeTeam: 'Rutgers',    awayTeam: 'Texas A&M',  awayRank: 8 }));
+  // LAST-KNOWN ranks for the two BYE schools — a prior week only. These are
+  // saved AFTER the slate above precisely so the reverse-find that resolves
+  // "most recent game" reaches them (and so this fixture isn't built in
+  // assertion order).
+  storage.saveGame(freshGame({ weekId: 'ord_w0', gameId: 'ord_clem', homeTeam: 'Clemson',  awayTeam: 'Furman',  homeRank: 5 }));
+  storage.saveGame(freshGame({ weekId: 'ord_w0', gameId: 'ord_mich', homeTeam: 'Michigan', awayTeam: 'Bowling Green', homeRank: 3 }));
+
+  // Roster order — NOT rank order. Rice (no game anywhere, ever) is FIRST.
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p1', displayName: 'RiceGuy',  almaMater: 'Rice',       active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p2', displayName: 'Drew',     almaMater: 'Oklahoma',   active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p3', displayName: 'Koby',     almaMater: 'USC',        active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p4', displayName: 'Kihoon',   almaMater: 'Texas A&M',  active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p5', displayName: 'ClemGuy',  almaMater: 'Clemson',    active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p6', displayName: 'BamaGuy',  almaMater: 'Alabama',    active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p7', displayName: 'MichGuy',  almaMater: 'Michigan',   active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'ord_p8', displayName: 'Jacob',    almaMater: 'Arkansas',   active: true }));
+
+  const rosterOrder = claimedAlmaMaters();
+  assert(JSON.stringify(rosterOrder) === JSON.stringify(['Rice', 'Oklahoma', 'USC', 'Texas A&M', 'Clemson', 'Alabama', 'Michigan', 'Arkansas']),
+    `fixture check: claimedAlmaMaters() hands the renderers PLAYER-ROSTER order, which is not rank order (got ${JSON.stringify(rosterOrder)})`);
+
+  const watchHtml = renderAlmaMaterWatch('ord_w');
+  const watchTeams = [...watchHtml.matchAll(/<span class="alma-watch-team">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  assert(watchTeams.length === 8, `fixture check: Watch rendered all eight claimed schools (not vacuous — got ${watchTeams.length})`);
+
+  // [17a] THE REPORTED BUG, in Drew's own example: TAMU is 8, Oklahoma is 10,
+  // so TAMU must come first. Roster order puts Oklahoma first.
+  assert(watchTeams.indexOf('#8 Texas A&amp;M') < watchTeams.indexOf('#10 Oklahoma'),
+    '[17a] BUG-1: Alma Mater Watch lists #8 Texas A&M BEFORE #10 Oklahoma, even though Oklahoma\'s claimant sits earlier in the player roster');
+
+  // [17b] Full ordering — ranked ascending, then unranked (roster order
+  // inside the tier), then BYE (last known rank ascending inside the tier,
+  // then no-known-rank).
+  const expectedWatch = ['#1 Alabama', '#8 Texas A&amp;M', '#10 Oklahoma', 'USC', 'Arkansas', 'Michigan', 'Clemson', 'Rice'];
+  assert(JSON.stringify(watchTeams) === JSON.stringify(expectedWatch),
+    `[17b] BUG-1: Watch order is ranked-ascending → unranked → BYE (got ${JSON.stringify(watchTeams)})`);
+
+  // [17c] Stability inside the unranked tier: USC and Arkansas are both
+  // unranked and both playing; the roster order between them is preserved.
+  assert(watchTeams.indexOf('USC') < watchTeams.indexOf('Arkansas'),
+    '[17c] within a tier the existing claimedAlmaMaters() order is preserved — USC (roster #3) still precedes Arkansas (roster #8)');
+
+  // [17d] A BYE school never jumps a school that is actually playing, even
+  // when its last known rank is better: Michigan was #3 last week but is on
+  // BYE, so it sits below UNRANKED-but-playing Arkansas.
+  assert(watchTeams.indexOf('Arkansas') < watchTeams.indexOf('Michigan'),
+    '[17d] a BYE school does not outrank a school that is actually playing — #3-last-week Michigan sorts below unranked-but-playing Arkansas');
+
+  // [17e] Inside the BYE tier, last-known rank still orders the rows, and a
+  // BYE school with no known rank anywhere goes last.
+  assert(watchTeams.indexOf('Michigan') < watchTeams.indexOf('Clemson') && watchTeams.indexOf('Clemson') < watchTeams.indexOf('Rice'),
+    '[17e] inside the BYE tier: last-known #3 Michigan, then last-known #5 Clemson, then Rice (never ranked anywhere) last');
+  assert(watchHtml.includes('alma-watch-bye'), 'fixture check: the BYE rows are genuinely BYE rows (not vacuous)');
+
+  // [17f] Coordinator-directed consistency extension — the SAME ordering on
+  // the Standings page's Alma Mater Rankings. Rankings is season-wide and has
+  // no slate, so it has no BYE tier: every school resolves a rank from its
+  // most recent game across getGames() (which is why Michigan/Clemson land in
+  // the RANKED tier here and in the BYE tier on Watch).
+  const rankHtml = renderAlmaMaterRankings();
+  const rankSchools = [...rankHtml.matchAll(/<span class="alma-rank-school">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  assert(rankSchools.length === 8, `fixture check: Rankings rendered all eight claimed schools (not vacuous — got ${rankSchools.length})`);
+  assert(rankSchools.indexOf('Texas A&amp;M (Aggies)') < rankSchools.indexOf('Oklahoma (Sooners)'),
+    '[17f] BUG-1: Alma Mater Rankings puts #8 Texas A&M before #10 Oklahoma too — the two surfaces agree');
+  const expectedRank = ['Alabama', 'Michigan', 'Clemson', 'Texas A&amp;M (Aggies)', 'Oklahoma (Sooners)', 'Rice', 'USC (Trojans)', 'Arkansas (Razorbacks)'];
+  assert(JSON.stringify(rankSchools) === JSON.stringify(expectedRank),
+    `[17g] Rankings order is ranked-ascending then unranked-in-roster-order (got ${JSON.stringify(rankSchools)})`);
+
+  // [17h] "If the rankings change halfway through the season, the order
+  // should adjust accordingly" — flip the two ranks in the game data ONLY
+  // (no roster change, no re-render trick) and the order must invert. This is
+  // the assertion that proves the order is derived at render time and not
+  // cached anywhere.
+  const okGame = storage.getGame('ord_ok');
+  const tamuGame = storage.getGame('ord_tamu');
+  storage.saveGame({ ...okGame, homeRank: 2 });
+  storage.saveGame({ ...tamuGame, awayRank: 14 });
+  const watchTeams2 = [...renderAlmaMaterWatch('ord_w').matchAll(/<span class="alma-watch-team">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  const expectedWatch2 = ['#1 Alabama', '#2 Oklahoma', '#14 Texas A&amp;M', 'USC', 'Arkansas', 'Michigan', 'Clemson', 'Rice'];
+  assert(JSON.stringify(watchTeams2) === JSON.stringify(expectedWatch2),
+    `[17h] BUG-1: when the AP ranks change mid-season, the Watch order adjusts on the next render with no roster change — Oklahoma at #2 now precedes Texas A&M at #14 (got ${JSON.stringify(watchTeams2)})`);
+  const rankSchools2 = [...renderAlmaMaterRankings().matchAll(/<span class="alma-rank-school">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  const expectedRank2 = ['Alabama', 'Oklahoma (Sooners)', 'Michigan', 'Clemson', 'Texas A&amp;M (Aggies)', 'Rice', 'USC (Trojans)', 'Arkansas (Razorbacks)'];
+  assert(JSON.stringify(rankSchools2) === JSON.stringify(expectedRank2),
+    `[17i] the Rankings order adjusts to the same rank change, on the same render pass (got ${JSON.stringify(rankSchools2)})`);
+
+  // [17j] No cached display ordering exists anywhere — week.lockedAlmaMaters
+  // is the tiebreaker Auto-Calc's frozen roster (AD-34 / F4) and must never
+  // be read for display order. Source-text guard.
+  //
+  // Reviewer note 2 (2026-09-12): both windows used to be fixed-length slices
+  // (4000 / 2500 chars) from the declaration. renderAlmaMaterWatch()'s body is
+  // longer than 4000 chars, so a read inserted at its TAIL escaped the window
+  // entirely and this guard passed against its own mutation. Brace-matched
+  // now, with the "did the window reach the closing brace" check asserted
+  // rather than assumed.
+  const appSrcOrd = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const lockedReads = [...appSrcOrd.matchAll(/lockedAlmaMaters/g)].length;
+  assert(lockedReads > 0, 'fixture check: lockedAlmaMaters IS referenced in app.js (not a vacuous scan)');
+  const watchFnSrc = fnBodySrc(appSrcOrd, 'export function renderAlmaMaterWatch');
+  const rankFnSrc  = fnBodySrc(appSrcOrd, 'export function renderAlmaMaterRankings');
+  assert(watchFnSrc.trimEnd().endsWith('}') && watchFnSrc.includes('⭐ Alma Mater Watch'),
+    "fixture check: the Watch window is brace-matched all the way to the function's closing } and contains its final return — a window that stops short is a silent hole");
+  assert(rankFnSrc.trimEnd().endsWith('}') && rankFnSrc.includes('alma-rank-value'),
+    "fixture check: the Rankings window reaches its closing } and contains its final return");
+  assert(watchFnSrc.length > 4000,
+    `fixture check: renderAlmaMaterWatch()'s body is ${watchFnSrc.length} chars — longer than the 4000-char slice this guard used to take, which is exactly how a tail insertion escaped it`);
+  assert(!watchFnSrc.includes('lockedAlmaMaters') && !rankFnSrc.includes('lockedAlmaMaters'),
+    '[17j] neither renderer reads week.lockedAlmaMaters — the AD-34 lock snapshot drives the tiebreaker Auto-Calc only, never display order');
+
+  // [17k] The pure comparator itself, tested directly (the seasonStandingsRows()
+  // pattern: factor the logic out, export it, test it without the renderer).
+  if (typeof app.sortAlmaMaterEntries !== 'function') {
+    assert(false, '[17k] app.js exports a pure sortAlmaMaterEntries() helper both renderers share');
+  } else {
+    const { sortAlmaMaterEntries } = app;
+    assert(JSON.stringify(sortAlmaMaterEntries([])) === '[]', '[17k] sortAlmaMaterEntries([]) is []');
+    const input = [
+      { alma: 'D', rank: null, onBye: true },
+      { alma: 'B', rank: 10, onBye: false },
+      { alma: 'C', rank: null, onBye: false },
+      { alma: 'A', rank: 1, onBye: false },
+      { alma: 'E', rank: 4, onBye: true },
+    ];
+    const snapshot = JSON.stringify(input);
+    const sorted = sortAlmaMaterEntries(input);
+    assert(sorted.map(e => e.alma).join('') === 'ABCED', `[17l] sortAlmaMaterEntries orders ranked → unranked → BYE(by last rank) (got ${sorted.map(e => e.alma).join('')})`);
+    assert(JSON.stringify(input) === snapshot, '[17m] sortAlmaMaterEntries does NOT mutate the array it was handed (returns a new one)');
+    const allTied = [{ alma: 'x1', rank: null }, { alma: 'x2', rank: null }, { alma: 'x3', rank: null }];
+    assert(sortAlmaMaterEntries(allTied).map(e => e.alma).join('') === 'x1x2x3', '[17n] an all-unranked list comes back in exactly the order it went in (stable)');
+    assert(sortAlmaMaterEntries([{ alma: 'z', rank: 3 }, { alma: 'y', rank: 3 }]).map(e => e.alma).join('') === 'zy', '[17o] two schools sharing the SAME rank keep roster order between them');
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[18] BUG-6 — Alma Mater Rankings lists EVERY claimant, not just the first…');
+{
+  // BUG-6 (fb_1788651890158_fva84, filed 2026-09-05 against v0.17.10). Drew,
+  // verbatim: "In the alma mater rankings it only lists drew by tamu and not
+  // kihoon. If there are too people with the same alma mater, both should be
+  // listed"
+  //
+  // renderAlmaMaterRankings() resolved its byline with
+  // `getPlayers().find(p => p.active && …)` — .find() structurally returns at
+  // most ONE player, so a school claimed by two people could only ever name
+  // one of them. The Settings-tab card's claimantsOf() (a .filter()) already
+  // had this right; the F5 note requires all three predicates to agree.
+  localStorage.clear();
+  storage.saveWeek(freshWeek({ weekId: 'dual_w' }));
+  storage.saveGame(freshGame({ weekId: 'dual_w', gameId: 'dual_g1', homeTeam: 'Texas A&M', awayTeam: 'Auburn', homeRank: 8 }));
+
+  // Roster order: Drew, then an INACTIVE Aggie, then Kihoon, then a
+  // whitespace/case-variant Aggie. Only the three ACTIVE ones may appear, in
+  // roster order.
+  storage.addPlayer(freshPlayer({ playerId: 'du_p1', displayName: 'Drew',       almaMater: 'Texas A&M',   active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'du_p2', displayName: 'GhostAggie', almaMater: 'Texas A&M',   active: false }));
+  storage.addPlayer(freshPlayer({ playerId: 'du_p3', displayName: 'Kihoon',     almaMater: 'Texas A&M',   active: true }));
+
+  const bylineOf = html => {
+    const m = [...html.matchAll(/<span class="alma-rank-player[^"]*">([\s\S]*?)<\/span>/g)].map(x => x[1]);
+    return m;
+  };
+
+  const html1 = bylineOf(renderAlmaMaterRankings());
+  assert(html1.length === 1, `fixture check: exactly one Texas A&M row exists — two claimants do NOT double the row (got ${html1.length})`);
+  // [18a] THE REPORTED BUG, in Drew's own words.
+  assert(html1[0] === 'Drew, Kihoon',
+    `[18a] BUG-6: the Texas A&M row names BOTH active claimants, in roster order, joined with ", " (got "${html1[0]}")`);
+  // [18b] The active-only rule from F5 still holds — a deactivated claimant
+  // must not be swept in by the change from .find() to .filter().
+  assert(!renderAlmaMaterRankings().includes('GhostAggie'),
+    '[18b] the DEACTIVATED Texas A&M claimant is still excluded — listing "both" means both ACTIVE claimants, not everyone who ever claimed it');
+
+  // [18c] A third claimant, stored with different casing AND surrounding
+  // whitespace, is also listed (F5's normalisation survives the fix) and
+  // lands in roster order, last.
+  storage.addPlayer(freshPlayer({ playerId: 'du_p4', displayName: 'CaseAggie', almaMater: '  texas a&m  ', active: true }));
+  assert(claimedAlmaMaters().length === 1, 'fixture check: the case/whitespace variant did not create a SECOND roster entry (not vacuous)');
+  assert(bylineOf(renderAlmaMaterRankings())[0] === 'Drew, Kihoon, CaseAggie',
+    '[18c] a claimant stored with different casing and surrounding whitespace is listed too, in roster order');
+
+  // [18d] The byline is escHtml'd per name, not concatenated raw.
+  storage.addPlayer(freshPlayer({ playerId: 'du_p5', displayName: '<img src=x onerror=alert(1)>', almaMater: 'Texas A&M', active: true }));
+  const hostileHtml = renderAlmaMaterRankings();
+  assert(!hostileHtml.includes('<img src=x onerror=alert(1)>') && hostileHtml.includes('&lt;img'),
+    '[18d] each claimant name is escHtml-encoded individually — a hostile display name is rendered safely, not dropped and not executable');
+
+  // [18e] UN-74/DI-74 flex-layout rule — the .alma-rank-player span is
+  // ALWAYS emitted, even with nothing in it.
+  localStorage.clear();
+  storage.saveWeek(freshWeek({ weekId: 'dual_w2' }));
+  storage.saveGame(freshGame({ weekId: 'dual_w2', gameId: 'dual_g2', homeTeam: 'Clemson', awayTeam: 'Furman', homeRank: 7 }));
+  storage.addPlayer(freshPlayer({ playerId: 'du_p6', displayName: 'SoloClaimant', almaMater: 'Clemson', active: true }));
+  const soloHtml = renderAlmaMaterRankings();
+  assert((soloHtml.match(/alma-rank-player/g) || []).length === 1,
+    '[18e] the .alma-rank-player span is emitted on every row (UN-74/DI-74 flex layout) — single claimant');
+  assert(bylineOf(soloHtml)[0] === 'SoloClaimant', 'fixture check: the single-claimant case still renders exactly one name (the fix does not overcorrect)');
+
+  // [18f] renderAlmaMaterWatch has NO claimant assumption to fix — it renders
+  // school / matchup / time only and never names a player. Asserted so a
+  // future edit can't quietly add a single-claimant byline there.
+  const watchDual = renderAlmaMaterWatch('dual_w2');
+  assert(watchDual.includes('Clemson') && !watchDual.includes('SoloClaimant'),
+    '[18f] renderAlmaMaterWatch names no players at all — it had no single-claimant bug to fix, and must not grow one');
+  assert(!watchDual.includes('alma-rank-player'), '[18f] …and emits no claimant span either');
+
+  // [18g] The three predicates still agree (the F5 invariant). The Settings
+  // card and Rankings must name the same people for the same school.
+  localStorage.clear();
+  storage.saveWeek(freshWeek({ weekId: 'dual_w3' }));
+  storage.saveGame(freshGame({ weekId: 'dual_w3', gameId: 'dual_g3', homeTeam: 'Texas A&M', awayTeam: 'Auburn', homeRank: 8 }));
+  storage.addPlayer(freshPlayer({ playerId: 'du_q1', displayName: 'Drew',   almaMater: 'Texas A&M', active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'du_q2', displayName: 'Kihoon', almaMater: 'Texas A&M', active: true }));
+  const cardHtml = renderAlmaMaterSettingsCard();
+  assert(cardHtml.includes('Drew, Kihoon'), 'fixture check: the Settings-tab card already listed both claimants (not vacuous — it is the reference behavior)');
+  assert(bylineOf(renderAlmaMaterRankings())[0] === 'Drew, Kihoon',
+    '[18g] Rankings and the Settings-tab card now name the same claimants, in the same order, from the same predicate');
+
+  // [18h] One shared predicate, not a third copy — the exported helper.
+  if (typeof app.almaMaterClaimants !== 'function') {
+    assert(false, '[18h] app.js exports a shared almaMaterClaimants() predicate that Rankings and the Settings card both call');
+  } else {
+    const { almaMaterClaimants } = app;
+    assert(almaMaterClaimants('Texas A&M').map(p => p.displayName).join(', ') === 'Drew, Kihoon',
+      '[18h] almaMaterClaimants() returns EVERY active claimant in roster order');
+    assert(almaMaterClaimants('  TEXAS A&M  ').map(p => p.displayName).join(', ') === 'Drew, Kihoon',
+      '[18i] almaMaterClaimants() normalises case and whitespace the same way claimedAlmaMaters() does');
+    assert(almaMaterClaimants('Nobody State').length === 0, '[18j] almaMaterClaimants() returns [] for a school nobody claims — never undefined, never a throw');
+    assert(almaMaterClaimants('').length === 0 && almaMaterClaimants(null).length === 0, '[18k] almaMaterClaimants() handles empty/null defensively (CONVENTIONS #7)');
+    const appSrcDual = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    // Comments are stripped before the scan — the fix's own docstring quotes
+    // the OLD `getPlayers().find(...)` shape by name, and a guard that can be
+    // tripped by prose describing the bug is not a guard on the code.
+    const rankBody = appSrcDual
+      .slice(appSrcDual.indexOf('export function renderAlmaMaterRankings'), appSrcDual.indexOf('export function renderAlmaMaterSettingsCard'))
+      .split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*')).join('\n');
+    assert(rankBody.includes('almaMaterClaimants('), 'fixture check: the comment-stripped scan window still holds real code (not vacuous)');
+    assert(!/getPlayers\(\)\.find\(/.test(rankBody),
+      '[18l] renderAlmaMaterRankings() no longer contains a getPlayers().find() claimant lookup — the single-claimant shape is structurally gone, not merely worked around');
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[19] Demo games must never feed an alma-mater rank lookup…');
+{
+  // Reviewer note 1 on the BUG-1/BUG-6 APPROVE-WITH-NOTES (2026-09-12).
+  // renderAlmaMaterRankings()'s reverse-find over getGames() and
+  // renderAlmaMaterWatch()'s BYE "last known rank" fallback both read EVERY
+  // game in storage with no `dataSourceMode !== 'demo'` filter — unlike the
+  // five other consumers that already have one (seasonStandingsRows,
+  // renderLeaderboard's visible-week set, the weekly-history week list,
+  // currentSeasonObligations, the demo-obligation purge). resetToDemo()
+  // writes GAMES as [...REAL_WEEK_1_2026_KNOWN_GAMES, ...DEMO_GAMES], so the
+  // fictional demo slate is at the END of the array and the reverse-find hits
+  // it FIRST: the reviewer saw "#7 AP" for Notre Dame and "#8 AP" for Texas
+  // A&M on the Standings page, numbers that exist nowhere but the fixture.
+  localStorage.clear();
+
+  // A REAL week: Texas A&M plays and is genuinely unranked; Clemson is #12.
+  storage.saveWeek(freshWeek({ weekId: 'dm_real', dataSourceMode: 'espn_live' }));
+  storage.saveGame(freshGame({ weekId: 'dm_real', gameId: 'dm_real_tamu', homeTeam: 'Texas A&M', awayTeam: 'Auburn',  homeRank: null }));
+  storage.saveGame(freshGame({ weekId: 'dm_real', gameId: 'dm_real_clem', homeTeam: 'Clemson',   awayTeam: 'Furman',  homeRank: 12 }));
+
+  // The SHIPPED demo fixture, saved AFTER the real week — the exact order
+  // resetToDemo() produces, which is what makes the reverse-find reach it.
+  storage.saveWeek(dm.DEMO_WEEK);
+  dm.DEMO_GAMES.forEach(g => storage.saveGame(g));
+
+  storage.addPlayer(freshPlayer({ playerId: 'dm_p1', displayName: 'Drew',    almaMater: 'Texas A&M', active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'dm_p2', displayName: 'KobyC',   almaMater: 'Clemson',   active: true }));
+  storage.addPlayer(freshPlayer({ playerId: 'dm_p3', displayName: 'NDGuy',   almaMater: 'Notre Dame', active: true }));
+  // Purdue: really #20 in the real week, and present in the demo fixture with
+  // NO rank — so the unfiltered lookup does the opposite damage here, erasing
+  // a real rank instead of inventing one. Same root cause, both directions.
+  storage.saveGame(freshGame({ weekId: 'dm_real', gameId: 'dm_real_pur', homeTeam: 'Purdue', awayTeam: 'Ball State', homeRank: 20 }));
+  storage.addPlayer(freshPlayer({ playerId: 'dm_p4', displayName: 'PurdueGuy', almaMater: 'Purdue', active: true }));
+
+  const allIds = storage.getGames().map(g => g.gameId);
+  assert(allIds.indexOf('dg2') > allIds.indexOf('dm_real_tamu'),
+    'fixture check: the demo Texas A&M game sits AFTER the real one in storage, so an unfiltered reverse-find would reach the demo game first (not a vacuous test)');
+  assert(dm.DEMO_GAMES.some(g => g.homeTeam === 'Texas A&M' && g.homeRank === 8) && dm.DEMO_GAMES.some(g => g.awayTeam === 'Notre Dame' && g.awayRank === 7),
+    'fixture check: the shipped DEMO_GAMES really do carry the fictional #8 Texas A&M / #7 Notre Dame ranks the reviewer saw');
+
+  const rankHtml = renderAlmaMaterRankings();
+  const rowOf = school => {
+    const rows = rankHtml.split('<div class="alma-rank-row">').slice(1);
+    return rows.find(r => r.includes(school)) || '';
+  };
+
+  // ── THE REVIEWER'S REPRODUCTION ──
+  assert(!rowOf('Texas A&amp;M').includes('#8 AP'),
+    '[19a] Rankings: the fictional demo-fixture rank (#8 Texas A&M) never becomes a badge on the Standings page');
+  assert(rowOf('Texas A&amp;M').includes('Unranked'),
+    '[19b] …the school falls back to its REAL most-recent game, where it is unranked');
+  assert(!rowOf('Notre Dame').includes('#7 AP') && rowOf('Notre Dame').includes('Unranked'),
+    '[19c] Rankings: Notre Dame — whose only game anywhere is the demo fixture — shows Unranked, not #7 AP');
+  assert(rowOf('Clemson').includes('#12 AP'),
+    '[19d] positive control: a rank from a genuinely non-demo week still renders — the filter did not overcorrect into hiding real ranks');
+
+  const rankSchools = [...rankHtml.matchAll(/<span class="alma-rank-school">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  assert(rankSchools.indexOf('Clemson') === 0,
+    `[19e] …and ORDER is unaffected by demo data: really-#12 Clemson leads, ahead of the two schools a demo rank would have promoted (got ${JSON.stringify(rankSchools)})`);
+
+  // ── Watch's BYE "last known rank" fallback, same lookup, same exclusion ──
+  // A current slate with neither Texas A&M nor Notre Dame on it, so both are
+  // BYE rows and both hit the fallback. Clemson plays, and is unranked on this
+  // slate, so a BYE school promoted by a demo rank would jump it.
+  storage.saveWeek(freshWeek({ weekId: 'dm_bye', weekNumber: 2, dataSourceMode: 'espn_live' }));
+  storage.saveGame(freshGame({ weekId: 'dm_bye', gameId: 'dm_bye_clem', homeTeam: 'Clemson', awayTeam: 'Wofford', homeRank: null }));
+  const watchHtml = renderAlmaMaterWatch('dm_bye');
+  const watchTeams = [...watchHtml.matchAll(/<span class="alma-watch-team">([\s\S]*?)<\/span>/g)].map(m => m[1]);
+  assert(watchTeams.length === 4 && (watchHtml.match(/alma-watch-bye/g) || []).length === 3,
+    `fixture check: Watch rendered all four schools with three genuine BYE rows (got ${JSON.stringify(watchTeams)})`);
+  // The BYE tier is ordered by LAST KNOWN rank, so a demo rank is visible here
+  // as ORDER even though a BYE row prints no rank prefix. With the demo games
+  // in the lookup the order is Notre Dame (#7, fictional) → Texas A&M (#8,
+  // fictional) → Purdue (real #20 erased by a rankless demo game).
+  assert(JSON.stringify(watchTeams) === JSON.stringify(['Clemson', 'Purdue', 'Texas A&amp;M', 'Notre Dame']),
+    `[19f] Watch: the BYE "last known rank" fallback skips demo weeks — really-#20 Purdue leads the BYE tier and the two schools ranked only by the demo fixture fall to the no-known-rank end, in roster order (got ${JSON.stringify(watchTeams)})`);
+  assert(watchTeams[0] === 'Clemson',
+    `[19g] …and a school actually playing still outranks every BYE row (got ${JSON.stringify(watchTeams)})`);
+
+  // ── The historical demo week (dataSourceMode: 'demo' too) is excluded by the
+  //    same week-id set — one rule, not two hand-kept lists. ──
+  storage.saveWeek(dm.HISTORICAL_DEMO_WEEK);
+  storage.saveGame({ ...dm.HISTORICAL_DEMO_GAMES[1], homeRank: 3 });   // Texas A&M, rank forced ON for this probe
+  assert(!renderAlmaMaterRankings().includes('#3 AP'),
+    '[19h] a rank on the HISTORICAL demo week (loaded via 📅 Load Historical Demo Week) is excluded by the same dataSourceMode==="demo" rule');
+
+  // ── One shared lookup, so the two surfaces cannot drift apart again. ──
+  {
+    const appSrcDemo = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const codeOf = body => body.split('\n').filter(l => !l.trim().startsWith('//') && !l.trim().startsWith('*') && !l.trim().startsWith('/*')).join('\n');
+    const watchBody = codeOf(fnBodySrc(appSrcDemo, 'export function renderAlmaMaterWatch'));
+    const rankBody  = codeOf(fnBodySrc(appSrcDemo, 'export function renderAlmaMaterRankings'));
+    assert(watchBody.includes('almaMaterRankLookupGames(') && rankBody.includes('almaMaterRankLookupGames('),
+      '[19i] both renderers resolve ranks through the SAME shared lookup helper — the filter cannot be fixed on one surface and forgotten on the other');
+    assert(!/getGames\(/.test(rankBody),
+      '[19j] renderAlmaMaterRankings() no longer reads getGames() directly at all — there is no unfiltered snapshot left for a demo game to enter through');
+    // Reviewer note 3: the comment promised the reversed copy was built once
+    // per render, but `[...allGamesForBye].reverse()` ran once per BYE school.
+    assert(!/\[\.\.\.allGamesForBye\]\.reverse\(\)/.test(watchBody),
+      '[19k] the per-BYE-school `[...allGamesForBye].reverse()` copy is gone — the reversed list really is built once per render, as the comment always claimed');
+  }
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
