@@ -124,7 +124,7 @@ export function renderWeekRecapCardHTML(prev) {
   if (!s) return '';
 
   const lines = [];
-  lines.push(`<div class="recap-line recap-winner">🏆 <strong>${esc(s.nameOf(s.winner.playerId))}</strong> took ${esc(formatWeekLabel(prev))} — ${s.winner.correctPicks ?? s.winner.points ?? '?'} correct${s.winner.wonTiebreaker ? ' (won on the tiebreaker)' : ''}.</div>`);
+  lines.push(`<div class="recap-line recap-winner">🏆 <strong>${esc(s.nameOf(s.winner.playerId))}</strong> took ${esc(formatWeekLabel(prev))} — ${esc(s.winner.correctPicks ?? s.winner.points ?? '?')} correct${s.winner.wonTiebreaker ? ' (won on the tiebreaker)' : ''}.</div>`);
   if (s.loser && s.loser.playerId !== s.winner.playerId) {
     lines.push(`<div class="recap-line">🥶 <strong>${esc(s.nameOf(s.loser.playerId))}</strong> brought up the rear.</div>`);
   }
@@ -140,7 +140,7 @@ export function renderWeekRecapCardHTML(prev) {
   if (s.extraPoint) {
     const winners = s.extraPoint.rows.filter(r => ['blackjack', 'win', 'push-win'].includes(r.outcome));
     const busts = s.extraPoint.rows.filter(r => r.outcome === 'bust');
-    if (winners.length) lines.push(`<div class="recap-line">🂡 Extra Point (longest FG ${s.extraPoint.actual} yd): <strong>${esc(winners.map(w => w.displayName).join(' & '))}</strong> ${winners[0].outcome === 'blackjack' ? 'hit BLACKJACK' : 'held the table'}${busts.length ? `; ${esc(busts.map(b => b.displayName).join(', '))} busted` : ''}.</div>`);
+    if (winners.length) lines.push(`<div class="recap-line">🂡 Extra Point (longest FG ${esc(s.extraPoint.actual)} yd): <strong>${esc(winners.map(w => w.displayName).join(' & '))}</strong> ${winners[0].outcome === 'blackjack' ? 'hit BLACKJACK' : 'held the table'}${busts.length ? `; ${esc(busts.map(b => b.displayName).join(', '))} busted` : ''}.</div>`);
     else if (s.extraPoint.allBusted) lines.push(`<div class="recap-line">🂡 Extra Point: the entire cohort busted. The house thanks you.</div>`);
   }
 
@@ -202,11 +202,11 @@ export function renderSeasonSummaryHTML(currentWeek) {
         <h3>📜 The Permanent Record — ${esc(SEASON_2025.label)}</h3>
         <span class="recap-byline">retrieved by S.C.R.I.B.E.</span>
       </div>
-      <div class="recap-line">👑 <strong>${esc(SEASON_2025.champion.name)}</strong> — ${SEASON_2025.champion.points} points, ${esc(SEASON_2025.champion.note)}. Champion of record.</div>
+      <div class="recap-line">👑 <strong>${esc(SEASON_2025.champion.name)}</strong> — ${esc(SEASON_2025.champion.points)} points, ${esc(SEASON_2025.champion.note)}. Champion of record.</div>
       ${SEASON_2025.standings.map(s =>
-        `<div class="recap-line recap-standing"><span class="recap-rank">${s.rank}.</span> ${esc(s.name)} <span class="recap-alias">"${esc(s.alias)}"</span> — ${s.total}</div>`
+        `<div class="recap-line recap-standing"><span class="recap-rank">${esc(s.rank)}.</span> ${esc(s.name)} <span class="recap-alias">"${esc(s.alias)}"</span> — ${esc(s.total)}</div>`
       ).join('')}
-      <div class="recap-line">🍺 Ledger carried into this season: ${Object.entries(nets).sort((a,b)=>b[1]-a[1]).map(([n,v]) => `${esc(n)} ${fmtNet(v)}`).join(' · ')} — all payable in person.</div>
+      <div class="recap-line">🍺 Ledger carried into this season: ${Object.entries(nets).sort((a,b)=>b[1]-a[1]).map(([n,v]) => `${esc(n)} ${esc(fmtNet(v))}`).join(' · ')} — all payable in person.</div>
       <div class="recap-line">🎯 Extra Point champion: Jacob (4). Kevin finished at −1, which remains the only negative Extra Point total in league history.</div>
       ${blurb ? `<div class="recap-blurb">${esc(blurb).replace(/\n/g, '<br>')}</div>` : ''}
       <div class="recap-closer">The season resets. The receipts don't.</div>
@@ -230,9 +230,9 @@ export function renderSeasonSummaryHTML(currentWeek) {
     if (standings?.length) {
       const nameOf = id => players.find(p => p.playerId === id)?.displayName || id;
       computed = `
-        <div class="recap-line">👑 <strong>${esc(nameOf(standings[0].playerId))}</strong> — Champion of record, CFP 2K${String(priorSeason).slice(-2)}.</div>
+        <div class="recap-line">👑 <strong>${esc(nameOf(standings[0].playerId))}</strong> — Champion of record, CFP 2K${esc(String(priorSeason).slice(-2))}.</div>
         ${standings.slice(0, 6).map((s2, i) =>
-          `<div class="recap-line recap-standing"><span class="recap-rank">${i + 1}.</span> ${esc(nameOf(s2.playerId))} — ${s2.totalCorrect ?? s2.totalPoints ?? 0} correct over ${priorWeeks.length} week${priorWeeks.length > 1 ? 's' : ''}</div>`
+          `<div class="recap-line recap-standing"><span class="recap-rank">${esc(i + 1)}.</span> ${esc(nameOf(s2.playerId))} — ${esc(s2.totalCorrect ?? s2.totalPoints ?? 0)} correct over ${priorWeeks.length} week${priorWeeks.length > 1 ? 's' : ''}</div>`
         ).join('')}`;
     }
   }

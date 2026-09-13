@@ -283,16 +283,16 @@ export const EP_OUTCOME_LABEL = {
 export function renderExtraPointResultsHTML(week, graded, escHtml) {
   if (!graded) return '';
   const rowsHtml = graded.rows.map(r => `
-    <div class="ep-row ep-${r.outcome}">
+    <div class="ep-row ep-${escHtml(String(r.outcome))}">
       <span class="ep-name">${escHtml(r.displayName)}</span>
-      <span class="ep-guess">${r.guess == null ? '—' : r.guess + ' yd'}</span>
-      <span class="ep-outcome">${EP_OUTCOME_LABEL[r.outcome] || r.outcome}${r.outcome === 'alive' || r.outcome === 'win' || r.outcome === 'push-win' ? ` (−${r.delta})` : ''}${r.outcome === 'bust' ? ` (+${r.delta})` : ''}</span>
+      <span class="ep-guess">${r.guess == null ? '—' : escHtml(String(r.guess)) + ' yd'}</span>
+      <span class="ep-outcome">${EP_OUTCOME_LABEL[r.outcome] || escHtml(String(r.outcome))}${r.outcome === 'alive' || r.outcome === 'win' || r.outcome === 'push-win' ? ` (−${escHtml(String(r.delta))})` : ''}${r.outcome === 'bust' ? ` (+${escHtml(String(r.delta))})` : ''}</span>
     </div>`).join('');
   const detect = week.extraPointDetect;
   return `
     <div class="card mb-md ep-card">
       <h3 class="ep-title">🎯 The Ischemic Extra Point</h3>
-      <div class="ep-actual">Longest FG this week: <strong>${graded.actual} yards</strong>
+      <div class="ep-actual">Longest FG this week: <strong>${escHtml(String(graded.actual))} yards</strong>
         ${detect ? `<div class="text-muted text-xs">${escHtml(detect.text || '')} — ${escHtml(detect.matchup || '')}</div>` : ''}
       </div>
       ${rowsHtml}

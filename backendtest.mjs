@@ -413,6 +413,219 @@ console.log('\n[11] backend/Code.gs — a free, one-click authorization trigger 
     'and says to ship it as a NEW VERSION of the SAME deployment — "New deployment" changes the /exec URL (RG-09)');
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [12] C7 — THE UNAUTHENTICATED READ GATE (security-reviewer, 2026-09-12)
+//
+// WHAT WAS WRONG
+// --------------
+// backend/Code.gs shipped `var REQUIRE_TOKEN_FOR_READ = false;`, and handle()
+// computes `needsToken = writeActions[action] || REQUIRE_TOKEN_FOR_READ`. So
+// every READ action — getAll, get, chatSince, chatBefore, chatHead,
+// listSnapshots, chatMetrics, notifyLog, presence — answered a request that
+// carried NO credential at all.
+//
+// The /exec URL is not a secret: it ships in config.json at the site root so
+// every device auto-connects (CLAUDE.md, locked decision). Anyone who opens
+// https://irbfootball.com/config.json can then POST {"action":"getAll"} and
+// receive the entire store: settings.sitePin, settings.adminPasswordHash,
+// every player's pinHash, and every pick for a week that is still OPEN — the
+// blind rule enforced in the client is not enforced by the server.
+//
+// WHY THE FLIP IS SAFE TO MAKE
+// ----------------------------
+// Every client read path already sends the token — proven by [12c]/[12d]
+// below, not assumed. That matters: if one path omitted it, flipping the flag
+// takes sync down league-wide for six people mid-season (RG-56's class of
+// failure). `ping` is answered BEFORE the gate, so the 🩺 health check and the
+// comm panel's connection test keep working with no credential.
+//
+// DEPLOY IS MANUAL. Code.gs changes nothing until Drew pastes it and runs
+// Deploy → Manage deployments → Edit → New version on the SAME deployment
+// (never "New deployment" — that changes the /exec URL, RG-09). Until then the
+// live server still answers reads without a token; the client is unaffected
+// either way because it has always sent one.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[12] backend/Code.gs — reads require the shared token');
+{
+  const vm = await import('node:vm');
+  const fs = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+  const src = fs.readFileSync(fileURLToPath(new URL('./backend/Code.gs', import.meta.url)), 'utf8');
+
+  // A Sheet twin with REAL secrets in it, so a tokenless getAll that gets past
+  // the gate visibly returns them. Without this the RED reads "Store not
+  // initialized" and understates the defect.
+  const SECRETS = {
+    cfbp_settings: { sitePin: '6969', adminPasswordHash: 'sha256:deadbeef', chatEnabled: true },
+    cfbp_players: [{ playerId: 'p0', displayName: 'Drew', pinHash: 'sha256:1111' },
+                   { playerId: 'p1', displayName: 'Kihoon', pinHash: 'sha256:2222' }],
+    cfbp_picks: [{ pickId: 'pk1', playerId: 'p1', weekId: 'w2026_3', selectedTeam: 'Texas A&M' }],
+  };
+  function fakeSheet(rows) {
+    const data = rows.slice();
+    return {
+      getDataRange: () => ({ getValues: () => data.map(r => r.slice()) }),
+      getLastRow: () => data.length,
+      getLastColumn: () => (data[0] ? data[0].length : 0),
+      getRange: () => ({ getValues: () => data.map(r => r.slice()), setValues() {}, setValue() {} }),
+      setFrozenRows() {}, appendRow(r) { data.push(r); },
+      getName: () => 'fake',
+    };
+  }
+  const store = fakeSheet([['key', 'json', 'updatedAt'],
+    ...Object.entries(SECRETS).map(([k, v]) => [k, JSON.stringify(v), '2026-09-12'])]);
+  const msgs = fakeSheet([['seq', 'id', 'ts', 'author', 'body']]);
+  const sandbox = {
+    PropertiesService: { getScriptProperties: () => ({ getProperty: () => 'tok', setProperty() {}, deleteProperty() {} }) },
+    CacheService: { getScriptCache: () => ({ get: () => null, put() {}, remove() {} }) },
+    LockService: { getScriptLock: () => ({ waitLock() {}, releaseLock() {} }) },
+    SpreadsheetApp: {
+      getActiveSpreadsheet: () => ({
+        getSheetByName: n => (n === 'CFBP_STORE' ? store : n === 'CFBP_MESSAGES' ? msgs : null),
+        insertSheet: () => fakeSheet([[]]),
+      }),
+    },
+    Utilities: { getUuid: () => 'uuid', formatDate: () => '' },
+    UrlFetchApp: { fetch() { throw new Error('no network in this sandbox'); } },
+    ContentService: { createTextOutput: s => ({ setMimeType: () => ({ getContent: () => s }) }), MimeType: { JSON: 'JSON' } },
+    Logger: { log() {} },
+    console: { log() {}, warn() {}, error() {} },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: 'Code.gs' });
+  const out = o => JSON.parse(o.getContent());
+  const postAs = (body) => out(sandbox.doPost({ postData: { contents: JSON.stringify(body) } }));
+  const getAs = (parameter) => out(sandbox.doGet({ parameter }));
+
+  // [12a] THE REPRODUCTION — a tokenless getAll must not hand back the store.
+  const anon = postAs({ action: 'getAll' });
+  assert(anon.ok === false && /unauthor/i.test(String(anon.error)),
+    `[12a] POST {"action":"getAll"} with NO token is refused (got: ${JSON.stringify(anon).slice(0, 160)})`);
+  const leaked = JSON.stringify(anon);
+  assert(!/6969/.test(leaked), '[12a] …so settings.sitePin is not in the reply');
+  assert(!/adminPasswordHash|sha256:deadbeef/.test(leaked), '[12a] …nor the commissioner password hash');
+  assert(!/pinHash|sha256:1111/.test(leaked), '[12a] …nor any player PIN hash');
+  assert(!/pk1|selectedTeam/.test(leaked), '[12a] …nor anyone\'s picks');
+
+  // [12b] EVERY store-returning action, both verbs. A gate that closed getAll
+  // and left chatSince open would leak the whole chat log instead.
+  const READ_ACTIONS = [
+    ['getAll', {}], ['get', { key: 'cfbp_settings' }], ['chatHead', {}],
+    ['chatSince', { seq: 0, limit: 50 }], ['chatBefore', { seq: 99, limit: 50 }],
+    ['listSnapshots', {}], ['chatMetrics', { days: 7 }],
+    ['notifyLog', { playerId: 'p0', afterSeq: 0 }], ['presence', { player: 'p0', seen: 0 }],
+  ];
+  for (const [action, params] of READ_ACTIONS) {
+    const r = postAs({ action, ...params });
+    assert(r.ok === false && /unauthor/i.test(String(r.error)),
+      `[12b] POST ${action} without a token is refused (got: ${JSON.stringify(r).slice(0, 110)})`);
+    const g = getAs({ action, ...Object.fromEntries(Object.entries(params).map(([k, v]) => [k, String(v)])) });
+    assert(g.ok === false && /unauthor/i.test(String(g.error)),
+      `[12b] GET ?action=${action} without a token is refused too (the 302-redirect path)`);
+  }
+
+  // [12c] …and the SAME actions still work WITH the token. A gate that refuses
+  // everyone is a different outage, not a fix.
+  const authed = postAs({ action: 'getAll', token: 'tok' });
+  assert(authed.ok === true, `[12c] getAll WITH the token still succeeds (got: ${JSON.stringify(authed).slice(0, 120)})`);
+  assert(authed.data && authed.data.cfbp_settings && authed.data.cfbp_settings.sitePin === '6969',
+    '[12c] …and still returns the real store, so hydrate() is unaffected');
+  assert(authed._action === 'getAll', '[12c] …carrying the BUG-A action echo, which the client checks for misrouting');
+  for (const [action, params] of READ_ACTIONS) {
+    const r = postAs({ action, token: 'tok', ...params });
+    assert(!/unauthor/i.test(String(r.error || '')),
+      `[12c] ${action} WITH the token is not refused (got: ${JSON.stringify(r).slice(0, 110)})`);
+  }
+
+  // [12d] ping is answered BEFORE the gate — the 🩺 diagnostics button and the
+  // comm panel's connection test must keep working with no credential.
+  const pingAnon = postAs({ action: 'ping' });
+  assert(pingAnon.ok === true && pingAnon.service === 'cfbp-backend',
+    '[12d] ping still answers without a token (the health check is not collateral damage)');
+  assert(!/6969|pinHash|adminPasswordHash/.test(JSON.stringify(pingAnon)), '[12d] …and carries no store data of its own');
+
+  // [12e] THE MECHANISM — the flag itself, so a future paste of an older
+  // Code.gs into the Apps Script editor fails here rather than in production.
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  assert(/var\s+REQUIRE_TOKEN_FOR_READ\s*=\s*true\s*;/.test(code),
+    '[12e] REQUIRE_TOKEN_FOR_READ is true in the executable source');
+  assert(/needsToken\s*=\s*writeActions\[action\]\s*\|\|\s*REQUIRE_TOKEN_FOR_READ/.test(code),
+    '[12e] …and handle() still consults it (the flag has to be wired, not just set)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [13] C7, client half — every read request already carries the token.
+// This is the proof that had to exist BEFORE the flag was flipped.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[13] Client read paths — the token is on every request');
+{
+  const fs = await import('node:fs');
+  const { fileURLToPath } = await import('node:url');
+
+  // [13a] backend.js call() — POST body, driven through the real functions.
+  arm(GETALL_OK());
+  await be.hydrate();
+  assert(calls[0]?.body?.action === 'getAll' && calls[0]?.body?.token === 'tok',
+    `[13a] hydrate() -> getAll carries the token in the POST body (got: ${JSON.stringify(calls[0]?.body && { action: calls[0].body.action, token: calls[0].body.token })})`);
+
+  arm({ ok: true, snapshots: [] });
+  await be.listSnapshots();
+  assert(calls[0]?.body?.token === 'tok', '[13a] listSnapshots carries the token');
+
+  arm({ ok: true, rows: [] });
+  await be.notifyLogFetch('p0', 0);
+  assert(calls[0]?.body?.action === 'notifyLog' && calls[0]?.body?.token === 'tok',
+    '[13a] notifications.js -> notifyLogFetch -> notifyLog carries the token');
+
+  arm({ ok: true, events: [], head: 0 });
+  await be.chatSinceRemote(0, 50);
+  assert(calls[0]?.body?.token === 'tok', '[13a] chatSince carries the token');
+
+  // [13b] chatTransport.js — GET reads put it in the QUERY STRING
+  // (js/chatTransport.js:76, `u.searchParams.set('token', c.token || '')`).
+  arm({ ok: true, head: 12 });
+  await tx.fetchHead();
+  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''),
+    `[13b] chatTransport GET chatHead carries token= in the query string (got: ${calls[0]?.url})`);
+  arm({ ok: true, events: [], head: 12 });
+  await tx.fetchSince(0, 50);
+  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatSince GET carries token=');
+  arm({ ok: true, events: [] });
+  await tx.fetchBefore(99, 50);
+  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatBefore GET carries token=');
+  arm({ ok: true, rows: [] });
+  await tx.fetchMetrics(7);
+  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatMetrics GET carries token=');
+  arm({ ok: true, assigned: [], head: 13 });
+  await tx.appendEvents([{ id: 'e9', body: 'x' }]);
+  assert(calls[0]?.body?.token === 'tok', '[13b] chatTransport POST chatAppend carries the token in the body');
+
+  // [13c] STRUCTURAL — the guard that covers the read path nobody has written
+  // yet. Only backend.js and chatTransport.js may talk to the backend URL
+  // (AD-16 for chat); a NEW module that fetches it, or an existing one that
+  // stops attaching the token, fails here rather than at the next redeploy.
+  const jsDir = fileURLToPath(new URL('./js/', import.meta.url));
+  const fetchers = fs.readdirSync(jsDir).filter(f => f.endsWith('.js'))
+    .filter(f => /\bfetch\s*\(/.test(fs.readFileSync(jsDir + f, 'utf8')));
+  assert(JSON.stringify(fetchers.sort()) === JSON.stringify(['backend.js', 'chatTransport.js', 'data-provider.js', 'extra-point.js', 'push-onesignal.js']),
+    `[13c] exactly five modules call fetch() — the two backend transports plus ESPN/ESPN-summary/config.json (got: ${fetchers.join(', ')})`);
+  const beSrc = fs.readFileSync(jsDir + 'backend.js', 'utf8');
+  const txSrc = fs.readFileSync(jsDir + 'chatTransport.js', 'utf8');
+  assert(/JSON\.stringify\(\{\s*action,\s*token:\s*c\.token,/.test(beSrc),
+    '[13c] backend.js call() builds every request body with the token');
+  assert(/u\.searchParams\.set\('token',\s*c\.token/.test(txSrc),
+    '[13c] chatTransport.js get() puts the token on every GET');
+  assert(/JSON\.stringify\(\{\s*action,\s*token:\s*c\.token,/.test(txSrc),
+    '[13c] chatTransport.js post() puts the token on every POST');
+  for (const [f, s] of [['data-provider.js', fs.readFileSync(jsDir + 'data-provider.js', 'utf8')],
+                        ['extra-point.js', fs.readFileSync(jsDir + 'extra-point.js', 'utf8')],
+                        ['push-onesignal.js', fs.readFileSync(jsDir + 'push-onesignal.js', 'utf8')]]) {
+    assert(!/getBackendConfig\(\)[\s\S]{0,400}?fetch\s*\(/.test(s),
+      `[13c] ${f} does not fetch the backend URL (its fetch() calls go to ESPN / config.json)`);
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, 0 failed`);

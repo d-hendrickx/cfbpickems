@@ -66,7 +66,23 @@
 var STORE_SHEET    = 'CFBP_STORE';
 var MSG_SHEET      = 'CFBP_MESSAGES';   // v0.16.0 — append-only chat event log
 var SNAP_SHEET     = 'CFBP_SNAPSHOTS';
-var REQUIRE_TOKEN_FOR_READ = false;   // set true to also gate reads
+// XSS-HARDEN round 2, C7 (security-reviewer audit, 2026-09-12) — was `false`.
+// handle() computes `needsToken = writeActions[action] || REQUIRE_TOKEN_FOR_READ`,
+// so while this was false EVERY read answered an uncredentialed request:
+// getAll, get, chatSince, chatBefore, chatHead, listSnapshots, chatMetrics,
+// notifyLog, presence. The /exec URL is not a secret — it ships in config.json
+// at the site root so every device auto-connects — so anyone who opened
+// irbfootball.com/config.json could POST {"action":"getAll"} and receive
+// settings.sitePin, settings.adminPasswordHash, every player's pinHash, and
+// every pick for a week that was still OPEN (the blind rule is a CLIENT rule;
+// the server never enforced it).
+//
+// Safe to flip because every client read path already sends the token —
+// backend.js call() in the POST body, chatTransport.js get() as a query param
+// (js/chatTransport.js:76), notifyLogFetch through call(). backendtest.mjs [13]
+// asserts that per path rather than trusting it; [12] asserts the gate itself.
+// `ping` is answered BEFORE the gate, so the health check still needs nothing.
+var REQUIRE_TOKEN_FOR_READ = true;   // reads are token-gated too (C7, 2026-09-12)
 var TOKEN_PROP     = 'CFBP_TOKEN';
 // Named-non-submitter reminder copy — a true config flip (Drew's option 2,
 // 2026-09-10). See the SCRIPT PROPERTIES block in this file's header.

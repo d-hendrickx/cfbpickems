@@ -303,7 +303,12 @@ console.log('\n[2] Render layer (js/app.js) — score order vs. matchup order…
   // the convention is away-first (not a matter of taste) and that the defect
   // is a SUBSET of render sites, which is precisely what "some" meant.
   const myWeekSrc = APP_SRC.slice(APP_SRC.indexOf('class="hist-game-row"') - 1200, APP_SRC.indexOf('class="hist-game-row"') + 400);
-  assert(/\$\{g\.awayScore\}\s*[–-]\s*\$\{g\.homeScore\}/.test(myWeekSrc),
+  // Locator updated 2026-09-12 (XSS-HARDEN): the score fields are now
+  // coerced at the render boundary — `${numHtml(g.awayScore)}`. The optional
+  // `numHtml(` prefix keeps this binding to the score TOKEN rather than to
+  // one particular spelling of it, so the orientation check keeps checking
+  // orientation instead of rotting to a vacuous pass (RG-69).
+  assert(/\$\{(?:numHtml\()?g\.awayScore\)?\}\s*[–-]\s*\$\{(?:numHtml\()?g\.homeScore\)?\}/.test(myWeekSrc),
     '2e: CONTROL — the per-week history row already prints awayScore first, matching its "away @ home" label. Away-first is the established convention; the sites above are the deviants');
 }
 
@@ -352,8 +357,9 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
   const liveScoreBlock = lsbIdx >= 0
     ? (APP_SRC.slice(lsbIdx).match(/<div class="live-score">[\s\S]*?<\/div>\s*<\/div>/) || [''])[0]
     : '';
-  const awayNumIdx = liveScoreBlock.indexOf('${game.awayScore}');
-  const homeNumIdx = liveScoreBlock.indexOf('${game.homeScore}');
+  // Locator updated 2026-09-12 (XSS-HARDEN) — see the note at 2e.
+  const awayNumIdx = liveScoreBlock.search(/\$\{(?:numHtml\()?game\.awayScore\)?\}/);
+  const homeNumIdx = liveScoreBlock.search(/\$\{(?:numHtml\()?game\.homeScore\)?\}/);
   assert(liveScoreBlock.length > 0 && awayNumIdx >= 0 && homeNumIdx >= 0,
     'fixture check: renderLiveScoreBlockHTML\'s .live-score block located WITH both score tokens present — a miss here means the locator has rotted (markup moved/renamed), not that orientation is fine');
   const firstNumIsAway = awayNumIdx < homeNumIdx;
@@ -368,7 +374,8 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
   const adminMetaIdx = APP_SRC.indexOf('<div class="game-admin-meta">', adminFnIdx);
   const adminBlock = adminMetaIdx >= 0 ? APP_SRC.slice(adminMetaIdx, adminMetaIdx + 900) : '';
   assert(/FINAL/.test(adminBlock), 'fixture check: the admin game list\'s FINAL score span located');
-  assert(adminBlock.indexOf('${game.awayScore}') < adminBlock.indexOf('${game.homeScore}'),
+  // Locator updated 2026-09-12 (XSS-HARDEN) — see the note at 2e.
+  assert(adminBlock.search(/\$\{(?:numHtml\()?game\.awayScore\)?\}/) < adminBlock.search(/\$\{(?:numHtml\()?game\.homeScore\)?\}/),
     '3d: THE BUG — the admin game list\'s FINAL score must read AWAY–HOME to match the "away @ home" header directly above it');
 
   // 3e — THE GUARD THAT MAKES THIS UNREPEATABLE. Sweep every score pair in
@@ -380,7 +387,10 @@ console.log('\n[3] Structural — renderGameCard\'s .live-score block, the admin
   const CHAT_SRC = readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
   const offenders = [];
   for (const [file, src] of [['js/app.js', APP_SRC], ['js/chat-ui.js', CHAT_SRC]]) {
-    const re = /\$\{\s*(?:game|g)\.(home|away)Score[^}]*\}\s*[–—-]\s*\$\{\s*(?:game|g)\.(home|away)Score[^}]*\}/g;
+    // Locator updated 2026-09-12 (XSS-HARDEN) — see the note at 2e. Without
+    // the optional `numHtml(` this sweep matches NOTHING and passes vacuously,
+    // which is the precise failure mode this block exists to prevent.
+    const re = /\$\{\s*(?:numHtml\()?\s*(?:game|g)\.(home|away)Score[^}]*\}\s*[–—-]\s*\$\{\s*(?:numHtml\()?\s*(?:game|g)\.(home|away)Score[^}]*\}/g;
     let m;
     while ((m = re.exec(src)) !== null) {
       if (m[1] === 'home' && m[2] === 'away') {

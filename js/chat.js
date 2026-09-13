@@ -32,6 +32,12 @@ import {
   appendEvents, subscribe, fetchBefore, fetchHead, StaleDeploymentError,
 } from './chatTransport.js';
 import { isBackendConfigured } from './backend.js';
+// XSS-HARDEN round 3 (F3-1) — the react fold's emoji ALLOW-LIST. data-model.js
+// imports nothing, so this cannot cycle (same argument as storage.js's
+// CHAT_ACCENTS import). The palette is the ONE list the pickers render from
+// (AD-20); validating against anything else would let the allow-list drift
+// away from the UI.
+import { REACTION_PALETTE } from './data-model.js';
 // v0.17.3 — chat retention (UN-88) reads settings.chatRetentionDays through
 // the storage seam. Safe: storage.js imports only data-model.js + backend.js,
 // neither of which imports chat.js, so this cannot cycle.
@@ -402,6 +408,19 @@ function applyTo(target, ev) {
     // below) — `emoji` becomes an object key in the rebuild loop
     // (`next[em] = next[em] || []`) a few lines down.
     if (isUnsafeKey(emoji)) return;
+    // XSS-HARDEN round 3 (F3-1) — ALLOW-LIST, the other half of escaping at
+    // the render sinks. `ev.meta.emoji` is attacker-controlled text off the
+    // append endpoint, and it becomes an object KEY in the rebuild loop below
+    // and then a render leaf in reactionsHTML(). Only the 18 palette entries
+    // may enter the fold.
+    //
+    // SKIP, never throw: chat.js folds one append-only log and ingest() walks
+    // a whole poll batch in one pass, so throwing here would abort the batch
+    // and lose every later event in it. Dropping the single bad event keeps
+    // the fold order-independent and idempotent (AD-09/AD-10) — the same
+    // event dropped on first sight is dropped again on replay, and a hostile
+    // append can never corrupt the fold.
+    if (!REACTION_PALETTE.includes(emoji)) return;
     const key = `${emoji}|${ev.author}`;
     const cur = target._reactOps.get(key);
     if (cur && cur.id === ev.id) return;

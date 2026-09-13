@@ -927,12 +927,25 @@ assert(({}).polluted === undefined, 'fixture check: the mutation-proof cleanup f
 // used above genuinely converts that throw into a recorded failure and lets
 // execution continue past it, instead of the process dying uncaught.
 {
+  // XSS-HARDEN round 3 (F3-1, 2026-09-12): the react branch now has TWO
+  // guards, not one. The palette allow-list added directly beneath
+  // isUnsafeKey() also rejects '__proto__' (it is not one of the 18
+  // REACTION_PALETTE emoji), so stripping only the isUnsafeKey line no longer
+  // reaches the crash — the mutant silently survived and this block went red
+  // while chat.js was in fact SAFER than before. Both guards are stripped so
+  // the mutation still demonstrates the real underlying crash. Neither guard
+  // is redundant in production: isUnsafeKey() states the prototype-pollution
+  // intent at the object-key boundary, the palette allow-list is the XSS
+  // boundary, and each is the other's backstop.
   const GUARD_LINE = '    if (isUnsafeKey(emoji)) return;';
+  const PALETTE_GUARD_LINE = '    if (!REACTION_PALETTE.includes(emoji)) return;';
   const realChatSrc = await readFile(new URL('./js/chat.js', import.meta.url), 'utf8');
   assert(realChatSrc.includes(GUARD_LINE), 'fixture check: the exact react-branch guard line is present in real chat.js (an unindented/reworded line would silently no-op this mutation)');
   assert(realChatSrc.split(GUARD_LINE).length - 1 === 1, 'fixture check: the guard line is UNIQUE in chat.js — not accidentally stripping a second occurrence');
+  assert(realChatSrc.includes(PALETTE_GUARD_LINE), 'fixture check: the emoji ALLOW-LIST guard line is present in real chat.js (XSS-HARDEN round 3) — it is the second guard this mutation must remove');
+  assert(realChatSrc.split(PALETTE_GUARD_LINE).length - 1 === 1, 'fixture check: the allow-list guard line is UNIQUE in chat.js');
 
-  const gDir = await createMutantDir('chat.js', src => src.replace(GUARD_LINE, ''));
+  const gDir = await createMutantDir('chat.js', src => src.replace(GUARD_LINE, '').replace(PALETTE_GUARD_LINE, ''));
   const gMod = await importFromMutantDir(gDir, 'chat.js');
   gMod._resetForTest();
   gMod.ingest([{ gameTag: '', type: 'message', author: 'p1', body: 'react target', notify: true, id: 'g_react_target', seq: 1, ts: 1000 }]);

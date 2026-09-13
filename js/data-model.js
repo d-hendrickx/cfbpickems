@@ -277,12 +277,35 @@ export const DEFAULT_TZ = 'PT';
  * entries are still the most-used ones, so the order is left as-is for
  * whoever next wants a curated subset. The dashboard's reaction picker shows
  * the whole list in a grid, where order is purely cosmetic.
+ *
+ * FROZEN as of XSS-HARDEN round 3 (F3-1, 2026-09-12), for the same reason
+ * CHAT_ACCENTS is: it is now an ALLOW-LIST, checked at two write seams
+ * (storage.js toggleReaction, chat.js's react fold). A list that can be
+ * pushed to at runtime is not an allow-list.
  */
-export const REACTION_PALETTE = [
+export const REACTION_PALETTE = Object.freeze([
   '👍', '👎', '🔥', '😂', '💀', '🍺',
   '😁', '😭', '😅', '😬', '🤡', '👀',
   '🫡', '🤘', '🤙', '☝️', '🚀', '🖕',
-];
+]);
+
+/**
+ * The ONE chat-accent palette (XSS-HARDEN round 2, C2, 2026-09-12). Same
+ * reasoning as REACTION_PALETTE above: it lived as a literal in chat-ui.js,
+ * and storage.js's setAccent() now has to validate against it. storage.js is
+ * a SEAM file and must not import chat-ui.js (chat-ui imports storage — that
+ * is a cycle, and the seam stays a leaf). data-model.js imports nothing, so
+ * it is the only place both can read from.
+ *
+ * Every entry is a plain 6-digit uppercase hex colour. That is load-bearing,
+ * not cosmetic: the value is interpolated into a `style="background:…"`
+ * attribute, so nothing in this list may contain a quote, a semicolon or a
+ * url(). setAccent() accepts a value ONLY if it is one of these exact
+ * strings — an allow-list, not a pattern.
+ */
+export const CHAT_ACCENTS = Object.freeze([
+  '#B91C1C', '#C2410C', '#A16207', '#15803D', '#0E7490', '#1D4ED8', '#7C3AED', '#BE185D',
+]);
 
 // Site-level access PIN — DEFAULT only. Commissioner can override this via
 // settings.sitePin (Commissioner → Security panel). verifySitePin() in storage.js

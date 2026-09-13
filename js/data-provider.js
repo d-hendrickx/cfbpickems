@@ -531,8 +531,37 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
 
     const dq = spread !== null ? DATA_QUALITY.CONFIRMED : DATA_QUALITY.PARTIAL;
 
+    // XSS-HARDEN round 2, C5 (2026-09-12) — SHAPE-CHECK THE EVENT ID.
+    //
+    // This value is not necessarily ESPN's. When the direct fetch fails we
+    // retry through three third-party CORS proxies (CORS_FALLBACKS at the top
+    // of this file), and whatever JSON comes back is parsed here as a
+    // scoreboard. The id is then rendered as element content in three places,
+    // put in an ESPN deep link, and compared as a String() all over app.js.
+    //
+    // THE RULE IS A CHARACTER ALLOW-LIST, NOT DIGITS-ONLY, AND THAT IS
+    // DELIBERATE. Real ESPN ids are all digits, and digits-only was the first
+    // implementation — but the id is also the JOIN KEY between a parsed game
+    // and a stored one (refreshScoresByEventIds, the slate matcher, the
+    // suggested-slate pool), so dropping an id that is merely unusual costs a
+    // game its live scores rather than protecting anything the escaping at the
+    // render sites does not already cover. So: reject every character that
+    // could form markup, close an attribute, or escape a URL path
+    // (< > " ' & / \ space, backtick, parens), keep anything inert, and WARN
+    // when a kept id is not all digits so a genuine ESPN schema change is
+    // still visible. Four sibling suites (livestatustest, slatetest, tbdtest,
+    // oddstest) feed synthetic ids such as `espn_evt_401520000` through this
+    // parser; they stay meaningful under this rule.
+    const rawEventId = event.id == null ? '' : String(event.id);
+    const espnEventId = /^[A-Za-z0-9_.:-]{1,64}$/.test(rawEventId) ? rawEventId : '';
+    if (rawEventId && !espnEventId) {
+      console.warn('[data-provider] dropped an unsafe espnEventId from the scoreboard payload:', rawEventId.slice(0, 80));
+    } else if (espnEventId && !/^\d+$/.test(espnEventId)) {
+      console.warn('[data-provider] non-numeric espnEventId kept (inert, but ESPN normally sends digits):', espnEventId);
+    }
+
     const parsedGame = createGame('', {
-      espnEventId:    event.id,
+      espnEventId,
       dataQuality:    dq,
       dataSource:     method === 'direct' ? 'espn_live' : 'espn_historical',
       homeTeam, awayTeam,

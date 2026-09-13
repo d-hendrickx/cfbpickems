@@ -17,6 +17,8 @@ import {
   SITE_PIN, SITE_PIN_KEY,
   isObligationActive,
   DEFAULT_TZ,
+  CHAT_ACCENTS,
+  REACTION_PALETTE,
 } from './data-model.js';
 
 import { cacheGet, cacheSet, isBackendReady } from './backend.js';
@@ -446,7 +448,34 @@ export function setTimezone(tzKey) {
 
 // ── v0.17.0 chat identity + notification prefs (per-player, follow the person) ──
 export function getAccent() { return _playerPref('accent') || null; }
-export function setAccent(color) { _setPlayerPref('accent', color); }
+/**
+ * XSS-HARDEN round 2, C2 (2026-09-12) — VALIDATE AT THE WRITE SEAM.
+ *
+ * `accent` is interpolated into a `style="background:${accent};color:#fff"`
+ * attribute at two chat-ui render sites. An attribute needs no angle bracket
+ * to break out of: `red" onmouseover="…` closes the style value and starts a
+ * new attribute on a real element. The render sites now escape (the sink
+ * fix), and this is the other half — a value that is not one of the eight
+ * palette colours never enters a player record in the first place.
+ *
+ * ALLOW-LIST, not a pattern, and no normalisation: an exact match against
+ * CHAT_ACCENTS (the same list the swatch row renders from), or `null` to
+ * clear. Anything else is REFUSED — the preference is left as it was rather
+ * than being coerced into something adjacent, because a silent coercion is
+ * how a "close enough" value gets a second life later.
+ *
+ * THE ONLY CHANGE TO THIS FILE. The load()/save() seam, its synchronous
+ * reads, and every other accessor are untouched (AD-02).
+ */
+export function setAccent(color) {
+  if (color === null || color === undefined || color === '') { _setPlayerPref('accent', null); return true; }
+  if (!CHAT_ACCENTS.includes(color)) {
+    console.warn('[storage] setAccent refused a value outside the palette:', color);
+    return false;
+  }
+  _setPlayerPref('accent', color);
+  return true;
+}
 export function getChatNick() { return _playerPref('chatNick') || null; }
 export function setChatNick(nick) { _setPlayerPref('chatNick', (nick || '').slice(0, 16)); }
 export function getNotifPrefs() {
@@ -958,9 +987,35 @@ export function getReactionsForGame(weekId, gameId) {
   return (all[weekId] && all[weekId][gameId]) || {};
 }
 
-/** Toggle a player's reaction. Returns the new list for that emoji on that game. */
+/**
+ * Toggle a player's reaction. Returns the new list for that emoji on that
+ * game — or `false` if the emoji was REFUSED.
+ *
+ * XSS-HARDEN round 3 (F3-1, 2026-09-12) — ALLOW-LIST, mirroring setAccent()
+ * above, and for the identical reason. The emoji becomes an object KEY in the
+ * `cfbp_reactions` blob and is then rendered as element CONTENT by
+ * renderReactionStrip() (app.js) and reactionsHTML() (chat-ui.js). The render
+ * sites now escape (the sink fix); this is the other half — a value that is
+ * not one of the 18 palette emoji never enters the blob in the first place.
+ *
+ * Exact match against REACTION_PALETTE (the same frozen list both pickers
+ * render from, AD-20), no normalisation: multi-codepoint entries like ☝️
+ * carry a variation selector, and "close enough" normalisation is how a
+ * hostile value gets a second life later.
+ *
+ * REFUSAL RETURNS `false`, not `[]`: `[]` already means "toggled off, nobody
+ * left," so callers could not tell the two apart. Both call sites in app.js
+ * guard with Array.isArray() before .includes().
+ *
+ * THE ONLY CHANGE TO THIS FILE in round 3. The load()/save() seam, its
+ * synchronous reads, and every other accessor are untouched (AD-02).
+ */
 export function toggleReaction(weekId, gameId, emoji, playerId) {
   if (!weekId || !gameId || !emoji || !playerId) return [];
+  if (!REACTION_PALETTE.includes(emoji)) {
+    console.warn('[storage] toggleReaction refused an emoji outside the palette:', emoji);
+    return false;
+  }
   const all = _reactionsAll();
   if (!all[weekId]) all[weekId] = {};
   if (!all[weekId][gameId]) all[weekId][gameId] = {};

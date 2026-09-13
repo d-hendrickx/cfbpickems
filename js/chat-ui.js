@@ -91,7 +91,7 @@ import {
   getNotifPrefs, setNotifPrefs,
   getPushActive,
 } from './storage.js';
-import { formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE } from './data-model.js';
+import { formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE, CHAT_ACCENTS } from './data-model.js';
 import { calculateAtsWinner } from './scoring.js';
 
 export const chatDigest = _digest;
@@ -103,7 +103,12 @@ export const chatDigest = _digest;
 // anchored to the message. There is no more "always-visible subset" concept
 // left for QUICK_EMOJI to describe — do not reintroduce it.
 const EDIT_WINDOW_MS = 5 * 60 * 1000;
-const ACCENTS = ['#B91C1C', '#C2410C', '#A16207', '#15803D', '#0E7490', '#1D4ED8', '#7C3AED', '#BE185D'];
+// XSS-HARDEN round 2, C2 (2026-09-12) — the palette moved to data-model.js so
+// storage.js's setAccent() can validate against the SAME list without importing
+// this module (chat-ui imports storage; the reverse would be a cycle). The
+// swatch row below, the write seam and the two render sites now agree by
+// construction rather than by three hand-kept copies.
+const ACCENTS = CHAT_ACCENTS;
 
 const U = {
   filter: 'all',            // 'all' | 'records' | 'mentions' | <gameId>
@@ -183,10 +188,10 @@ let _refreshUpdatedTimer = null;
 function refreshControlHTML(idPrefix) {
   const status = _refreshStatus;
   const checking = status === 'checking';
-  return `<button type="button" class="btn btn-ghost btn-sm" id="${idPrefix}-btn"
+  return `<button type="button" class="btn btn-ghost btn-sm" id="${esc(idPrefix)}-btn"
       ${checking ? 'disabled aria-disabled="true"' : ''}
       aria-label="${REFRESH_ARIA_LABEL[status]}">🔄</button>
-    <span class="chat-refresh-status" id="${idPrefix}-status" aria-live="polite">${REFRESH_STATUS_TEXT[status]}</span>`;
+    <span class="chat-refresh-status" id="${esc(idPrefix)}-status" aria-live="polite">${REFRESH_STATUS_TEXT[status]}</span>`;
 }
 
 /** Patches BOTH refresh controls' DOM state directly rather than forcing a
@@ -589,7 +594,7 @@ function drainToast() {
   const el = document.createElement('div');
   el.id = 'chat-toast';
   el.className = 'chat-toast';
-  el.innerHTML = `<span class="chat-toast-avatar" style="${accentOf(msg.author) ? `background:${accentOf(msg.author)};color:#fff` : ''}">${esc(initialsOf(msg.author))}</span>
+  el.innerHTML = `<span class="chat-toast-avatar" style="${accentOf(msg.author) ? `background:${esc(accentOf(msg.author))};color:#fff` : ''}">${esc(initialsOf(msg.author))}</span>
     <span class="chat-toast-body"><strong>${esc(nameOf(msg.author))}</strong> ${esc((msg.body || '').slice(0, 80))}</span>
     <button type="button" class="chat-toast-dismiss" aria-label="Dismiss">✕</button>`;
   // RG-26 — carried on the node so _clearToastsForChatPage() can acknowledge
@@ -842,6 +847,17 @@ function renderUrlToken(raw, imgPreview) {
   if (tm) { trail = tm[0]; url = url.slice(0, url.length - trail.length); }
   if (!url) return raw;   // degenerate: the whole token was punctuation — bail out unlinked
   const href = /^www\./i.test(url) ? `https://${url}` : url;
+  // XSS-HARDEN round 2, C6 (2026-09-12) — DEFENCE IN DEPTH. Today the only
+  // caller is bodyHTML(), whose URL_RE matches http(s):// and www. and nothing
+  // else, so `javascript:`/`data:` cannot reach here through chat. This
+  // function nevertheless writes an <a href> (and, gated, an <img src>) out of
+  // its argument and used to trust whatever it was handed — so it now checks
+  // its own precondition. A non-http(s) token renders as the plain text it
+  // already is: `raw` arrives ALREADY ESCAPED from bodyHTML() (see this
+  // function's contract above), so it is returned unchanged rather than run
+  // through esc() a second time, which would print `&amp;amp;` for the `&` in
+  // any ordinary query string.
+  if (!/^https?:\/\//i.test(href)) return raw;
   const link = `<a href="${href}" rel="noopener noreferrer" target="_blank">${url}</a>`;
   // F4-interim — gated behind settings.chatImagePreviewEnabled (off by
   // default, D7/Drew's decision). `loading="lazy" referrerpolicy="no-referrer"`
@@ -851,6 +867,12 @@ function renderUrlToken(raw, imgPreview) {
     ? `<br><img src="${href}" loading="lazy" referrerpolicy="no-referrer" class="chat-img-preview" alt="">` : '';
   return `${link}${img}${trail}`;
 }
+
+// Test-only seams (same convention as `_quoteHTMLForTest`/`_messageHTMLForTest`).
+// renderUrlToken() writes an <a href> out of its argument, so xsstest [11]
+// drives it DIRECTLY with hostile schemes rather than only through bodyHTML().
+export const _renderUrlTokenForTest = renderUrlToken;
+export const _escForTest = esc;
 
 function bodyHTML(m) {
   const escaped = esc(m.body);
@@ -925,7 +947,7 @@ function reactionsHTML(m, self, trailing = '') {
   // reactionNamesHTML). The pill's own tap-to-toggle ([data-react] handler)
   // is unchanged.
   const pills = entries.map(([emoji, who]) =>
-    `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}">${emoji} ${who.length}</button>`).join('');
+    `<button class="chat-react-pill${who.includes(self) ? ' me' : ''}" data-react="${esc(emoji)}" data-target="${esc(m.id)}">${esc(emoji)} ${who.length}</button>`).join('');
   return `<div class="chat-reactions">${pills}${trailing}</div>${reactionNamesHTML(entries)}`;
 }
 
@@ -1111,7 +1133,7 @@ function feedbackPopoverHTML(m, self) {
   const mine = self ? (getFeedbackFor(m.id)[self] || {}) : {};
   if (m.author === 'scribe') {
     const opt = (val, emoji, label) =>
-      `<button type="button" class="feedback-pick-option${mine.rating === val ? ' active' : ''}" data-fb-rating="${val}">${emoji} ${esc(label)}</button>`;
+      `<button type="button" class="feedback-pick-option${mine.rating === val ? ' active' : ''}" data-fb-rating="${esc(val)}">${esc(emoji)} ${esc(label)}</button>`;
     return `<div class="feedback-picker feedback-picker-grid">
       ${opt('hit', '🔥', 'Hit')}
       ${opt('mid', '😐', 'Mid')}
@@ -1473,7 +1495,7 @@ function messageHTML(m, self, showNewDivider) {
 
   return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
   <div class="chat-msg${mine ? ' chat-mine' : ''}${scribe ? ' chat-scribe' : ''}${pending ? ' is-pending' : ''}${failed ? ' is-failed' : ''}" data-mid="${esc(m.id)}">
-    <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${accent};color:#fff"` : ''}>${initialsOf(m.author)}</div>
+    <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${esc(accent)};color:#fff"` : ''}>${esc(initialsOf(m.author))}</div>
     <div class="chat-bubble-col">
       <div class="chat-meta">
         <span class="chat-author">${esc(nameOf(m.author))}</span>
@@ -1545,7 +1567,7 @@ function gamereactRunHTML(run) {
     const found = gameById(m.gameTag);
     return `${esc(m.meta?.emoji || '👀')} ${found ? esc(gameShort(found.game, found.week)) : ''}`;
   }).join(' · ');
-  return `<div class="chat-msg chat-system chat-gamereact" data-ts="${run.ts}">
+  return `<div class="chat-msg chat-system chat-gamereact" data-ts="${esc(run.ts)}">
     <div class="chat-system-body">${esc(nameOf(run.author))} reacted &nbsp;${parts}</div>
     <span class="chat-time">${relTime(run.ts)}</span>
   </div>`;
@@ -1661,7 +1683,7 @@ export function renderChatPage() {
     const found = gameById(U.filter);
     if (found) {
       const g = found.game;
-      const score = g.homeScore != null ? `${g.awayScore}–${g.homeScore}` : '';
+      const score = g.homeScore != null ? `${esc(g.awayScore)}–${esc(g.homeScore)}` : '';
       const myViewPick = self ? getPicks(found.week.weekId, self).find(p => p.gameId === g.gameId) : null;
       const headerCls = gameThreadHeaderClass(myViewPick, g);
       viewHeader = `<div class="chat-view-header${headerCls}">
@@ -2686,7 +2708,7 @@ export function openGameChatSheet(gameId) {
   const wrap = document.createElement('div');
   wrap.id = 'chat-sheet-wrap';
   const g = found?.game;
-  const score = g && g.homeScore != null ? `${g.awayScore}–${g.homeScore}` : '';
+  const score = g && g.homeScore != null ? `${esc(g.awayScore)}–${esc(g.homeScore)}` : '';
   const firstUse = !lsGet('cfbp_chat_sheet_hint');
   const selfForHeader = me();
   const myHeaderPick = (selfForHeader && found) ? getPicks(found.week.weekId, selfForHeader).find(p => p.gameId === gameId) : null;
@@ -2904,7 +2926,7 @@ export function dashboardChatTeaserHTML() {
   const n = self ? unreadCount(self, 'all') : 0;
   const preview = `<strong>${esc(nameOf(latest.author))}</strong>: ${esc(latest.body.slice(0, 64))}`;
   return `
-  <div class="card mb-md dash-chat-teaser" id="dash-chat-teaser" data-teaser-seq="${latestSeq}">
+  <div class="card mb-md dash-chat-teaser" id="dash-chat-teaser" data-teaser-seq="${esc(latestSeq)}">
     <div class="dash-chat-left" data-open-chat>
       <span class="dash-chat-icon">💬</span>
       <div class="dash-chat-body">

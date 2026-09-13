@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.21.1';
+export const APP_VERSION = 'v0.21.2';
 export const APP_VERSION_DATE = '2026-09-12';
 
 /**
@@ -39,6 +39,18 @@ export const APP_VERSION_DATE = '2026-09-12';
  */
 const WHATS_NEW_RELEASES = [
   {
+    // v0.21.2 — security patch (Phase III session, docs/SESSION_LOG_091126_SUPABASE.md).
+    // Fix-only release; the FIRST `fixed` item doubles as SCRIBE's chat-post headline.
+    version: 'v0.21.2',
+    date: '2026-09-12',
+    added: [],
+    fixed: [
+      'Security patch. Nothing changes in how the app looks or plays. Under the hood, the league\'s data can no longer be read by anyone who finds the site address without the league\'s own key, and every place the app shows text it got from the shared data — scores, ranks, names, rules, reactions, chat links — now treats that text as text, never as code.',
+      'Tiebreaker and Extra Point guesses, the rules editor, chat reactions, avatar colors, and ESPN game ids are all rendered safely, and a reaction or accent color outside the app\'s own palette is refused rather than stored.',
+      'A structural test now checks every piece of markup in the app for unescaped text, so this class of problem is caught before it ships instead of after.',
+    ],
+  },
+  {
     // v0.21.1 — the 2026-09-12 feedback batch (docs/SESSION_LOG_091226.md).
     // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
     version: 'v0.21.1',
@@ -66,10 +78,9 @@ const WHATS_NEW_RELEASES = [
     // Moved VERBATIM from the single-slot WHATS_NEW constant this replaced —
     // do NOT rewrite this copy. It shipped; it is the record of what shipped.
     // `expanded: true` is the one-release catch-up flag described above: v0.21.0
-    // predates the release post, so v0.21.1 carries it along. Remove at v0.21.2.
+    // predates the release post, so v0.21.1 carried it along; the flag was removed at v0.21.2 as planned.
     version: 'v0.21.0',
     date: '2026-09-11',
-    expanded: true,
     added: [
       'SCRIBE can speak up on its own. When something worth a line happens — a lead change, a lone-wolf cover, a broken streak, a unanimous slate, a bold claim in the room — it can post one message about it. The commissioner sets how often under Comm → Settings → SCRIBE Participation, from Quiet to Unhinged. Direct @scribe questions are answered regardless.',
       'My SCRIBE File. Chat → prefs → 📁 My SCRIBE File shows what SCRIBE has recorded about you in plain language. Delete anything you told it, add hard-limit topics it will never bring up, and set your roast tolerance. Facts it works out from the standings refresh on their own.',
@@ -3449,7 +3460,7 @@ function renderHistoricalPicksView(c, week, currentWeek) {
         const res = evaluatePick(pick, g);
         pickBadge = `<span class="hist-pick ${getResultBadgeClass(res)}">${escHtml(pick.selectedTeam)} ${res === PICK_RESULT.WIN ? '✓' : res === PICK_RESULT.LOSS ? '✗' : ''}</span>`;
       }
-      const score = (g.homeScore != null && g.awayScore != null) ? `${g.awayScore}–${g.homeScore}` : '';
+      const score = (g.homeScore != null && g.awayScore != null) ? `${numHtml(g.awayScore)}–${numHtml(g.homeScore)}` : '';
       return `<div class="hist-game-row">
         <div class="hist-matchup">${escHtml(getTeamDisplay(g, 'away'))} @ ${escHtml(getTeamDisplay(g, 'home'))}
           <span class="text-muted text-xs">${escHtml(formatSpread(g.lockedSpread ?? g.spread, g.favorite, g) || '')}</span></div>
@@ -3582,9 +3593,13 @@ function renderExtraPointInput(week) {
       <label class="form-label" for="ep-input">🎯 The Ischemic Extra Point <span class="text-muted text-xs">(blackjack rules)</span></label>
       <p class="text-muted text-xs mb-sm">Longest MADE field goal on this week's slate, in yards. Closest without going over wins. Over = bust. Exact = blackjack.</p>
       <input class="form-input" id="ep-input" type="number" inputmode="numeric" min="15" max="75" step="1"
-        placeholder="e.g. 52" value="${val}" />
+        placeholder="e.g. 52" value="${numHtml(val)}" />
     </div>`;
 }
+// Test-only seam (the `_rulesEditorHTMLForTest` convention, app.js:13221) —
+// renderExtraPointInput/renderTiebreakerInput are module-private and want a
+// live container, so xsstest [14] drives them directly. No production caller.
+export const _extraPointInputHTMLForTest = renderExtraPointInput;
 
 function renderTiebreakerInput(week) {
   if (!week?.tiebreakerQuestion) return '';
@@ -3593,10 +3608,11 @@ function renderTiebreakerInput(week) {
     <div class="tiebreaker-question">${escHtml(week.tiebreakerQuestion)}</div>
     <input class="form-input" id="tb-input" type="number" min="0" step="1"
       placeholder="Your numeric guess…" style="margin-top:10px"
-      value="${state.draftTiebreaker !== null && state.draftTiebreaker !== undefined ? state.draftTiebreaker : ''}" />
+      value="${numHtml(state.draftTiebreaker !== null && state.draftTiebreaker !== undefined ? state.draftTiebreaker : '')}" />
     <p class="text-muted text-xs mt-sm">Required. Closest guess wins ties.</p>
   </div>`;
 }
+export const _tiebreakerInputHTMLForTest = renderTiebreakerInput;
 
 function renderLoginScreen(week) {
   const players = getPlayers().filter(p => p.active);
@@ -3743,7 +3759,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
     </div>
     ${tbGuess!==null?`<div class="tiebreaker-card tiebreaker-submitted">
       <span class="tiebreaker-label">🎯 Your Tiebreaker Guess</span>
-      <span class="tiebreaker-value">${tbGuess}</span>
+      <span class="tiebreaker-value">${numHtml(tbGuess)}</span>
     </div>`:''}
     <div id="submitted-games"></div>
     <div class="card mt-md text-center" style="padding:16px">
@@ -3985,9 +4001,9 @@ function renderLiveScoreBlockHTML(game) {
   const rz = redZoneDisplay(liveEntry, game, { short: false });
   return `<div class="live-block">
     <div class="live-score">
-      <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${game.awayScore}</div>
+      <div class="score-num${game.awayScore>game.homeScore?' score-leading':''}">${numHtml(game.awayScore)}</div>
       <div class="score-status${noPulseCls}">${game.status===GAME_STATUS.LIVE?'🔴 LIVE':'FINAL'}</div>
-      <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${game.homeScore}</div>
+      <div class="score-num${game.homeScore>game.awayScore?' score-leading':''}">${numHtml(game.homeScore)}</div>
     </div>${liveDisp ? `<div class="live-status-detail text-xs text-muted text-center">${escHtml(liveDisp.text)}</div>` : ''}${rz ? `<div class="rz-line text-center"><span class="rz-mark" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span></div>` : ''}
   </div>`;
 }
@@ -4039,8 +4055,8 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
 
   const dqBadge = renderSourceBadge(game);
   const timeStr = fmtTime(game.kickoff, game);  // passes game for TBD detection
-  const homeRk  = game.homeRank ? `#${game.homeRank} ` : '';
-  const awayRk  = game.awayRank ? `#${game.awayRank} ` : '';
+  const homeRk  = game.homeRank ? `#${numHtml(game.homeRank)} ` : '';
+  const awayRk  = game.awayRank ? `#${numHtml(game.awayRank)} ` : '';
   const dis     = isLocked ? 'disabled' : '';
 
   // School (Mascot) display
@@ -4152,7 +4168,7 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
         <button class="${awayCls}" data-team="${escHtml(game.awayTeam)}" data-game-id="${game.gameId}" ${dis}>${escHtml(awayDisplay)}</button>
         <button class="${homeCls}" data-team="${escHtml(game.homeTeam)}" data-game-id="${game.gameId}" ${dis}>${escHtml(homeDisplay)}</button>
       </div>`:''}
-      ${game.espnEventId?`<div class="text-muted text-xs mt-sm text-right">ESPN: ${game.espnEventId}</div>`:''}
+      ${game.espnEventId?`<div class="text-muted text-xs mt-sm text-right">ESPN: ${escHtml(game.espnEventId)}</div>`:''}
     </div>
   </div>`;
 }
@@ -4591,7 +4607,7 @@ export function renderAlmaMaterWatch(weekId, games) {
     const opp     = isHome ? teamSchool(game,'away') : teamSchool(game,'home');
     const myRank  = rank;
     const oppRank = isHome ? game.awayRank : game.homeRank;
-    const rankStr = myRank ? `#${myRank} ` : '';
+    const rankStr = myRank ? `#${numHtml(myRank)} ` : '';
     const oppStr  = oppRank ? `#${oppRank} ${opp}` : opp;
     const loc     = isHome ? 'vs' : '@';
     const timeStr = fmtTime(game.kickoff, game);
@@ -4607,7 +4623,7 @@ export function renderAlmaMaterWatch(weekId, games) {
       const tied = myScore === oppScore;
       const wl = tied ? 'T' : (won ? 'W' : 'L');
       const cls = tied ? 'alma-result-tie' : (won ? 'alma-result-win' : 'alma-result-loss');
-      scoreStr = ` · <span class="alma-result-pill ${cls}">${wl} ${myScore}–${oppScore}</span>`;
+      scoreStr = ` · <span class="alma-result-pill ${cls}">${wl} ${numHtml(myScore)}–${numHtml(oppScore)}</span>`;
     } else if (game.status===GAME_STATUS.LIVE&&game.homeScore!==null) {
       const myScore  = isHome?game.homeScore:game.awayScore;
       const oppScore = isHome?game.awayScore:game.homeScore;
@@ -4616,7 +4632,7 @@ export function renderAlmaMaterWatch(weekId, games) {
       const tied = myScore === oppScore;
       const status = tied ? 'TIED' : (ahead ? 'WINNING' : 'LOSING');
       const cls = tied ? '' : (ahead ? 'alma-live-ahead' : 'alma-live-behind');
-      scoreStr = ` · <span class="alma-live-pill ${cls}"><span class="live-dot"></span>${status} ${myScore}–${oppScore}</span>`;
+      scoreStr = ` · <span class="alma-live-pill ${cls}"><span class="live-dot"></span>${status} ${numHtml(myScore)}–${numHtml(oppScore)}</span>`;
     }
 
     return `<div class="alma-watch-row">
@@ -5130,7 +5146,7 @@ function renderDashboardInner() {
     // the week a question exists again.
     'dash-tiebreaker': week.tiebreakerQuestion?`<div class="tiebreaker-card tiebreaker-dashboard">
       <span class="tiebreaker-label">🎯 Tiebreaker: ${escHtml(week.tiebreakerQuestion)}</span>
-      ${actualTB!==null?`<div class="tb-actual">Actual: <strong>${actualTB}</strong></div>`:'<div class="text-muted text-xs">Actual answer not entered yet.</div>'}
+      ${actualTB!==null?`<div class="tb-actual">Actual: <strong>${numHtml(actualTB)}</strong></div>`:'<div class="text-muted text-xs">Actual answer not entered yet.</div>'}
     </div>`:'',
   };
   const dashComposed = composeSections('dashboard', dashSections);
@@ -5387,14 +5403,14 @@ export function renderScoreSummaryRowsHTML(week, weeklyResults, players, actualT
     } else if (!submitted) {
       tbDisp = '—';                                      // hasn't submitted
     } else if (actualTB !== null) {
-      tbDisp = `${r.tiebreakerGuess} (Δ${r.tiebreakerDelta})`;
+      tbDisp = `${numHtml(r.tiebreakerGuess)} (Δ${numHtml(r.tiebreakerDelta)})`;
     } else {
-      tbDisp = String(r.tiebreakerGuess);
+      tbDisp = numHtml(r.tiebreakerGuess);
     }
     return `<tr class="${hideStanding ? '' : (r.isWinner?'winner-row':r.isLoser?'loser-row':'')}">
       ${hideStanding
         ? '<td class="rank-cell">—</td>'
-        : `<td class="rank-cell rank-${r.rank}">${r.rank}</td>`}
+        : `<td class="rank-cell rank-${numHtml(r.rank)}">${numHtml(r.rank)}</td>`}
       <td class="player-name-cell">${escHtml(name)}${hideStanding ? '' : (r.isWinner?' 🏆':r.isLoser?' 💀':'')}${(!hideStanding && r.wonByTiebreaker)?' <span class="text-xs text-muted">(TB)</span>':''}</td>
       <td class="result-win">${blind ? '—' : r.correctPicks}</td>
       <td class="result-loss">${blind ? '—' : r.incorrectPicks}</td>
@@ -5480,7 +5496,7 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     const kickoffStr = fmtTime(game.kickoff, game);
     let stateIndicator = '';
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
-      stateIndicator = `<span class="status-pill status-pill-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
+      stateIndicator = `<span class="status-pill status-pill-final">FINAL ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
       // Item 2 Pass B (DI-4) — append the captured quarter/clock text, verbatim,
       // right next to the existing LIVE pill. No entry -> disp is null -> the
@@ -5496,7 +5512,7 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
       // it renders once per row and never inside the blinded •••/▲/▽ language.
       const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortTeam });
       const rzMark = rz ? `<span class="rz-mark" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
-      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${game.awayScore}–${game.homeScore}${detailText}</span>${rzMark}`;
+      stateIndicator = `<span class="live-pill" style="font-size:.66rem"><span class="live-dot${dotCls}"></span>LIVE ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}${detailText}</span>${rzMark}`;
     }
     const statusInfo = `<span class="kickoff-time">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -5591,7 +5607,7 @@ function renderReactionStrip(weekId, gameId, players) {
     return `<button type="button" class="reaction-chip${mine?' reaction-chip-mine':''}"
       data-week-id="${escHtml(weekId)}" data-game-id="${escHtml(gameId)}" data-emoji="${escHtml(emoji)}"
       title="${escHtml(names)}">
-      <span class="reaction-chip-emoji">${emoji}</span>
+      <span class="reaction-chip-emoji">${escHtml(emoji)}</span>
       <span class="reaction-chip-count">${pids.length}</span>
     </button>`;
   }).join('');
@@ -5614,6 +5630,10 @@ function renderReactionStrip(weekId, gameId, players) {
 
   return `<span class="reaction-strip" data-reaction-strip="${escHtml(weekId)}::${escHtml(gameId)}">${chips}${addBtn}</span>`;
 }
+// Test-only seam (the `_rulesEditorHTMLForTest` convention, app.js:13221) —
+// the dashboard reaction strip is module-private; xsstest [15] drives it
+// directly with a poisoned emoji key. No production caller.
+export const _reactionStripForTest = renderReactionStrip;
 
 /**
  * Re-renders just one game's reaction strip after a toggle, so we don't have
@@ -5646,8 +5666,12 @@ function bindReactionHandlers(players) {
       const session = getSession();
       if (!session?.playerId) { showToast('Log in as a player to react','warning'); return; }
       const { weekId, gameId, emoji } = btn.dataset;
+      // toggleReaction() now REFUSES an emoji outside REACTION_PALETTE and
+      // returns `false` (storage.js, mirroring setAccent). Guard before
+      // .includes() — a bare false here is a TypeError that would break the
+      // strip for everyone.
       const after = toggleReaction(weekId, gameId, emoji, session.playerId);
-      if (after.includes(session.playerId)) { try { sendGameReact(gameId, emoji, session.playerId); } catch {} }
+      if (Array.isArray(after) && after.includes(session.playerId)) { try { sendGameReact(gameId, emoji, session.playerId); } catch {} }
       refreshReactionStrip(weekId, gameId, players);
     });
   });
@@ -5671,7 +5695,7 @@ function bindReactionHandlers(players) {
           const session = getSession();
           if (!session?.playerId) { showToast('Log in to react','warning'); picker.remove(); return; }
           const after = toggleReaction(weekId, gameId, opt.dataset.emoji, session.playerId);
-          if (after.includes(session.playerId)) { try { sendGameReact(gameId, opt.dataset.emoji, session.playerId); } catch {} }
+          if (Array.isArray(after) && after.includes(session.playerId)) { try { sendGameReact(gameId, opt.dataset.emoji, session.playerId); } catch {} }
           picker.remove();
           refreshReactionStrip(weekId, gameId, players);
         });
@@ -5901,7 +5925,7 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
     const kickoffStr = fmtTime(game.kickoff, game);
     let stateIndicator = '';
     if (game.status === GAME_STATUS.FINAL && game.homeScore !== null) {
-      stateIndicator = `<span class="dc-status dc-final">FINAL ${game.awayScore}–${game.homeScore}</span>`;
+      stateIndicator = `<span class="dc-status dc-final">FINAL ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>`;
     } else if (game.status === GAME_STATUS.LIVE && game.homeScore !== null) {
       // Item 2 Pass B (DI-5) — a SEPARATE chip (own dc-status pill), never
       // appended inline into the score chip's text, so the ≤14-char budget
@@ -5916,7 +5940,7 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       // lose the feature.
       const rz = redZoneDisplay(liveStatusById.get(game.gameId), game, { teamLabel: shortLabel });
       const rzChip = rz ? `<span class="dc-status dc-redzone" aria-label="${escHtml(rz.ariaLabel)}">${escHtml(rz.label)}</span>` : '';
-      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${game.awayScore}–${game.homeScore}</span>${detailChip}${rzChip}`;
+      stateIndicator = `<span class="dc-status dc-live"><span class="live-dot${dotCls}"></span>${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>${detailChip}${rzChip}`;
     }
     const statusInfo = `<span class="dc-status dc-scheduled">${escHtml(kickoffStr)}</span>${stateIndicator}`;
 
@@ -6271,7 +6295,7 @@ export function renderAlmaMaterRankings() {
   });
 
   const rows = sortAlmaMaterEntries(entries).map(({ alma, rank }) => {
-    const rankStr = rank ? `<span class="rank-badge">#${rank} AP</span>` : '<span class="text-muted text-xs">Unranked</span>';
+    const rankStr = rank ? `<span class="rank-badge">#${numHtml(rank)} AP</span>` : '<span class="text-muted text-xs">Unranked</span>';
     // BUG-6 (2026-09-05) — was `getPlayers().find(...)`, which can only ever
     // return ONE player: Texas A&M is claimed by both Drew and Kihoon and the
     // row named only Drew. Now the shared almaMaterClaimants() predicate (see
@@ -6505,11 +6529,11 @@ function renderCommPage() {
             <div class="flex gap-sm flex-wrap mb-md">
               <div class="form-group" style="flex:1;min-width:120px;margin:0">
                 <label class="form-label">Start Date</label>
-                <input class="form-input" type="date" id="week-start" value="${week.startDate||''}" />
+                <input class="form-input" type="date" id="week-start" value="${escHtml(week.startDate||'')}" />
               </div>
               <div class="form-group" style="flex:1;min-width:120px;margin:0">
                 <label class="form-label">End Date</label>
-                <input class="form-input" type="date" id="week-end" value="${week.endDate||''}" />
+                <input class="form-input" type="date" id="week-end" value="${escHtml(week.endDate||'')}" />
               </div>
             </div>
             <div class="flex gap-sm flex-wrap mb-md">
@@ -6749,7 +6773,7 @@ function renderCommPage() {
             <div class="form-group"><label class="form-label">Actual Value</label>
               <div class="flex gap-sm">
                 <input class="form-input" id="tb-actual" type="number" style="flex:1"
-                  value="${week.actualTiebreakerValue!==null?week.actualTiebreakerValue:''}" placeholder="Enter actual…" />
+                  value="${week.actualTiebreakerValue!==null?numHtml(week.actualTiebreakerValue):''}" placeholder="Enter actual…" />
                 <button class="btn btn-secondary btn-sm" id="auto-calc-tb-btn">Auto-Calc</button>
               </div>
             </div>
@@ -6961,7 +6985,7 @@ function renderCommPage() {
       <div class="admin-section" data-comm-tab="settings">
         <div class="admin-section-title">League Rules</div>
         <div class="card">
-          <textarea class="form-textarea" id="rules-editor" style="min-height:180px;font-size:.8rem;font-family:monospace">${getRulesEditorText()}</textarea>
+          ${rulesEditorHTML()}
           <div class="flex gap-sm mt-sm">
             <button class="btn btn-primary btn-sm" id="save-rules-btn">Save Rules</button>
             <button class="btn btn-ghost btn-sm" id="reset-rules-btn">Reset Default</button>
@@ -7198,8 +7222,8 @@ function renderDemoBatchGrid(games) {
       `<option value="${s}"${g.status===s?' selected':''}>${s}</option>`).join('');
     return `<tr data-game-id="${g.gameId}">
       <td class="batch-matchup">${escHtml(matchup(g))}</td>
-      <td><input class="form-input batch-home-score" type="number" min="0" inputmode="numeric" value="${hs}" placeholder="—" aria-label="Home score" /></td>
-      <td><input class="form-input batch-away-score" type="number" min="0" inputmode="numeric" value="${as_}" placeholder="—" aria-label="Away score" /></td>
+      <td><input class="form-input batch-home-score" type="number" min="0" inputmode="numeric" value="${numHtml(hs)}" placeholder="—" aria-label="Home score" /></td>
+      <td><input class="form-input batch-away-score" type="number" min="0" inputmode="numeric" value="${numHtml(as_)}" placeholder="—" aria-label="Away score" /></td>
       <td><select class="form-select batch-status" aria-label="Status">${statusOpts}</select></td>
     </tr>`;
   }).join('');
@@ -7527,6 +7551,16 @@ function availAddPayloadJSON(game, week) {
     venue:game.venue||null, neutralSite:game.neutralSite||false,
     lastUpdated:new Date().toISOString(),
   });
+  // NOTE (XSS-HARDEN round 2, 2026-09-12 — reported, NOT changed here): this
+  // JSON lands in a SINGLE-QUOTED attribute (`data-game='…'`) and escapes only
+  // `'`. That is sufficient — the attribute cannot be closed, and `<`/`>`
+  // inside an attribute VALUE are inert — so there is no vulnerability to fix
+  // and this batch leaves it alone. It is fragile rather than broken: anyone
+  // who requotes this attribute to double quotes makes it live. Widening the
+  // escape here is a separate change, because requesttest.mjs:405 asserts on
+  // the RAW attribute text round-tripping through JSON.parse() and would have
+  // to move with it (a browser decodes entities when it reads
+  // `btn.dataset.game`; that test does not).
   return payload.replace(/'/g,"&#39;");
 }
 
@@ -7541,9 +7575,9 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
     return `<div class="game-admin-card" style="${onSlate?'opacity:.65':''}">
       <div class="game-admin-header">
         <div class="game-admin-matchup">
-          ${game.awayRank?`#${game.awayRank} `:''}${escHtml(td(game,'away'))}
+          ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
+          ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge ml-sm">⭐</span>':''}
           ${game.nationalTV?`<span class="national-tv-badge ml-sm">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grFolded)}
@@ -7559,7 +7593,7 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
         <span>${fmtTime(game.kickoff, game)}</span>
         <span style="color:${game.spread!==null?'inherit':'var(--text-muted)'}">${spreadStr}</span>
         ${(() => { const loc = formatVenueDisplay(game); return loc ? `<span class="text-muted text-xs">📍 ${escHtml(loc)}${game.neutralSite?' 🌍':''}</span>` : ''; })()}
-        ${game.espnEventId?`<code style="font-size:.65rem;color:var(--text-muted)">ESPN:${game.espnEventId}</code>`:''}
+        ${game.espnEventId?`<code style="font-size:.65rem;color:var(--text-muted)">ESPN:${escHtml(game.espnEventId)}</code>`:''}
       </div>
     </div>`;
   }).join('');
@@ -7586,9 +7620,9 @@ export function renderAdminGamesList(games, week, overrides) {
       ${readyBanner}
       <div class="game-admin-header">
         <div class="game-admin-matchup">
-          ${game.awayRank?`#${game.awayRank} `:''}${escHtml(td(game,'away'))}
+          ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${game.homeRank?`#${game.homeRank} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
+          ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?'<span class="alma-mater-badge">⭐</span>':''}
           ${game.nationalTV?`<span class="national-tv-badge">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grSlateFolded)}
@@ -7605,8 +7639,8 @@ export function renderAdminGamesList(games, week, overrides) {
         <span>Spread: <strong style="color:${sv!==null?'inherit':'var(--text-muted)'}">${spreadStr}</strong>
           <em class="text-muted text-xs">${game.spreadSource==='espn'?'ESPN':'Manual'}</em></span>
         <span class="badge badge-${game.status}">${game.status}</span>
-        ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${game.awayScore}–${game.homeScore}</span>`:''}
-        ${game.espnEventId?`<code style="font-size:.65rem">ESPN:${game.espnEventId}</code>`:''}
+        ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>`:''}
+        ${game.espnEventId?`<code style="font-size:.65rem">ESPN:${escHtml(game.espnEventId)}</code>`:''}
         ${mu?'<span class="badge badge-open">🔓 Unlocked</span>':''}
       </div>
     </div>`;
@@ -7850,7 +7884,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       // with the ordinary "Week: locked" success toast above.
       if(statusResult?.spreadLockRefusals?.length){
         const names=statusResult.spreadLockRefusals.map(g=>`${g.awayTeam} @ ${g.homeTeam}`).join(', ');
-        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length>1?'s':''} — sign contradicts recorded favorite: ${escHtml(names)}. Fix the spread/favorite in Games, then lock again.`,'error');
+        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length>1?'s':''} — sign contradicts recorded favorite: ${names}. Fix the spread/favorite in Games, then lock again.`,'error');
       }
       renderCommPage();
     });
@@ -9256,7 +9290,7 @@ export function renderTiebreakerGuessesAdmin(week, players, actualTB) {
     <div class="flex gap-sm flex-wrap">
       ${guesses.map(x=>x.blind
         ?`<span class="badge badge-final tb-guess-blind">${escHtml(x.player.displayName)}: <span title="Hidden until the games kick off">•••</span></span>`
-        :`<span class="badge badge-final">${escHtml(x.player.displayName)}: ${x.guess}${x.delta!==null?` (Δ${x.delta})`:''}</span>`).join('')}
+        :`<span class="badge badge-final">${escHtml(x.player.displayName)}: ${numHtml(x.guess)}${x.delta!==null?` (Δ${numHtml(x.delta)})`:''}</span>`).join('')}
     </div>${blindNote}`;
 }
 
@@ -9339,7 +9373,7 @@ function handleObligationAction(obId, action) {
     showToast('Denied — back to unpaid.', 'error');
   } else if (action === 'mark' && next === 'pending') {
     saveObligation({ ...ob, status: next, deniedReason: null });
-    showToast(`Marked as paid — waiting on ${escHtml(recipientName)} or the commissioner to confirm.`, 'warning');
+    showToast(`Marked as paid — waiting on ${recipientName} or the commissioner to confirm.`, 'warning');
   } else if (action === 'mark' && next === 'paid') {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
@@ -9350,7 +9384,7 @@ function handleObligationAction(obId, action) {
     const settled = { ...ob, status: next, paidAt: new Date().toISOString(), deniedReason: null };
     saveObligation(settled);
     try { postObligationSettledNotice(settled); } catch (e) { console.warn('[lifecycle] obligation-settled hook failed', e); }
-    showToast(`Confirmed — ${escHtml(payerName)} paid ${escHtml(recipientName)}.`, 'success');
+    showToast(`Confirmed — ${payerName} paid ${recipientName}.`, 'success');
   } else if (action === 'undo') {
     saveObligation({ ...ob, status: next, paidAt: null });
   }
@@ -9380,13 +9414,13 @@ function handleOb2025Action(obligationId, action) {
     showToast('Denied — back to unpaid.', 'error');
   } else if (action === 'mark' && next === 'pending') {
     applyStatus(next);
-    showToast(`Marked as paid — waiting on ${escHtml(row.recipientName)} or the commissioner to confirm.`, 'warning');
+    showToast(`Marked as paid — waiting on ${row.recipientName} or the commissioner to confirm.`, 'warning');
   } else if (action === 'mark' && next === 'paid') {
     applyStatus(next);
     showToast(role === 'creditor' ? 'Confirmed — marked paid.' : 'Marked paid ✅', 'success');
   } else if (action === 'confirm') {
     applyStatus(next);
-    showToast(`Confirmed — ${escHtml(row.payerName)} paid ${escHtml(row.recipientName)}.`, 'success');
+    showToast(`Confirmed — ${row.payerName} paid ${row.recipientName}.`, 'success');
   } else if (action === 'undo') {
     applyStatus(next);
   }
@@ -9459,7 +9493,7 @@ function renderSeason2025RecordSection() {
           <table class="dashboard-table">
             <thead><tr><th>Rk</th><th>Player</th><th>Reg</th><th>EP</th><th>Conf ×2</th><th>Bowls</th><th>R1 ×2</th><th>QF ×2</th><th>Semis ×3</th><th>Total</th></tr></thead>
             <tbody>${SEASON_2025.standings.map(s=>`<tr>
-              <td>${s.rank}</td><td class="player-name-cell">${escHtml(s.name)} <span class="text-xs text-muted">"${escHtml(s.alias)}"</span></td>
+              <td>${numHtml(s.rank)}</td><td class="player-name-cell">${escHtml(s.name)} <span class="text-xs text-muted">"${escHtml(s.alias)}"</span></td>
               <td>${s.reg}</td><td>${s.extraPt}</td><td>${s.conf}</td><td>${s.bowls}</td><td>${s.cfpR1}</td><td>${s.cfpQF}</td><td>${s.semis??'DNP'}</td><td><strong>${s.total}</strong></td>
             </tr>`).join('')}</tbody>
           </table>
@@ -10022,10 +10056,10 @@ function showGameModal(game, week, onSave) {
     <div class="form-group"><label class="form-label">Venue (optional)</label><input class="form-input" id="m-venue" value="${escHtml(game?.venue||'')}" /></div>
     <div class="form-group"><label class="form-label">Home Conference</label><input class="form-input" id="m-hconf" value="${escHtml(game?.homeConference||'')}" /></div>
     <div class="form-group"><label class="form-label">Away Conference</label><input class="form-input" id="m-aconf" value="${escHtml(game?.awayConference||'')}" /></div>
-    <div class="form-group"><label class="form-label">Home Rank (blank=unranked)</label><input class="form-input" id="m-hrank" type="number" value="${game?.homeRank||''}" /></div>
-    <div class="form-group"><label class="form-label">Away Rank</label><input class="form-input" id="m-arank" type="number" value="${game?.awayRank||''}" /></div>
-    ${game?`<div class="form-group"><label class="form-label">Home Final Score</label><input class="form-input" id="m-hs" type="number" value="${game.homeScore??''}" /></div>
-    <div class="form-group"><label class="form-label">Away Final Score</label><input class="form-input" id="m-as" type="number" value="${game.awayScore??''}" /></div>
+    <div class="form-group"><label class="form-label">Home Rank (blank=unranked)</label><input class="form-input" id="m-hrank" type="number" value="${numHtml(game?.homeRank)}" /></div>
+    <div class="form-group"><label class="form-label">Away Rank</label><input class="form-input" id="m-arank" type="number" value="${numHtml(game?.awayRank)}" /></div>
+    ${game?`<div class="form-group"><label class="form-label">Home Final Score</label><input class="form-input" id="m-hs" type="number" value="${numHtml(game.homeScore)}" /></div>
+    <div class="form-group"><label class="form-label">Away Final Score</label><input class="form-input" id="m-as" type="number" value="${numHtml(game.awayScore)}" /></div>
     <div class="form-group"><label class="form-label">Status</label>
       <select class="form-select" id="m-status">
         <option value="scheduled"${game.status==='scheduled'?' selected':''}>Scheduled</option>
@@ -10361,7 +10395,7 @@ function showResetPinModal(playerId, displayName) {
     if(!pin||pin.length<4){showToast('PIN must be at least 4 digits','error');return;}
     if(pin!==pin2){showToast('PINs do not match','error');return;}
     setPlayerPin(playerId,pin);
-    showToast(`✅ PIN updated for ${escHtml(displayName)}`,'success');ov.remove();renderCommPage();
+    showToast(`✅ PIN updated for ${displayName}`,'success');ov.remove();renderCommPage();
   });
 }
 
@@ -11549,7 +11583,7 @@ export function renderCommExtraPointCardHTML(week) {
       return `<span class="ep-admin-guess ep-admin-guess-blind">${escHtml(p.displayName)}: <strong title="Hidden until the games kick off">•••</strong></span>`;
     }
     const g = getExtraPointGuess(week.weekId, p.playerId);
-    return `<span class="ep-admin-guess">${escHtml(p.displayName)}: <strong>${g == null ? '—' : g + ' yd'}</strong></span>`;
+    return `<span class="ep-admin-guess">${escHtml(p.displayName)}: <strong>${g == null ? '—' : numHtml(g) + ' yd'}</strong></span>`;
   }).join(' ');
   const blindNote = canSeeOthers ? '' :
     '<p class="text-muted text-xs" style="margin:4px 0 0">Other players\' guesses stay hidden until kickoff — yours is still editable.</p>';
@@ -11568,7 +11602,7 @@ export function renderCommExtraPointCardHTML(week) {
         <div class="form-group" style="margin-bottom:0">
           <label class="form-label" style="font-size:.7rem">Actual longest FG (yards)</label>
           <input class="form-input" id="ep-actual-input" type="number" min="15" max="75" style="width:110px"
-            value="${week.extraPointActual != null ? week.extraPointActual : ''}" />
+            value="${numHtml(week.extraPointActual != null ? week.extraPointActual : '')}" />
         </div>
         <button class="btn btn-primary btn-sm" id="ep-save-btn">Save &amp; Grade</button>
         ${graded ? '<button class="btn btn-ghost btn-sm" id="ep-post-btn">📣 Post result to chat</button>' : ''}
@@ -12544,7 +12578,7 @@ export function tickAutoTransition() {
         // caller. Same showToast() the rest of this module already uses.
         if (autoSpreadLockRefusals.length) {
           const names = autoSpreadLockRefusals.map(g => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
-          showToast(`⚠️ Auto-lock: spread NOT frozen for ${autoSpreadLockRefusals.length} game${autoSpreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${escHtml(names)}. Fix in Commissioner → Games, then lock manually.`, 'error');
+          showToast(`⚠️ Auto-lock: spread NOT frozen for ${autoSpreadLockRefusals.length} game${autoSpreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. Fix in Commissioner → Games, then lock manually.`, 'error');
         }
       }
     }
@@ -13193,6 +13227,23 @@ function getRulesEditorText(useDefault=false) {
   return rules.map(s=>`## ${s.section}\n${s.items.map(i=>`- ${i}`).join('\n')}`).join('\n\n');
 }
 
+/**
+ * The Rules editor's <textarea>, extracted from renderCommPage() so the sink
+ * is reachable from xsstest.mjs [7] (renderCommPage() is private and wants a
+ * live #page-commissioner). ONE copy of the markup, per CONVENTIONS #21 — the
+ * panel calls this, the test calls this.
+ */
+function rulesEditorHTML() {
+  // XSS-HARDEN round 2, C1 (2026-09-12) — escHtml() AT THE SINK. The body of
+  // a <textarea> is an HTML context like any other: a `</textarea>` inside a
+  // custom rule closes the element early and everything after it is parsed as
+  // markup, in the commissioner's own session. escHtml() here is also
+  // round-trip-safe, because the browser DECODES entities when it builds
+  // `.value`, which is what "Save Rules" reads back through parseRulesText().
+  return `<textarea class="form-textarea" id="rules-editor" style="min-height:180px;font-size:.8rem;font-family:monospace">${escHtml(getRulesEditorText())}</textarea>`;
+}
+export const _rulesEditorHTMLForTest = rulesEditorHTML;
+
 function parseRulesText(text) {
   const lines=[];let cur=null;
   for(const line of text.split('\n')){
@@ -13327,9 +13378,53 @@ function escHtml(s){
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function showToast(msg,type='success'){
+/**
+ * XSS-HARDEN (2026-09-12) — the NUMERIC render boundary (CONVENTIONS #7).
+ *
+ * Scores and ranks are numbers when ESPN's parser or the game modal writes
+ * them, but they reach the renderers through the synced games blob, and
+ * saveGame() has no coercion and no allow-list — whatever a bad import or a
+ * hand-edited Sheet cell leaves in the blob is what gets interpolated. The
+ * ledger §6 open row is exactly this.
+ *
+ * WHY NOT JUST escHtml(): escHtml() opens with `if(!s)return''`, so
+ * escHtml(0) is the EMPTY STRING. Wrapping the score sites in escHtml would
+ * have blanked every zero on the board — a 0-0 final, a shutout, a scoreless
+ * first quarter. So: finite numbers render as numbers (0 included), and
+ * anything else falls through to escHtml so a malformed value stays VISIBLE
+ * to the commissioner as inert text instead of being parsed as markup.
+ *
+ * ATTRIBUTE POSITION: safe in a DOUBLE-QUOTED attribute only. escHtml()
+ * escapes & < > and the double quote, but deliberately NOT the apostrophe
+ * (it is the commonest character in league copy and escaping it reads badly),
+ * so a value dropped into a single-quoted attribute could still close it.
+ * Every markup site in this app double-quotes its attributes; xsstest [13a]
+ * is the guard that keeps that true.
+ */
+function numHtml(v){
+  if(v===null||v===undefined||String(v).trim()==='')return'';
+  const n=typeof v==='boolean'?NaN:Number(v);
+  return Number.isFinite(n)?String(n):escHtml(String(v));
+}
+
+/**
+ * XSS-HARDEN (2026-09-12) — ESCAPE AT THE SINK, not at the 200-odd call
+ * sites. showToast() assigned `t.innerHTML = msg` raw, which made every
+ * caller an HTML sink: team names from ESPN, player display names, backend
+ * error strings, week labels. Escaping here is the only fix that cannot be
+ * forgotten by the next person who adds a toast.
+ *
+ * `html:true` is the explicit opt-in for a caller that genuinely needs
+ * markup. NOTHING passes it today (audited 2026-09-12: no showToast() call
+ * site in the app contains a tag), and any caller that starts to must be
+ * audited individually. Callers must NOT pre-escape — the sink escapes
+ * exactly once, or "Texas A&M" renders as "Texas A&amp;M".
+ */
+function showToast(msg,type='success',{html=false}={}){
   const c=document.getElementById('toast-container');if(!c)return;
-  const t=document.createElement('div');t.className=`toast ${type}`;t.innerHTML=msg;c.appendChild(t);
+  const t=document.createElement('div');t.className=`toast ${type}`;
+  t.innerHTML=html?msg:escHtml(msg);
+  c.appendChild(t);
   setTimeout(()=>{t.style.cssText+='opacity:0;transition:opacity .3s';setTimeout(()=>t.remove(),300);},3200);
 }
 
