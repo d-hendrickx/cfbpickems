@@ -2908,6 +2908,29 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
     `[22] …and it is literally the FIRST statement in boot(), so no future insertion can quietly get in front of it (found ${JSON.stringify(bootBody.slice(afterBrace, installAt).trim().slice(0, 120))} before it)`);
   assert(bootBody.indexOf('wireSupabaseAdapter()') > installAt,
     '[22] the adapter is wired after the predicate, not before — one ordering, stated once');
+  // ── …AND *BEFORE* THE AUTH-MODE DECISION (cutover, 2026-09-18) ───────────
+  // The interlock now asks a CONFIGURATION question, and one of its two terms is
+  // "has the adapter registered its probe?" (js/auth.js). wireSupabaseAdapter()
+  // is what registers it. So a boot that ran applyAuthModeDecision() FIRST would
+  // read an unregistered probe, conclude this build has no Supabase data layer,
+  // and hold every device behind the 'interlock' gate — the exact symptom of the
+  // cutover defect, reintroduced by ordering alone with the predicate itself
+  // still correct. authtest [45] proves the predicate; this proves the order it
+  // depends on.
+  const wireAt22 = bootBody.indexOf('wireSupabaseAdapter()');
+  const decideAt22 = bootBody.indexOf('await applyAuthModeDecision()');
+  assert(decideAt22 > -1, '[22] fixture: boot()\'s awaited applyAuthModeDecision() was located');
+  assert(wireAt22 < decideAt22,
+    `[22] the adapter is wired BEFORE boot() awaits applyAuthModeDecision() (wire@${wireAt22}, decide@${decideAt22}) — the interlock's configuration test reads the registered probe, so the reverse order holds every device at the gate`);
+  {
+    // MUTANT, on a STRING (never the file): move the wiring below the decision
+    // and the rule must go red.
+    const mutant22 = bootBody
+      .replace('wireSupabaseAdapter();', '/*moved*/')
+      .replace('await applyAuthModeDecision()', 'await applyAuthModeDecision(); wireSupabaseAdapter()');
+    assert(!(mutant22.indexOf('wireSupabaseAdapter()') < mutant22.indexOf('await applyAuthModeDecision()')),
+      '[22] MUTANT: wiring the adapter at the decision instead of at the top of boot() turns that rule RED');
+  }
 
   // MUTANT PROOF for (a): reordering the two must turn the rule red. Applied to
   // a STRING, never to the file (CLAUDE.md: never git checkout to undo a test
@@ -2955,13 +2978,10 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
   {
     const cfgRaw = readFileSync(new URL('./config.json', import.meta.url), 'utf8');
     const cfg = JSON.parse(cfgRaw);
-    // CUTOVER 2026-09-18: the invariant is DI §8.1 step 3 — the two flags move TOGETHER, never one
-    // alone. Before cutover both were absent; from cutover both read 'supabase'; a rollback removes
-    // both in one commit. Either pair is legal; a split pair is the defect this assertion exists for.
-    const bothAbsent = !('dataMode' in cfg) && !('authMode' in cfg);
-    const bothOn = cfg.dataMode === 'supabase' && cfg.authMode === 'supabase';
-    assert(bothAbsent || bothOn,
-      `[22] config.json's authMode/dataMode move TOGETHER — both absent (pre-cutover / rollback) or both 'supabase' (cutover); got authMode=${JSON.stringify(cfg.authMode)} dataMode=${JSON.stringify(cfg.dataMode)}`);
+    assert(!('dataMode' in cfg),
+      `[22] config.json has NO dataMode key (got ${JSON.stringify(cfg.dataMode)}) — absent IS 'sheets' (CONVENTIONS #10), which is what every device does today`);
+    assert(!('authMode' in cfg),
+      '[22] …and still no authMode key either. DI §8.1 step 3: both are set in the SAME commit at cutover, never one alone');
 
     // BYTE-IDENTITY OF BEHAVIOUR, asked of the two functions that decide it.
     // Absent and 'sheets' must produce the same answer, and 'supabase' must be

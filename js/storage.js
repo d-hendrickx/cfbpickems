@@ -34,7 +34,7 @@ import { cacheGet, cacheSet, isBackendReady } from './backend.js';
 import * as sb from './supabase-backend.js';
 // Phase III Step 3a (DI-180f) — see the getSession() comment below. This is
 // the only new import this file gains for the whole build.
-import { getAuthMode, getSupabaseSession, isAuthDataLayerMismatch, AuthModeMismatchError } from './auth.js';
+import { getAuthMode, getSupabaseSession, isSupabaseWriteWithheld, AuthModeMismatchError } from './auth.js';
 
 const KEYS = {
   SETTINGS:    'cfbp_settings',
@@ -358,14 +358,23 @@ function save(k,v,fields) {
   // names storage.save() by function, and an interlock that lives anywhere
   // else is not an interlock. Flagged in the handoff for Drew's ruling.
   //
-  // While authMode:'supabase' is set and no Supabase DATA backend exists
-  // (js/supabase-backend.js is Step 4), identity is being resolved against a
-  // project any Google account can join while every write still lands in the
-  // six-player league's Sheet. A write in that state is the stranger-as-
-  // commissioner hazard actually happening. Refuse it, loudly and typed —
-  // never a silent no-op, which would look exactly like a successful save to
-  // every caller (AD-06).
-  if (isAuthDataLayerMismatch()) {
+  // While authMode:'supabase' is set and no Supabase DATA backend is SERVING,
+  // identity is being resolved against a project any Google account can join
+  // while the write would land somewhere that identity does not govern. A write
+  // in that state is the stranger-as-commissioner hazard actually happening.
+  // Refuse it, loudly and typed — never a silent no-op, which would look
+  // exactly like a successful save to every caller (AD-06).
+  //
+  // THE QUESTION THIS ASKS IS READINESS, NOT CONFIGURATION (2026-09-18). The
+  // predicate was split after the cutover defect: app.js's boot interlock asks
+  // whether the BUILD has a Supabase data layer (answerable before any session
+  // exists), while this guard asks whether the adapter is SERVING — false
+  // during HYDRATING / SWITCHING / HELD / OFFLINE-READONLY, which is exactly
+  // when a write must be refused. isSupabaseWriteWithheld() is the former
+  // isAuthDataLayerMismatch(), verbatim, so the behaviour here is unchanged;
+  // only the name and the question it answers are now stated. §3.3 layer 1 and
+  // authtest [44c] drive all four not-serving states.
+  if (isSupabaseWriteWithheld()) {
     throw new AuthModeMismatchError(
       `Refusing to write "${k}": authMode is 'supabase' but the data layer is still the Sheets backend.`);
   }

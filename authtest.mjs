@@ -919,7 +919,11 @@ console.log('\n[16] SEC F1 (CRITICAL) — THE INTERLOCK: supabase auth over a Sh
   //    same predicate, or they can disagree about whether the app is safe.
   const storageSrc = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8');
   const appSrc16 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert(/function save\(k,v,fields\) \{[\s\S]{0,1400}?isAuthDataLayerMismatch\(\)/.test(storageSrc),
+  // 2026-09-18 — the guard reads isSupabaseWriteWithheld(), which IS the
+  // predicate this section drives (the former isAuthDataLayerMismatch(),
+  // unchanged in behaviour). The gate decision below reads the CONFIGURATION
+  // predicate that kept its name. One question each; see [45] for why.
+  assert(/function save\(k,v,fields\) \{[\s\S]{0,1800}?isSupabaseWriteWithheld\(\)/.test(storageSrc),
     'storage.js\'s save() itself carries the guard — an interlock that lives anywhere else is not an interlock');
   assert(/if \(isAuthDataLayerMismatch\(\)\) \{\s*\n\s*forceSignedOutSession\(\);/.test(appSrc16),
     'boot() gates on the SAME isAuthDataLayerMismatch() and forces the signed-out session before anything else can run');
@@ -961,16 +965,18 @@ console.log('\n[16] SEC F1 (CRITICAL) — THE INTERLOCK: supabase auth over a Sh
     assert(/showAuthConfigErrorBanner\(\);/.test('  showAuthConfigErrorBanner();\n'),
       'canary: that rule DOES match a real call statement, so it is not vacuously green');
   }
-  assert(/isAuthDataLayerMismatch\(\)\s*\{[\s\S]{0,200}?authMode === 'supabase' && !hasSupabaseDataBackend\(\)/.test(readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8')),
-    'and the predicate is defined once, in auth.js, in terms of both halves');
+  {
+    const authSrc16 = readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8');
+    assert(/isSupabaseWriteWithheld\(\)\s*\{[\s\S]{0,300}?authMode === 'supabase' && !hasSupabaseDataBackend\(\)/.test(authSrc16),
+      'and the WRITE predicate is defined once, in auth.js, in terms of both halves — authMode plus the live data backend');
+    assert(/isAuthDataLayerMismatch\(\)\s*\{[\s\S]{0,900}?getDataMode\(\) === 'supabase' && _dataBackendProbe !== null/.test(authSrc16),
+      '…and the CONFIGURATION predicate beside it, in terms of the two config flags plus a registered probe (2026-09-18: one term answered both questions, and a fresh device could not boot the mode — [45])');
+  }
 
   // 6. config.json names the REAL hazard, not onboarding friction.
   const cfgRaw = readFileSync(new URL('./config.json', import.meta.url), 'utf8');
   const cfg = JSON.parse(cfgRaw);
-  // CUTOVER 2026-09-18: absent (pre-cutover / rollback) or 'supabase' WITH dataMode 'supabase' in the
-  // same file (DI §8.1 step 3 — the two flags never move alone). Anything else is the split state.
-  assert((cfg.authMode === undefined && cfg.dataMode === undefined) || (cfg.authMode === 'supabase' && cfg.dataMode === 'supabase'),
-    `config.json authMode/dataMode are both absent or both 'supabase' (got ${JSON.stringify(cfg.authMode)}/${JSON.stringify(cfg.dataMode)})`);
+  assert(cfg.authMode === undefined, 'config.json still has NO authMode key — absent is \'pins\' (CONVENTIONS #10)');
   assert(/commissioner of the real league|stranger would be commissioner/i.test(cfg._authComment),
     'config.json\'s _authComment names the stranger-as-commissioner hazard over the shared Sheet');
   assert(/Sheet/.test(cfg._authComment) && /hasSupabaseDataBackend/.test(cfg._authComment),
@@ -6786,11 +6792,27 @@ console.log('\n[43] STEP 3b (DI-182/DI-183) — claim codes, linking, and member
   {
     // The differing-email half, in the SAME tick: zero matches is NOT an error
     // and the player is never told "you're linked."
+    //
+    // ── RUN IN THE SHIPPING FLAG COMBINATION (2026-09-18) ───────────────────
+    // This family used to run with `dataMode` left at 'sheets', which is the one
+    // world in which isContentWithheld()'s third clause cannot fire — so the
+    // whole of DI-183 was green against a flag combination the league no longer
+    // ships. It is the combination that produced the pre-link dead end ([46]).
+    // Both flags on, the override cleared, and an IDLE adapter, here too: this
+    // path must reach the claim screen on the phones that are actually deployed.
     const calls = [];
     resetAll(scriptClient({
       link_member_by_email: () => ({ data: [], error: null }),
       _from: () => ({ data: [], error: null }),
     }, calls));
+    const sb43 = await import('./js/supabase-backend.js');
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth._resetSupabaseDataBackendForTest();
+    sb43._resetForTest();
+    sb43.init({ register: auth.registerSupabaseDataBackend, getClient: () => null, getActiveLeagueId: auth.getActiveLeagueId });
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    assert(auth.isSupabaseDataMode() === true && sb43.getState() === 'IDLE' && auth.hasSupabaseDataBackend() === false,
+      '[43b] fixture: the SHIPPING flag combination — dataMode:\'supabase\', adapter IDLE, no test override');
     storeValidSession();
     app._resetLinkFlowForTest();
     auth._setMembershipsForTest([]);
@@ -6820,6 +6842,12 @@ console.log('\n[43] STEP 3b (DI-182/DI-183) — claim codes, linking, and member
     app.renderLeagueFlowScreen('dashboard');
     assert(/Join a League/.test(dashEl43c.innerHTML) && /Create a League/.test(dashEl43c.innerHTML),
       '[43i] non-vacuity — DI-181\'s landing still offers join/create; the two screens are genuinely different, not one screen with a feature deleted');
+    // Hand the adapter back IDLE-and-unwired with the override restored, so the
+    // rest of [43] runs in the world it was written for rather than inheriting
+    // this block's flags (resetAll() clears dataMode, not the adapter).
+    sb43._resetForTest();
+    auth._resetSupabaseDataBackendForTest();
+    auth._setHasSupabaseDataBackendForTest(true);
   }
 
   // ── [43c] "THIS ISN'T ME" IS DESTRUCTIVE-FIRST (§5.3) ─────────────────────
@@ -8689,6 +8717,493 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
   storage.setBackendMode('local');
   assert(auth.isSupabaseDataMode() === false && storage.getBackendMode() === 'local',
     '[44f] teardown: the suite is handed back in dataMode:\'sheets\' with the seam local, so nothing below inherits this section\'s adapter');
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [45] THE FRESH-DEVICE CUTOVER BOOT (live defect, 2026-09-18 ~22:30 PT)
+//
+// WHAT DREW SAW. config.json flipped to authMode:'supabase' + dataMode:'supabase'
+// (commit 3fea371). Every device — including a phone that had never run the app —
+// painted the INTERLOCK hold gate: "We'll be right back / Something's not set up
+// right on our end." No Google button. No way forward. Rolled back the same night.
+//
+// WHY EVERY SECTION ABOVE STAYED GREEN THROUGH IT. Every flip-path fixture in
+// [44] primes the adapter ACTIVE first, because each of them is about a device
+// that is already signed in. NOTHING drove a device through boot()'s auth-mode
+// decision with NO SESSION in supabase mode — which is the state every device is
+// in at the instant of a cutover, and the only state that matters at one.
+//
+// THE MECHANISM, in one line: the adapter cannot hydrate before a JWT exists
+// (RLS), so on a fresh device the probe is false, so the OLD
+// isAuthDataLayerMismatch() (`authMode==='supabase' && !hasSupabaseDataBackend()`)
+// was true, so app.js:756 held the mode BEFORE offering the gate that would have
+// produced the very session the probe was waiting for. The mode could never boot.
+//
+// The predicate was answering TWO questions with one term:
+//   (1) CONFIGURATION — "is this build wired for Supabase data at all?" That is
+//       what the interlock and the picks card mean, and it is knowable at boot.
+//   (2) READINESS — "is the adapter serving right now?" That is what
+//       storage.save() must ask, and it is deliberately false most of a boot.
+// This section drives (1). [44c] already drives (2) and stays exactly as it was.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[45] The FRESH-DEVICE cutover boot — a device with no session must reach the SIGN-IN gate…');
+{
+  const sb = await import('./js/supabase-backend.js');
+
+  const quiet45 = async (fn) => {
+    const rl = console.log, rw = console.warn, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.info = ri; }
+  };
+
+  /** A PostgREST-shaped fake with exactly the surface hydrate() uses ([44]'s). */
+  function fakeClient45({ rows = {} } = {}) {
+    const thenable = (table) => ({
+      select() { return this; },
+      eq() { return this; },
+      then(res) { return res({ data: rows[table] || [], error: null }); },
+    });
+    return { from: (table) => thenable(table), rpc: async () => ({ data: [], error: null }) };
+  }
+
+  /**
+   * ONE drive of the REAL boot sequence, in boot()'s own order and through
+   * boot()'s own functions:
+   *   wireSupabaseAdapter()  — registration only, no client, no hydrate, IDLE
+   *   applyAuthModeDecision() — the config read, the interlock, the gate choice
+   * boot() itself is a DOMContentLoaded handler and is not exported; those two
+   * calls ARE the part of it this defect lives in. What only a browser can
+   * confirm is named in §12.
+   */
+  async function driveFreshBoot({ config, registerAdapter = true, client = fakeClient45() } = {}) {
+    resetAll();
+    auth._setHasSupabaseDataBackendForTest(null);    // no override — the real derivation
+    auth._resetSupabaseDataBackendForTest();
+    app._resetSupabaseSdkLoaderForTest();
+    app._resetSupabaseDataForTest();
+    await quiet45(() => sb._resetForTest());
+    // A FRESH PHONE: nothing this app has ever written is on it.
+    for (const k of ['cfbp_supabase_session', 'cfbp_supabase_active_league', 'cfbp_auth_mode_last_known',
+                     'cfbp_device_data_owner', 'cfbp_supabase_mirror', 'cfbp_site_unlocked', 'cfbp_session']) {
+      localStorage.removeItem(k);
+    }
+    if (registerAdapter) {
+      sb.init({
+        register: auth.registerSupabaseDataBackend,
+        getClient: () => client,
+        getActiveLeagueId: auth.getActiveLeagueId,
+        getIdentityEpoch: auth.getIdentityEpoch,
+        getAccountUserId: auth.getAccountUserId,
+        getDeviceDataOwnerTuple: auth.getDeviceDataOwnerTuple,
+        getDeviceDataOwner: auth.getDeviceDataOwner,
+        getSession: () => ({ isAdmin: false, playerId: 'm1' }),
+        hasValidSupabaseSession: auth.hasValidSupabaseSession,
+        isPrivilegeHeld: auth.isPrivilegeHeld,
+        hasSheetMirror: auth.hasSheetMirrorOnDevice,
+        isSiteUnlocked: storage.isSiteUnlocked,
+      });
+    }
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('config.json')) return { ok: true, json: async () => config };
+      throw new Error('network disabled in authtest');
+    };
+    const errors = [];
+    const realErr = console.error;
+    console.error = (...a) => errors.push(a.map(String).join(' '));
+    let out = null;
+    try { out = await app._applyAuthModeDecisionForTest(); }
+    finally { console.error = realErr; globalThis.fetch = realFetch; }
+    return { out, errors };
+  }
+
+  // The deployed config.json, byte-for-byte the shape commit 3fea371 shipped.
+  const CUTOVER_CONFIG = {
+    backendUrl: 'https://script.test/exec', backendToken: 'tok',
+    authMode: 'supabase', dataMode: 'supabase',
+    supabaseUrl: 'https://p.test', supabaseAnonKey: 'anon-key',
+  };
+
+  // ── R1 — DRIVE THE PAGE FORWARD FROM A FRESH DEVICE ──────────────────────
+  {
+    const { out, errors } = await driveFreshBoot({ config: CUTOVER_CONFIG });
+    assert(auth.hasValidSupabaseSession() === false && sb.getState() === 'IDLE',
+      `[45] fixture: no session on this device and the adapter is IDLE (got session=${auth.hasValidSupabaseSession()}, state=${sb.getState()}) — the state EVERY device is in at the instant of a cutover`);
+    assert(auth.getAuthMode() === 'supabase' && auth.getDataMode() === 'supabase',
+      '[45] fixture: …and both flags really did arrive from config.json');
+
+    assert(out?.hold === null,
+      `[45] R1: the auth-mode decision does NOT hold (got ${JSON.stringify(out?.hold)}) — this is the live defect: 'interlock' here is the gate Drew saw on every phone`);
+    assert(app.currentAuthHoldReason() === '',
+      `[45] R1: …no hold gate state (got ${JSON.stringify(app.currentAuthHoldReason())})`);
+    const ov = document.getElementById('site-gate-overlay');
+    assert(ov?.getAttribute('data-gate-state') !== 'hold' && ov?.getAttribute('data-hold-reason') !== 'interlock',
+      `[45] R1: …and the overlay that IS up is not the hold variant (got ${JSON.stringify(ov?.getAttribute('data-gate-state'))}/${JSON.stringify(ov?.getAttribute('data-hold-reason'))})`);
+    assert(!!document.getElementById('google-gate-submit') && /Continue with Google/.test(ov?.innerHTML || ''),
+      '[45] R1: the GOOGLE SIGN-IN GATE is painted — the one control that can produce the session the data layer is waiting for');
+    assert(auth.isSessionForcedOut() === false,
+      '[45] R1: …and the session is not force-latched to signed-out, so a sign-in that lands can actually resolve a membership');
+    assert(!errors.some(e => /\[auth\] INTERLOCK/.test(e)),
+      `[45] R1: nothing logged the interlock (got ${JSON.stringify(errors.filter(e => /INTERLOCK/.test(e)))})`);
+
+    // MUTANT, stated in place rather than by editing the module: the OLD
+    // predicate was `!hasSupabaseDataBackend()`, and in THIS fixture that probe
+    // is false. So reverting isAuthDataLayerMismatch() to the probe turns every
+    // assertion above red — which is what makes them a test of the split rather
+    // than of the wiring.
+    assert(auth.hasSupabaseDataBackend() === false && auth.isAuthDataLayerMismatch() === false,
+      '[45] R1 MUTANT-PROOF: the readiness probe is FALSE here while the CONFIGURATION predicate is false too — the old one-term predicate would have answered "mismatch" and held the mode');
+    // …and the WRITE guard still says no, because nothing is serving yet. The
+    // two questions are now visibly different in the same instant.
+    assert(auth.isSupabaseWriteWithheld() === true,
+      '[45] R1: the WRITE is still withheld in that same instant (IDLE is not serving) — the split moved the gate decision, it did not open the write path');
+  }
+
+  // ── R2 — THE SIGN-IN LANDS, THE ADAPTER HYDRATES, THE APP RESOLVES ───────
+  {
+    const client = fakeClient45();
+    await driveFreshBoot({ config: CUTOVER_CONFIG, client });
+    // A successful Google round trip, as the SDK reports it, then the membership
+    // read that follows it.
+    auth._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    await quiet45(async () => {
+      auth._fireAuthEventForTest('SIGNED_IN', { access_token: 't', user: { id: 'u-fresh', email: 'drew@test' } });
+      auth._setMembershipsForTest([{ leagueId: 'L1', memberId: 'm1', role: 'player', displayName: 'Drew', leagueName: 'IRB' }]);
+      auth.setActiveLeagueId('L1');
+    });
+    assert(auth.getActiveLeagueId() === 'L1' && auth.hasValidSupabaseSession() === true,
+      '[45] R2 fixture: a session is proven and a league is active');
+    const hydrated = await quiet45(() => app._ensureSupabaseDataHydratedForTest('boot'));
+    assert(sb.getState() === 'ACTIVE' && hydrated === true,
+      `[45] R2: ensureSupabaseDataHydrated() runs and the adapter goes ACTIVE (got ${sb.getState()}) — the hydrate the interlock used to make unreachable`);
+    assert(auth.hasSupabaseDataBackend() === true && auth.isSupabaseWriteWithheld() === false,
+      '[45] R2: …so the READINESS predicate flips and writes are allowed — the release, not just the assertion');
+    assert(app.isContentWithheld() === false,
+      '[45] R2: …and content is no longer withheld, i.e. the dashboard paints');
+    await quiet45(() => sb._resetForTest());
+  }
+
+  // ── THE REAL SEC F1 HAZARD STILL HOLDS — BOTH HALVES OF IT ───────────────
+  // The interlock exists for ONE combination: Supabase identity over a Sheets
+  // data layer (isAdmin derived from a project any Google account can join,
+  // applied to writes that land in the six players' Sheet). Splitting the
+  // predicate must not soften that by one device.
+  {
+    const { out, errors } = await driveFreshBoot({
+      config: { ...CUTOVER_CONFIG, dataMode: undefined },
+    });
+    assert(auth.getAuthMode() === 'supabase' && auth.getDataMode() !== 'supabase',
+      '[45] fixture: authMode:\'supabase\' with dataMode ABSENT — the split-flag state DI §8.1 step 3 forbids, and the one a half-finished cutover produces');
+    assert(out?.hold === 'interlock' && app.currentAuthHoldReason() === 'interlock',
+      `[45] SEC F1: …still holds the whole mode (got ${JSON.stringify(out?.hold)}) — a build with no Supabase data layer never derives a session`);
+    assert(errors.some(e => /INTERLOCK/.test(e)),
+      '[45] SEC F1: …loudly, on console.error');
+  }
+  {
+    const { out } = await driveFreshBoot({ config: CUTOVER_CONFIG, registerAdapter: false });
+    assert(auth.getDataMode() === 'supabase' && auth.hasSupabaseDataBackend() === false,
+      '[45] fixture: dataMode:\'supabase\' but NO probe registered — the adapter is not wired into this build at all');
+    assert(out?.hold === 'interlock',
+      `[45] SEC F1: …also holds (got ${JSON.stringify(out?.hold)}) — the flag alone is not a data layer, which is §0.3 item 6 read as a CONFIGURATION question`);
+  }
+
+  // ── THE TWO PREDICATES ARE DEFINED WHERE THEY ARE READ ───────────────────
+  {
+    const authSrc45 = readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8');
+    assert(/export function isAuthDataLayerMismatch\(\)\s*\{[\s\S]{0,900}?getDataMode\(\) === 'supabase' && _dataBackendProbe !== null/.test(authSrc45),
+      '[45] isAuthDataLayerMismatch() is the CONFIGURATION question — the two config flags plus a registered probe, never the live state machine');
+    assert(/export function isSupabaseWriteWithheld\(\)\s*\{[\s\S]{0,300}?authMode === 'supabase' && !hasSupabaseDataBackend\(\)/.test(authSrc45),
+      '[45] isSupabaseWriteWithheld() is the READINESS question, and it is the OLD predicate verbatim — identical behaviour at the write seam');
+    // Comments blanked for every CALL-SITE rule below, length preserved
+    // (boottest [22]'s blanker, same reason): the prose at these sites
+    // necessarily names the predicates being counted, and a rule that cannot
+    // tell a sentence from a statement counts the sentences (RG-49's shape).
+    const blank = (src) => src
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    const storageSrc45 = blank(readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8'));
+    assert(/function save\(k,v,fields\) \{[\s\S]{0,1600}?isSupabaseWriteWithheld\(\)/.test(storageSrc45)
+      && !/isAuthDataLayerMismatch/.test(storageSrc45),
+      '[45] storage.js\'s save() asks the READINESS question and no CODE in that file asks the configuration one — a write during HYDRATING/SWITCHING/HELD/OFFLINE-READONLY is still refused ([44c] drives all four)');
+    const appSrc45 = blank(readFileSync(new URL('./js/app.js', import.meta.url), 'utf8'));
+    const mismatchSites = (appSrc45.match(/[^.\w]isAuthDataLayerMismatch\(\)/g) || []).length;
+    assert(mismatchSites === 2,
+      `[45] js/app.js CALLS the configuration predicate at exactly two sites — the boot interlock and the picks card (got ${mismatchSites})`);
+    assert(!/isSupabaseWriteWithheld/.test(appSrc45),
+      '[45] …and app.js asks the readiness question through the adapter\'s own state (sb.getState()), never through the write predicate');
+    assert(/isAuthDataLayerMismatch/.test(readFileSync(new URL('./js/app.js', import.meta.url), 'utf8')),
+      '[45] canary: the blanker did not simply erase the file the two rules above are counting in');
+    // THE OVERRIDE IS TEST-ONLY, AND NOW BOTH PREDICATES HONOUR IT — so the
+    // claim "production never sets it" has to be a rule rather than a comment.
+    {
+      const { readdirSync } = await import('node:fs');
+      const dir = new URL('./js/', import.meta.url);
+      const mods = readdirSync(dir).filter(f => f.endsWith('.js'));
+      assert(mods.length >= 15, `[45] fixture: js/ was enumerated (${mods.length} modules)`);
+      const offenders = mods.filter(f =>
+        blank(readFileSync(new URL(f, dir), 'utf8')).includes('_setHasSupabaseDataBackendForTest('));
+      assert(offenders.length === 1 && offenders[0] === 'auth.js',
+        `[45] the test override is SET by nothing in js/ but its own declaration in auth.js (offenders: ${JSON.stringify(offenders)}) — it short-circuits the configuration predicate, so a production caller would be a way to switch the interlock off`);
+    }
+  }
+
+  // ── TEARDOWN — hand the world back exactly as [44f] does ─────────────────
+  await quiet45(() => sb._resetForTest());
+  await quiet45(() => auth._resetSupabaseDataBackendForTest());
+  auth._setHasSupabaseDataBackendForTest(true);
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+  app._resetAuthHoldForTest();
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [46] THE PRE-LINK DEAD END — a proven account with ZERO memberships, in the
+//      SHIPPING flag combination (cutover defect #2, found by the reviewer at
+//      runtime on the f33d8a8 gate, 2026-09-18)
+//
+// WHAT IT WAS. `isContentWithheld()`'s third clause was
+// `getDataMode()==='supabase' && sb.isContentWithheldByAdapter()`. The adapter
+// leaves IDLE only by hydrating a LEAGUE, and ensureSupabaseDataHydrated()
+// returns at `if (!leagueId) return false` when there is none — so an account
+// with no membership was withheld permanently. attemptAutoLink() guards on that
+// predicate (answered 'idle', so link_member_by_email() was never called) and
+// linkFlowScreen() guards on it (answered ''), leaving a blank page with no
+// control on it. Tonight that is ALL SIX PLAYERS: the import left every
+// league_members row with user_id NULL, so every founder's first read is zero
+// memberships and the link is the only way out of it.
+//
+// SAME CLASS AS [45]: a predicate asked about a state that could only be reached
+// by first getting past the gate the predicate itself was blocking. The guard
+// for the class is the same too — drive the page FORWARD from the device state
+// the cutover actually creates, rather than priming the healthy end state.
+//
+// WHAT IS PINNED HERE: the pre-link page is not withheld and its screens paint;
+// the auto-link fires on BOTH of its call sites (boot's, and the in-page
+// MEMBERSHIPS_REFRESHED one the PKCE redirect actually takes); and the post-link
+// league IS withheld again until the adapter serves it, so nothing here weakens
+// DI-T4.10.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[46] The PRE-LINK dead end — zero memberships in the shipping flag combination…');
+{
+  const sb = await import('./js/supabase-backend.js');
+  const quiet46 = async (fn) => {
+    const rl = console.log, rw = console.warn, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.info = ri; }
+  };
+
+  /**
+   * THE SHIPPING FLAG COMBINATION, and nothing simulated about it: both config
+   * flags 'supabase', the test override CLEARED, the adapter wired and IDLE —
+   * i.e. exactly what a phone had on it the night of the cutover.
+   */
+  function shippingFlags({ client = null, rows = {} } = {}) {
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth._resetSupabaseDataBackendForTest();
+    sb._resetForTest();
+    sb.init({
+      register: auth.registerSupabaseDataBackend,
+      getClient: () => (client || {
+        from: () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } }),
+        rpc: async () => ({ data: [], error: null }),
+      }),
+      getActiveLeagueId: auth.getActiveLeagueId,
+      getIdentityEpoch: auth.getIdentityEpoch,
+      getAccountUserId: auth.getAccountUserId,
+      getDeviceDataOwnerTuple: auth.getDeviceDataOwnerTuple,
+      getDeviceDataOwner: auth.getDeviceDataOwner,
+      getSession: () => ({ isAdmin: false, playerId: 'm1' }),
+      hasValidSupabaseSession: auth.hasValidSupabaseSession,
+      isPrivilegeHeld: auth.isPrivilegeHeld,
+      hasSheetMirror: auth.hasSheetMirrorOnDevice,
+      isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+      supabaseUrl: 'https://p.test', supabaseAnonKey: 'anon-key' });
+    void rows;
+  }
+
+  /** The Step-3b script client, same shape [43] uses, so this section drives the
+   *  real wrappers rather than a second mock dialect. */
+  const scriptClient46 = (script, calls) => ({
+    session: script._session || { user: { id: 'u-drew', email: 'drew@example.com' } },
+    rpc: (name, params) => { calls.push({ name, params }); const fn = script[name]; return fn ? fn(params) : { data: null, error: null }; },
+    from: (table, b) => (script._from ? script._from(table, b) : { data: [], error: null }),
+  });
+
+  // ── (a) THE MATCHED FOUNDER: BOOT'S CALL SITE ────────────────────────────
+  {
+    const calls = [];
+    let linkedYet = false;
+    resetAll(scriptClient46({
+      link_member_by_email: () => { linkedYet = true; return { data: [{ league_id: 'L-A', member_id: 'mDrew' }], error: null }; },
+      // The row is UNLINKED (user_id NULL) until link_member_by_email runs —
+      // which is why the first membership read is zero rows. That is the whole
+      // state this defect lives in, so the fixture has to have it.
+      _from: () => (linkedYet
+        ? { data: [{ league_id: 'L-A', id: 'mDrew', role: 'commissioner', display_name: 'Drew', active: true, user_id: 'u-drew' }], error: null }
+        : { data: [], error: null }),
+    }, calls));
+    shippingFlags();
+    storeValidSession();
+    app._resetLinkFlowForTest();
+    await quiet46(() => auth.refreshMembershipsAndSession());
+
+    assert(auth.getDataMode() === 'supabase' && sb.getState() === 'IDLE' && auth.hasSupabaseDataBackend() === false,
+      `[46] fixture: shipping flags, adapter IDLE, no override (state=${sb.getState()})`);
+    assert(auth.hasResolvedMemberships() === true && auth.getCachedMemberships().length === 0 && !auth.getActiveLeagueId(),
+      '[46] fixture: the membership read RESOLVED to zero rows — the six founders\' state tonight, not a failed read');
+    assert(sb.isContentWithheldByAdapter() === true,
+      '[46] fixture: …and the adapter itself still reports "not serving", so the lifted withhold below is a decision, not a side effect');
+
+    assert(app.isContentWithheld() === false,
+      '[46] R1: the page is NOT withheld — an IDLE adapter under an account with no league is holding nothing back');
+    const outcome = await quiet46(() => app.attemptAutoLink());
+    assert(outcome === 'linked' && calls.some(c => c.name === 'link_member_by_email'),
+      `[46] R1: …so attemptAutoLink() actually RUNS and calls link_member_by_email (got ${JSON.stringify(outcome)}, rpcs ${JSON.stringify(calls.map(c => c.name))}) — it answered 'idle' before this fix and the founder was never linked`);
+
+    // POST-LINK: the league exists now, so the withhold comes BACK until the
+    // adapter serves it. DI-T4.10 is not weakened by one device.
+    assert(auth.getActiveLeagueId() === 'L-A',
+      `[46] …the link resolved a membership and the league pointer moved (got ${JSON.stringify(auth.getActiveLeagueId())})`);
+    assert(app.isContentWithheld() === true,
+      '[46] R1: …and NOW the page is withheld again — there is a league to withhold, and it has not hydrated yet');
+    assert(app.linkFlowScreen() === '',
+      '[46] …so the confirmation card is DEFERRED (not skipped: the flow still says linked) while the league loads');
+
+    const hydrated = await quiet46(() => app._ensureSupabaseDataHydratedForTest('auth:MEMBERSHIPS_REFRESHED'));
+    assert(hydrated === true && sb.getState() === 'ACTIVE',
+      `[46] R2: the membership resolve triggers the hydrate and the adapter goes ACTIVE (got ${sb.getState()})`);
+    assert(app.isContentWithheld() === false,
+      '[46] R2: …the withhold releases');
+    assert(app.linkFlowScreen() === 'confirm',
+      `[46] R2: …and DI-183h's confirmation card is owed after all (got ${JSON.stringify(app.linkFlowScreen())}) — deferred, never skipped`);
+    const dash46 = new FakeEl(); dash46.id = 'page-dashboard'; registry.set('page-dashboard', dash46);
+    app.renderLinkFlowScreen('dashboard');
+    assert(/You're linked as Drew\./.test(dash46.innerHTML),
+      `[46] R2: …asserted on the RENDERED DOM (got ${JSON.stringify(dash46.innerHTML.slice(0, 100))})`);
+    await quiet46(() => sb._resetForTest());
+  }
+
+  // ── (b) THE UNMATCHED ACCOUNT: THE CLAIM SCREEN, NOT A BLANK PAGE ────────
+  {
+    const calls = [];
+    resetAll(scriptClient46({
+      link_member_by_email: () => ({ data: [], error: null }),
+      _from: () => ({ data: [], error: null }),
+    }, calls));
+    shippingFlags();
+    storeValidSession();
+    app._resetLinkFlowForTest();
+    await quiet46(() => auth.refreshMembershipsAndSession());
+
+    const outcome = await quiet46(() => app.attemptAutoLink());
+    assert(outcome === 'unmatched',
+      `[46] an account whose Google address matches no row gets 'unmatched' (got ${JSON.stringify(outcome)}) — the expected path, not an error`);
+    assert(app.isContentWithheld() === false && app.linkFlowScreen() === 'claim',
+      `[46] …and the CLAIM-CODE screen is owed (got ${JSON.stringify(app.linkFlowScreen())}) — the dead end was a blank page with no control on it`);
+    const dash46b = new FakeEl(); dash46b.id = 'page-dashboard'; registry.set('page-dashboard', dash46b);
+    app.renderLinkFlowScreen('dashboard');
+    assert(/Enter the code your commissioner gave you\./.test(dash46b.innerHTML),
+      `[46] …asserted on the RENDERED DOM in the shipping flag combination (got ${JSON.stringify(dash46b.innerHTML.slice(0, 100))})`);
+    await quiet46(() => sb._resetForTest());
+  }
+
+  // ── (c) THE WITHHOLD STILL HOLDS FOR EVERY OTHER SHAPE ───────────────────
+  // The lift is scoped to a POSITIVE fact — "we asked, and this account is in no
+  // leagues" — never to an absence. Three neighbouring shapes, each of which
+  // would paint an empty league if the lift were written as `!getActiveLeagueId()`.
+  {
+    const calls = [];
+    resetAll(scriptClient46({ _from: () => ({ data: [], error: null }) }, calls));
+    shippingFlags();
+    storeValidSession();
+    app._resetLinkFlowForTest();
+
+    auth._setMembershipsForTest(null);            // never asked / still asking
+    assert(auth.hasResolvedMemberships() === false && app.isContentWithheld() === true,
+      '[46] (c) memberships UNRESOLVED -> still withheld: a dashboard painted while the count is unknown is DI-T4.10\'s empty-league flash');
+    auth._setMembershipsForTest([]);
+    assert(app.isContentWithheld() === false,
+      '[46] (c) …resolved to zero -> lifted (the fixture is live, so the three below are about the terms and not about a frozen predicate)');
+    auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'IRB' }]);
+    assert(app.isContentWithheld() === true,
+      '[46] (c) a RESOLVED membership -> withheld again while the adapter is IDLE — the league exists and has not loaded');
+    auth._setMembershipsForTest([]);
+    auth.setActiveLeagueId('L-A');
+    assert(app.isContentWithheld() === true,
+      '[46] (c) a league POINTER with zero memberships (a handover mid-drop, §6.6) -> withheld: there is a league named, so there is one to withhold');
+    auth.setActiveLeagueId(null);
+    assert(app.isContentWithheld() === false, '[46] (c) fixture: …and back to the lifted pre-link state');
+    await quiet46(() => sb._resetForTest());
+  }
+
+  // ── (d) THE SECOND CALL SITE — THE SIGN-IN THAT LANDS IN-PAGE (DI-183e) ──
+  // THE PATH THE APP REALLY TAKES. signInWithGoogle() is a PKCE REDIRECT back to
+  // location.origin; the SDK exchanges the code ASYNCHRONOUSLY, so on the page
+  // that completes a sign-in `hasValidSupabaseSession()` is still false when
+  // boot()'s decision reads it — and boot()'s auto-link call is behind exactly
+  // that guard. Without a second site the founder is shown DI-181a's
+  // stranger-shaped join/create landing and only a SECOND open would link them.
+  {
+    const calls = [];
+    let linkedYet = false;
+    resetAll(scriptClient46({
+      link_member_by_email: () => { linkedYet = true; return { data: [{ league_id: 'L-A', member_id: 'mDrew' }], error: null }; },
+      _from: () => (linkedYet
+        ? { data: [{ league_id: 'L-A', id: 'mDrew', role: 'player', display_name: 'Drew', active: true, user_id: 'u-drew' }], error: null }
+        : { data: [], error: null }),
+    }, calls));
+    shippingFlags();
+    app._resetLinkFlowForTest();
+    wireRealAuthUI();                       // the REAL listener chain, not a hand call
+
+    // The sign-in lands AFTER the gate decision: no persisted token at boot…
+    assert(auth.hasValidSupabaseSession() === false,
+      '[46] (d) fixture: no persisted session at the instant boot() would have asked — the PKCE return\'s actual state');
+    // …then the SDK's exchange completes and the session appears.
+    storeValidSession();
+    await quiet46(async () => {
+      auth._fireAuthEventForTest('SIGNED_IN', { access_token: 't', user: { id: 'u-drew', email: 'drew@example.com' } });
+      for (let i = 0; i < 25; i++) await new Promise(r => setTimeout(r, 0));
+    });
+    assert(calls.some(c => c.name === 'link_member_by_email'),
+      `[46] (d) the in-page MEMBERSHIPS_REFRESHED drives the auto-link (rpcs ${JSON.stringify(calls.map(c => c.name))}) — the page that completes the sign-in links the founder, rather than the next one`);
+    assert(app._linkFlowStateForTest().state === 'linked' && app._linkFlowStateForTest().attempted === true,
+      `[46] (d) …once, latched for the page (got ${JSON.stringify(app._linkFlowStateForTest())}) — boot's site and this one can never both spend the RPC`);
+    await quiet46(() => sb._resetForTest());
+  }
+
+  // ── (e) THE TWO CALL SITES, PINNED ───────────────────────────────────────
+  {
+    const appSrc46 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    // `await attemptAutoLink()`, not a bare name match: the export DECLARATION
+    // reads `async function attemptAutoLink()` and counting it would make the
+    // rule report three sites forever — a rule that has to be edited to stay
+    // green is a rule nobody trusts.
+    const sites = (appSrc46.match(/await attemptAutoLink\(\)/g) || []).length;
+    assert(sites === 2,
+      `[46] (e) attemptAutoLink() is CALLED at exactly two sites — boot's decision and the in-page membership resolve (got ${sites})`);
+    assert(/async function attemptAutoLink\(\)/.test(appSrc46) && !/await attemptAutoLink\(\) \{/.test(appSrc46),
+      '[46] (e) canary: the declaration exists and is NOT one of the two counted sites');
+    assert(/const noLeagueToWithhold = !getActiveLeagueId\(\)[\s\S]{0,200}?hasResolvedMemberships\(\)[\s\S]{0,120}?getCachedMemberships\(\)\.length === 0/.test(appSrc46),
+      '[46] (e) the lift is stated as a positive, three-term fact — no pointer, the read succeeded, it resolved to zero — never as "the pointer is empty"');
+    assert(/getDataMode\(\) === 'supabase' && !noLeagueToWithhold && sb\.isContentWithheldByAdapter\(\)/.test(appSrc46),
+      '[46] (e) …and the adapter\'s own state list is still the other half of the clause, read through its one predicate (no second copy of READY_STATES)');
+  }
+
+  // ── TEARDOWN ─────────────────────────────────────────────────────────────
+  await quiet46(() => sb._resetForTest());
+  await quiet46(() => auth._resetSupabaseDataBackendForTest());
+  auth._setHasSupabaseDataBackendForTest(true);
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+  app._resetAuthHoldForTest();
+  app._resetLinkFlowForTest();
 }
 
 

@@ -745,14 +745,24 @@ async function applyAuthModeDecision() {
     try { clearSession(); } catch (e) {
       console.warn('[auth] the PIN-mode session record could not be removed on this device (storage is refusing writes); continuing into the interlock rather than aborting the boot', e);
     }
-    // ── SEC F1 (CRITICAL) — THE INTERLOCK ────────────────────────────────────
-    // authMode:'supabase' with no Supabase DATA backend is not a half-built
-    // feature, it is a privilege-escalation path: isAdmin would be derived from
-    // a league_members row in a project any Google account can create a league
-    // in, and then applied to an app whose every write lands in the six-player
-    // league's Sheet. Refuse the whole mode. No session is derived, no sign-in
-    // is offered, no hydrate runs, and storage.save() throws for the duration
-    // (js/storage.js's save() guard reads the SAME isAuthDataLayerMismatch()).
+    // ── SEC F1 (CRITICAL) — THE INTERLOCK. A CONFIGURATION QUESTION ──────────
+    // authMode:'supabase' in a build with NO Supabase data layer wired
+    // (dataMode is not 'supabase', or no adapter probe was ever registered) is
+    // not a half-built feature, it is a privilege-escalation path: isAdmin would
+    // be derived from a league_members row in a project any Google account can
+    // create a league in, and then applied to an app whose every write lands in
+    // the six-player league's Sheet. Refuse the whole mode. No session is
+    // derived, no sign-in is offered, no hydrate runs.
+    //
+    // IT ASKS ABOUT THE BUILD, NEVER ABOUT THE ADAPTER'S CURRENT STATE
+    // (2026-09-18). It used to ask the readiness probe, and that shipped: on a
+    // fresh device there is no session, so the adapter cannot hydrate (RLS needs
+    // a JWT), so the probe was false, so this branch held the mode BEFORE
+    // offering the gate that produces the session — every phone stuck on "We'll
+    // be right back" at cutover. The write refusal in js/storage.js still asks
+    // the readiness question, under its own name (isSupabaseWriteWithheld()),
+    // because a write during HYDRATING/SWITCHING/HELD/OFFLINE-READONLY must
+    // still be refused. Two questions, two predicates, neither weakened.
     if (isAuthDataLayerMismatch()) {
       forceSignedOutSession();
       // forceSignedOutSession() IS an identity change (whoever this device
@@ -768,7 +778,7 @@ async function applyAuthModeDecision() {
       // torn-down page content. showAuthConfigErrorBanner() stays exported and
       // tested; it simply has no pre-identity call site any more.
       showAuthHoldGate('interlock');
-      console.error('[auth] INTERLOCK: authMode is \'supabase\' but hasSupabaseDataBackend() is false — refusing to derive a session or hydrate.');
+      console.error('[auth] INTERLOCK: authMode is \'supabase\' but this build has no Supabase data layer wired (dataMode is not \'supabase\', or no adapter probe is registered) — refusing to derive a session or hydrate.');
       return { deployed, authMode, hold: 'interlock' };
     }
 
@@ -2645,7 +2655,43 @@ export function isContentWithheld() {
     // not-ready adapter, and `null` must not be rendered as "your league is
     // empty". It cannot be, because every empty-state render is behind this
     // predicate and this predicate is true for exactly those states.
-    if (getDataMode() === 'supabase' && sb.isContentWithheldByAdapter()) return true;
+    //
+    // ══ …UNLESS THERE IS NO LEAGUE TO WITHHOLD (cutover defect #2, 2026-09-18) ══
+    //
+    // WHAT THIS CLAUSE DID TO AN ACCOUNT WITH ZERO MEMBERSHIPS. The adapter can
+    // only leave IDLE by hydrating a league, and ensureSupabaseDataHydrated()
+    // returns at its `if (!leagueId) return false` line when there is none. So a
+    // proven account that is not yet a member of anything was withheld FOREVER:
+    // attemptAutoLink() guards on this predicate and answered 'idle' (so
+    // link_member_by_email() was never called), linkFlowScreen() guards on it and
+    // answered '' — a blank page with no control on it, on the one device state
+    // the whole DI-183 transition exists for. Tonight that is all six players:
+    // every league_members row has user_id NULL until the link runs.
+    //
+    // THE CLAUSE ASKS THE WRONG HALF OF ITS OWN QUESTION. "The adapter is not
+    // serving" only withholds something if there is something to serve. An IDLE
+    // adapter under an account with no league is not holding a league back; there
+    // is no league. So the withhold is scoped to the case where one exists —
+    // and the "no league" case is stated CONSERVATIVELY, as a positive fact we
+    // have actually established rather than as an absence:
+    //
+    //   • the memberships must have RESOLVED (null = still asking, and a page
+    //     that paints the dashboard while the count is unknown is the empty-league
+    //     flash DI-T4.10 forbids), and
+    //   • the read must not have FAILED (SEC F2: "we couldn't ask" is never
+    //     "you're in no leagues"), and
+    //   • the count must be ZERO and no league pointer set.
+    //
+    // Every other shape — a resolved league, a pending read, a failed read, a
+    // pointer mid-switch — still withholds exactly as before. What renders in the
+    // lifted case is never league data: navigateTo() routes a zero-membership
+    // account to linkFlowScreen()'s card or DI-181a's landing, both of which are
+    // about the account, not about a league's contents.
+    const noLeagueToWithhold = !getActiveLeagueId()
+      && !getMembershipsError()
+      && hasResolvedMemberships()
+      && getCachedMemberships().length === 0;
+    if (getDataMode() === 'supabase' && !noLeagueToWithhold && sb.isContentWithheldByAdapter()) return true;
     return false;
   } catch (e) {
     console.warn('[auth] the withhold predicate could not be evaluated in supabase mode — failing CLOSED', e);
@@ -4780,16 +4826,21 @@ function renderHistoricalPicksView(c, week, currentWeek) {
 function supabasePicksHoldHTML() {
   // ══ PHASE III STEP 4 PART B — THREE NEW REASONS THE PICKS PAGE CAN BE HELD ══
   //
-  // All three are read off the SAME predicate the write interlock reads
-  // (isAuthDataLayerMismatch() -> hasSupabaseDataBackend() -> the adapter's
-  // probe), which is the whole point of §1.3: the page and the seam can never
-  // tell different stories about whether a pick can be saved. What changes here
-  // is only the WORDS, because "the build is broken", "we're checking your
-  // sign-in", "you're switching leagues" and "you're offline" are four
-  // different things to say to a player standing over a slate.
+  // All three are read off the SAME state the write interlock reads (the
+  // adapter's own machine, through isPrivilegeHeld()/sb.getState(), which is
+  // what isSupabaseWriteWithheld() asks js/storage.js's save() guard), which is
+  // the whole point of §1.3: the page and the seam can never tell different
+  // stories about whether a pick can be saved. What changes here is only the
+  // WORDS, because "the build is broken", "we're checking your sign-in",
+  // "you're switching leagues" and "you're offline" are four different things
+  // to say to a player standing over a slate.
   //
-  // Ordered most-specific first, and the mismatch branch below is last of the
-  // four because it is the one that cannot resolve by itself.
+  // Ordered most-specific first, and the branch below is last of the four
+  // because it is the one that cannot resolve by itself — and it is the only
+  // one of them that asks a CONFIGURATION question (2026-09-18): its copy says
+  // "on this build", so it must mean the build, not a transient adapter state.
+  // An adapter that is merely still hydrating gets the Loading… spinner below,
+  // which is the truth for that instant.
   if (isSupabaseDataMode()) {
     // §6.4 (DI-180p's residual) — THE VERIFY WINDOW. The server would refuse
     // the write in this world, and the client must not offer an action it knows
@@ -15461,13 +15512,21 @@ export const _AUTH_HOLD_COPY_FOR_TEST = AUTH_HOLD_COPY;
  * denial of service. runAuthHoldCheck() special-cased ONE reason ('data-hold')
  * and let every other value fall through to applyAuthModeDecision(). So a
  * 'session-expired' hold — which A8 raises on a device whose adapter is HELD —
- * reached that function's interlock branch, which asks
+ * reached that function's interlock branch, which asked
  * `isAuthDataLayerMismatch()`, i.e. `!hasSupabaseDataBackend()`, i.e. "is the
  * adapter serving". It is not; that is why the gate is up. So the 20-second
  * re-check answered its own hold by calling forceSignedOutSession() and
  * swapping the gate for 'interlock' — whose own copy says it "does not clear
  * until Drew redeploys". A player whose token blipped would have been locked
  * out of the app until a deploy, by the timer that exists to let them back in.
+ *
+ * 2026-09-18 — THAT SECOND CLAUSE IS NO LONGER TRUE, AND THE TABLE STAYS. The
+ * interlock now asks a CONFIGURATION question (see applyAuthModeDecision()), so
+ * a 'session-expired' hold falling through would no longer be relabelled
+ * 'interlock'. It would still be answered by re-running the wrong recovery — the
+ * identity and the mode were never in doubt, the LEAGUE is what is missing — so
+ * the split below is unchanged and still exhaustive. What changed is only how
+ * bad the fall-through was, not whether it was a defect.
  *
  * TWO RECOVERIES, and the split is WHAT IS ACTUALLY MISSING:
  *
@@ -15830,10 +15889,10 @@ export async function runAuthHoldCheck({ manual = false } = {}) {
   // ── SECURITY F2 — DISPATCH ON THE REASON, EXHAUSTIVELY ────────────────────
   // See AUTH_HOLD_RECOVERY's comment for why a fall-through here was a
   // self-inflicted lockout rather than a missed optimisation. Both Step-4 holds
-  // take the adapter path, and NEITHER may reach applyAuthModeDecision() —
-  // whose interlock branch reads "the adapter is not serving" as "this build is
-  // broken", which is exactly true and exactly the wrong conclusion while a
-  // data hold is up.
+  // take the adapter path, and NEITHER may reach applyAuthModeDecision() — which
+  // re-asks whether this device knows WHO IT IS and WHAT MODE IT IS IN, neither
+  // of which is in doubt while a data hold is up, and which does not hydrate the
+  // league that actually is missing.
   if (AUTH_HOLD_RECOVERY[_authHoldReason] === 'adapter-hydrate') {
     const heldReason = _authHoldReason;
     _authHoldCheckInFlight = true;
@@ -16706,6 +16765,50 @@ export function refreshAuthUI(event, payload) {
     // the one ordering rule this handler has — "wiped before anything paints",
     // pinned by authtest as a source-order assertion — and would show the new
     // league's pill over the old league's draft.
+  }
+
+  // ══ DI-183e — THE AUTO-LINK'S SECOND CALL SITE: THE SIGN-IN THAT LANDS
+  //    IN-PAGE (cutover defect #2, 2026-09-18) ════════════════════════════════
+  //
+  // WHY ONE CALL SITE WAS NOT ENOUGH. boot()'s call (applyAuthModeDecision, above)
+  // is guarded by `hasValidSupabaseSession()`, which is a SYNCHRONOUS read of the
+  // persisted token. On the page that completes a Google sign-in there is no
+  // persisted token at that instant: the PKCE redirect lands with `?code=` in the
+  // URL and the SDK exchanges it ASYNCHRONOUSLY (detectSessionInUrl), so the
+  // session appears a few hundred milliseconds AFTER the decision has already
+  // chosen its gate. The auto-link therefore did not run on the one page load
+  // where the player has just signed in — a founder was shown DI-181a's
+  // stranger-shaped "join or create" landing instead of their confirmation card,
+  // and only a SECOND open of the app would have linked them.
+  //
+  // MEMBERSHIPS_REFRESHED is the right event: it is the first moment the count is
+  // KNOWN, which is the same precondition boot's call site checks after awaiting
+  // its own refresh. Every other term mirrors that site exactly (proven session,
+  // no read failure, resolved, zero memberships) so the two cannot answer
+  // differently — and attemptAutoLink() is latched once-per-page (`_autoLinkAttempted`),
+  // so whichever site gets there first is the only one that calls the RPC.
+  //
+  // NOT INSIDE the isSupabaseDataMode() block above: DI-183 is an AUTH-mode
+  // feature (Step 3b shipped it under dataMode:'sheets') and gating it on the
+  // data flag would make the link flow unreachable on any build that has not cut
+  // the data layer over.
+  if (event === 'MEMBERSHIPS_REFRESHED'
+      && hasValidSupabaseSession() && !getMembershipsError()
+      && hasResolvedMemberships() && getCachedMemberships().length === 0) {
+    (async () => {
+      try {
+        const outcome = await attemptAutoLink();
+        // Repaint for the same reason boot's site does: the refresh that brought
+        // us here emitted its event BEFORE the link resolved, so nothing else is
+        // going to ask which DI-183 screen is now owed. A no-op outcome repaints
+        // nothing, and the call is re-entrant-safe (the block above cannot fire
+        // again — the link's own refresh leaves a non-zero membership count).
+        if (outcome && outcome !== 'idle') refreshAuthUI();
+      } catch (e) {
+        // A link attempt must never be the thing that breaks a session event.
+        console.warn('[auth] the in-page auto-link attempt failed', e);
+      }
+    })();
   }
 
   if (AUTH_SESSION_EVENTS.includes(event)) {

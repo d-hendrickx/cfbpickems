@@ -132,10 +132,14 @@ let _dataBackendProbe = null;             // () => boolean, registered by the ad
  * A non-function argument UNREGISTERS rather than throwing: unlike
  * chatTransport's predicate (DI-T4.12, where a bad install silently disabled a
  * cross-league interlock and therefore has to stop the boot), a missing probe
- * here fails CLOSED all by itself — `hasSupabaseDataBackend()` answers false,
- * the interlock holds the whole mode, and the player sees the hold gate. The
- * loud failure is already built; a throw would only turn a locked app into a
- * blank one.
+ * here fails CLOSED all by itself — `hasSupabaseDataBackend()` answers false so
+ * every write is refused, AND (2026-09-18) `isAuthDataLayerMismatch()` reads the
+ * unregistered probe as "this build has no data layer", so the interlock holds
+ * the whole mode and the player sees the hold gate. The loud failure is already
+ * built; a throw would only turn a locked app into a blank one.
+ *
+ * THE REGISTRATION IS THE CONFIGURATION FACT; CALLING IT IS THE READINESS ONE.
+ * That distinction is the whole of the cutover fix — see isAuthDataLayerMismatch().
  */
 export function registerSupabaseDataBackend(probe) {
   _dataBackendProbe = typeof probe === 'function' ? probe : null;
@@ -157,10 +161,72 @@ export function hasSupabaseDataBackend() {
   }
 }
 
-/** True when the auth mode and the data layer disagree — i.e. every write must
- *  be refused and the app must say so out loud. Read by storage.js's save()
- *  guard and by app.js's boot() interlock branch, so the two can never drift. */
+/**
+ * ══ TWO QUESTIONS, TWO PREDICATES (live cutover defect, 2026-09-18) ══════════
+ *
+ * WHAT HAPPENED. On the night of the cutover (config.json authMode:'supabase' +
+ * dataMode:'supabase') every device, including a phone that had never opened the
+ * app, painted the INTERLOCK hold gate instead of the Google sign-in gate. The
+ * mode could not boot at all.
+ *
+ * WHY. This function used to be `authMode === 'supabase' && !hasSupabaseDataBackend()`
+ * — i.e. it answered the interlock's question with the adapter's LIVE readiness
+ * probe. The adapter cannot hydrate until a JWT exists (every RLS policy needs
+ * auth.uid()), so on a device with no session the probe is necessarily false,
+ * so the mismatch was necessarily true, so app.js's applyAuthModeDecision() held
+ * the mode BEFORE offering the gate that would have produced the session the
+ * probe was waiting for. A deadlock with the shape of a misconfiguration.
+ *
+ * THE SPLIT, and which caller needs which:
+ *
+ *   isAuthDataLayerMismatch()   CONFIGURATION — "is this build wired for a
+ *                               Supabase data layer at all?" Answerable at boot,
+ *                               from the two config flags plus the fact of a
+ *                               registered probe. This is what SEC F1 is about
+ *                               (identity from Supabase while every write lands
+ *                               in the six players' Sheet), and it is what
+ *                               app.js's interlock and picks-card copy mean:
+ *                               "Sign-in isn't ready on THIS BUILD."
+ *
+ *   isSupabaseWriteWithheld()   READINESS — "is the adapter serving right now?"
+ *                               The OLD predicate, verbatim, for the ONE caller
+ *                               that needs it: js/storage.js's save() refusal.
+ *                               Deliberately false for most
+ *                               of a boot — HYDRATING, SWITCHING, HELD and
+ *                               OFFLINE-READONLY all withhold the write, and the
+ *                               adapter's header (supabase-backend.js:124) says
+ *                               "writes NEVER — the interlock does the refusing",
+ *                               so that behaviour is preserved EXACTLY.
+ *
+ * WHY THE CONFIGURATION TERM IS `_dataBackendProbe !== null` AND NOT THE PROBE'S
+ * ANSWER: a registered probe is the fact that a Supabase data layer exists in
+ * this build (registerSupabaseDataBackend() is called from app.js's
+ * wireSupabaseAdapter(), the first thing boot() does after the chat predicate).
+ * CALLING it asks whether that layer is serving, which is the other question.
+ * A missing registration still fails CLOSED — an unwired adapter cannot be a
+ * data layer, so the interlock still holds the mode, which is the §1.3 rule
+ * read as configuration rather than as state.
+ */
 export function isAuthDataLayerMismatch() {
+  if (_cfg.authMode !== 'supabase') return false;
+  // THE ONE TEST SEAM, honoured by BOTH predicates. `_setHasSupabaseDataBackendForTest()`
+  // means "pretend this build does / does not have a Supabase data layer", which
+  // is the configuration question stated in the affirmative — so a suite that
+  // sets it must get the same answer from both, or every fixture in authtest
+  // that stands a hold gate up would have to re-state the whole cutover config
+  // to test something that is not about the cutover at all. No module under js/
+  // calls the setter (authtest [45] pins that), so this line is inert on every
+  // device. The sections that are about the derivation — [16], [44a], [45] —
+  // take the override AWAY and drive the real terms below.
+  if (_hasSupabaseDataBackendOverrideForTest !== null) return !_hasSupabaseDataBackendOverrideForTest;
+  return !(getDataMode() === 'supabase' && _dataBackendProbe !== null);
+}
+
+/** READINESS. The pre-2026-09-18 form of the predicate above, unchanged, with
+ *  exactly one consumer: storage.save()'s SEC F1 write refusal. True whenever a
+ *  Supabase-identity build's data layer is not serving, which includes every
+ *  not-yet-hydrated instant of a perfectly healthy boot — that is the point. */
+export function isSupabaseWriteWithheld() {
   return _cfg.authMode === 'supabase' && !hasSupabaseDataBackend();
 }
 
