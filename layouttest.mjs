@@ -1247,10 +1247,54 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
   // touch movement at any time. Drew: "It shouldnt move accidentally scrolling."
   assert(!/touchmove|touchstart|dragstart|dragover/.test(layoutFns),
     'A10q: THE CONSTRAINT — no touch or drag listener exists anywhere in the layout controls, so "moves while scrolling" is structurally impossible rather than tuned with a threshold');
-  assert(/state\.layoutEditing = null/.test((appSrc10.match(/function resyncPlayerPreferences\(\)[\s\S]*?\n\}/) || [''])[0]),
+  // SIXTH GATE (2026-09-17) — matched by the opening PAREN, not `()`.
+  // resyncPlayerPreferences() takes an options object now, and a needle pinned
+  // to the empty argument list stopped matching the function at all — which
+  // turns this rule VACUOUS-then-RED rather than catching anything real.
+  const resyncFn10 = (appSrc10.match(/function resyncPlayerPreferences\([\s\S]*?\n\}/) || [''])[0];
+  assert(!!resyncFn10, 'A10r fixture: resyncPlayerPreferences() was located (a stale needle would make the rule below meaningless)');
+  assert(/state\.layoutEditing = null/.test(resyncFn10),
     'A10r: edit mode is cleared in resyncPlayerPreferences() — the app\'s one chokepoint on login / logout / player switch, so a handed-off phone never arrives still wearing move bars');
+  // …and the ONE exemption is named, not implicit. DI-180o(b) suspends layout
+  // edit mode alongside the draft ("the bars come off the page now and come back
+  // with the slate"), so the single path that has just RESTORED a suspended
+  // slate — same account, same league, byte-identical tuple — must not have it
+  // nulled again one line later. Every other caller passes nothing and clears.
+  assert(/if \(!preserveLayoutEditing\) state\.layoutEditing = null;/.test(resyncFn10),
+    'A10r(ii): …and the clear is unconditional EXCEPT for one named parameter — so the exemption is a thing a reader can find, not a silent early return');
+  assert(/preserveLayoutEditing: outcome === 'restored'/.test(appSrc10),
+    'A10r(iii): …which only the suspended-slate RESTORE path sets. A handover, a sign-out, a league switch and a discard all still clear the bars.');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

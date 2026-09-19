@@ -1216,7 +1216,17 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
 // across modules is READ-ONLY: nothing outside the swept files is edited, but
 // a helper that lives one import away (formatSpread in data-model.js,
 // getPickStatusClass in scoring.js) can be PROVEN safe instead of denied.
-const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js'];
+// SEC F4 / reviewer N2 (2026-09-16) — js/auth.js JOINS THE SWEEP AT ZERO.
+// It has no markup-bearing template and therefore no sinks today, which is
+// exactly why now is the time to add it: a file enters the ratchet at zero and
+// the FIRST interpolation anyone ever writes into it arrives already covered.
+// Added after it, not before it, the same template lands as a pre-existing
+// finding that someone has to decide about under deadline. It renders no DOM
+// today by design (app.js owns every render for DI-180/181/184) — but it is
+// the module that will hold league names, member display names and account
+// emails, i.e. values typed into a Google profile by someone outside this
+// league, which is the highest-risk input class in the whole app.
+const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/auth.js'];
 const RESOLVABLE = [...SWEPT, 'js/data-model.js', 'js/scoring.js', 'js/storage.js', 'js/chat.js',
   'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js'];
 const SRC = {};
@@ -1299,6 +1309,24 @@ const EXEMPTIONS = [
     why: "pillsHTML(): accumulated with `html +=` from the swept template at chat-ui.js:702-703, whose every interpolation (esc(tag), esc(gameShort(...)), dot(n)) is itself a site in this sweep" },
   { file: 'js/chat-ui.js', expr: 'scrollBodyHTML',
     why: "renderChatPage(): a ternary over searchResultsHTML() and a swept markup template (chat-ui.js:1717-1719); both branches' interpolations are separate sites in this sweep" },
+  // ── DI-182a (Step 3b) — the alma-mater <option> list ────────────────────
+  // This value is a LIST OF <option> ELEMENTS, i.e. markup on purpose, so a
+  // wrapper here would print the tags instead of rendering them. Both of its
+  // two producers escape every player-supplied value inside it:
+  //   • the registered provider is js/app.js's buildAlmaMaterOptions(), whose
+  //     every option is built as `<option value="${escHtml(...)}">${escHtml(...)}</option>`
+  //     — the SAME function, and the same escaping, the commissioner's Edit
+  //     Player modal has always used (DI-182f: one implementation, two callers);
+  //   • the unregistered fallback, four lines above this site, is
+  //     `<option value="${esc(cur)}" selected>${esc(cur)}</option>` — a site in
+  //     THIS sweep, and visibly wrapped.
+  // The scanner denies only because the value crosses a module boundary through
+  // an injected function reference it cannot resolve statically. The values
+  // themselves are ESPN team names plus whatever the player's record holds, and
+  // that record's path to a sink is what [8b] already covers.
+  { file: 'js/chat-ui.js', expr: "almaOptionsHTML(player?.almaMater || '')",
+    why: "almaOptionsHTML() returns <option> MARKUP by design; both producers escape every interpolation inside it — js/app.js's buildAlmaMaterOptions() uses escHtml() on value and label (the same call the commissioner modal makes), and the unregistered fallback in chat-ui.js uses esc() and is itself a site in this sweep" },
+
   { file: 'js/chat-ui.js', expr: "m.deleted ? '' : whatsNewLinkHTML(m)",
     why: "whatsNewLinkHTML() returns '' or a template whose BOTH interpolations are esc()'d at chat-ui.js:1390; the scanner denies only because the value is String(m.meta?.version || '') and its String() rule accepts String(Number(...)) alone" },
 ];
@@ -1344,6 +1372,25 @@ for (const e of EXEMPTIONS) {
 // markup to it, that template arrives already covered.
 assert(markupSites(SRC['js/notifications.js']).length === 0,
   `[9c-0] js/notifications.js has no markup-bearing template literal — it builds notification TEXT, never HTML (found: ${markupSites(SRC['js/notifications.js']).length})`);
+
+// [9c-0b] SEC F4 / reviewer N2 — the same statement for js/auth.js, which
+// enters this sweep at ZERO sinks. It owns the Supabase client, session state
+// and membership records; js/app.js owns every render for DI-180/181/184. If
+// that division ever slips and a template lands here, this line fails on the
+// day it is written rather than at the next security review.
+assert(markupSites(SRC['js/auth.js']).length === 0,
+  `[9c-0b] js/auth.js has no markup-bearing template literal — it is the data/logic half of the sign-in front door and renders no DOM (found: ${markupSites(SRC['js/auth.js']).length})`);
+{
+  // …and prove the scanner can actually see into this file, so the line above
+  // is a real zero and not a path that silently resolves to nothing (RG-27).
+  const CANARY_AUTH = SRC['js/auth.js'] + `
+function __authCanary(evil) { return \`<div class="c">\${evil.leagueName}</div>\`; }`;
+  const hits = sweepFile('js/auth.js', CANARY_AUTH).map(h => h.expr);
+  assert(hits.includes('evil.leagueName'),
+    `[9c-0b] canary: an unwrapped interpolation added to js/auth.js IS reported (got: ${JSON.stringify(hits.slice(-3))})`);
+}
+assert(sweepFile('js/auth.js').length === 0,
+  `[9c-0b] …and the live file sweeps clean — js/auth.js enters the ratchet at zero, with no exemption of its own (found: ${sweepFile('js/auth.js').length})`);
 
 // [9c-1] FULL STRENGTH — every ${…} in these files is (i), (ii) or (iii).
 for (const file of ['js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/chat-ui.js']) {
@@ -1904,6 +1951,101 @@ for (const field of ['startDate', 'endDate']) {
 // ALLOW-LIST at both write seams against REACTION_PALETTE, the one shared
 // palette already in data-model.js (AD-20).
 // ══════════════════════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════════════════════
+// [16] PHASE III STEP 4 PART B — THE NEW BANNERS RENDER SERVER TEXT
+//
+// The adapter's status channel carries FOUR values that did not exist before
+// this build and that come from somewhere the app does not control:
+//
+//   detail.serverMessage   PostgREST's own words for a 42501, or an RPC's named
+//                          exception. Server text.
+//   detail.error           whatever a failed select or a thrown RPC produced.
+//   detail.banner          §3.3's write-during-switch line, which INTERPOLATES
+//                          TWO LEAGUE NAMES — commissioner-authored strings from
+//                          a table any signed-in account can create a row in.
+//   detail.key             a cfbp_* key name.
+//
+// js/supabase-backend.js's own header says it plainly: serverMessage "is
+// UNTRUSTED TEXT — every render path must run it through escHtml()".
+//
+// THE RULE THIS SECTION PINS is narrower and stronger than "they are escaped":
+// they reach exactly ONE render path, showBackendErrorBanner(), which escapes at
+// its single sink. A second render path for the same values is how one of them
+// gets escaped and the other does not — which is the shape defect (1) at the top
+// of this file already was, one surface over.
+// ══════════════════════════════════════════════════════════════════════════
+console.log('\n[16] Step 4 — the adapter status channel\u2019s server text reaches ONE escaping sink\u2026');
+{
+  const codeOnly = appSrc
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+
+  // (a) The sink itself still escapes. One line, and everything below depends on it.
+  assert(/<div class="beb-detail">\$\{escHtml\(String\(message\)\)\}<\/div>/.test(codeOnly),
+    '[16] showBackendErrorBanner() escapes its message at the sink');
+
+  // (b) EVERY use of the four channel values is an ARGUMENT to that function —
+  //     never an interpolation into markup of its own.
+  const handler = codeOnly.slice(codeOnly.indexOf('function onSupabaseDataStatus'), codeOnly.indexOf('function showSupabaseOfflineBanner'));
+  assert(handler.length > 200, '[16] fixture: the Step-4 status handler was located (a failed slice would make the rest vacuous)');
+  assert(!/innerHTML/.test(handler),
+    '[16] the status handler assigns NO innerHTML of its own — it hands its values to the banner helpers and renders nothing directly');
+  const sites = [...codeOnly.matchAll(/detail\.(serverMessage|error|banner|key)/g)];
+  assert(sites.length >= 4, `[16] fixture: the four channel values really are read (${sites.length} sites)`);
+  for (const m of sites) {
+    // The 200 characters around each read must not contain a markup-bearing
+    // template. `showBackendErrorBanner(...)` is the only legitimate consumer.
+    const near = codeOnly.slice(Math.max(0, m.index - 200), m.index + 200);
+    assert(!/<[a-z][^>]*>\s*\$\{/.test(near) || /showBackendErrorBanner\(/.test(near),
+      `[16] detail.${m[1]} is never interpolated into markup \u2014 it is an argument to showBackendErrorBanner(), which escapes`);
+  }
+
+  // (c) THE CANARY. The rule must FAIL against a handler that renders directly,
+  //     or (b) is passing over the absence of markup rather than over its safety.
+  const crafted = 'function onSupabaseDataStatus(status, detail){ el.innerHTML = `<div>${detail.serverMessage}</div>`; }';
+  assert(/innerHTML/.test(crafted) && /<[a-z][^>]*>\s*\$\{/.test(crafted.slice(0, 200)),
+    '[16] canary: a handler that DID interpolate serverMessage into markup is detected by the same two tests');
+
+  // (d) The two Step-4 banners that build their OWN markup escape everything
+  //     they interpolate, even though both values are app-derived today.
+  //     "It happens to be safe right now" is not a rendering rule.
+  const offline = codeOnly.slice(codeOnly.indexOf('function showSupabaseOfflineBanner'), codeOnly.indexOf('function hideSupabaseOfflineBanner'));
+  assert(/innerHTML = `<span>\$\{escHtml\(text\)\}<\/span>`/.test(offline),
+    '[16] the offline read-only banner escapes its whole line');
+  const note = codeOnly.slice(codeOnly.indexOf('function supabaseProgressUnknownNoteHTML'), codeOnly.indexOf('function supabaseProgressUnknownNoteHTML') + 900);
+  assert(/\$\{escHtml\(/.test(note),
+    '[16] the "who else has picks in" note escapes its interpolation');
+  // The time value IS interpolated — INSIDE the escHtml() argument, which is the
+  // point: the whole line is escaped as ONE string, so there is no seam between
+  // "the literal part" and "the value part" for a future edit to widen. What
+  // must not exist is an interpolation sitting directly in the MARKUP.
+  const noteMarkup = (note.match(/`<p class="blind-note">[\s\S]*?`;/) || [''])[0];
+  assert(noteMarkup.length > 40, '[16] fixture: the note\u2019s markup template was located');
+  const escAt = noteMarkup.indexOf('${escHtml(');
+  assert(escAt > -1 && /<span>\$\{escHtml\(/.test(noteMarkup),
+    '[16] \u2026the ONE interpolation adjacent to the note\u2019s markup is an escHtml() call');
+  const tailAt = noteMarkup.indexOf('${tail}');
+  assert(tailAt === -1 || tailAt > escAt,
+    `[16] \u2026and the time value is interpolated INSIDE that call, not beside it (escHtml@${escAt}, tail@${tailAt})`);
+  const offlineMarkup = (offline.match(/`<span>[\s\S]*?`;/) || [''])[0];
+  assert([...offlineMarkup.matchAll(/\$\{/g)].length === 1 && /\$\{escHtml\(text\)\}/.test(offlineMarkup),
+    '[16] \u2026and the offline banner\u2019s markup likewise: one interpolation, and it is escaped');
+
+  // (e) The hold-gate variant Step 4 added goes through the SAME escaping
+  //     renderer the other three do \u2014 it is copy in a map, not a new sink.
+  assert(/'data-hold': \{/.test(codeOnly),
+    '[16] the data-hold variant is an entry in AUTH_HOLD_COPY');
+  assert(/\$\{escHtml\(copy\.heading\)\}/.test(codeOnly) && /\$\{escHtml\(copy\.body\)\}/.test(codeOnly),
+    '[16] \u2026and authHoldGateInnerHTML() escapes both, so the new variant inherits the escaping rather than restating it');
+
+  // (f) js/backend.js's typed relay refusal carries an INTERNAL action name and
+  //     is never rendered by this file at all \u2014 stated so a future caller that
+  //     starts rendering it has to come back here.
+  assert(!/SheetsRelayRefusedError/.test(codeOnly),
+    '[16] js/app.js renders no SheetsRelayRefusedError text \u2014 every relay caller already degrades through its own try/catch');
+}
+
 console.log('\n[15] reaction emoji — escaped at both content sinks, allow-listed at both write seams…');
 
 const { REACTION_PALETTE } = dataModel;
@@ -2026,4 +2168,33 @@ for (const [file, src] of [['js/storage.js', storageSrc], ['js/chat.js', chatSrc
 
 // ══════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} xsstest.mjs — ${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

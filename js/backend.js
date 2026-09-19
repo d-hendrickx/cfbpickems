@@ -323,18 +323,154 @@ export function getSyncStatus() {
  * 'empty' or 'missing' → silent fall back to local mode (a fork-friendly
  * default), while real connection errors get surfaced loudly to the user.
  */
+// Phase III Step 3a (DI-180f) — additive read only, no new behavior for the
+// existing url/token contract. `authMode`/`supabaseUrl`/`supabaseAnonKey` are
+// three more fields on the SAME config.json this function already fetches;
+// this is still "reading config," not a new backend responsibility. Returned
+// on EVERY branch (including the failure branches) so app.js's boot() can
+// make its gate decision off one object without a second fetch or a
+// null-check per branch — CONVENTIONS #10, an absent/invalid authMode reads
+// as 'pins', the safe default, never as 'supabase'.
+function _normalizeAuthMode(raw) {
+  return (raw === 'supabase' || raw === 'prelink') ? raw : 'pins';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Phase III Step 4 Part B, DI §2.7 — THE SHEETS RELAY ALLOW-LIST
+// ══════════════════════════════════════════════════════════════════════════════
+/**
+ * `dataMode` — 'sheets' (today, and the default when the key is absent) or
+ * 'supabase' (the third storage mode, js/supabase-backend.js). Read from
+ * config.json on the SUCCESS branches of loadDeployedConfig() below, beside
+ * `authMode`, and normalized here with the same CONVENTIONS #10 shape: anything
+ * that is not literally 'supabase' is 'sheets'. The key is DELIBERATELY ABSENT
+ * from the shipped config.json — absent means 'sheets', which is what every
+ * device does today, and DI §8.1 step 3 sets it in the same commit as
+ * `authMode` at cutover, never alone.
+ *
+ * The name is `dataMode` and not the assessment's `storageMode` because
+ * `storageMode` is already a legacy `cfbp_settings` field the projection strips
+ * as a credential (supabase-projection.js:261-270) — reusing it would make a
+ * grep ambiguous (DI §1.4).
+ */
+function _normalizeDataMode(raw) {
+  return raw === 'supabase' ? 'supabase' : 'sheets';
+}
+
+/**
+ * The module's live answer to "is this league's data on Supabase?".
+ *
+ * NOT read off getBackendConfig(): that object is the url/token pair and it is
+ * persisted to localStorage, so a cutover-era value could be read back on a
+ * device whose config.json has since been rolled back. This is set once per
+ * page, by js/auth.js's configureAuth(), from the config read that actually
+ * happened — and it defaults to 'sheets', which is the flag-off world.
+ *
+ * js/auth.js already imports this module (auth.js:31); this module imports
+ * nothing of auth.js's, so there is no cycle and no second config fetch.
+ */
+let _dataMode = 'sheets';
+export function getDataMode() { return _dataMode; }
+export function setDataMode(mode) { _dataMode = _normalizeDataMode(mode); return _dataMode; }
+
+/**
+ * DI §2.7 — every relay below carries the PRODUCTION league's token to the
+ * PRODUCTION league's Sheet, and several of them READ league data server-side
+ * (`scribeAsk` assembles context out of CFBP_STORE). A test league running on
+ * Supabase that reaches any of them is a cross-league bleed — the SEC F1
+ * stranger-as-commissioner class, one layer over.
+ *
+ * So in `dataMode:'supabase'` call() refuses every action except these two
+ * (Drew decision D-4):
+ *   • `ping`       the Comm -> Settings connection test. Reads and writes
+ *                  nothing; its whole job is to answer "is the Sheet reachable".
+ *   • `notifyPush` OneSignal delivery is league-agnostic: `external_id` is the
+ *                  member id, unique across leagues by construction
+ *                  (`p1…p6` in IRB, `p_<ts>_<rand>` elsewhere, 0003:74-113),
+ *                  and the `dedupKey` embeds the league-unique `weekId`.
+ *
+ * A FROZEN ARRAY, not a Set — the same lesson supabase-backend.js:110-131
+ * wrote up at the seventh gate. A Set's contents live in internal slots, so
+ * `Object.freeze(new Set([...]))` leaves `add()` fully working and
+ * `Set.prototype.add.call(s, 'runTrainer')` walks past any own-property stub.
+ * An array's elements ARE properties, so freeze reaches all of them and
+ * `Array.prototype.push.call(arr, x)` throws in strict mode (ES modules always
+ * are). `.includes()` on a two-element list, a handful of times per session, is
+ * not a trade worth thinking about.
+ */
+const SHEETS_RELAY_ALLOWLIST = Object.freeze(['ping', 'notifyPush']);
+/** Test-only read — never mutated, and a copy so a caller cannot reach the
+ *  frozen original by reference either. */
+export function _sheetsRelayAllowlistForTest() { return [...SHEETS_RELAY_ALLOWLIST]; }
+
+/**
+ * A relay this build DELIBERATELY refuses, typed so callers can tell it from a
+ * network failure. `code` is the stable string (the same shape auth.js:50-67
+ * and supabase-backend.js:75-85 established); every caller of a relay already
+ * wraps in try/catch (backend.js:1104-1113 documents that), so the degraded
+ * behaviour is the one they already have — canned scribeLines, a Comm -> Data
+ * toast — rather than a new failure path.
+ *
+ * `action` is an INTERNAL action name from this module's own call sites, never
+ * user data; the banner copy in app.js still escapes it, because "it happens to
+ * be safe today" is not a rendering rule.
+ */
+export class SheetsRelayRefusedError extends Error {
+  constructor(action) {
+    super(`Refusing to send "${action}" to the Google Sheet: this league's data lives in Supabase, `
+      + 'and that relay would read or write the other league\'s Sheet. Nothing was sent.');
+    this.name = 'SheetsRelayRefusedError';
+    this.code = 'sheets_relay_refused';
+    this.action = String(action || '');
+    /** Marks this as an EXPECTED, designed refusal rather than an outage —
+     *  the same flag chatTransport.js's ChatTransportUnavailableError carries
+     *  (chatTransport.js:103) and for the same reason: the sync badge must not
+     *  go red because a feature that is scheduled for Step 6 is off. */
+    this.interlocked = true;
+  }
+}
+
+/**
+ * SEC F1-R1 — `authModeKnown` IS THE FINDING.
+ *
+ * Both failure branches below used to return a hardcoded `authMode:'pins'`.
+ * That is a config read ANSWERING a question it could not ask: an offline cold
+ * boot, a Pages 5xx, a service-worker 503 or a captive portal would all report
+ * "this league is on PINs" with the same confidence as a config.json that
+ * actually says so. After cutover that downgrade is a privilege escalation —
+ * pins mode makes storage.getSession() read `cfbp_session` again, which on a
+ * pre-cutover device may still say `isAdmin:true`, on a device where
+ * `cfbp_site_unlocked` is already set.
+ *
+ * So the failure branches no longer carry an authMode at all; they carry
+ * `authModeKnown:false`, and app.js's boot() decides (js/app.js
+ * resolveEffectiveAuthMode(): keep the last-known-good mode, and if there is
+ * none, behave exactly as today). `authModeKnown:true` on the success branches
+ * so the flag is explicit in both directions rather than inferred from the
+ * absence of a key.
+ *
+ * Unchanged for every existing consumer of ok/url/token/reason.
+ */
 export async function loadDeployedConfig() {
   try {
     // Cache-bust on every load so a fresh deploy is picked up immediately
     const res = await fetch('config.json?t=' + Date.now(), { cache: 'no-store' });
-    if (!res.ok) return { ok: false, reason: 'missing' };
+    if (!res.ok) return { ok: false, reason: 'missing', authModeKnown: false };
     const data = await res.json();
     const url = (data?.backendUrl || '').trim();
     const token = (data?.backendToken || '').trim();
-    if (!url || !token) return { ok: false, reason: 'empty' };
-    return { ok: true, url, token };
+    const authMode = _normalizeAuthMode(data?.authMode);
+    // DI §1.4 — carried on the SUCCESS branches only, exactly like authMode.
+    // The failure branches deliberately carry neither (SEC F1-R1: a config read
+    // that could not happen must not ANSWER a question it could not ask), and
+    // js/auth.js's configureAuth() keeps the last successfully-established mode.
+    const dataMode = _normalizeDataMode(data?.dataMode);
+    const supabaseUrl = (data?.supabaseUrl || '').trim();
+    const supabaseAnonKey = (data?.supabaseAnonKey || '').trim();
+    if (!url || !token) return { ok: false, reason: 'empty', authMode, dataMode, authModeKnown: true, supabaseUrl, supabaseAnonKey };
+    return { ok: true, url, token, authMode, dataMode, authModeKnown: true, supabaseUrl, supabaseAnonKey };
   } catch (err) {
-    return { ok: false, reason: 'malformed', error: String(err.message || err) };
+    return { ok: false, reason: 'malformed', error: String(err.message || err), authModeKnown: false };
   }
 }
 
@@ -344,14 +480,52 @@ export function getBackendConfig() {
   catch { _config = null; }
   return _config;
 }
+/**
+ * SEC F-1 (2026-09-17) — THE DEVICE WRITE MAY NOT ABORT THE CALLER.
+ *
+ * These two used to write localStorage unguarded, and boot() calls
+ * setBackendConfig() (js/app.js, right after loadDeployedConfig()) with no
+ * enclosing try — ABOVE resolveEffectiveAuthMode() and every fail-closed auth
+ * branch. On a device whose storage rejects writes (quota exhausted; private
+ * mode on some browsers) boot() rejected at that line and nothing below it
+ * ran: with the flag off, a dead boot and not even a banner (an AD-06
+ * loud-fail violation by omission); after cut-over, the app left in the
+ * default 'pins' mode with a possibly stale PIN-era session and no gate.
+ *
+ * So the persistence is now best-effort and the in-memory `_config` — which is
+ * what every read in THIS page actually uses (see getBackendConfig()) — is set
+ * either way. That is deliberately NOT a silent localStorage fallback in the
+ * AD-06 sense: sync is unaffected this session (the config is in memory and
+ * hydrate runs from it), so the proportionate report is one console warning,
+ * not a red banner. The only cost is that the config has to be re-read from
+ * config.json on the next open, which every boot does anyway.
+ *
+ * Neither the token nor the URL is ever logged; only the error's name.
+ */
+function _persistConfig(payload) {
+  try {
+    if (payload === null) localStorage.removeItem(CFG_KEY);
+    else localStorage.setItem(CFG_KEY, payload);
+    return true;
+  } catch (e) {
+    console.warn(`[backend] backend config could not be ${payload === null ? 'cleared on' : 'saved to'} this device (${e && e.name || 'storage error'}); this session runs from memory.`);
+    return false;
+  }
+}
+/**
+ * @returns {{url:string, token:string, persisted:boolean}} a COPY of the
+ * in-memory config (always set) plus whether it also reached the device.
+ * `persisted` is on the returned copy only — never in the stored payload.
+ */
 export function setBackendConfig(url, token) {
   _config = { url: (url || '').trim().replace(/\/$/, ''), token: (token || '').trim() };
-  localStorage.setItem(CFG_KEY, JSON.stringify(_config));
-  return _config;
+  const persisted = _persistConfig(JSON.stringify(_config));
+  return { ..._config, persisted };
 }
+/** @returns {boolean} true when the key is really gone from the device. */
 export function clearBackendConfig() {
   _config = null;
-  localStorage.removeItem(CFG_KEY);
+  return _persistConfig(null);
 }
 export function isBackendConfigured() {
   const c = getBackendConfig();
@@ -589,6 +763,14 @@ export async function requestWithMisrouteGuard(action, send) {
 }
 
 async function call(action, payload = {}) {
+  // ── DI §2.7 — THE ALLOW-LIST GUARD, BEFORE ANYTHING ELSE ──────────────────
+  // Above getBackendConfig(), above the body construction, above every retry
+  // wrapper, and therefore unambiguously BEFORE ANY fetch(). The refusal is a
+  // fact about this build's data mode, not about whether a backend happens to
+  // be configured, so it must not be reachable only on the configured path.
+  if (_dataMode === 'supabase' && !SHEETS_RELAY_ALLOWLIST.includes(action)) {
+    throw new SheetsRelayRefusedError(action);
+  }
   const c = getBackendConfig();
   if (!c || !c.url) throw new Error('Backend not configured');
   const body = JSON.stringify({ action, token: c.token, ...payload });

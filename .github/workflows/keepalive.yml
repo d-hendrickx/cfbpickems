@@ -1,0 +1,115 @@
+# keepalive.yml — Supabase free-tier keep-alive. Phase III Step 4, Drew decision D-8.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# DREW COMMITS AND PUSHES THIS FILE, AND ADDS THE TWO SECRETS. Claude does not (AD-47/AD-53:
+# Drew runs every deploy). Nothing here runs until both of the following exist:
+#
+#   GitHub -> the `cfbpickems` repo -> Settings -> Secrets and variables -> Actions -> New
+#   repository secret, twice:
+#
+#     SUPABASE_URL        e.g. https://<project-ref>.supabase.co   (no trailing slash)
+#     SUPABASE_ANON_KEY   the project's ANON key
+#
+#   Until they are set, every scheduled run FAILS LOUDLY on the guard below rather than pinging
+#   nothing and reporting green — a keep-alive that silently does nothing is worse than none,
+#   because the project pauses anyway and the workflow's green checkmark says it did not.
+#
+# WHY THE ANON KEY IS SAFE TO PUT IN A SECRET AND WOULD BE SAFE IN THE OPEN: it is a CLIENT key by
+# design — it already ships in `config.json` to every player's browser (AD-05's reasoning, one
+# layer over), and every table it can reach carries FORCE ROW LEVEL SECURITY with `anon` granted
+# nothing anywhere (0002_rls.sql, and rls.test.mjs's AN1.* sweep is the live proof). It is in a
+# secret anyway, because a key in a workflow file is a key in every fork and every log.
+#
+# THE SERVICE-ROLE KEY MUST NEVER APPEAR HERE. It bypasses RLS entirely. This file needs no
+# privilege at all — it only needs the REST endpoint to answer.
+#
+# WHY THIS EXISTS: a Supabase free-tier project PAUSES after 7 consecutive idle days, and a paused
+# project answers nothing — no sign-in, no picks, no chat. That is a real risk from the moment the
+# test league carries Step 4 testing rather than daily traffic, and it will be a real risk again
+# for any league that goes quiet between seasons. One HTTP GET every six hours is enough to keep
+# the clock reset.
+#
+# WHAT REPLACES IT: `pg_cron` in-house (Step 5/6, ARCHITECTURE_PHASE_III.md:452). This Action costs
+# nothing to keep afterwards, so there is no hurry to delete it — but when pg_cron lands, one of
+# the two should go, and this file is the one that can be removed without a migration.
+#
+# WHY A GET ON `/rest/v1/` AND NOT A TABLE READ: the root of the REST API answers with the OpenAPI
+# document for the schema. It touches no table, needs no policy, and cannot be affected by a future
+# grant change — so it proves the PROJECT is awake without asserting anything about the data.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+name: Supabase keep-alive
+
+on:
+  schedule:
+    # Every 6 hours, at :17 past — deliberately NOT on the hour. GitHub's scheduler is
+    # best-effort and delays runs at popular times (the top of the hour most of all); an
+    # off-peak minute is the cheapest way to make a 6-hour cadence actually land near 6 hours.
+    - cron: '17 */6 * * *'
+  # So Drew can prove it works the moment he pushes it, instead of waiting up to six hours to
+  # find out that a secret name is misspelled.
+  workflow_dispatch:
+
+# The job reads nothing from the repository and writes nothing to it.
+permissions:
+  contents: read
+
+concurrency:
+  # A delayed run plus the next scheduled one must not double up. `cancel-in-progress: false`
+  # because the older ping is the one that has already waited — let it finish.
+  group: supabase-keepalive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Guard — both secrets must be present
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${SUPABASE_URL:-}" ]      || missing="$missing SUPABASE_URL"
+          [ -n "${SUPABASE_ANON_KEY:-}" ] || missing="$missing SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing — the keep-alive did NOT ping. Add them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          # The URL is echoed, the key never is. A trailing slash would make the request path
+          # `//rest/v1/`, which some edges answer with a redirect rather than the document.
+          case "$SUPABASE_URL" in
+            */) echo "::error::SUPABASE_URL must not end with a slash (got a trailing '/')"; exit 1 ;;
+            https://*) : ;;
+            *) echo "::error::SUPABASE_URL must start with https://"; exit 1 ;;
+          esac
+          echo "Pinging ${SUPABASE_URL}/rest/v1/"
+
+      - name: GET /rest/v1/ and fail loudly on any non-2xx
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          # --silent --show-error : no progress meter, but curl's own errors still print.
+          # --write-out '%{http_code}' with --output /dev/null : we want the STATUS, not the body
+          #   (the body is the whole OpenAPI document for the schema — several KB of noise in a log
+          #   that is only ever read when something is wrong).
+          # --max-time 30 : a hung connection must not sit on a runner for the job's whole timeout.
+          # NO --fail : it would exit before the status could be printed, and the status is the
+          #   single most useful thing in the log. The explicit test below is what fails the job.
+          # The anon key goes in BOTH `apikey` and `Authorization`, which is what PostgREST behind
+          # Supabase expects; `apikey` alone is accepted today and the pair is the documented form.
+          code=$(curl --silent --show-error --location --max-time 30 \
+                      --output /dev/null --write-out '%{http_code}' \
+                      -H "apikey: ${SUPABASE_ANON_KEY}" \
+                      -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+                      "${SUPABASE_URL}/rest/v1/")
+          echo "HTTP ${code}"
+          case "$code" in
+            2??) echo "Project is awake." ;;
+            000) echo "::error::No HTTP response at all (DNS, TLS or timeout) — the project may be PAUSED or the URL is wrong."; exit 1 ;;
+            401|403) echo "::error::HTTP ${code} — the project answered, so it is awake, but the anon key was REFUSED. Check the SUPABASE_ANON_KEY secret; it may have been rotated."; exit 1 ;;
+            *) echo "::error::HTTP ${code} from ${SUPABASE_URL}/rest/v1/ — the keep-alive ping did not succeed."; exit 1 ;;
+          esac

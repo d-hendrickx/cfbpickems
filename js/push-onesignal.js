@@ -68,8 +68,37 @@ let _configUnreachable = false;   // last config.json read failed outright (vs. 
  *  "not configured" for the entire life of the page — the priming card then
  *  renders nothing at all and there is no way back without a reload. Only a
  *  successful read is memoized now; a failed read returns '' and is retried. */
-async function loadAppId() {
-  if (_appId !== null) return _appId;
+/**
+ * ══ SECURITY F-2 (seventh gate, 2026-09-17) — MEMOIZE THE PROMISE, NOT JUST
+ *    THE VALUE ═════════════════════════════════════════════════════════════════
+ *
+ * THE DEFECT, reproduced: `_appId` is only assigned AFTER the fetch resolves, so
+ * two callers that arrive before the first read lands both miss the memo and
+ * both start their own `config.json` request. loginOneSignal() and
+ * logoutOneSignal() each await this before queueing onto OneSignalDeferred — so
+ * the ORDER they queue in is the order the two independent network reads happen
+ * to come back in, not the order the app called them. With a handover
+ * (logout-then-login, which DI-180q deliberately sequences that way) a logout
+ * whose read is slower lands SECOND and the sequence becomes
+ * `["login:mB", "logout"]`: the incoming player is bound to nobody and silently
+ * receives no pushes for the rest of the session. That is the exact failure
+ * DI-180q's ordering fix was written to prevent, re-entered one layer down.
+ *
+ * Memoizing the PROMISE makes the second caller await the FIRST caller's read,
+ * so both resume in call order. The existing "a failure is not memoized" rule
+ * (the 2026-09-10 regression below) is preserved exactly: the in-flight promise
+ * is dropped again on any outcome that is not a definitive App ID, so one
+ * transient blip at boot can no longer pin push to "not configured" for the life
+ * of the page.
+ *
+ *  RG (2026-09-10): this used to memoize the FAILURE too (`_appId = ''` on a
+ *  thrown fetch), so one transient network blip at boot pinned push to
+ *  "not configured" for the entire life of the page — the priming card then
+ *  renders nothing at all and there is no way back without a reload. Only a
+ *  successful read is memoized now; a failed read returns '' and is retried.
+ */
+let _appIdPromise = null;
+async function _readAppId() {
   try {
     const res = await fetch('config.json?t=' + Date.now(), { cache: 'no-store' });
     if (!res.ok) { _configUnreachable = true; return ''; }   // transient — not memoized
@@ -81,6 +110,19 @@ async function loadAppId() {
     return '';                                    // transient — not memoized
   }
   return _appId;
+}
+function loadAppId() {
+  if (_appId !== null) return Promise.resolve(_appId);
+  // `??=` so concurrent callers share ONE read and therefore resume in the order
+  // they called, which is the whole point (security F-2).
+  _appIdPromise ??= _readAppId().finally(() => {
+    // Cleared on EVERY outcome. When the read was definitive `_appId` is set and
+    // the fast path above never reaches the promise again; when it was transient
+    // `_appId` is still null and the next caller starts a fresh read — the
+    // failure-is-not-memoized rule, unchanged.
+    _appIdPromise = null;
+  });
+  return _appIdPromise;
 }
 
 /** True once we know push COULD be configured (non-empty App ID). Does not
@@ -342,29 +384,77 @@ export async function ensureOneSignalInit() {
   return Promise.race([_initOnce, timer]);
 }
 
+/**
+ * ══ SECURITY F-3 (EIGHTH gate, 2026-09-18) — ORDER IS A CHAIN, NOT A SIDE
+ *    EFFECT OF THE MEMO ═════════════════════════════════════════════════════════
+ *
+ * The seventh gate made loginOneSignal()/logoutOneSignal() resume in call order
+ * by memoizing loadAppId()'s PROMISE, so two concurrent callers await the same
+ * read. That was correct and it is still here — but it bought ordering as a
+ * SIDE EFFECT of a cache, and the cache has a teardown: `loadAppId()`'s
+ * `.finally()` sets `_appIdPromise = null` on every outcome (the
+ * failure-is-not-memoized rule, which must stay). There is therefore a window,
+ * a few microtasks wide, in which the first caller has torn the memo down and
+ * the second caller has not yet reached the `_appId !== null` fast path — so the
+ * second call starts its OWN read and can resume FIRST.
+ *
+ * On a handover that is the whole bug back again: DI-180q deliberately sequences
+ * logout-then-login, and if those two invert, `OneSignal.login()` is queued
+ * before `OneSignal.logout()`, the logout wins, and the INCOMING player is bound
+ * to nobody — silently receiving no pushes for the rest of the session, which is
+ * indistinguishable from "push isn't working on my phone."
+ *
+ * So ordering stops depending on the memo at all. Every OneSignal-affecting call
+ * goes through ONE chain: link N+1 does not start until link N has settled, so
+ * the order OneSignalDeferred is pushed is exactly the order the app called,
+ * whatever config.json is doing.
+ *
+ * `.then(fn, fn)` — the SAME function as both handlers — is what keeps the chain
+ * alive across a failure. A rejected link would otherwise poison every later one,
+ * which would mean one failed logout permanently disabling push identity for the
+ * page. `fn` ignores its argument, so it does not care which slot it was called
+ * in.
+ */
+let _osChain = Promise.resolve();
+function _queueOneSignalCall(fn) {
+  _osChain = _osChain.then(fn, fn);
+  return _osChain;
+}
+
 /** Associate the current device with `playerId` (correction #2 pairs this with
  *  logoutOneSignal() below). Safe to call before init resolves — OneSignal
- *  queues calls made via OneSignalDeferred. No-ops when not configured. */
+ *  queues calls made via OneSignalDeferred. No-ops when not configured.
+ *
+ *  ORDER AGAINST logoutOneSignal() IS STRUCTURAL, NOT LUCK: both go through
+ *  `_queueOneSignalCall()` above, so the app's call order is the queue order
+ *  regardless of where loadAppId()'s memo happens to be. Security F-2 (seventh
+ *  gate) made them share one config read; security F-3 (eighth) made the sharing
+ *  unnecessary for correctness. */
 export async function loginOneSignal(playerId) {
   if (!playerId) return;
-  const appId = await loadAppId();
-  if (!appId) return;
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  window.OneSignalDeferred.push(async (OneSignal) => {
-    try { await OneSignal.login(String(playerId)); }
-    catch (err) { console.warn('[push-onesignal] login failed', err); }
+  return _queueOneSignalCall(async () => {
+    const appId = await loadAppId();
+    if (!appId) return;
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      try { await OneSignal.login(String(playerId)); }
+      catch (err) { console.warn('[push-onesignal] login failed', err); }
+    });
   });
 }
 
 /** correction #2 — MUST be called on sign-out and on player switch, or a
- *  handed-off phone keeps receiving the previous player's pushes. */
+ *  handed-off phone keeps receiving the previous player's pushes. Serialized
+ *  against loginOneSignal() through the same chain (security F-3). */
 export async function logoutOneSignal() {
-  const appId = await loadAppId();
-  if (!appId) return;
-  window.OneSignalDeferred = window.OneSignalDeferred || [];
-  window.OneSignalDeferred.push(async (OneSignal) => {
-    try { await OneSignal.logout(); }
-    catch (err) { console.warn('[push-onesignal] logout failed', err); }
+  return _queueOneSignalCall(async () => {
+    const appId = await loadAppId();
+    if (!appId) return;
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push(async (OneSignal) => {
+      try { await OneSignal.logout(); }
+      catch (err) { console.warn('[push-onesignal] logout failed', err); }
+    });
   });
 }
 
@@ -604,6 +694,16 @@ export function wireNotificationClicks(onClick) {
  *  (chat.js, backend.js) so notifytest.mjs can exercise loadAppId() fresh. */
 export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
   _appId = null;
+  // SECURITY F-2 — the shared in-flight read is per-PAGE state; a suite driving
+  // several scenarios in one process is several pages, and one surviving here
+  // would hand the next scenario the previous one's config answer.
+  _appIdPromise = null;
+  // SECURITY F-3 (eighth gate) — the serialization chain is per-PAGE state too.
+  // A chain left over from the previous scenario would make the next scenario's
+  // first call wait on a settled link (harmless) or, if that link is still in
+  // flight because the previous scenario's fetch stub never resolved, wait
+  // forever (not harmless). Reset with the rest.
+  _osChain = Promise.resolve();
   _scriptPromise = null;
   _initOnce = null;
   _configUnreachable = false;

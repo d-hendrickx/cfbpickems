@@ -5278,23 +5278,90 @@ function scribeTrainerRememberThisSources_(events, playersById) {
     if (!msg) continue;
     var flagger = (playersById[liveAuthor] && playersById[liveAuthor].displayName) || liveAuthor;
     var speaker = (playersById[msg.author] && playersById[msg.author].displayName) || msg.author;
-    out.push({ id: tid, body: String(msg.body || ''), speaker: speaker, flaggedBy: flagger });
+    // RG-144 — the raw AUTHOR ids travel alongside the display names so the
+    // prompt can print the canonical id of the person a fact would be about.
+    out.push({ id: tid, body: String(msg.body || ''), speaker: speaker, flaggedBy: flagger,
+               speakerId: String(msg.author || ''), flaggedById: liveAuthor });
   }
   return out;
 }
 
+// ── RG-144 (2026-09-18) ── A TRAINER-OUTPUT playerId IS AN IDENTIFIER ──────
+//
+// THE DEFECT: the live Sheet acquired `fact_candidate` rows whose playerId
+// was "Brayden"/"Jacob" — DISPLAY NAMES. The Supabase importer's projection
+// refused them, correctly: scribe_memory.subject_member_id is a members FK
+// and "Brayden" is not a member id.
+//
+// TWO causes, both real, both fixed:
+//   1. The prompt never showed the model a single canonical id. The
+//      fact-source block said "said by Koby, flagged by Kevin" and the
+//      schema asked for `playerId`. The only player-shaped string anywhere
+//      in the input was a display name, so a display name is what came back.
+//      (Fixed in scribeTrainerBuildInputText_ + the schema description.)
+//   2. Nothing server-side ever checked it. This filter validated
+//      `sourceMessageId` and nothing else, and the persist step wrote
+//      `String(f.playerId || '')` verbatim. A prompt instruction is not a
+//      guarantee — the model is free to ignore it, so the guarantee has to
+//      live here, where it is deterministic.
+//
+// THE RULE, in order, and it does not guess:
+//   • an exact, case-SENSITIVE match against a known playerId is accepted
+//     as-is (including a deactivated player's id — his members row exists,
+//     so the FK resolves and the fact is still about a real person);
+//   • otherwise, a case-insensitive, trimmed match against the displayName
+//     of EXACTLY ONE active player is MAPPED to that id, and logged;
+//   • anything else — no match, or two matches — is DISCARDED, and logged.
+//     Two players named "Kevin" is a thing a commissioner-editable roster
+//     permits, and attributing a claim about a real person to the wrong one
+//     is worse than losing the claim.
+// "Active" here excludes only `active === false`; a record with no `active`
+// field at all reads as active (CONVENTIONS #10), so an older player row
+// cannot silently stop being name-matchable.
+function scribeTrainerResolvePlayerId_(raw, playersById) {
+  var byId = playersById || {};
+  var s = String(raw === undefined || raw === null ? '' : raw).trim();
+  if (!s) return { ok: false, reason: 'empty', raw: s };
+  if (Object.prototype.hasOwnProperty.call(byId, s) && byId[s]) {
+    return { ok: true, playerId: s, mapped: false };
+  }
+  var target = s.toLowerCase(), ids = Object.keys(byId), matches = [];
+  for (var i = 0; i < ids.length; i++) {
+    var p = byId[ids[i]];
+    if (!p || p.active === false) continue;
+    if (String(p.displayName || '').trim().toLowerCase() === target) matches.push(ids[i]);
+  }
+  if (matches.length === 1) return { ok: true, playerId: matches[0], mapped: true, raw: s };
+  if (matches.length > 1) return { ok: false, reason: 'ambiguous', raw: s, matches: matches };
+  return { ok: false, reason: 'unknown', raw: s };
+}
+
 /** Drops any model-proposed fact whose `sourceMessageId` is not one of the
- *  explicitly-supplied 📌 source ids. Returns `{ kept, dropped }` so the run
- *  can report the drop count rather than silently swallowing it. */
-function scribeTrainerFilterFactCandidates_(candidates, sources) {
+ *  explicitly-supplied 📌 source ids, and (RG-144) any whose `playerId`
+ *  cannot be resolved to a real player id. Returns
+ *  `{ kept:[{c, playerId}], dropped, unresolved, mapped }` so the run can
+ *  report every drop by reason rather than silently swallowing it. */
+function scribeTrainerFilterFactCandidates_(candidates, sources, playersById) {
   var allowed = {};
   (sources || []).forEach(function (s) { allowed[s.id] = 1; });
-  var kept = [], dropped = 0;
+  var kept = [], dropped = 0, unresolved = 0, mapped = 0;
   (candidates || []).forEach(function (c) {
-    if (c && allowed[String(c.sourceMessageId || '')]) kept.push(c);
-    else dropped++;
+    if (!c || !allowed[String(c.sourceMessageId || '')]) { dropped++; return; }
+    var resolved = scribeTrainerResolvePlayerId_(c.playerId, playersById || {});
+    if (!resolved.ok) {
+      dropped++; unresolved++;
+      Logger.log('scribeTrainerResolvePlayerId_: DISCARDED fact_candidate (' + resolved.reason +
+        ') playerId="' + String(c.playerId) + '" key="' + String(c.key || '') + '" source=' + String(c.sourceMessageId || ''));
+      return;
+    }
+    if (resolved.mapped) {
+      mapped++;
+      Logger.log('scribeTrainerResolvePlayerId_: mapped display name "' + resolved.raw + '" -> ' + resolved.playerId +
+        ' on fact_candidate key="' + String(c.key || '') + '" source=' + String(c.sourceMessageId || ''));
+    }
+    kept.push({ c: c, playerId: resolved.playerId });
   });
-  return { kept: kept, dropped: dropped };
+  return { kept: kept, dropped: dropped, unresolved: unresolved, mapped: mapped };
 }
 
 function scribeTrainerPlayersById_() {
@@ -5462,7 +5529,7 @@ function scribeTrainerContinuityText_(learnings) {
   return lines.join('\n');
 }
 
-function scribeTrainerBuildInputText_(events, feedbackEvents, aftermath, metrics, learnings, factSources) {
+function scribeTrainerBuildInputText_(events, feedbackEvents, aftermath, metrics, learnings, factSources, playersById) {
   var parts = [];
   parts.push('=== SCRIBE TRAINER ANALYSIS INPUT ===');
   parts.push('Window: ' + events.length + ' raw chat-log events since the last run (or season start on a first run).');
@@ -5495,11 +5562,27 @@ function scribeTrainerBuildInputText_(events, feedbackEvents, aftermath, metrics
   // a closed set, with the ids spelled out, because the server drops any
   // candidate citing anything else (scribeTrainerFilterFactCandidates_).
   var sources = factSources || [];
+  // RG-144 — THE ROSTER, WITH IDS. Until this line existed, every player
+  // reference in this input was a display name and the schema still asked for
+  // a `playerId`; the model had no id to give and returned the only
+  // player-shaped string it had been shown. The server-side resolver
+  // (scribeTrainerResolvePlayerId_) is the guarantee; this is what stops the
+  // guarantee from having to drop or remap work in the ordinary case.
+  var rosterIds = Object.keys(playersById || {});
+  var rosterLine = [];
+  for (var ri = 0; ri < rosterIds.length; ri++) {
+    var rp = (playersById || {})[rosterIds[ri]];
+    if (!rp || rp.active === false) continue;
+    rosterLine.push(rosterIds[ri] + '=' + String(rp.displayName || ''));
+  }
+  parts.push('LEAGUE ROSTER — canonical player ids. A fact_candidate\'s `playerId` MUST be one of these exact ids (left of the "="), never a display name:');
+  parts.push(rosterLine.length ? rosterLine.join(', ') : '(roster unavailable — do not propose any fact_candidate)');
+  parts.push('');
   parts.push('FACT-CANDIDATE SOURCE SET — the COMPLETE and ONLY list of messages you may cite in a fact_candidate\'s sourceMessageId. Each was explicitly flagged "remember this" by a player. A fact_candidate whose sourceMessageId is not one of these exact ids is DISCARDED by the pipeline before it is ever stored, so do not propose one:');
   if (sources.length) {
     sources.forEach(function (s) {
       var body = s.body.length > 400 ? s.body.slice(0, 400) + '…' : s.body;
-      parts.push('- id=' + s.id + ' (said by ' + s.speaker + ', flagged by ' + s.flaggedBy + '): ' + body);
+      parts.push('- id=' + s.id + ' (said by ' + s.speaker + ' [' + s.speakerId + '], flagged by ' + s.flaggedBy + '): ' + body);
     });
   } else {
     parts.push('(none this window — return an EMPTY fact_candidates array)');
@@ -5555,7 +5638,10 @@ function scribeTrainerOutputSchema_() {
   var factItem = {
     type: 'object',
     properties: {
-      playerId: { type: 'string' }, key: { type: 'string' }, value: { type: 'string' },
+      // RG-144 — the instruction travels WITH the field, not only in the prose
+      // above it. The prompt's LEAGUE ROSTER line is the list this refers to.
+      playerId: { type: 'string', description: "The subject's canonical player id from the LEAGUE ROSTER line (e.g. p2) — never a display name." },
+      key: { type: 'string' }, value: { type: 'string' },
       confidence: { type: 'number' }, sourceMessageId: { type: 'string' },
     },
     required: ['playerId', 'key', 'value', 'confidence', 'sourceMessageId'],
@@ -5859,7 +5945,7 @@ function runTrainerPass_(opts) {
   }
 
   var factSources = scribeTrainerRememberThisSources_(events, playersById);
-  var inputText = scribeTrainerBuildInputText_(events, feedbackEvents, aftermath, metrics, learnings, factSources);
+  var inputText = scribeTrainerBuildInputText_(events, feedbackEvents, aftermath, metrics, learnings, factSources, playersById);
 
   var runId = scribeTrainerRunId_();
   var reservation = scribeLogReserve_(runId, 'trainer', scribeModel_());
@@ -5942,9 +6028,14 @@ function runTrainerPass_(opts) {
   // SIGNIFICANT #7 — validate BEFORE mapping: a candidate citing a source
   // that was never in the supplied set is dropped outright, never stored as
   // a pending row an approver would have no way to verify.
-  var factFilter = scribeTrainerFilterFactCandidates_(parsed.fact_candidates, factSources);
-  var newFacts = factFilter.kept.map(function (f) {
-    return { kind: 'fact_candidate', playerId: String(f.playerId || ''), key: String(f.key || ''),
+  // RG-144 — and the playerId is RESOLVED against the roster inside the same
+  // filter: a display name the model returned instead of an id is mapped when
+  // it is unambiguous, and the candidate is dropped when it is not. `playerId`
+  // below is the RESOLVED id, never the model's raw string.
+  var factFilter = scribeTrainerFilterFactCandidates_(parsed.fact_candidates, factSources, playersById);
+  var newFacts = factFilter.kept.map(function (k) {
+    var f = k.c;
+    return { kind: 'fact_candidate', playerId: k.playerId, key: String(f.key || ''),
       value: String(f.value || ''), confidence: Number(f.confidence) || 0,
       sourceMessageId: String(f.sourceMessageId || ''), status: scribeTrainerStatusFor_('fact_candidate', f.confidence),
       createdAt: nowIso, runId: runId };
@@ -5972,6 +6063,11 @@ function runTrainerPass_(opts) {
       newExperiments: newExperiments.length, calibrationExperiments: calibrationExperiments.length,
       newFactCandidates: newFacts.length,
       droppedFactCandidates: factFilter.dropped,
+      // RG-144 — the drop count is broken out by REASON. "The model cited a
+      // source it was not given" and "the model named someone we do not have"
+      // are different failures and want different responses.
+      unresolvedPlayerFactCandidates: factFilter.unresolved,
+      mappedPlayerIds: factFilter.mapped,
       factSourceSetSize: factSources.length,
       autoApproved: newLearnings.filter(function (l) { return l.status === 'approved'; }).length +
         newCanon.filter(function (c) { return c.approvalStatus === 'approved'; }).length },
@@ -6749,17 +6845,39 @@ function scribeMemoryRefreshComputed_() {
 // Idempotent twice over: the upsert collapses on (playerId,kind,key), and an
 // applied row is stamped `memoryAppliedAt` so a second sync is a no-op that
 // reports 0 applied rather than rewriting rows.
+//
+// RG-144 (2026-09-18) — THE LAST GATE. This is the step that copies a
+// fact_candidate's playerId into CFBP_SCRIBE_MEMORY, whose projected
+// `subject_member_id` IS the members foreign key the Supabase import refused.
+// The Trainer no longer stores an unresolved playerId, but rows written
+// BEFORE that fix are already on the live Sheet (and a row can also be
+// hand-edited), so the same resolution runs again here: an unambiguous
+// display name is repaired on the way in, anything unresolvable is REFUSED —
+// not applied, not stamped `memoryAppliedAt`, and logged so it shows up as
+// unfinished business rather than a silent success.
 function scribeMemoryApplyApprovedFacts_() {
   var learnings = scribeLoadLearnings_();
-  var applied = 0, changed = false;
+  var playersById = scribeTrainerPlayersById_();
+  var applied = 0, skipped = 0, changed = false;
   var nowIso = new Date().toISOString();
   for (var i = 0; i < learnings.length; i++) {
     var l = learnings[i];
     if (!l || l.kind !== 'fact_candidate' || l.status !== 'approved') continue;
     if (l.memoryAppliedAt) continue;
     if (!l.playerId || !l.key) continue;
+    var resolved = scribeTrainerResolvePlayerId_(l.playerId, playersById);
+    if (!resolved.ok) {
+      skipped++;
+      Logger.log('scribeMemoryApplyApprovedFacts_: REFUSED approved fact_candidate (' + resolved.reason +
+        ') playerId="' + String(l.playerId) + '" key="' + String(l.key) + '" — not written to memory, not stamped applied');
+      continue;
+    }
+    if (resolved.mapped) {
+      Logger.log('scribeMemoryApplyApprovedFacts_: mapped display name "' + resolved.raw + '" -> ' + resolved.playerId +
+        ' on approved fact_candidate key="' + String(l.key) + '"');
+    }
     scribeMemoryUpsertRecord_({
-      playerId: l.playerId, kind: 'fact', key: l.key, value: l.value,
+      playerId: resolved.playerId, kind: 'fact', key: l.key, value: l.value,
       provenance: 'trainer-proposed', confidence: l.confidence,
       sourceMessageId: l.sourceMessageId || '',
     });
@@ -6767,7 +6885,7 @@ function scribeMemoryApplyApprovedFacts_() {
     applied++; changed = true;
   }
   if (changed) scribeSaveLearnings_(learnings);
-  return { applied: applied };
+  return { applied: applied, skipped: skipped };
 }
 
 /** Parses the points back out of a `classify_<id>:<points>` log value.
@@ -6911,7 +7029,10 @@ function scribeMemorySync(req) {
   }
   var result = scribeMemoryApplyApprovedFacts_();
   var refreshed = (req && req.refreshComputed === false) ? null : scribeMemoryRefreshComputed_();
-  return { ok: true, applied: result.applied, refreshed: refreshed };
+  // RG-144 — `skipped` is reported, never swallowed: an approved fact that
+  // could not be attributed to a real player id is an outcome the caller
+  // deserves to see.
+  return { ok: true, applied: result.applied, skipped: result.skipped, refreshed: refreshed };
 }
 
 // ── Memory -> context (fills assembleScribeContext_'s reserved block 5) ────

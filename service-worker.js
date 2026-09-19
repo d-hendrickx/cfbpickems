@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v21-2';
+const CACHE_NAME = 'cfb-pickems-v22-0';
 
 const STATIC_ASSETS = [
   './',
@@ -91,6 +91,18 @@ const STATIC_ASSETS = [
   './js/scribeFeedback.js',  // same — omitted from the shell cache after the Build 1 merge
   './js/extra-point.js',
   './js/recap.js',
+  // Phase III Step 3a (reviewer N3 / SEC F6). js/auth.js is statically imported
+  // by app.js AND by storage.js, so it is boot-critical exactly as
+  // scribeAgent.js/scribeFeedback.js are — a shell cache without it serves a
+  // module graph that cannot resolve. The vendored SDK is NOT statically
+  // imported (app.js injects it only in authMode:'supabase'), but it is
+  // precached anyway so that a supabase-mode device is not one flaky request
+  // away from an unusable front door, and so the cached copy is the sha-pinned
+  // one. Cost, named: ~one SDK's worth of install-time bytes for every device,
+  // including the 'pins' devices that will never execute it — install-time and
+  // once per CACHE_NAME, not per boot.
+  './js/auth.js',
+  './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',
 ];
@@ -149,6 +161,36 @@ self.addEventListener('fetch', event => {
 
   // ESPN API and CORS proxies: always go to network; fall back to cache if offline.
   if (url.hostname.includes('espn') || url.hostname.includes('corsproxy') || url.hostname.includes('allorigins') || url.hostname.includes('codetabs')) {
+    event.respondWith(networkFirst(event.request, false));
+    return;
+  }
+
+  // ── SEC S-6 — config.json IS NEVER CACHED ───────────────────────────────────
+  // js/backend.js's loadDeployedConfig() cache-busts with `config.json?t=` +
+  // Date.now(), so every boot requested a URL that had never been seen before.
+  // Cache Storage keys on the FULL url, so each of those became its own entry:
+  // a permanent, monotonically growing pile of config snapshots that nothing can
+  // ever read back (the next boot's timestamp never matches a stored one), each
+  // one holding `backendToken` in plain text, and all of them surviving until
+  // CACHE_NAME next changes. Unbounded growth AND a needless multiplication of
+  // the secret.
+  //
+  // The fix is to stop CACHING it, not to start matching it:
+  //   ⚠️ DO NOT ADD `ignoreSearch` HERE, OR ANYWHERE IN THIS FILE. ⚠️
+  // With ignoreSearch, an offline boot would be served a STALE cached
+  // config.json as a 200 — which loadDeployedConfig() reports as a SUCCESSFUL
+  // read (`authModeKnown: true`). That re-opens the exact privilege downgrade
+  // SEC F1-R1 closed: a cut-over device reading a pre-cutover config off its own
+  // disk would select 'pins' with full confidence and hand back a stale
+  // `cfbp_session` that may still say isAdmin:true. A config read must fail
+  // honestly when it cannot reach the network. boottest [17] asserts that no
+  // `ignoreSearch` appears in this file.
+  //
+  // RESPONSES ARE UNCHANGED, both ways: online, networkFirst returns the network
+  // response exactly as before (the only thing skipped is the cache.put); offline
+  // it returns the same synthetic 503, because a `?t=<now>` URL never matched a
+  // cached entry in the first place.
+  if (url.pathname === '/config.json' || url.pathname.endsWith('/config.json')) {
     event.respondWith(networkFirst(event.request, false));
     return;
   }

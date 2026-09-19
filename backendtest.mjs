@@ -627,6 +627,126 @@ console.log('\n[13] Client read paths — the token is on every request');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [14] Phase III Step 4 Part B — THE SHEETS RELAY ALLOW-LIST (DI §2.7).
+//
+// This closes adaptertest.mjs's A17 skip, which named this file as its
+// follow-up: the guard lives in call() at js/backend.js, a file Part A could
+// not edit, so Part A asserted only that the ADAPTER can reach no relay and
+// deferred the guard itself to here.
+//
+// THE ASSERTION THAT MATTERS IS "AND NEVER FETCHED". A refusal that happens
+// AFTER the request has gone out is not an interlock — the production league's
+// Sheet has already been read or written by then, which is the entire cross-
+// league bleed §2.7 exists to prevent. Every case below therefore checks
+// `calls.length === 0` as well as the throw, and the fetch stub is armed with
+// NOTHING so that a request would also exhaust it and fail loudly.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[14] dataMode:\'supabase\' — every Sheets relay except ping/notifyPush is refused BEFORE the fetch (DI §2.7, A17)');
+{
+  assert(be.getDataMode() === 'sheets',
+    '[14] the default dataMode is \'sheets\' — the flag-off world, and what an absent config.json key means (CONVENTIONS #10)');
+
+  // ── the flag-off world is untouched ──────────────────────────────────────
+  arm(PING());
+  const okBefore = await be.pingBackend();
+  assert(okBefore.ok === true && calls.length === 1,
+    '[14] in \'sheets\' mode every relay still goes out exactly as it does today');
+  arm({ ok: true, _action: 'runTrainer', skipped: false });
+  const trainerBefore = await rejects(be.runTrainerRemote({ adminPasswordHash: 'h' }));
+  assert(!trainerBefore && calls.length === 1,
+    '[14] …including the ones the allow-list will later refuse — runTrainer reaches the server in \'sheets\' mode');
+
+  // ── flip the mode ────────────────────────────────────────────────────────
+  assert(be.setDataMode('supabase') === 'supabase', '[14] setDataMode(\'supabase\') takes');
+  assert(be.getDataMode() === 'supabase', '[14] …and getDataMode() reports it');
+
+  // Every REFUSED action, by its own exported relay where there is one. The
+  // list is written out rather than derived, so a relay added later without a
+  // thought about the interlock shows up here as an untested name rather than
+  // being swept into a loop that happens to still pass.
+  const refused = [
+    ['runTrainerRemote',       () => be.runTrainerRemote({ adminPasswordHash: 'h' }),                 'runTrainer'],
+    ['scribeAskRemote',        () => be.scribeAskRemote({ triggerMessageId: 'm1', playerId: 'p1' }),  'scribeAsk'],
+    ['scribeAutonomousRemote', () => be.scribeAutonomousRemote({ trigger: 't' }),                     'scribeAutonomous'],
+    ['scribeClassifyRemote',   () => be.scribeClassifyRemote({ messageId: 'm1' }),                    'scribeClassify'],
+    ['scribeMemoryListRemote',   () => be.scribeMemoryListRemote({ playerId: 'p1' }),                         'scribeMemoryList'],
+    ['scribeMemoryUpsertRemote', () => be.scribeMemoryUpsertRemote({ playerId: 'p1', kind: 'k', text: 't' }), 'scribeMemoryUpsert'],
+    ['scribeMemoryDeleteRemote', () => be.scribeMemoryDeleteRemote({ id: 'x', playerId: 'p1' }),              'scribeMemoryDelete'],
+    ['scribeMemorySyncRemote',   () => be.scribeMemorySyncRemote({ adminPasswordHash: 'h' }),                 'scribeMemorySync'],
+    ['createSnapshot',         () => be.createSnapshot('label'),                                      'snapshot'],
+    ['listSnapshots',          () => be.listSnapshots(),                                              'listSnapshots'],
+    ['restoreSnapshot',        () => be.restoreSnapshot('snap1'),                                     'restoreSnapshot'],
+    ['hydrate (getAll)',       () => be.hydrate(),                                                    'getAll'],
+    ['notifyLogFetch',         () => be.notifyLogFetch('p1', 0),                                     'notifyLog'],
+  ];
+  for (const [name, run, action] of refused) {
+    arm();                                    // NOTHING queued: a fetch would also exhaust the stub
+    const err = await rejects(run());
+    assert(!!err && err.name === 'SheetsRelayRefusedError',
+      `[14] ${name} throws a typed SheetsRelayRefusedError in supabase data mode`);
+    assert(!!err && err.code === 'sheets_relay_refused',
+      `[14] …with code 'sheets_relay_refused' (got ${err && err.code})`);
+    assert(!!err && err.action === action, `[14] …naming the refused action '${action}' (got ${err && err.action})`);
+    assert(!!err && err.interlocked === true,
+      '[14] …flagged as a DESIGNED refusal, not an outage, so the sync badge does not go red for a Step 6 feature');
+    assert(calls.length === 0, `[14] …and NOTHING was fetched (got ${calls.length} request(s)) — the refusal is before the wire`);
+  }
+
+  // ── the two allowed actions still work ───────────────────────────────────
+  arm(PING());
+  const p = await be.pingBackend();
+  assert(p.ok === true && calls.length === 1 && calls[0].body.action === 'ping',
+    '[14] `ping` is on the allow-list and still reaches the Sheet — the Comm → Settings connection test keeps working');
+
+  arm({ ok: true, _action: 'notifyPush', sent: 1 });
+  const np = await rejects(be.notifyPushRelay({ dedupKey: 'd1', playerIds: ['p1'], title: 'T', body: 'B', destination: 'chat', event: 'E' }));
+  assert(!np, `[14] \`notifyPush\` is on the allow-list and does not throw (got: ${np && np.message})`);
+  assert(calls.length === 1 && calls[0].body.action === 'notifyPush',
+    '[14] …and the request really went out: OneSignal external_ids are league-unique by construction (D-4)');
+
+  // ── the allow-list itself cannot be widened at runtime ───────────────────
+  // Security F-3/F-E's lesson, applied here: a FROZEN ARRAY, so index
+  // assignment, push, and Array.prototype.push.call all throw in strict mode.
+  // A Set would have looked identical and been mutable through its internal slot.
+  const listed = be._sheetsRelayAllowlistForTest();
+  assert(JSON.stringify(listed) === JSON.stringify(['ping', 'notifyPush']),
+    `[14] the allow-list is exactly ['ping','notifyPush'] (got ${JSON.stringify(listed)})`);
+  listed.push('runTrainer');
+  assert(JSON.stringify(be._sheetsRelayAllowlistForTest()) === JSON.stringify(['ping', 'notifyPush']),
+    '[14] …and the accessor returns a COPY, so a caller mutating what it got cannot widen the real list');
+  {
+    const fs = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const src = fs.readFileSync(fileURLToPath(new URL('./js/backend.js', import.meta.url)), 'utf8');
+    assert(/const SHEETS_RELAY_ALLOWLIST = Object\.freeze\(\[/.test(src),
+      '[14] …and the real list is a FROZEN ARRAY, not a Set (a Set\'s contents are internal slots that Object.freeze cannot reach)');
+    // Non-vacuity: prove the guard is the FIRST thing call() does, above
+    // getBackendConfig() and therefore unambiguously above the fetch.
+    // Comments stripped first — the guard's OWN comment says "above
+    // getBackendConfig()", and matching prose instead of code is how a static
+    // rule passes over the thing it is describing rather than over the thing
+    // that runs (RG-49's shape).
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/[^\n]*$/gm, '');
+    const at = code.indexOf('async function call(action');
+    const callBody = code.slice(at, at + 900);
+    assert(at > 0 && callBody.indexOf('SHEETS_RELAY_ALLOWLIST') > -1
+      && callBody.indexOf('SHEETS_RELAY_ALLOWLIST') < callBody.indexOf('getBackendConfig()'),
+      '[14] the guard is the first statement in call() — above the config read, above the body build, above fetch()');
+  }
+
+  // ── R2, THE RELEASE: the mode is not a one-way door ──────────────────────
+  // Driven forward rather than asserted about — a rollback (DI §8.2 flips both
+  // keys back) must restore every relay on the next config read.
+  be.setDataMode('sheets');
+  arm({ ok: true, _action: 'runTrainer', skipped: false });
+  const back = await rejects(be.runTrainerRemote({ adminPasswordHash: 'h' }));
+  assert(!back && calls.length === 1,
+    '[14] R2: back in \'sheets\' mode the refused relays work again — a rollback restores them with no code change');
+  assert(be.setDataMode('nonsense') === 'sheets' && be.setDataMode(undefined) === 'sheets',
+    '[14] anything that is not literally \'supabase\' normalizes to \'sheets\' (CONVENTIONS #10, fail-safe direction)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, 0 failed`);
 else { console.error(`❌ FAILURES — ${pass} passed, ${fail} failed`); process.exitCode = 1; }

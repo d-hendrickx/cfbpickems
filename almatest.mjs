@@ -210,9 +210,13 @@
 // Node built-ins for §14's mutation battery — same tmpdir-copy discipline as
 // slatetest.mjs's §[M] (CLAUDE.md: never git checkout/restore/stash to undo a
 // mutation; mutate a COPY under os.tmpdir(), never real source).
-import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm, cp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+// A mutant directory is a FULL COPY of js/, never a hand-listed subset —
+// see the comment at importMutant() below (2026-09-17 sweep finding).
+const MUTANT_JS_DIR = fileURLToPath(new URL('./js/', import.meta.url));
 
 // ── DOM / localStorage stubs (slatetest.mjs shape — registered elements that
 //    remember listeners, so real click handlers can be driven end to end) ──
@@ -1142,7 +1146,15 @@ console.log('\n[14] F2 — restoring 8ae64f4\'s dropped ESPN-threading proof, pl
   async function importMutant(mutatedSrc) {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'almatest-mutant-'));
     mutantDirs.push(dir);
-    await writeFile(path.join(dir, 'data-model.js'), realDataModelSrc, 'utf8');
+    // FULL COPY of js/, not a hand-listed subset (2026-09-17 sweep finding).
+    // almatotaltest.mjs hand-listed the modules its target transitively needed
+    // and CRASHED with ERR_MODULE_NOT_FOUND the day js/storage.js gained an
+    // import — a list of dependencies is a snapshot of the import graph on the
+    // day somebody wrote it down. This target's graph (data-provider ->
+    // data-model) happens to still be complete, so this is hardening, not a
+    // repair: copying the directory has nothing to keep up to date, and
+    // feedbacktest.mjs's createMutantDir() already does exactly this.
+    await cp(MUTANT_JS_DIR, dir, { recursive: true });
     await writeFile(path.join(dir, 'data-provider.js'), mutatedSrc, 'utf8');
     const url = new URL(`file://${path.join(dir, 'data-provider.js')}?t=${Date.now()}_${Math.random()}`);
     return import(url.href);

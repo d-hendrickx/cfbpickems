@@ -88,9 +88,10 @@
  *      reviewer found GREEN against the existing suites
  */
 
-import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm, cp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ── DOM / localStorage stubs (slatetest.mjs/almatest.mjs shape) ────────────
 const store = new Map();
@@ -518,17 +519,34 @@ console.log('\n[8] recomputeAlmaMaterFlags() — skips LOCKED/LIVE/FINAL, touche
 console.log('\n[9] Mutation battery — calculateAlmaMaterTotal()…');
 {
   const realScoringSrc = await readFile(new URL('./js/scoring.js', import.meta.url), 'utf8');
-  const realDataModelSrc = await readFile(new URL('./js/data-model.js', import.meta.url), 'utf8');
-  const realStorageSrc = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
-  const realBackendSrc = await readFile(new URL('./js/backend.js', import.meta.url), 'utf8');
 
+  /**
+   * ══ THE MUTANT DIRECTORY IS NOW A FULL COPY OF js/ ═════════════════════════
+   *
+   * REGRESSION IN THIS SUITE, found by a full sweep 2026-09-17: this file used
+   * to hand-list the modules scoring.js transitively needs — data-model.js,
+   * storage.js, backend.js — and write exactly those four into the temp dir.
+   * That list is a snapshot of the import graph on the day it was written, and
+   * Phase III Step 3a moved the graph: js/storage.js now imports './auth.js'.
+   * So every `import(mutantDir/scoring.js)` died with
+   * ERR_MODULE_NOT_FOUND ./auth.js, at module scope, taking the WHOLE SUITE
+   * down before assertion one — a crash, not a failure, which is why it was
+   * invisible to anything that only watched the five gate suites.
+   *
+   * Copying the whole directory instead of enumerating part of it removes the
+   * failure mode rather than patching this instance of it: the copy cannot go
+   * stale, because it has nothing to keep up to date. It is also what
+   * feedbacktest.mjs's createMutantDir() already does (`cp(jsDir, dir,
+   * {recursive:true})`), so this is the existing precedent, not a new pattern.
+   * Cost measured: ~330 KB per mutant dir, and the suite still runs in under a
+   * second.
+   */
+  const jsDir = fileURLToPath(new URL('./js/', import.meta.url));
   const mutantDirs = [];
   async function importMutant(mutatedScoringSrc) {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'almatotaltest-mutant-'));
     mutantDirs.push(dir);
-    await writeFile(path.join(dir, 'data-model.js'), realDataModelSrc, 'utf8');
-    await writeFile(path.join(dir, 'storage.js'), realStorageSrc, 'utf8');
-    await writeFile(path.join(dir, 'backend.js'), realBackendSrc, 'utf8');
+    await cp(jsDir, dir, { recursive: true });
     await writeFile(path.join(dir, 'scoring.js'), mutatedScoringSrc, 'utf8');
     const url = new URL(`file://${path.join(dir, 'scoring.js')}?t=${Date.now()}_${Math.random()}`);
     return import(url.href);
@@ -893,4 +911,33 @@ console.log('\n[10] Structural call-site scans…');
 // ═════════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
-else { console.log(`❌ FAILURES — ${pass} passed, ${fail} failed`); process.exit(1); }
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+else process.stdout.write(`❌ FAILURES — ${pass} passed, ${fail} failed` + '\n', () => process.stderr.write('', () => process.exit(1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

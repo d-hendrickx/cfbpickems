@@ -2137,6 +2137,132 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
     '[24h] the priming card waits for config.json before deciding — subscriptionState() awaits the App ID rather than reading a not-yet-populated value at boot');
   assert(st2.configFetches >= 1, '[24h] (and that state really did come from a config read)');
 
+  // ── [24k] SECURITY F-2 (seventh gate) — LOGOUT-BEFORE-LOGIN IS ORDERED ────
+  // THE DEFECT, reproduced rather than reasoned about. loadAppId() memoized the
+  // VALUE (`_appId`), which is only assigned AFTER the fetch resolves — so two
+  // callers arriving before the first read lands both missed the memo and both
+  // started their own config.json request. loginOneSignal() and
+  // logoutOneSignal() each await that before queueing onto OneSignalDeferred,
+  // so the order they QUEUE in was the order the two independent reads happened
+  // to come back in. DI-180q's handover deliberately calls logout FIRST and the
+  // re-login LAST; with the logout's read the slower of the two, the queue came
+  // out `["login:mB", "logout"]` and the incoming player was bound to NOBODY,
+  // silently receiving nothing for the rest of the session — the exact failure
+  // DI-180q's ordering fix was written to prevent, one layer down.
+  //
+  // THE STUB IS THE REPRODUCTION: the FIRST read is slower than the second.
+  {
+    const APP_ID_F2 = 'abad65e9-1111-2222-3333-444444444444';
+    installPushStubs({ sdkCompatible: true, standalone: true });
+    push._resetForTest();
+    let reads = 0;
+    globalThis.fetch = async () => {
+      const mine = ++reads;
+      // First read slow, every later read instant. Under the old code this put
+      // the logout's answer LAST; under the fix there is only ever one read.
+      await new Promise(r => setTimeout(r, mine === 1 ? 40 : 0));
+      return { ok: true, json: async () => ({ oneSignalAppId: APP_ID_F2 }) };
+    };
+    globalThis.OneSignalDeferred = [];
+    // Called in the order DI-180q's chokepoint calls them: clear first, bind last.
+    const pOut = push.logoutOneSignal();
+    const pIn = push.loginOneSignal('mB');
+    await Promise.all([pOut, pIn]);
+    const osSeq = [];
+    const queued = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred.splice(0) : [];
+    for (const cb of queued) {
+      await cb({ login: id => osSeq.push(`login:${id}`), logout: () => osSeq.push('logout') });
+    }
+    assert(osSeq.length === 2, `[24k] fixture: both OneSignal calls were queued (${JSON.stringify(osSeq)})`);
+    assert(osSeq[0] === 'logout',
+      `[24k] SEC F-2 — the LOGOUT is queued FIRST even when its config read is the slower one (${JSON.stringify(osSeq)}). The other order leaves the handset bound to nobody.`);
+    assert(osSeq[osSeq.length - 1] === 'login:mB',
+      `[24k] …and the login for the incoming player is LAST (${JSON.stringify(osSeq)})`);
+    assert(reads === 1,
+      `[24k] …because ONE config read served both calls (got ${reads}): loadAppId() memoizes the PROMISE now, so the second caller awaits the first caller's read and both resume in CALL order. Two reads is the race itself.`);
+    // …and the failure-is-not-memoized rule from [24h] is preserved by the
+    // change: a read that fails must not pin push to "not configured".
+    push._resetForTest();
+    globalThis.fetch = async () => { throw new Error('offline'); };
+    assert(await push.isPushConfigured() === false, '[24k] a failing read still reports "not configured" for that call…');
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: APP_ID_F2 }) });
+    assert(await push.isPushConfigured() === true,
+      '[24k] …and is still NOT memoized after the promise-memo change — the in-flight promise is dropped on every outcome, so only a definitive App ID sticks');
+  }
+
+  // ── [24k] SECURITY F-3 (EIGHTH gate) — ORDER ACROSS THE MEMO TEARDOWN ─────
+  // The seventh gate bought call ordering as a SIDE EFFECT of loadAppId()'s
+  // promise memo. A cache with a teardown has a window, and this is it:
+  //
+  //   1. logoutOneSignal() calls loadAppId(). `_appId` is null, so it takes the
+  //      SLOW path — `_readAppId()` chained through a `.finally()`, which is two
+  //      extra microtask hops before its continuation can run.
+  //   2. `_readAppId()` assigns `_appId` and resolves.
+  //   3. loginOneSignal() calls loadAppId() in that instant. `_appId !== null`
+  //      now, so it takes the FAST path — `Promise.resolve(_appId)`, ONE hop.
+  //   4. The login's continuation therefore runs BEFORE the logout's, and
+  //      OneSignalDeferred comes out ["login:mB", "logout"]. The logout wins,
+  //      the incoming player is bound to NOBODY, and the phone silently receives
+  //      no pushes for the rest of the session.
+  //
+  // Nothing about that depends on a slow network — it is pure microtask ordering,
+  // which is why the [24k] block above (whose stub races two MACROTASK timers)
+  // cannot see it. This one sweeps the gap between the two calls across the whole
+  // teardown window, one microtask at a time, and demands the same answer at
+  // EVERY gap. The fix is the `_osChain` serialization: the login's body does not
+  // begin until the logout's link has settled, whatever the memo is doing.
+  {
+    const APP_ID_F3 = 'abad65e9-5555-6666-7777-888888888888';
+    const observed = [];
+    for (let gap = 0; gap <= 8; gap++) {
+      installPushStubs({ sdkCompatible: true, standalone: true });
+      push._resetForTest();
+      // Resolves entirely in MICROTASKS — no timer anywhere — so the gap loop
+      // below can actually step through `_appId`'s assignment instead of being
+      // parked behind a macrotask the way [24k]'s 40ms stub is.
+      globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: APP_ID_F3 }) });
+      globalThis.OneSignalDeferred = [];
+      // DI-180q's order: clear the old binding first, bind the new player last.
+      const pOut = push.logoutOneSignal();
+      for (let i = 0; i < gap; i++) await Promise.resolve();
+      const pIn = push.loginOneSignal('mB');
+      await Promise.all([pOut, pIn]);
+      // Drain any trailing microtasks the chain may still be traversing.
+      for (let i = 0; i < 8; i++) await Promise.resolve();
+      const seq = [];
+      const queued = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred.splice(0) : [];
+      for (const cb of queued) {
+        await cb({ login: id => seq.push(`login:${id}`), logout: () => seq.push('logout') });
+      }
+      observed.push({ gap, seq });
+    }
+    const wrong = observed.filter(o => JSON.stringify(o.seq) !== JSON.stringify(['logout', 'login:mB']));
+    assert(observed.every(o => o.seq.length === 2),
+      `[24k] fixture: both OneSignal calls were queued at every gap (${JSON.stringify(observed.map(o => o.seq.length))}) — a gap that queued fewer would make the ordering assertion below vacuous there`);
+    assert(wrong.length === 0,
+      `[24k] SEC F-3 — logout-then-login holds at EVERY microtask gap across loadAppId()'s memo teardown, not just the ones where the memo happens to be warm. Failing gaps: ${JSON.stringify(wrong)}. Ordering is now a property of the _osChain serialization, not a side effect of a cache.`);
+    // NON-VACUITY — the sweep must actually be crossing the teardown, or it is
+    // nine copies of the same warm-memo case. At gap 0 the memo is COLD (the
+    // login shares the logout's in-flight read); by the last gap it is WARM (the
+    // login takes the `_appId !== null` fast path). Proven by counting reads.
+    {
+      installPushStubs({ sdkCompatible: true, standalone: true });
+      push._resetForTest();
+      let coldReads = 0;
+      globalThis.fetch = async () => { coldReads++; return { ok: true, json: async () => ({ oneSignalAppId: APP_ID_F3 }) }; };
+      globalThis.OneSignalDeferred = [];
+      const a = push.logoutOneSignal(); const b = push.loginOneSignal('mB');
+      await Promise.all([a, b]);
+      assert(coldReads === 1,
+        `[24k] non-vacuity — at gap 0 ONE config read serves both calls (got ${coldReads}): the memo is genuinely cold there, so the sweep starts before the teardown and ends after it`);
+    }
+    // …and the chain does not swallow the calls: the drained sequence above is
+    // the real OneSignalDeferred, and a chain that never ran would have produced
+    // an empty one at every gap (asserted by the length check).
+    assert(observed[0].seq[0] === 'logout' && observed[observed.length - 1].seq[0] === 'logout',
+      '[24k] …and both ends of the sweep agree, which is the point: the answer must not depend on where in the teardown the second call lands');
+  }
+
   // ── [24i] a failed boot init does not poison the later tap ────────────────
   //   app.js calls ensureOneSignalInit() at boot (js/app.js ~line 325); the
   //   player taps Turn On later. v16's init() sets its "already initialized"
@@ -2828,4 +2954,33 @@ console.log('\n[27] BUG-12 — a push that arrives (or is tapped) while the app 
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

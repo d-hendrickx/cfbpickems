@@ -691,6 +691,112 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 }
 .site-gate-btn:hover{background:#fff;color:#000}
 
+/* Phase III Step 3a — Google sign-in gate (DI-180). Same .site-gate shell;
+   only the inner content differs (DI-180e). */
+.site-gate-notice{color:#888;font-size:.78rem;margin-bottom:12px;letter-spacing:.06em}
+.google-signin-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px}
+.google-signin-btn:disabled{opacity:.6;cursor:default}
+/* D-1 (approved 2026-09-16) — the Google "G" mark: a SECOND, narrowly-scoped
+   inline-SVG exception to "icons are unicode emoji" (CONVENTIONS #16), one
+   place only, externally mandated by Google's OAuth branding guidelines
+   rather than a style preference. Do not widen this exception either. */
+.google-g-mark{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;
+  background:#fff;border-radius:3px;padding:2px;flex-shrink:0}
+
+/* DI-180l (approved 2026-09-17) — THE FAIL-CLOSED HOLD GATE.
+   Same .site-gate / .site-gate-inner shell and the same .site-gate-btn chrome
+   as the PIN and Google gates, reused verbatim (DI-180e). NO NEW COLOR TOKENS:
+   a hold is informational, not an error, so it inherits the gate's own black/
+   white and there is no red or amber anywhere in it.
+   What IS overridden, and only for this variant, is TYPOGRAPHY and GEOMETRY:
+   the gate's shared `text-transform:lowercase` + `.15em` tracking is designed
+   for two-word labels ("enter access pin") and turns a full sentence of honest
+   copy into something a player has to decode. The button goes full-width with
+   min-height:44px, matching every other gate button's tap target. */
+.site-gate[data-gate-state="hold"] .site-gate-title{
+  text-transform:none;letter-spacing:.04em;margin-bottom:12px;
+}
+.site-gate[data-gate-state="hold"] .site-gate-subtitle{
+  text-transform:none;letter-spacing:.02em;font-size:.88rem;line-height:1.5;margin-bottom:24px;
+}
+.site-gate[data-gate-state="hold"] .site-gate-btn{
+  display:block;width:100%;min-height:44px;text-transform:none;letter-spacing:.08em;
+}
+.site-gate[data-gate-state="hold"] .site-gate-btn:disabled{opacity:.6;cursor:default}
+
+/* DI-184 — active-league header pill. Same chrome as .header-identity-pill
+   (below), distinguishable by position (first in .header-right) and content,
+   not a new visual style. */
+.league-pill{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.4);color:#fff;
+  font-family:'Oswald',sans-serif;font-size:.72rem;font-weight:700;letter-spacing:.03em;
+  padding:4px 12px;border-radius:20px;max-width:120px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;display:inline-block;vertical-align:middle;-webkit-tap-highlight-color:transparent}
+/* Reviewer B4 / DI-184b — #league-pill is a <span> for EVERY account now. The
+   single-membership case is a static label (no caret, no handler, no button
+   role); the multi-membership case gets role="button" from renderLeaguePill(),
+   which is also what turns on the pointer/tap affordance here. Keyed on the
+   role, not the tag, so the cursor and the actual behaviour can never disagree. */
+.league-pill{cursor:default}
+.league-pill[role="button"]{cursor:pointer}
+.league-pill[role="button"]:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
+/* DI-181 — league flow (landing/join/create/selector). Reuses .card/.btn/
+   .status-pill throughout; this is the one new layout primitive, a simple
+   two-column row at desktop width for the join/create cards. */
+.league-flow-row{display:flex;flex-direction:column;gap:16px}
+@media (min-width:600px){.league-flow-row{flex-direction:row}.league-flow-row>.card{flex:1}}
+.league-flow-row .card{margin-bottom:0}
+
+/* DI-181c "Switching leagues…" — same fixed/opaque/z-index OVERLAY TECHNIQUE
+   #site-gate-overlay uses (DI-181e), normal app theming (not the black/white
+   gate look) since this happens mid-session, not at the front door. */
+#league-switch-overlay{position:fixed;inset:0;z-index:9500;background:var(--bg);
+  display:flex;align-items:center;justify-content:center}
+
+/* ── THE AUTH FAILURE CHANNEL (reviewer N5, 2026-09-16) ─────────────────────
+   Three requirements a single fixed banner could not hold at once:
+
+   1. ABOVE THE GATE. #site-gate-overlay is z-index 9000 and .site-gate inside
+      it is 9999, and both are fully opaque. The session-expired banner shipped
+      at z-index 190 — i.e. BEHIND the very overlay it is telling the player to
+      sign in through. It was invisible in the one state it exists for.
+   2. CLEAR OF THE BOTTOM NAV. Anchored at bottom:0 it covered .bottom-nav
+      (height var(--nav-height)) whenever no gate was up, taking the app's
+      primary navigation with it.
+   3. COEXISTENCE (AD-06). The auth channel and the sync channel are separate
+      reports and both must be readable at once; and within the auth channel,
+      "session expired", "can't reach sign-in" and the config interlock can in
+      principle all be live together. Two position:fixed nodes at the same edge
+      simply stack on top of each other.
+
+   So the channel gets ONE stacking context — this flex column — sitting above
+   the nav and above the gate. Banners are ordinary children: they stack
+   vertically, never overlap, and the red .backend-error-banner (top of screen,
+   z-index 200, its own node) is untouched and visible alongside any of them. */
+#auth-banner-stack{position:fixed;left:0;right:0;
+  bottom:calc(var(--nav-height) + env(safe-area-inset-bottom,0px));
+  z-index:10000;display:flex;flex-direction:column;pointer-events:none}
+#auth-banner-stack > *{pointer-events:auto}
+.auth-banner{padding:10px 14px;font-family:'Inter',sans-serif;
+  box-shadow:0 -2px 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;
+  gap:12px;font-size:.82rem;flex-wrap:wrap;text-align:center;color:#fff}
+/* DI-180c/e — session expired. Amber, not the sync banner's red: a sync
+   failure and an auth failure must never look like the same problem. */
+.session-expired-banner{background:#7a5b06;border-top:3px solid #4a3703}
+/* SEC F2 — "can't reach sign-in". Amber-red: louder than an expiry (which the
+   player can fix with one tap) and quieter than the interlock (which they
+   cannot fix at all). */
+.auth-banner-unavailable{background:#8a3d10;border-top:3px solid #4d2109}
+/* SEC F1 — the data-layer interlock. The loudest thing in the app, because
+   every write is being refused while it is up. */
+.auth-banner-config{background:#7a0c0c;border-top:3px solid #3f0606;font-weight:600}
+/* Phase III Step 4 (DI §5.3) — offline read-only. Amber, the same weight class
+   as the expiry banner and deliberately NOT the red .backend-error-banner: a
+   device showing its own league from a verified snapshot is not a sync failure,
+   and the two must not look like the same problem (DI-180c's rule). Slightly
+   cooler than the expiry amber so the two are distinguishable when both are up. */
+.auth-banner-offline{background:#4a5a06;border-top:3px solid #2c3703}
+
 /* Demo simulation */
 #demo-score-controls{margin-top:8px}
 

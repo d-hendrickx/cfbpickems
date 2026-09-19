@@ -1184,7 +1184,28 @@ console.log('\n[13] BUG-12 — wakeChat() puts the pushed message in the room wi
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) });
 }
 
-console.log('\n' + '─'.repeat(70));
-console.log(`${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed`);
-console.log('─'.repeat(70));
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F8 (sixth gate) — write-then-exit-in-the-callback: `console.log()`
+// followed by `process.exit()` is a race whenever stdout is a pipe (loadtest's
+// spawnSync, any `| grep`), and the dropped line is the one the parent parses.
+// See authtest.mjs's fuller note at the same place.
+process.stdout.write(`\n${'─'.repeat(70)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n${'─'.repeat(70)}\n`,
+  () => process.exit(fail === 0 ? 0 : 1));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

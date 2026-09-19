@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.21.2';
-export const APP_VERSION_DATE = '2026-09-12';
+export const APP_VERSION = 'v0.22.0';
+export const APP_VERSION_DATE = '2026-09-19';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -38,6 +38,20 @@ export const APP_VERSION_DATE = '2026-09-12';
  * no card, no `<details>`, no shell, and no chat post either.
  */
 const WHATS_NEW_RELEASES = [
+  {
+    // v0.22.0 — Phase III groundwork, shipped DORMANT (docs/SESSION_LOG_091126_SUPABASE.md entry 31).
+    // Google sign-in, league linking, the Supabase data adapter and chat transport are all in this
+    // build behind config flags that are OFF; the only player-visible change is the two chat prefs
+    // rows (DI-182a). The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
+    version: 'v0.22.0',
+    date: '2026-09-19',
+    added: [
+      'Chat ⚙ has two new rows: your initials and your alma mater. Set them once and they follow you across devices. The commissioner can still set your alma mater from the Players tab.',
+    ],
+    fixed: [
+      'Groundwork for the new sign-in and data system is in this build, switched off. Nothing about picks, scoring, standings or chat changes today; when it switches on, everyone will be told first.',
+    ],
+  },
   {
     // v0.21.2 — security patch (Phase III session, docs/SESSION_LOG_091126_SUPABASE.md).
     // Fix-only release; the FIRST `fixed` item doubles as SCRIBE's chat-post headline.
@@ -281,6 +295,11 @@ import {
   getGames, getGame, saveGame, deleteGame, saveAllGamesForWeek, clearSlateForWeek,
   getAvailableGames, saveAvailableGames, clearAvailableGames,
   getPicks, getPick, saveAllPicks, hasPlayerSubmitted,
+  // Phase III Step 4 Part B (DI §4.3 / DI-T4.11, coordinator ruling 2026-09-18)
+  // — the derived who-has-submitted counts, read through the SEAM like every
+  // other league value. Returns null for "we do not know", which is a different
+  // answer from "nobody has submitted" and must never be rendered as one.
+  getWeekProgress,
   getWeeklyResults, saveAllWeeklyResults,
   getObligations, getActiveObligations, saveObligation, saveAllObligations, createObligation,
   getNickname, setNickname, getDisplayNamePlain,
@@ -347,6 +366,82 @@ import {
   scribeMemoryListRemote, scribeMemoryUpsertRemote, scribeMemoryDeleteRemote, scribeMemorySyncRemote,
 } from './backend.js';
 
+// Phase III Step 3a (DI-180, DI-181, DI-184) — the sign-in front door.
+// js/auth.js owns the Supabase client + session/membership state; every
+// render in this section of app.js is new (showGoogleSignInGate(),
+// showLeagueFlowGate(), the Account sheet, the DI-184 header pill) but reuses
+// existing CSS/markup patterns verbatim per the design inputs' reuse calls.
+import {
+  configureAuth, getAuthMode,
+  hasValidSupabaseSession, isSessionExpired, clearSessionExpired,
+  signInWithGoogle, signOut, getAccountEmail,
+  getActiveLeagueId, setActiveLeagueId, getActiveLeagueName,
+  hasResolvedMemberships, getCachedMemberships, refreshMembershipsAndSession,
+  switchActiveLeague, onAuthEvent, joinLeague, createLeague,
+  // Remediation (2026-09-16): the SEC F1 interlock seam, the SEC F2 loud-fail
+  // membership-error latch, and the two typed errors both of those raise.
+  isAuthDataLayerMismatch, forceSignedOutSession,
+  getMembershipsError, AuthUnavailableError,
+  // Second remediation pass (2026-09-17): getAccountUserId() is the first term
+  // of the identity tuple the session-change chokepoint latches on (reviewer
+  // F-1/F-2); the last-known-authMode pair is SEC F1-R1's fail-closed store.
+  getAccountUserId, getLastKnownAuthMode, setLastKnownAuthMode,
+  // Fourth-gate amendment (2026-09-17): A9's ONE device-local clearing routine
+  // (called by the identity chokepoint the moment a different account is proven
+  // at a device whose previous session expired).
+  clearDeviceLocalSessionData,
+  // Fifth-gate amendment (2026-09-17, security 9): the identity key's field
+  // separator is ONE constant, owned by auth.js and imported here. The two files
+  // used to declare their own and they DISAGREED (a literal NUL byte here, a
+  // space there) — see IDENTITY_KEY_SEP's comment in js/auth.js.
+  IDENTITY_KEY_SEP,
+  // Sixth-gate amendment (2026-09-17):
+  //   • isPrivilegeHeld() — security F-6: the league switcher's role badge used
+  //     to read `league_members.role` straight out of the membership cache, so
+  //     it kept saying "Commissioner" for the ACTIVE league while DI-180p's
+  //     privilege lock was forcing isAdmin false everywhere else.
+  //   • clearForcedSignOut() — reviewer F2: `_sessionForcedOut` had no
+  //     production release, so a device that recovered from a hold with a valid
+  //     saved session painted its league as nobody for the life of the page.
+  isPrivilegeHeld, clearForcedSignOut,
+  // ── Phase III STEP 3b (DI-182 / DI-183) — claim codes, linking, members ───
+  // Every one of these is an RPC-then-refreshMembershipsAndSession() wrapper in
+  // auth.js, mirroring joinLeague()'s shape exactly. app.js never calls an RPC
+  // itself and never flips a local role/identity flag — see the block comment
+  // above linkMemberByEmail() in js/auth.js for why that is the only safe shape.
+  linkMemberByEmail, linkMember, unlinkMember,
+  getClaimCodes, issueClaimCode, listLeagueMembers, getMemberContacts,
+  setMemberRole, setMemberActive,
+  normalizeClaimCode, isClaimCodeShape,
+  // DI-180q + brief §3b — the confirmation card's one-time re-download line is
+  // conditioned on the device clear having ACTUALLY fired, which only
+  // reconcileDeviceDataOwner() knows. Read-only accessor, no new storage key.
+  getLastDeviceDataReconcile,
+  // ── Phase III STEP 4 PART B (DI-T4.1…T4.12) — the data adapter's host wiring ─
+  //   • getDataMode/isSupabaseDataMode — the SECOND flag (§1.4). isSupabaseDataMode
+  //     is also the predicate js/chatTransport.js is handed at boot (DI-T4.12).
+  //   • registerSupabaseDataBackend — §1.3's registration, so
+  //     hasSupabaseDataBackend() derives from the LIVE adapter state machine and
+  //     never from a config flag (entry condition #2).
+  //   • getSupabaseClient — §1.1: ONE client, auth.js's, never a second one.
+  //   • getIdentityEpoch / getDeviceDataOwnerTuple / hasSheetMirrorOnDevice —
+  //     the injected accessors §3.3, §5.3 and §6.1's read-back need, each from
+  //     the module that OWNS the fact rather than from a key literal here.
+  //   • LeagueSwitchFailedError — §3.2: a switch whose hydrate did not land
+  //     keeps DI-181c's overlay up instead of emitting SWITCH_END.
+  getDataMode, isSupabaseDataMode, registerSupabaseDataBackend, getSupabaseClient,
+  getIdentityEpoch, getDeviceDataOwnerTuple, getDeviceDataOwner, hasSheetMirrorOnDevice,
+  LeagueSwitchFailedError, _leagueNameById, _switchBannerLeagueName,
+} from './auth.js';
+
+// Phase III Step 4 Part B — THE THIRD STORAGE MODE (DI §1.1).
+// A namespace import for the same reason js/storage.js uses one: the adapter has
+// ZERO top-level side effects, so importing it costs a flag-off boot nothing but
+// the module eval. app.js NEVER reads league data from it — every read in this
+// file still goes through storage.js's accessors (§0.3 item 1). What app.js owns
+// is the adapter's LIFECYCLE: init, hydrate, status, Realtime, and the banners.
+import * as sb from './supabase-backend.js';
+
 // ── v0.16.0 modules ──────────────────────────────────────────────────────────
 import {
   initChatUI, renderChatPage, gameChatBubbleHTML, dashboardChatTeaserHTML,
@@ -354,13 +449,20 @@ import {
   emitPicksLockedEvent, emitGameFinalEvent, emitExtraPointEvent, emitWeekFinalEvent,
   emitPickRevealEvent, emitKickoffEvent, scribeLiveGameCheck,
   resumeChatAfterLogin,
+  // DI-182a/f (Step 3b) — app.js OWNS buildAlmaMaterOptions() (it reads the
+  // ESPN catalog cached in this module) and hands it down, because chat-ui.js
+  // importing app.js would close a cycle. One implementation, two call sites.
+  registerAlmaMaterOptionsProvider,
+  // SECURITY F-3 / DI-T7.6 (audit #10) — and the self-edit writer, same
+  // direction, same reason. See patchPlayer()'s own header.
+  registerPlayerPatchWriter,
   chatDigest,
   setChatSyncStatus,
   // FEAT-5 / DI-202b — the wager modal quotes the source message with the SAME
   // markup chat's own reply quote uses, not a second copy of it.
   staticQuoteHTML,
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat } from './chat.js';
+import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox } from './chat.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
   getScribeFrequency, isScribeAutonomousEnabled } from './scribeAgent.js';
@@ -375,7 +477,11 @@ import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, MEMORY_COPY, consi
          // deterministic selector, and THE one claim truncation (DI-202n item 5).
          wagerLine, wagerClaimTruncate, WAGER_CLAIM_MAX } from './scribeLines.js';
 import { SEASON_2025, season2025Obligations, season2025Nets, ob2025Status } from './history-2025.js';
-import { fetchMetrics as fetchChatMetrics } from './chatTransport.js';
+import { fetchMetrics as fetchChatMetrics, setSupabaseDataModePredicate, installSupabaseChat } from './chatTransport.js';
+// Phase III Step 5 (DI-T5.2): the row→event map is INJECTED into the chat transport, never
+// re-implemented there. Zero extra bytes: this module is already in every device's graph via
+// supabase-backend.js.
+import { rowToMessage } from './supabase-projection.js';
 import { renderPrevWeekRecapHTML, renderSeasonSummaryHTML, renderWeekRecapCardHTML } from './recap.js';
 import {
   detectLongestFieldGoal, gradeWeekExtraPoint, gradeExtraPoint,
@@ -492,11 +598,754 @@ function clearPickDraft() {
   state.draftExtraPoint = null;
 }
 
+/**
+ * ══ SEC F1-R1 — WHICH AUTH MODE IS THIS BOOT IN? ════════════════════════════
+ *
+ * THE CLASS LESSON, APPLIED. Three times in this arc a failure path silently
+ * picked the permissive default: `return []` became "you have no leagues",
+ * `INITIAL_SESSION` with a null session took the gate down, and a failed
+ * config read announced `authMode:'pins'`. This function is the third one, and
+ * its answer to "what does it do when the read fails" is written here, beside
+ * the code, and tested in boottest:
+ *
+ *   config read SUCCEEDED  -> use what it says, and REMEMBER it. This is the
+ *                             only path allowed to write the last-known value,
+ *                             and the only path allowed to select 'pins'.
+ *   config read FAILED,
+ *     last-known exists    -> keep it. A 404/5xx/503/offline boot does not get
+ *                             to demote a cut-over device back to PINs, because
+ *                             'pins' makes storage.getSession() read
+ *                             `cfbp_session` again — a record that may still
+ *                             say isAdmin:true, on a device whose
+ *                             `cfbp_site_unlocked` is already set. boot()'s
+ *                             caller then HOLDS on 'supabase' rather than
+ *                             offering a gate it cannot back.
+ *     no last-known        -> 'pins', i.e. byte-identical to today. A device
+ *                             that has never completed a successful config read
+ *                             has never been a supabase device, so there is
+ *                             nothing to fail closed about, and the flag-off
+ *                             world must not change (DI-180f).
+ */
+/*
+ * SEC S-3 (FINDING 2) — `!== false` WAS STILL A FAIL-OPEN TEST.
+ *
+ * The first version of this function asked `authModeKnown !== false`, which
+ * treats EVERY shape that is not literally `false` as a successful read:
+ * `{}`, `undefined`, `null`, a response object from a future refactor that
+ * forgot the flag. Two consequences, both in the permissive direction — the
+ * same direction this whole arc keeps failing in:
+ *   1. an unknown shape SELECTS a mode (`deployed?.authMode || 'pins'` -> pins)
+ *      on a device that may have cut over, i.e. the downgrade SEC F1-R1 closed,
+ *      reopened through the back door; and
+ *   2. worse, it then WRITES that guess to the last-known key, destroying a
+ *      genuine 'supabase' memory. `resolve({})` was enough to demote a device
+ *      permanently.
+ * Only an explicit `=== true` — a read that actually happened — may select a
+ * mode by config or write the last-known value. Everything else keeps the last
+ * known good answer, and falls back to today's 'pins' only when there has never
+ * been one. boottest [16]'s structural rule now requires every `return` in
+ * loadDeployedConfig() to carry the flag explicitly, so "unknown" can only ever
+ * arise from a caller outside that function.
+ */
+function resolveEffectiveAuthMode(deployed) {
+  if (deployed?.authModeKnown === true) {
+    const mode = deployed?.authMode || 'pins';
+    const persisted = setLastKnownAuthMode(mode);
+    // SEC S-2 — the write is verified now, and a failure is loud rather than
+    // swallowed. THIS boot is unaffected (the config read answered the question
+    // directly); what is lost is the memory a FUTURE boot would fall back on if
+    // its own config read failed, which on a cut-over device is the difference
+    // between holding and downgrading to PINs.
+    if (!persisted && mode !== 'pins') {
+      console.error(`[auth] this device is in '${mode}' mode but could not record that on the device (storage full, or private browsing). This session is unaffected; a future boot whose config.json read FAILS will fall back to PIN mode here.`);
+    }
+    return mode;
+  }
+  return getLastKnownAuthMode() || 'pins';
+}
+export const _resolveEffectiveAuthModeForTest = resolveEffectiveAuthMode;
+
 // ─── INIT ─────────────────────────────────────────────────────────────────────
+
+/**
+ * ══ THE AUTH-MODE DECISION, IN ONE PLACE (DI-180f + DI-180l) ════════════════
+ *
+ * Read config.json, decide which mode this device is in, and put the correct
+ * screen up. Lifted out of boot() for DI-180l: the hold gate's Retry button and
+ * its 20-second background re-check run EXACTLY this, so there is no second
+ * copy of the branch logic to drift out of step with boot's.
+ *
+ * Returns `{ deployed, authMode, hold }`. `hold` is null when the app may
+ * proceed, or the DI-180l reason string when a fail-closed gate is up and the
+ * caller must stop: `'config-unreadable' | 'sdk-unavailable' | 'interlock'`.
+ *
+ * Every branch below is idempotent — it is called again every 20 seconds while
+ * a hold is up.
+ */
+async function applyAuthModeDecision() {
+  // loadDeployedConfig() never throws (its own try/catch always returns an
+  // object), so this cannot leave `deployed` undefined; boot() reuses it for
+  // the hydrate block rather than fetching twice.
+  const deployed = await loadDeployedConfig();
+  if (deployed.ok) setBackendConfig(deployed.url, deployed.token);
+  const authMode = resolveEffectiveAuthMode(deployed);
+  configureAuth({ ...deployed, authMode });
+
+  // ── SEC F1-R1 / DI-180l — THE CONFIG READ FAILED AND THIS DEVICE WAS ON
+  //    SUPABASE ───────────────────────────────────────────────────────────────
+  // The only branch where the app refuses to pick a mode. resolveEffectiveAuthMode()
+  // has already decided we cannot honestly call this device a 'pins' device;
+  // what is left is to make sure nothing downstream acts as if it were.
+  //
+  // Held, not degraded: no PIN-mode session is derived (getSession() delegates
+  // to auth.js, and forceSignedOutSession() latches it to the signed-out shape
+  // so a late membership resolve cannot re-derive isAdmin), and no hydrate runs.
+  //
+  // DI-180l — WHAT CHANGED HERE, AND WHY IT IS A GATE NOW. This used to raise
+  // showAuthUnavailableBanner() and nothing else. On a device that had already
+  // satisfied the site PIN, that meant a line of text at the bottom of a fully
+  // painted dashboard — a device with NO proven identity reading its league's
+  // picks and standings off its own local mirror. The hold gate replaces the
+  // banner-only call (not in addition to it) and tears the painted content down
+  // before it paints (A6).
+  // SEC S-3 — `!== true`, matching resolveEffectiveAuthMode() exactly. The two
+  // must agree on what "the read succeeded" means, or an unknown shape gets a
+  // mode from the last-known memory (correct) and then sails past the hold
+  // branch as though config.json had vouched for it (not correct).
+  if (deployed.authModeKnown !== true && authMode === 'supabase') {
+    forceSignedOutSession();
+    applyIdentityDeltaIfChanged('config-unreadable-hold');
+    showAuthHoldGate('config-unreadable');
+    console.error("[auth] config.json could not be read and this device last booted in 'supabase' mode — holding signed out rather than downgrading to PINs.");
+    return { deployed, authMode, hold: 'config-unreadable' };
+  }
+
+  if (authMode === 'supabase') {
+    // SEC F1-R1, second half — on a supabase boot the PIN-mode session record
+    // is dead weight with a live hazard attached: getSession() no longer reads
+    // it, so a stale `{isAdmin:true}` sits there invisibly until something puts
+    // the device back in 'pins' mode and reads it straight back. Removed ONCE,
+    // here, on a config read that actually said 'supabase' — never on the hold
+    // path above, where a transient network failure must not cost a player
+    // their PIN login. clearSession() is a direct removeItem(), not a save(),
+    // so it is unaffected by the write interlock below.
+    //
+    // GUARDED AT THE CALL SITE (reported by the fourth-gate security pass;
+    // js/storage.js is ask-first, so the unguarded removeItem() stays reported
+    // rather than edited). WHAT THE GUARD BUYS, stated as the consequence: on a
+    // device whose storage refuses every operation this line threw straight out
+    // of boot() — above the interlock, above the gate, above every fail-closed
+    // branch below — leaving the app in whatever state the paint-first phase had
+    // reached with no lock and no banner. It is now a warning, and the boot
+    // continues into the interlock. WHAT THE GUARD COSTS: the stale
+    // `cfbp_session` record stays on that device. It is unreadable to this mode
+    // (getSession() delegates to auth.js while authMode is 'supabase'), so it is
+    // inert until a rollback to 'pins' — which is a strictly better failure than
+    // a dead boot, and is named here rather than discovered later.
+    try { clearSession(); } catch (e) {
+      console.warn('[auth] the PIN-mode session record could not be removed on this device (storage is refusing writes); continuing into the interlock rather than aborting the boot', e);
+    }
+    // ── SEC F1 (CRITICAL) — THE INTERLOCK ────────────────────────────────────
+    // authMode:'supabase' with no Supabase DATA backend is not a half-built
+    // feature, it is a privilege-escalation path: isAdmin would be derived from
+    // a league_members row in a project any Google account can create a league
+    // in, and then applied to an app whose every write lands in the six-player
+    // league's Sheet. Refuse the whole mode. No session is derived, no sign-in
+    // is offered, no hydrate runs, and storage.save() throws for the duration
+    // (js/storage.js's save() guard reads the SAME isAuthDataLayerMismatch()).
+    if (isAuthDataLayerMismatch()) {
+      forceSignedOutSession();
+      // forceSignedOutSession() IS an identity change (whoever this device
+      // thought it was, it is now nobody), so it routes through the one
+      // chokepoint like every other such path — the static rule in authtest
+      // enumerates this call site and checks exactly that.
+      applyIdentityDeltaIfChanged('interlock-forced-signout');
+      // DI-180l — the hold gate REPLACES showAuthConfigErrorBanner() here. The
+      // old comment at this site explained that the PIN gate was deliberately
+      // left standing because no replacement gate would ever be offered; the
+      // hold gate IS that replacement, and it is a strictly stronger lock (no
+      // PIN field, no button that could look like it succeeded) painted over
+      // torn-down page content. showAuthConfigErrorBanner() stays exported and
+      // tested; it simply has no pre-identity call site any more.
+      showAuthHoldGate('interlock');
+      console.error('[auth] INTERLOCK: authMode is \'supabase\' but hasSupabaseDataBackend() is false — refusing to derive a session or hydrate.');
+      return { deployed, authMode, hold: 'interlock' };
+    }
+
+    // Past the interlock: the PIN gate is not the right gate for this mode.
+    // Remove it before anything below decides what replaces it.
+    //
+    // SECURITY 10 — NOT A HOLD OVERLAY, THOUGH. This line used to remove
+    // whatever was there, which on the 20-second re-check path meant the hold
+    // gate came down HERE and the page then sat unlocked for the width of the
+    // `await ensureSupabaseSdkLoaded()` below (up to its 10-second deadline,
+    // and longer on the re-injection path). The hold stays up until something
+    // actually replaces it: showAuthHoldGate() updates it in place, the Google
+    // gate swaps it, and hideAuthHoldGate() removes it once the app is resolved.
+    if (!currentGateIsHold()) document.getElementById('site-gate-overlay')?.remove();
+
+    // Reviewer B2 — the vendored SDK is fetched ONLY here, only in this mode.
+    // index.html no longer carries a static <script> tag for it, so a 'pins'
+    // or 'prelink' boot downloads zero extra bytes (boottest pins that).
+    const sdkReady = await ensureSupabaseSdkLoaded();
+    // REVIEWER N-b — the SDK's absence is now an ANSWER, not a hang. false
+    // means it errored, or neither event arrived inside the deadline.
+    //
+    // DI-180l — WHICH OF THE TWO ANSWERS THIS IS depends on whether an identity
+    // has ever been proven on this device, which is precisely the gate family's
+    // scope boundary:
+    //   • NO saved session -> pre-identity. A "Continue with Google" button
+    //     that can only fail when tapped is worse than no button at all, so
+    //     this is the sdk-unavailable HOLD GATE.
+    //   • A saved session -> post-identity. The player already proved who they
+    //     are and what is on screen is legitimately theirs, so it stays a
+    //     BANNER (DI-180m), with a Sign In button that routes back to the
+    //     sdk-unavailable hold gate if it is tapped while the SDK is still
+    //     missing (A4). Whether such a device should be able to READ its own
+    //     cached league while offline is UN-187, DEFERRED to Step 4 (A5).
+    if (!sdkReady && !hasValidSupabaseSession()) {
+      showAuthHoldGate('sdk-unavailable');
+      return { deployed, authMode, hold: 'sdk-unavailable' };
+    }
+    // ── SECURITY S-1 — THE HOLD STATE IS CLEARED *BEFORE* THE NEXT GATE PAINTS ─
+    // Past all three hold branches: whatever was being held is resolved, and
+    // the gate decision below owns #site-gate-overlay from here. Clearing the
+    // reason first means the overlay the next line creates is not a hold
+    // overlay and cannot be removed as one (hideAuthHoldGate() is scoped to the
+    // hold VARIANT precisely so these two facts stay independent), and it kills
+    // the 20-second re-check timer that would otherwise keep re-running this
+    // whole decision underneath a resolved app.
+    //
+    // ── SECURITY F-7 (sixth gate, 2026-09-17) — WHAT A THROW BETWEEN HERE AND
+    //    THE RESOLVED GATE'S PAINT USED TO LEAVE BEHIND ─────────────────────
+    // `clearAuthHoldReason()` drops the hold STATE and kills the 20-second
+    // re-check timer with it. Everything below it paints. If any of it throws —
+    // showGoogleSignInGate() reads settings and touches the DOM;
+    // wireAuthUIEvents() runs a listener registration; a device refusing storage
+    // can make either of them throw — the page is left in the one state this
+    // whole family exists to prevent: a HOLD OVERLAY still on screen (nobody
+    // removed it), no hold state behind it, no re-check timer to clear it, and a
+    // Retry button whose handler now runs a decision that thinks nothing is
+    // held. Unrecoverable without a reload, which DI-180a forbids.
+    //
+    // So the clear is paired with a re-assert. The hold that WAS up is captured
+    // first, and on a throw the gate goes straight back up (which re-arms the
+    // timer and re-binds Retry) and the decision reports itself as still held,
+    // so boot() stops and the re-check keeps trying. Fail-closed on a path whose
+    // failure mode is "no lock at all".
+    const priorHold = currentAuthHoldReason();
+    clearAuthHoldReason();
+    try {
+      // ── REVIEWER F2 (sixth gate) — THE FORCED-SIGN-OUT LATCH IS RELEASED ──
+      // Past every hold branch is the exact inverse of the two places
+      // forceSignedOutSession() is called, and the only honest moment to lower
+      // it: the config really was read, the data layer really does agree, and
+      // the SDK really is on the page. Without this a device that recovered from
+      // a config-unreadable hold — which A2 promises resolves by ITSELF on a
+      // 20-second timer — came back as nobody, holding a valid saved session,
+      // for the life of the page. Routed through the ONE chokepoint like both of
+      // the SET sites, because it is an identity change.
+      if (clearForcedSignOut()) applyIdentityDeltaIfChanged('forced-signout-released');
+      if (!sdkReady) showAuthUnavailableBanner();
+      // One listener for the whole session — auth.js fires this on every
+      // sign-in/out/refresh/membership-refresh; app.js re-derives every
+      // affected render from it rather than each caller re-wiring its own.
+      wireAuthUIEvents();
+      if (!hasValidSupabaseSession()) showGoogleSignInGate();
+      // hasValidSupabaseSession() is a LOCAL, synchronous check (no network) —
+      // it does not by itself populate memberships. Kick that off now so the
+      // active league / isAdmin resolve as soon as possible after a warm
+      // return, without blocking the gate decision above on a network call.
+      if (hasValidSupabaseSession()) {
+        // Deliberately NOT awaited — the gate decision above must not block on a
+        // network call — but written as async/await inside its own try/catch
+        // rather than a .then() chain (CONVENTIONS #: no promise chains).
+        (async () => {
+          try {
+            await refreshMembershipsAndSession();
+            // DI-183e — THE AUTO-LINK RUNS AFTER THE FIRST MEMBERSHIP READ, not
+            // before it. The order is load-bearing: an account that is ALREADY
+            // linked has memberships, and this check is what makes the six
+            // founders pay for link_member_by_email() once, on the one boot that
+            // needs it, and never again.
+            if (getCachedMemberships().length === 0) {
+              const outcome = await attemptAutoLink();
+              // Repaint so whichever DI-183 screen is now owed actually renders
+              // — the membership refresh's own emit went out before the link
+              // resolved, so nothing else is going to ask again.
+              if (outcome && outcome !== 'idle') refreshAuthUI();
+            }
+          } catch (e) {
+            // A link attempt must never be the thing that fails a boot.
+            console.warn('[auth] initial membership refresh failed', e);
+          }
+        })();
+      }
+    } catch (e) {
+      const reassert = priorHold || 'config-unreadable';
+      console.error(`[auth] the resolved gate failed to paint after the hold state had already been cleared — re-asserting the '${reassert}' hold rather than leaving an overlay with no state and no re-check timer behind it`, e);
+      showAuthHoldGate(reassert);
+      return { deployed, authMode, hold: reassert };
+    }
+  }
+  return { deployed, authMode, hold: null };
+}
+export const _applyAuthModeDecisionForTest = applyAuthModeDecision;
+
+// ════════════════════════════════════════════════════════════════════════════
+// PHASE III STEP 4 PART B — THE DATA ADAPTER'S LIFECYCLE (DI §1.5, §5, §7)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════════════════
+// DI-T4.11 — "A ROW THE CLIENT CANNOT SEE MUST NOT BE RENDERED AS ABSENT"
+// ════════════════════════════════════════════════════════════════════════════
+/**
+ * WHAT BREAKS WITHOUT THIS, precisely. Three surfaces derive "who has
+ * submitted" by asking whether a player appears in the picks array:
+ * `renderDashboardTable()`, `renderDashboardCompact()`, and the PICKS_LOCKED
+ * notice's count. Under RLS, on an OPEN week, `picks_select` returns a player
+ * exactly one member's rows — their own — so all three would answer "nobody
+ * else has submitted", every week, to everybody. That is not a blind rule
+ * working; it is a false statement about five other people.
+ *
+ * So `week_submission_status()` (§4.3, migration 0008) returns per-member
+ * COUNTS with no pick content, the adapter folds them into the derived,
+ * read-only mirror key `cfbp_week_progress`, and this function is the ONE place
+ * that reads them.
+ *
+ * ── AND ABSENT IS NOT ZERO (the §12 amendment) ──────────────────────────────
+ * The progress key is deliberately NOT persisted to the device snapshot — a
+ * stale copy of it would say "nobody has submitted" with total confidence — so
+ * while ACTIVE-STALE or OFFLINE-READONLY there is no entry at all. Three
+ * answers, therefore, not two:
+ *
+ *   'yes'      the player has a full slate
+ *   'no'       the player demonstrably does not
+ *   'unknown'  we cannot see their rows AND we have no count for them
+ *
+ * 'unknown' renders as PRESENT-BUT-BLANK, never as "hasn't submitted". Every
+ * caller below treats it that way.
+ *
+ * Three cases answer from the picks array directly, because in each of them the
+ * client genuinely holds the rows: flag-off (`dataMode:'sheets'` — every device
+ * holds every pick, as today), the caller's OWN row (always visible to them),
+ * and a week whose picks are public (live/final — RLS opens up, which is why
+ * the adapter does not even call the RPC for those weeks).
+ */
+function submissionStateFor(weekId, playerId) {
+  let me = null;
+  try { me = getSession()?.playerId || null; } catch { me = null; }
+  const fromPicks = () => (hasPlayerSubmitted(weekId, playerId) ? 'yes' : 'no');
+  if (!isSupabaseDataMode() || !playerId || playerId === me) return fromPicks();
+  try {
+    const week = getWeek(weekId);
+    if (week && arePicksPublic(week)) return fromPicks();
+  } catch { /* fall through to the count */ }
+  const byWeek = weekSubmissionProgress(weekId);
+  const entry = byWeek && byWeek[playerId];
+  if (!entry) return 'unknown';
+  let gameCount = 0;
+  try { gameCount = getGames(weekId).length; } catch { gameCount = 0; }
+  if (!gameCount) return 'unknown';
+  return (Number(entry.pickCount) || 0) >= gameCount ? 'yes' : 'no';
+}
+
+/**
+ * The derived progress map for one week, or null when there is none.
+ *
+ * READ THROUGH THE SEAM. The first pass of this build called
+ * the adapter's mirror directly here for 'cfbp_week_progress', and reported
+ * that as a discrepancy with
+ * §0.3 item 1 ("no module imports supabase-backend.js to read data"); the
+ * coordinator's 2026-09-18 ruling closed it by adding `getWeekProgress()` to
+ * js/storage.js, which is the ONLY door to the adapter's mirror. app.js now
+ * touches the adapter for its LIFECYCLE and for nothing else — authtest's
+ * static rule pins that the adapter's synchronous read and write entry points
+ * are reachable from js/storage.js and from nowhere else.
+ *
+ * `null` from the accessor means WE DO NOT KNOW (DI-T4.11), and it is returned
+ * unchanged here: not in supabase mode, adapter not serving, or serving from
+ * the device snapshot where this key is deliberately absent. Every caller below
+ * renders that as UNKNOWN, never as zero.
+ */
+function weekSubmissionProgress(weekId) {
+  try {
+    const v = getWeekProgress();
+    if (!v || typeof v !== 'object' || !v.weeks) return null;
+    return v.weeks[weekId] || null;
+  } catch { return null; }
+}
+/** The `{ at }` stamp beside the map, so a surface can say "as of <time>"
+ *  instead of implying "now". '' when there is no map at all. */
+function weekSubmissionProgressAt() {
+  try {
+    const v = getWeekProgress();
+    return (v && v.at) ? String(v.at) : '';
+  } catch { return ''; }
+}
+/**
+ * The narrower question the two dashboard matrices ask, split out DELIBERATELY
+ * from submissionStateFor() above.
+ *
+ * Those two surfaces have always keyed column presence on "does this player
+ * appear in the picks array AT ALL" — not on a FULL slate, which is what
+ * hasPlayerSubmitted() means. The two differ for a player half-way through, and
+ * collapsing them would have quietly dropped that player's column in the
+ * flag-off world (xsstest [5c] caught exactly that on the first pass of this
+ * change). So the original predicate stays at the call sites, and this answers
+ * only the new question: CAN this device see the answer at all?
+ *
+ *   'known'    yes — flag-off, my own row, or a live/final week where RLS opens
+ *              up, or a week whose count RPC has landed
+ *   'unknown'  no — Supabase mode, another player, a blind week, and no count
+ *              on this device (ACTIVE-STALE / OFFLINE-READONLY, where the
+ *              derived progress key is deliberately not persisted)
+ */
+function submissionVisibility(weekId, playerId) {
+  let me = null;
+  try { me = getSession()?.playerId || null; } catch { me = null; }
+  if (!isSupabaseDataMode() || !playerId || playerId === me) return 'known';
+  try {
+    const week = getWeek(weekId);
+    if (week && arePicksPublic(week)) return 'known';
+  } catch { /* fall through to the count */ }
+  const byWeek = weekSubmissionProgress(weekId);
+  return (byWeek && byWeek[playerId]) ? 'known' : 'unknown';
+}
+
+export const _submissionStateForTest = submissionStateFor;
+export const _submissionVisibilityForTest = submissionVisibility;
+
+/** The one-line "we can't tell who else is in yet" note. '' in every mode and
+ *  every state except the one it describes, so it cannot become clutter. */
+function supabaseProgressUnknownNoteHTML(week) {
+  if (!week || !isSupabaseDataMode()) return '';
+  try {
+    if (arePicksPublic(week)) return '';
+    const players = getPlayers().filter(p => p.active);
+    if (!players.some(p => submissionVisibility(week.weekId, p.playerId) === 'unknown')) return '';
+    const at = weekSubmissionProgressAt();
+    const when = at ? fmtBannerTime(at) : '';
+    const tail = when ? ` Last checked ${when}.` : '';
+    return `<p class="blind-note"><span class="blind-note-icon">⏳</span><span>${escHtml(
+      `Who else has picks in isn't available right now — nobody is being shown as missing.${tail}`)}</span></p>`;
+  } catch { return ''; }
+}
+
+/** §7.1 item 2 — how old a hydrate has to be before the 60 s tick re-selects
+ *  even on a LIVE Realtime channel. Five minutes, per the DI: a league select
+ *  is six members and one slate, so the cost of being wrong in this direction
+ *  is trivial and the cost of being wrong in the other is a stale dashboard. */
+const SUPABASE_TICK_REHYDRATE_MS = 5 * 60 * 1000;
+
+/** True once sb.init() has run in this page. The adapter is wired ONCE, at the
+ *  top of boot(), before anything can subscribe or paint. */
+let _sbWired = false;
+/** The once-per-page post-hydrate tail latch for the Supabase path — the same
+ *  role `_withholdReleased` plays for the hold path. */
+let _sbTailRan = false;
+/** Set while a hydrate is in flight so the 60 s tick and a Realtime re-hydrate
+ *  cannot stack three selects on a slow connection. */
+let _sbHydrateInFlight = null;
+/** REVIEWER F-B — the hold reason a re-check is currently retrying FOR, held
+ *  for the width of its awaited hydrate. afterSupabaseHydrate() reads it so a
+ *  failed retry cannot come back wearing a LESS specific reason than the one it
+ *  went out with. '' at every other instant. */
+let _sbHoldRetryReason = '';
+
+/**
+ * DI §1.1/§1.3 — WIRE THE ADAPTER TO ITS HOST.
+ *
+ * Every accessor comes from the module that OWNS the fact, never from a key
+ * literal re-typed here (reviewer F9's rule). That is why this function lives
+ * in app.js at all: the adapter's §6.1 wipe needs storage.js's
+ * setSiteUnlocked/isSiteUnlocked, and storage.js imports auth.js — so auth.js
+ * could not have supplied them without a cycle. app.js imports all three, so it
+ * is the only place where the whole set is in scope at once.
+ *
+ * Idempotent and side-effect-free: it creates no client, reads no storage, arms
+ * no timer and does not hydrate. Every one of those is a later, explicit call.
+ */
+function wireSupabaseAdapter() {
+  if (_sbWired) return;
+  _sbWired = true;
+  sb.init({
+    // §1.3 — the probe goes back to auth.js, so hasSupabaseDataBackend() reads
+    // the live state machine. This is entry condition #2, and A7's mutant.
+    register: registerSupabaseDataBackend,
+    // §1.1 — ONE client. Never a second createClient().
+    getClient: getSupabaseClient,
+    // §3.1 / DI-184d — the header pill's text and every select's league_id
+    // predicate come from this one call.
+    getActiveLeagueId,
+    getIdentityEpoch,
+    getAccountUserId,
+    getDeviceDataOwnerTuple,
+    getDeviceDataOwner,
+    // §3.3 — the refusal banner names BOTH leagues. `_switchBannerLeagueName()`
+    // answers the DESTINATION for the width of a switch (when the pointer may
+    // not have moved yet) and the active league at every other instant.
+    getLeagueName: _switchBannerLeagueName,
+    getLeagueNameById: _leagueNameById,
+    // §2.1 — the route depends on the caller's ROLE, which honours DI-180p's
+    // privilege lock because getSession() does.
+    getSession,
+    hasValidSupabaseSession,
+    isPrivilegeHeld,
+    // §6.1 — the two Sheets-era device records the first Supabase boot wipes,
+    // each through its owning module's EXPORTED accessor…
+    clearMirror,
+    setSiteUnlocked,
+    // …and each read back through its owning module's PREDICATE (reviewer F9).
+    // A missing accessor reports "NOT VERIFIED", never success.
+    hasSheetMirror: hasSheetMirrorOnDevice,
+    isSiteUnlocked,
+    // §4.2 — Realtime folds into the mirror; the repaint is app.js's.
+    onRealtimeEvent: () => { _repaintForSupabaseData('realtime'); },
+  });
+  sb.onStatus(onSupabaseDataStatus);
+}
+
+/**
+ * §5.2 — the adapter's status channel, rendered.
+ *
+ * The badge gains ONE map entry ('refused'), because "the server said no" and
+ * "sync is broken" are different things to tell a player and the existing badge
+ * could only say the second. Every banner below escapes `serverMessage`,
+ * `reason` and both league names: they are server text and league text, i.e.
+ * untrusted, and "it happens to be safe today" is not a rendering rule
+ * (CONVENTIONS; xsstest is the guard).
+ */
+function onSupabaseDataStatus(status, detail = {}) {
+  updateSyncBadge(status === 'refused' ? 'refused' : status);
+  const state = detail.state || sb.getState();
+  if (status === 'refused') {
+    const banner = detail.banner
+      || (detail.serverMessage
+        ? `The server refused to save ${detail.key || 'that change'}: ${detail.serverMessage}. Nothing was saved.`
+        : `The server refused to save ${detail.key || 'that change'}. Nothing was saved.`);
+    showBackendErrorBanner(String(banner));
+    return;
+  }
+  if (state === 'OFFLINE-READONLY') { showSupabaseOfflineBanner(sb.getStatus().lastSyncAt); return; }
+  hideSupabaseOfflineBanner();
+  if (status === 'error') {
+    if (detail.error) showBackendErrorBanner(String(detail.error));
+    // §5.2 last paragraph — a REFUSED READ may mean a role changed under us.
+    // Handed to auth.js's one membership path; never classified here.
+    if (detail.membershipSuspect) {
+      (async () => {
+        try { await refreshMembershipsAndSession(); }
+        catch (e) { console.warn('[sb] the membership refresh after a refused read failed', e); }
+      })();
+    }
+    return;
+  }
+  if (status === 'synced') { hideBackendErrorBanner(); }
+}
+
+/**
+ * §5.3 — THE OFFLINE READ-ONLY BANNER (Drew decision D-1(a)).
+ *
+ * AMBER, in the auth-banner stack, NOT the red sync banner: this is not a sync
+ * failure, it is a device reading its own league without a live connection, and
+ * DI-180c's weight classes exist so a player can tell those apart at a glance.
+ * Every save is already refused (the probe is false in this state, §1.3 — the
+ * interlock does the refusing, there is no second mechanism), so the banner's
+ * job is to explain, not to block.
+ */
+function showSupabaseOfflineBanner(at) {
+  const when = at ? fmtBannerTime(at) : '';
+  const text = when
+    ? `You're offline. Showing your league as of ${when}. Picks can't be saved until you're back online.`
+    : "You're offline. Showing your league's last saved copy. Picks can't be saved until you're back online.";
+  let el = document.getElementById('supabase-offline-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'supabase-offline-banner';
+    el.className = 'auth-banner auth-banner-offline';
+    authBannerStack().appendChild(el);
+  }
+  el.innerHTML = `<span>${escHtml(text)}</span>`;
+}
+function hideSupabaseOfflineBanner() {
+  document.getElementById('supabase-offline-banner')?.remove();
+}
+/** "as of 4:12 PM" — the player's own timezone, through the same helper every
+ *  other time in the app goes through, so an offline banner cannot be the one
+ *  place that renders UTC. Falls back to '' rather than to a raw ISO string. */
+function fmtBannerTime(iso) {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: getTimezone() || undefined });
+  } catch { return ''; }
+}
+
+/**
+ * §1.5 item 3 / §5.1 — THE ONE PLACE THE ADAPTER HYDRATES.
+ *
+ * Four callers, one body (CONVENTIONS #21): the membership resolve (the boot
+ * trigger), the 60-second tick's safety net (§7.1), the hold-recovery path
+ * (§1.5 item 5), and the red banner's Retry. A second hand-written copy of this
+ * sequence is exactly the defect reviewer F4 closed on the Sheets tail.
+ *
+ * NOTE WHAT IS *NOT* HERE: no `setBackendMode('local')`, no `initStorage()`, no
+ * `ensureSeedData()` on failure. §5.1 — in this mode a failed hydrate is a HOLD
+ * or the offline state, never local mode, because local mode would seed a demo
+ * template into a real league under a proven identity (§0.3 item 3).
+ */
+async function ensureSupabaseDataHydrated(reason) {
+  if (!isSupabaseDataMode()) return false;
+  const leagueId = getActiveLeagueId();
+  if (!leagueId) return false;
+  if (_sbHydrateInFlight) return _sbHydrateInFlight;
+  const run = (async () => {
+    try {
+      // Sync, and normally 0 — it paints instantly ONLY when the snapshot's
+      // owner tuple is this identity's and §5.3's other three conditions hold.
+      const primed = sb.primeFromSnapshot(getDeviceDataOwnerTuple(), leagueId);
+      if (primed > 0) {
+        setBackendMode('supabase');
+        _repaintForSupabaseData('snapshot');
+      }
+      await sb.hydrate(leagueId, { epoch: getIdentityEpoch(), reason });
+    } catch (e) {
+      // hydrate() reports through its own status channel; this catch exists so
+      // one thrown select cannot take the boot down with it.
+      console.error('[sb] the league hydrate threw', e);
+    }
+    return afterSupabaseHydrate(reason);
+  })();
+  _sbHydrateInFlight = run;
+  try { return await run; } finally { _sbHydrateInFlight = null; }
+}
+
+/** The landing half, split out so the state branch is readable on its own. */
+async function afterSupabaseHydrate(reason) {
+  const state = sb.getState();
+  if (state === 'ACTIVE') {
+    setBackendMode('supabase');
+    hideSupabaseOfflineBanner();
+    hideBackendErrorBanner();
+    // §5.1 — the data hold clears itself the moment the league is there.
+    // Both of Step 4's own hold reasons clear themselves the moment the league
+    // is back. 'data-hold' never had an identity problem; 'session-expired' had
+    // one and it has just been resolved by the event that got us here (a fresh
+    // sign-in, or DI-180p's verification coming back alive). Neither is cleared
+    // by a hold reason this function did not raise — A7's rule is unchanged.
+    if (['data-hold', 'session-expired'].includes(currentAuthHoldReason())) {
+      clearAuthHoldReason();
+      hideAuthHoldGate();
+    }
+    sb.subscribeRealtime();
+    refreshHeader();
+    _repaintForSupabaseData(reason);
+    if (!_sbTailRan) {
+      _sbTailRan = true;
+      try { await runPostHydrateTail(); }
+      catch (e) { _sbTailRan = false; console.error('[sb] the post-hydrate tail failed; it will be retried on the next hydrate', e); }
+    }
+    return true;
+  }
+  if (state === 'ACTIVE-STALE' || state === 'OFFLINE-READONLY') {
+    setBackendMode('supabase');
+    _repaintForSupabaseData(reason);
+    return false;
+  }
+  // HELD / IDLE / HYDRATING with nothing serveable. §5.1: the data hold. It is
+  // NOT DI-180l's identity hold — the player IS proven; what is missing is the
+  // league — so it gets its own reason key and its own copy, and the shared
+  // gate machinery (teardown, Retry, the 20 s re-check) is reused verbatim.
+  // SECURITY F2 — DO NOT OVERWRITE A MORE SPECIFIC HOLD. A 'session-expired'
+  // gate is up because the SERVER rejected this token; re-labelling it
+  // 'data-hold' ("Couldn't load your league") would send the player looking for
+  // a connection problem instead of tapping Sign In. A hold already up keeps
+  // its reason; only an unheld page gets the generic one.
+  //
+  // REVIEWER F-B (pass 4), THIRD CASE — …AND A RETRY'S OWN REASON COUNTS TOO.
+  // The preservation above only preserved a reason that was STILL SET. If the
+  // gate came down during the retry's awaited hydrate, the specific reason was
+  // gone and this line stamped the generic one over it — so a 'session-expired'
+  // retry could still end on 'data-hold', by a different route than the one
+  // F-B first found. The precedence now lives HERE, in one place, in the order
+  // that says what is most true:
+  //   1. a hold raised DURING the await — later information wins;
+  //   2. else the reason the retry in flight is FOR — its own, not downgraded;
+  //   3. else the generic data hold.
+  showAuthHoldGate(currentAuthHoldReason() || _sbHoldRetryReason || 'data-hold');
+  const err = sb.getStatus().lastError;
+  if (err) showBackendErrorBanner(String(err));
+  return false;
+}
+
+/** Repaint after the adapter's data changed. navigateTo() is the ONE render
+ *  chokepoint and it already refuses to paint while content is withheld, so
+ *  this needs no second guard of its own (security S-2). */
+function _repaintForSupabaseData(reason) {
+  try { navigateTo(state.currentTab || 'dashboard'); }
+  catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
+}
+
+/** Test seam — the three page-lifetime latches above have to be droppable
+ *  between suite sections. Production never calls this. */
+export function _resetSupabaseDataForTest() {
+  _sbWired = false; _sbTailRan = false; _sbHydrateInFlight = null; _sbHoldRetryReason = '';
+}
+export const _ensureSupabaseDataHydratedForTest = ensureSupabaseDataHydrated;
+export const _wireSupabaseAdapterForTest = wireSupabaseAdapter;
 
 document.addEventListener('DOMContentLoaded', () => { boot(); });
 
 async function boot() {
+  // ══ DI-T4.12 — THE CHAT-TRANSPORT PREDICATE IS INSTALLED FIRST, AND THE
+  //    INSTALL IS DELIBERATELY NOT IN A try/catch ═══════════════════════════
+  //
+  // FIRST, because chatTransport.js is the only module that talks to the chat
+  // backend (AD-16) and chat starts EARLY in this function — `initChatUI({phase:
+  // 'early'})` below is above the config read on purpose (BUG-G), and
+  // navigateTo() subscribes through refreshChatEnabled(). Installing the
+  // predicate after any of that would leave a window in which a Supabase-scoped
+  // league appends to the six players' production Sheet, which is the one thing
+  // §7.3 exists to prevent. boottest asserts this line precedes the first
+  // subscribe().
+  //
+  // NOT IN A try/catch, because setSupabaseDataModePredicate() THROWS on a
+  // non-function (chatTransport.js:133) and that throw is the whole point: a
+  // typo'd or not-yet-exported name used to pass `undefined`, revert the module
+  // to "chat is available", and disable the cross-league interlock for the
+  // session with no error and no log line. Swallowing it here would restore
+  // exactly that failure one layer up. This is the first statement in boot(),
+  // above revealApp(), so a throw leaves the boot-time visibility lock ON and
+  // the page never paints — a SEEN boot failure on the first load of the build
+  // that introduced it, which is what a programming error should be.
+  //
+  // `isSupabaseDataMode` cannot throw (it is a property read of a module-private
+  // object), which matters because once a real predicate is installed a
+  // THROWING predicate fails CLOSED and would take chat off every device.
+  setSupabaseDataModePredicate(isSupabaseDataMode);
+  // ── PHASE III STEP 5 (DI-T5.1) — the chat context, beside the predicate and for the same
+  //    reason. The predicate says whether THIS LEAGUE's data has moved; this says whether this
+  //    build can serve chat from there. Both installed, or the transport fails CLOSED with
+  //    Step 4's copy — correct, visible, and never a fallback to the production Sheet. Not in a
+  //    try/catch, for the same reason the predicate's install is not: a non-function dep is a
+  //    programming error that must be SEEN on the first boot of the build that introduced it.
+  //    Dormant with the flag off: installSupabaseChat() stores deps; nothing is fetched or
+  //    subscribed until the predicate answers true.
+  installSupabaseChat({
+    getClient: getSupabaseClient,        // js/auth.js — the SAME client the adapter gets.
+    getLeagueId: getActiveLeagueId,      // js/auth.js — DI-184d: one call for every league_id predicate.
+    rowToMessage,                        // js/supabase-projection.js — injected, never re-implemented.
+    isReady: sb.isReady,                 // js/supabase-backend.js — no fetch from a mirror that is not serving.
+    getIdentityEpoch,                    // js/auth.js — RECOMMENDED: a same-phone account handover never moves the league.
+    onAdapterSynced: (cb) => sb.onStatus((status) => { if (status === 'synced') cb(); }),
+                                         // amendment A7 — RECOMMENDED: re-sends a parked ritual post on the flush.
+  });
+  // Then the adapter itself: registration only — no client, no storage read, no
+  // timer, no hydrate. In the flag-off world every line of it stays dormant,
+  // because nothing below calls hydrate unless isSupabaseDataMode() is true.
+  wireSupabaseAdapter();
+
   // ── v0.16.0 FAST BOOT ──────────────────────────────────────────────────────
   // Root cause of the old ~20s blank: boot awaited a full Google Apps Script
   // getAll (10–20s cold start) BEFORE anything rendered — even the PIN gate —
@@ -517,7 +1366,22 @@ async function boot() {
     if (status === 'synced') hideBackendErrorBanner();
   });
 
-  const primedKeys = primeFromMirror();
+  // ── DI §1.5 item 1 / §6.2 — NO SHEETS MIRROR ON A SUPABASE DEVICE ─────────
+  // On a device whose last SUCCESSFUL config read said 'supabase', priming the
+  // Sheets mirror here would paint the pre-cutover league — twenty-two keys of
+  // it — before any identity has been proven on this page. The Supabase
+  // snapshot cannot be primed at this point either, because its owner tuple
+  // needs the account id, which is not known until the membership read; so the
+  // first paint on such a device is the SKELETON, deliberately. That is the
+  // cost §1.5 names, and it is what makes A6 a DATA boundary (§6.2) instead of
+  // an overlay over data that is already in the document.
+  //
+  // `getLastKnownAuthMode()` is a synchronous device-local read (SEC F1-R1's
+  // fail-closed memory, written only by a config read that SUCCEEDED), so
+  // paint-first is untouched: no network, no await, and on every flag-off
+  // device it answers '' or 'pins' and this line is byte-identical to before.
+  const supabaseDevice = (() => { try { return getLastKnownAuthMode() === 'supabase'; } catch { return false; } })();
+  const primedKeys = supabaseDevice ? 0 : primeFromMirror();
   let rendered = false;
 
   if (primedKeys > 0) {
@@ -580,14 +1444,67 @@ async function boot() {
   //  whether this device is cloud-connected — never flash seeded demo data
   //  over a shared league, and never seed INTO an unhydrated backend.)
 
+  // ── PAINT FIRST (reviewer B2, 2026-09-16) ──────────────────────────────────
+  // THIS ORDERING IS LOAD-BEARING and it is a REVERT. Step 3a's first pass
+  // hoisted `await loadDeployedConfig()` above this point so the gate decision
+  // could read authMode — which made every boot, on every device, in the live
+  // 'pins' mode nobody has left, wait on a network round trip before the
+  // visibility lock came off. The PIN gate has never done that (AD-08: prime,
+  // paint, gate as an OVERLAY, hydrate in the background), and a feature flag
+  // that is OFF must cost nothing (DI-180f's own byte-identical contract, read
+  // as a performance contract and not just a rendering one).
+  //
+  // So: the PIN-gate decision and revealApp() run FIRST, exactly as they did
+  // before Step 3a. The authMode branch below runs AFTER the paint and, in
+  // 'supabase' mode only, swaps the overlay — both gates are the same opaque
+  // full-viewport #site-gate-overlay shell, so the swap happens underneath a
+  // cover, not in front of the app. The cost, named rather than hidden: on a
+  // supabase-mode device that has previously satisfied the site PIN, the
+  // painted shell is briefly visible before the Google gate lands. That is the
+  // same window the PIN gate has always had, and it is the price of paint-
+  // first; DI-180h's "no league-scoped data before sign-in" is satisfied by
+  // the gate, not by withholding the paint.
   if (!isSiteUnlocked()) showSitePinGate();
-  revealApp();   // paint happens NOW — hydration overlaps PIN entry
+  revealApp();   // paint happens NOW — hydration overlaps sign-in/PIN entry
+
+  // ── AUTH-MODE GATE (DI-180f) ────────────────────────────────────────────────
+  // ONE function, called from boot() here and re-called verbatim by DI-180l's
+  // Retry button and its 20s background re-check — so "Retry re-runs the same
+  // branch logic boot() already runs" is a fact about the code rather than a
+  // second copy of it that can drift.
+  const decision = await applyAuthModeDecision();
+  const deployed = decision.deployed;
+  if (decision.hold) {
+    // REVIEWER F1 (sixth gate) — RECORD THAT THE TAIL NEVER RAN. Everything
+    // below this line (hydrate, ensureSeedData, the one post-hydrate tail) is
+    // skipped, and the hold can clear later — by the 20-second re-check, by
+    // Retry, or by an identity finally arriving. Whoever un-withholds the page
+    // has to run this, and "somebody remembered to" is what failed here: the
+    // resume refused while content was withheld, and nothing re-triggered it
+    // when the identity turned up afterwards. See releaseWithholdIfResolved().
+    _bootStoppedAtHold = true;
+    return;
+  }
 
   // ── Background connect + hydrate ──────────────────────────────────────────
   try {
-    const deployed = await loadDeployedConfig();   // same-origin fetch, ~fast
-    if (deployed.ok) setBackendConfig(deployed.url, deployed.token);
-
+    // ── DI §1.5 item 3 / §5.1 — THE SUPABASE BRANCH ─────────────────────────
+    // The Sheets hydrate block below is BYPASSED ENTIRELY in this mode, which
+    // is what makes the three `setBackendMode('local'); initStorage()` arms in
+    // it unreachable (§5.1, boottest pins it). Those arms seed demo data into
+    // raw localStorage, and doing that under a proven identity's league is the
+    // failure §0.3 item 3 forbids.
+    //
+    // The active league may not be resolved yet — the membership refresh
+    // applyAuthModeDecision() kicked off is deliberately not awaited — in which
+    // case this returns false and the MEMBERSHIPS_REFRESHED listener runs the
+    // hydrate the moment the league IS known. Content stays withheld until then
+    // (§5.1's third clause), so nothing paints from a half-known state.
+    if (isSupabaseDataMode()) {
+      await ensureSupabaseDataHydrated('boot');
+      await runPostHydrateTail();
+      return;
+    }
     if (isBackendConfigured()) {
       await hydrateBackend();          // cold start happens here, off-screen
       setBackendMode('googleSheets');
@@ -620,11 +1537,66 @@ async function boot() {
   }
   if (backendErrorBanner) showBackendErrorBanner(backendErrorBanner);
 
+  // ── REVIEWER F4 — ONE POST-HYDRATE TAIL, TWO CALLERS ─────────────────────
+  // Everything boot() does after the hydrate settles lives in ONE function, so
+  // the hold-gate resume path (resumeAfterHoldCleared) cannot carry a partial
+  // hand-written copy of it. See runPostHydrateTail() for the list and for why
+  // each step is safe to call twice.
+  await runPostHydrateTail();
+}
+
+/**
+ * ══ REVIEWER F4 (fifth gate, 2026-09-17) — boot()'s TAIL, EXTRACTED ══════════
+ *
+ * THE FINDING. resumeAfterHoldCleared() was a SECOND, PARTIAL copy of this
+ * list: it ran `initChatUI(); updateChatBadges();` and nothing else. So a device
+ * that booted into a hold gate and then recovered — the config-unreadable
+ * variant recovers by itself, silently, on a 20-second timer — spent the rest of
+ * its session with no push adapter registered, no chat-notification wiring, no
+ * notification bell, no OneSignal init/login (so every player-targeted push went
+ * to a device that never identified itself), no push-active flag (so in-app
+ * toasts were suppressed as if push were carrying them), no wager cache, no
+ * SCRIBE file button, and no ?ntab deep-link handling. Each of those is a
+ * separate silent degradation, and the only thing holding the two lists in step
+ * was that somebody remembered to edit both.
+ *
+ * IDEMPOTENT ON A DOUBLE CALL, by latch AND by construction: the latch below
+ * makes it run once per page, and every step inside it is independently safe to
+ * repeat anyway (initChatUI() wires once, wireScribeFileEntry() and
+ * wireChatNotifications() are latched, setupNotifBell() checks its own
+ * data-bound marker, refreshWagerCache() early-returns once loaded,
+ * ensureOneSignalInit() is a cached promise, and the ?ntab params are scrubbed
+ * from the URL by the first pass). The latch is what makes the beforeunload
+ * listener single, which is the one step that would otherwise stack.
+ */
+let _postHydrateTailDone = false;
+async function runPostHydrateTail() {
+  if (_postHydrateTailDone) return;
+  _postHydrateTailDone = true;
   // Chat engine + badges (v0.16.0) — BUG-G: this is now the LATE phase. The
   // transport and the cached-room replay already started above, before the
   // hydrate; what still has to wait for the hydrated settings blob runs here
   // (epoch heal, outbox load + flush) plus all the UI wiring. Unchanged
   // otherwise, including for the paths that never ran an early phase at all.
+  // ── DI-182a/f (Step 3b) — ONE alma-mater dropdown, two call sites ─────────
+  // Registered BEFORE initChatUI() renders anything, so the prefs panel's very
+  // first paint already has the catalog. chat-ui.js cannot import
+  // buildAlmaMaterOptions() (app.js imports chat-ui.js — the reverse edge would
+  // be a cycle), so app.js hands it down instead. The SAME function the
+  // commissioner's Edit Player modal calls, with the same current-value
+  // preservation, and an identical fallback source when ESPN is unreachable.
+  try {
+    registerAlmaMaterOptionsProvider(current => buildAlmaMaterOptions(current, cachedEspnTeamsList() || ALMA_MATERS));
+  } catch (e) { console.warn('[chat] the alma-mater options provider could not be registered', e); }
+  // SECURITY F-3 / DI-T7.6 — the self-edit WRITER, handed down the same way and
+  // for the same layering reason. patchPlayer() lives here because this is the
+  // module the commissioner's Edit Player modal lives in, so the one policy
+  // about which fields a surface may write sits beside the one other writer of
+  // them. Registered BEFORE initChatUI() renders, so the prefs panel is never
+  // live with no writer behind it.
+  try {
+    registerPlayerPatchWriter(patchPlayer);
+  } catch (e) { console.warn('[chat] the player-patch writer could not be registered', e); }
   try { initChatUI(); updateChatBadges(); } catch (e) { console.warn('[chat] init failed', e); }
   // Build 3, Group D (2026-09-11, DI-D4) — one delegated document listener
   // for the "My SCRIBE File" button chat-ui.js renders in the player prefs
@@ -708,7 +1680,14 @@ async function boot() {
     }
   } catch (e) { console.warn('[notifications] deep-link parse failed', e); }
 
-  window.addEventListener('beforeunload', () => { try { flushPush(); } catch {} });
+  // Guarded because this tail is now reachable from TWO callers (boot() and the
+  // hold-gate resume), and one of them runs in environments — the Node suites,
+  // which drive the real functions — where `window` is globalThis and has no
+  // addEventListener. An unguarded call threw out of the resume path and took
+  // the rest of the tail with it.
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('beforeunload', () => { try { flushPush(); } catch {} });
+  }
 }
 
 /**
@@ -739,6 +1718,17 @@ function showBackendErrorBanner(message) {
     </div>`;
   el.style.display = 'block';
   document.getElementById('beb-retry-btn')?.addEventListener('click', async () => {
+    // DI §5.1 — in Supabase data mode Retry re-runs the ADAPTER hydrate. The
+    // Sheets path below is not merely wrong here, it is the one thing §0.3
+    // item 3 forbids: it would hydrate the six players' production Sheet on a
+    // device whose league lives somewhere else.
+    if (isSupabaseDataMode()) {
+      showToast('⏳ Retrying connection…', 'warning');
+      const ok = await ensureSupabaseDataHydrated('banner-retry');
+      if (ok) { hideBackendErrorBanner(); showToast('✅ Connection restored', 'success'); }
+      else showToast(`❌ Still failing: ${sb.getStatus().lastError || 'the league could not be loaded'}`, 'error');
+      return;
+    }
     if (!isBackendConfigured()) {
       showToast('No backend URL configured on this device','error');
       return;
@@ -780,6 +1770,16 @@ function updateSyncBadge(status) {
     syncing: '☁️ Syncing…',
     synced:  '☁️ Synced',
     error:   '⚠️ Sync error',
+    // DI §5.2 — ONE map entry, and it is the difference between "we could not
+    // reach the server" and "the server read your request and said no". A
+    // refusal is an ANSWER; calling it a sync error sends the player (and Drew)
+    // looking for a connection problem that is not there, which is exactly the
+    // misdirection BUG-A's "Sync refused…" toast caused once already.
+    refused: '⛔ Refused',
+    // supabase-backend.js maps IDLE and OFFLINE-READONLY to 'offline': no
+    // league is loaded, which is not a failure — it is the state a handover
+    // clear deliberately leaves behind, and the state an aeroplane leaves.
+    offline: '📴 Offline',
   };
   const el = document.getElementById('sync-badge');
   if (el) {
@@ -1335,10 +2335,24 @@ export function postPicksOpenedNotice(week) {
 export function postPicksLockedNotice(week) {
   if (!week) return null;
   const active = getPlayers().filter(p => p.active);
-  const submittedCount = active.filter(p => hasPlayerSubmitted(week.weekId, p.playerId)).length;
+  // DI-T4.11 — a count is a CLAIM, and this one is broadcast to six people. If
+  // any player's state is 'unknown' (Supabase mode, the count RPC's answer not
+  // on this device) the count would be a lie, so the FACT IS OMITTED rather
+  // than guessed: buildCopy() drops facts outside the event's list before
+  // substitution, so the post degrades to the count-free wording instead of
+  // announcing "2 of 6 got picks in" to a league where all six did.
+  const states = active.map(p => submissionStateFor(week.weekId, p.playerId));
+  const countable = !states.includes('unknown');
+  const submittedCount = states.filter(s => s === 'yes').length;
+  if (!countable) {
+    console.warn('[sb] the PICKS_LOCKED notice is omitting its submitted count — week_submission_status() '
+      + 'has not landed on this device, and a count nobody can verify is worse than no count.');
+  }
   return emitLifecyclePost({
     event: LIFECYCLE_EVENTS.PICKS_LOCKED, scopeId: week.weekId, weekId: week.weekId, week,
-    facts: { weekN: week.weekNumber, submittedCount, totalPlayers: active.length },
+    facts: countable
+      ? { weekN: week.weekNumber, submittedCount, totalPlayers: active.length }
+      : { weekN: week.weekNumber },
   });
 }
 
@@ -1526,7 +2540,126 @@ function setupChatEnabledWatch() {
   _chatEnabledWatchTimer = setInterval(() => { try { checkChatEnabledLive(); } catch {} }, 20000);
 }
 
+/**
+ * ══ SECURITY S-2 — ONE PREDICATE: IS LEAGUE CONTENT WITHHELD RIGHT NOW? ══════
+ * (fifth gate, 2026-09-17.)
+ *
+ * WHAT THIS CLOSES, as the sequence that actually happened. A6's teardown
+ * empties the six page containers before a hold gate paints — and then
+ * setupAutoRefresh() (armed at boot, ABOVE the gate decision) fired ~60 seconds
+ * later, runAutoRefreshTick() called renderDashboard(), and the whole
+ * mirror-derived dashboard was painted straight back into the DOM behind the
+ * overlay. refreshAuthUI() did the same thing on the next session event through
+ * its trailing navigateTo(). The teardown was real; it just was not DURABLE.
+ * A lock asserted once and never re-checked is the class lesson of this arc.
+ *
+ * So every repaint entry point asks this ONE question first, rather than each
+ * one carrying its own copy of the rule:
+ *   • navigateTo()          — the single render chokepoint for all six tabs
+ *   • runAutoRefreshTick()  — the 60s timer (and no score fetch either: a held
+ *                             device must not talk to ESPN or write a week
+ *                             transition to the shared backend)
+ *   • refreshAuthUI()       — its trailing re-navigate
+ *   • deepLinkTo()          — a notification tap, incl. the window.deepLinkTo
+ *                             bridge chat-ui.js uses
+ * (window.navigateTo is the same function object, so the bridges are covered by
+ * the guard inside it rather than by a second check at the bridge.)
+ *
+ * TWO CASES, and the second one is the reason this is not just
+ * `currentAuthHoldReason()`:
+ *   1. any hold gate is up — the device cannot be trusted to know who it is;
+ *   2. authMode is 'supabase' and there is no valid session — nobody has proven
+ *      who they are, so league data may not be (re)painted for them. This is
+ *      the Google gate's own state, and it is DI-180h read as a rule about
+ *      PAINTING rather than about which overlay is on top.
+ *
+ * THE FLAG-OFF WORLD IS UNTOUCHED, by construction: in 'pins'/'prelink' mode
+ * this returns false unconditionally, so the PIN gate's paint-first behaviour
+ * (AD-08, load-bearing) is byte-identical. Nothing here withholds the FIRST
+ * paint in supabase mode either — boot paints from the mirror before
+ * configureAuth() has run, which is deliberate (reviewer B2's revert) and
+ * unchanged; what this stops is a REPAINT after the app has learned it has no
+ * identity, which is the only thing A6's teardown needs to stay torn down.
+ *
+ * ══ REVIEWER F4 (SIXTH gate, 2026-09-17) — CASE 2 IS ABOUT *PRE*-IDENTITY ════
+ *
+ * WHAT THE SECOND TERM USED TO DO TO A SIGNED-IN PLAYER. It was
+ * `supabase && !hasValidSupabaseSession()`, and hasValidSupabaseSession() is a
+ * LOCAL read of `expires_at` — so it goes false, routinely, on a device whose
+ * player is signed in and has done nothing wrong: an iOS tab woken from the
+ * background before the SDK has fired TOKEN_REFRESHED, and the whole of
+ * DI-180p's verify window. For that span every tap did NOTHING — navigateTo()
+ * returned early, the auto-refresh tick returned early, refreshAuthUI()'s
+ * re-navigate returned early — with no gate and no banner to explain it. A8 is
+ * explicit that a post-identity failure is a BANNER, never a re-block.
+ *
+ * SO THE TERM IS SCOPED TO "NOBODY HAS EVER BEEN PROVEN HERE", and the test for
+ * that is `getAccountUserId()`, deliberately rather than a page-lifetime flag.
+ * The question the reviewer asked for an answer to is: AFTER A DESTROY, IS
+ * CONTENT WITHHELD AGAIN? With this choice, YES — `_clearExpiredSessionFromDevice()`
+ * clears the account id, so the device is back to pre-identity and content is
+ * withheld again. That is the fail-closed direction and it is the right one: a
+ * destroy is the SERVER having proven the refresh token dead, the token is off
+ * the device, and the SDK's own SIGNED_OUT then brings the Google gate up — so
+ * the withheld page is explained by a gate rather than being a silent freeze,
+ * which is the only thing that made the pre-fix behaviour unacceptable. A
+ * page-lifetime `_everProvenIdentity` flag would have answered NO, i.e. left a
+ * device whose sign-in was just destroyed repainting league data from the
+ * mirror. Documented here because it is a decision, not a detail.
+ *
+ * AND THE `catch`: it used to fail OPEN for both modes. Security E3's argument
+ * for that holds only in the flag-off world (a throwing storage must not lock
+ * six players out of the PIN app they have been using all season). In supabase
+ * mode the same throw means "we cannot tell whether anyone is signed in", and
+ * the only safe answer to that is to withhold. Two arms, two directions, each
+ * stated where it is taken.
+ */
+export function isContentWithheld() {
+  let supabaseMode = false;
+  try { supabaseMode = getAuthMode() === 'supabase'; } catch { supabaseMode = false; }
+  if (!supabaseMode) {
+    // Flag-off (and 'prelink'). A hold gate is still a hold gate if one is
+    // somehow up; everything else fails OPEN (security E3).
+    try { return !!currentAuthHoldReason(); } catch { return false; }
+  }
+  try {
+    if (currentAuthHoldReason()) return true;
+    // Case 2, scoped: no identity has EVER been proven on this page.
+    if (!hasValidSupabaseSession() && !getAccountUserId()) return true;
+    // ── CASE 3 (Phase III Step 4 Part B, DI §5.1) — THE ADAPTER IS NOT SERVING ─
+    //
+    // Only in `dataMode:'supabase'`. Case 2 asks whether anyone is PROVEN; this
+    // asks whether their LEAGUE is here. They are different failures with
+    // different fixes, and before the adapter existed the second one could not
+    // happen — a Sheets device always had its local mirror to paint.
+    //
+    // TRUE unless the adapter is serving: ACTIVE, ACTIVE-STALE and
+    // OFFLINE-READONLY all paint (the last two with their own banner saying
+    // what they are); IDLE, HYDRATING, SWITCHING and HELD do not. That list
+    // lives in ONE place, beside the state machine
+    // (supabase-backend.js's READY_STATES), and is read here through
+    // isContentWithheldByAdapter() rather than re-derived — a second copy of a
+    // state list is how a seventh state gets forgotten by one of them.
+    //
+    // DI-T4.10's other half depends on this: load() answers `null` for a
+    // not-ready adapter, and `null` must not be rendered as "your league is
+    // empty". It cannot be, because every empty-state render is behind this
+    // predicate and this predicate is true for exactly those states.
+    if (getDataMode() === 'supabase' && sb.isContentWithheldByAdapter()) return true;
+    return false;
+  } catch (e) {
+    console.warn('[auth] the withhold predicate could not be evaluated in supabase mode — failing CLOSED', e);
+    return true;
+  }
+}
+
 function navigateTo(tab) {
+  // SECURITY S-2 — the render chokepoint refuses to paint league data while no
+  // identity is proven. Deliberately BEFORE `state.currentTab` moves: a
+  // navigation that renders nothing must not leave the app believing it is on a
+  // tab it never painted, and the resume path re-navigates to the remembered
+  // tab once the hold clears.
+  if (isContentWithheld()) return;
   // Item A — chat OFF must never be reachable via navigation. Redirect BEFORE
   // touching any page/nav state so the chat page is never even briefly the
   // active section. (renderChatPage() carries the SAME guard as defense in
@@ -1535,6 +2668,21 @@ function navigateTo(tab) {
     showToast('Chat has been turned off by the commissioner.', 'warning');
     tab = 'dashboard';
   }
+  // DI-181a + reviewer N10 — decided HERE, before the tab is committed, because
+  // the league-flow screen cannot render into #page-chat (chat-ui.js owns that
+  // subtree). A signed-in account with no league context that taps Chat gets
+  // the landing on the dashboard page instead of a chat tab with its DOM
+  // replaced. Computed once and reused below so the answer cannot change
+  // between the redirect and the render.
+  const leagueFlow = getAuthMode() === 'supabase' && needsLeagueFlowScreen();
+  // DI-183b — the link-result screens occupy DI-181a's OWN slot and take
+  // precedence over it, per the arbitration note above linkFlowScreen(). They
+  // are mutually exclusive with DI-181's landing for all six founders, since a
+  // matched or claimed link resolves a membership immediately and never shows
+  // the join/create landing at all. Computed here, beside `leagueFlow`, so the
+  // two answers cannot change between the redirect and the render.
+  const linkFlow = linkFlowScreen();
+  if ((leagueFlow || linkFlow) && tab === 'chat') tab = 'dashboard';
   state.currentTab = tab;
   // UN-110: drives body[data-tab="..."] CSS (chat's own header-hidden layout,
   // UN-111's tz/theme visibility). MUST come after the chat-disabled redirect
@@ -1544,7 +2692,22 @@ function navigateTo(tab) {
   document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
   document.querySelectorAll('.page-section').forEach(el => el.classList.toggle('active', el.id === `page-${tab}`));
   applyChatNavVisibility();
-  ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, rules: renderRulesPage, chat: renderChatPage })[tab]?.();
+  // DI-181a — a signed-in supabase account with zero (or unresolved,
+  // multi-membership) league context sees the join/create landing or the
+  // league selector INSTEAD OF whichever tab it tapped, "in place of a
+  // dashboard" — checked here, once, rather than duplicated into all six
+  // per-tab render functions.
+  if (linkFlow) {
+    // DI-183h's first must-not: there is no path that skips the confirmation
+    // card. It is checked BEFORE the league-flow branch precisely so a link that
+    // just resolved a membership cannot fall through to a normal dashboard
+    // render — the card is the control, not a courtesy.
+    renderLinkFlowScreen(tab);
+  } else if (leagueFlow) {
+    renderLeagueFlowScreen(tab);
+  } else {
+    ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, rules: renderRulesPage, chat: renderChatPage })[tab]?.();
+  }
   // Chat polls fast only while the chat tab is open
   try { setPollMode(tab === 'chat' ? 'active' : 'passive'); updateChatBadges(); } catch {}
   try { refreshChatEnabled(); } catch {}
@@ -1578,7 +2741,22 @@ function refreshHeader() {
   // on #header-meta directly would wipe that button on every refresh.
   const el   = document.getElementById('header-meta-week');
   renderHeaderIdentity();
+  renderLeaguePill();
   if (!el) return;
+  // ── SECURITY F-4 (sixth gate, 2026-09-17) — THE WEEK BLOCK IS LEAGUE DATA ──
+  // A6's teardown empties `#header-meta-week` because a week's NAME and DATES
+  // are the league's data. This function then put them straight back, from the
+  // same local mirror, behind a live hold gate — reached without a navigation
+  // and without a timer, because refreshAuthUI() calls refreshHeader()
+  // UNCONDITIONALLY (deliberately: the identity chip and the league pill are
+  // what make the page stop claiming to be somebody, and both render nothing
+  // without an identity). MEMBERSHIPS_FAILED and INITIAL_SESSION both arrive on
+  // a held device, so both repainted it.
+  //
+  // CLEARED rather than skipped: `return` would leave whatever happened to be
+  // there, and on the DI-180m banner path (post-identity, no hold) the element
+  // legitimately holds the previous week. One assignment, no ambiguity.
+  if (isContentWithheld()) { el.innerHTML = ''; return; }
   // UN-117 — name and dates each own a line; the status badge rides with the
   // name so a wrapped date range can never orphan it onto a third line.
   // DI-A2 (2026-09-09): this is the ONE caller that passes collapseYear:true —
@@ -1636,9 +2814,104 @@ export function renderHeaderIdentity() {
 }
 
 /** One-time click binding — the header identity chip always routes to Picks,
- *  logged in or out (UN-106). Bound once at boot alongside setupNav(). */
+ *  logged in or out (UN-106), UNLESS authMode:'supabase' (DI-180a), in which
+ *  case it opens the Account sheet instead. Checked at CLICK time, not bind
+ *  time, since authMode resolves asynchronously during boot; in 'pins'/
+ *  absent this is unconditionally the exact same handler as before
+ *  (getAuthMode() defaults to 'pins' until configureAuth() ever runs). Bound
+ *  once at boot alongside setupNav(). */
 export function setupHeaderIdentity() {
-  document.getElementById('header-identity')?.addEventListener('click', () => navigateTo('picks'));
+  document.getElementById('header-identity')?.addEventListener('click', () => {
+    if (getAuthMode() === 'supabase') { showAccountSheet(); return; }
+    navigateTo('picks');
+  });
+}
+
+/**
+ * DI-184 — the active-league label. REVERTED to DI-184b's approved text on
+ * 2026-09-16 (reviewer B4; coordinator ruling pending Drew's confirmation).
+ *
+ * Step 3a's first pass implemented D-2's "make the existing header title the
+ * league name" alternative by assigning `document.title`. D-2 cannot attach:
+ * `.app-header` HAS NO TITLE ELEMENT — the header's left slot is #header-meta
+ * (the two-line week block plus the feedback button) and its right slot is the
+ * identity/bell/sync cluster. There is no on-screen title for the league name
+ * to become, so "zero new UI" became "a browser tab title nobody looks at on a
+ * phone," which is not an active-league indicator at all. `document.title` is
+ * no longer touched here; the original title behaviour is restored.
+ *
+ * So, DI-184b as written and approved:
+ *   - the pill renders for EVERY supabase-mode account, single-league included;
+ *   - NON-INTERACTIVE when memberships === 1 — no caret, no click handler, no
+ *     button role. A static label is not a control (DI-184g);
+ *   - INTERACTIVE when memberships > 1 — caret, role="button", tabindex, and
+ *     the league-selector sheet on tap.
+ *
+ * DI-184d's invariant is unchanged and is the reason this function reads
+ * getActiveLeagueName() EXACTLY ONCE into `name`: that one call chains through
+ * getActiveLeagueId(), which is the same function the active read/write scope
+ * resolves from. authtest [3] spies on the read counter rather than comparing
+ * two values that might agree by coincidence.
+ *
+ * Inert (hidden, empty) in 'pins'/'prelink'.
+ */
+function _leaguePillClick() { showLeagueSelectorSheet(); }
+
+function _clearLeaguePill(el) {
+  el.hidden = true;
+  el.innerHTML = '';
+  el.removeEventListener('click', _leaguePillClick);
+  el.removeAttribute?.('role');
+  el.removeAttribute?.('tabindex');
+  // DI-184j (approved 2026-09-17) — AND THE ACCESSIBLE NAME. Every attribute
+  // the interactive variant may have set is removed, not merely left stale.
+  // A pill that once rendered a league name and later loses it (the account was
+  // removed from that league mid-session) kept `aria-label="Active league:
+  // <old name>"` on a hidden element with no visible text: harmless on screen,
+  // but a screen reader still announced a league this account is no longer in.
+  // That is reviewer N-a's "control-shaped nothing", one layer down — in the
+  // accessibility tree instead of the visual one.
+  el.removeAttribute?.('aria-label');
+}
+
+export function renderLeaguePill() {
+  const el = document.getElementById('league-pill');
+  if (!el) return;
+  if (getAuthMode() !== 'supabase') { _clearLeaguePill(el); return; }
+  // DI-184c "loading" — hold the slot empty rather than guess, the same rule
+  // renderHeaderIdentity() already applies to the identity chip while a
+  // session is set but the underlying record hasn't hydrated yet.
+  if (!hasValidSupabaseSession() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }
+  const name = getActiveLeagueName();
+  // REVIEWER N-a — an EMPTY name is an unknown name, and the answer to an
+  // unknown name is no pill. The lookup above resolves to '' whenever the
+  // active id matches no cached membership (a pointer to a league this account
+  // was just removed from, a refresh that resolved to a different set) or the
+  // league row genuinely carries no name. Rendering anyway painted a bordered
+  // empty chip with an aria-label of "Active league: " — a control-shaped
+  // nothing, in the one place in the app whose whole job is telling a
+  // commissioner which league he is about to act in. This is DI-184c's "hold
+  // the slot empty rather than guess" rule applied to its third input; the two
+  // above it (no session, memberships unresolved) already do exactly this.
+  if (!name) { _clearLeaguePill(el); return; }
+  const memberships = getCachedMemberships();
+  // Bind/unbind EVERY render against the same named handler, so the "no click
+  // handler" half of DI-184b is a fact about the element a test can read, not
+  // a claim about a code path — and so a re-render can never stack listeners.
+  el.removeEventListener('click', _leaguePillClick);
+  el.hidden = false;
+  if (memberships.length > 1) {
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', `Active league: ${name}. Tap to switch.`);
+    el.innerHTML = `${escHtml(name)} <span aria-hidden="true">▾</span>`;
+    el.addEventListener('click', _leaguePillClick);
+  } else {
+    el.removeAttribute?.('role');
+    el.removeAttribute?.('tabindex');
+    el.setAttribute('aria-label', `Active league: ${name}`);
+    el.innerHTML = `${escHtml(name)}`;
+  }
 }
 
 /**
@@ -1773,14 +3046,23 @@ function applyTheme(themeKey) {
  * player switch) so a player's chosen color scheme and TZ follow them across
  * devices and don't get clobbered by whoever logged in last.
  */
-function resyncPlayerPreferences() {
+function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // FEAT-8a / UN-179, DI-179f — layout EDIT MODE is transient per-session UI
   // state, and this function is the app's one chokepoint on every session
   // change (login / logout / player switch). Without this line, a player who
   // logged out mid-edit would hand the next person a page still wearing move
   // bars, wired to a pageKey whose order they can no longer write. Same
   // pattern the OneSignal login/logout correction uses two lines below.
-  state.layoutEditing = null;
+  //
+  // THE ONE EXEMPTION (DI-180o(b), made explicit at the sixth gate). Layout edit
+  // mode is one of the FOUR values an expiry SUSPENDS, and DI-180o(b) says in as
+  // many words that "the bars come off the page now and come back with the
+  // slate". So on the single path where the suspension box has just RESTORED it
+  // — same account, same league, byte-identical tuple — this line must not
+  // immediately null it again. Every other caller (the four PIN-mode
+  // login/logout handlers, and every identity change that is not a restore)
+  // passes nothing and clears it, exactly as before.
+  if (!preserveLayoutEditing) state.layoutEditing = null;
   state.layoutAnnounce = null;
   applyTheme(getTheme());
   renderTzToggle();
@@ -2010,6 +3292,12 @@ function renderNotifCenterSkeletonHTML() {
  *  or a section id not on the page (rare) just lands on the tab's default
  *  view rather than throwing. */
 function deepLinkTo(destination) {
+  // SECURITY S-2 — a notification tap (or chat-ui.js's window.deepLinkTo
+  // bridge) is a repaint entry point like any other. navigateTo() below already
+  // refuses, but the message lookup, the forced chat fetch and the scroll-into-
+  // view would still run against a page that is being withheld — so the whole
+  // path stops here rather than half-running.
+  if (isContentWithheld()) return;
   if (!destination?.tab) { navigateTo('dashboard'); return; }
   navigateTo(destination.tab);
   const params = destination.params || {};
@@ -3480,17 +4768,112 @@ function renderHistoricalPicksView(c, week, currentWeek) {
   bindPicksWeekNav();
 }
 
+/**
+ * SEC F2 / reviewer N4 — the Picks tab's supabase-mode hold state.
+ *
+ * This used to be an unconditional spinner with "Loading…" under it. When the
+ * membership read had FAILED, that spinner never resolved: an indefinite
+ * loading state is the quietest possible way to report an outage, and it is
+ * the exact opposite of AD-06. It now branches on the same error latch the
+ * banner reads, so the page and the banner can never tell different stories.
+ */
+function supabasePicksHoldHTML() {
+  // ══ PHASE III STEP 4 PART B — THREE NEW REASONS THE PICKS PAGE CAN BE HELD ══
+  //
+  // All three are read off the SAME predicate the write interlock reads
+  // (isAuthDataLayerMismatch() -> hasSupabaseDataBackend() -> the adapter's
+  // probe), which is the whole point of §1.3: the page and the seam can never
+  // tell different stories about whether a pick can be saved. What changes here
+  // is only the WORDS, because "the build is broken", "we're checking your
+  // sign-in", "you're switching leagues" and "you're offline" are four
+  // different things to say to a player standing over a slate.
+  //
+  // Ordered most-specific first, and the mismatch branch below is last of the
+  // four because it is the one that cannot resolve by itself.
+  if (isSupabaseDataMode()) {
+    // §6.4 (DI-180p's residual) — THE VERIFY WINDOW. The server would refuse
+    // the write in this world, and the client must not offer an action it knows
+    // may be refused. Release is the existing _releaseExpiryHoldOnProof() /
+    // SESSION_REVERIFIED path; no new latch was added, because the probe reads
+    // the live predicate.
+    if (isPrivilegeHeld()) {
+      return `<div class="card text-center"><h3>⏳ One moment</h3>
+        <p class="text-muted">We're confirming your sign-in — one moment before you can submit.</p>
+        <p class="text-muted">Nothing you've already submitted has changed.</p></div>`;
+    }
+    const st = sb.getState();
+    // §3.3 — the write-during-switch hard gate, seen from the Picks page. The
+    // blocking overlay is up anyway (DI-181c); this is what is underneath it.
+    if (st === 'SWITCHING') {
+      return `<div class="card text-center"><h3>🔄 Switching leagues…</h3>
+        <p class="text-muted">Loading the league you picked. Picks can't be saved until it's ready.</p></div>`;
+    }
+    // §5.3 — offline read-only. The player can READ their slate; they cannot
+    // submit, and the amber banner at the bottom of the screen says why.
+    if (st === 'OFFLINE-READONLY') {
+      return `<div class="card text-center"><h3>📴 You're offline</h3>
+        <p class="text-muted">You can look at your league, but picks can't be saved until you're back online.</p>
+        <p class="text-muted">Nothing you've already submitted has changed.</p></div>`;
+    }
+  }
+  if (isAuthDataLayerMismatch()) {
+    return `<div class="card text-center"><h3>⚠️ Sign-in isn't ready on this build</h3>
+      <p class="text-muted">This build's data layer is not ready for Supabase sign-in. Contact the commissioner.</p>
+      <p class="text-muted">Nothing you've submitted has changed, and nothing can be saved from here until this is fixed.</p></div>`;
+  }
+  if (getMembershipsError()) {
+    return `<div class="card text-center"><h3>⚠️ Can't reach sign-in</h3>
+      <p class="text-muted">Can't reach sign-in right now. Your picks are safe; try again in a minute.</p></div>`;
+  }
+  return '<div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>';
+}
+
+/** SEC concern 1 — see the call site. A resolved membership pointing at a
+ *  player record that does not exist in this league's data. Loud and terminal;
+ *  never a re-render loop. */
+function supabaseNoPlayerRecordHTML() {
+  return `<div class="card text-center"><h3>⚠️ We can't find your player record</h3>
+    <p class="text-muted">You're signed in, but this league's data has no player matching your account yet.</p>
+    <p class="text-muted">Nothing is lost — ask your commissioner to link your account before you pick.</p></div>`;
+}
+
 function renderPicksPageCurrent() {
   const c = document.getElementById('page-picks'); if (!c) return;
   const session = getSession();
   const week    = getCurrentWeek();
 
   if (!session.playerId || !session.playerVerified) {
+    // DI-180g — renderLoginScreen()/bindLoginScreen() are retired entirely
+    // in authMode:'supabase' (no PIN-style player-tile picker ever renders).
+    // This branch is only reachable here when navigateTo()'s own
+    // needsLeagueFlowScreen() check said false (i.e. this isn't the
+    // zero/unresolved-membership case) OR while memberships are still
+    // loading — either way, the sign-in gate or the league-flow screen
+    // already owns the visible state; this is just a safe, inert hold.
+    if (getAuthMode() === 'supabase') { c.innerHTML = supabasePicksHoldHTML(); return; }
     c.innerHTML = renderLoginScreen(week); bindLoginScreen(); return;
   }
 
   const player = getPlayer(session.playerId);
-  if (!player) { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); return; }
+  if (!player) {
+    // ── SEC concern 1 — DO NOT clearSession() HERE IN SUPABASE MODE ─────────
+    // In 'pins' mode clearSession() removes KEYS.SESSION, getSession() then
+    // reads null, and the re-render lands on the login screen: one bounce,
+    // terminated. In 'supabase' mode getSession() no longer reads KEYS.SESSION
+    // at all — it is synthesized from the membership cache — so clearSession()
+    // changes NOTHING the next getSession() can observe, session.playerId is
+    // still set, getPlayer() still misses, and renderPicksPage() re-enters this
+    // exact branch. Unbounded recursion, on the tab a player opens first.
+    //
+    // The state it fires on is real and diagnostic: an active Supabase
+    // membership whose member id has no matching player row in the Sheet — i.e.
+    // identity resolved against one store while the data lives in another,
+    // which is the same mode confusion the SEC F1 interlock exists for. Say so
+    // and stop; never loop, and never silently clear an identity the player did
+    // not ask to have cleared.
+    if (getAuthMode() === 'supabase') { c.innerHTML = supabaseNoPlayerRecordHTML(); return; }
+    clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); return;
+  }
 
   const games       = week ? getGames(week.weekId).sort((a,b) => new Date(a.kickoff)-new Date(b.kickoff)) : [];
   const submitted   = week ? hasPlayerSubmitted(week.weekId, session.playerId) : false;
@@ -4293,6 +5676,17 @@ function submitPicks(week, games) {
     : (wasEditing ? '✅ Picks updated!' : '✅ Picks submitted! Good luck!'),'success');
   setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); },300);   // UN-115 (DI-115b): submitted view replaces the form
 }
+/**
+ * REVIEWER F7 (sixth gate, 2026-09-17) — authtest [40] used to prove
+ * "a restored draft is still validated against the current slate" by READING
+ * this function's source and checking the order of two substrings. That is a
+ * claim about the text, not about the behaviour: it stays green for a
+ * submitPicks() that calls canPlayerSubmitPicks() and ignores the answer. The
+ * behavioral half needs to call it, so the hook exists — and nothing bridges it
+ * onto window (authtest [28] pins that), so it is reachable only through an ES
+ * import, exactly like every other `_…ForTest` export in this file.
+ */
+export const _submitPicksForTest = submitPicks;
 
 // ─── ALMA MATER WATCH ─────────────────────────────────────────────────────────
 
@@ -5015,6 +6409,26 @@ function renderDashboard() {
   if (host && !document.getElementById('dash-chat-teaser')) {
     host.insertAdjacentHTML('afterbegin', dashboardChatTeaserHTML());
   }
+  // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
+  // Inserted the same way the chat teaser is: `afterbegin` on the page host,
+  // AFTER renderDashboardInner() has painted. That makes it a banner ABOVE the
+  // ordered sections rather than a new section within them, so RG-01's locked
+  // section order is untouched — the same reason the teaser is placed this way
+  // and not pushed into the section list.
+  //
+  // It sits above the chat teaser deliberately: the teaser is an invitation, the
+  // banner is a deadline. prelinkBannerHTML() returns '' in every mode but
+  // 'prelink' and while any hold gate is up, so this is inert for everybody
+  // except the six founders in the shadow period.
+  //
+  // RE-SHOWS EACH SESSION (DI-183e): there is no dismissal state and no storage
+  // key for one. A player who is unlinked at cutover is in the single
+  // highest-risk state of the whole phase, so "dismissible but reappearing" is
+  // implemented as "always rendered while the condition holds."
+  if (host && !document.getElementById('prelink-banner')) {
+    const banner = prelinkBannerHTML();
+    if (banner) { host.insertAdjacentHTML('afterbegin', banner); bindPrelinkBanner(host); }
+  }
 }
 
 function renderDashboardInner() {
@@ -5104,6 +6518,15 @@ function renderDashboardInner() {
       ${!canViewOtherPicks(week)
         ? `<p class="blind-note"><span class="blind-note-icon">🙈</span><span>Other players' picks stay hidden until the games kick off — that way nobody can peek and then change their own. Check back at kickoff to compare.</span></p>`
         : ''}
+      ${/* DI-T4.11 — say WHEN, rather than let a stale answer read as "now".
+            Shown only when the who-has-submitted counts are genuinely absent
+            from this device (ACTIVE-STALE / OFFLINE-READONLY, where the
+            derived key is deliberately not persisted), so it is invisible in
+            the flag-off world and invisible on a healthy Supabase boot.
+            FINAL COPY IS OWED TO user-experience — the design input names "a
+            dash or skeleton chip" and leaves the wording to it; this is the
+            factual placeholder, not a UX decision taken here. */''}
+      ${supabaseProgressUnknownNoteHTML(week)}
       ${(getSettings().dashboardLayout==='compact')
         ? `<div class="dashboard-compact">${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`
         : `<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
@@ -5455,7 +6878,21 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
     }
   }
 
-  const submittedRaw = players.filter(p=>allPicks.some(pk=>pk.playerId===p.playerId));
+  // DI-T4.11 — COLUMN PRESENCE IS THE "WHO HAS SUBMITTED" SURFACE, so it may
+  // not be derived from an array RLS has filtered.
+  //
+  // THE ORIGINAL TEST IS UNTOUCHED and is still asked FIRST: a player with any
+  // pick in `allPicks` gets a column, exactly as before — which is why this is
+  // byte-identical in `dataMode:'sheets'`, where nothing is ever unknown.
+  // ADDED is the second arm, and it keeps a column for BOTH of the answers
+  // that are not a demonstrable "no": a player the count RPC says HAS submitted
+  // (whose rows RLS withheld from this device), and a player whose state is
+  // UNKNOWN because no count has landed at all. Only 'no' — which in supabase
+  // mode means the SERVER said zero — loses a column. In `dataMode:'sheets'`
+  // the arm is a no-op: a player with no picks is 'no' and a player with any
+  // pick already passed the first arm, so the filter is byte-identical.
+  const submittedRaw = players.filter(p => allPicks.some(pk => pk.playerId === p.playerId)
+    || submissionStateFor(weekId, p.playerId) !== 'no');
   if(!submittedRaw.length) return'<p class="text-muted text-center" style="padding:24px">No picks submitted yet.</p>';
   // Priority 7: reorder columns per the viewer's saved layout (their own column first)
   const submitted = getOrderedPlayersForDashboard(submittedRaw, session.playerId);
@@ -5898,7 +7335,13 @@ function bindCommentBubbleHandlers() {
 export function renderDashboardCompact(players, games, allPicks, weeklyResults, weekId, actualTB) {
   const session = getSession();
   const picks = allPicks;
-  const submittedRaw = players.filter(p => picks.some(pk => pk.playerId === p.playerId));
+  // DI-T4.11 — the same rule as the matrix, and it has to BE the same rule:
+  // the compact layout is the one six of six players see on a phone, so "who
+  // has submitted" answering differently between the two layouts would be the
+  // blind rule telling two stories. See renderDashboardTable()'s comment for
+  // why the original test is asked first and unchanged.
+  const submittedRaw = players.filter(p => picks.some(pk => pk.playerId === p.playerId)
+    || submissionStateFor(weekId, p.playerId) !== 'no');
   // Priority 7: same reorder rule as the matrix — viewer's column (here a chip
   // position) is leftmost; rest follows the saved order.
   const submitted = getOrderedPlayersForDashboard(submittedRaw, session.playerId);
@@ -6361,10 +7804,58 @@ export function renderAlmaMaterSettingsCard() {
 
 // ─── COMMISSIONER PAGE ────────────────────────────────────────────────────────
 
-function renderCommPage() {
+/** EXPORTED for Step 3b. DI-182j requires the permission-denied state and the
+ *  claim-code visibility rule to be asserted against RENDERED OUTPUT rather than
+ *  a code-path grep (RG-27's lesson, which the base DI cites by name), and this
+ *  is the function that produces both trees. Same seam renderLeagueFlowScreen()
+ *  already exposes for the same reason; nothing in production calls it by any
+ *  name but this one. */
+export function renderCommPage() {
   const c=document.getElementById('page-commissioner'); if(!c)return;
   const session=getSession();
-  if(!session.isAdmin){renderCommLogin(c);return;}
+  if(!session.isAdmin){
+    // DI-180g — renderCommLogin() (the commissioner PASSWORD form) is
+    // retired entirely in authMode:'supabase': isAdmin is derived from
+    // league_members.role, so there is nothing to log into. DI-182's real
+    // permission-denied card (icon, "Commissioner Only" copy, the twelve-
+    // capability acceptance rows) is Step 3b — NOT built here. This is a
+    // clearly marked, minimal, safe seam so a non-commissioner never sees
+    // admin content in the meantime: no password field, no admin controls,
+    // explicitly labeled as a placeholder for 3b to replace.
+    if (getAuthMode() === 'supabase') {
+      // ── DI-182c (STEP 3b) — THE REAL PERMISSION-DENIED CARD ───────────────
+      // Replaces the 3a placeholder that used to sit here. Reuses
+      // renderCommLogin()'s own `🔐` icon-heading block, minus the password
+      // field and button underneath it — because there is nothing to
+      // authenticate into: `isAdmin` is derived from `league_members.role`, and
+      // the only way to gain it is for a commissioner to grant it.
+      //
+      // "HIDE, DON'T DISABLE" (DI-182g row 3) IS WHY THIS IS A `return`. A
+      // non-commissioner's render path never emits the member-management markup
+      // AT ALL — not disabled, not CSS-hidden, ABSENT. The claim-code visibility
+      // test asserts the two role paths produce structurally different DOM
+      // trees, which is only true if the denial branch never falls through.
+      //
+      // DI-182e's copy names the commissioner so a player knows who to ask. The
+      // name comes off the membership cache (a display name, never an email —
+      // contact columns left the member-readable grant in 0007) and is escaped.
+      const commName = (() => {
+        try {
+          const active = getActiveLeagueId();
+          const rows = getCachedMemberships().filter(m => m.leagueId === active && m.role === 'commissioner');
+          return rows.map(m => m.displayName).filter(Boolean).join(', ');
+        } catch { return ''; }
+      })();
+      c.innerHTML = `<div class="card text-center" id="comm-denied-card">
+        <h3>🔐 Commissioner Only</h3>
+        <p class="text-muted">${commName
+          ? `This league's commissioner is ${escHtml(commName)}. If that should be you, reach out to a platform admin.`
+          : 'Only this league\'s commissioner can open this tab. If that should be you, reach out to a platform admin.'}</p>
+      </div>`;
+      return;
+    }
+    renderCommLogin(c);return;
+  }
 
   // Build page in safe sections — any crash shows which section failed
   try {
@@ -6854,8 +8345,32 @@ function renderCommPage() {
         </div>`);
     }
 
+    // ── DI-183c + DI-182b (STEP 3b) — LINK STATUS, THEN LEAGUE MEMBERS ──────
+    // In supabase mode these two cards render INSTEAD of "Players, PINs &
+    // Contact" below, in that order (status first, then actions — DI-183c's own
+    // ordering, so linking status and member management sit together and there
+    // are not two places doing the same thing).
+    //
+    // In 'pins'/'prelink' NOTHING here emits and the PIN card below is
+    // byte-identical to what it has always been — DI-180f's flag contract, which
+    // boottest's byte-diff assertion already pins.
+    //
+    // RG-10: `data-comm-tab="players"` on both, or they render on all five tabs.
+    if (getAuthMode() === 'supabase') {
+      sections.push(`
+        <div class="admin-section" data-comm-tab="players">
+          <div class="admin-section-title">Account Linking</div>
+          <div class="card" id="comm-link-status-card"><p class="text-muted">Loading members…</p></div>
+        </div>`);
+      sections.push(`
+        <div class="admin-section" data-comm-tab="players">
+          <div class="admin-section-title">League Members</div>
+          <div class="card" id="comm-members-card"><div class="player-admin-row" style="opacity:.35"><div class="player-admin-info"><span class="player-admin-avatar">··</span><div><div class="font-display" style="font-size:.9rem">Loading…</div></div></div></div></div>
+        </div>`);
+    }
+
     // Players
-    sections.push(`
+    if (getAuthMode() !== 'supabase') sections.push(`
       <div class="admin-section" data-comm-tab="players">
         <div class="admin-section-title">Players, PINs &amp; Contact</div>
         <div class="card">
@@ -7169,6 +8684,14 @@ function renderCommPage() {
       </div>`);
 
     c.innerHTML = sections.join('\n');
+    // ── DI-182b/DI-183c (Step 3b) — THE THREE COMMISSIONER READS, AFTER PAINT.
+    // Fire-and-forget with its own catch inside: the member card renders its
+    // DI-182d loading skeleton synchronously above and fills itself in, so a
+    // slow or refused RPC can never hold up the rest of the commissioner panel.
+    // Only in supabase mode — in 'pins'/'prelink' the cards were never emitted.
+    if (getAuthMode() === 'supabase') {
+      loadLeagueMembersCard().catch(e => console.warn('[auth] the League Members card could not load', e));
+    }
     // Tab visibility lives on the panel container as a data attribute so a
     // single CSS rule handles show/hide for all 18 sections at once.
     c.setAttribute('data-comm-active', state.commTab);
@@ -11895,7 +13418,10 @@ function renderCommExtrasV16(week, games) {
     try {
       const mod = await import('./chatTransport.js');
       const { head } = await mod.fetchHead();
-      if (out) out.textContent = `✅ Chat backend OK — head at seq ${head}. Deployment is current.`;
+      // Step 5 D-6: "Deployment is current" is an Apps Script statement; there is no deployment
+      // to be current on the Supabase transport.
+      const tail = mod.chatTransportMode() === 'sheets' ? ' Deployment is current.' : '';
+      if (out) out.textContent = `✅ Chat backend OK — head at seq ${head}.${tail}`;
     } catch (e) {
       if (out) out.textContent = e?.stale
         ? '❌ DEPLOYMENT OUT OF DATE — the deployed Apps Script has no chat endpoints. Paste the new Code.gs, then Deploy → Manage deployments → Edit → New version (same URL).'
@@ -11907,7 +13433,9 @@ function renderCommExtrasV16(week, games) {
     const out = document.getElementById('chat-metrics-out');
     if (!out) return;
     try {
-      const { rows } = await fetchChatMetrics(7);
+      const { rows, unsupported } = await fetchChatMetrics(7);
+      // Step 5 D-6: honest copy on a backend that has no Apps Script quota to meter.
+      if (unsupported) { out.textContent = 'Not applicable — the new backend has no Apps Script quota.'; return; }
       if (!rows.length) { out.textContent = 'No metrics yet — they accrue once chat traffic starts.'; return; }
       out.innerHTML = rows.map(r => {
         const total = r.execCount || 0;
@@ -12483,6 +14011,44 @@ export function setupAutoRefresh() {
  * re-render Picks; it re-renders only the dashboard, which is safe to rebuild.
  */
 export async function runAutoRefreshTick() {
+  // ── SECURITY S-2 — A HELD DEVICE DOES NOT TICK ────────────────────────────
+  // This is the timer that undid A6's teardown ~60 seconds after the gate went
+  // up: renderDashboard() repainted the whole mirror-derived dashboard behind
+  // the overlay. The guard is at the TOP, above tickAutoTransition(), because
+  // the repaint is not the only thing that must not happen — a device with no
+  // proven identity must not fetch ESPN scores and must certainly not write an
+  // automatic week transition into the shared backend on everyone's behalf.
+  // (The timer itself is also parked when a hold gate goes up; this is the
+  // belt to that braces, and it is the half that covers the no-session case
+  // where no hold gate exists.)
+  if (isContentWithheld()) return;
+  // ══ DI §7.1 / §5.3 — THE TICK IN SUPABASE DATA MODE ═══════════════════════
+  //
+  // Two jobs, in this order, and the ORDER matters.
+  //
+  // (1) OFFLINE-READONLY DOES NOT TALK TO ANYONE. No ESPN fetch, no week
+  //     transition, no re-render off scores that cannot arrive — §5.3 says it
+  //     plainly. The one thing it DOES do is retry the hydrate, because that is
+  //     what turns the amber banner off when the signal comes back (R1: the
+  //     release is driven forward, not asserted about). `online` does the same.
+  //
+  // (2) OTHERWISE THE TICK IS REALTIME'S SAFETY NET (§7.1 item 2). The channel
+  //     is the primary data path and the hydrate is the truth: if the channel
+  //     is not LIVE, or the last hydrate is stale, the tick re-selects. A LIVE
+  //     channel with a recent hydrate skips it, so six phones do not each run a
+  //     league select every minute for nothing.
+  if (isSupabaseDataMode()) {
+    const st = sb.getStatus();
+    if (st.state === 'OFFLINE-READONLY' || st.state === 'HELD') {
+      ensureSupabaseDataHydrated('tick-recover').catch(e => console.warn('[sb] tick recovery failed', e));
+      return;
+    }
+    const lastAt = st.lastSyncAt ? Date.parse(st.lastSyncAt) : 0;
+    const stale = !lastAt || (Date.now() - lastAt) > SUPABASE_TICK_REHYDRATE_MS;
+    if (st.realtime !== 'live' || stale) {
+      ensureSupabaseDataHydrated('tick').catch(e => console.warn('[sb] tick hydrate failed', e));
+    }
+  }
   // N1 / DI-N5 (UN-204, 2026-09-12) — THE pollNotifyLog() TICK IS GONE. It
   // existed to fold the server-fired reminder/locking-soon log into the
   // Notification Center list; DI-N5 retires that list, so this was a 60-second
@@ -12533,6 +14099,48 @@ export async function runAutoRefreshTick() {
  */
 export function tickAutoTransition() {
   try {
+    // ══ DI §7.2 (reviewer F3, Part B gate) — COMMISSIONER-ONLY IN SUPABASE ══
+    //
+    // This function writes OPEN->LOCKED (with the spread freeze), LOCKED->LIVE
+    // and `pendingFinalization` from WHICHEVER DEVICE TICKS FIRST — which is
+    // the right design against a shared Sheet, where every device may write.
+    //
+    // Against RLS every one of those is commissioner-only, and the status legs
+    // are RPC-only (`weeks_status_guard` refuses a direct status PATCH with
+    // 42501). So at a lock boundary, on the five player phones, this reached
+    // `saveWeek(next)` and threw AdapterWriteRefusedError once a minute.
+    //
+    // WHAT THAT ACTUALLY COST — corrected at the re-gate, because the first
+    // version of this comment claimed the throw "aborted the tick before
+    // doRefreshScores()" and that is simply false: this function's own
+    // try/catch at the bottom swallows everything, so runAutoRefreshTick()
+    // carries on and the scores refresh fine. The real costs are smaller and
+    // worth stating accurately rather than dramatically:
+    //   • a typed error swallowed into a console.warn on five devices, once a
+    //     minute, for the whole boundary — noise that would mask a real failure
+    //     arriving on the same channel;
+    //   • the `changed` block never completes, so the re-render that follows
+    //     saveWeek() is skipped and those devices do not repaint the surface
+    //     that depends on week.status;
+    //   • and the thing that matters most, which is not a symptom at all: five
+    //     devices REPEATEDLY ATTEMPTING A WRITE THE SERVER REFUSES. §7.2 says
+    //     they must not, and "the refusal happens to be harmless today" is the
+    //     argument that stops being true the first time a policy is widened.
+    //
+    // `getSession().isAdmin` honours DI-180p's privilege lock by construction,
+    // so a commissioner in the verify window is also gated — correctly: the
+    // server would refuse that write too.
+    //
+    // THE RESIDUAL, named rather than discovered (§7.2): with the
+    // commissioner's device closed at lock time, `weeks.status` LAGS. The RULE
+    // does not — `pick_window_open()` refuses a late pick server-side off
+    // `picks_lock_at`, and getEffectiveWeekStatus() already renders 'locked'
+    // from the same timestamp on every device. Step 5/6's pg_cron closes it.
+    if (isSupabaseDataMode()) {
+      let isAdmin = false;
+      try { isAdmin = getSession()?.isAdmin === true; } catch { isAdmin = false; }
+      if (!isAdmin) return;
+    }
     const week = getCurrentWeek();
     if (!week) return;
     if (week.dataSourceMode === 'demo') return;
@@ -12850,7 +14458,27 @@ function downloadFile(content, filename, mime='text/csv;charset=utf-8') {
   const url  = URL.createObjectURL(blob);
   const a    = Object.assign(document.createElement('a'), { href: url, download: filename });
   document.body.appendChild(a); a.click();
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 200);
+  // ── PRE-EXISTING FLAKE, reproduced at 32d9a4e and fixed here ──────────────
+  //
+  // THE RACE. This callback fires 200 ms after the click, and by then the
+  // anchor may not be where it was put: a suite that resets its DOM stub
+  // between sections detaches it, and a real page can too (a re-render of an
+  // ancestor, a navigation). `document.body.removeChild(a)` on a node that is
+  // no longer a child of `document.body` throws NotFoundError — and because
+  // this is a bare timer callback with no caller to catch it, that throw is
+  // unhandled. Under Node it lands after the suite's last assertion and before
+  // its summary line, so slatetest failed roughly one run in three with no
+  // failed assertion to point at (2 failures in 3 full sweeps; 6/6 standalone).
+  //
+  // The guard is the portable form, and it fixes two things at once: it asks
+  // the anchor where it actually IS rather than assuming, and it does nothing
+  // when the answer is "nowhere". `.unref()` is NOT the fix — browsers return a
+  // number from setTimeout, so it does not exist in production code; this file
+  // runs in a browser.
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 200);
 }
 /** Build a safe filename slug for a week */
 function weekSlug(week) {
@@ -13431,7 +15059,7 @@ function showToast(msg,type='success',{html=false}={}){
 
 // ─── SITE PIN GATE ────────────────────────────────────────────────────────────
 
-function showSitePinGate() {
+export function showSitePinGate() {
   // v0.16.0 — the gate is now an OVERLAY on top of the (already booted) app,
   // instead of nuking document.body and reloading on success. Killing the
   // reload removes the entire second boot + second Apps Script hydrate that
@@ -13473,6 +15101,3053 @@ function showSitePinGate() {
   document.getElementById('site-gate-submit')?.addEventListener('click', submit);
   input?.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
   setTimeout(() => input?.focus(), 100);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase III Step 3a — DI-180 (Google sign-in gate), DI-181 (league flow),
+// DI-184 (active-league label). authMode:'pins'/absent is byte-identical to
+// everything above this point (boottest.mjs pins that); everything below is
+// new surface reachable ONLY in authMode:'supabase'.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// D-1 (approved 2026-09-16) — Google's official multicolor "G" mark, the
+// second narrowly-scoped inline-SVG exception to CONVENTIONS #16 (the first
+// is the bottom-nav icons, approved 2026-08-07). Externally mandated by
+// Google's OAuth branding guidelines, not a style choice, and used in
+// exactly one place. Do not widen this exception either.
+const GOOGLE_G_MARK_SVG = `<svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" focusable="false">
+  <path fill="#4285F4" d="M17.64 9.2045c0-.6381-.0573-1.2518-.1636-1.8409H9v3.4814h4.8436c-.2086 1.125-.8427 2.0782-1.7959 2.7164v2.2581h2.9087c1.7018-1.5668 2.6836-3.874 2.6836-6.615z"/>
+  <path fill="#34A853" d="M9 18c2.43 0 4.4673-.8059 5.9564-2.1805l-2.9087-2.2581c-.8059.54-1.8368.8591-3.0477.8591-2.3436 0-4.3282-1.5831-5.0359-3.7104H.9573v2.3318C2.4382 15.9832 5.4818 18 9 18z"/>
+  <path fill="#FBBC05" d="M3.9641 10.71c-.18-.54-.2823-1.1168-.2823-1.71s.1023-1.17.2823-1.71V4.9582H.9573A8.9965 8.9965 0 000 9c0 1.4523.3477 2.8264.9573 4.0418L3.9641 10.71z"/>
+  <path fill="#EA4335" d="M9 3.5795c1.3214 0 2.5077.4541 3.4404 1.346l2.5818-2.5818C13.4632.8918 11.4259 0 9 0 5.4818 0 2.4382 2.0168.9573 4.9582L3.9641 7.29C4.6718 5.1627 6.6564 3.5795 9 3.5795z"/>
+</svg>`;
+
+/**
+ * Reviewer B2 — THE VENDORED SDK IS INJECTED, NOT STATICALLY TAGGED.
+ *
+ * index.html used to carry `<script src="vendor/supabase-js-2.116.0.js">` for
+ * every visitor, which meant the 'pins' flag-off path — the only path anyone is
+ * on — downloaded and parsed the entire Supabase SDK on every cold load to use
+ * none of it. A flag that is off must cost nothing. The tag is gone; this
+ * injects the same file, from the same path, only after config.json has said
+ * authMode is 'supabase'.
+ *
+ * The sha256 pin moves here with it. There is no build step and no SRI on a
+ * same-origin classic script we control, so the pin has always been a TEST-TIME
+ * guarantee rather than a runtime one: authtest [12] hashes the file on disk
+ * against this constant, so an accidental edit or a bad re-copy fails the suite
+ * instead of shipping. What the runtime checks is narrower and still worth
+ * stating: the src is this pinned filename and nothing else — never a CDN,
+ * never a value derived from config.
+ *
+ * STEP 3b MUST CALL THIS TOO. DI-180f's `'prelink'` mode runs the Google
+ * sign-in/linking flow while Sheets stays authoritative, so it needs the SDK —
+ * but boot() deliberately does NOT load it for 'prelink' today, because nothing
+ * in THIS build uses it and the reviewer-B2 contract is zero extra bytes for
+ * every mode that does not. Whoever builds DI-183's "Link My Account Now"
+ * banner awaits this function from that banner's own handler (which is better
+ * than boot anyway: the bytes are then paid by the player who tapped, not by
+ * everyone). Named here so it is not discovered as a null client at runtime.
+ */
+const SUPABASE_SDK_SRC = 'vendor/supabase-js-2.116.0.js';
+const SUPABASE_SDK_SHA256 = '84ee9bf45695c1dd3ba1595b6bcfb0f09672434631351ffc8ebe9140545d5ff6';
+export const _SUPABASE_SDK_SRC_FOR_TEST = SUPABASE_SDK_SRC;
+export const _SUPABASE_SDK_SHA256_FOR_TEST = SUPABASE_SDK_SHA256;
+
+/**
+ * REVIEWER N-b — THE THIRD EVENT IS "NEITHER EVENT".
+ *
+ * A `<script>` fires `load` or `error` in every case the spec cares about, and
+ * in a handful it cares about less: a captive portal that accepts the socket
+ * and holds it, a proxy that stalls mid-body, an iOS tab backgrounded before
+ * the response completes. Without a deadline this promise stays pending, and
+ * `await ensureSupabaseSdkLoaded()` in boot() suspends the entire supabase-mode
+ * boot forever — no gate decision, no membership refresh, no banner, nothing on
+ * screen but the already-painted shell. Silent, permanent, and indistinguishable
+ * from a slow network.
+ *
+ * WHAT IT DOES WHEN THE READ FAILS, written down: it resolves **false**, which
+ * is the same closed answer an `error` gives and routes to the same place —
+ * boot() raises the AuthUnavailable banner, auth.js's ensureClient() returns
+ * null, and getMemberships() throws AuthUnavailableError rather than
+ * degrading into "you have no leagues" (SEC F2).
+ *
+ * The race does not cancel the load. If the script arrives at second 30,
+ * window.supabase is set and ensureClient() starts working; the false answer
+ * only means "not available in time", which is what the banner says.
+ *
+ * `timeoutMs` is a parameter, not a constant read from module scope, so the
+ * test drives a 5ms deadline against a script element that never fires either
+ * event instead of making the suite sleep ten seconds.
+ */
+const SUPABASE_SDK_LOAD_TIMEOUT_MS = 10000;
+let _supabaseSdkPromise = null;
+/** Security 9 — the tag this page last injected, so a re-injection can remove
+ *  the dead one instead of stacking another beside it. */
+let _supabaseSdkScriptEl = null;
+export function ensureSupabaseSdkLoaded({ timeoutMs = SUPABASE_SDK_LOAD_TIMEOUT_MS } = {}) {
+  if (typeof window !== 'undefined' && window.supabase) return Promise.resolve(true);
+  if (_supabaseSdkPromise) return _supabaseSdkPromise;
+  // REVIEWER FINDING 3 — the deadline has to be CANCELLED when the race is
+  // decided. It was not, so every SUCCESSFUL supabase boot logged
+  // "…neither loaded nor errored within 10000ms" to console.error ten seconds
+  // after the SDK had in fact loaded — a red error, on the exact channel an
+  // operator scans to decide whether sign-in is broken, describing a failure
+  // that did not happen. Promise.race() ignores the second resolution; the
+  // TIMER still runs, and the log is a side effect of the timer, not of the
+  // promise.
+  //
+  // The deadline is created BEFORE the loader on purpose: the loader's executor
+  // can resolve SYNCHRONOUSLY (the catch branch below, when createElement
+  // throws), and a clearDeadline() that ran before the timer existed would
+  // cancel nothing and leave the log behind.
+  let deadlineTimer = null;
+  const clearDeadline = () => {
+    if (deadlineTimer !== null) { clearTimeout(deadlineTimer); deadlineTimer = null; }
+  };
+  const deadline = new Promise(resolve => {
+    deadlineTimer = setTimeout(() => {
+      deadlineTimer = null;
+      console.error(`[auth] the vendored Supabase SDK neither loaded nor errored within ${timeoutMs}ms:`, SUPABASE_SDK_SRC);
+      resolve(false);
+    }, timeoutMs);
+    // Node-only (authtest/boottest): keep a 10s deadline from holding the
+    // process open. No-op in a browser, where timers do not keep anything alive.
+    if (typeof deadlineTimer?.unref === 'function') deadlineTimer.unref();
+  });
+  const loaded = new Promise(resolve => {
+    try {
+      const el = document.createElement('script');
+      // SECURITY 9 — ONE TAG AT A TIME, NO ORPHAN GROWTH. The sdk-unavailable
+      // hold drops the loader latch on every 20-second re-check, so a device
+      // sitting on that gate for ten minutes used to accumulate thirty dead
+      // <script> tags in <head>, each with its own listeners. The previous
+      // failed tag is removed before the new one goes in.
+      try { _supabaseSdkScriptEl?.remove?.(); } catch {}
+      _supabaseSdkScriptEl = el;
+      el.src = SUPABASE_SDK_SRC;   // literal constant — never interpolated, never remote
+      el.async = false;
+      el.addEventListener('load', () => { clearDeadline(); resolve(true); });
+      el.addEventListener('error', () => {
+        clearDeadline();
+        // Loud, not silent: auth.js's ensureClient() will now return null and
+        // getMemberships() throws AuthUnavailableError, which raises the
+        // banner. Nothing degrades into "you have no leagues" (SEC F2).
+        console.error('[auth] the vendored Supabase SDK failed to load:', SUPABASE_SDK_SRC);
+        resolve(false);
+      });
+      (document.head || document.body).appendChild(el);
+    } catch (e) {
+      clearDeadline();
+      console.error('[auth] could not inject the vendored Supabase SDK', e);
+      resolve(false);
+    }
+  });
+  _supabaseSdkPromise = Promise.race([loaded, deadline]);
+  return _supabaseSdkPromise;
+}
+/**
+ * Drop the one-injection-per-load latch.
+ *
+ * The latch exists so a single boot injects the vendored SDK exactly once
+ * (reviewer B2/N-b). DI-180l's 20-second background re-check needs one narrow
+ * exception to that, and it is a correctness bug without it: the
+ * sdk-unavailable hold's whole promise is that a player who regains signal
+ * clears the gate without doing anything, and `await ensureSupabaseSdkLoaded()`
+ * on the second pass would otherwise return the LATCHED `false` forever — so
+ * that variant could only ever clear on a page reload, which is the one thing
+ * DI-180a forbids. Called from exactly one place (runAuthHoldCheck, and only
+ * while `window.supabase` is genuinely still absent), so the "one injection per
+ * boot" contract still holds for every path that is not already blocked on a
+ * failed injection.
+ *
+ * `_resetSupabaseSdkLoaderForTest` is kept as the exported alias the suites
+ * already call — same function, two names, so the production caller does not
+ * have to read as if it were a test hook.
+ */
+function resetSupabaseSdkLoader() { _supabaseSdkPromise = null; }
+export { resetSupabaseSdkLoader as _resetSupabaseSdkLoaderForTest };
+
+/**
+ * Reviewer N5 — ONE bottom-anchored stack for the AUTH failure channel.
+ *
+ * Three constraints collided and a single fixed banner could not satisfy them:
+ * (1) an auth banner must render ABOVE the sign-in gate (#site-gate-overlay is
+ * z-index 9000, .site-gate 9999) or the one message telling a player what went
+ * wrong sits behind an opaque overlay; (2) when no gate is up it must not cover
+ * .bottom-nav; (3) AD-06 says the sync channel and the auth channel are
+ * separate and BOTH must be able to be visible at once — which two
+ * independently `position:fixed` banners at the same edge cannot do.
+ *
+ * So the auth channel gets a flex column at the bottom, above the nav, above
+ * the gate. Each banner is an ordinary child: they stack instead of
+ * overlapping, and the backend-sync red banner (top, its own node, z-index
+ * 200) is untouched and still visible alongside any of them.
+ */
+function authBannerStack() {
+  let stack = document.getElementById('auth-banner-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.id = 'auth-banner-stack';
+    document.body.appendChild(stack);
+  }
+  return stack;
+}
+
+/**
+ * SEC F1 — the interlock's visible half. Persistent, undismissable: this is a
+ * misconfiguration only the commissioner can fix, and every write is being
+ * refused while it is up, so a dismiss button would only hide the explanation
+ * for why nothing saves.
+ */
+export function showAuthConfigErrorBanner() {
+  if (document.getElementById('auth-config-error-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'auth-config-error-banner';
+  el.className = 'auth-banner auth-banner-config';
+  el.textContent = "This build's data layer is not ready for Supabase sign-in. Contact the commissioner.";
+  authBannerStack().appendChild(el);
+}
+export function hideAuthConfigErrorBanner() {
+  document.getElementById('auth-config-error-banner')?.remove();
+}
+
+/**
+ * SEC F2 / reviewer N4 — AD-06 loud-fail for the AUTH channel. Raised whenever
+ * a membership read fails (SDK absent, project unconfigured, network down, RLS
+ * error). Its own node and its own copy: "can't reach sign-in" is a different
+ * problem from "sync is broken" and from "your session expired," and a player
+ * who is told the wrong one debugs the wrong thing.
+ *
+ * The copy leads with what the player actually needs to know — nothing they
+ * did is lost — because the failure mode this replaces (rendering DI-181's
+ * join/create landing over an infrastructure error) told a six-year league
+ * member they had no leagues.
+ */
+export function showAuthUnavailableBanner() {
+  if (document.getElementById('auth-unavailable-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'auth-unavailable-banner';
+  el.className = 'auth-banner auth-banner-unavailable';
+  // DI-180m — "try again in a minute" is replaced BY THE BUTTON. The old copy
+  // asked the player to wait and gave them nothing to do; the risk it left open
+  // is that isSessionExpiredError()'s classification can be wrong, so a
+  // genuinely REVOKED session lands here and the player has no path back short
+  // of clearing storage. One harmless extra tap during a real outage is the
+  // cheaper mistake.
+  el.innerHTML = `<span>Can't reach sign-in right now. Your picks are safe.</span>
+    <button type="button" id="auth-unavailable-signin-btn" class="btn btn-sm btn-ghost">Sign In</button>`;
+  authBannerStack().appendChild(el);
+  document.getElementById('auth-unavailable-signin-btn')?.addEventListener('click', authSignInAffordance);
+}
+export function hideAuthUnavailableBanner() {
+  document.getElementById('auth-unavailable-banner')?.remove();
+}
+
+/**
+ * DI-180m + A4 + A7 — THE ONE HANDLER BEHIND EVERY "Sign In" AFFORDANCE.
+ *
+ * Both banners share it (they are the same intent: "let me back in"), so the
+ * two cannot drift apart, and all three of the amendment's constraints live in
+ * one readable place:
+ *
+ *   A7 — it may NEVER take a hold gate down. A hold gate is a fail-closed lock
+ *        for a device whose data layer or config cannot be trusted at all;
+ *        replacing it with a Google gate would hand the player a control that
+ *        cannot work and, worse, remove the block. So if any hold variant is
+ *        up, this RE-RENDERS that same variant and stops.
+ *   A4 — it may never open a Google gate this build cannot back. With no
+ *        vendored SDK on the page, `signInWithGoogle()` can only throw after
+ *        the tap, so the honest answer is the sdk-unavailable hold gate itself.
+ *   A7 (second half) — tapping Sign In must not make the app FORGET that the
+ *        session expired. hideSessionExpiredBanner() clears auth.js's expiry
+ *        latch, which is what refreshAuthUI() re-reads to decide whether to put
+ *        the banner back; so the banner node is removed DIRECTLY here and the
+ *        latch is left alone. If the sign-in then fails, the next session event
+ *        re-raises the same banner instead of quietly forgetting.
+ */
+export function authSignInAffordance() {
+  const held = currentAuthHoldReason();
+  if (held) { showAuthHoldGate(held); return; }
+  if (typeof window === 'undefined' || !window.supabase) { showAuthHoldGate('sdk-unavailable'); return; }
+  document.getElementById('session-expired-banner')?.remove();
+  document.getElementById('auth-unavailable-banner')?.remove();
+  showGoogleSignInGate();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-180l — THE FAIL-CLOSED HOLD GATE (approved 2026-09-17, with A1/A2/A3/A6)
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * WHAT THIS CLOSES (security S-1). Three states used to render as a BANNER over
+ * the dashboard: the config-unreadable hold, a vendored SDK that never arrived,
+ * and the interlock. On a device that had already satisfied the site PIN, the
+ * PIN gate was never stood up — boot()'s only gate call is
+ * `if (!isSiteUnlocked()) showSitePinGate()`, and the two hold branches only
+ * ever took an overlay DOWN, never put one UP. So a device with NO proven
+ * identity sat looking at its own league's standings and picks, painted from
+ * the local mirror, with one line of text at the bottom. That is exactly the
+ * "shared secret, no notion of a person" failure UN-180 exists to close.
+ *
+ * SCOPE, stated once so it is not re-litigated per variant: this family is
+ * PRE-IDENTITY only. Once a session has been proven and the player is looking
+ * at their own hydrated league, a later failure is a BANNER (DI-180m), never a
+ * re-block — they proved who they are and the data on screen is legitimately
+ * theirs. A8: that includes a session that EXPIRES after a legitimate sign-in,
+ * which stays a banner for Step 3a.
+ *   STEP 4 TODO (A8, recorded so it is decided and not inherited): once local
+ *   data is league-scoped, a post-identity expiry becomes a GATE here too.
+ *
+ * NOT AN ERROR STATE: no red, no amber, no new color tokens — it reuses
+ * `.site-gate`'s own values (DI-180l's reuse call). A hold is informational.
+ */
+const AUTH_HOLD_COPY = {
+  'config-unreadable': {
+    // A1 — the other two variants keep "One moment": they really can resolve by
+    // themselves, and the background re-check is what resolves them.
+    heading: 'One moment',
+    body: "We couldn't confirm you're signed in. Your picks and history are safe — nothing has changed.",
+  },
+  'sdk-unavailable': {
+    heading: 'One moment',
+    body: "Sign-in didn't load. Check your connection and try again.",
+  },
+  interlock: {
+    // A1 — "One moment" promises something that resolves by itself. An
+    // interlock does not clear until Drew redeploys, so the heading says so.
+    heading: "We'll be right back",
+    body: "Something's not set up right on our end. Your picks and history are safe — nothing has changed. Let the commissioner know if this doesn't clear up.",
+  },
+  // ── Phase III Step 4 Part B (DI §5.1) — THE DATA HOLD ─────────────────────
+  // NOT DI-180l's identity hold, and the distinction is the whole reason it has
+  // its own key: the player IS proven, what is missing is the LEAGUE. So the
+  // copy says "your league", not "you're signed in" — and, like the other two
+  // "One moment" variants, it really does resolve by itself, because the 20 s
+  // re-check and the 60 s tick both retry the hydrate.
+  //
+  // DI-180l's non-negotiable is preserved by reusing this shell verbatim: no
+  // Google button, no PIN field, nothing on this screen that could look like a
+  // working sign-in control. Retry, and nothing else.
+  'data-hold': {
+    heading: 'One moment',
+    body: "Couldn't load your league. Nothing has changed — retry in a moment.",
+  },
+  // ── §6.3 / A8 (reviewer F2, Part B gate) — POST-IDENTITY EXPIRY IS A GATE ──
+  // In Step 3a an expiry after a legitimate sign-in was a BANNER, and that was
+  // right: the league on screen came from the one shared Sheet and the player
+  // had every right to it. Once local data is LEAGUE-SCOPED the argument is
+  // gone — those rows were served to a token the server has now rejected — so
+  // A8 promotes it to a gate, which is what tears the page down.
+  //
+  // COPY IS DI-180d's, VERBATIM, reused rather than invented: the same sentence
+  // the session-expired banner has always shown, so a player who sees both sees
+  // one message. NOT 'One moment' for the heading — A1's rule is that the
+  // phrase promises something that resolves by itself, and this one does not:
+  // it needs a sign-in. The Sign In affordance stays on the BANNER (DI-180m/A7:
+  // a gate never carries a control that could look like a working sign-in), and
+  // the dedicated gate variant that would carry one is deferred to
+  // user-experience post-cutover.
+  'session-expired': {
+    heading: 'Please sign in again',
+    body: 'Your session expired — sign in again to keep picking.',
+  },
+};
+export const _AUTH_HOLD_COPY_FOR_TEST = AUTH_HOLD_COPY;
+
+/**
+ * ══ SECURITY F2 (delta audit #15, 2026-09-18) — WHICH RECOVERY RUNS, PER HOLD ══
+ *
+ * THE DEFECT THIS TABLE EXISTS TO MAKE IMPOSSIBLE, and it was a self-inflicted
+ * denial of service. runAuthHoldCheck() special-cased ONE reason ('data-hold')
+ * and let every other value fall through to applyAuthModeDecision(). So a
+ * 'session-expired' hold — which A8 raises on a device whose adapter is HELD —
+ * reached that function's interlock branch, which asks
+ * `isAuthDataLayerMismatch()`, i.e. `!hasSupabaseDataBackend()`, i.e. "is the
+ * adapter serving". It is not; that is why the gate is up. So the 20-second
+ * re-check answered its own hold by calling forceSignedOutSession() and
+ * swapping the gate for 'interlock' — whose own copy says it "does not clear
+ * until Drew redeploys". A player whose token blipped would have been locked
+ * out of the app until a deploy, by the timer that exists to let them back in.
+ *
+ * TWO RECOVERIES, and the split is WHAT IS ACTUALLY MISSING:
+ *
+ *   'auth-decision'   the device cannot establish WHO IT IS or WHAT MODE IT IS
+ *                     IN. Re-running applyAuthModeDecision() is the right
+ *                     answer because that is the thing that failed.
+ *   'adapter-hydrate' the identity is fine and the MODE is fine; the LEAGUE is
+ *                     missing. Re-running the auth decision re-asks a question
+ *                     that was never in doubt — and, because the adapter is by
+ *                     definition not serving while these holds are up, gets the
+ *                     wrong answer to it.
+ *
+ * EXHAUSTIVE over AUTH_HOLD_COPY by construction: authtest asserts every key
+ * has an entry, so a sixth hold reason cannot be added without someone deciding
+ * which recovery it gets. A missing entry is a fall-through, and a fall-through
+ * is this finding.
+ */
+const AUTH_HOLD_RECOVERY = {
+  'config-unreadable': 'auth-decision',
+  'sdk-unavailable':   'auth-decision',
+  interlock:           'auth-decision',
+  'data-hold':         'adapter-hydrate',
+  'session-expired':   'adapter-hydrate',
+};
+export const _AUTH_HOLD_RECOVERY_FOR_TEST = AUTH_HOLD_RECOVERY;
+
+/** Every page container the app paints league data into. A6's teardown list,
+ *  in ONE place (CONVENTIONS #21) so a seventh tab cannot be forgotten by it. */
+const APP_PAGE_CONTAINER_IDS = ['page-picks', 'page-dashboard', 'page-leaderboard', 'page-commissioner', 'page-rules', 'page-chat'];
+export const _APP_PAGE_CONTAINER_IDS_FOR_TEST = APP_PAGE_CONTAINER_IDS;
+
+const AUTH_HOLD_RECHECK_MS = 20000;
+let _authHoldReason = '';
+let _authHoldTimer = null;
+let _authHoldCheckInFlight = false;
+let _authHoldVisibilityWired = false;
+// ── SIXTH GATE — THE THREE LATCHES THE TEARDOWN OWNS, NAMED ────────────────
+// Every one of these is in the state table at the top of js/auth.js, with the
+// thing that sets it and the thing that releases it, because the sixth gate's
+// three recovery defects were all state that no table listed.
+/** The DOM latch: `inert` + `aria-hidden` on .main-content/.bottom-nav. */
+let _appContentInert = false;
+/** True while _parkTimersForHold() has stopped the score interval and the
+ *  chat-enabled watch. Its RELEASE is the re-arm in the transition below —
+ *  without the flag the re-arm would have to run on every session event, which
+ *  would re-phase the 60-second polling cadence roughly hourly. */
+let _timersParkedForHold = false;
+/** True when boot() returned at a hold and therefore never hydrated, never
+ *  seeded, and never ran runPostHydrateTail(). REVIEWER F4 (seventh gate): this
+ *  is a PRECONDITION, not a one-shot — nothing in production ever clears it
+ *  (only _resetAuthHoldForTest() does), because "this page stopped at a hold"
+ *  stays true for the life of the page. `_withholdReleased` below is what makes
+ *  the expensive half run once. */
+let _bootStoppedAtHold = false;
+/** The once-per-page latch on the un-withhold transition (this replaces
+ *  `_authHoldResumeDone`, which was named for one of the three call sites).
+ *  Set BEFORE the work it guards (re-entrancy) and RESET to false when that work
+ *  throws, so the next session event retries — reviewer F1, seventh gate. */
+let _withholdReleased = false;
+
+/** '' when no hold gate is up. The single source of truth A7 reads. */
+export function currentAuthHoldReason() { return _authHoldReason; }
+
+/**
+ * A6 — A GATE IS NOT A DATA BOUNDARY, SO TEAR THE PAGE DOWN FIRST.
+ *
+ * The app paints from its local mirror BEFORE the config is read (AD-08's
+ * paint-first boot, which is load-bearing and deliberately not being changed).
+ * By the time a hold fires, league data is already in the document — so an
+ * opaque overlay hides it from a player and leaves it fully readable to anyone
+ * who opens dev tools or runs a bookmarklet. The overlay is the lock; THIS is
+ * the data boundary.
+ *
+ * WHAT IS EMPTIED, exactly: the six `.page-section` containers listed above,
+ * the header's week block (a week NAME is league data), the DI-184 league pill,
+ * the identity chip, and the notification-bell count. Nothing else in the
+ * document holds mirror-derived text.
+ *
+ * #page-chat IS emptied, and that is a deliberate, narrow exception to reviewer
+ * N10 ("app.js never writes into chat-ui.js's subtree"). N10 protects chat's
+ * scroll anchoring, composer and node identity from a RENDER it cannot see;
+ * this is not a render, it is a security teardown, and leaving a cached room of
+ * six players' messages in the DOM behind a lock would defeat the whole point.
+ * The repaint path below re-enters chat through its own renderChatPage().
+ *
+ * ADDED AT THE FIFTH GATE (security 7/8, reviewer F8/F9/F10):
+ *   • the `.active` class comes off every page section. Not cosmetic: chat-ui.js
+ *     owns its own onChat subscriber and repaints `#page-chat` whenever
+ *     `#page-chat.active` exists, and re-inserts the dashboard chat TEASER
+ *     (a quoted message) whenever `#page-dashboard.active` exists. app.js's
+ *     navigateTo() guard cannot reach that subscriber, and chat-ui.js cannot
+ *     import app.js (cycle) — so the teardown removes the thing it keys on.
+ *   • every open `.modal-overlay` is removed and the toast container emptied.
+ *     A hold can fire while the Account sheet, a game modal or a toast holding
+ *     a player's name is on screen; those nodes sit at a higher z-index than
+ *     the overlay, i.e. IN FRONT of the lock.
+ *   • the app badge is cleared, because a badge count is league data on the
+ *     home screen of a device that is no longer signed in.
+ *   • `.main-content` and `.bottom-nav` are made inert + aria-hidden, so the
+ *     withheld page is unreachable by keyboard, by screen reader and by a
+ *     scripted click — not merely covered by an opaque div. Restored on clear.
+ *     The PIN gate's behaviour is deliberately NOT changed (it never called
+ *     this, and paint-first + PIN entry is AD-08's shipped flow).
+ */
+function tearDownRenderedContentForHold() {
+  for (const id of APP_PAGE_CONTAINER_IDS) {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = '';
+  }
+  // The `.active` marker, not just the markup — see the comment block above.
+  try { document.querySelectorAll('.page-section').forEach(el => el.classList?.remove('active')); } catch {}
+  try { if (document.body?.dataset) delete document.body.dataset.tab; } catch {}
+  const week = document.getElementById('header-meta-week');
+  if (week) week.innerHTML = '';
+  const pill = document.getElementById('league-pill');
+  if (pill) _clearLeaguePill(pill);
+  const ident = document.getElementById('header-identity');
+  if (ident) { ident.innerHTML = ''; ident.hidden = true; }
+  // The chat unread COUNT is league data too (it is a number of messages six
+  // named people wrote), on two surfaces — the nav pill and the tab title.
+  try { document.querySelectorAll('.nav-unread').forEach(b => b.remove()); } catch {}
+  try { document.title = String(document.title || '').replace(/^\(\d+\+?\)\s*/, ''); } catch {}
+  // Anything painted IN FRONT of the overlay (security 8 / reviewer F9).
+  try { document.querySelectorAll('.modal-overlay').forEach(m => m.remove()); } catch {}
+  const toasts = document.getElementById('toast-container');
+  if (toasts) toasts.innerHTML = '';
+  // The home-screen badge. `clearAppBadge` is Badging-API-only, so it is
+  // feature-detected rather than assumed (iOS Safari standalone has it; a
+  // desktop browser may not).
+  try { if (typeof navigator !== 'undefined' && typeof navigator.clearAppBadge === 'function') navigator.clearAppBadge(); } catch {}
+  _setAppContentInert(true);
+}
+
+/**
+ * Security 7 / reviewer F8 — the withheld page is INERT, not merely covered.
+ *
+ * `inert` removes the subtree from the focus order, from hit-testing and from
+ * the accessibility tree in one attribute; `aria-hidden` is set with it because
+ * `inert` is younger than some of the browsers this PWA runs on (an iOS 15
+ * home-screen install), and an old browser that ignores `inert` still honours
+ * `aria-hidden`. Scoped to the two containers that hold app surface —
+ * `.main-content` and `.bottom-nav` — and NEVER to the overlay itself.
+ *
+ * Reached only from the hold gate's teardown and its clear. The PIN gate and
+ * the Google gate keep exactly the behaviour they shipped with.
+ */
+function _setAppContentInert(on) {
+  _appContentInert = !!on;
+  for (const sel of ['.main-content', '.bottom-nav']) {
+    try {
+      document.querySelectorAll(sel).forEach(el => {
+        if (on) { el.setAttribute?.('inert', ''); el.setAttribute?.('aria-hidden', 'true'); }
+        else { el.removeAttribute?.('inert'); el.removeAttribute?.('aria-hidden'); }
+      });
+    } catch {}
+  }
+}
+
+/**
+ * The gate itself. Rendered UNCONDITIONALLY — never behind `isSiteUnlocked()`,
+ * which is the one-line shape of security S-1 — and it REPLACES whatever
+ * overlay is there, because a PIN field is not an acceptable thing to leave in
+ * front of a player whose device cannot be trusted to know who they are.
+ *
+ * Same shell as showSitePinGate()/showGoogleSignInGate() (DI-180e): the
+ * #site-gate-overlay / .site-gate / .site-gate-inner markup and the
+ * .site-gate-btn chrome, verbatim. No "welcome to" framing — a hold is not an
+ * invitation to proceed. No PIN field, no Google button, no logo: nothing on
+ * this screen may look like a working sign-in control or a signed-in success.
+ */
+function authHoldGateInnerHTML(key) {
+  const copy = AUTH_HOLD_COPY[key];
+  return `
+    <div class="site-gate" data-gate-state="hold" data-hold-reason="${escHtml(key)}">
+      <div class="site-gate-inner">
+        <div class="site-gate-title">${escHtml(copy.heading)}</div>
+        <div class="site-gate-subtitle">${escHtml(copy.body)}</div>
+        <button class="site-gate-btn" id="auth-hold-retry" type="button">Retry</button>
+      </div>
+    </div>`;
+}
+
+/** True when the overlay currently on screen is a HOLD gate (as opposed to the
+ *  PIN gate, the Google gate, or nothing). Read off the DOM rather than off
+ *  `_authHoldReason`, deliberately: security S-1 is precisely the case where the
+ *  two disagree — the reason is cleared before the resolved mode paints its own
+ *  gate, and whatever is on screen at that moment is NOT ours to remove. */
+function currentGateIsHold() {
+  const ov = document.getElementById('site-gate-overlay');
+  return !!ov && ov.getAttribute?.('data-gate-state') === 'hold';
+}
+
+export function showAuthHoldGate(reason) {
+  const key = AUTH_HOLD_COPY[reason] ? reason : 'config-unreadable';
+  _authHoldReason = key;
+  tearDownRenderedContentForHold();
+  _parkTimersForHold();
+  // ── SECURITY 9 / REVIEWER F10 — UPDATE IN PLACE WHEN A HOLD IS ALREADY UP ──
+  // The 20-second re-check calls this function again on every tick that still
+  // holds. Removing and re-appending the overlay each time meant a real visual
+  // flicker every 20 seconds on a device sitting on the gate — and, for the
+  // width of that swap, NO overlay in the document at all: any paint that
+  // happened to land in between (a timer, an auth event, chat-ui's subscriber)
+  // would have painted onto an unlocked page. So an existing hold overlay is
+  // REUSED: only its inner markup and its reason attribute change.
+  const existing = document.getElementById('site-gate-overlay');
+  if (existing && currentGateIsHold()) {
+    existing.setAttribute?.('data-hold-reason', key);
+    existing.innerHTML = authHoldGateInnerHTML(key);
+    document.getElementById('auth-hold-retry')?.addEventListener('click', () => { runAuthHoldCheck({ manual: true }); });
+    _wireAuthHoldVisibility();
+    scheduleAuthHoldRecheck();
+    return;
+  }
+  existing?.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'site-gate-overlay';
+  wrap.setAttribute?.('data-gate-state', 'hold');
+  wrap.setAttribute?.('data-hold-reason', key);
+  wrap.innerHTML = authHoldGateInnerHTML(key);
+  document.body.appendChild(wrap);
+  document.getElementById('auth-hold-retry')?.addEventListener('click', () => { runAuthHoldCheck({ manual: true }); });
+  _wireAuthHoldVisibility();
+  scheduleAuthHoldRecheck();
+}
+
+/**
+ * Security 10 — THE HOLD STATE AND ITS TIMER ARE DROPPED TOGETHER, ALWAYS.
+ *
+ * Separated from hideAuthHoldGate() because the DOM half and the state half now
+ * happen at different moments: applyAuthModeDecision() clears the STATE the
+ * instant it is past every hold branch (so the gate it paints next is not
+ * mistaken for a hold), while the OVERLAY is taken down by whoever replaces it.
+ * A surviving 20-second timer would re-run the entire auth decision underneath
+ * a resolved app, so it dies with the state, not with the node.
+ */
+function clearAuthHoldReason() {
+  _authHoldReason = '';
+  if (_authHoldTimer !== null) { clearTimeout(_authHoldTimer); _authHoldTimer = null; }
+}
+
+/**
+ * ══ SECURITY S-1 — A HOLD THAT CLEARS MUST NEVER LEAVE *NO* GATE ═════════════
+ *
+ * WHAT THIS USED TO DO, and what it cost. `document.getElementById(
+ * 'site-gate-overlay')?.remove()`, unconditionally. runAuthHoldCheck() calls
+ * applyAuthModeDecision() FIRST — which, on a supabase device with no saved
+ * session, paints the Google sign-in gate into that very id — and then called
+ * this, which deleted the gate that had just been painted. The 20-second
+ * background re-check reached that state by itself, with nobody touching the
+ * device: no gate, no identity, and resumeAfterHoldCleared() repainting the
+ * league's dashboard from the local mirror.
+ *
+ * So the removal is now scoped to the HOLD VARIANT. If the overlay on screen is
+ * somebody else's gate (Google, PIN), it stays — taking it down is that gate
+ * owner's decision, not ours.
+ */
+export function hideAuthHoldGate() {
+  clearAuthHoldReason();
+  if (currentGateIsHold()) document.getElementById('site-gate-overlay')?.remove();
+  // The inert/aria-hidden pair — and the parked timers, and boot()'s skipped
+  // tail — are restored only when nothing is withholding content any more. On
+  // the path where the hold clears straight into a Google gate, the page is
+  // still withheld, so it stays inert: the lock changed shape, it did not lift.
+  // ONE transition, three call sites (see releaseWithholdIfResolved).
+  // REVIEWER F1 (seventh gate) — fire-and-forget, but never SWALLOWED: the
+  // transition resets its own latch and returns false on a failure, and this
+  // catch is what makes the failure visible in the console instead of an
+  // unhandled rejection with no context.
+  releaseWithholdIfResolved('hideAuthHoldGate')
+    .catch(e => console.error('[auth] the un-withhold transition rejected (hideAuthHoldGate)', e));
+}
+
+/**
+ * "Park", not "stop": the hold may clear in 20 seconds and the app has to be
+ * able to pick both of these back up. Cheap and reversible — setupAutoRefresh()
+ * and setupChatEnabledWatch() are both idempotent re-arms, and
+ * resumeAfterHoldCleared() calls them.
+ *
+ * WHAT IS NOT PARKED, named rather than implied: chat.js's poll loop. It is
+ * started by initChatUI({phase:'early'}) at boot — above the gate decision, and
+ * deliberately so (BUG-G) — and chat.js exposes no stop for it (refreshChatEnabled()
+ * reads the commissioner's setting, which is not what is being asked here).
+ * What that leaves reachable while a hold is up is the unread COUNT, not any
+ * message content: the teardown strips the `.active` markers chat-ui.js keys its
+ * renders on, so no room and no teaser can be painted, and it strips the nav
+ * pill and the title prefix — but a delivery landing later can re-add the count.
+ * Reported to Drew as a residual for Step 3b/4 (it needs either an exported
+ * stopChatTransport() in chat.js or a paused flag chat-ui.js can read, both of
+ * which are edits to files this pass is not allowed to make).
+ */
+function _parkTimersForHold() {
+  _timersParkedForHold = true;
+  try { if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; } } catch {}
+  try { if (_chatEnabledWatchTimer) { clearInterval(_chatEnabledWatchTimer); _chatEnabledWatchTimer = null; } } catch {}
+  // DI §6.5 — 'paused', not 'passive'. 'passive' only says the chat tab is not
+  // showing; the poll loop keeps running, which is what put an unread COUNT —
+  // a number of messages six named people wrote — on the nav pill and in the
+  // tab title IN FRONT of the hold gate, every 20 seconds, on a device whose
+  // page had just been torn down precisely so no league data was reachable.
+  // 'paused' stops the timer and drops the subscription; releaseWithholdIfResolved()
+  // restores it through setupChatEnabledWatch()/initChatUI().
+  try { setPollMode('paused'); } catch {}
+}
+
+/**
+ * A2 — the 20-second SILENT re-check. No spinner, no flicker: a player who
+ * regains signal (Kihoon, landing) gets the gate cleared without remembering to
+ * do anything.
+ *
+ * PAUSED WHILE BACKGROUNDED, and that is the point of the visibility wiring
+ * below: a backgrounded tab polls nothing at all. It resumes the 20s cadence on
+ * visibilitychange rather than firing immediately, so flipping between tabs
+ * cannot turn a re-check into a request per flip; the Retry button is there for
+ * anyone who wants the answer sooner.
+ */
+function scheduleAuthHoldRecheck() {
+  if (_authHoldTimer !== null) return;
+  if (!_authHoldReason) return;
+  if (typeof setTimeout !== 'function') return;
+  _authHoldTimer = setTimeout(() => {
+    _authHoldTimer = null;
+    // Re-read, don't assume: the hold may have cleared, and a hidden tab polls
+    // nothing (the visibility listener reschedules when it comes back).
+    if (!_authHoldReason) return;
+    if (typeof document !== 'undefined' && document.hidden) return;
+    runAuthHoldCheck({ manual: false });
+  }, AUTH_HOLD_RECHECK_MS);
+  // Node-only (authtest/boottest): a 20s timer must not hold the process open.
+  if (typeof _authHoldTimer?.unref === 'function') _authHoldTimer.unref();
+}
+
+function _wireAuthHoldVisibility() {
+  if (_authHoldVisibilityWired) return;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  _authHoldVisibilityWired = true;
+  document.addEventListener('visibilitychange', () => {
+    if (!_authHoldReason) return;
+    if (document.hidden) return;
+    scheduleAuthHoldRecheck();
+  });
+}
+
+/**
+ * ONE re-check, shared by Retry and the background timer.
+ *
+ * Retry COALESCES with the background check by construction: the pending timer
+ * is cancelled on the way in, and a second call while one is in flight only
+ * updates the label — there is never more than one config read outstanding.
+ *
+ * No page reload, ever (DI-180a's rule for the gate generally): it re-runs the
+ * same loadDeployedConfig() -> resolveEffectiveAuthMode() -> branch that boot()
+ * runs, and the branch itself decides what is on screen afterwards.
+ */
+export async function runAuthHoldCheck({ manual = false } = {}) {
+  if (_authHoldTimer !== null) { clearTimeout(_authHoldTimer); _authHoldTimer = null; }
+  const btn = document.getElementById('auth-hold-retry');
+  if (manual && btn) { btn.disabled = true; btn.textContent = 'Retrying…'; }
+  if (_authHoldCheckInFlight) return;
+  // ── SECURITY F2 — DISPATCH ON THE REASON, EXHAUSTIVELY ────────────────────
+  // See AUTH_HOLD_RECOVERY's comment for why a fall-through here was a
+  // self-inflicted lockout rather than a missed optimisation. Both Step-4 holds
+  // take the adapter path, and NEITHER may reach applyAuthModeDecision() —
+  // whose interlock branch reads "the adapter is not serving" as "this build is
+  // broken", which is exactly true and exactly the wrong conclusion while a
+  // data hold is up.
+  if (AUTH_HOLD_RECOVERY[_authHoldReason] === 'adapter-hydrate') {
+    const heldReason = _authHoldReason;
+    _authHoldCheckInFlight = true;
+    _sbHoldRetryReason = heldReason;
+    let ok = false;
+    try {
+      ok = await ensureSupabaseDataHydrated(
+        heldReason === 'session-expired' ? 'session-expired-recovery' : 'hold-retry');
+    } catch (e) { console.warn(`[sb] the ${heldReason} retry failed`, e); }
+    finally { _authHoldCheckInFlight = false; _sbHoldRetryReason = ''; }
+    // afterSupabaseHydrate() has already cleared the reason and the overlay on
+    // success; this is the page-content half A6's teardown owes back.
+    if (ok) { hideAuthHoldGate(); await resumeAfterHoldCleared(); return; }
+    // …and the LAST RESORT, for the one branch that returns `false` WITHOUT
+    // raising a gate of its own: a hydrate that lands ACTIVE-STALE or
+    // OFFLINE-READONLY is serving, so afterSupabaseHydrate() gates nothing. If
+    // the gate came down during the await, the page would be left ungated with
+    // the league still not fully loaded. This is the only path on which this
+    // line fires — see [44m] case 3.
+    //
+    // STILL HELD. The hydrate re-verifies the session by making a real request:
+    // if the server is still rejecting the token the adapter comes back HELD
+    // with a 'session' classification, and the player stays on the gate that
+    // tells them to sign in again — NEVER on 'interlock', which is a statement
+    // about the BUILD and would be a lie here. Re-asserted rather than assumed,
+    // because afterSupabaseHydrate() raises a gate of its own on failure.
+    // ── REVIEWER F-B (pass 4) — RE-RAISE ONLY WHEN THERE IS NO GATE AT ALL ──
+    //
+    // This was `!== heldReason`, which re-raised on a CHANGED reason as well as
+    // on a missing one — and "changed" is precisely the case that must be left
+    // alone. The awaited hydrate above is a real round trip: during it, a
+    // MEMBERSHIPS_FAILED{expired} can land and raise 'session-expired'. Coming
+    // back and finding the reason different from the one we started with, the
+    // old line concluded "something took my gate down" and put 'data-hold' back
+    // — replacing the one gate that offers a way out (the Sign In affordance on
+    // DI-180d's banner) with one that tells the player to wait for a connection
+    // that is not the problem.
+    //
+    // `!_authHoldReason` is the honest test: re-raise only if there is no gate,
+    // never over a gate somebody else raised while we were awaiting. A later
+    // hold is later INFORMATION, not interference.
+    if (!_authHoldReason) showAuthHoldGate(heldReason);
+    const stillBtn = document.getElementById('auth-hold-retry');
+    if (stillBtn) { stillBtn.disabled = false; stillBtn.textContent = 'Retry'; }
+    scheduleAuthHoldRecheck();
+    return;
+  }
+  _authHoldCheckInFlight = true;
+  // The ONE narrow exception to "one SDK injection per load" — see
+  // resetSupabaseSdkLoader(). Without it the sdk-unavailable variant re-reads a
+  // latched `false` on every re-check and can only clear on a page reload,
+  // which would make A2's silent-recovery promise false for that variant.
+  // Conditioned on the SDK genuinely still being absent, so a boot that DID get
+  // the script never re-injects it.
+  if (_authHoldReason === 'sdk-unavailable' && !(typeof window !== 'undefined' && window.supabase)) {
+    resetSupabaseSdkLoader();
+  }
+  let decision = null;
+  try {
+    decision = await applyAuthModeDecision();
+  } catch (e) {
+    console.warn('[auth] hold re-check failed', e);
+  } finally {
+    _authHoldCheckInFlight = false;
+  }
+  if (decision && !decision.hold) {
+    // The hold is genuinely over. applyAuthModeDecision() has already painted
+    // whatever gate the resolved mode calls for (Google gate, or none) and has
+    // already cleared the hold STATE on its way past the last hold branch; all
+    // that is left is to take the hold OVERLAY down if it is still the thing on
+    // screen (S-1: never anyone else's gate), put the PIN gate back for a locked
+    // pins device, and repaint the page content this gate tore down.
+    hideAuthHoldGate();
+    if (decision.authMode !== 'supabase' && !isSiteUnlocked()) showSitePinGate();
+    // SECURITY F2 — the 'session-expired' re-hydrate that used to live here is
+    // GONE, because this branch is now unreachable for it: AUTH_HOLD_RECOVERY
+    // routes both Step-4 holds to the adapter path above, which returns. Left
+    // as a note rather than as dead code, so the next reader does not restore
+    // it and re-open the fall-through it was compensating for.
+    await resumeAfterHoldCleared();
+    return;
+  }
+  // Still holding. The branch has re-rendered the correct variant (which resets
+  // the button), so all that is needed is the next tick of the cadence.
+  const btn2 = document.getElementById('auth-hold-retry');
+  if (btn2) { btn2.disabled = false; btn2.textContent = 'Retry'; }
+  scheduleAuthHoldRecheck();
+}
+
+/**
+ * The repaint, stated explicitly because A6 asks for it: the hold emptied the
+ * page containers, so clearing the hold has to put them back — WITHOUT a
+ * reload. This is boot()'s own tail, reached from the one path that skipped it,
+ * and it runs at most once per page.
+ *
+ * ensureSeedData() is called under exactly boot()'s condition (a hydrate that
+ * actually SUCCEEDED, in googleSheets mode) and nowhere else, so RG-12's rule —
+ * never seed into an unhydrated backend — holds on this path for the same
+ * reason it holds on boot's.
+ */
+async function resumeAfterHoldCleared() {
+  // ── SECURITY S-1, THE SECOND HALF ─────────────────────────────────────────
+  // This path repaints league data from the local mirror. It may therefore run
+  // ONLY when an identity is actually available: the 20-second re-check can
+  // reach "the hold cleared" on a supabase device that has no session at all
+  // (the Google gate is what is on screen), and repainting there is the exact
+  // state security S-1 is about — league data, no person.
+  //
+  // The refusal keeps its own log line because it is the interesting case; the
+  // work itself is the ONE transition below, which every other caller shares.
+  if (isContentWithheld()) {
+    console.info('[auth] the hold cleared but no identity is proven on this device — the page is left torn down behind the sign-in gate');
+    return false;
+  }
+  return releaseWithholdIfResolved('resumeAfterHoldCleared');
+}
+
+/**
+ * ══ REVIEWER F1 + SECURITY F-2 (SIXTH gate, 2026-09-17) ══════════════════════
+ * ══ UN-WITHHOLDING IS A TRANSITION, NOT A CALL-SITE OBLIGATION ═══════════════
+ *
+ * THE DEFECT, as the sequence a player actually reaches. A device boots into the
+ * config-unreadable hold: the page is torn down, `.main-content` and
+ * `.bottom-nav` are made `inert`, the score interval and the chat-enabled watch
+ * are parked, and boot() RETURNS — so no hydrate, no ensureSeedData(), no
+ * runPostHydrateTail(). Twenty seconds later the re-check finds config.json and
+ * the hold clears into the Google gate. resumeAfterHoldCleared() correctly
+ * refuses (nobody is signed in yet). The player taps Continue with Google and
+ * comes back signed in.
+ *
+ * And then nothing happens. `_setAppContentInert(false)` had THREE call sites
+ * and the sign-in path was not one of them, so the page stayed inert — every tap
+ * swallowed, the nav unreachable by keyboard and invisible to VoiceOver — while
+ * looking completely normal. Nothing re-triggered the resume, so the hydrate
+ * that boot skipped never ran, the seed never ran, the tail never ran (no push
+ * adapter, no OneSignal login, no bell, no wager cache), and the two parked
+ * timers were never re-armed, so scores never refreshed and a commissioner
+ * turning chat off mid-session was never noticed. Painted, and dead.
+ *
+ * THE CLASS, which is the third time this arc has hit it: a lock was written as
+ * "whoever puts it up takes it down", i.e. as an obligation on a list of call
+ * sites, and a list of call sites is a list of the paths somebody remembered.
+ * So it is written here as a TRANSITION instead — ONE function that asks the one
+ * predicate and, if the answer has flipped, undoes everything the withheld state
+ * did, in one place. Its three callers are just the three moments the answer can
+ * flip:
+ *   • hideAuthHoldGate()          — the hold itself came down
+ *   • resumeAfterHoldCleared()    — the re-check resolved (keeps its own refusal log)
+ *   • refreshAuthUI()'s signed-in branch — an identity ARRIVED (the missing one)
+ * Each is guarded by `!isContentWithheld()` inside this function rather than at
+ * the call site, for exactly the same reason.
+ *
+ * IDEMPOTENT, in two layers. The DOM/timer half runs whenever something is
+ * actually latched (`_appContentInert`, `_timersParkedForHold`) and is a no-op
+ * otherwise. The expensive half — the repaint, the hydrate, boot()'s tail — is
+ * gated on `_bootStoppedAtHold`, so a NORMAL boot (which owns its own hydrate
+ * and its own tail, in the order BUG-G established) is completely unaffected by
+ * this function existing: every signed-in session event calls it, and on an
+ * ordinary page it does nothing at all. `_withholdReleased` then makes the
+ * expensive half once-per-page, and runPostHydrateTail() is latched again
+ * inside itself.
+ *
+ * ensureSeedData() is called under exactly boot()'s condition (a hydrate that
+ * actually SUCCEEDED, in googleSheets mode) and nowhere else, so RG-12's rule —
+ * never seed into an unhydrated backend — holds on this path for the same
+ * reason it holds on boot's.
+ *
+ * ══ REVIEWER F1 (SEVENTH gate, 2026-09-17) — A LATCH SET ABOVE THE WORK MUST
+ *    BE UNSET WHEN THE WORK DOES NOT HAPPEN ════════════════════════════════════
+ *
+ * `_withholdReleased = true` sits ABOVE everything it guards, deliberately — it
+ * is the re-entrancy guard, and two concurrent session events must not both run
+ * a hydrate. But the body underneath it was partly UNWRAPPED (the repaint) and
+ * the tail was awaited with no catch at all, so ONE throw anywhere in there left
+ * `_withholdReleased = true` with no production path that ever resets it: the
+ * page is painted and operable (section (1) already ran) and permanently
+ * un-hydrated and un-tailed — which is the sixth gate's BLOCK-1 end state
+ * reached one statement later. Both call sites were `void`/bare, so the
+ * rejection was also an unhandled one.
+ *
+ * So the latch is now HELD ONLY WHILE THE WORK IS RUNNING: set first, RESET on
+ * failure, and the caller gets `false`. The next session event (a token refresh
+ * arrives within the hour, and a sign-in usually much sooner) retries. Retrying
+ * is safe for the same reason the latch existed: every step in here is either
+ * idempotent or latched in its own right (runPostHydrateTail(), ensureSeedData()
+ * under boot()'s exact condition, navigateTo(), the renderers).
+ *
+ * Section (1) is unchanged in effect but no longer all-or-nothing: each re-arm
+ * is caught on its own, so a throw in setupAutoRefresh() can no longer take
+ * setupChatEnabledWatch() with it, and `_timersParkedForHold` is cleared AFTER
+ * both attempts rather than before either — clearing it first meant a throw
+ * left the flag saying "not parked" over a device with nothing armed.
+ *
+ * @returns {Promise<boolean>} true when the expensive half ran to completion.
+ */
+async function releaseWithholdIfResolved(reason) {
+  if (isContentWithheld()) return false;
+  // ── (1) THE DOM LATCH AND THE PARKED TIMERS ───────────────────────────────
+  // Unconditional on any path out of a withheld state, whether or not boot
+  // stopped at a hold: a hold that goes up and comes down on a fully-booted page
+  // parks the timers just the same, and leaving them parked is a device that
+  // silently stops refreshing scores for the rest of its session.
+  //
+  // Each step owns its own catch (reviewer F1): the page being operable, the
+  // score tick and the chat-enabled watch are three independent recoveries, and
+  // losing two of them because the first threw is the failure mode this whole
+  // transition exists to remove.
+  if (_appContentInert) {
+    try { _setAppContentInert(false); }
+    catch (e) { console.error('[auth] could not lift the inert latch on the recovered page', e); }
+  }
+  if (_timersParkedForHold) {
+    try { setupAutoRefresh(); }
+    catch (e) { console.error('[auth] could not re-arm the score/auto-transition tick after a hold', e); }
+    try { setupChatEnabledWatch(); }
+    catch (e) { console.error('[auth] could not re-arm the chat-enabled watch after a hold', e); }
+    // DI §6.5 — THE PAUSE IS A LATCH, SO IT NEEDS AN EXPLICIT RELEASE. Its own
+    // catch, like the two above and for the same reason: re-arming the score
+    // tick, the chat-enabled watch and the chat poll are three independent
+    // recoveries, and losing the third because the first threw is the failure
+    // mode this whole transition exists to remove. Without this line the
+    // pause holds for the life of the page and chat never comes back — the
+    // exact "asserted once, never released" shape §1.3's latch table exists to
+    // stop, which is why the pause has a row in it.
+    try { setPollMode(state.currentTab === 'chat' ? 'active' : 'passive'); }
+    catch (e) { console.error('[auth] could not un-pause the chat poll after a hold', e); }
+    // AFTER all three attempts, never before any — see the header note.
+    _timersParkedForHold = false;
+  }
+  // ── (2) THE HALF THAT ONLY A HELD BOOT IS MISSING ─────────────────────────
+  if (!_bootStoppedAtHold) return false;
+  if (_withholdReleased) return false;
+  _withholdReleased = true;   // re-entrancy guard FIRST; released below on failure
+  console.info(`[auth] content is no longer withheld (${reason}) — running the hydrate and the post-hydrate tail this boot skipped at its hold gate`);
+  try {
+    refreshHeader(); renderTzToggle(); renderThemeToggle();
+    try { renderLeaguePill(); } catch {}
+    try { renderHeaderIdentity(); } catch {}
+    try { renderNotifBell(); } catch {}
+    navigateTo(state.currentTab || 'dashboard');
+    try { initChatUI({ phase: 'early' }); } catch (e) { console.warn('[chat] early start failed (post-hold)', e); }
+    try {
+      // ── DI §1.5 item 5 — HOLD RECOVERY HYDRATES THROUGH THE ADAPTER ───────
+      // A device recovering from a hold rehydrates from its own league, not
+      // from the Sheet. Same one function every other caller uses, so the
+      // recovery path cannot carry a second, partial copy of the sequence —
+      // which is precisely the defect reviewer F4 closed on this very function.
+      if (isSupabaseDataMode()) {
+        await ensureSupabaseDataHydrated('hold-recovery');
+      } else if (isBackendConfigured()) {
+        await hydrateBackend();
+        setBackendMode('googleSheets');
+        try { refreshChatEnabled(); } catch {}
+        ensureSeedData();
+        refreshHeader();
+        navigateTo(state.currentTab || 'dashboard');
+      }
+    } catch (err) {
+      console.error('[backend] hydrate failed (post-hold):', err);
+      showBackendErrorBanner(String(err.message || err));
+    }
+    // ── REVIEWER F4 (fifth gate) — THE SAME TAIL boot() RUNS, NOT A COPY ────
+    // This used to hand-roll `initChatUI(); updateChatBadges();` and stop there,
+    // so a device that resumed from a hold never got the push adapter, the
+    // chat-notification wiring, the bell, the OneSignal init/login/push-active
+    // flag, the wager cache, the SCRIBE file entry, or the ?ntab deep link. Two
+    // hand-written lists is how they drifted; there is now exactly one.
+    await runPostHydrateTail();
+  } catch (e) {
+    // THE RESET. Nothing here is logged with an id, an email or a token — the
+    // reason string is a call-site label and the error is whatever threw.
+    _withholdReleased = false;
+    console.error(`[auth] the un-withhold transition (${reason}) did not complete — the once-per-page latch is RELEASED so the next session event retries it. A page left latched here would be painted, operable and permanently un-hydrated.`, e);
+    return false;
+  }
+  return true;
+}
+
+/** Test hook — the hold gate owns a timer, a visibility listener and a
+ *  one-shot resume latch, all of which have to be droppable between sections. */
+export function _resetAuthHoldForTest() {
+  if (_authHoldTimer !== null) { clearTimeout(_authHoldTimer); _authHoldTimer = null; }
+  _authHoldReason = '';
+  _authHoldCheckInFlight = false;
+  _authHoldVisibilityWired = false;
+  // Sixth gate — every latch in PART 2 of the state table that is per-PAGE.
+  // A suite driving several boots in one process is several pages; one of these
+  // surviving would make the next scenario's transition a silent no-op, which is
+  // exactly the cross-section leak that makes a green run meaningless.
+  _withholdReleased = false;
+  _timersParkedForHold = false;
+  _bootStoppedAtHold = false;
+  // REVIEWER F4 — boot() and the resume path share ONE post-hydrate tail, and
+  // it is latched to run once per PAGE. A suite that drives several boots in one
+  // process is several pages, so the latch is dropped with the rest of the
+  // per-page state; leaving it set would make every boot after the first skip
+  // its own tail and quietly measure the wrong thing.
+  _postHydrateTailDone = false;
+  // The teardown's accessibility half is per-page state too (a suite's next
+  // scenario must not inherit an inert .main-content from this one).
+  _setAppContentInert(false);
+}
+
+/**
+ * DI-180a/b/d — "Continue with Google" replaces showSitePinGate() one-for-
+ * one in authMode:'supabase'. Reuses #site-gate-overlay/.site-gate/
+ * .site-gate-inner CSS VERBATIM (DI-180e) — only the inner content differs.
+ */
+export function showGoogleSignInGate() {
+  const s = getSettings();
+  const titleTop  = s.welcomeTitleTop  || 'welcome to';
+  const titleMain = s.welcomeTitleMain || (s.welcomeTitle ? s.welcomeTitle.replace(/^welcome to\s*/i,'') : "irb pick 'ems");
+  document.getElementById('site-gate-overlay')?.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'site-gate-overlay';
+  wrap.innerHTML = `
+    <div class="site-gate">
+      <div class="site-gate-inner">
+        <div class="site-gate-title-top">${escHtml(titleTop)}</div>
+        <div class="site-gate-title">${escHtml(titleMain)}</div>
+        <div class="site-gate-subtitle">sign in to make your picks</div>
+        <div id="google-gate-message" style="display:none"></div>
+        <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
+          <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
+          <span id="google-gate-btn-label">Continue with Google</span>
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(wrap);
+  const btn = document.getElementById('google-gate-submit');
+  const label = document.getElementById('google-gate-btn-label');
+  const msgEl = document.getElementById('google-gate-message');
+  const showMessage = (text, tone) => {
+    if (!msgEl) return;
+    msgEl.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    msgEl.textContent = text;
+    msgEl.style.display = 'block';
+  };
+  btn?.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true;
+    if (msgEl) msgEl.style.display = 'none';
+    if (label) label.textContent = 'Connecting to Google…';
+    try {
+      await signInWithGoogle();
+      // Success continues via the PKCE redirect round-trip — the SDK's
+      // onAuthStateChange('SIGNED_IN', …) fires on return, which
+      // refreshAuthUI() uses to remove this overlay (no reload either way).
+    } catch (err) {
+      btn.disabled = false;
+      if (label) label.textContent = 'Continue with Google';
+      const msg = String(err?.message || err || '');
+      // DI-180c — cancelled is NOT a failure: no red tone, subtle copy,
+      // a DISTINCT code path from a genuine OAuth/network failure.
+      if (/cancel|closed|popup/i.test(msg)) showMessage('Sign-in cancelled.', 'notice');
+      else showMessage("Google sign-in couldn't complete — nothing was saved. Check your connection and try again.", 'error');
+    }
+  });
+}
+
+/** DI-180c "Session expired" — a NEW banner, distinct DOM node from
+ *  showBackendErrorBanner() (never merged — see that function's own
+ *  reasoning, restated in DI-180e). Persistent until dismissed via its own
+ *  "Sign In" action, which just re-opens the gate in place. */
+export function showSessionExpiredBanner() {
+  if (document.getElementById('session-expired-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'session-expired-banner';
+  // Same VISUAL WEIGHT CLASS as .backend-error-banner (fixed, full-width,
+  // persistent) but bottom-anchored, its own color, and its OWN class name —
+  // a distinct DOM node at a distinct screen position so the two can be
+  // visible at once without either clobbering the other (DI-180c/e).
+  el.className = 'auth-banner session-expired-banner';
+  el.innerHTML = `<span>Your session expired — sign in again to keep picking.</span>
+    <button type="button" id="session-expired-signin-btn" class="btn btn-sm btn-ghost">Sign In</button>`;
+  // Reviewer N5 — into the auth stack, not straight onto <body>: the stack is
+  // what carries the above-the-gate z-index and the clear-the-bottom-nav
+  // offset, and what lets this coexist with the two banners above without
+  // either one sitting on top of the other.
+  authBannerStack().appendChild(el);
+  // DI-180m / A7 — the SAME handler the unavailable banner's button uses. It
+  // was `hideSessionExpiredBanner(); showGoogleSignInGate();` inline, which
+  // (a) cleared the expiry latch, so a failed sign-in attempt forgot the
+  // session had expired, and (b) would have taken a hold gate down. See
+  // authSignInAffordance().
+  document.getElementById('session-expired-signin-btn')?.addEventListener('click', authSignInAffordance);
+}
+export function hideSessionExpiredBanner() {
+  document.getElementById('session-expired-banner')?.remove();
+  clearSessionExpired();
+}
+
+// Every Supabase auth event that carries a SESSION as its payload. auth.js
+// also fires its OWN lifecycle events ('MEMBERSHIPS_REFRESHED',
+// 'MEMBERSHIPS_FAILED', 'SWITCH_START'/'SWITCH_END') whose payload is a plain
+// object, NOT a session — handled separately below, because treating one as
+// the other is exactly how the gate used to come down on a null session.
+const AUTH_SESSION_EVENTS = ['SIGNED_IN', 'SIGNED_OUT', 'INITIAL_SESSION', 'TOKEN_REFRESHED', 'USER_UPDATED', 'PASSWORD_RECOVERY', 'MFA_CHALLENGE_VERIFIED'];
+
+let _authEventsWired = false;
+/**
+ * Wires app.js's ONE auth listener. Idempotent. Split out of boot() (reviewer
+ * B1) so authtest can drive the REAL wiring — fire an event through auth.js's
+ * own _fireAuthEventForTest() and watch what the app actually does with it —
+ * instead of hand-calling refreshAuthUI() and proving only that the function
+ * body works when called with the arguments the test chose.
+ */
+export function wireAuthUIEvents() {
+  if (_authEventsWired) return;
+  _authEventsWired = true;
+  onAuthEvent((event, payload) => {
+    try { refreshAuthUI(event, payload); }
+    catch (e) { console.warn('[auth] UI refresh failed', e); }
+  });
+}
+/**
+ * Reviewer F-1/F-2 — the identity latch is reset HERE, with the listener latch.
+ * It has to be: authtest's resetAll() tears down auth.js's whole world between
+ * sections, and a latch that survived that would make the first event of the
+ * NEXT section look like "same identity" and skip the reset it is asserting on.
+ * (The reviewer's own first attempt at this fix turned four [17] assertions red
+ * for exactly that reason.)
+ */
+export function _resetAuthUIWiringForTest() {
+  _authEventsWired = false;
+  _lastIdentityKey = null;
+  // DI-180o(b) — the suspension box has the same lifecycle as the latch beside
+  // it: both are "what this PAGE remembers about who was here". A box that
+  // survived a suite's teardown would make the next section's first expiry
+  // silently a no-op (the capture guard refuses to overwrite an existing
+  // suspension, deliberately), which is exactly the kind of cross-section leak
+  // that makes a green run meaningless.
+  _suspendedSlate = null;
+}
+
+/**
+ * ══ THE SESSION-CHANGE CHOKEPOINT (reviewer F-1/F-2, 2026-09-17) ═════════════
+ *
+ * ONE function. Every path on which the effective identity can change calls it,
+ * and it is the only place in supabase mode that is allowed to clear a draft or
+ * re-resolve per-player preferences.
+ *
+ * WHY IT IS A DELTA AND NOT AN EVENT LIST. Two defects, opposite directions,
+ * both caused by the previous shape (`if (event === 'SIGNED_IN' || 'SIGNED_OUT'
+ * || 'MEMBERSHIPS_REFRESHED')`):
+ *
+ *   F-1 (over-firing) — the SDK fires TOKEN_REFRESHED roughly hourly and on tab
+ *   focus. auth.js answers it with refreshMembershipsAndSession(), which emits
+ *   MEMBERSHIPS_REFRESHED, which was in that list. So a player with a slate
+ *   half-filled in lost their picks, tiebreaker, Extra Point guess and any
+ *   in-progress layout edit, silently, because a token rotated. Nothing about
+ *   who they are had changed.
+ *
+ *   F-2 (under-firing) — switchActiveLeague() emits SWITCH_START/SWITCH_END,
+ *   neither of which was in that list, while getSession().playerId changes from
+ *   one league's member id to the other's. So after a switch the draft picks,
+ *   tiebreaker, layout edit mode and the OneSignal binding all carried over
+ *   from the league the player had just left.
+ *
+ * An event name is a proxy for "did identity change". This compares identity.
+ *
+ * THE TUPLE is (supabase account id, active league id, getSession().playerId) —
+ * all three, not just playerId. league id is in it because two leagues can
+ * legitimately produce the same member id, and a switch between those two must
+ * still clear; account id is in it because a device handed to a second Google
+ * account that happens to map to the same membership row is still a different
+ * person. Any term unknown reads as the string 'null', which differs from a
+ * resolved value, so an unknown identity is treated as a CHANGED identity.
+ *
+ * WHAT IT DOES WHEN THE READ FAILS: `_lastIdentityKey` starts null and is reset
+ * to null by _resetAuthUIWiringForTest(). null matches no computed key, so the
+ * FIRST evaluation after boot (or after a reset) always fires. That is the
+ * closed answer: when we do not know who was here before, assume it was someone
+ * else and clear.
+ */
+let _lastIdentityKey = null;
+
+/**
+ * ══ DI-180o OPTION (b) — AN EXPIRY SUSPENDS THE SLATE, IT DOES NOT DISCARD IT ═
+ * (Drew's ruling, 2026-09-17.)
+ *
+ * WHAT WENT WRONG WITHOUT THIS. Two correct fixes met. DI-180p's ancestor took
+ * a dead sign-in token off the device (so a commissioner panel is never painted
+ * over a rejected session), which moves the identity tuple to *nobody*; and the
+ * chokepoint below answers every tuple move by clearing the draft. Net effect,
+ * which nobody decided: a player half-way through a slate whose session expired
+ * tapped "Sign In", came back as themselves, and their picks were gone.
+ *
+ * THE DISTINCTION THE FIX IS BUILT ON. An expiry is not a change of person; an
+ * explicit Sign Out is. So on an expiry the draft is not cleared — it is
+ * MOVED OUT of `state` into this module-private box and held there:
+ *
+ *   • UNREACHABLE while signed out, structurally rather than by policy. Every
+ *     render path in the app reads `state.draftPicks` / `state.draftTiebreaker`
+ *     / `state.draftExtraPoint` / `state.layoutEditing`, and all four are reset
+ *     to empty by the same clearPickDraft() the general rule has always used.
+ *     There is no code path that can render a suspended slate, because a
+ *     suspended slate is not in `state` at all.
+ *   • RESTORED only when the identity that comes back is byte-identical to the
+ *     one that left — see _resumeOrDiscardSuspendedSlate() for the exact rule
+ *     and why it is the FULL tuple rather than DI-180o's "same account id".
+ *   • WIPED before the first render for any other account (RG-51 preserved).
+ *
+ * FAIL-CLOSED, as DI-180o requires it: a slate is suspended ONLY if the latch
+ * still holds a resolved account id to key it to. Missing or unknown ⇒ the
+ * draft is cleared and nothing is kept. "Unknown ⇒ changed" stays the default
+ * for the general comparison below — it is untouched — and an expiry is the one
+ * NAMED exception, which is why the exception is expressed as extra bookkeeping
+ * beside the comparison instead of a loosening of it.
+ *
+ * A page reload still drops the draft either way (drafts have always been
+ * in-memory only) — unchanged, and out of scope.
+ */
+let _suspendedSlate = null;   // null | { key, accountId, leagueId, draftPicks, draftTiebreaker, draftExtraPoint, layoutEditing }
+
+/**
+ * The identity key's field separator — IMPORTED from js/auth.js, never declared
+ * twice (security 9, fifth gate 2026-09-17).
+ *
+ * It is U+0000 and not a space on purpose — a league name or id containing a
+ * space must not be able to forge a different tuple — and DI-180o(b) is the
+ * first thing that ever needed to read a term back OUT of the key, which is
+ * exactly when an unwritten-down separator becomes a defect. (It was, for one
+ * revision of this pass: the parser split on ' ' and read the WHOLE key as the
+ * account id, so a returning player's slate was discarded as "a different
+ * account".)
+ *
+ * WHAT CHANGED THIS PASS. This file held its own copy, written as a LITERAL NUL
+ * byte in the source — invisible in every editor and every diff, and one stray
+ * copy-paste away from becoming a space — while js/auth.js's own _identityTuple()
+ * joined its three terms with an actual space. Two separators, two files, no
+ * test that they agreed. Now there is one constant, exported by the module that
+ * owns the three identity terms and imported here, written as the escape
+ * '\u0000'. authtest pins that the two modules' keys are byte-identical.
+ */
+export const _IDENTITY_KEY_SEP_FOR_TEST = IDENTITY_KEY_SEP;
+
+/** The account-id term of an identity key, or '' when it is unresolved. Reads
+ *  'null' back as "unknown" — the same convention currentIdentityKey() writes
+ *  it with, so the two cannot drift into different notions of unknown. */
+function _accountTermOf(key) {
+  const term = String(key || '').split(IDENTITY_KEY_SEP)[0];
+  return (!term || term === 'null') ? '' : term;
+}
+function _leagueTermOf(key) {
+  const term = String(key || '').split(IDENTITY_KEY_SEP)[1];
+  return (!term || term === 'null') ? '' : term;
+}
+export function _suspendedSlateForTest() { return _suspendedSlate; }
+
+/** The identity tuple, flattened. Never returns '' — an unknown term is the
+ *  literal 'null', so "unknown" and "resolved" can never collide. */
+function currentIdentityKey() {
+  let accountId = '';
+  let leagueId = '';
+  let playerId = '';
+  try { accountId = getAccountUserId() || ''; } catch { accountId = ''; }
+  try { leagueId = getActiveLeagueId() || ''; } catch { leagueId = ''; }
+  try { playerId = getSession()?.playerId || ''; } catch { playerId = ''; }
+  return [accountId || 'null', leagueId || 'null', playerId || 'null'].join(IDENTITY_KEY_SEP);
+}
+
+/**
+ * DI-180o(b) — the suspension half of the chokepoint, run on EVERY delta, in a
+ * fixed order. Called after `state` has already been cleared by the general
+ * rule, so every branch here is about the BOX, never about what is on screen.
+ *
+ * @param prevKey the identity the device was acting on before this delta
+ * @param key     the identity it is acting on now
+ * @param expiry  true when this delta was caused by a session EXPIRY (or
+ *                DI-180p's still-unverified 401) — the single named exception
+ * @param discard true when the caller knows this is a deliberate change of
+ *                person or of league (Sign Out, league switch, join, create)
+ */
+function _reconcileSuspendedSlate({ prevKey, key, expiry, discard, captured }) {
+  // (a) A deliberate change of person or of league. Nothing is kept, ever.
+  if (discard) {
+    if (_suspendedSlate) console.info('[auth] the suspended slate is discarded — this was a deliberate identity change, not an expiry');
+    _suspendedSlate = null;
+    return 'discarded';
+  }
+
+  // (b) An expiry. Capture, fail-closed. A suspension that already exists is
+  // NOT overwritten: `state` was cleared by the first expiry, so capturing a
+  // second time would replace a real slate with an empty one — which is the
+  // discard this whole input exists to prevent, arriving through the back door
+  // (isSessionExpired() is a latch and stays true across later events).
+  if (expiry && !_suspendedSlate) {
+    const accountId = _accountTermOf(prevKey);
+    if (!accountId) {
+      console.info('[auth] session expired with no proven account id on this page — the draft is discarded (fail-closed)');
+      return 'no-account';
+    }
+    _suspendedSlate = {
+      key: prevKey, accountId, leagueId: _leagueTermOf(prevKey),
+      draftPicks: captured.draftPicks,
+      draftTiebreaker: captured.draftTiebreaker,
+      draftExtraPoint: captured.draftExtraPoint,
+      layoutEditing: captured.layoutEditing,
+    };
+    console.info('[auth] session expired — the unsubmitted slate is SUSPENDED (unreachable until the same account signs back in)');
+    return 'captured';
+  }
+  if (!_suspendedSlate) return 'none';
+
+  // (c) The same identity came back, byte for byte. Restore.
+  //
+  // WHY THE FULL TUPLE AND NOT DI-180o's "same account id". Account equality is
+  // the necessary condition, not the sufficient one: the same Google account in
+  // a DIFFERENT league must not have League A's slate handed to it, which is
+  // exactly the defect authtest [17e] pins. Because the expiry path deliberately
+  // leaves the active-league pointer alone, a returning player's tuple resolves
+  // back to the identical string, so the narrower gate costs the real case
+  // nothing and closes a case the wider one leaves open.
+  if (key === _suspendedSlate.key) {
+    state.draftPicks = _suspendedSlate.draftPicks;
+    state.draftTiebreaker = _suspendedSlate.draftTiebreaker;
+    state.draftExtraPoint = _suspendedSlate.draftExtraPoint;
+    state.layoutEditing = _suspendedSlate.layoutEditing;
+    _suspendedSlate = null;
+    console.info('[auth] the same account signed back in — the suspended slate is restored exactly where it was left');
+    return 'restored';
+  }
+
+  // (d) A DIFFERENT account is proven at this device. Wipe, before anything
+  // renders — and clear the outgoing player's device-local data with it, which
+  // is the moment A9 rules that clear belongs on the expiry path.
+  const accountNow = _accountTermOf(key);
+  if (accountNow && accountNow !== _suspendedSlate.accountId) {
+    _suspendedSlate = null;
+    try { clearDeviceLocalSessionData(); }
+    catch (e) { console.warn('[auth] device-local clear failed', e); }
+    console.info('[auth] a different account signed in — the suspended slate and the previous player\'s device-local data are cleared');
+    return 'wiped';
+  }
+
+  // (d2) Removal from the league the slate belongs to. Memberships have
+  // resolved and the suspended league is not among them, so there is no league
+  // left for that slate to be submitted into.
+  if (_suspendedSlate.leagueId && hasResolvedMemberships()
+      && !getCachedMemberships().some(m => m.leagueId === _suspendedSlate.leagueId)) {
+    _suspendedSlate = null;
+    console.info('[auth] this account is no longer a member of the suspended slate\'s league — the slate is discarded');
+    return 'league-gone';
+  }
+
+  // (e) Anything else: the identity is partial or still resolving (a SIGNED_IN
+  // whose memberships have not landed yet is the ordinary case, and it is NOT
+  // the same key as the suspended one). Hold the suspension. Nothing renders
+  // from it, so holding is free — and discarding here would throw the slate
+  // away one event before the event that would have restored it.
+  return 'held';
+}
+
+/**
+ * Fires clearPickDraft() + resyncPlayerPreferences() if and only if the
+ * effective identity differs from the last one this device acted on. Returns
+ * true when it fired, so a caller (and a test) can tell a no-op apart from a
+ * reset. `reason` is for the console trail only — it is never used to decide.
+ *
+ * `expiry` / `discard` are DI-180o(b) bookkeeping ONLY: they never change
+ * whether the reset fires, only what happens to the draft that was in `state`
+ * when it did. The comparison above them is untouched.
+ */
+function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false } = {}) {
+  const key = currentIdentityKey();
+  if (key === _lastIdentityKey) return false;
+  const prevKey = _lastIdentityKey;
+  _lastIdentityKey = key;
+  console.info(`[auth] identity changed (${reason}) — clearing the pick draft and re-resolving player preferences`);
+  // Read the draft BEFORE it is cleared — the suspension box is the same four
+  // values, moved rather than copied-and-kept.
+  const captured = {
+    draftPicks: state.draftPicks,
+    draftTiebreaker: state.draftTiebreaker,
+    draftExtraPoint: state.draftExtraPoint,
+    layoutEditing: state.layoutEditing,
+  };
+  clearPickDraft();
+  // resyncPlayerPreferences() RUNS AT EXPIRY, deliberately, and each of the
+  // things it does was decided rather than inherited:
+  //   • OneSignal logout — YES, at the expiry itself. A device nobody is signed
+  //     into must stop receiving player-targeted pushes the instant we know the
+  //     session is gone; waiting for the next sign-in would leave the previous
+  //     player's pushes landing on it for as long as it sits there. It also
+  //     costs the returning player nothing: the login() on their way back in is
+  //     the same call this function already makes on every session change.
+  //   • layout EDIT MODE — cleared from `state` (it is one of the four
+  //     suspended values, so the bars come off the page now and come back with
+  //     the slate) — DI-179j's "transient" rule, honoured on both sides.
+  //   • theme / timezone / header identity / notification bell — YES, at
+  //     expiry. They are what makes the page stop claiming to be somebody; a
+  //     header still showing the expired player's chip is the same
+  //     "control-shaped nothing" reviewer N-a removed from the league pill.
+  //   • the wager cache refresh — it early-returns without a playerId, so it is
+  //     a no-op at expiry and re-runs on the way back in. Nothing to decide.
+  // ── ORDER, AND WHY IT CHANGED AT THE SIXTH GATE (DI-180q) ─────────────────
+  // The reconcile used to run AFTER resyncPlayerPreferences(). It is BEFORE it
+  // now, because DI-180q gave clearDeviceLocalSessionData() a second job: it
+  // drops the OneSignal binding, so the previous player's pushes stop landing on
+  // a handset that has changed hands. A9's branch (d) calls that routine — and
+  // resyncPlayerPreferences() ends with `loginOneSignal(newPlayerId)`. With the
+  // old order, the two OneSignal calls were queued login-then-logout on the very
+  // path this is all for (a different account proven at a device with a
+  // suspended slate), leaving the incoming player bound to NOBODY and silently
+  // receiving no pushes at all for the rest of the session.
+  //
+  // So: every clear happens first, and the re-login is the last thing that
+  // happens. Nothing in _reconcileSuspendedSlate() reads a preference, a theme,
+  // a timezone or the header, so moving it up costs nothing else — and the two
+  // values it needs (`captured`, `prevKey`) were both taken above, before
+  // clearPickDraft().
+  const outcome = _reconcileSuspendedSlate({ prevKey, key, expiry, discard, captured });
+  // ── SECURITY F-4 (seventh gate) — THE IN-RAM OUTBOX GOES WITH THE CLEAR ────
+  // js/auth.js's clearDeviceLocalSessionData() removes `cfbp_chat_outbox2` by
+  // name, but the live `S.outbox` array inside chat.js is the other half of the
+  // same object and a same-page handover never reloads. auth.js cannot call
+  // chat.js's clearOutbox() itself — chat.js -> storage.js -> auth.js is already
+  // an edge, so the reverse would be a cycle — so it is called HERE, at the one
+  // chokepoint every path that clears device-local data passes through:
+  // signOut(), reconcileDeviceDataOwner()'s handover, and branch (d) above all
+  // end in an identity event that lands on this function.
+  //
+  // REVIEWER NIT (eighth gate) — the word "afterwards" used to sit at the end of
+  // that sentence and it was wrong on one of the three paths, in the direction
+  // that matters. On the RECONCILE path this chokepoint runs BEFORE the clear,
+  // not after it: reconcileDeviceDataOwner() is reached FROM the identity event
+  // this function is handling, so the in-RAM outbox is dropped on the way in and
+  // the localStorage sweep happens on the way out. That ordering is correct and
+  // deliberate — dropping the RAM copy first means the sweep cannot race a
+  // persistOutbox() that re-writes the key it just removed — but a comment that
+  // says "afterwards" would send the next reader looking for a bug that isn't
+  // there, or worse, reordering the two.
+  //
+  // THE ACCOUNT TERM, NOT THE WHOLE TUPLE, and NEVER ON AN EXPIRY:
+  //   • a league switch is the same person, and their unsent messages are still
+  //     theirs (one shared room today — AD-09/AD-17);
+  //   • an expiry is A9's explicit exemption: a player whose token died and who
+  //     signs straight back in as themselves must find their outbox where they
+  //     left it, which is exactly why the expiry path does not clear either.
+  // So this fires on A -> B, on A -> signed-out, and on signed-out -> B (a
+  // handset that booted signed out carrying the previous player's queue).
+  const accountBefore = _accountTermOf(prevKey);
+  const accountAfter = _accountTermOf(key);
+  if (!expiry && accountBefore !== accountAfter) {
+    try {
+      const dropped = clearOutbox();
+      if (dropped) console.info(`[chat] ${dropped} unsent event(s) belonging to the previous identity were dropped with the device-local clear`);
+    } catch (e) { console.warn('[chat] could not drop the outbox on an identity change', e); }
+  }
+  // `preserveLayoutEditing` only on the one path that just put it back — see
+  // resyncPlayerPreferences()'s own comment. Everything else clears it.
+  resyncPlayerPreferences({ preserveLayoutEditing: outcome === 'restored' });
+  return true;
+}
+/** Exported for authtest — drives the chokepoint's OBSERVABLE result rather
+ *  than re-deriving it. Production never calls this. */
+export function _currentIdentityKeyForTest() { return currentIdentityKey(); }
+export function _lastIdentityKeyForTest() { return _lastIdentityKey; }
+
+/**
+ * The one auth/membership lifecycle handler (see wireAuthUIEvents()).
+ *
+ * REVIEWER B1 — WHAT WAS WRONG. The old body was `if (event === 'SIGNED_OUT')
+ * { …gate… } else { remove the gate }`. Every other event removed the gate,
+ * including INITIAL_SESSION — which the SDK fires on EVERY page load, with a
+ * null session, when nobody is signed in. So the sign-in gate came down by
+ * itself, on boot, for a signed-out visitor, exposing the shell behind it; and
+ * a player who cancelled the Google popup had their "Sign-in cancelled." copy
+ * removed along with the overlay it was written into, which is why that copy
+ * had no reachable render path at all.
+ *
+ * The gate now comes down on ONE condition, stated positively: a session
+ * object actually arrived AND hasValidSupabaseSession() agrees there is an
+ * unexpired token on this device. Everything else — null session, cancelled
+ * flow, expired token, membership event — LEAVES THE GATE ALONE, and an
+ * already-painted gate is never re-created, so its inline cancelled/failed
+ * message survives.
+ */
+export function refreshAuthUI(event, payload) {
+  if (getAuthMode() !== 'supabase') return;
+
+  // ── The auth-unavailable channel (SEC F2) ─────────────────────────────────
+  // SEC F4 — TWO failures, two banners. A PostgREST 401 / PGRST301 on the
+  // membership read means the JWT is dead: the fix is one tap on "Sign In", and
+  // DI-180c already has the copy for it. Everything else ("can't reach sign-in
+  // right now") tells the player to check their connection. Telling an expired
+  // session to check its wifi is the same class of misdirection SEC F2 fixed in
+  // the other direction, so the classification lives in auth.js (one
+  // judgement, isSessionExpiredError()) and arrives on the payload.
+  if (event === 'MEMBERSHIPS_FAILED') {
+    if (payload?.expired) { hideAuthUnavailableBanner(); showSessionExpiredBanner(); }
+    else showAuthUnavailableBanner();
+  }
+  // DI-180p — the verification came back ALIVE: the 401 was a slow clock or a
+  // rotated key, nothing was destroyed, and the banner was a false alarm. Taken
+  // down through hideSessionExpiredBanner() (which also clears the latch, so
+  // the gate's own re-render below stops agreeing that the session is dead).
+  if (event === 'SESSION_REVERIFIED') { hideSessionExpiredBanner(); hideAuthUnavailableBanner(); }
+  if (event === 'MEMBERSHIPS_REFRESHED') hideAuthUnavailableBanner();
+
+  // ══ PHASE III STEP 4 PART B — THE ADAPTER'S THREE LIFECYCLE HOOKS ══════════
+  if (isSupabaseDataMode()) {
+    // A8 (§6.3) — A POST-IDENTITY EXPIRY BECOMES A GATE, NOT A BANNER.
+    //
+    // In Step 3a an expiry after a legitimate sign-in was a banner, because the
+    // league data on screen was the shared Sheet's and the player had every
+    // right to it. Once local data is LEAGUE-SCOPED that is no longer the
+    // argument: the rows in the mirror were served to a token the server has
+    // now rejected, so the honest answer is to stop serving them. withhold()
+    // takes the adapter to HELD, which makes the probe false — so every save()
+    // is refused through the EXISTING interlock (no second mechanism, §1.3) —
+    // and makes isContentWithheld() true, which tears the page down.
+    //
+    // DI-180p is preserved: this is the FIRST classification, the lock is
+    // immediate, and NOTHING is destroyed. DI-180o(b) is preserved: the
+    // suspended slate lives in app.js's own box and is restored when the same
+    // tuple returns and the adapter re-hydrates. The banner and the Sign In
+    // affordance are unchanged (DI-180m/A7: a session event never takes a hold
+    // down by itself).
+    if (event === 'MEMBERSHIPS_FAILED' && payload?.expired) {
+      try { sb.withhold('session-expired'); }
+      catch (e) { console.warn('[sb] could not withhold the league on an expiry', e); }
+      // ── REVIEWER F2 — WITHHOLDING IS NOT TEARING DOWN ─────────────────────
+      //
+      // THE DEFECT, and it is the sixth gate's F4 in a new place. withhold()
+      // makes isContentWithheld() true, which stops the next REPAINT — and
+      // nothing else. The dashboard that is already in the DOM stays in the
+      // DOM: six players' picks, the standings, the week, readable to anyone
+      // holding the handset and to anyone who opens dev tools, under an
+      // identity the server has just rejected. "The teardown was real; it just
+      // was not DURABLE" was the lesson last time; this time it never ran.
+      //
+      // showAuthHoldGate() is what runs it: tearDownRenderedContentForHold()
+      // empties the six page containers, the week block, the league pill, the
+      // identity chip, the unread counts, any open modal and the toast stack,
+      // then marks .main-content/.bottom-nav inert — and it arms the 20-second
+      // re-check, which is what lets this resolve without a reload.
+      try { showAuthHoldGate('session-expired'); }
+      catch (e) { console.error('[auth] the session-expired gate failed to paint — the league is withheld but still on screen', e); }
+    }
+    // §1.5 item 3 — THE MEMBERSHIP RESOLVE IS THE ADAPTER'S TRIGGER. It is the
+    // first moment the account id and the active league are both known, which
+    // is what the device snapshot's owner tuple needs. Not awaited: this is a
+    // synchronous listener, and the hydrate reports through its own status
+    // channel and its own repaint.
+    // R2 (reviewer F2) — THE RELEASE. `SESSION_REVERIFIED` joins the two
+    // membership events: DI-180p's verify-before-destroy means a 401 is a
+    // QUESTION, and this is the event that answers it "alive". A device held by
+    // A8's gate has to come back on that answer as well as on a fresh sign-in,
+    // or a false-alarm expiry costs a reload — which DI-180a forbids.
+    if (event === 'MEMBERSHIPS_REFRESHED' || event === 'SIGNED_IN' || event === 'SESSION_REVERIFIED') {
+      const st = sb.getState();
+      if (st === 'IDLE' || st === 'HELD' || st === 'OFFLINE-READONLY') {
+        (async () => {
+          try { await ensureSupabaseDataHydrated(`auth:${event}`); }
+          catch (e) { console.warn('[sb] the post-membership hydrate failed', e); }
+        })();
+      }
+    }
+    // §3.2 — THE SWITCH NEEDS NOTHING HERE, and that is worth stating rather
+    // than leaving as an absence. switchActiveLeague() awaits the new league's
+    // hydrate INSIDE itself and emits SWITCH_END only on success, so by the
+    // time this handler runs the data is already loaded; the identity
+    // chokepoint below then clears the outgoing league's draft, re-resolves
+    // per-player preferences, and repaints the header and the league pill as
+    // part of that one reset.
+    //
+    // A header repaint HERE would paint before that chokepoint, which breaks
+    // the one ordering rule this handler has — "wiped before anything paints",
+    // pinned by authtest as a source-order assertion — and would show the new
+    // league's pill over the old league's draft.
+  }
+
+  if (AUTH_SESSION_EVENTS.includes(event)) {
+    const signedIn = !!payload && hasValidSupabaseSession();
+    if (signedIn) {
+      // ── SECURITY F-3 (sixth gate), THE app.js HALF ─────────────────────────
+      // hideSessionExpiredBanner() does two things: it removes the node AND it
+      // clears auth.js's expiry latch. Doing that while DI-180p's privilege lock
+      // is still up leaves the state reviewer F2 already closed once — the
+      // commissioner surface gone, isAdmin forced false, and nothing on screen
+      // saying why — reached this time through an INITIAL_SESSION, which the SDK
+      // fires on EVERY page load with whatever is in localStorage and which is
+      // therefore not proof of anything.
+      //
+      // It costs the real case nothing, which is what makes it safe: a genuinely
+      // proven-good SIGNED_IN/TOKEN_REFRESHED releases the lock inside
+      // _handleAuthStateChange BEFORE any listener runs, and the
+      // SESSION_REVERIFIED that release emits takes both banners down on its own
+      // — so by the time this line sees such an event the lock is already false
+      // and the banner is already gone. Only the events that are NOT proof are
+      // affected, which is exactly the intent.
+      //
+      // The invariant, asserted by authtest after every event of the sequence:
+      //   isPrivilegeHeld()  =>  isSessionExpired()
+      if (!isPrivilegeHeld()) hideSessionExpiredBanner();
+      // A7 — a hold gate is a fail-closed lock and a session event may not take
+      // one down. Only the sign-in gate comes down here.
+      if (!currentAuthHoldReason()) document.getElementById('site-gate-overlay')?.remove();   // no reload (DI-180a)
+      // ── REVIEWER F1 / SECURITY F-2 (sixth gate) — AN IDENTITY ARRIVING IS
+      //    THE THIRD MOMENT THE WITHHOLD CAN LIFT ─────────────────────────────
+      // It is the one the previous pass missed. A page that booted into a hold,
+      // cleared it into the Google gate and then had a session arrive was left
+      // inert, un-hydrated, un-seeded, with both timers parked and boot()'s tail
+      // never run — painted, and completely dead to touch. The guard lives
+      // INSIDE the transition, so this is a bare call and cannot drift from the
+      // other two. On an ordinary boot it does nothing (see its comment).
+      // REVIEWER F1 (seventh gate) — the rejection is CAUGHT here rather than
+      // dropped by a bare `void`: the transition now releases its own latch on a
+      // failure so the next session event retries, and this line is what tells
+      // a reader (and a console) that it happened.
+      releaseWithholdIfResolved(`auth-event:${event}`)
+        .catch(e => console.error(`[auth] the un-withhold transition rejected (auth-event:${event})`, e));
+    } else {
+      if (isSessionExpired()) showSessionExpiredBanner(); else hideSessionExpiredBanner();
+      // Re-show the gate ONLY if it is not already up. showGoogleSignInGate()
+      // removes and re-creates the overlay, which would wipe the inline
+      // "Sign-in cancelled." / failure copy the player is currently reading.
+      // A7 again: if a hold gate is up, it stays up — a Google gate is not an
+      // acceptable replacement for a lock this build cannot lift.
+      if (!document.getElementById('site-gate-overlay') && !currentAuthHoldReason()) showGoogleSignInGate();
+    }
+  }
+
+  // ── THE SESSION-CHANGE CHOKEPOINT ─────────────────────────────────────────
+  // Unconditional, on EVERY auth/membership event this handler sees. It is
+  // safe to call on all of them — and it has to be called on all of them —
+  // because applyIdentityDeltaIfChanged() decides by comparing identity, not by
+  // guessing from an event name. See its own comment for why an event-name list
+  // was the wrong shape twice in a row.
+  //
+  // DI-180o(b) — the ONE piece of information the chokepoint cannot derive from
+  // the tuple: was this an EXPIRY (suspend the slate) or a change of person
+  // (discard it)? It arrives on the payload, classified once in auth.js
+  // (isSessionExpiredError), or — for the SDK's own involuntary SIGNED_OUT —
+  // from auth.js's expiry latch, which that branch sets for exactly this
+  // purpose and never sets for a deliberate signOut() (SEC concern 2).
+  const expiry = (event === 'MEMBERSHIPS_FAILED' && payload?.expired === true)
+              || (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());
+  // …and its opposite. A SIGNED_OUT that is NOT an expiry is auth.js's own
+  // deliberate signOut() (it consumes the _signingOut flag specifically so the
+  // two can be told apart — SEC concern 2), and a completed league switch moves
+  // the scope the slate belongs to. Both are changes of person-or-league, so
+  // both discard immediately, exactly as they did before this input.
+  //
+  // MEMBERSHIPS_REFRESHED is deliberately NOT in this list: it is the event
+  // that RESOLVES a returning player's tuple, so treating it as a discard would
+  // throw the slate away one event before the event that restores it. A join or
+  // create reaches the chokepoint through it, and is handled by the suspension
+  // rules instead — worst case the box is held, unreachable, until the page is
+  // closed, which loses nothing and leaks nothing.
+  const discard = (event === 'SIGNED_OUT' && !expiry) || event === 'SWITCH_END';
+  applyIdentityDeltaIfChanged(`event:${event}`, { expiry, discard });
+
+  // The header and the bell are NOT withheld: they are what makes the page stop
+  // claiming to be somebody (renderHeaderIdentity()/renderLeaguePill() both
+  // render nothing without an identity, which is the point). The PAGE repaint is.
+  refreshHeader();
+  try { renderNotifBell(); } catch {}
+  // SECURITY S-2 — this trailing re-navigate is the second path that undid A6's
+  // teardown (the auto-refresh tick was the first): every auth event repainted
+  // the whole dashboard from the mirror behind the hold overlay. navigateTo()
+  // carries the same guard internally; it is stated HERE as well because this is
+  // the call site the reviewer found, and because a future navigateTo() that
+  // grows an "unless forced" parameter must not silently re-open it.
+  if (isContentWithheld()) return;
+  try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[auth] re-navigate failed', e); }
+}
+
+/** DI-180a/d — Account sheet. Reuses .modal-overlay.centered/.modal
+ *  verbatim (DI-180e), the same pattern showEditPlayerModal()/
+ *  showCreateWeekModal() already use. */
+export function showAccountSheet() {
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  const memberships = getCachedMemberships();
+  const switchRow = memberships.length > 1
+    ? `<button type="button" class="btn btn-ghost btn-block mt-sm" id="account-switch-btn">Switch League</button>`
+    : '';
+  // ── DI-183e (Step 3b) — "This isn't me", FROM THE ACCOUNT SHEET ───────────
+  // The SAME dispute the confirmation card offers, reachable after the card has
+  // been dismissed — because a mis-link is not always noticed in the first ten
+  // seconds. One unlink implementation (auth.js's unlinkMember), three callers:
+  // this, the confirmation card, and the commissioner's "Unlink Account".
+  //
+  // Only when there IS an active membership to dispute. On a signed-in account
+  // with no league there is nothing to be wrong about.
+  const active = memberships.find(m => m.leagueId === getActiveLeagueId());
+  const notMeRow = active
+    ? `<button type="button" class="btn btn-ghost btn-block mt-sm" id="account-not-me-btn">This isn't me</button>`
+    : '';
+  // ── THE ARBITRATION SEAM (see the DI-183 block comment) ────────────────────
+  // DI-181's join/create landing keeps its own route HERE, off the claim-code
+  // screen, because §3d forbids a join affordance on that screen and forbidding
+  // it everywhere would make DI-181 unreachable for a genuinely new user.
+  const joinRow = memberships.length === 0
+    ? `<button type="button" class="btn btn-ghost btn-block mt-sm" id="account-join-btn">Join or Create a League</button>`
+    : '';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Account</h3><button class="modal-close" id="account-sheet-close">✕</button></div>
+    <p>Signed in as ${escHtml(getAccountEmail())}</p>
+    ${active ? `<p class="text-muted" style="font-size:.85rem">Playing as ${escHtml(active.displayName || active.memberId)} in ${escHtml(active.leagueName || 'this league')}.</p>` : ''}
+    ${switchRow}
+    ${joinRow}
+    ${notMeRow}
+    <button type="button" class="btn btn-danger btn-block mt-sm" id="account-signout-btn">Sign Out</button>
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#account-sheet-close')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  ov.querySelector('#account-switch-btn')?.addEventListener('click', () => { close(); showLeagueSelectorSheet(); });
+  ov.querySelector('#account-join-btn')?.addEventListener('click', () => {
+    close();
+    // Reset the link flow so linkFlowScreen() stops claiming the slot and
+    // DI-181a's landing renders in it. The dispute route and the join route are
+    // deliberately different doors; this is the one that leads to join/create.
+    resetLinkFlow();
+    renderLeagueFlowScreen(state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard'));
+  });
+  ov.querySelector('#account-not-me-btn')?.addEventListener('click', async () => {
+    const act = getCachedMemberships().find(m => m.leagueId === getActiveLeagueId());
+    if (!act) return;
+    if (!confirm(`We'll unlink this account from ${act.displayName || act.memberId} right away, and you can enter your own code. Continue?`)) return;
+    const btn = ov.querySelector('#account-not-me-btn');
+    btn.disabled = true; btn.textContent = 'Unlinking…';
+    try {
+      // DESTRUCTIVE FIRST — the RPC completes, and the refresh inside it drops
+      // the disputed membership, BEFORE anything repaints. Closing the sheet
+      // first would put a repaint between the dispute and the unlink.
+      await unlinkMember(act.leagueId, act.memberId);
+      resetLinkFlow();
+      close();
+      // Straight to the claim-code screen — the player is mid-flow and the only
+      // way forward is their own code. attemptAutoLink() is NOT re-run: their
+      // verified email is what mis-matched them here in the first place.
+      _markLinkFlowUnmatchedAfterDispute();
+      navigateTo(state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard'));
+    } catch (err) {
+      // REVIEWER F-E — same split as the confirmation card's. A refresh failure
+      // after a successful unlink must not tell the player it failed, and must
+      // not leave a control up that would answer not_commissioner on the retry.
+      if (err?.code === 'unlink_refresh_failed') {
+        resetLinkFlow();
+        close();
+        showToast("You're unlinked. We couldn't refresh this page — reload to continue.", 'warning');
+        return;
+      }
+      btn.disabled = false; btn.textContent = "This isn't me";
+      showToast(`We couldn't unlink that just now. ${claimCodeErrorCopy(err)} Tell your commissioner — they can unlink it from their side.`, 'error');
+    }
+  });
+  ov.querySelector('#account-signout-btn')?.addEventListener('click', async () => {
+    close();
+    await signOut();   // fires 'SIGNED_OUT' -> refreshAuthUI() re-shows the gate
+    // Reviewer B3 — routed HERE TOO, not only from refreshAuthUI(). auth.js's
+    // signOut() fires SIGNED_OUT to its listeners, so in the wired app this is
+    // the second call and the identity latch makes it a genuine no-op; it is
+    // here so the chokepoint does not depend on a listener being wired, which
+    // is exactly the assumption that left the draft and the OneSignal binding
+    // in place. Same ONE function either way — never a hand-written copy of
+    // its body, which is how the two call sites drifted apart before.
+    // DI-180o(b) — `discard` because this is the explicit change of person, not
+    // an expiry: an unsubmitted slate is never carried across a Sign Out.
+    applyIdentityDeltaIfChanged('account-sheet-signout', { discard: true });
+  });
+}
+
+// ── DI-181 — league flow (no-league landing, join, create, switch) ─────────
+
+/** True when the app should show DI-181's landing/selector INSTEAD of the
+ *  requested tab's normal content. False while memberships haven't resolved
+ *  yet (hold empty — same rule DI-184c's header pill uses) so the six real
+ *  players never see a flash of "join or create" before their one
+ *  membership resolves. */
+export function needsLeagueFlowScreen() {
+  if (getAuthMode() !== 'supabase') return false;
+  if (!hasValidSupabaseSession()) return false;      // the sign-in gate owns this state
+  // SEC F2 / reviewer N4 — a FAILED membership read must never render the
+  // join/create landing. "We couldn't ask" and "the answer is zero leagues"
+  // look identical from here unless this line exists, and the first one being
+  // shown as the second is how a founding member gets told he isn't in a
+  // league. Belt and braces with auth.js leaving _membershipsCache at null on
+  // failure (hasResolvedMemberships() false) — two independent reasons this
+  // returns false, because one of them is a subtle invariant about a cache.
+  if (getMembershipsError()) return false;
+  if (!hasResolvedMemberships()) return false;       // loading — hold empty
+  const memberships = getCachedMemberships();
+  if (memberships.length === 0) return true;          // DI-181a landing
+  const activeId = getActiveLeagueId();
+  if (!activeId || !memberships.some(m => m.leagueId === activeId)) {
+    return memberships.length > 1;                    // DI-181c selector (never true for 1)
+  }
+  return false;
+}
+
+/**
+ * ══ SECURITY F-6 (sixth gate, 2026-09-17) — THE BADGE READS THE LOCKED SESSION,
+ *    NOT THE RAW CACHE ═══════════════════════════════════════════════════════
+ *
+ * `role` comes straight off `_membershipsCache`, i.e. off the last successful
+ * `league_members.role` read. DI-180p's privilege lock does not touch that cache
+ * — deliberately, because the hold is a VIEW over an unchanged session, which is
+ * the whole reason a false alarm costs the player nothing. The consequence
+ * nobody had looked at: while privilege is HELD, every commissioner control is
+ * gone, `getSession().isAdmin` is false, the expired banner is up — and the
+ * league switcher still labels the ACTIVE league "Commissioner". A label that
+ * contradicts the app's own behaviour is how a commissioner concludes the panel
+ * is broken rather than that their session needs re-verifying.
+ *
+ * Scoped to the ACTIVE league, and only there, because that is the only row the
+ * lock has an opinion about: `getSession().isAdmin` is derived from the active
+ * membership alone. Another league's row keeps its own cached role, which is
+ * still true — the lock is about what this device may DO right now, not about
+ * what the server thinks of a league it is not scoped to.
+ */
+function leagueRoleBadgeHTML(role, { leagueId = null } = {}) {
+  let effective = role;
+  try {
+    if (leagueId && isPrivilegeHeld() && leagueId === getActiveLeagueId()) {
+      effective = getSession()?.isAdmin ? 'commissioner' : 'player';
+    }
+  } catch { /* a badge must never be the thing that throws out of a render */ }
+  return effective === 'commissioner'
+    ? `<span class="badge badge-open">Commissioner</span>`
+    : `<span class="badge badge-draft">Player</span>`;
+}
+
+function leagueFlowLandingHTML() {
+  return `
+    <div class="card text-center">
+      <h2>You're not in a league yet</h2>
+      <p class="text-muted">Join with an invitation code, or start your own.</p>
+    </div>
+    <div class="league-flow-row">
+      <div class="card">
+        <h3>Join a League</h3>
+        <div class="form-group">
+          <label for="league-join-code">Invitation code</label>
+          <input type="text" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" />
+          <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
+        </div>
+        <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
+        <button type="button" class="btn btn-primary btn-block" id="league-join-btn">Join League</button>
+      </div>
+      <div class="card">
+        <h3>Create a League</h3>
+        <div class="form-group">
+          <label for="league-create-name">League name</label>
+          <input type="text" id="league-create-name" placeholder="e.g. IRB Pick 'Ems" autocomplete="off" maxlength="80" />
+        </div>
+        <div class="site-gate-error" id="league-create-error" style="display:none;color:var(--loss)"></div>
+        <button type="button" class="btn btn-primary btn-block" id="league-create-btn">Create League</button>
+      </div>
+    </div>`;
+}
+
+/** The row list is the ONE piece shared by both selector surfaces — DI-181's
+ *  automatic full-page selector (no active league resolved yet) and DI-184's
+ *  voluntary reopen (tapping the header pill / Account sheet's "Switch
+ *  League") — DI-184f "no second selector implementation." */
+function leagueSelectorListHTML() {
+  const memberships = getCachedMemberships();
+  return `<div id="league-selector-list">
+      ${memberships.map(m => `
+        <button type="button" class="card league-selector-row" style="display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;cursor:pointer;min-height:44px" data-league-id="${escHtml(m.leagueId)}">
+          <span>${escHtml(m.leagueName || m.leagueId)}</span>
+          ${leagueRoleBadgeHTML(m.role, { leagueId: m.leagueId })}
+        </button>`).join('')}
+    </div>`;
+}
+function leagueSelectorHTML() {
+  return `<div class="card text-center"><h2>Choose a League</h2></div>${leagueSelectorListHTML()}`;
+}
+/** Binds every `.league-selector-row` inside `container` to switch leagues,
+ *  then calls `afterPick()` (e.g. closing a modal) once the switch settles —
+ *  shared by the full-page selector and the sheet below. */
+function bindLeagueSelectorRows(container, afterPick) {
+  container.querySelectorAll('.league-selector-row').forEach(row => {
+    row.addEventListener('click', async () => {
+      await doSwitchActiveLeague(row.dataset.leagueId);
+      if (afterPick) afterPick();
+    });
+  });
+}
+
+/**
+ * SEC F5 — DISTINCT COPY PER SERVER ERROR CODE.
+ *
+ * Both join and create used to render one hardcoded line for every possible
+ * rejection. A player who typed a 100-character league name, a player whose
+ * token had expired mid-form, and a player who was already in the league were
+ * all told the code didn't match an open league — advice that is wrong for all
+ * three and sends them to their commissioner with a false report. And the
+ * connectivity line ("check your connection") was shown for server-side
+ * VALIDATION failures, which is the same class of lie in the other direction.
+ *
+ * The keys are the exact strings the RPCs RAISE (supabase/migrations/
+ * 0003_functions.sql: `raise exception 'invalid_code'`, `'bad_name'`,
+ * `'not_authenticated'`, `'already_member'`), which PostgREST surfaces in
+ * error.message. Matched by substring because PostgREST prefixes/decorates the
+ * message; matched against a fixed table so an unrecognised server string can
+ * never fall through to a reassuring line.
+ */
+const LEAGUE_RPC_ERROR_COPY = [
+  ['invalid_code',      "That code doesn't match an open league. Double-check it with whoever invited you."],
+  ['already_member',    "You're already in that league — switch to it from your account instead."],
+  ['bad_name',          'That league name needs to be between 1 and 80 characters.'],
+  ['not_authenticated', 'Your sign-in expired before that went through. Sign in again and retry.'],
+];
+const LEAGUE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
+const LEAGUE_UNKNOWN_COPY      = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
+
+/** Returns the copy for one failed join/create attempt. Connectivity copy is
+ *  reserved for REAL transport failures (a thrown TypeError from fetch, or
+ *  auth.js's AuthUnavailableError) — never for a server that answered. */
+function leagueRpcErrorCopy(err) {
+  const raw = `${err?.message || ''} ${err?.code || ''}`;
+  for (const [code, copy] of LEAGUE_RPC_ERROR_COPY) if (raw.includes(code)) return copy;
+  if (err instanceof AuthUnavailableError || err?.name === 'AuthUnavailableError' || err instanceof TypeError || /failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return LEAGUE_CONNECTIVITY_COPY;
+  }
+  return LEAGUE_UNKNOWN_COPY;
+}
+export const _LEAGUE_RPC_ERROR_COPY_FOR_TEST = { map: LEAGUE_RPC_ERROR_COPY, connectivity: LEAGUE_CONNECTIVITY_COPY, unknown: LEAGUE_UNKNOWN_COPY, resolve: leagueRpcErrorCopy };
+
+function bindLeagueFlowScreen(container) {
+  const joinBtn = container.querySelector('#league-join-btn');
+  const joinErr = container.querySelector('#league-join-error');
+  joinBtn?.addEventListener('click', async () => {
+    const code = container.querySelector('#league-join-code')?.value || '';
+    if (joinErr) joinErr.style.display = 'none';
+    joinBtn.disabled = true; joinBtn.textContent = 'Joining…';
+    try {
+      const joined = await joinLeague(code);
+      showToast(`You're in — welcome to ${joined?.leagueName || 'your new league'}.`, 'success');
+      navigateTo(state.currentTab || 'dashboard');
+    } catch (err) {
+      if (joinErr) { joinErr.textContent = leagueRpcErrorCopy(err); joinErr.style.display = 'block'; }
+    } finally {
+      joinBtn.disabled = false; joinBtn.textContent = 'Join League';
+    }
+  });
+  const createBtn = container.querySelector('#league-create-btn');
+  const createErr = container.querySelector('#league-create-error');
+  createBtn?.addEventListener('click', async () => {
+    const name = container.querySelector('#league-create-name')?.value || '';
+    if (createErr) createErr.style.display = 'none';
+    createBtn.disabled = true; createBtn.textContent = 'Creating…';
+    try {
+      await createLeague(name);
+      showToast("League created — you're the commissioner.", 'success');
+      navigateTo(state.currentTab || 'dashboard');
+    } catch (err) {
+      if (createErr) { createErr.textContent = leagueRpcErrorCopy(err); createErr.style.display = 'block'; }
+    } finally {
+      createBtn.disabled = false; createBtn.textContent = 'Create League';
+    }
+  });
+  bindLeagueSelectorRows(container, null);
+}
+
+export function renderLeagueFlowScreen(tab) {
+  // REVIEWER N10 — #page-chat is chat-ui.js's DOM. It owns that subtree's
+  // markup, its scroll anchoring, its composer, its message-node identity and
+  // its listeners; writing innerHTML into it from app.js destroys all of that
+  // with no way for chat-ui.js to know it happened. navigateTo() already
+  // re-routes a league-flow navigation away from 'chat' before this is called,
+  // so this is the defensive half of that pair: if it is ever reached with
+  // 'chat', render NOTHING rather than take the page apart.
+  if (tab === 'chat') { console.warn('[auth] league-flow screen refused to render into #page-chat (chat-ui.js owns it)'); return; }
+  const c = document.getElementById(`page-${tab}`);
+  if (!c) return;
+  const memberships = getCachedMemberships();
+  c.innerHTML = memberships.length === 0 ? leagueFlowLandingHTML() : leagueSelectorHTML();
+  bindLeagueFlowScreen(c);
+}
+
+/**
+ * ══ SECURITY F-3 / DI-T7.6 (audit #10) — A FIELD PATCH, NOT A WHOLE-ROW WRITE ═
+ *
+ * `savePlayer(player)` (js/storage.js:777-783) REPLACES the row: `all[idx] =
+ * {...player, updatedAt}`. Whatever object you hand it becomes the record. That
+ * is fine for the commissioner's Edit Player modal, which reads the row and
+ * writes it back in the same interaction — and it is NOT fine for the prefs
+ * panel, which was doing `savePlayer({ ...player, ...patch })` where `player`
+ * was read at PANEL-RENDER time.
+ *
+ * TWO FAILURES, and the second is the one DI-T7.6 is about:
+ *
+ *   1. A STALE ROW OVERWRITES A FRESH ONE. The panel renders, the player leaves
+ *      it open, something else updates the record (a commissioner override, a
+ *      Sheet hydrate), the player then edits their initials — and the whole
+ *      row as it looked minutes ago is written back over it.
+ *
+ *   2. A WRITE CARRIES CONTACT FIELDS IT NEVER INTENDED TO TOUCH. After
+ *      migration 0007 the contact columns left the member-readable grant, so
+ *      `js/supabase-projection.js` projects another player's `email`/`phone`/
+ *      `phoneVerified` as ABSENT (DI-T7.6's own words: "never as empty strings
+ *      that a later save() could write back over the real values"). A
+ *      spread-the-whole-row write then sends those absences back as the new
+ *      truth. DI-T7.6's rule is exact: THE ADAPTER MUST NEVER WRITE A CONTACT
+ *      FIELD IT DID NOT READ. A prefs panel editing initials has not read one.
+ *
+ * SO THE WRITE NAMES ITS FIELDS. `patchPlayer(playerId, fields)` re-reads the
+ * current row AT WRITE TIME and applies only the named keys — which closes (1)
+ * — and refuses to carry a contact key that is not explicitly in `fields`,
+ * which closes (2) structurally rather than by everyone remembering.
+ *
+ * WHY IT LIVES HERE AND NOT IN js/storage.js. The storage seam's job is
+ * `load`/`save` and the typed accessors over them (AD-02, CONVENTIONS #8); this
+ * is a POLICY about which fields a given surface may write, which is the
+ * caller's business. js/app.js is also the module the commissioner's Edit Player
+ * modal lives in, so the one implementation sits beside the one other writer of
+ * these fields.
+ *
+ * WHY chat-ui.js RECEIVES IT BY INJECTION. Same reason as
+ * `registerAlmaMaterOptionsProvider` two hundred lines down: app.js imports
+ * chat-ui.js, so the reverse edge would close a cycle. One implementation, two
+ * callers, one direction.
+ */
+const PLAYER_CONTACT_FIELDS = Object.freeze(['email', 'phone', 'phoneVerified']);
+export const _PLAYER_CONTACT_FIELDS_FOR_TEST = PLAYER_CONTACT_FIELDS;
+/** The keys of the last patch, for the suites. `patchPlayer` is the only writer
+ *  of the prefs rows, so "a prefs write never carries a contact key" is
+ *  observable here rather than inferred from what the record looks like
+ *  afterwards — which would be the same whether the key was absent or present
+ *  and equal. */
+let _lastPlayerPatchKeys = null;
+export function _lastPlayerPatchKeysForTest() { return _lastPlayerPatchKeys ? [..._lastPlayerPatchKeys] : null; }
+
+export function patchPlayer(playerId, fields) {
+  const patch = fields && typeof fields === 'object' ? fields : {};
+  _lastPlayerPatchKeys = Object.keys(patch);
+  // READ AT WRITE TIME, never from a closure captured at render time. This is
+  // the whole of fix (1), and it is one line.
+  const current = getPlayers().find(p => p.playerId === playerId);
+  if (!current) {
+    console.warn('[app] patchPlayer: no such player; nothing written');
+    return false;
+  }
+  // DI-T7.6, enforced rather than documented. A contact key travels ONLY if the
+  // caller named it. `delete` rather than "leave it as current" for a key that
+  // is absent from BOTH: writing `undefined` into the record is a different
+  // value from not having the key, and `getPlayers()` round-trips through JSON.
+  const next = { ...current };
+  for (const [k, v] of Object.entries(patch)) {
+    if (PLAYER_CONTACT_FIELDS.includes(k)) continue;   // handled below, explicitly
+    next[k] = v;
+  }
+  for (const k of PLAYER_CONTACT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(patch, k)) {
+      next[k] = patch[k];                              // named on purpose — the commissioner modal
+    } else if (Object.prototype.hasOwnProperty.call(current, k)) {
+      next[k] = current[k];                            // untouched, re-read fresh, not from a stale render
+    } else {
+      delete next[k];                                  // absent stays absent (DI-T7.6's projection case)
+    }
+  }
+  savePlayer(next);
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-183 (STEP 3b) — THE SIX FOUNDERS' LINK FLOW
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * ══ WHAT THIS IS, AND WHY IT SITS IN FRONT OF DI-181's LANDING ═══════════════
+ *
+ * UN-183: Koby has a record, obligations, chat history and last year's archive
+ * riding on this app, and the change of engine must cost him ONE Google sign-in
+ * and give him back the same season he had the night before. His history is not
+ * copied onto a new account — his member row already exists and his sign-in
+ * ATTACHES to it (the (b) seam UN-183's root driver chose). This is the code
+ * that performs the attaching.
+ *
+ * THE BLIND RULE IS THE WHOLE DESIGN HERE, and DI-183e states it as three facts
+ * this file has to keep true:
+ *   1. THE LINK IS NEVER A SELF-ASSERTED "I'm Koby" DROPDOWN. Every path below
+ *      is a server-side match — a verified email, or a commissioner-issued code.
+ *      Nowhere does a player pick their own name from a list. A mis-link does
+ *      not just show the wrong name; it hands one player write access to
+ *      another's picks and read access to their pre-lock selections, silently.
+ *   2. THE CONFIRMATION CARD IS THE CONTROL, not polish. It exists so a wrong
+ *      link is caught by the one person guaranteed to notice, and it renders on
+ *      EVERY successful link, auto or code. There is no path that skips it
+ *      (DI-183h's first must-not).
+ *   3. "THIS ISN'T ME" MUST ACTUALLY DO SOMETHING — it unlinks SERVER-SIDE
+ *      FIRST, then routes to the claim-code screen.
+ *
+ * ── THE ONE THING THE BRIEF DOES NOT SETTLE, RESOLVED HERE AND FLAGGED ───────
+ *
+ * DI-181a's landing (Join a League / Create a League) and DI-183's claim-code
+ * screen occupy the SAME slot and are reached by the SAME observable state: a
+ * proven Google account with zero memberships. The app genuinely cannot tell an
+ * unmatched founder from a brand-new user — the brief says as much in §3d ("the
+ * app cannot distinguish 'hasn't gotten one yet' from 'lost it' from 'never
+ * will'") — and it gives no flag for "the transition is over."
+ *
+ * §3d's rule is literal and non-negotiable: the claim-code screen must never
+ * offer, imply or auto-execute any path by which an unmatched Google account
+ * becomes a NEW member of the founders' league, and there is "no 'Join League'
+ * affordance anywhere on this screen."
+ *
+ * RESOLVED, MINIMALLY AND IN ONE PLACE: the claim-code screen wins the slot, and
+ * DI-181's join/create landing keeps its own route — from the ACCOUNT SHEET,
+ * which is a different screen and therefore satisfies §3d literally. That keeps
+ * DI-181 reachable for a genuinely new user without putting a join affordance
+ * where DI-183 forbids one, and it errs toward the six founders, who are the
+ * only real users this quarter.
+ *
+ * The arbitration is ONE predicate — `linkFlowScreen()` below — so if Drew rules
+ * the other way it is a change to one function, not a rewrite. FLAGGED IN THE
+ * HANDOFF; not a silent design decision.
+ */
+
+/**
+ * The link attempt is a per-PAGE state machine, not stored anywhere. No new
+ * device-local key (the brief's builder note 4) — and nothing here is a fact
+ * worth surviving a reload, because the server is the authority on whether this
+ * account is linked and re-asking is one RPC.
+ *
+ *   'idle'       nothing tried yet
+ *   'attempting' link_member_by_email() is in flight
+ *   'linked'     a link resolved — the confirmation card is owed
+ *   'unmatched'  zero rows matched — the claim-code screen is owed
+ *   'error'      the attempt itself failed (NOT the same as "no match")
+ */
+let _linkFlow = { state: 'idle', memberId: '', leagueId: '', displayName: '', error: '' };
+/** Once per page. A second automatic attempt would be a second chance for a
+ *  race to resolve differently, and the whole point of the confirmation card is
+ *  that the player sees exactly one answer. */
+let _autoLinkAttempted = false;
+export function _linkFlowStateForTest() { return { ..._linkFlow, attempted: _autoLinkAttempted }; }
+/** Production reset — used by the two doors that deliberately LEAVE this flow
+ *  (the Account sheet's "Join or Create a League", and the confirmation card's
+ *  Continue). Named without the ForTest suffix because it IS production
+ *  behaviour; `_resetLinkFlowForTest` below is the suite's alias for it so the
+ *  two can never drift. */
+function resetLinkFlow() {
+  _linkFlow = { state: 'idle', memberId: '', leagueId: '', displayName: '', error: '' };
+  _autoLinkAttempted = false;
+  _linkRedownloadUntil = 0;
+}
+export const _resetLinkFlowForTest = resetLinkFlow;
+
+/**
+ * DI-180q's one-time re-download line — WHEN it may be shown.
+ *
+ * Every founder device hits DI-180q's "marker missing but local data present"
+ * case on this exact link: the marker is Supabase-only and these are PIN-era
+ * phones, so all six take one local cache clear and re-download. The line is
+ * conditioned on that having ACTUALLY fired, not shown unconditionally — a
+ * device that somehow already carries a matching marker never sees it.
+ *
+ * EIGHTH-GATE COPY CORRECTION (coordinator ruling, 2026-09-18). The brief's §3b
+ * wrote "Refreshing your chat history — this happens once." That was true of the
+ * SEVENTH-gate sweep, which cleared a named list of chat/notify keys. Security
+ * F-1 then INVERTED the sweep to a `cfbp_` prefix rule, so the clear is now
+ * EVERY local cache key — picks, players, results, obligations, the chat log,
+ * the notification log. Telling a player it is "your chat history" while their
+ * whole league re-hydrates is a smaller promise than the app is keeping, and the
+ * one thing it makes them worry about (their messages) is the one thing that was
+ * never at risk. The line says what actually happens instead.
+ */
+const LINK_REDOWNLOAD_COPY = 'Refreshing your league on this phone — one moment.';
+const LINK_REDOWNLOAD_CEILING_MS = 5000;
+let _linkRedownloadUntil = 0;
+/** Marks the line as owed. Called only when reconcileDeviceDataOwner() reports
+ *  it actually cleared something. Auto-expires so it can never hang. */
+export function noteLinkRedownloadStarted() { _linkRedownloadUntil = Date.now() + LINK_REDOWNLOAD_CEILING_MS; }
+function linkRedownloadLineHTML() {
+  if (Date.now() >= _linkRedownloadUntil) return '';
+  // Non-blocking and self-dismissing: a line of text under the confirmation
+  // copy, never an overlay, never a spinner over the button. It must not block
+  // the "This isn't me" tap or navigating away — which is a property of it being
+  // a <p>, not of a timer.
+  return `<p class="text-muted" style="font-size:.82rem;margin-top:8px" id="link-redownload-line">${escHtml(LINK_REDOWNLOAD_COPY)}</p>`;
+}
+export const _LINK_REDOWNLOAD_COPY_FOR_TEST = LINK_REDOWNLOAD_COPY;
+
+/**
+ * SEC F5's pattern, applied to link_member()'s FOUR distinct server errors.
+ *
+ * The base DI wrote ONE string ("That code doesn't match an unlinked player…")
+ * for what the finalized server contract makes four different outcomes. Three of
+ * the four would be actively misleading under that one string: a player whose
+ * code EXPIRED, or whose row somebody else already claimed, would be told to
+ * double-check their typing and would go on retyping a code that can never work.
+ * The base DI's own stated intent is "honest, not reassuring," which extends to
+ * all four — flagged non-blocking in brief §2 and built here.
+ *
+ * Matched by substring against the exact strings link_member() RAISEs, against a
+ * fixed table, so an unrecognised server string can never fall through to a
+ * reassuring line.
+ */
+const CLAIM_CODE_ERROR_COPY = [
+  ['invalid_code',   "That code doesn't match an unlinked player in this league. Double-check it with your commissioner."],
+  ['code_expired',   'That code has expired. Ask your commissioner for a new one — it only takes them a moment.'],
+  ['already_linked', "That code has already been used. If it wasn't you, tell your commissioner right away — they can unlink it and issue a new one."],
+  ['already_member', "You're already in this league. You don't need a code — try signing out and back in."],
+  // ── REVIEWER F4/F5 (audit #10) — THREE MORE, because three more can now reach
+  //    a PLAYER'S screen and were falling through to the unknown line.
+  //
+  // `last_commissioner` and `not_commissioner` are raised by `unlink_member`,
+  // which "This isn't me" calls — so both are reachable from the link flow, not
+  // only from the commissioner's card. `not_found` is raised by `link_member`
+  // and `issue_claim_code`, and since migration 0009 (security R-5) it is also
+  // what an INACTIVE member's code answers. Without these three a founder
+  // disputing a link read "That didn't go through. Try again, and tell your
+  // commissioner what you typed if it keeps failing" — advice that is wrong for
+  // all three, and for `last_commissioner` actively misleading: there is nothing
+  // to retype and retrying will never work.
+  ['last_commissioner', 'This league needs at least one commissioner. Promote someone else first, then try again.'],
+  ['not_commissioner',  'Only a commissioner can do that.'],
+  // R-5's copy. It deliberately does NOT say "that member was removed" — the
+  // server refuses an inactive row with the same `not_found` an absent one
+  // raises, precisely so the response is not an oracle, and copy that undid that
+  // on the client would hand back exactly what the SQL withheld.
+  ['not_found',         "We couldn't find that. Double-check it with your commissioner — they can reissue if it's gone stale."],
+];
+const CLAIM_CODE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
+const CLAIM_CODE_UNKNOWN_COPY = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
+function claimCodeErrorCopy(err) {
+  const raw = `${err?.message || ''} ${err?.code || ''}`;
+  for (const [code, copy] of CLAIM_CODE_ERROR_COPY) if (raw.includes(code)) return copy;
+  if (err instanceof AuthUnavailableError || err?.name === 'AuthUnavailableError' || err instanceof TypeError || /failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return CLAIM_CODE_CONNECTIVITY_COPY;
+  }
+  return CLAIM_CODE_UNKNOWN_COPY;
+}
+export const _CLAIM_CODE_ERROR_COPY_FOR_TEST = { map: CLAIM_CODE_ERROR_COPY, connectivity: CLAIM_CODE_CONNECTIVITY_COPY, unknown: CLAIM_CODE_UNKNOWN_COPY, resolve: claimCodeErrorCopy };
+
+/**
+ * REVIEWER F5 (audit #10) — THE MEMBER-MANAGEMENT ACTIONS NEED THEIR OWN
+ * FALLBACK, because they are read by a DIFFERENT PERSON.
+ *
+ * `claimCodeErrorCopy()`'s unknown line ends "tell your commissioner what you
+ * typed if it keeps failing." That is right for a founder on the claim-code
+ * screen and absurd on the commissioner's own card: the commissioner IS the
+ * commissioner, there is nothing typed to report, and the sentence reads as the
+ * app not knowing who it is talking to.
+ *
+ * The MAPPED codes are shared deliberately — `not_commissioner`,
+ * `last_commissioner` and `not_found` mean the same thing whoever is reading
+ * them, and two tables would be two places for them to drift. Only the
+ * FALLBACKS differ, which is the only part that was ever audience-specific.
+ *
+ * 42501 is called out by name because it is the shape a POLICY refusal arrives
+ * in — a bare Postgres error code with no named exception behind it — and it is
+ * the most likely unknown here: every member-management write goes through
+ * `league_members`' UPDATE policy and its BEFORE-UPDATE guard.
+ */
+const MEMBER_ACTION_REFUSED_COPY = 'That change was refused by the server. Nothing was changed.';
+function memberActionErrorCopy(err) {
+  const raw = `${err?.message || ''} ${err?.code || ''}`;
+  for (const [code, copy] of CLAIM_CODE_ERROR_COPY) if (raw.includes(code)) return copy;
+  if (err instanceof AuthUnavailableError || err?.name === 'AuthUnavailableError' || err instanceof TypeError || /failed to fetch|networkerror|load failed|network request failed/i.test(raw)) {
+    return CLAIM_CODE_CONNECTIVITY_COPY;
+  }
+  // "Nothing was changed" is a claim about the DATABASE, and it is true for the
+  // refusals this line covers: a policy refusal and a guard refusal both abort
+  // the statement, and every wrapper awaits the RPC before it touches any local
+  // state. It would NOT be true of a transport failure mid-write, which is why
+  // that case is returned above rather than falling through to here.
+  return MEMBER_ACTION_REFUSED_COPY;
+}
+export const _MEMBER_ACTION_ERROR_COPY_FOR_TEST = { refused: MEMBER_ACTION_REFUSED_COPY, resolve: memberActionErrorCopy };
+
+/**
+ * WHICH DI-183 SCREEN, IF ANY, OWES A RENDER. The single arbitration point named
+ * in the block comment above.
+ *
+ * PRE-CONDITIONS (brief §3a), in the order they win — each is a different
+ * authority and the earlier one always beats the later:
+ *   1. `authMode` must be 'supabase'. In 'pins' the entire DI is inert.
+ *   2. `isContentWithheld()` — ANY hold gate up wins outright. A hold is a
+ *      fail-closed lock on a device whose config or data layer cannot be
+ *      trusted; a link screen competing with it would be a control that cannot
+ *      work, which is A4's rule.
+ *   3. A Google session must be PROVEN. An unproven identity is DI-180's gate,
+ *      not DI-183's — link screens never render for one.
+ *   4. A failed membership READ is not "zero leagues" (SEC F2's rule, the same
+ *      one needsLeagueFlowScreen() carries). "We couldn't ask" must never be
+ *      painted as "you're not in a league", which for a founder mid-transition
+ *      is the most alarming possible lie.
+ *
+ * @returns {''|'confirm'|'claim'} '' when DI-183 owes nothing.
+ */
+export function linkFlowScreen() {
+  if (getAuthMode() !== 'supabase') return '';
+  if (isContentWithheld()) return '';
+  if (!hasValidSupabaseSession()) return '';
+  if (getMembershipsError()) return '';
+  if (!hasResolvedMemberships()) return '';
+  // A resolved link owes the confirmation card ONCE, whatever the membership
+  // count now says — it is the control, and DI-183h forbids skipping it.
+  if (_linkFlow.state === 'linked') return 'confirm';
+  // Everything below is the zero-membership case. An account that already has a
+  // league is past this flow entirely.
+  if (getCachedMemberships().length > 0) return '';
+  if (_linkFlow.state === 'unmatched' || _linkFlow.state === 'error') return 'claim';
+  return '';
+}
+
+/**
+ * THE AUTO-LINK ATTEMPT (DI-183e), run once per page.
+ *
+ * FAIL-CLOSED ORDERING (brief §3b): an auto-link is never presented as final
+ * before the confirmation card has rendered, and a ZERO-match is never shown as
+ * an error. Zero matches is the EXPECTED path for anyone whose Google address
+ * differs from the one on file — the player goes straight to the claim-code
+ * screen with no error state in between.
+ *
+ * An attempt that THREW is different from one that matched nothing, and is kept
+ * different: the claim-code screen still renders (it is the only way forward),
+ * but the failure is recorded so the screen can say so rather than implying the
+ * server looked and found nothing.
+ */
+export async function attemptAutoLink() {
+  if (_autoLinkAttempted) return _linkFlow.state;
+  if (getAuthMode() !== 'supabase') return 'idle';
+  if (!hasValidSupabaseSession()) return 'idle';
+  if (isContentWithheld()) return 'idle';
+  _autoLinkAttempted = true;
+  _linkFlow = { ..._linkFlow, state: 'attempting' };
+  try {
+    const rows = await linkMemberByEmail();
+    if (!rows.length) {
+      _linkFlow = { state: 'unmatched', memberId: '', leagueId: '', displayName: '', error: '' };
+      return 'unmatched';
+    }
+    _recordResolvedLink(rows[0].leagueId, rows[0].memberId);
+    return 'linked';
+  } catch (err) {
+    console.warn('[auth] the automatic email link could not be attempted', err);
+    _linkFlow = { state: 'error', memberId: '', leagueId: '', displayName: '', error: claimCodeErrorCopy(err) };
+    return 'error';
+  }
+}
+
+/** Shared by both successful paths (auto and code) so the confirmation card
+ *  cannot differ between them — DI-183e says it is the SAME card, and the only
+ *  way to guarantee that is for there to be one place that builds its state. */
+function _recordResolvedLink(leagueId, memberId) {
+  const m = getCachedMemberships().find(x => x.memberId === memberId);
+  _linkFlow = {
+    state: 'linked', memberId, leagueId,
+    displayName: m?.displayName || '', error: '',
+  };
+  // DI-180q's line is owed only when the clear ACTUALLY fired. Both wrappers
+  // that reach here (linkMemberByEmail / linkMember) end in
+  // refreshMembershipsAndSession(), which calls reconcileDeviceDataOwner() on
+  // its way out — so by this line the outcome is already recorded and this is a
+  // read, not a guess.
+  //
+  // 'cleared' is the six founders' case (marker missing, PIN-era local data
+  // present). 'adopted' means there was nothing to inherit and nothing was
+  // downloaded again, so the line would be describing something that did not
+  // happen. 'kept' means the device already belonged to this identity.
+  // 'clear-incomplete' is a handset refusing removals — the app is not going to
+  // tell that player everything is being refreshed when it demonstrably is not.
+  try {
+    if (getLastDeviceDataReconcile()?.action === 'cleared') noteLinkRedownloadStarted();
+  } catch { /* a status line must never be the thing that throws out of a link */ }
+}
+
+function linkConfirmCardHTML() {
+  // DI-183f's copy, unchanged. `<name>` is the display name off the member row
+  // the server just linked — escaped, because it is a value that came out of a
+  // database row a commissioner typed.
+  const who = _linkFlow.displayName || 'your account';
+  return `
+    <div class="card text-center" id="link-confirm-card">
+      <h2>You're linked as ${escHtml(who)}.</h2>
+      <p class="text-muted">Everything from this season carried over.</p>
+      ${linkRedownloadLineHTML()}
+      <button type="button" class="btn btn-primary btn-block mt-sm" id="link-continue-btn">Continue</button>
+      <button type="button" class="btn btn-ghost btn-block mt-sm" id="link-not-me-btn">This isn't me</button>
+    </div>`;
+}
+
+function claimCodeScreenHTML() {
+  // §3d — NO join/create affordance anywhere on this screen, BY CONSTRUCTION.
+  // The only control is the code field. See the arbitration note at the top of
+  // this section for where DI-181's landing lives instead.
+  const attemptNote = _linkFlow.state === 'error'
+    ? `<p class="text-muted" style="font-size:.8rem">We couldn't check your email automatically just now, so you'll need the code.</p>`
+    : '';
+  return `
+    <div class="card" id="link-claim-card">
+      <h2>Enter the code your commissioner gave you.</h2>
+      ${attemptNote}
+      <div class="form-group">
+        <label for="link-claim-code">Claim code</label>
+        <input type="text" id="link-claim-code" placeholder="e.g. 7XK4P2QR" autocomplete="off" maxlength="12"
+               inputmode="text" autocapitalize="characters" spellcheck="false" />
+      </div>
+      <div class="site-gate-error" id="link-claim-error" style="display:none;color:var(--loss)"></div>
+      <button type="button" class="btn btn-primary btn-block" id="link-claim-btn">Link My Account</button>
+    </div>`;
+}
+
+/**
+ * "THIS ISN'T ME" — DESTRUCTIVE FIRST, AND NOTHING PAINTS BEFORE THE SERVER HAS
+ * ANSWERED.
+ *
+ * The base DI's coordinator annotation is the whole specification: the link has
+ * already granted this account read and write access to another player's picks,
+ * so it "cannot stay in place for one second longer than needed." The RPC goes
+ * out first; the claim-code screen renders only once unlink_member() and the
+ * membership refresh have both returned. Rendering first — even for the few
+ * hundred milliseconds a round trip takes — would leave a player looking at a
+ * screen that says they are not linked while the server still says they are.
+ */
+async function disputeCurrentLink() {
+  const { leagueId, memberId } = _linkFlow;
+  if (!leagueId || !memberId) { _linkFlow = { state: 'unmatched', memberId: '', leagueId: '', displayName: '', error: '' }; return; }
+  await unlinkMember(leagueId, memberId);
+  _linkFlow = { state: 'unmatched', memberId: '', leagueId: '', displayName: '', error: '' };
+}
+export const _disputeCurrentLinkForTest = disputeCurrentLink;
+/** Test-only: put the flow into the 'linked' state without driving a live
+ *  auto-link. [43c]'s REV F-E block needs the confirmation card up while the
+ *  membership READ is already failing — and attemptAutoLink() cannot get there,
+ *  because it needs that same read to succeed first. Production reaches this
+ *  state only through _recordResolvedLink()'s two real callers. */
+export const _recordResolvedLinkForTest = (leagueId, memberId) => _recordResolvedLink(leagueId, memberId);
+
+/** After a dispute from the Account sheet, the claim-code screen is owed and
+ *  the automatic email attempt must NOT run again — the verified email is
+ *  exactly what mis-matched this account in the first place, so re-running it
+ *  would re-link the row that was just disputed. `_autoLinkAttempted` stays
+ *  true and the state goes straight to 'unmatched'. */
+function _markLinkFlowUnmatchedAfterDispute() {
+  _autoLinkAttempted = true;
+  _linkFlow = { state: 'unmatched', memberId: '', leagueId: '', displayName: '', error: '' };
+}
+
+function bindLinkFlowScreen(container) {
+  container.querySelector('#link-continue-btn')?.addEventListener('click', () => {
+    // The card has done its job; the player goes to their season. The flow is
+    // reset so a later navigation does not re-render a card about a link that
+    // has already been confirmed (DI-183's "one-time card").
+    _linkFlow = { state: 'idle', memberId: '', leagueId: '', displayName: '', error: '' };
+    navigateTo(state.currentTab || 'dashboard');
+  });
+
+  const notMe = container.querySelector('#link-not-me-btn');
+  notMe?.addEventListener('click', async () => {
+    if (!confirm("We'll unlink this account from that player right away, and you can enter your own code. Continue?")) return;
+    notMe.disabled = true; notMe.textContent = 'Unlinking…';
+    try {
+      await disputeCurrentLink();
+      navigateTo(state.currentTab || 'dashboard');
+    } catch (err) {
+      // ══ REVIEWER F-E (audit #11) — WHICH HALF FAILED DECIDES WHAT WE SAY ═══
+      //
+      // `unlink_refresh_failed` means the SERVER ALREADY DID IT: the row is
+      // unlinked and the disputed account has lost its access. Saying "we
+      // couldn't unlink that" there is a lie, and leaving the confirmation card
+      // up offers a retry that will answer `not_commissioner` — because the
+      // caller is no longer that member, which is precisely what succeeded. So
+      // the card comes DOWN, the copy says what actually happened, and the only
+      // instruction is the one that helps (reload).
+      if (err?.code === 'unlink_refresh_failed') {
+        resetLinkFlow();
+        showToast("You're unlinked. We couldn't refresh this page — reload to continue.", 'warning');
+        return;
+      }
+      // The RPC itself failed: nothing changed server-side, the wrong account
+      // still has access, and a retry is genuinely the right next step. LOUD,
+      // and the card stays up so the retry is one tap away.
+      notMe.disabled = false; notMe.textContent = "This isn't me";
+      showToast(`We couldn't unlink that just now. ${claimCodeErrorCopy(err)} Tell your commissioner — they can unlink it from their side.`, 'error');
+    }
+  });
+
+  const btn = container.querySelector('#link-claim-btn');
+  const errEl = container.querySelector('#link-claim-error');
+  const input = container.querySelector('#link-claim-code');
+  const submit = async () => {
+    if (!btn) return;
+    const raw = input?.value || '';
+    if (errEl) errEl.style.display = 'none';
+    // SHAPE FIRST (the brief's builder note 1), SERVER LAST. This saves a round
+    // trip on an obvious typo and nothing more — a well-formed code is always
+    // decided by link_member(), never here.
+    if (!isClaimCodeShape(raw)) {
+      if (errEl) {
+        errEl.textContent = 'A claim code is 8 characters — letters and numbers, no spaces. Check it against what your commissioner sent.';
+        errEl.style.display = 'block';
+      }
+      return;
+    }
+    btn.disabled = true; btn.textContent = 'Linking…';
+    try {
+      const { leagueId, memberId } = await linkMember(normalizeClaimCode(raw));
+      _recordResolvedLink(leagueId, memberId);
+      navigateTo(state.currentTab || 'dashboard');
+    } catch (err) {
+      if (errEl) { errEl.textContent = claimCodeErrorCopy(err); errEl.style.display = 'block'; }
+      btn.disabled = false; btn.textContent = 'Link My Account';
+    }
+  };
+  btn?.addEventListener('click', submit);
+  input?.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+}
+
+/** Renders whichever DI-183 screen `linkFlowScreen()` says is owed, into the
+ *  same slot DI-181a's landing uses. REVIEWER N10's rule applies unchanged: it
+ *  must never render into #page-chat, which chat-ui.js owns. */
+export function renderLinkFlowScreen(tab) {
+  if (tab === 'chat') { console.warn('[auth] link-flow screen refused to render into #page-chat (chat-ui.js owns it)'); return; }
+  const which = linkFlowScreen();
+  if (!which) return;
+  const c = document.getElementById(`page-${tab}`);
+  if (!c) return;
+  c.innerHTML = which === 'confirm' ? linkConfirmCardHTML() : claimCodeScreenHTML();
+  bindLinkFlowScreen(c);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-182b/c/d/e + DI-183c (STEP 3b) — THE COMMISSIONER'S MEMBER MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * ══ THE BLIND RULE, AS THREE PROPERTIES OF THIS CARD ═════════════════════════
+ *
+ * UN-182's answer is that this need IS the blind rule, and DI-182d restates it
+ * as UI facts rather than only a database property. All three hold here by
+ * CONSTRUCTION, which is the only way they survive the next feature:
+ *
+ *   1. THE COMMISSIONER IS NOT EXEMPT, and a player can see that is true. There
+ *      is no "see all picks" control in this card, for any role. Not hidden, not
+ *      disabled — it does not exist, and the test for it is the ABSENCE of the
+ *      markup, which is testable.
+ *   2. NO ADMIN WRITE PATH BYPASSES A MEMBER'S OWN DATA. Every action here
+ *      touches a `league_members` row. Nothing in this file reads or writes a
+ *      `picks` row on another player's behalf.
+ *   3. NOTHING HERE RENDERS AN OPEN-WEEK PICK, ever, regardless of role.
+ *
+ * AND ONE MORE, DI-182g row 2: every action is scoped to `getActiveLeagueId()`.
+ * There is no cross-league admin action, and no code path here takes a league id
+ * from anywhere but the active-league accessor.
+ */
+
+/** Per-render cache of the async reads behind the card. Not stored anywhere —
+ *  a commissioner's view of the roster is a live question, and a stale answer
+ *  about who is linked is exactly the answer that matters least. */
+let _memberCardData = { members: [], codes: [], contacts: [], error: '' };
+export function _memberCardDataForTest() { return { ..._memberCardData }; }
+export function _setMemberCardDataForTest(d) { _memberCardData = { members: [], codes: [], contacts: [], error: '', ...d }; }
+
+/** DI-183c — "N of 6 linked", then one row per player: name + ✅/⚪ + (for ⚪)
+ *  the code. Purely a status summary; every ACTION lives in DI-182b's card
+ *  below, so there are never two places doing the same thing. */
+/**
+ * DI-183e-A2 — how long ago the dispute was raised, in the card's own voice.
+ *
+ * NOT chat-ui.js's relTime(): that one answers 'sending…' for a falsy input,
+ * which is right for an unsent message and actively misleading for a dispute
+ * timestamp. It is also not exported. Six lines here beats an export that would
+ * make two unrelated surfaces share a string nobody can change for one of them.
+ *
+ * An UNPARSEABLE value returns '' and the caller falls back to the bare warning:
+ * the commissioner needs to know a dispute happened far more than they need to
+ * know when, and a row reading "⚠️ Said 'this isn't me' NaN" is the kind of
+ * thing that gets the whole warning ignored.
+ */
+function disputeRelTime(iso) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const d = Date.now() - t;
+  if (d < 0) return 'just now';                       // clock skew between server and handset
+  if (d < 60e3) return 'just now';
+  if (d < 3600e3) return `${Math.floor(d / 60e3)}m ago`;
+  if (d < 86400e3) return `${Math.floor(d / 3600e3)}h ago`;
+  if (d < 7 * 86400e3) return `${Math.floor(d / 86400e3)}d ago`;
+  return `on ${new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
+}
+export const _disputeRelTimeForTest = disputeRelTime;
+
+function linkStatusCardHTML() {
+  const { members, codes, error } = _memberCardData;
+  if (error) return `<p class="text-muted">${escHtml(error)}</p>`;
+  if (!members.length) return `<p class="text-muted">Loading members…</p>`;
+  const active = members.filter(m => m.active);
+  const linked = active.filter(m => m.linked).length;
+  // DI-183e-A2 / DI-183h item 3 — "surfaces the mismatch to the COMMISSIONER, not
+  // just the player". A dispute is the one state on this card that needs acting
+  // on (issue a fresh code), so it is counted in the summary line as well as
+  // marked on the row: a commissioner scanning six rows should not have to find
+  // the warning to know there is one.
+  const disputed = active.filter(m => m.linkDisputedAt);
+  // THE ROW IS THREE LINES, and the ORDER is the design input rather than a
+  // layout preference (brief §8: the warning renders "above the code"). The code
+  // used to sit inline on the status line, which put it ABOVE a warning appended
+  // after the row — and the warning is precisely the thing to read BEFORE
+  // deciding whether to hand that code to somebody. Name/status, then the
+  // dispute, then the code. On a 375px screen all three fit in the same vertical
+  // rhythm the rest of the card uses; the indent aligns them under the name.
+  // An EXPRESSION-BODIED arrow below, not a block-bodied one, and that is
+  // load-bearing rather than stylistic: xsstest's structural classifier
+  // descends into a template inside `xs.map(x => `…`)` and checks each
+  // interpolation individually, but it cannot see past a `{ … return … }`
+  // body — so a block body reports the WHOLE map as one unclassified site and
+  // the ratchet takes it as new debt. Written this way, every value in the row
+  // (the display name, the claim code) is its own swept site and each is
+  // visibly escHtml()'d.
+  const codeFor = (id) => (codes.find(c => c.memberId === id)?.claimCode || '');
+  return `
+    <div class="font-display mb-sm" style="font-size:.9rem">${linked} of ${active.length} linked${disputed.length ? ` · ${disputed.length} disputed` : ''}</div>
+    <div class="link-status-list">
+      ${active.map(m => `<div class="flex gap-sm" style="align-items:center;min-height:32px">
+          <span>${m.linked ? '✅' : '⚪'}</span>
+          <span class="font-display" style="font-size:.85rem;flex:1">${escHtml(m.displayName || m.memberId)}</span>
+          <span class="text-xs text-muted">${m.linked ? 'Linked' : 'Not linked'}</span>
+        </div>
+        ${m.linkDisputedAt ? `<div class="text-xs" style="color:var(--loss);margin:-4px 0 2px 26px">⚠️ Said &quot;this isn't me&quot;${disputeRelTime(m.linkDisputedAt) ? ` ${escHtml(disputeRelTime(m.linkDisputedAt))}` : ''}</div>` : ''}
+        ${!m.linked && codeFor(m.memberId) ? `<div class="text-xs text-muted" style="margin:-2px 0 6px 26px">code <strong>${escHtml(codeFor(m.memberId))}</strong></div>` : ''}`).join('')}
+    </div>`;
+}
+
+/**
+ * DI-182b/c/d/e — the League Members card.
+ *
+ * "HIDE, DON'T DISABLE" (DI-182g row 3) IS STRUCTURAL HERE. This function is
+ * only ever reached from renderCommPage()'s admin branch, which a
+ * non-commissioner never enters — their render `return`s at the denial card. So
+ * the two roles produce genuinely different DOM trees and there is no
+ * code-shaped node for CSS to hide.
+ *
+ * SECURITY F-4 (audit #10): this paragraph used to end "The `isAdmin` re-check
+ * below is belt to that brace, not a substitute for it." THERE IS NO SUCH
+ * RE-CHECK in this function, and there never was. A comment that claims a second
+ * guard exists is worse than no comment: the next reader trusts a defence that
+ * is not there, and the `return` at the denial card — which IS the mechanism —
+ * looks like the weaker half of a pair rather than the whole thing. The sentence
+ * is deleted rather than the check added, deliberately: renderCommPage() reads
+ * `getSession().isAdmin` once, at the top, and branches; a second read here
+ * would be a second source of truth for the same question, and the failure mode
+ * of two sources is that they disagree. The structural test ([43g]) asserts the
+ * ABSENCE of this markup from the non-commissioner tree, which is the property
+ * that actually holds.
+ *
+ * THE CLAIM CODE NEVER COMES FROM THE MEMBER LIST. `_memberCardData.codes` is
+ * populated by getClaimCodes() → `get_claim_codes(p_league)`, a commissioner-
+ * gated RPC. The `authenticated` SELECT grant on `league_members` is a column
+ * list that EXCLUDES `claim_code` by design (TECH doc A2), so a generic read
+ * could not return one even if this file asked — and it does not ask.
+ */
+function leagueMembersCardHTML() {
+  // DI-182d's LOADING state is the static skeleton markup renderCommPage()
+  // paints into #comm-members-card directly — deliberately NOT built here and
+  // interpolated in. js/app.js's xsstest ratchet ([9c-2]) only tightens, and a
+  // `${leagueMembersCardHTML(...)}` call inside that section template is an
+  // interpolation the structural classifier cannot follow, so it would have
+  // entered the backlog as new debt on the day it was written. A card that is
+  // filled in by loadLeagueMembersCard() a tick later does not need to be
+  // interpolated at all.
+  const { members, codes, contacts, error } = _memberCardData;
+  if (error) {
+    // DI-182d's error state — LOUD, and scoped to the card. A broken member
+    // list is not a broken app, and reporting it as one (a full-width red
+    // banner) would send the commissioner chasing the wrong thing.
+    return `<p style="color:var(--loss)">${escHtml(error)}</p>
+      <button type="button" class="btn btn-secondary btn-sm" id="members-retry-btn">Try Again</button>`;
+  }
+  if (!members.length) return `<p class="text-muted">No members yet.</p>`;
+
+  const codeFor = (id) => codes.find(c => c.memberId === id) || null;
+  const emailFor = (id) => contacts.find(c => c.memberId === id)?.email || '';
+  // DI-182d's "Empty (theoretical)" state: a sole member has nobody to be
+  // promoted or demoted RELATIVE TO, so those controls are not rendered.
+  const soleMember = members.filter(m => m.active).length <= 1;
+
+  return members.map(m => {
+    const code = codeFor(m.memberId);
+    const email = emailFor(m.memberId);
+    const statusLine = m.linked
+      ? `Linked${email ? ` as ${escHtml(email)}` : ''}`
+      : 'Not linked yet';
+    const codeLine = (!m.linked && code?.claimCode)
+      ? `<div class="text-xs">Claim code: <strong>${escHtml(code.claimCode)}</strong></div>`
+      : '';
+    return `
+    <div class="player-admin-row" data-member-row="${escHtml(m.memberId)}">
+      <div class="player-admin-info">
+        <span class="player-admin-avatar${!m.active ? ' inactive' : ''}">${escHtml(m.initials || (m.displayName || '??').slice(0, 2).toUpperCase())}</span>
+        <div>
+          <div class="font-display" style="font-size:.9rem">${escHtml(m.displayName || m.memberId)}${!m.active ? ' <em class="text-muted">(removed)</em>' : ''}
+            ${m.role === 'commissioner' ? '<span class="badge badge-open">Commissioner</span>' : '<span class="badge badge-draft">Player</span>'}</div>
+          <div class="text-xs text-muted">${statusLine}</div>
+          ${codeLine}
+        </div>
+      </div>
+      <div class="player-admin-controls">
+        ${m.linked ? '' : `
+          <button class="btn btn-secondary btn-sm member-copy-code-btn" data-member-id="${escHtml(m.memberId)}" ${code?.claimCode ? '' : 'disabled'}>Copy Code</button>`}
+        <button class="btn btn-ghost btn-sm member-newcode-btn" data-member-id="${escHtml(m.memberId)}" data-name="${escHtml(m.displayName || m.memberId)}" ${m.linked ? 'disabled title="Unlink first — a linked row has no claim code."' : ''}>New Code</button>
+        ${soleMember ? '' : (m.role === 'commissioner'
+          ? `<button class="btn btn-ghost btn-sm member-demote-btn" data-member-id="${escHtml(m.memberId)}" data-name="${escHtml(m.displayName || m.memberId)}">Make Player</button>`
+          : `<button class="btn btn-ghost btn-sm member-promote-btn" data-member-id="${escHtml(m.memberId)}" data-name="${escHtml(m.displayName || m.memberId)}">Make Commissioner</button>`)}
+        ${m.linked ? `<button class="btn btn-ghost btn-sm member-unlink-btn" data-member-id="${escHtml(m.memberId)}" data-name="${escHtml(m.displayName || m.memberId)}">Unlink Account</button>` : ''}
+        <button class="btn ${m.active ? 'btn-danger' : 'btn-secondary'} btn-sm member-remove-btn" data-member-id="${escHtml(m.memberId)}" data-name="${escHtml(m.displayName || m.memberId)}" data-active="${m.active ? '1' : '0'}">${m.active ? 'Remove from League' : 'Restore'}</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/**
+ * Loads the three commissioner reads and re-renders both cards in place.
+ *
+ * THREE SEPARATE RPCs, NOT ONE JOIN, and that is the design rather than an
+ * inefficiency: the member list, the claim codes and the contact emails have
+ * three DIFFERENT authorization stories server-side (a column-limited table
+ * grant, a commissioner-gated RPC, and a DEFINER RPC that answers differently
+ * for a plain member). Collapsing them into one read would mean one of those
+ * three stories had to be weakened to accommodate the other two.
+ *
+ * A FAILED CODES READ DOES NOT FAIL THE CARD. The member list is the card; the
+ * codes and contacts decorate it. A commissioner whose `get_claim_codes()` call
+ * is refused still needs to see, promote and unlink their roster.
+ */
+export async function loadLeagueMembersCard() {
+  const leagueId = getActiveLeagueId();
+  const statusEl = document.getElementById('comm-link-status-card');
+  const cardEl = document.getElementById('comm-members-card');
+  if (!leagueId || !cardEl) return;
+  try {
+    const members = await listLeagueMembers(leagueId);
+    let codes = [], contacts = [];
+    try { codes = await getClaimCodes(leagueId); }
+    catch (e) { console.warn('[auth] claim codes could not be read (the roster still renders)', e); }
+    try { contacts = await getMemberContacts(leagueId); }
+    catch (e) { console.warn('[auth] member contacts could not be read (the roster still renders)', e); }
+    _memberCardData = { members, codes, contacts, error: '' };
+  } catch (err) {
+    console.warn('[auth] the league member list could not be read', err);
+    // Also the commissioner-addressed resolver: this string renders inside the
+    // commissioner's own card, and nobody else can reach it.
+    _memberCardData = { members: [], codes: [], contacts: [], error: `We couldn't load this league's members. ${memberActionErrorCopy(err)}` };
+  }
+  if (statusEl) statusEl.innerHTML = linkStatusCardHTML();
+  cardEl.innerHTML = leagueMembersCardHTML();
+  bindLeagueMembersCard(cardEl);
+}
+
+/**
+ * EVERY ACTION IS RPC-THEN-REFRESH, NEVER A LOCAL FLIP.
+ *
+ * DI-182i's second must-not is the sharp one: "must not let a demoted
+ * commissioner retain any Comm-tab affordance after the demotion — immediately,
+ * not after a refresh." `refreshMembershipsAndSession()` inside each auth.js
+ * wrapper is the only function that recomputes `getSession().isAdmin`, and
+ * navigateTo('commissioner') below re-enters renderCommPage(), which reads it.
+ * So demoting yourself flips the tab to the denial card on the very next render,
+ * as a consequence of the code path rather than of a remembered extra step.
+ */
+function bindLeagueMembersCard(container) {
+  const leagueId = getActiveLeagueId();
+  container.querySelector('#members-retry-btn')?.addEventListener('click', () => { loadLeagueMembersCard(); });
+
+  /** One shape for all five writes: confirm (if asked), run, re-render, report.
+   *  A single helper so a future sixth action cannot forget the refresh. */
+  const runMemberAction = async (btn, { confirmCopy, run, busyCopy, okCopy, reRenderCommTab = false }) => {
+    if (confirmCopy && !confirm(confirmCopy)) return;
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = busyCopy;
+    try {
+      await run();
+      if (okCopy) showToast(okCopy, 'success');
+      // The Comm tab is re-entered ONLY for the writes that can change the
+      // acting commissioner's OWN role. For an action against somebody else's
+      // row, re-rendering the whole tab would throw away the commissioner's
+      // scroll position for no gain — the card re-render below is enough.
+      if (reRenderCommTab) { navigateTo('commissioner'); return; }
+      await loadLeagueMembersCard();
+    } catch (err) {
+      // REVIEWER F-E — the commissioner's Unlink Account reaches the same
+      // wrapper, so it inherits the same distinction. The write LANDED; only the
+      // re-read did not. Re-enabling the button here would invite a second
+      // unlink of a row that is already unlinked, which answers `not_found`.
+      if (err?.code === 'unlink_refresh_failed') {
+        showToast('That change was applied. We couldn\'t refresh this page — reload to see it.', 'warning');
+        return;
+      }
+      btn.disabled = false; btn.textContent = label;
+      // REVIEWER F5 — the commissioner-addressed resolver, not the player one.
+      showToast(memberActionErrorCopy(err), 'error');
+    }
+  };
+
+  container.querySelectorAll('.member-promote-btn').forEach(btn => btn.addEventListener('click', () => runMemberAction(btn, {
+    confirmCopy: `Make ${btn.dataset.name} a commissioner of this league?`,
+    busyCopy: 'Promoting…', okCopy: `${btn.dataset.name} is now a commissioner.`,
+    run: () => setMemberRole(leagueId, btn.dataset.memberId, 'commissioner'),
+  })));
+  container.querySelectorAll('.member-demote-btn').forEach(btn => btn.addEventListener('click', () => runMemberAction(btn, {
+    confirmCopy: `Make ${btn.dataset.name} a player? They'll lose commissioner access immediately.`,
+    busyCopy: 'Updating…', okCopy: `${btn.dataset.name} is now a player.`,
+    run: () => setMemberRole(leagueId, btn.dataset.memberId, 'player'),
+    // DI-182i — demoting YOURSELF must flip the tab now, not on next boot.
+    // `getSession().playerId` is the active membership's member id, so this is
+    // the exact comparison that decides whether the acting commissioner just
+    // removed their own access. The server refuses the last commissioner.
+    reRenderCommTab: btn.dataset.memberId === (getSession()?.playerId || ''),
+  })));
+  container.querySelectorAll('.member-unlink-btn').forEach(btn => btn.addEventListener('click', () => runMemberAction(btn, {
+    confirmCopy: `${btn.dataset.name} will need a new code to sign back in. Continue?`,
+    busyCopy: 'Unlinking…', okCopy: `${btn.dataset.name} is unlinked. Issue them a new code.`,
+    // THE SAME unlinkMember() WRAPPER "This isn't me" CALLS — one
+    // implementation, two callers (brief §4), never a second copy of its body.
+    run: () => unlinkMember(leagueId, btn.dataset.memberId),
+    reRenderCommTab: btn.dataset.memberId === (getSession()?.playerId || ''),
+  })));
+  container.querySelectorAll('.member-remove-btn').forEach(btn => btn.addEventListener('click', () => runMemberAction(btn, {
+    // DI-182e's copy, and it is TRUE of the write that is actually made: this
+    // sets `active = false` and nothing else. Nothing on this path deletes a row.
+    //
+    // REVIEWER F7 (audit #10) — THE CITATION HERE WAS WRONG, and the conclusion
+    // survives it. This used to read "There is no DELETE policy on
+    // picks/obligations server-side". `obligations` genuinely has none
+    // (0002_rls.sql:282-284 is select/insert/update and stops). `picks` DOES
+    // have one — `picks_delete`, 0002_rls.sql:260-261 — but read what it admits:
+    //
+    //     using (member_id = my_member_id(league_id)
+    //            and pick_window_open(league_id, week_id)
+    //            and game_pickable(league_id, game_id))
+    //
+    // three conjuncts, and every one of them narrows it away from this button.
+    // It is a PLAYER deleting HIS OWN pick while the window is still OPEN — the
+    // "I changed my mind before lock" path, which the app has always had. It is
+    // scoped to `my_member_id()`, so a commissioner cannot reach another
+    // player's row through it; and it is scoped to an open window, so it cannot
+    // touch a single graded, historical pick. The removed member's history is
+    // therefore kept for the reason the copy says, just not for the reason the
+    // old comment gave — and a comment that cites a policy which does not exist
+    // is one grep away from being discovered as a lie about a promise made to
+    // six players in a confirm dialog.
+    confirmCopy: btn.dataset.active === '1'
+      ? `This removes ${btn.dataset.name} from the league. Their history is kept, not deleted. Continue?`
+      : `Restore ${btn.dataset.name} to the league?`,
+    busyCopy: btn.dataset.active === '1' ? 'Removing…' : 'Restoring…',
+    okCopy: btn.dataset.active === '1' ? `${btn.dataset.name} removed. Their history is intact.` : `${btn.dataset.name} restored.`,
+    run: () => setMemberActive(leagueId, btn.dataset.memberId, btn.dataset.active !== '1'),
+    // REVIEWER F8 (audit #10) — SELF-REMOVE IS THE THIRD SELF-ACTION, and it was
+    // the only one without this. Demote-self and unlink-self both re-enter the
+    // Comm tab because they can take the acting commissioner's own access away;
+    // so can Remove. `active = false` drops the row out of `my_member_id()`
+    // (0002_rls.sql's `and m.active`), which is what `getSession().isAdmin` is
+    // derived through — so a commissioner who removes themself is no longer a
+    // commissioner, and without this the panel keeps painting every control they
+    // no longer have until the next navigation. The comparison is the same one,
+    // on the same term, for the same reason.
+    reRenderCommTab: btn.dataset.memberId === (getSession()?.playerId || ''),
+  })));
+  container.querySelectorAll('.member-newcode-btn').forEach(btn => btn.addEventListener('click', () => runMemberAction(btn, {
+    confirmCopy: 'This invalidates the old code. Continue?',
+    busyCopy: 'Issuing…',
+    // `issue_claim_code` is idempotent-by-replacement, so re-issuing IS the
+    // revoke — there is no window in which two codes are live, and no separate
+    // revoke call to forget.
+    run: async () => { await issueClaimCode(leagueId, btn.dataset.memberId); },
+    okCopy: `New code issued for ${btn.dataset.name}.`,
+  })));
+  container.querySelectorAll('.member-copy-code-btn').forEach(btn => btn.addEventListener('click', async () => {
+    const code = _memberCardData.codes.find(c => c.memberId === btn.dataset.memberId)?.claimCode || '';
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      showToast('Code copied.', 'success');
+    } catch {
+      // Clipboard is permission-gated and blocked outright in some in-app
+      // browsers. The code is already rendered on the row, so the honest
+      // fallback is to say so rather than to fail silently.
+      showToast('Couldn\'t copy automatically — the code is on the row, read it from there.', 'warning');
+    }
+  }));
+}
+
+/**
+ * DI-183a-ii — THE "Set up your account" DASHBOARD BANNER (pre-cutover).
+ *
+ * Lives entirely on Sheets: `authMode` is still pre-cutover, the Sheet is still
+ * authoritative, and tapping this performs the PRE-LINKING flow. It is a banner
+ * ABOVE the ordered dashboard sections, never a new section within them —
+ * RG-01's locked section order is untouched.
+ *
+ * IT MUST ROUTE THROUGH ensureSupabaseSdkLoaded(), FROM THIS TAP HANDLER.
+ * boot() deliberately does not load the Supabase SDK in 'prelink' mode
+ * (reviewer-B2: zero extra bytes for a mode that isn't using it), and the
+ * SDK-loading comment in this file names THIS banner as the caller responsible
+ * for awaiting it. If the SDK does not arrive inside its deadline, the tap
+ * routes to showAuthHoldGate('sdk-unavailable') — DI-180l/A4's rule, "no button
+ * that will only fail when tapped" — and NOT to a banner-local error message.
+ * ONE hold-gate family, not two.
+ */
+export function prelinkBannerHTML() {
+  if (getAuthMode() !== 'prelink') return '';
+  if (isContentWithheld()) return '';
+  return `
+    <div class="card" id="prelink-banner">
+      <div class="font-display" style="font-size:.95rem">🔑 New sign-in is coming.</div>
+      <p class="text-muted" style="font-size:.85rem;margin:4px 0 8px">You'll sign in with Google instead of a PIN. Linking now takes a moment and means nothing to do later.</p>
+      <button type="button" class="btn btn-primary btn-sm" id="prelink-banner-btn">Link My Account Now</button>
+    </div>`;
+}
+/** Test-only: shrink the banner's SDK deadline so authtest can prove the
+ *  sdk-unavailable route in milliseconds instead of ten real seconds. Same
+ *  convention push-onesignal.js's `_resetForTest({sdkReadyMs})` already uses.
+ *  Production never sets it, so the deadline is the real one. */
+let _prelinkSdkTimeoutMsForTest = null;
+export function _setPrelinkSdkTimeoutForTest(ms) { _prelinkSdkTimeoutMsForTest = ms == null ? null : Number(ms); }
+export function bindPrelinkBanner(container) {
+  const btn = (container || document).querySelector('#prelink-banner-btn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true; btn.textContent = 'Loading…';
+    try {
+      const ready = await ensureSupabaseSdkLoaded(
+        _prelinkSdkTimeoutMsForTest == null ? undefined : { timeoutMs: _prelinkSdkTimeoutMsForTest });
+      if (!ready) { showAuthHoldGate('sdk-unavailable'); return; }
+      showGoogleSignInGate();
+    } catch (err) {
+      // A THROW IS THE SAME ANSWER AS A FALSE. The SDK either arrived or it did
+      // not; how it failed to arrive is not a distinction the player can act on,
+      // and inventing a second error surface here is exactly the "two hold-gate
+      // families" A4 forbids.
+      console.warn('[auth] the pre-link banner could not load the Supabase SDK', err);
+      showAuthHoldGate('sdk-unavailable');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Link My Account Now';
+    }
+  });
+}
+
+/**
+ * DI-184's header pill and the Account sheet's "Switch League" button both
+ * open this — a DISMISSIBLE sheet, reusing the SAME row-list markup/bind
+ * logic DI-181's automatic full-page selector uses (DI-184f "no second
+ * selector implementation"), but as a `.modal-overlay.centered`/`.modal`
+ * (the same pattern showAccountSheet() uses), not a full-page takeover —
+ * unlike DI-181a's automatic selector, this is a VOLUNTARY reopen by an
+ * account that already has a working active league loaded, so cancelling
+ * out of it must be possible.
+ */
+function showLeagueSelectorSheet() {
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Choose a League</h3><button class="modal-close" id="league-selector-sheet-close">✕</button></div>
+    ${leagueSelectorListHTML()}
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#league-selector-sheet-close')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  bindLeagueSelectorRows(ov, close);
+}
+
+/** DI-181c "Switching leagues…" — the one state that DOES get the full
+ *  opaque overlay treatment (DI-181e), because a league switch must block
+ *  every write surface, not just whichever tab happens to be open
+ *  (DI-181h's blind-rule obligation). */
+function showLeagueSwitchOverlay() {
+  document.getElementById('league-switch-overlay')?.remove();
+  const el = document.createElement('div');
+  el.id = 'league-switch-overlay';
+  el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Switching leagues…</p></div>`;
+  document.body.appendChild(el);
+}
+function hideLeagueSwitchOverlay() { document.getElementById('league-switch-overlay')?.remove(); }
+
+export async function doSwitchActiveLeague(leagueId) {
+  if (!leagueId) return;
+  showLeagueSwitchOverlay();
+  try {
+    await switchActiveLeague(leagueId);
+  } catch (e) {
+    console.warn('[auth] league switch failed', e);
+    showToast("Couldn't switch leagues — check your connection and try again.", 'error');
+  } finally {
+    // REVIEWER NOTE 5 — WHAT THIS LINE IS, STATED CORRECTLY.
+    //
+    // It is IDEMPOTENT DEFENCE IN DEPTH, not the thing that first clears the
+    // draft on a league switch. The clear happens via the instrumented write in
+    // js/auth.js: setActiveLeagueId() notifies, switchActiveLeague() emits
+    // SWITCH_END, and app.js's wired listener routes that into the very same
+    // applyIdentityDeltaIfChanged() — so in the normal, wired app this call is
+    // already a no-op by the time it runs, because the latch has moved.
+    //
+    // It stays because it costs nothing and covers the case the listener cannot:
+    // doSwitchActiveLeague() called before wireAuthUIEvents() has run (a boot
+    // ordering change, a test driving the function directly), where there is no
+    // listener to route SWITCH_END anywhere. The earlier version of this comment
+    // claimed this line WAS the fix for F-2; that was wrong, and it matters,
+    // because a reader who checks "does the switch path clear the draft?" by
+    // reading this line alone would conclude the auth.js half is redundant and
+    // delete it. Neither is dead code; one is the mechanism and one is the net.
+    //
+    // In the `finally` and not the `try` on purpose: switchActiveLeague() moves
+    // the pointer BEFORE it emits SWITCH_END, so a failure after the move still
+    // has to be reconciled. The delta check makes the common case (switch
+    // refused before the pointer moved) a no-op — one function, called from
+    // everywhere it could matter, firing once.
+    // DI-180o(b) — `discard`: a league switch changes the scope a slate belongs
+    // to, so an unsubmitted one never survives it (same rule as Sign Out).
+    applyIdentityDeltaIfChanged(`league-switch:${leagueId}`, { discard: true });
+    hideLeagueSwitchOverlay();
+    refreshHeader();
+    navigateTo(state.currentTab || 'dashboard');
+  }
 }
 
 window.navigateTo=navigateTo;

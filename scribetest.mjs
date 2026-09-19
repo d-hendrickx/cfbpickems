@@ -1324,4 +1324,33 @@ console.log('\n[26] BUG-D — the @scribe ask must never race its own trigger me
 
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
-else { console.error(`❌ FAILURES — ${pass} passed, ${fail} failed`); process.exit(1); }
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+else process.stderr.write(`❌ FAILURES — ${pass} passed, ${fail} failed` + '\n', () => process.stdout.write('', () => process.exit(1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

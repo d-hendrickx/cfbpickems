@@ -1282,6 +1282,221 @@ console.log("\n[26] NOTE #14 (CONVENTIONS #17) — the Approve/Reject buttons cl
   });
 }
 
+console.log("\n[27] RG-144 — a trainer-output playerId is RESOLVED against the roster: real id kept, unambiguous display name mapped, anything else discarded…");
+{
+  // THE REPORTED DEFECT. The live Sheet acquired `fact_candidate` rows whose
+  // playerId was "Brayden"/"Jacob" — DISPLAY NAMES, not ids. The Supabase
+  // importer's projection refused them (scribe_memory.subject_member_id is a
+  // members FK), which is how they surfaced; the export was corrected by hand.
+  //
+  // WHY the model produced a name: scribeTrainerBuildInputText_ named every
+  // player in the fact-source set by DISPLAY NAME only ("said by Koby,
+  // flagged by Kevin") and never printed a single canonical id, while the
+  // schema asked for a `playerId`. The only player-shaped string in the whole
+  // prompt was a display name, so that is what came back — and nothing
+  // server-side ever checked it (scribeTrainerFilterFactCandidates_ validated
+  // `sourceMessageId` and nothing else; the persist step took
+  // `String(f.playerId || '')` verbatim).
+  const env27 = buildSandbox();
+  enableTrainer(env27);
+  const logs27 = [];
+  env27.gs.Logger = { log: m => logs27.push(String(m)) };
+  env27.gs.setOne('cfbp_players', [
+    { playerId: 'p1', displayName: 'Drew', active: true },
+    { playerId: 'p2', displayName: 'Brayden', active: true },
+    { playerId: 'p5', displayName: 'Jacob', active: true },
+    { playerId: 'p9', displayName: 'Ghosty', active: false },
+  ]);
+  const s27 = env27.gs.ensureMsgSheet();
+  seedRatedWindow(env27, 3);
+  ['srcA', 'srcB', 'srcC', 'srcD', 'srcE', 'srcF'].forEach((id, i) => {
+    appendMsgRow(s27, { id, author: 'p2', body: 'flagged source ' + id });
+    appendMsgRow(s27, { id: 'flag_' + id, type: 'feedback', author: 'p1', targetId: id, meta: { category: 'remember_this', value: true } });
+  });
+
+  let captured27 = null;
+  env27.setUrlFetchImpl((url, opts) => {
+    captured27 = JSON.parse(opts.payload);
+    return anthropicJsonResponse(trainerOutput({
+      fact_candidates: [
+        { playerId: 'Brayden', key: 'k_name', value: 'bets unders', confidence: 0.8, sourceMessageId: 'srcA' },
+        { playerId: 'p5', key: 'k_realid', value: 'always takes the dog', confidence: 0.8, sourceMessageId: 'srcB' },
+        { playerId: '  jacob ', key: 'k_case', value: 'hates night games', confidence: 0.8, sourceMessageId: 'srcC' },
+        { playerId: 'Kihoon', key: 'k_unknown', value: 'not in this league', confidence: 0.9, sourceMessageId: 'srcD' },
+        { playerId: 'Ghosty', key: 'k_inactive', value: 'a former member by name', confidence: 0.9, sourceMessageId: 'srcE' },
+        { playerId: 'p9', key: 'k_inactive_id', value: 'a former member by ID', confidence: 0.9, sourceMessageId: 'srcF' },
+      ],
+    }));
+  });
+  const r27 = runTrainerAuthed(env27);
+  assert(r27.ok === true && !r27.skipped, `fixture check: a real run happened (${JSON.stringify(r27.skipped || r27.error || 'ok')})`);
+
+  const rosterIds27 = ['p1', 'p2', 'p5', 'p9'];
+  const facts27 = env27.gs.scribeLoadLearnings_().filter(l => l.kind === 'fact_candidate');
+  const byKey27 = {};
+  facts27.forEach(f => { byKey27[f.key] = f; });
+
+  // ── THE HEADLINE ASSERTION — this is the bug, stated once ────────────────
+  assert(facts27.every(f => rosterIds27.indexOf(f.playerId) !== -1),
+    `NOT ONE stored fact_candidate carries a playerId that is not a known player id (got ${JSON.stringify(facts27.map(f => f.playerId))})`);
+
+  assert(byKey27.k_name && byKey27.k_name.playerId === 'p2',
+    `an unambiguous display name is MAPPED to the canonical id, not stored and not thrown away (got ${byKey27.k_name && byKey27.k_name.playerId})`);
+  assert(byKey27.k_realid && byKey27.k_realid.playerId === 'p5',
+    'a real id passes through untouched');
+  assert(byKey27.k_case && byKey27.k_case.playerId === 'p5',
+    `the name match is case-insensitive and whitespace-tolerant (got ${byKey27.k_case && byKey27.k_case.playerId})`);
+  assert(byKey27.k_inactive_id && byKey27.k_inactive_id.playerId === 'p9',
+    'a real id belonging to an INACTIVE player is still a real id — the members row exists, so the FK resolves and the row is kept');
+  assert(!byKey27.k_unknown,
+    'a playerId matching no player at all is DISCARDED — never stored for an approver who would have no idea who it refers to');
+  assert(!byKey27.k_inactive,
+    'a display name that only matches a DEACTIVATED player is discarded too — name-matching is deliberately limited to active players');
+  assert(facts27.length === 4, `exactly the four resolvable candidates survive (got ${facts27.length}: ${JSON.stringify(facts27.map(f => f.key + '=' + f.playerId))})`);
+
+  // The run REPORTS both outcomes rather than swallowing them — same
+  // discipline [22]'s droppedFactCandidates already established.
+  assert(r27.counts.droppedFactCandidates === 2,
+    `the two unresolvable candidates are counted as dropped (got ${JSON.stringify(r27.counts)})`);
+  assert(r27.counts.unresolvedPlayerFactCandidates === 2,
+    `…and broken out by REASON, so "the model is naming people we do not have" is visible separately from "the model cited a source it was not given" (got ${r27.counts.unresolvedPlayerFactCandidates})`);
+  assert(r27.counts.mappedPlayerIds === 2,
+    `…and the two display-name mappings are counted as well (got ${r27.counts.mappedPlayerIds})`);
+
+  // Logging — a mapping is a silent repair unless it is written down, and a
+  // discard is data loss unless it is written down.
+  assert(logs27.some(l => /scribeTrainerResolvePlayerId_: mapped display name "Brayden" -> p2/.test(l)),
+    `every mapping is logged with both halves (got ${JSON.stringify(logs27.filter(l => /ResolvePlayerId/.test(l)))})`);
+  assert(logs27.some(l => /scribeTrainerResolvePlayerId_: DISCARDED/.test(l) && /Kihoon/.test(l)),
+    'every discard is logged with the string that could not be resolved');
+
+  // ── And the prompt half of the root cause: the ids are now IN the input ──
+  const userText27 = captured27.messages[0].content;
+  assert(/LEAGUE ROSTER/.test(userText27) && /p2=Brayden/.test(userText27),
+    'the Trainer input now prints the canonical id next to every active player — the model was previously shown display names ONLY and asked for an id');
+  assert(/never a display name/i.test(userText27),
+    'and says in words that a fact_candidate playerId must be one of those ids');
+  assert(/said by Brayden \[p2\]/.test(userText27),
+    'each fact source names its speaker BY ID as well as by display name, since that speaker is the usual subject of the fact');
+  const factPlayerIdField27 = captured27.output_config.format.schema.properties.fact_candidates.items.properties.playerId;
+  assert(/canonical/i.test(factPlayerIdField27.description || '') && /display name/i.test(factPlayerIdField27.description || ''),
+    `the schema field ITSELF says canonical id, never a display name — the instruction travels with the field, not only in the prose above it (got ${JSON.stringify(factPlayerIdField27.description || null)})`);
+}
+
+console.log("\n[27b] RG-144 — ambiguity is NEVER guessed, and the resolver is exercised directly…");
+{
+  const env27b = buildSandbox();
+  env27b.gs.setOne('cfbp_players', []);
+  const R = (raw, players) => env27b.gs.scribeTrainerResolvePlayerId_(raw, players);
+  const roster27 = {
+    p3: { playerId: 'p3', displayName: 'Kevin', active: true },
+    p7: { playerId: 'p7', displayName: 'Kevin', active: true },   // two Kevins — a commissioner-editable roster allows it
+    p4: { playerId: 'p4', displayName: 'Koby', active: true },
+  };
+  const amb = R('Kevin', roster27);
+  assert(amb.ok === false && amb.reason === 'ambiguous',
+    `two active players share a display name -> the candidate is REFUSED, never assigned to whichever one sorted first (got ${JSON.stringify(amb)})`);
+  assert(R('p3', roster27).ok === true && R('p3', roster27).playerId === 'p3',
+    'the id path is unaffected by the ambiguity — an exact id is never name-matched at all');
+  assert(R('Koby', roster27).ok === true && R('Koby', roster27).playerId === 'p4' && R('Koby', roster27).mapped === true,
+    'an unambiguous name still maps, and reports that it was mapped');
+  assert(R('', roster27).ok === false && R('', roster27).reason === 'empty', 'an empty playerId is refused');
+  assert(R(null, roster27).ok === false, 'a null playerId is refused, not coerced into the string "null"');
+  assert(R('P4', roster27).ok === false && R('P4', roster27).reason === 'unknown',
+    'id matching is EXACT and case-SENSITIVE — "P4" is not "p4", because an id is an identifier and a near-miss must not silently become a different row');
+  assert(R('Koby', {}).ok === false, 'an empty roster resolves nothing (fails closed, never "no roster so allow anything")');
+}
+
+console.log("\n[27c] RG-144 — the memory-apply path is the LAST gate: a legacy display-name row never reaches CFBP_SCRIBE_MEMORY…");
+{
+  // The live Sheet already contains rows written before this fix. When Drew
+  // approves one, scribeMemoryApplyApprovedFacts_ copies its playerId into
+  // CFBP_SCRIBE_MEMORY — the sheet whose projected column IS the members FK.
+  // So the same resolution runs here too: repair what is unambiguous, refuse
+  // the rest, and never stamp memoryAppliedAt on a row that was not applied.
+  const env27c = buildSandbox();
+  const logs27c = [];
+  env27c.gs.Logger = { log: m => logs27c.push(String(m)) };
+  env27c.gs.setOne('cfbp_players', [
+    { playerId: 'p2', displayName: 'Brayden', active: true },
+    { playerId: 'p5', displayName: 'Jacob', active: true },
+  ]);
+  env27c.gs.scribeSaveLearnings_([
+    { kind: 'fact_candidate', playerId: 'Brayden', key: 'legacy_name', value: 'unders on Big Ten nights', confidence: 0.8, sourceMessageId: 'm1', status: 'approved', createdAt: '2026-09-01T00:00:00Z', runId: 'r1' },
+    { kind: 'fact_candidate', playerId: 'Kihoon', key: 'legacy_unknown', value: 'nobody by that name', confidence: 0.8, sourceMessageId: 'm2', status: 'approved', createdAt: '2026-09-01T00:00:00Z', runId: 'r1' },
+    { kind: 'fact_candidate', playerId: 'p5', key: 'legacy_id', value: 'already correct', confidence: 0.8, sourceMessageId: 'm3', status: 'approved', createdAt: '2026-09-01T00:00:00Z', runId: 'r1' },
+  ]);
+  const applied27 = env27c.gs.scribeMemoryApplyApprovedFacts_();
+  const mem27 = env27c.gs.scribeMemoryAll_();
+  assert(mem27.every(m => m.playerId === 'p2' || m.playerId === 'p5'),
+    `every memory row written carries a real player id (got ${JSON.stringify(mem27.map(m => m.playerId + ':' + m.key))})`);
+  assert(mem27.some(m => m.key === 'legacy_name' && m.playerId === 'p2'),
+    'an unambiguous legacy display-name row is repaired on the way in rather than blocking the approval');
+  assert(!mem27.some(m => m.key === 'legacy_unknown'),
+    'an unresolvable legacy row is NOT written to memory — this is the row shape the Supabase import refused');
+  assert(applied27.applied === 2 && applied27.skipped === 1,
+    `the sync reports what it refused instead of reporting success for it (got ${JSON.stringify(applied27)})`);
+  const stillPending = env27c.gs.scribeLoadLearnings_().filter(l => l.key === 'legacy_unknown')[0];
+  assert(stillPending && !stillPending.memoryAppliedAt,
+    'the refused row is never stamped memoryAppliedAt — it is unfinished business, not a completed sync');
+  assert(logs27c.some(l => /scribeMemoryApplyApprovedFacts_/.test(l) && /Kihoon/.test(l)),
+    'and the refusal is logged with the offending value');
+}
+
+console.log("\n[27d] RG-144 Mutation-prove — delete the resolver call on a SCRATCH source string and the display name comes straight back…");
+{
+  const marker27 = "var resolved = scribeTrainerResolvePlayerId_(c.playerId, playersById || {});";
+  assert(codeGsSrc.includes(marker27), 'fixture check: the resolver really is called from the fact-candidate filter in the real source');
+  const mutated27 = codeGsSrc.replace(marker27,
+    "var resolved = { ok: true, playerId: String(c.playerId || ''), mapped: false };   // MUTATED FOR TEST — the pre-RG-144 behaviour");
+  assert(mutated27 !== codeGsSrc, 'fixture check: the mutation changed the (in-memory) source string');
+
+  const mutEnv27 = buildSandbox(mutated27);
+  enableTrainer(mutEnv27);
+  mutEnv27.gs.setOne('cfbp_players', [{ playerId: 'p2', displayName: 'Brayden', active: true }]);
+  const sM27 = mutEnv27.gs.ensureMsgSheet();
+  seedRatedWindow(mutEnv27, 3);
+  appendMsgRow(sM27, { id: 'srcM', author: 'p2', body: 'flagged source' });
+  appendMsgRow(sM27, { id: 'flagM', type: 'feedback', author: 'p1', targetId: 'srcM', meta: { category: 'remember_this', value: true } });
+  mutEnv27.setUrlFetchImpl(() => anthropicJsonResponse(trainerOutput({
+    fact_candidates: [{ playerId: 'Brayden', key: 'k_mut', value: 'v', confidence: 0.8, sourceMessageId: 'srcM' }],
+  })));
+  const rM27 = runTrainerAuthed(mutEnv27);
+  assert(rM27.ok === true, 'fixture check: the mutated run still "succeeds" — which is exactly how this shipped unnoticed');
+  const mutFacts = mutEnv27.gs.scribeLoadLearnings_().filter(l => l.kind === 'fact_candidate');
+  assert(mutFacts.length === 1 && mutFacts[0].playerId === 'Brayden',
+    'MUTATION CANARY: with the resolver bypassed on a scratch source string, "Brayden" is stored verbatim exactly as the live Sheet shows — [27]\'s headline assertion is capable of going red');
+}
+
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
-else { console.error(`❌ FAILURES — ${pass} passed, ${fail} failed`); process.exit(1); }
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+else process.stderr.write(`❌ FAILURES — ${pass} passed, ${fail} failed` + '\n', () => process.stdout.write('', () => process.exit(1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

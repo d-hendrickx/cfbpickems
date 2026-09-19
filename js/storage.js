@@ -22,6 +22,19 @@ import {
 } from './data-model.js';
 
 import { cacheGet, cacheSet, isBackendReady } from './backend.js';
+// Phase III Step 4 Part B (DI §1.2 row 1) — THE THIRD STORAGE MODE.
+// A NAMESPACE import, and a STATIC one, exactly as the design input specifies:
+// js/supabase-backend.js has ZERO top-level side effects by construction (its
+// own header, constraint 1 — no client, no storage read, no timer, no DOM), so
+// importing it costs a 'pins'/'sheets' boot nothing but the module eval, and
+// loadtest.mjs's DOM stub still imports this seam exactly as it does today.
+// It imports only ./supabase-projection.js, so this edge introduces no cycle
+// (supabase-backend.js never imports auth.js/storage.js/backend.js — DI §1.3's
+// register-don't-import rule is what keeps that true).
+import * as sb from './supabase-backend.js';
+// Phase III Step 3a (DI-180f) — see the getSession() comment below. This is
+// the only new import this file gains for the whole build.
+import { getAuthMode, getSupabaseSession, isAuthDataLayerMismatch, AuthModeMismatchError } from './auth.js';
 
 const KEYS = {
   SETTINGS:    'cfbp_settings',
@@ -190,6 +203,35 @@ const KEYS = {
 // permanent routing decision for one key, made in the open at the same seam that
 // already routes SESSION and SITE_UNLOCK, and it is unconditional — it behaves
 // identically whether the backend is healthy, degraded or absent.
+// ── Phase III Step 3a (reviewer N9) — THREE MORE DEVICE-LOCAL KEYS, owned by
+//    js/auth.js rather than declared in KEYS above, named here so this list is
+//    still the one place a reader can see everything that stays on the handset:
+//      'cfbp_supabase_session'       js/auth.js AUTH_STORAGE_KEY — the Supabase
+//        SDK's own persisted token, written by the SDK (we only configure the
+//        storageKey and remove it on sign-out). Never routed through load()/
+//        save(): it is the SDK's private format, and putting a bearer token on
+//        a shared Sheet would hand every league member every other member's
+//        session.
+//      'cfbp_supabase_active_league' js/auth.js ACTIVE_LEAGUE_KEY — which
+//        league is active ON THIS DEVICE. Device-local for exactly the reason
+//        SESSION is: it records what this handset is looking at, not league
+//        state. Drew switching leagues on a laptop must not re-scope a phone.
+//      'cfbp_auth_mode_last_known'   js/auth.js LAST_AUTH_MODE_KEY (SEC F1-R1,
+//        second remediation pass) — the last authMode a SUCCESSFUL config.json
+//        read established on THIS device. Device-local because it is a fact
+//        about what this handset last saw, not league state; and because its
+//        entire job is to be readable when the network is not. It is what makes
+//        a failed config read fail CLOSED (keep the last known mode) instead of
+//        silently selecting 'pins' — which, after cutover, would resurrect the
+//        stale `cfbp_session` above as a live commissioner session. Only ever
+//        written by a config read that succeeded.
+//      'cfbp_device_data_owner'      js/auth.js DEVICE_DATA_OWNER_KEY (DI-180q) — the account id + active league id this handset's local data belongs to; device-local (a fact about this handset), never synced, opaque ids only.
+//      'cfbp_supabase_mirror'        js/supabase-backend.js SNAPSHOT_KEY (Phase III Step 4, DI §5.3) — the last-good league snapshot the adapter paints from while a hydrate is in flight (ACTIVE-STALE) or while offline (OFFLINE-READONLY). Device-local because it IS the device's copy; written only from server truth, never while dirty, and it replaces 'cfbp_sheet_mirror' in dataMode:'supabase' (which the first Supabase boot then wipes, §6.1). Under the `cfbp_` prefix on purpose, so auth.js's F-1 handover sweep clears it with no new list entry, and read back through the adapter's exported hasDeviceSnapshot() rather than a second key literal.
+//    All five are read/written by their OWNING module directly (the first four
+//    by auth.js, the fifth by supabase-backend.js) rather than through this
+//    seam, for the reasons above; none is in the Set below because none is ever
+//    passed to load()/save(). Named so a future reader does not conclude the
+//    inventory is complete without them.
 const DEVICE_LOCAL_KEYS = new Set([
   KEYS.SESSION,
   KEYS.SITE_UNLOCK,
@@ -218,18 +260,82 @@ const DEVICE_LOCAL_KEYS = new Set([
   'cfbp_backend_config',
 ]);
 
-// Active storage backend: 'local' | 'googleSheets'. Default local.
+/**
+ * DI §4.3 — the ONE derived, read-only mirror key. Deliberately NOT in `KEYS`
+ * above: nothing writes it (the adapter's set() refuses it by name), nothing
+ * persists it, and it has no Sheets counterpart — putting it in KEYS would
+ * invite exactly the load()/save() treatment it must never get.
+ *
+ * js/supabase-backend.js OWNS the name (its `DERIVED_PROGRESS_KEY`). This is a
+ * second copy of a string, which is RG-49's whole shape, so adaptertest asserts
+ * the two are byte-identical rather than trusting that they are.
+ */
+const WEEK_PROGRESS_KEY = 'cfbp_week_progress';
+
+// Active storage backend: 'local' | 'googleSheets' | 'supabase'. Default local.
 // storage.js owns this flag; app.js flips it after a successful hydrate().
+//
+// Phase III Step 4 Part B (DI §1.2 row 2). This function used to coerce ANY
+// mode other than 'googleSheets' to 'local', which is why a third mode is a
+// real edit and not a flag. The coercion itself is kept, deliberately, and only
+// widened by one name: an unrecognised string is still 'local', because 'local'
+// is the mode that cannot lose anybody's data to a typo.
 let _backendMode = 'local';
 export function getBackendMode() { return _backendMode; }
-export function setBackendMode(mode) { _backendMode = (mode === 'googleSheets') ? 'googleSheets' : 'local'; }
+export function setBackendMode(mode) {
+  _backendMode = (mode === 'googleSheets' || mode === 'supabase') ? mode : 'local';
+}
 
-function useSheets(key) {
-  return _backendMode === 'googleSheets' && isBackendReady() && !DEVICE_LOCAL_KEYS.has(key);
+/**
+ * DI §1.2 row 3 — `useSheets()` renamed `useBackend()`, because it now answers
+ * for two different backends.
+ *
+ * ══ DI-T4.10 (§12, post-gate amendment) — READINESS IS NOT THE ROUTING RULE ══
+ *
+ * Note the asymmetry between the two arms, which is the whole of the amendment:
+ *
+ *   googleSheets   `isBackendReady()` is part of the question. A Sheets device
+ *                  that has not hydrated falls through to raw localStorage, and
+ *                  that is CORRECT for it: the Sheets mirror and localStorage
+ *                  hold the same league's data, so the fall-through is a warm
+ *                  cache, not a different league. Unchanged, byte-for-byte.
+ *
+ *   supabase       readiness is NOT part of the question. The MODE decides the
+ *                  route; readiness decides only what the adapter ANSWERS (see
+ *                  load() below, which returns null rather than falling
+ *                  through). A post-cutover device may still hold Sheets-era
+ *                  league data under the very same `cfbp_*` keys — the
+ *                  first-boot wipe (§6.1) clears only the Sheets mirror and the
+ *                  site-unlock flag — so a fall-through there would serve LAST
+ *                  SEASON'S SHEET as though it were this league's Supabase rows,
+ *                  silently, on exactly the boots where the hydrate failed.
+ *                  That is the reported discrepancy js/supabase-backend.js's
+ *                  header raised, and this is where it is decided.
+ *
+ * `DEVICE_LOCAL_KEYS` is checked in both arms and is unchanged: device-local
+ * keys keep falling through to raw localStorage in every mode, which is what
+ * they are for.
+ */
+function useBackend(key) {
+  if (DEVICE_LOCAL_KEYS.has(key)) return false;
+  if (_backendMode === 'googleSheets') return isBackendReady();
+  if (_backendMode === 'supabase') return true;
+  return false;
 }
 
 function load(k) {
-  if (useSheets(k)) {
+  if (useBackend(k)) {
+    if (_backendMode === 'supabase') {
+      // DI-T4.10. `sb.isReady()` is true in ACTIVE / ACTIVE-STALE /
+      // OFFLINE-READONLY and false in IDLE / HYDRATING / SWITCHING / HELD.
+      // A not-ready adapter answers `null` — and `null` is distinguishable from
+      // an empty league at the accessor layer, because ensureSeedData() seeds
+      // nothing in this mode (below) and every empty-state render is gated by
+      // app.js's isContentWithheld(), which is true whenever the adapter is not
+      // serving. Never `localStorage.getItem` — see useBackend()'s comment.
+      try { return sb.isReady() ? sb.get(k) : null; }
+      catch (e) { console.error('[Storage:supabase]', k, e); return null; }
+    }
     try { return cacheGet(k); } catch (e) { console.error('[Storage:sheets]', k, e); return null; }
   }
   try { const r=localStorage.getItem(k); return r?JSON.parse(r):null; }
@@ -246,7 +352,40 @@ function load(k) {
  *   write. See RG-24 / the AD-08 note in backend.js cacheSet().
  */
 function save(k,v,fields) {
-  if (useSheets(k)) {
+  // ── SEC F1 (CRITICAL) — THE WRITE INTERLOCK ────────────────────────────────
+  // The ONE edit this remediation makes outside storage.js's designated
+  // Step-3a regions, and it is made deliberately and in the open: the finding
+  // names storage.save() by function, and an interlock that lives anywhere
+  // else is not an interlock. Flagged in the handoff for Drew's ruling.
+  //
+  // While authMode:'supabase' is set and no Supabase DATA backend exists
+  // (js/supabase-backend.js is Step 4), identity is being resolved against a
+  // project any Google account can join while every write still lands in the
+  // six-player league's Sheet. A write in that state is the stranger-as-
+  // commissioner hazard actually happening. Refuse it, loudly and typed —
+  // never a silent no-op, which would look exactly like a successful save to
+  // every caller (AD-06).
+  if (isAuthDataLayerMismatch()) {
+    throw new AuthModeMismatchError(
+      `Refusing to write "${k}": authMode is 'supabase' but the data layer is still the Sheets backend.`);
+  }
+  if (useBackend(k)) {
+    if (_backendMode === 'supabase') {
+      // DI §1.2 row 5. NOT wrapped in a `return false` catch the way the Sheets
+      // arm is: the adapter's set() throws a TYPED AdapterWriteRefusedError for
+      // a route it may not write (§2.1) and for the derived progress key, and
+      // that refusal has to reach the caller so the red banner can name the
+      // rule. Swallowing it into `false` is the silent no-op AD-06 exists for —
+      // it looks exactly like a successful save to every caller.
+      //
+      // The interlock above has already thrown for every not-ready state
+      // (§3.3 layer 1): hasSupabaseDataBackend() derives from the adapter's
+      // probe, which is true only in ACTIVE/ACTIVE-STALE, so a write during
+      // SWITCHING / HELD / OFFLINE-READONLY / HYDRATING never reaches this
+      // line and the mirror is never touched by one.
+      sb.set(k, v, fields);
+      return true;
+    }
     try { cacheSet(k, v, fields); return true; } catch (e) { console.error('[Storage:sheets] save', k, e); return false; }
   }
   try { localStorage.setItem(k,JSON.stringify(v)); return true; }
@@ -288,16 +427,54 @@ export const USER_MUTABLE_KEYS = [
  * source of that flag.
  */
 export function ensureSeedData(opts = {}) {
-  const sheets = getBackendMode() === 'googleSheets';
-  const maySeedUserData = !sheets || opts.confirmEmpty === true;
+  // Phase III Step 4 Part B (DI §1.2 row 6) — RG-12'S REFUSAL COVERS THE NEW
+  // MODE TOO, and this ONE LINE is the whole of it.
+  //
+  // `=== 'googleSheets'` would have read FALSE in dataMode:'supabase', so a
+  // hydrate that delivered nothing — a held adapter, an offline boot, a partial
+  // read — would have seeded DEMO_PLAYERS, DEMO_PICKS and the draft week
+  // template straight into a real league's keys. That is RG-12's cascade
+  // exactly, arriving through a mode the guard had never heard of. The test is
+  // now "is this a SHARED store" rather than "is this the Sheet", which is the
+  // property the refusal was always about.
+  // ══ SUPABASE MODE SEEDS NOTHING, EVER ══════════════════════════════════
+  // (Coordinator ruling 2026-09-18, gap 2 — one line, and it is a stronger
+  // statement than the RG-12 guard below rather than a version of it.)
+  //
+  // THE SERVER IS THE SEED. A Supabase league is created by `create_league()`,
+  // its members by the linking RPCs, its weeks and games by the commissioner
+  // through the adapter — every one of them server-side, under RLS, in a table
+  // that already exists before any device boots. There is no state in which a
+  // handset is the right place to invent a roster, a slate or a draft week.
+  //
+  // WHAT THE RG-12 GUARD ALONE LEFT OPEN, and why one line is not enough.
+  // `maySeedUserData` protects USER_MUTABLE_KEYS only, so the walk below would
+  // still reach cfbp_settings, cfbp_comments, cfbp_notifications and the three
+  // SCRIBE keys — and push each of them at the adapter. Two outcomes, both
+  // wrong: a commissioner session WRITES a default settings blob over a league
+  // that has one, and every other session throws AdapterWriteRefusedError out
+  // of whatever called ensureSeedData(). Neither is "seeding was refused"; the
+  // first is a silent overwrite and the second is a crash in a boot path.
+  //
+  // FAIL-SAFE BY CONSTRUCTION: an empty read in this mode means the hydrate has
+  // not landed, and app.js's isContentWithheld() is true for exactly that
+  // state, so nothing renders an empty league as though it were a real one.
+  // `{ confirmEmpty: true }` does NOT override this — it is the answer to "is
+  // this SHEET really new", a question the Supabase path never asks.
+  if (getBackendMode() === 'supabase') {
+    console.info('[Storage] supabase data mode: seeding is skipped entirely — the server is the seed, and a device is never the right place to invent league data.');
+    return;
+  }
+  const shared = getBackendMode() !== 'local';
+  const maySeedUserData = !shared || opts.confirmEmpty === true;
 
   const seed = (key, value) => {
     if (load(key)) return;                                    // already present
     if (!maySeedUserData && USER_MUTABLE_KEYS.includes(key)) {
-      // Refuse, loudly. An empty user-data key in sheets mode means hydrate
-      // did not deliver it — NOT that the league has no data.
-      console.warn('[Storage] REFUSING to seed user-mutable key in sheets mode:', key,
-        '— an empty read is not proof the Sheet is empty (RG-12).');
+      // Refuse, loudly. An empty user-data key against a shared store means
+      // hydrate did not deliver it — NOT that the league has no data.
+      console.warn('[Storage] REFUSING to seed user-mutable key in shared-backend mode:', key,
+        '— an empty read is not proof the store is empty (RG-12).');
       return;
     }
     save(key, value);
@@ -645,8 +822,46 @@ export function setSitePin(newPin) {
 
 // ─── SESSION ──────────────────────────────────────────────────────────────────
 
-export function getSession(){ return load(KEYS.SESSION)||{playerId:null,isAdmin:false,playerVerified:false}; }
+// Phase III Step 3a (DI-180f) — the ONE seam edit this build makes to
+// storage.js, per its own explicit scope. getSession() delegates to
+// js/auth.js's synthesized {playerId,isAdmin,playerVerified} shape ONLY when
+// authMode:'supabase'; every other line in this file, and every other
+// function in this pair, is untouched. Still synchronous (CONVENTIONS #9) —
+// getSupabaseSession() is a plain in-memory read, never a fetch.
+export function getSession(){
+  if (getAuthMode() === 'supabase') {
+    try { return getSupabaseSession(); }
+    catch { return {playerId:null,isAdmin:false,playerVerified:false}; }
+  }
+  return load(KEYS.SESSION)||{playerId:null,isAdmin:false,playerVerified:false};
+}
+/**
+ * ══ DI §6.7 — A GUARDED NO-OP IN authMode:'supabase' ═════════════════════════
+ * (Coordinator ruling 2026-09-18, gap 3.)
+ *
+ * getSession() already delegates to js/auth.js in this mode (just above), so
+ * `cfbp_session` is UNREADABLE here — which is precisely what makes writing it
+ * dangerous rather than merely pointless. A stray call would lay down a
+ * PIN-era `{playerId, isAdmin}` record that nothing in this mode can see, and
+ * that a ROLLBACK to `pins` would read straight back as a live session. That is
+ * the SEC F1-R1 hazard (js/backend.js:339-357) arriving by a different door: a
+ * device that was a commissioner before cutover becoming one again, silently,
+ * on a config change nobody connected to it.
+ *
+ * The PIN login paths are retired in this mode (DI-180g), so no production
+ * caller should reach this at all — which is why it WARNS rather than returning
+ * quietly. A no-op that says nothing is how the next such caller gets written.
+ *
+ * clearSession() below is deliberately NOT guarded: removing that record is
+ * always safe and app.js's boot does it on purpose on a supabase config read.
+ */
 export function setSession(playerId,isAdmin=false,playerVerified=false){
+  if (getAuthMode() === 'supabase') {
+    console.warn('[Storage] REFUSING to write cfbp_session in supabase auth mode:',
+      'the session lives in the Supabase auth session and the adapter\'s owner tuple.',
+      'A PIN-era record written here is invisible to this mode and would be read back as a live session by a rollback to pins.');
+    return;
+  }
   save(KEYS.SESSION,{playerId,isAdmin,playerVerified,setAt:new Date().toISOString()});
 }
 export function clearSession(){ localStorage.removeItem(KEYS.SESSION); }
@@ -1555,6 +1770,60 @@ export function hasPlayerSubmitted(weekId,playerId){
   const picks=getPicks(weekId,playerId);
   const games=getGames(weekId);
   return games.length>0&&picks.length>=games.length;
+}
+
+/**
+ * ══ DI §4.3 / DI-T4.11 — THE DERIVED WHO-HAS-SUBMITTED COUNTS ════════════════
+ * (Phase III Step 4 Part B; coordinator ruling 2026-09-18, gap 1.)
+ *
+ * WHY THIS FUNCTION EXISTS AT ALL. Under RLS, on an OPEN week, `picks_select`
+ * returns a player exactly one member's rows — their own. Every surface that
+ * derived "who has submitted" from the picks array would therefore answer
+ * "nobody else has", to everybody, every week. `week_submission_status()` (a
+ * DEFINER RPC returning per-member COUNTS and no pick content) is the answer,
+ * and the adapter folds it into the derived mirror key below.
+ *
+ * WHY IT IS HERE AND NOT IN app.js. §0.3 item 1: no module reaches into
+ * js/supabase-backend.js to read data — the seam is the only door. app.js used
+ * to call `sb.get('cfbp_week_progress')` directly, which was a reported
+ * discrepancy; this is the accessor that closes it. authtest's static rule pins
+ * that `sb.get(`/`sb.set(` appear in NO file but this one.
+ *
+ * THE RETURN CONTRACT IS THE WHOLE POINT (DI-T4.11): `null` means WE DO NOT
+ * KNOW, and callers must render that as unknown, never as zero. Three ways to
+ * get `null`, and all three are honest:
+ *   • not in supabase data mode — nothing derives counts, the picks array is
+ *     already the truth (every device holds every pick);
+ *   • the adapter is not serving — IDLE/HYDRATING/SWITCHING/HELD;
+ *   • the adapter is serving from the DEVICE SNAPSHOT (ACTIVE-STALE /
+ *     OFFLINE-READONLY), where this key is deliberately absent because it is
+ *     never persisted. A stale copy of it would say "nobody has submitted" with
+ *     total confidence, which is the exact failure §4.3 exists to prevent.
+ *
+ * @returns {null | { at: string, weeks: { [weekId]: { [memberId]: {pickCount, hasTiebreaker, hasExtraPoint, lastUpdated} } } }}
+ */
+export function getWeekProgress(){
+  if (_backendMode !== 'supabase') return null;
+  try {
+    // ACTIVE ONLY — not `isReady()`, and the difference is reviewer F1/F5.
+    //
+    // `isReady()` is true in three states, and two of them are states in which
+    // this device has STOPPED ASKING: ACTIVE-STALE (serving the device
+    // snapshot) and OFFLINE-READONLY (serving it with no live connection).
+    // Both SERVE, so a count left in the mirror would be handed to the
+    // dashboard and rendered as fact.
+    //
+    // The adapter already deletes the key on the ACTIVE -> OFFLINE-READONLY
+    // transition, and never persists it to the snapshot at all. This is the
+    // SECOND guard, and it is the one that holds by construction rather than by
+    // the right transition having happened: whatever is in the mirror, a device
+    // that is not currently in touch with the server does not get to state a
+    // count. "We stopped asking" and "nobody submitted" are different facts,
+    // and only one of them is safe to draw (DI-T4.11).
+    if (sb.getState() !== 'ACTIVE') return null;
+    return sb.get(WEEK_PROGRESS_KEY);
+  }
+  catch(e){ console.error('[Storage:supabase] week progress', e); return null; }
 }
 
 // ─── RESULTS ──────────────────────────────────────────────────────────────────

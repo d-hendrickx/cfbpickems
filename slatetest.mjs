@@ -65,9 +65,13 @@
  *  M   Mutation battery (RED/GREEN, tmpdir copy, inversions included)
  */
 
-import { readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdtemp, rm, cp } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+// A mutant directory is a FULL COPY of js/, never a hand-listed subset —
+// see the comment at importMutant() below (2026-09-17 sweep finding).
+const MUTANT_JS_DIR = fileURLToPath(new URL('./js/', import.meta.url));
 
 // ── DOM / localStorage stubs (gradetest.mjs shape — registered elements that
 //    remember listeners, so bindCommEventListeners() can be driven for real) ──
@@ -958,7 +962,15 @@ console.log('\n[M] Mutation battery — data-provider.js selection logic…');
   async function importMutant(mutatedSrc) {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'slatetest-mutant-'));
     mutantDirs.push(dir);
-    await writeFile(path.join(dir, 'data-model.js'), realDataModelSrc, 'utf8');
+    // FULL COPY of js/, not a hand-listed subset (2026-09-17 sweep finding).
+    // almatotaltest.mjs hand-listed the modules its target transitively needed
+    // and CRASHED with ERR_MODULE_NOT_FOUND the day js/storage.js gained an
+    // import — a list of dependencies is a snapshot of the import graph on the
+    // day somebody wrote it down. This target's graph (data-provider ->
+    // data-model) happens to still be complete, so this is hardening, not a
+    // repair: copying the directory has nothing to keep up to date, and
+    // feedbacktest.mjs's createMutantDir() already does exactly this.
+    await cp(MUTANT_JS_DIR, dir, { recursive: true });
     await writeFile(path.join(dir, 'data-provider.js'), mutatedSrc, 'utf8');
     const url = new URL(`file://${path.join(dir, 'data-provider.js')}?t=${Date.now()}_${Math.random()}`);
     return import(url.href);
@@ -1234,4 +1246,33 @@ console.log('\n[M] Mutation battery — data-provider.js selection logic…');
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
 else console.log(`❌ ${pass} passed, ${fail} failed`);
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

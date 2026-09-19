@@ -36,6 +36,7 @@
 import { getSettings, getScribeLearnings, getScribeCanon } from './storage.js';
 import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
 import { scribeAskRemote as scribeAskRemoteBackend, runTrainerRemote as runTrainerRemoteBackend, scribeAutonomousRemote as scribeAutonomousRemoteBackend, scribeClassifyRemote as scribeClassifyRemoteBackend } from './backend.js';
+import { chatTransportMode, askScribe } from './chatTransport.js';
 
 export function isScribeInteractiveEnabled() {
   return getSettings().scribeInteractiveEnabled !== false;
@@ -126,8 +127,32 @@ export async function runTrainerRemote({ adminPasswordHash = '' } = {}) {
 // RESTRICTION — `SCRIBE_WEB_SEARCH_ENABLED` (the Script Property) stays the
 // master switch and this can never turn search back on when that property
 // is off.
+// ── PHASE III STEP 5, DI-T5.6 / Drew's D-4 — THE ONE BRANCH ──────────────────
+//
+// The Apps Script relay re-reads the trigger message out of the PRODUCTION
+// league's Sheet. On a Supabase-scoped league that is a cross-league bleed —
+// the same class as the chat transport interlock, one action over — and D-4's
+// relay allow-list (`ping` + `notifyPush`) already refuses `scribeAsk` there.
+// So the route is chosen by the mode, and the mode is asked of the ONE module
+// that owns the answer (chatTransport.js's `chatTransportMode()`), never
+// re-derived here: a second opinion about which backend a league is on is how
+// two of them end up disagreeing on the device where it matters.
+//
+// In Supabase mode `askScribe()` makes no network call and answers
+// `{ ok:true, unavailable:true }`. `fireScribeMention()`'s only success test is
+// `r.ok && r.responseMessageId` (js/scribeLines.js:539), so the player gets the
+// canned SCRIBE line under the same deterministic id — never silence, never a
+// spinner. Step 6 replaces askScribe()'s body with the Edge Function call and
+// touches nothing here.
+//
+// The import is of chatTransport.js, which chat.js already loads on every
+// device, so this adds no bytes to a flag-off boot.
 export async function scribeAskRemote({ triggerMessageId, playerId, weekId = '', gameTag = '' }) {
-  return scribeAskRemoteBackend({ triggerMessageId, playerId, weekId, gameTag, webSearch: isScribeWebSearchEnabled() });
+  const webSearch = isScribeWebSearchEnabled();
+  if (chatTransportMode() !== 'sheets') {
+    return askScribe({ triggerMessageId, playerId, weekId, gameTag, webSearch });
+  }
+  return scribeAskRemoteBackend({ triggerMessageId, playerId, weekId, gameTag, webSearch });
 }
 
 // ── Build 3, Group D (2026-09-11, DI-D1/DI-D2) ──────────────────────────────

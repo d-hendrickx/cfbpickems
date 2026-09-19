@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=21-2" />
+  <link rel="stylesheet" href="css/styles.css?v=22-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -129,6 +129,17 @@
            only place items side by side. -->
       <div class="header-meta" id="header-meta"><span id="header-meta-week"><strong>Loading…</strong></span></div>
       <div class="header-right">
+        <!-- Phase III Step 3a (DI-184b, reverted to the approved text
+             2026-09-16 — reviewer B4: D-2's "reuse the header title" ruling
+             cannot attach, because .app-header has no title element).
+             Rendered for EVERY account in authMode:'supabase'; hidden and
+             empty in 'pins'/'prelink'. First in .header-right per DI-184a.
+             A <span>, NOT a <button>: DI-184b's single-membership case must
+             be non-interactive with no button role, and a tag cannot change
+             at runtime. renderLeaguePill() (js/app.js) adds role="button" +
+             tabindex + the caret + a click handler ONLY when the account has
+             more than one membership. -->
+        <span id="league-pill" class="league-pill" hidden></span>
         <!-- UN-106: identity is the most actionable header state, so it renders
              first. Empty + hidden until renderHeaderIdentity() (js/app.js) reads
              getSession() — never a flash of "Sign In" before session resolves. -->
@@ -211,8 +222,18 @@
 
 <div id="toast-container"></div>
 
+<!-- Phase III Step 3a (DI-180…184) — THE VENDORED SUPABASE SDK IS NOT TAGGED
+     HERE. It used to be: a classic (non-module) script tag for
+     vendor/supabase-js-2.116.0.js sat on this line, so every visitor downloaded and parsed the whole
+     SDK on every cold load, in a mode ('pins') that never touches it. Reviewer B2:
+     a flag that is off must cost nothing. js/app.js's boot() now injects that
+     same file, from that same path, ONLY after config.json reports
+     authMode:'supabase' (ensureSupabaseSdkLoaded()), and the sha256 pin moved
+     with it — SUPABASE_SDK_SHA256 in js/app.js, verified against the bytes on
+     disk by authtest.mjs [12]. Still vendored, still same-origin, still no
+     CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=21-2"></script>
+<script type="module" src="js/app.js?v=22-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -229,7 +250,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=21-2' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=22-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

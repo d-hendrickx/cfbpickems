@@ -22,6 +22,31 @@
 
 import { readFile, readdir } from 'node:fs/promises';
 
+/**
+ * ══ REVIEWER F8 (sixth gate, 2026-09-17) — A HUNG CHILD MUST FAIL, NOT HANG ══
+ *
+ * Eleven suites are run as CHILD PROCESSES from this file (scribeToolsTwin,
+ * trainertest, backendtest, authtest, persisttest, almatotaltest, boottest,
+ * cachetest, memorytest, scoringtest, groupdtest), every one of them through a
+ * `spawnSync` with no deadline. spawnSync with no timeout waits FOREVER — so a
+ * child that deadlocks (an un-awaited promise, a timer nobody unref'd, a stubbed
+ * clock that never advances, a `process.exit` that never runs) does not turn the
+ * sweep red. It turns the sweep into a process that never returns, which reads
+ * to a human as "the machine is slow" and, in a terminal that has been left
+ * alone, as nothing at all. A test harness that can hang is a test harness that
+ * can be silently skipped, and this whole arc is a list of guards that were
+ * green while proving nothing.
+ *
+ * Five minutes is roughly twenty times the slowest child today (authtest, ~15s
+ * on this machine), so it can only be reached by a genuine hang. On the timeout
+ * spawnSync kills the child, `result.status` comes back null and `result.error`
+ * is set — and every one of the eleven call sites already asserts
+ * `result.status === 0` and prints `result.error.message`, so the existing
+ * assertion turns red with the reason attached. No new failure plumbing needed;
+ * the deadline is the whole fix.
+ */
+const SPAWNED_SUITE_TIMEOUT_MS = 300000;
+
 // ── DOM / browser stubs ───────────────────────────────────────────────────────
 const store = new Map();
 globalThis.localStorage = {
@@ -72,7 +97,7 @@ function assert(cond, label) {
 // ── 1. Module import smoke test ───────────────────────────────────────────────
 console.log('\n[1] Importing all modules…');
 const mods = {};
-for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'chat-ui', 'app']) {
+for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'auth', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'supabase-projection', 'chat-ui', 'app']) {
   try {
     mods[m] = await import(`./js/${m}.js`);
     console.log('  ✅ js/' + m + '.js');
@@ -1297,7 +1322,12 @@ assert(headerRightBlock.indexOf('id="header-identity"') > -1
   'the identity chip is first in .header-right, ahead of the sync badge / tz toggle / theme toggle');
 assert(/renderHeaderIdentity\(\);/.test((appJsSrc.match(/function refreshHeader\(\)[\s\S]*?\n}/) || [''])[0]),
   'refreshHeader() calls renderHeaderIdentity() — covers boot + every week-driven re-render');
-assert(/renderHeaderIdentity\(\);/.test((appJsSrc.match(/function resyncPlayerPreferences\(\)[\s\S]*?\n}/) || [''])[0]),
+// SIXTH GATE (2026-09-17) — matched by the opening PAREN. This function takes
+// an options object now (DI-180o(b)'s layout-edit exemption on the one path
+// that RESTORES a suspended slate), and a needle pinned to the empty argument
+// list stops matching the function at all — which turns a real rule red for a
+// reason that has nothing to do with what it guards.
+assert(/renderHeaderIdentity\(\);/.test((appJsSrc.match(/function resyncPlayerPreferences\([\s\S]*?\n}/) || [''])[0]),
   'resyncPlayerPreferences() calls renderHeaderIdentity() — covers login/logout/player-switch');
 
 // ── 23. Batch 2 (v0.17.4) — UN-101 BETA badge, UN-102 notifications, UN-103
@@ -7868,7 +7898,7 @@ console.log('\n[67] scribeToolsTwin.mjs — spawned as a subprocess, exit code +
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['scribeToolsTwin.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['scribeToolsTwin.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `scribeToolsTwin.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -7892,7 +7922,7 @@ console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + pri
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['trainertest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['trainertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `trainertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch68 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -8437,7 +8467,7 @@ console.log('\n[73] backendtest.mjs — spawned as a subprocess, exit code + pri
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['backendtest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['backendtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `backendtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch73 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -8445,7 +8475,191 @@ console.log('\n[73] backendtest.mjs — spawned as a subprocess, exit code + pri
   if (summaryMatch73) {
     assert(summaryMatch73[1] === '✅ ALL PASS', `backendtest.mjs itself reports ALL PASS (got: ${summaryMatch73[0]})`);
     assert(Number(summaryMatch73[3]) === 0, `backendtest.mjs reports zero failed assertions (got ${summaryMatch73[3]} failed, ${summaryMatch73[2]} passed)`);
-    assert(Number(summaryMatch73[2]) >= 40, `backendtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch73[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch73[2]) >= 200, `backendtest.mjs actually ran its full set (got ${summaryMatch73[2]}, floor 200 — raised from 40; the ratchet only tightens)`);
+  }
+}
+
+// ── 73b. authtest.mjs — spawned as a subprocess, same shape as [73] ─────────
+// Phase III Step 3a. Own process for the same class of reason backendtest.mjs
+// and cachetest.mjs get one: it installs a fake window.supabase.createClient
+// and repeatedly calls auth.js's _resetAuthForTest()/configureAuth(), which
+// would leak Supabase client/session state into every suite after it if run
+// inline.
+console.log('\n[73b] authtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['authtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `authtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch73b = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch73b, `authtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch73b ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch73b) {
+    assert(summaryMatch73b[1] === '✅ ALL PASS', `authtest.mjs itself reports ALL PASS (got: ${summaryMatch73b[0]})`);
+    assert(Number(summaryMatch73b[3]) === 0, `authtest.mjs reports zero failed assertions (got ${summaryMatch73b[3]} failed, ${summaryMatch73b[2]} passed)`);
+    assert(Number(summaryMatch73b[2]) >= 1400, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1400 — raised from 40, which a suite of 1417 could have lost 97% of and still passed)`);
+  }
+}
+
+// ── 73e/73f. adaptertest.mjs + transporttest.mjs — spawned, same shape ─────
+//
+// Phase III STEP 4. Both were written in Part A's isolated worktree and neither
+// was in any gate list, which is the same gap that let persisttest.mjs and
+// almatotaltest.mjs sit broken and unnoticed through Step 3a (see 73c/73d
+// below). Part A's security review made adding them a Part-B ENTRY CONDITION
+// rather than a nicety: a suite nothing spawns is a suite nobody runs.
+//
+// Own process, for the reason backendtest.mjs gets one: adaptertest installs a
+// PostgREST-shaped fake client and drives js/supabase-backend.js's real state
+// machine to ACTIVE, which would leave the seam routed through a live mirror
+// for every suite after it. transporttest installs and removes
+// chatTransport.js's dataMode predicate, whose NEVER-INSTALLED state no
+// production path can return to.
+//
+// adaptertest prints "N passed, N failed, N skipped" rather than the ALL PASS
+// banner, so its summary regex is its own; the SKIP count is asserted as a
+// CEILING, because a skip that quietly grows back is how a Part-B follow-up
+// gets forgotten.
+console.log('\n[73e] adaptertest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['adaptertest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `adaptertest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m73e = out.match(/(\d+) passed, (\d+) failed, (\d+) skipped/);
+  assert(!!m73e, `adaptertest.mjs printed its own pass/fail/skip summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73e ? '' : '\n' + out.slice(-800)}`);
+  if (m73e) {
+    assert(Number(m73e[2]) === 0, `adaptertest.mjs reports zero failed assertions (got ${m73e[2]} failed, ${m73e[1]} passed)`);
+    assert(Number(m73e[1]) >= 499, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 499) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
+    assert(Number(m73e[3]) === 0, `adaptertest.mjs has NO remaining Part-B skips (got ${m73e[3]}) — A9b, A14b and A17 were all closed by Part B, and a skip that reappears is a follow-up nobody is tracking`);
+  }
+}
+
+console.log('\n[73f] transporttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['transporttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `transporttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m73f = out.match(/(\d+) passed, (\d+) failed/);
+  assert(!!m73f, `transporttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73f ? '' : '\n' + out.slice(-800)}`);
+  if (m73f) {
+    assert(Number(m73f[2]) === 0, `transporttest.mjs reports zero failed assertions (got ${m73f[2]} failed, ${m73f[1]} passed)`);
+    assert(Number(m73f[1]) >= 169, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 169 — raised from 40 when Step 5 landed; the ratchet only tightens)`);
+  }
+}
+
+// ── 73h. xsstest.mjs — spawned as a subprocess, same shape ─────────────────
+//
+// SECURITY F1 (Part B gate, 2026-09-18). xsstest.mjs has been the app's ONLY
+// escaping guard since 2026-09-12 and nothing has ever spawned it — its own
+// header says "Standalone by design … loadtest.mjs is not edited by this work",
+// which was true of the pass that wrote it and has been quietly false of every
+// pass since. A suite nothing spawns is a suite nobody runs, and this one holds
+// the generic interpolation ratchet over js/app.js: the thing that catches a
+// NEW unescaped sink the day it is written, rather than the day it is exploited.
+//
+// Own process for the same reason the rest of this list gets one: it installs
+// its own DOM stubs and drives real render paths, and it is the third suite
+// whose absence from a gate list was found by a sweep rather than by a failure
+// (persisttest and almatotaltest were the first two — see 73c/73d).
+console.log('\n[73h] xsstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['xsstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `xsstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m73h = out.match(/xsstest\.mjs — (\d+) passed, (\d+) failed/);
+  assert(!!m73h, `xsstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73h ? '' : '\n' + out.slice(-800)}`);
+  if (m73h) {
+    assert(Number(m73h[2]) === 0, `xsstest.mjs reports zero failed assertions (got ${m73h[2]} failed, ${m73h[1]} passed)`);
+    assert(Number(m73h[1]) >= 296, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 296) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
+  }
+}
+
+// ── 73g. weekprogresstest.mjs — spawned as a subprocess, same shape ────────
+//
+// DI-T4.11. Own process because it drives js/app.js's dashboard renderers with
+// the storage seam pointed at the Supabase adapter and auth.js in
+// `dataMode:'supabase'` — three globals that would poison every suite after it.
+console.log('\n[73g] weekprogresstest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['weekprogresstest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `weekprogresstest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m73g = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!m73g, `weekprogresstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73g ? '' : '\n' + out.slice(-800)}`);
+  if (m73g) {
+    assert(m73g[1] === '✅ ALL PASS', `weekprogresstest.mjs itself reports ALL PASS (got: ${m73g[0]})`);
+    assert(Number(m73g[3]) === 0, `weekprogresstest.mjs reports zero failed assertions (got ${m73g[3]} failed, ${m73g[2]} passed)`);
+    assert(Number(m73g[2]) >= 71, `weekprogresstest.mjs actually ran its full set (got ${m73g[2]}, floor 71 — raised from 25; the ratchet only tightens)`);
+  }
+}
+
+// ── 73c/73d. persisttest.mjs + almatotaltest.mjs — spawned, same shape ──────
+//
+// WHY THEY ARE HERE NOW (2026-09-17). A full sweep of every `*test*.mjs` found
+// two suites that Phase III Step 3a had broken and nobody had noticed, because
+// neither was in any gate list and neither is spawned by this file:
+//
+//   • persisttest.mjs [7] (RG-51's one-pick-draft-reset rule) went 37/1 the day
+//     a COMMENT in js/app.js came to contain both of the anchors its source
+//     scan keys on. A rule reporting the app's own documentation as a defect.
+//   • almatotaltest.mjs CRASHED at module scope with ERR_MODULE_NOT_FOUND —
+//     its mutation battery hand-listed the modules it copies into a tmpdir, and
+//     js/storage.js gained an `import './auth.js'`. A crash, not a failure, so
+//     not even a pass/fail line came out of it.
+//
+// Both are cheap (≈1s and ≈4s), and both guard rules about DATA LOSS — one
+// player's draft pre-filling another's box, and the alma-mater totals. Spawned
+// here so they cannot rot silently a second time. ADDED to the existing list
+// ([73] backendtest, [73b] authtest, [76] boottest, [78] cachetest,
+// [79] memorytest, …) — this file is never regenerated.
+console.log('\n[73c] persisttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['persisttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `persisttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m73c = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
+  assert(!!m73c, `persisttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73c ? '' : '\n' + out.slice(-800)}`);
+  if (m73c) {
+    assert(m73c[1] === '✅ ALL PASS', `persisttest.mjs itself reports ALL PASS (got: ${m73c[0]})`);
+    assert(Number(m73c[3]) === 0, `persisttest.mjs reports zero failed assertions (got ${m73c[3]} failed, ${m73c[2]} passed)`);
+    assert(Number(m73c[2]) >= 30, `persisttest.mjs actually ran a non-trivial number of assertions (got ${m73c[2]})`);
+  }
+}
+
+console.log('\n[73d] almatotaltest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['almatotaltest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `almatotaltest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  // A CRASH is the failure mode this guard is really about — it produces no
+  // summary line at all, which is why the line's PRESENCE is asserted first.
+  const m73d = out.match(/(✅ ALL PASS|❌ \d+ FAILED) — (\d+) passed, (\d+) failed/);
+  assert(!!m73d, `almatotaltest.mjs printed its own pass/fail summary line — i.e. it did not die at module scope (fixture check)${m73d ? '' : '\n' + out.slice(-800)}`);
+  assert(!/ERR_MODULE_NOT_FOUND/.test(out),
+    'almatotaltest.mjs resolves its whole module graph — a hand-listed tmpdir copy is how it broke, so the specific symptom is named here');
+  if (m73d) {
+    assert(m73d[1] === '✅ ALL PASS', `almatotaltest.mjs itself reports ALL PASS (got: ${m73d[0]})`);
+    assert(Number(m73d[3]) === 0, `almatotaltest.mjs reports zero failed assertions (got ${m73d[3]} failed, ${m73d[2]} passed)`);
+    assert(Number(m73d[2]) >= 50, `almatotaltest.mjs actually ran a non-trivial number of assertions (got ${m73d[2]})`);
   }
 }
 
@@ -8772,6 +8986,83 @@ console.log('\n[75] BUG-D — whenAppended(): the outbox is the only thing that 
   }
 }
 
+// ── [75b] ────────────────────────────────────────────────────────────────────
+console.log('\n[75b] SECURITY F-4 (eighth gate) — a queued event carries its LEAGUE, and never flushes into a different one…');
+{
+  // THE GAP THE AUTHOR GUARD LEAVES OPEN. flushOutbox()'s seventh-gate guard
+  // asks "is this the same PERSON?" — one of the identity tuple's two terms. The
+  // other is the LEAGUE, and it is the one Drew actually reaches: he is a member
+  // of more than one league with the same member id resolving in each. He types
+  // a message in League A with no signal, switches to League B, and the queue
+  // flushes. The author matches. The message lands in the wrong room, in front
+  // of the wrong six people, correctly attributed to him.
+  //
+  // A league-only switch does not change the ACCOUNT term, so app.js's identity
+  // chokepoint deliberately does not clear the outbox for it (same person, still
+  // their words — AD-09/AD-17's one shared room is per league, not per account).
+  // That makes this guard the only thing standing there.
+  const chat75b = mods['chat'], auth75b = mods['auth'];
+  try {
+    chat75b._resetForTest();
+    auth75b._resetAuthForTest();
+    storage.setSession('mA', false, true);
+
+    // (1) THE STAMP EXISTS, and it is taken at COMPOSE time — the only moment
+    //     the intended league is known for certain.
+    auth75b.setActiveLeagueId('L-A');
+    chat75b.sendEvent({ type: 'message', body: 'kevin you are cooked', author: 'mA' });
+    const queuedA = chat75b._outboxForTest();
+    assert(queuedA.length === 1, 'fixture: one event is queued');
+    assert(queuedA[0].leagueId === 'L-A',
+      `SEC F-4 — the queued event carries the league it was composed in (got ${JSON.stringify(queuedA[0].leagueId)})`);
+
+    // (2) A LEAGUE-ONLY SWITCH, then a flush. The author still matches; the
+    //     league does not. The entry must be DROPPED, not sent.
+    auth75b.setActiveLeagueId('L-B');
+    await chat75b.flushOutbox();
+    const leftB = chat75b._outboxForTest();
+    assert(!leftB.some(e => e.leagueId === 'L-A'),
+      `SEC F-4 — an entry stamped with a DIFFERENT league is never flushed (${JSON.stringify(leftB.map(e => e.leagueId))}): same person, wrong room, wrong six people`);
+
+    // (3) NON-VACUITY — the SAME entry, composed in the league the device is
+    //     actually scoped to, survives. A guard that dropped everything would
+    //     pass (2) and silently destroy every message in the app.
+    chat75b._resetForTest();
+    auth75b.setActiveLeagueId('L-B');
+    chat75b.sendEvent({ type: 'message', body: 'a message for league B', author: 'mA' });
+    await chat75b.flushOutbox();
+    const leftMatch = chat75b._outboxForTest();
+    assert(leftMatch.length === 1 && leftMatch[0].leagueId === 'L-B',
+      `SEC F-4 non-vacuity — a MATCHING league is untouched (${JSON.stringify(leftMatch.map(e => e.leagueId))}); it is still queued because no backend is configured in this fixture, which is the point — it was not DROPPED`);
+
+    // (4) THE PRE-EXISTING QUEUE. Every event composed before this stamp shipped
+    //     comes back out of localStorage with no `leagueId` at all. Those FLUSH
+    //     as today, deliberately: there is nothing to compare, and silently
+    //     destroying a player's unsent messages on upgrade day is a worse failure
+    //     than delivering one to the room it was almost certainly composed in
+    //     (five of the six players are in exactly one league). The exemption
+    //     drains itself — everything from this release forward is stamped.
+    chat75b._resetForTest();
+    auth75b.setActiveLeagueId('L-B');
+    localStorage.setItem('cfbp_chat_outbox2', JSON.stringify([
+      { id: 'pre-existing-1', type: 'message', author: 'mA', body: 'queued before the stamp shipped', gameTag: '', targetId: '', replyTo: '', notify: true, meta: null },
+    ]));
+    chat75b._loadOutboxForTest();
+    const restored = chat75b._outboxForTest();
+    assert(restored.length === 1 && !restored[0].leagueId,
+      `fixture: an UNSTAMPED entry was restored from localStorage (got ${JSON.stringify(restored.map(e => e.leagueId))}) — this is the upgrade-day shape, not a contrivance`);
+    await chat75b.flushOutbox();
+    assert(chat75b._outboxForTest().some(e => e.id === 'pre-existing-1'),
+      'SEC F-4 — an entry with NO leagueId is NOT dropped: the pre-existing queue flushes as today rather than being destroyed by a guard that shipped after it');
+  } finally {
+    storage.setSession(null, false, false);
+    try { localStorage.removeItem('cfbp_chat_outbox2'); } catch {}
+    auth75b.setActiveLeagueId(null);
+    auth75b._resetAuthForTest();
+    chat75b._resetForTest();
+  }
+}
+
 // ── [76] ─────────────────────────────────────────────────────────────────────
 // BUG-F / BUG-E (2026-09-11). Own process, like [73]: boottest.mjs replaces the
 // global CLOCK (setTimeout/clearTimeout/Math.random) for whole sections, which
@@ -8781,7 +9072,7 @@ console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printe
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['boottest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['boottest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `boottest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch76 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -9088,7 +9379,7 @@ console.log('\n[78] cachetest.mjs — spawned as a subprocess, exit code + print
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['cachetest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['cachetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `cachetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch78 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -9109,7 +9400,7 @@ console.log('\n[79] memorytest.mjs — spawned as a subprocess, exit code + prin
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['memorytest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['memorytest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `memorytest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch79 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -9131,7 +9422,7 @@ console.log('\n[80] scoringtest.mjs — spawned as a subprocess, exit code + pri
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['scoringtest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['scoringtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `scoringtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch80 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -9154,7 +9445,7 @@ console.log('\n[81] groupdtest.mjs — spawned as a subprocess, exit code + prin
   const { spawnSync } = await import('node:child_process');
   const { fileURLToPath } = await import('node:url');
   const cwd = fileURLToPath(new URL('.', import.meta.url));
-  const result = spawnSync(process.execPath, ['groupdtest.mjs'], { cwd, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, ['groupdtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
   const out = (result.stdout || '') + (result.stderr || '');
   assert(result.status === 0, `groupdtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
   const summaryMatch81 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
@@ -9824,7 +10115,8 @@ console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails close
   // never got a wager list at all (refreshWagerCache early-returns with no
   // playerId and leaves its latch false), so no callback could ever fire on it.
   {
-    const resyncSrc84 = (appJsSrc.match(/function resyncPlayerPreferences\(\) \{[\s\S]*?\n\}/) || [''])[0];
+    // SIXTH GATE — opening paren, not `() {`. See the note at [the header-identity rule] above.
+    const resyncSrc84 = (appJsSrc.match(/function resyncPlayerPreferences\([\s\S]*?\n\}/) || [''])[0];
     assert(resyncSrc84.length > 0,
       '84-34: fixture check — resyncPlayerPreferences() was located in js/app.js');
     assert(/refreshWagerCache\(\{\s*force:\s*true\s*\}\)/.test(resyncSrc84),
@@ -9974,4 +10266,33 @@ console.log('\n[85] N1 / FEAT-11 — lifecycle notices: coverage + dial independ
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
-process.exit(fail === 0 ? 0 : 1);
+// REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
+// `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS
+// whenever they are a pipe — which is what they are under loadtest.mjs's
+// spawnSync() and under every `| grep` a human runs. So the one summary line a
+// parent suite parses can be dropped from a run that really did finish, and a
+// FAILING run whose line never arrives reads as a harness problem instead. The
+// nested empty writes' callbacks fire only once every earlier write on that
+// stream has reached the OS; BOTH streams are drained because loadtest.mjs
+// parses `stdout + stderr`. Same fix as authtest.mjs/boottest.mjs, applied
+// without changing one character of what is printed.
+process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
+
+// ── SECURITY F-6 (eighth gate, 2026-09-18) — THE FLUSH SHIM NEEDS ITS OWN
+//    BACKSTOP ─────────────────────────────────────────────────────────────────
+// The write-then-exit-in-the-callback shim above (reviewer F-3, seventh gate)
+// fixed a dropped summary line by making the exit wait for the bytes. That trade
+// bought correctness with a new failure mode: if the callback NEVER fires, the
+// process never exits. It does not fire when the reader at the other end of the
+// pipe has gone away mid-write, when stdout is a full pipe nobody is draining,
+// or when an imported module has wedged the event loop — and loadtest.mjs runs
+// every one of these suites through spawnSync(), which has no timeout and would
+// simply hang the whole sweep with no output to say which suite did it.
+//
+// So the exit is armed twice. The callback is still the fast path and still the
+// one that runs on every healthy run; this timer only ever fires if that path
+// did not. .unref() is what keeps it honest — an unref'd timer does not hold the
+// event loop open on its own account, so it cannot delay a natural exit by five
+// seconds or resurrect a process that was ready to leave. It just makes "hang
+// forever" impossible.
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

@@ -43,7 +43,24 @@ import { REACTION_PALETTE } from './data-model.js';
 // neither of which imports chat.js, so this cannot cycle.
 // UN-112 — the epoch clear writes settings.chatEpochSeq/chatEpochSetAt through
 // the same seam, via saveSetting. Same import, same safety argument.
-import { getSettings, saveSetting } from './storage.js';
+// SECURITY F-4 (seventh gate) — getSession() joins the SAME import, for the
+// author guard in flushOutbox(). No new module edge: storage.js was already a
+// dependency here, and it imports only data-model.js / backend.js / auth.js,
+// none of which imports chat.js, so this still cannot cycle.
+import { getSettings, saveSetting, getSession } from './storage.js';
+// ── SECURITY F-2/F-4 (EIGHTH gate, 2026-09-18) — THE LEAGUE TERM AND THE
+//    "IDENTITY HAS NOT LANDED YET" TERM ────────────────────────────────────────
+// Three synchronous reads, all of them already below this module in the graph:
+// js/chat.js -> js/storage.js -> js/auth.js is an EXISTING edge (see the note
+// above), and js/auth.js imports only js/backend.js + js/push-onesignal.js,
+// neither of which imports anything at all. So naming auth.js directly here adds
+// no cycle and no new layer — it removes an indirection, because storage.js does
+// not re-export any of the three.
+//   • getActiveLeagueId()      — SECURITY F-4's league term on the outbox guard.
+//   • getAuthMode()            — tells 'pins'/anonymous apart from 'supabase'.
+//   • hasValidSupabaseSession() — an account is PROVEN at this device even though
+//                                 getSession().playerId has not resolved yet.
+import { getActiveLeagueId, getAuthMode, hasValidSupabaseSession } from './auth.js';
 
 // ── Device-local persistence keys (AD-12) ─────────────────────────────────────
 const K_LASTSEEN = 'cfbp_chat_lastseen2';   // { seq, byTag: { gameId: seq } }
@@ -75,6 +92,7 @@ const S = {
   selfId: null,
   unsub: null,
   forceTick: null,           // DI-168 — set alongside S.unsub by _subscribeNow(); see forceRefresh()
+  paused: false,             // DI §6.5 (Step 4) — the hold-gate pause; see setPollMode('paused')
   wake: null,                // BUG-12 — likewise; the event-driven (push tap / foreground push / resume) forced fetch. See wakeChat()
   subs: new Set(),
   backfillLow: null,
@@ -618,6 +636,20 @@ export function sendEvent(ev) {
     gameTag: ev.gameTag || '', body: (ev.body || '').slice(0, 1000),
     targetId: ev.targetId || '', replyTo: ev.replyTo || '',
     notify: !!ev.notify, meta: ev.meta || null,
+    // ── SECURITY F-4 (EIGHTH gate) — THE LEAGUE STAMP ────────────────────────
+    // The author guard below answers "is this the same PERSON?" and stops there,
+    // which is one of the two terms the identity tuple actually has. The other is
+    // the LEAGUE. Drew is a member of more than one, with the same member id
+    // resolving in each: he composes a message in League A offline, switches to
+    // League B (a league-only switch — same account, so the account-term
+    // comparison at app.js's chokepoint does not fire), and the queued message
+    // flushes into the wrong room, authored correctly and addressed to the wrong
+    // six people. The stamp is taken HERE, at compose time, because that is the
+    // only moment the intended league is known for certain.
+    //
+    // '' when no league is resolved — an unscoped event, which flushOutbox()
+    // treats as "pre-existing queue" and sends, deliberately (see its guard).
+    leagueId: getActiveLeagueId() || '',
     local: true, _localTs: Date.now(),
   };
   ingest([full], undefined, { caughtUp: S.caughtUp });   // optimistic — liveness-neutral (BUG-C)
@@ -659,9 +691,123 @@ export function sendGameReact(gameId, emoji, author) {
 // ── Outbox ────────────────────────────────────────────────────────────────────
 const FLUSH_COALESCE_MS = 750;
 const MAX_ATTEMPTS = 3;
+/** SECURITY F-2 (eighth gate) — how long flushOutbox() waits before re-asking
+ *  when an account is proven but its member id has not resolved yet. Longer than
+ *  FLUSH_COALESCE_MS on purpose: the thing being waited for is a network round
+ *  trip, and re-asking every 750ms would spin for its whole duration. */
+const IDENTITY_HOLD_RETRY_MS = 2000;
+/** SECURITY F-2 (eighth gate) — how many times flushOutbox() has HELD for an
+ *  unresolved identity. Exported for the suites only, because "it held" and "it
+ *  ran and then stopped at the backend gate" leave the queue in the identical
+ *  state, and a test that cannot tell them apart would pass against a guard that
+ *  never armed. Production never reads it. */
+let _identityHolds = 0;
+export function _identityHoldCountForTest() { return _identityHolds; }
+/**
+ * SECURITY F-4 — the non-player authors this module carries.
+ *
+ * ══ REVIEWER F-3 (EIGHTH gate, 2026-09-18) — THE CITATION AND THE REASON WERE
+ *    BOTH WRONG ═════════════════════════════════════════════════════════════════
+ *
+ * THE CITATION. This comment used to say "the retention fold already excludes
+ * these from 'human' messages (see :1495)". There is no such exclusion in the
+ * retention fold — retention hides by TIMESTAMP and does not look at the author
+ * at all. The fold that actually excludes these two names is the WEEKLY DIGEST's
+ * `human` filter in chatDigest(), and it was a hardcoded literal pair rather than
+ * a read of this Set, so the two could (and did) drift in exactly the way the
+ * comment claimed they could not. It now reads this Set — see chatDigest().
+ *
+ * THE REASON, which is the part that matters. The old justification was "neither
+ * is a person, so neither can be the previous player." That is FALSE for
+ * `'system'`: app.js's postCommissionerAnnouncement() falls back to
+ * `author: 'system'` whenever it has no commissioner playerId, so a real person's
+ * typed announcement can be sitting in this outbox stamped `'system'`. Under the
+ * old reasoning that text would flush under whichever account happened to be
+ * signed in — the exact thing the guard exists to stop, reached through its own
+ * exemption.
+ *
+ * THE CORRECT REASON: this content is ALREADY ADDRESSED TO THE ROOM. A SCRIBE
+ * line, a lifecycle notice, a commissioner announcement — every one of them was
+ * composed to be read by all six players in the shared Locker Room, so sending it
+ * from a different session discloses nothing that was not already going to be
+ * disclosed to exactly those people. The exemption is about the CONTENT'S
+ * AUDIENCE, not about whether a human typed it. (What it costs, accepted: the
+ * post may be relayed by a device that has changed hands. It still arrives at the
+ * same room with the same author stamp and the same words.)
+ *
+ * ══ SECURITY F-5 — AND IT IS GENUINELY IMMUTABLE. IT TOOK THREE GOES. ════════
+ *
+ * This is an exported ALLOW-LIST that decides whose queued events may leave a
+ * device under somebody else's session. `_SYSTEM_AUTHORS_FOR_TEST` puts it in
+ * reach of any module in the process, and a single added entry anywhere —
+ * including in a suite that ran earlier in the same process — would exempt a
+ * real player from the guard with no diff to show for it.
+ *
+ * FIRST ATTEMPT (eighth gate): `Object.freeze(new Set([...]))`. Worthless. A
+ * Set's contents are INTERNAL SLOTS, not object properties, so freezing leaves
+ * `add`/`delete`/`clear` fully working and `Object.isFrozen()` still answers
+ * true. Asserting "it is frozen" would have been a test that proves nothing.
+ *
+ * SECOND ATTEMPT (eighth gate, shipped): keep the Set, shadow the three mutators
+ * with own properties that throw, then freeze so the shadows cannot be removed.
+ * Better, and still bypassable in ONE LINE — `Set.prototype.add.call(SET, 'p3')`
+ * walks straight past an own-property stub and mutates the internal slot anyway.
+ * Own-property shadowing cannot defend a structure whose state lives somewhere
+ * the property lookup never goes. (Security audit #10 / F-5 found this, on the
+ * precedent of the identical two-attempt arc in js/supabase-backend.js:109-140.)
+ *
+ * WHAT ACTUALLY WORKS: A FROZEN ARRAY. An array's elements ARE indexed
+ * properties and its length IS a property, so `Object.freeze` reaches all of it
+ * — `push`, index assignment, `length = 0`, and the prototype-call forms of all
+ * of those, throw in strict mode (ES modules are always strict). There is no
+ * internal slot to go around, because there is no internal slot.
+ *
+ * DELIBERATELY NOT IMPORTED FROM js/supabase-backend.js. That module has the
+ * same `frozenList()` helper and the same comment, and sharing it would be the
+ * obvious move — but js/chat.js must not depend on the Step 4 data adapter. The
+ * adapter is dormant, has no importer, and is a layer ABOVE the chat engine;
+ * an import here would make the chat engine fail to load if the adapter ever
+ * did, for the sake of one `Object.freeze([...])`. Two three-word helpers is
+ * the cheaper mistake.
+ *
+ * The cost is `.includes()` instead of `.has()`: O(n) on a list of two, read
+ * once per queued event per flush. Not a trade worth thinking about.
+ */
+const SYSTEM_AUTHORS = Object.freeze(['scribe', 'system']);
+export const _SYSTEM_AUTHORS_FOR_TEST = SYSTEM_AUTHORS;
 
 function persistOutbox() {
-  try { localStorage.setItem(K_OUTBOX, JSON.stringify(S.outbox.map(o => o.ev))); } catch {}
+  try {
+    // ── SECURITY F-4 (seventh gate) — AN EMPTY QUEUE LEAVES NO KEY ───────────
+    // This used to write the literal `[]`, so once a device had ever sent
+    // anything the key existed forever with nothing in it. loadOutbox() already
+    // treats a missing key as `[]`, so removing it instead changes nothing about
+    // how the queue reads back.
+    //
+    // REVIEWER F-1 (EIGHTH gate) — WHY, SPLIT INTO THE TWO SEPARATE CLAIMS IT
+    // USED TO RUN TOGETHER. The seventh-gate comment credited BOTH symptoms to
+    // the `[]` write, and only one of them was ever its fault:
+    //
+    //   1. ACTUALLY THIS BUG. A handset carrying nothing but an empty outbox
+    //      answered YES to DI-180q's "is there anything here that could belong to
+    //      a previous player?" — so every phone in the league read as "previous
+    //      player data present" and took a pointless one-time clear. Removing the
+    //      key on an empty queue is the fix, and it is the fix for this alone.
+    //
+    //   2. NOT THIS BUG — it was the UNION in _keysToClear(). The clear's own
+    //      read-back saw a key it had just removed still listed, reported the
+    //      sweep INCOMPLETE, refused to write the owner marker, and re-cleared on
+    //      every boot. The cause was `_keysToClear()` unioning the whole
+    //      documented `_SIGNOUT_LOCAL_KEYS` list UNCONDITIONALLY, so the
+    //      post-sweep re-ask could never be empty no matter what this function
+    //      wrote. It was fixed in js/auth.js, by making that union conditional on
+    //      the key actually being present — see the comment at _scanKeysToClear().
+    //
+    // Recorded apart because a future reader chasing symptom 2 must be sent to
+    // auth.js, not to this line.
+    if (!S.outbox.length) { localStorage.removeItem(K_OUTBOX); return; }
+    localStorage.setItem(K_OUTBOX, JSON.stringify(S.outbox.map(o => o.ev)));
+  } catch {}
 }
 function loadOutbox() {
   try {
@@ -675,11 +821,200 @@ function scheduleFlush() {
   S.flushTimer = setTimeout(() => { S.flushTimer = null; flushOutbox(); }, FLUSH_COALESCE_MS);
 }
 
+/**
+ * ══ SECURITY F-4 (seventh gate, 2026-09-17) — THE UNSENT QUEUE IS DEVICE-LOCAL
+ *    DATA, AND HALF OF IT LIVES IN RAM ══════════════════════════════════════════
+ *
+ * DI-180q's device-local clear removed `cfbp_chat_outbox2` by key name, which is
+ * only half the object: `S.outbox` is the live array, and a same-page handover
+ * (the player signs out and a second Google account signs in without a reload)
+ * never touches it. The persisted copy went; the in-memory copy stayed, and the
+ * next flush sent the departing player's unsent messages under the incoming
+ * player's session.
+ *
+ * So the drop is exported, both halves at once, and it is called from app.js's
+ * identity chokepoint rather than from js/auth.js. THE LAYERING IS WHY: auth.js
+ * importing chat.js would close the cycle chat.js -> storage.js -> auth.js ->
+ * chat.js. app.js already imports both and already owns the one place that knows
+ * the identity moved, so that is where it goes — and the author guard in
+ * flushOutbox() below is the marker-INDEPENDENT backstop that does not depend on
+ * this call happening at all.
+ *
+ * BUG-D's contract is honoured: anything awaiting one of these ids is rejected
+ * now rather than left to burn its full bound on a send that no longer exists —
+ * the same thing _applyEpochLocally() does for the same reason.
+ *
+ * ══ THE ACCEPTED LIMIT, STATED SO IT IS A DECISION AND NOT AN OVERSIGHT
+ *    (eighth gate, 2026-09-18) ══════════════════════════════════════════════════
+ *
+ * THE OUTBOX IS DEVICE-LOCAL PLAINTEXT. It is a JSON array in localStorage under
+ * `cfbp_chat_outbox2`, and anyone holding the unlocked handset — with a devtools
+ * console, a file manager on a jailbroken device, or a backup extractor — can
+ * read it, guard or no guard. This guard and clearOutbox() defend against an
+ * ACCIDENTAL CROSS-ACCOUNT FLUSH: the queue being SENT, over the network, under a
+ * second player's session and attributed to them in the shared log where all six
+ * people read it. They do not, and cannot, defend against the person physically
+ * holding the device.
+ *
+ * That is the right trade for this app and it is not a gap to be closed later:
+ * encrypting a device-local queue would need a key, the key would have to live on
+ * the same device, and the result would be obfuscation with a maintenance cost.
+ * The threat model here is a SHARED FAMILY PHONE and a handover between friends,
+ * not a forensic adversary — six people who know each other (PLAYERS.md), where
+ * the real harm is "Koby's message appeared under Kevin's name in the Locker
+ * Room", which is exactly what these two mechanisms prevent.
+ *
+ * @returns {number} how many queued events were dropped (for the suites and the
+ *          caller's console trail; no content and no ids are logged).
+ */
+export function clearOutbox() {
+  const dropped = S.outbox.length;
+  S.outbox.forEach(o => settleAppend(o.ev.id, new Error(`This device changed hands before ${o.ev.id} could be sent`)));
+  S.outbox = [];
+  try { localStorage.removeItem(K_OUTBOX); } catch {}
+  return dropped;
+}
+
+/** SECURITY F-4 — how many events are queued right now. Read by the suites so
+ *  "a same-page handover leaves nothing queued" is observable rather than
+ *  inferred from what did or did not get sent. Production never calls it. */
+export function _outboxForTest() { return S.outbox.map(o => o.ev); }
+
+/** SECURITY F-4 (eighth gate) — restore the persisted queue on demand, the way
+ *  initChat() does on a cold boot. Exported so the suites can build the ONE
+ *  shape that cannot be produced by sendEvent(): an entry written by a PREVIOUS
+ *  release, with no `leagueId` stamp on it. That is the upgrade-day case the
+ *  league guard must let through, and asserting it requires the real loader
+ *  rather than a hand-built S.outbox. Production never calls this. */
+export function _loadOutboxForTest() { loadOutbox(); }
+
 export async function flushOutbox() {
   // "Off" means zero network activity, not just zero reads — a queued send
   // (e.g. a SCRIBE post staged from the commissioner panel while chat is
   // hidden) waits in the outbox, persisted, and flushes automatically the
   // moment chat is re-enabled. Nothing is lost (item A: "data is preserved").
+  if (!S.outbox.length) return;
+  // ── SECURITY F-4 (seventh gate) — THE AUTHOR GUARD ────────────────────────
+  // A MEMBER'S words never leave this device under a different member's session.
+  // clearOutbox() handles the tidy case (app.js saw the identity move); this
+  // handles every case it cannot see — a queue restored from localStorage by
+  // loadOutbox() on a handset that changed hands between sessions, a DI-180q
+  // clear that could not complete on a device refusing removals, a reload
+  // mid-handover. The stamp is already on every entry (sendEvent() writes
+  // `author`), so this is a comparison, not new data.
+  //
+  // THE ALLOW-LIST IS TWO THINGS, and the second one is not optional:
+  //   • the member id of the session at this device right now, and
+  //   • the SYSTEM authors. `author: 'scribe'` is the ordinary case, not an edge
+  //     one — What's New posts, wager-due resurfacing, lifecycle posts, the
+  //     Tier-1 queue and the weekly pin are all staged into this same outbox
+  //     under SCRIBE's id, never under the commissioner's. A bare
+  //     `author === me` check would have silently stopped every one of them from
+  //     ever being sent.
+  //
+  //     WHY THEY ARE EXEMPT (reviewer F-3, eighth gate — the old wording here
+  //     said "neither is a person" and that is not true of `'system'`; see the
+  //     SYSTEM_AUTHORS declaration for the full correction): the content is
+  //     ALREADY ADDRESSED TO THE ROOM. Every one of these was composed to be read
+  //     by all six players in the shared Locker Room, so relaying it from a
+  //     different session discloses nothing it was not already going to disclose
+  //     to exactly those people. That is a property of the CONTENT'S AUDIENCE,
+  //     not of who typed it — which is the version that survives
+  //     postCommissionerAnnouncement() stamping a commissioner's own typed words
+  //     with `author: 'system'`.
+  //
+  // AN UNRESOLVED SESSION IS NOT A MISMATCH. getSession() can legitimately
+  // answer with no playerId early in boot (chat's transport starts before the
+  // identity settles — BUG-G) and for an anonymous viewer. With nobody signed
+  // in there is no "sent under B" to prevent, and blocking here would mean a
+  // device whose session has not resolved yet silently stops flushing with no
+  // retry trigger. So the guard is armed only once we know who the device is.
+  //
+  // ── SECURITY F-2 (EIGHTH gate, 2026-09-18) — "NOBODY IS SIGNED IN" AND
+  //    "I DO NOT KNOW YET WHO IS SIGNED IN" ARE DIFFERENT ANSWERS ─────────────
+  //
+  // The paragraph above collapsed them into one, and the collapse was safe right
+  // up until Step 3a made a device able to have a PROVEN account with an
+  // UNRESOLVED member id. That is a real window, not a theoretical one: a Google
+  // session restores from localStorage synchronously at boot, and the membership
+  // read that turns it into a playerId is a network round trip. A handset that
+  // changed hands between sessions restores the previous player's queue via
+  // loadOutbox() and reaches this line inside that window, with `me === ''` — so
+  // the guard disarms itself at exactly the moment it is needed, and the previous
+  // player's unsent messages go out under the incoming account's token.
+  //
+  // So the two cases are separated, and only one of them disarms:
+  //   • 'pins' mode, or supabase mode with NO proven session (an anonymous
+  //     viewer, a signed-out device): nobody is signed in, there is no "sent
+  //     under B" to prevent, and there may never be one. FLUSH, as today.
+  //   • supabase mode WITH a proven session but no playerId yet: the answer is
+  //     coming. HOLD — send nothing, keep the queue intact, and let the identity
+  //     land. This costs a queued message a second or two once; the alternative
+  //     costs it the wrong author permanently.
+  let me = '';
+  try { me = String(getSession()?.playerId || ''); } catch { me = ''; }
+  if (!me) {
+    let identityPending = false;
+    try { identityPending = getAuthMode() === 'supabase' && hasValidSupabaseSession(); } catch { identityPending = false; }
+    if (identityPending) {
+      // The queue is UNTOUCHED — not dropped, not persisted differently, not
+      // marked failed. Re-armed on a slower cadence than the ordinary coalescing
+      // window so an identity that takes a while does not spin: this is the
+      // "next flush trigger", made a property of the code rather than a hope
+      // that something else calls us (initChat(), enable, and app.js's identity
+      // chokepoint all call flushOutbox() too, and any of them arriving first
+      // simply finds the timer already armed).
+      _identityHolds++;
+      if (!S.flushTimer) S.flushTimer = setTimeout(() => { S.flushTimer = null; flushOutbox(); }, IDENTITY_HOLD_RETRY_MS);
+      return;
+    }
+  }
+  if (me) {
+    // ── SECURITY F-4 (EIGHTH gate) — THE LEAGUE TERM, ALONGSIDE THE AUTHOR ───
+    // `author === me` is one of the identity tuple's two terms. An entry stamped
+    // with a DIFFERENT league than the one this device is scoped to right now is
+    // just as wrong as one stamped with a different member: same person, wrong
+    // room, wrong six people. Dropped here rather than sent.
+    //
+    // AN ENTRY WITH NO `leagueId` AT ALL FLUSHES AS TODAY, deliberately. That is
+    // the pre-existing queue — every event composed before this stamp shipped,
+    // restored from localStorage by loadOutbox() on the first boot after the
+    // release. There is no league to compare it against, and silently destroying
+    // a player's unsent messages on upgrade is a worse failure than delivering
+    // one to the room they were almost certainly composed in (one league is the
+    // only case that exists today for five of the six players). The stamp is on
+    // every event from this release forward, so the exemption drains itself.
+    //
+    // SYSTEM authors are NOT exempt from the league term, unlike the author term:
+    // a SCRIBE post is addressed to one specific room, and 'scribe' being a
+    // non-person is a reason to let it past the AUTHOR check, not a reason to let
+    // it land in the wrong league.
+    const activeLeague = (() => { try { return String(getActiveLeagueId() || ''); } catch { return ''; } })();
+    const sendable = (o) => {
+      const a = String(o.ev.author || '');
+      if (a !== me && !SYSTEM_AUTHORS.includes(a)) return false;
+      const evLeague = String(o.ev.leagueId || '');
+      if (evLeague && activeLeague && evLeague !== activeLeague) return false;
+      return true;
+    };
+    const mine = S.outbox.filter(sendable);
+    if (mine.length !== S.outbox.length) {
+      const foreign = S.outbox.filter(o => !sendable(o));
+      S.outbox = mine;
+      // BUG-D — reject the waiters rather than leaving them to time out.
+      foreign.forEach(o => settleAppend(o.ev.id, new Error(`Queued under a different identity on this device — ${o.ev.id} was not sent`)));
+      persistOutbox();
+      // A COUNT, never the content, never the foreign author id and never the
+      // foreign league id. The whole point of the guard is that the previous
+      // identity's words do not leave this device; printing them into the
+      // console would be the same leak one layer over (security F-3's rule).
+      console.warn(`[chat] ${foreign.length} queued event(s) were composed under a different member id or a different league on this device and will NOT be sent`);
+    }
+  }
+  // The guard above runs ABOVE this gate on purpose: it sends nothing, so it
+  // costs no network activity ("off means zero network activity" is unchanged),
+  // and a foreign entry must not sit in the queue waiting for connectivity to
+  // come back. This is the original gate, unmoved otherwise.
   if (!S.outbox.length || !isBackendConfigured() || !isChatEnabled()) return;
   const batch = S.outbox.splice(0, S.outbox.length);
   try {
@@ -824,8 +1159,48 @@ export function roomMode() {
 }
 
 export function setViewOpen(open) { S.viewOpen = !!open; }
-/** Back-compat shim for app.js ('active' when the chat tab is showing). */
-export function setPollMode(mode) { setViewOpen(mode === 'active'); }
+/**
+ * Back-compat shim for app.js ('active' when the chat tab is showing).
+ *
+ * ══ 'paused' — THE ONE EXPORTED PAUSE (Phase III Step 4, DI §6.5) ═══════════
+ *
+ * The amendment's finding, verbatim: *"Chat's background poll keeps running
+ * behind a hold gate, so the unread COUNT can reappear on the nav badge."* A
+ * hold gate tears the page down precisely so no league data is reachable, and a
+ * count of messages six named people wrote is league data — arriving on the nav
+ * pill and in the tab title, in front of the lock, roughly every 20 seconds.
+ *
+ * 'passive' was never enough: it only says the chat TAB is not showing, and the
+ * poll loop keeps running (that is what makes an unread badge possible at all).
+ * So 'paused' is a third value that stops the timer and DROPS the subscription.
+ *
+ * `S.paused` is also read by `_subscribeNow()`, and that is not belt-and-braces
+ * — it is the guard that makes the pause hold. Three other paths re-subscribe
+ * on their own schedule (`refreshChatEnabled()`'s 30 s watch,
+ * `startChatTransport()`, `initChat()`), so a pause that only cleared the
+ * current subscription would be silently undone by whichever of them fired
+ * next, which is exactly the "asserted once and never re-checked" shape this
+ * codebase has paid for before.
+ *
+ * `_parkTimersForHold()` pauses; `releaseWithholdIfResolved()` resumes through
+ * the 'active'/'passive' arm, which re-subscribes only if the pause was the
+ * thing holding it down (so a chat-disabled league is not force-subscribed).
+ */
+export function setPollMode(mode) {
+  if (mode === 'paused') {
+    S.paused = true;
+    setViewOpen(false);
+    if (S.unsub) { S.unsub(); S.unsub = null; S.forceTick = null; S.wake = null; }
+    return;
+  }
+  const wasPaused = S.paused === true;
+  S.paused = false;
+  setViewOpen(mode === 'active');
+  if (wasPaused && isChatEnabled() && isBackendConfigured() && !S.unsub) _subscribeNow();
+}
+/** Read by boottest/authtest to prove the pause is a STATE and not just a
+ *  one-off unsubscribe. Production never calls it. */
+export function _isPollPausedForTest() { return S.paused === true; }
 
 // ── DI-169 — device-local raw-events cache (instant render on boot) ──────────
 // What is cached: the RAW EVENT LIST exactly as chatTransport.js delivers it
@@ -981,6 +1356,11 @@ function readAndPrimeEventsCache() {
  *  changed on re-login" — nothing in this closure captures selfId (it closes
  *  over ingest, roomMode and S.head), so that was never a reason. */
 function _subscribeNow() {
+  // DI §6.5 — THE PAUSE HOLDS. Without this line the 30-second chat-enabled
+  // watch, startChatTransport() and initChat() would each quietly re-subscribe
+  // behind a hold gate, and the unread badge would come back on the nav pill in
+  // front of the lock. See setPollMode()'s comment.
+  if (S.paused === true) return;
   if (S.unsub) S.unsub();
   const sub = subscribe(
     (events, head, delivery) => {
@@ -1418,7 +1798,12 @@ export function chatDigest(startMs, endMs, ctx = {}) {
   const nameOf = pid => players.find(p => p.playerId === pid)?.displayName || pid;
   const inRange = m => (m.ts || 0) >= startMs && (m.ts || 0) <= endMs;
   const msgs = getMessages({ tag: 'all', types: ['message'] }).filter(m => inRange(m) && !m.deleted);
-  const human = msgs.filter(m => m.author !== 'system' && m.author !== 'scribe');
+  // REVIEWER F-3 (eighth gate) — reads SYSTEM_AUTHORS rather than repeating the
+  // two names. This IS the fold the Set's declaration comment cites; it was a
+  // hardcoded literal pair, so "kept as one Set so they cannot drift" was an
+  // aspiration rather than a fact. Behaviour is identical today — the point is
+  // that a third system author added to the Set now reaches here too.
+  const human = msgs.filter(m => !SYSTEM_AUTHORS.includes(String(m.author || '')));
 
   const byPlayer = {};
   human.forEach(m => { byPlayer[m.author] = (byPlayer[m.author] || 0) + 1; });
@@ -1512,6 +1897,7 @@ export function _resetForTest() {
   S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;
   _eventsCacheBuf = [];                                   // DI-169 — no leaking raw events into the next test section's writes
   _cachePrimed = false;                                   // BUG-G — the once-per-session prime latch is session state, same lifecycle as the buffer above
+  _identityHolds = 0;                                     // SECURITY F-2 (eighth gate) — a per-page counter, so a suite's sections do not inherit each other's holds
   // DI-169 — UNLIKE K_LASTSEEN/K_OUTBOX/K_EPOCH_APPLIED above (whose
   // persistence across _resetForTest() is harmless — they're read on demand
   // by specific functions, not unconditionally on every initChat()), a stale

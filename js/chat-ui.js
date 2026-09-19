@@ -2558,15 +2558,91 @@ function maybeMentionMenu(input) {
 // reasons: this panel is re-rendered on every prefs change (a directly-bound
 // listener would go stale), and importing app.js here would make chat-ui.js
 // depend on the module that already imports it.
+/**
+ * ══ DI-182a/f (STEP 3b) — THE ALMA-MATER DROPDOWN IS *ONE* IMPLEMENTATION ════
+ *
+ * DI-182f is explicit: the player's self-edit row and the commissioner's
+ * `showEditPlayerModal()` must be "the SAME function call — one dropdown
+ * implementation, two call sites." That function is `buildAlmaMaterOptions()`,
+ * and it lives in js/app.js because it reads `cachedEspnTeamsList()`, which is
+ * app.js MODULE STATE (the ESPN team catalog, fetched and cached there).
+ *
+ * chat-ui.js CANNOT IMPORT IT. app.js already imports chat-ui.js, so the reverse
+ * edge would close a cycle — the same reason the "My SCRIBE File" button a few
+ * lines below has its click wired in app.js by delegation rather than here.
+ * Copying the builder into this file would satisfy the letter of DI-182a and
+ * break DI-182f outright: two implementations that drift the first time the
+ * catalog's shape changes.
+ *
+ * SO app.js REGISTERS ITS OWN BUILDER, ONCE, AT INIT. Dependency injection in
+ * one direction only: chat-ui.js declares what it needs, app.js supplies it, and
+ * there is still exactly one `buildAlmaMaterOptions()` in the codebase with two
+ * callers. Unregistered (a suite importing chat-ui.js on its own), the row falls
+ * back to the player's current value as the only option — which renders
+ * correctly and saves correctly, it just cannot offer the catalog.
+ */
+let _almaOptionsProvider = null;
+export function registerAlmaMaterOptionsProvider(fn) { _almaOptionsProvider = typeof fn === 'function' ? fn : null; }
+/**
+ * SECURITY F-3 / DI-T7.6 (audit #10) — THE SELF-EDIT WRITER, ALSO INJECTED.
+ *
+ * The prefs rows used to write `savePlayer({ ...player, ...patch })`, where
+ * `player` was read when the panel rendered. savePlayer() REPLACES the row, so
+ * that write carried every field of a possibly-stale copy — including
+ * `email`/`phone`/`phoneVerified`, which after migration 0007 project as ABSENT
+ * for anyone but the commissioner. DI-T7.6's rule is that a write must never
+ * carry a contact field it did not read; editing your initials has not read one.
+ *
+ * `patchPlayer(playerId, fields)` (js/app.js) re-reads the row at write time and
+ * carries only the named keys. It is injected for the same reason the dropdown
+ * builder above is: app.js imports this module, so importing app.js here would
+ * close a cycle. Unregistered — a suite importing chat-ui.js on its own — the
+ * rows simply do not write, which is the fail-closed direction: a self-edit that
+ * silently did nothing is recoverable; one that blanked a phone number is not.
+ */
+let _playerPatchWriter = null;
+export function registerPlayerPatchWriter(fn) { _playerPatchWriter = typeof fn === 'function' ? fn : null; }
+export function _playerPatchWriterForTest() { return _playerPatchWriter; }
+export function _almaOptionsProviderForTest() { return _almaOptionsProvider; }
+function almaOptionsHTML(current) {
+  if (_almaOptionsProvider) {
+    try { return _almaOptionsProvider(current); }
+    catch (e) { console.warn('[chat-ui] the alma-mater options provider failed', e); }
+  }
+  const cur = (current || '').trim();
+  return `<option value="">— None —</option>${cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}`;
+}
+
 function prefsPanelHTML() {
   const self = me();
   if (!self) return '';
   const prefs = getNotifPrefs();
   const accent = getAccent();
+  const player = getPlayer(self);
   return `
   <div class="card mb-md chat-prefs">
     <div class="chat-prefs-row"><label>Display name</label>
       <input class="form-input" id="pref-nick" maxlength="16" value="${esc(getChatNick() || '')}" placeholder="${esc(getPlayer(self)?.displayName || '')}" /></div>
+    <!-- ── DI-182a (Step 3b) — the two league-identity rows ──────────────────
+         NAMED LIMITATION, carried over from the DI verbatim rather than quietly
+         dropped: housing a LEAGUE-IDENTITY edit inside a panel titled around
+         chat preferences is not ideal information architecture. It is the
+         correct choice for THIS build because it is the only self-service
+         surface that exists; a proper "My Profile" page is the natural
+         follow-up once League Home has a settings destination of its own.
+         Note that player.initials has existed on the data model (data-model.js's
+         getPlayerInitials()) with NO editable UI anywhere — commissioner or
+         player — until now.
+         NO BACKTICKS IN HERE: this markup lives inside a template literal, and
+         a backtick closes it. The SCRIBE-file comment below carries the same
+         warning; the first draft of this block ignored it and every module that
+         imports chat-ui.js failed to parse. -->
+    <div class="chat-prefs-row"><label>Initials</label>
+      <input class="form-input" id="pref-initials" maxlength="3" autocapitalize="characters" spellcheck="false"
+             value="${esc(player?.initials || '')}" placeholder="${esc((player?.displayName || '').charAt(0).toUpperCase())}" /></div>
+    <div class="chat-prefs-row"><label>Alma mater</label>
+      <select class="form-input" id="pref-alma">${almaOptionsHTML(player?.almaMater || '')}</select></div>
+    <div class="chat-prefs-row"><span class="text-muted" style="font-size:.75rem">Your commissioner can also set this for you.</span></div>
     <div class="chat-prefs-row"><label>Accent</label>
       <div class="chat-accent-row">${ACCENTS.map(a =>
         `<button class="chat-accent-swatch${a === accent ? ' active' : ''}" data-accent="${a}" style="background:${a}"></button>`).join('')}
@@ -2594,8 +2670,53 @@ function prefsPanelHTML() {
 // output rather than against a grep of the source (RG-27).
 export const _prefsPanelHTMLForTest = prefsPanelHTML;
 
+/** Test-only seam, the same convention `_prefsPanelHTMLForTest` uses and for the
+ *  same reason (RG-27): DI-182a's self-edit rows are asserted against the REAL
+ *  binding rather than by calling the writer the binding happens to use. Without
+ *  it, a mutation that put the whole-row spread BACK at the call site inside
+ *  saveSelfField() left authtest green — the suite was exercising patchPlayer()
+ *  and not the one line that decides what patchPlayer() is handed. Production
+ *  reaches bindPrefsPanel() through renderChatPage() and nothing else. */
+export const _bindPrefsPanelForTest = () => bindPrefsPanel();
+
 function bindPrefsPanel() {
   document.getElementById('pref-nick')?.addEventListener('change', e => { setChatNick(e.target.value); renderChatPage(); });
+  // ── DI-182a (Step 3b) — the two league-identity rows ──────────────────────
+  // Both write the SAME fields the commissioner's Edit Player modal writes,
+  // through the SAME injected field patch (js/app.js's patchPlayer(), security
+  // F-3 / DI-T7.6 — NOT a whole-row savePlayer()). DI-182a's own ruling on
+  // conflicts, stated so nobody builds more than was asked for: "whichever saves
+  // last wins, identically to how two people editing the same Sheet row behave
+  // today. No new conflict-resolution logic is being built for this."
+  const saveSelfField = (patch) => {
+    const self = me();
+    if (!self) return;                       // anonymous viewers never reach this panel anyway
+    // A FIELD PATCH, not a whole-row write. `patch` here is always exactly one
+    // key — `initials` or `almaMater` — so the contact fields are provably not
+    // in it, and patchPlayer() re-reads the row at write time rather than
+    // trusting the copy this panel rendered from. See registerPlayerPatchWriter
+    // above for why it arrives by injection instead of by import.
+    if (!_playerPatchWriter) {
+      console.warn('[chat-ui] no player-patch writer is registered; the self-edit was NOT saved (fail-closed: a write that did nothing is recoverable, one that blanked a contact field is not)');
+      return;
+    }
+    _playerPatchWriter(self, patch);
+  };
+  document.getElementById('pref-initials')?.addEventListener('change', e => {
+    // Trimmed + uppercased to match getPlayerInitials()'s own fallback, which
+    // uppercases the first letter of the display name — otherwise a player who
+    // types "dh" gets a lowercase avatar next to five uppercase ones.
+    saveSelfField({ initials: String(e.target.value || '').trim().toUpperCase().slice(0, 3) });
+    renderChatPage();
+  });
+  document.getElementById('pref-alma')?.addEventListener('change', e => {
+    // The VALUE is `location`, the same field parseAndReport() stores as
+    // game.homeTeam/awayTeam — so Alma Mater Watch's exact-equality match
+    // applies to whatever is saved here, exactly as it does to the
+    // commissioner's override. Same field, same shape, same function.
+    saveSelfField({ almaMater: String(e.target.value || '') });
+    renderChatPage();
+  });
   document.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
   document.getElementById('pref-toasts')?.addEventListener('change', e => setNotifPrefs({ toasts: e.target.checked }));
   document.getElementById('pref-toast-duration')?.addEventListener('change', e => setNotifPrefs({ toastDuration: Number(e.target.value) }));
