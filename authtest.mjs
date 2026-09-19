@@ -429,6 +429,17 @@ console.log('\n[4] refreshMembershipsAndSession() — auto-resolve, DI-181c/g…
   const gm = src.match(/export async function getMemberships\([\s\S]*?\n\}/);
   assert(!!gm, 'fixture check — getMemberships() was located');
   assert(!!gm && !/select\(\s*['"]\*/.test(gm[0]), 'getMemberships() never calls select(\'*\') — enumerated columns only (task instruction)');
+  // RG (2026-09-19 cutover): a BARE `leagues(name)` embed is ambiguous to PostgREST (own FK vs the
+  // many-to-many through `standings`) and answers PGRST201 — every membership read failed on the
+  // live API while every fixture here stayed green, because the fake client does no relationship
+  // resolution. The embed must NAME its relationship. Comment-blanked so prose cannot satisfy it.
+  {
+    const code = gm ? gm[0].replace(/\/\/[^\n]*/g, '') : '';
+    assert(/leagues!league_members_league_id_fkey\(name\)/.test(code),
+      'getMemberships() embeds `leagues` through the NAMED relationship `league_members_league_id_fkey` (a bare embed is PGRST201-ambiguous on the live API)');
+    assert(!/[^!\w]leagues\(name\)/.test(code),
+      '…and no bare `leagues(name)` embed survives in its code (the ambiguous form that failed every membership read at the cutover)');
+  }
   assert(!!gm && !/claim_code/.test(gm[0]), 'getMemberships()\'s own column list does not name claim_code/claim_code_expires_at');
 }
 

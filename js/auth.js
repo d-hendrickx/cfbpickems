@@ -1671,7 +1671,12 @@ export async function getMemberships(op = null) {
   }
   const { data, error } = await client
     .from('league_members')
-    .select('league_id, id, role, display_name, active, leagues(name)')
+    // The embed NAMES its relationship. A bare `leagues(name)` is AMBIGUOUS to PostgREST — it can reach
+    // `leagues` by this table's own FK or many-to-many through `standings` — and it answers PGRST201
+    // rather than guess. That refused EVERY membership read at the 2026-09-19 cutover ("Can't reach
+    // sign-in right now"); the fake client in authtest does no relationship resolution, so only the
+    // live API could see it. The response key is still `leagues`.
+    .select('league_id, id, role, display_name, active, leagues!league_members_league_id_fkey(name)')
     .eq('user_id', uid)
     .eq('active', true);
   if (error) throw error;
