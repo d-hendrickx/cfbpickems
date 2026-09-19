@@ -54,6 +54,21 @@
  * real risk against a benefit that is a hold either way. Revisit at cutover if
  * Drew wants the hold gone.
  *
+ * ── FOLLOW-UP CARRIED OUT OF THE CUTOVER NIGHT (2026-09-18, deliberately NOT
+ *    fixed tonight) ──────────────────────────────────────────────────────────
+ * `runPostHydrateTail()` in js/app.js is latched once per page (`_postHydrateTailDone`, js/app.js — NOT `_sbTailRan`, which only runs inside the ACTIVE branch; corrected at the v0.22.1 gate).
+ * On the sequence this night produced — a device that boots PRE-IDENTITY (zero
+ * memberships), links, and only then hydrates a league — the tail's latch is
+ * first touched under an identity that had no league, so anything in the tail
+ * that is league-scoped runs for the first time against the league that arrived
+ * afterwards rather than being re-run for it. It SELF-HEALS: the identity
+ * chokepoint (`applyIdentityDeltaIfChanged`) fires on the membership resolve
+ * that brings the league in, and re-derives every affected render. Recorded
+ * here rather than changed because a latch that governs seeding and the
+ * post-hydrate render order is exactly the kind of boot-time state RG-12 says
+ * not to touch at 23:00 on a cutover night, and nothing observed tonight
+ * depends on it. Revisit with the ledger row for this hotfix.
+ *
  * ── A NOTE FOR PART B, and it is a REPORTED DISCREPANCY, not an edit ────────
  * DI §1.2's table renames `useSheets(key)` to `useBackend(key)` and routes
  * `load()` to this module's synchronous read when it is true. When the adapter

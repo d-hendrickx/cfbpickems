@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.22.0';
+export const APP_VERSION = 'v0.22.1';
 export const APP_VERSION_DATE = '2026-09-19';
 
 /**
@@ -38,6 +38,20 @@ export const APP_VERSION_DATE = '2026-09-19';
  * no card, no `<details>`, no shell, and no chat post either.
  */
 const WHATS_NEW_RELEASES = [
+  {
+    // v0.22.1 — THE CUTOVER (Phase III Step 8, 2026-09-19 early). Fixes RG-163/RG-164 (the two
+    // pre-identity readiness deadlocks found at the first attempt) and flips authMode+dataMode.
+    // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
+    version: 'v0.22.1',
+    date: '2026-09-19',
+    added: [
+      'The league runs on its new home now. Sign in with Google once — if your Google email matches the one the commissioner has on file you are linked automatically; otherwise enter the code he gives you. Picks, records, standings and the whole chat history came across; live scores and sync are faster.',
+    ],
+    fixed: [
+      'The first cutover attempt tonight showed everyone a "We\'ll be right back" screen. Two start-up bugs, both fixed and both now covered by tests that start from a fresh phone with no sign-in.',
+      'Until the next release: @scribe answers from its stock lines, and the automatic "picks lock soon" reminders and the weekly SCRIBE trainer are paused. Push notifications, the reveal, results and the chat notices all work as before.',
+    ],
+  },
   {
     // v0.22.0 — Phase III groundwork, shipped DORMANT (docs/SESSION_LOG_091126_SUPABASE.md entry 31).
     // Google sign-in, league linking, the Supabase data adapter and chat transport are all in this

@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v22-0';
+const CACHE_NAME = 'cfb-pickems-v22-1';
 
 const STATIC_ASSETS = [
   './',
@@ -102,6 +102,17 @@ const STATIC_ASSETS = [
   // including the 'pins' devices that will never execute it — install-time and
   // once per CACHE_NAME, not per boot.
   './js/auth.js',
+  // Phase III Step 4 Part B (2026-09-18). BOTH are STATIC imports — js/storage.js
+  // imports supabase-backend.js as a namespace (DI §1.2 row 1) and
+  // supabase-backend.js imports supabase-projection.js (its own header,
+  // constraint 2) — so they are boot-critical on EVERY device, flag on or off,
+  // for the same reason auth.js is: a shell cache without them serves a module
+  // graph that cannot resolve, which is RG-03's blank app arriving through the
+  // cache instead of through a typo. They cost a flag-off boot nothing at run
+  // time (neither has a top-level side effect, boottest [22](d)); this is about
+  // the bytes being present, not about them executing.
+  './js/supabase-backend.js',
+  './js/supabase-projection.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

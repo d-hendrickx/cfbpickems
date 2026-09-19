@@ -2575,6 +2575,34 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
       '[25e] service-worker.js answers GET_VERSION with its CACHE_NAME — the page cannot tell a real update from a controller flip without it');
     assert(/'\.\/js\/sw-register\.js'/.test(swSrc25),
       '[25e] js/sw-register.js is in STATIC_ASSETS — the offline shell boots, and a boot-critical module is not left uncached');
+    // ── EVERY STATICALLY IMPORTED MODULE, NOT A HAND-KEPT LIST (2026-09-18) ──
+    // js/supabase-backend.js and js/supabase-projection.js shipped for a whole
+    // build absent from STATIC_ASSETS while js/storage.js imported the first
+    // statically — i.e. the precached shell held a module graph that could not
+    // resolve, which is RG-03's blank app arriving through the cache rather than
+    // through a typo. The per-file assertions above only ever catch the file
+    // somebody remembered to write one for, so the rule is derived from the
+    // imports instead: anything any js/ module imports with a STATIC `import …
+    // from './x.js'` must be in the shell. Dynamic `import()` is deliberately
+    // not counted — those are fetched on demand, by design.
+    {
+      const { readdirSync, readFileSync } = await import('node:fs');
+      const jsDir = new URL('./js/', import.meta.url);
+      const jsFiles = readdirSync(jsDir).filter(f => f.endsWith('.js'));
+      assert(jsFiles.length >= 15, `[25e] fixture: js/ was enumerated (${jsFiles.length} modules)`);
+      const imported = new Set();
+      for (const f of jsFiles) {
+        const src = readFileSync(new URL(f, jsDir), 'utf8');
+        for (const m of src.matchAll(/^\s*import\s[^;]*?from\s+'\.\/([\w.-]+\.js)'/gm)) imported.add(m[1]);
+      }
+      assert(imported.has('storage.js') && imported.has('auth.js'),
+        '[25e] fixture: the import scan found the modules everything depends on — a scan that found nothing would make the rule vacuous');
+      const uncached = [...imported].filter(f => !swSrc25.includes(`'./js/${f}'`)).sort();
+      assert(uncached.length === 0,
+        `[25e] every STATICALLY imported js/ module is in STATIC_ASSETS (missing: ${JSON.stringify(uncached)}) — a shell cache that is one module short serves a graph that cannot resolve`);
+      assert(['supabase-backend.js', 'supabase-projection.js'].every(f => imported.has(f) && swSrc25.includes(`'./js/${f}'`)),
+        '[25e] …including the two the adapter added, named here because they are the pair that was missing');
+    }
     assert(/swScriptBasename\(worker\.scriptURL\) === ourName/.test(swRegSrc),
       '[25e] the ownership test compares BASENAMES, not full URLs (the mutation in [25f] is exactly this line)');
   }

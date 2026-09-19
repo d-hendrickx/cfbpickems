@@ -2978,10 +2978,13 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
   {
     const cfgRaw = readFileSync(new URL('./config.json', import.meta.url), 'utf8');
     const cfg = JSON.parse(cfgRaw);
-    assert(!('dataMode' in cfg),
-      `[22] config.json has NO dataMode key (got ${JSON.stringify(cfg.dataMode)}) — absent IS 'sheets' (CONVENTIONS #10), which is what every device does today`);
-    assert(!('authMode' in cfg),
-      '[22] …and still no authMode key either. DI §8.1 step 3: both are set in the SAME commit at cutover, never one alone');
+    // CUTOVER 2026-09-19 (v0.22.1): the invariant is DI §8.1 step 3 — the two flags move TOGETHER,
+    // never one alone. Before cutover both were absent; from cutover both read 'supabase'; a
+    // rollback removes both in one commit. Either pair is legal; a split pair is the defect.
+    const bothAbsent = !('dataMode' in cfg) && !('authMode' in cfg);
+    const bothOn = cfg.dataMode === 'supabase' && cfg.authMode === 'supabase';
+    assert(bothAbsent || bothOn,
+      `[22] config.json's authMode/dataMode move TOGETHER — both absent (pre-cutover / rollback) or both 'supabase' (cutover); got authMode=${JSON.stringify(cfg.authMode)} dataMode=${JSON.stringify(cfg.dataMode)}`);
 
     // BYTE-IDENTITY OF BEHAVIOUR, asked of the two functions that decide it.
     // Absent and 'sheets' must produce the same answer, and 'supabase' must be

@@ -976,7 +976,10 @@ console.log('\n[16] SEC F1 (CRITICAL) — THE INTERLOCK: supabase auth over a Sh
   // 6. config.json names the REAL hazard, not onboarding friction.
   const cfgRaw = readFileSync(new URL('./config.json', import.meta.url), 'utf8');
   const cfg = JSON.parse(cfgRaw);
-  assert(cfg.authMode === undefined, 'config.json still has NO authMode key — absent is \'pins\' (CONVENTIONS #10)');
+  // CUTOVER 2026-09-19 (v0.22.1): absent (pre-cutover / rollback) or 'supabase' WITH dataMode
+  // 'supabase' in the same file (DI §8.1 step 3 — the two flags never move alone).
+  assert((cfg.authMode === undefined && cfg.dataMode === undefined) || (cfg.authMode === 'supabase' && cfg.dataMode === 'supabase'),
+    `config.json authMode/dataMode are both absent or both 'supabase' (got ${JSON.stringify(cfg.authMode)}/${JSON.stringify(cfg.dataMode)})`);
   assert(/commissioner of the real league|stranger would be commissioner/i.test(cfg._authComment),
     'config.json\'s _authComment names the stranger-as-commissioner hazard over the shared Sheet');
   assert(/Sheet/.test(cfg._authComment) && /hasSupabaseDataBackend/.test(cfg._authComment),
