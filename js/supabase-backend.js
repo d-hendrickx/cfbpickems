@@ -1711,12 +1711,21 @@ async function _execute(client, op, leagueId) {
   }
   if (op.kind === 'rows') {
     let res;
+    // THE RETURNING LIST IS THE TABLE'S GRANTED COLUMN LIST, NEVER A BARE `.select()`. A bare
+    // `.select()` is `RETURNING *`, and PostgREST must be able to READ every column it returns:
+    // on a table whose SELECT grant is a column list (`league_members` since 0007 — email, phone,
+    // phone_verified and the claim-code pair are not member-readable) the whole WRITE is refused
+    // with "permission denied for table league_members", although the UPDATE itself is allowed.
+    // Found live at the 2026-09-19 cutover (the first profile save after sign-in raised the red
+    // sync banner); the offline fake applies no column privileges, so only the real API shows it.
+    // `_select()` already reads with the same list (SELECT_COLS), so one constant serves both.
+    const returning = SELECT_COLS[op.table] || '*';
     if (op.op === 'insert') {
-      res = await client.from(op.table).insert(op.rows).select();
+      res = await client.from(op.table).insert(op.rows).select(returning);
     } else if (op.op === 'patch') {
-      res = await client.from(op.table).update(op.changed).eq('league_id', leagueId).eq('id', op.rowId).select();
+      res = await client.from(op.table).update(op.changed).eq('league_id', leagueId).eq('id', op.rowId).select(returning);
     } else {
-      res = await client.from(op.table).delete().eq('league_id', leagueId).eq('id', op.rowId).select();
+      res = await client.from(op.table).delete().eq('league_id', leagueId).eq('id', op.rowId).select(returning);
     }
     if (res && res.error) throw _refusalFrom(res.error, { key: op.key, rowId: op.rowId || null, leagueId });
     // A policy that DENIES a row reports zero rows affected and NO error

@@ -803,6 +803,18 @@ await section('\n[A1] load() is SYNCHRONOUS in supabase mode, and the source say
   // edit that made one of them async would still pass every behavioural test
   // on the first tick and break the entire app on the second.
   const src = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8');
+  // RG (2026-09-19 cutover, live): a bare `.select()` after insert/update/delete is `RETURNING *`,
+  // and on a table whose SELECT grant is a COLUMN LIST (league_members since 0007) PostgREST refuses
+  // the whole WRITE — "permission denied for table league_members" — though the UPDATE is allowed.
+  // This fake applies no column privileges, so the rule is pinned on the source, comment-blanked.
+  {
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    assert(!/\.select\(\s*\)/.test(code),
+      '[A-RET] no bare `.select()` anywhere in the adapter — every write names its RETURNING columns (a bare one is RETURNING * and is refused on a column-granted table)');
+    assert(/const returning = SELECT_COLS\[op\.table\] \|\| '\*';/.test(code)
+      && (code.match(/\.select\(returning\)/g) || []).length === 3,
+      '[A-RET] the rows writer returns SELECT_COLS[table] on all three verbs (insert, patch, delete) — the same list _select() reads with');
+  }
   const bodyOf = (name) => {
     const m = new RegExp(`export function ${name}\\s*\\(`).exec(src);
     if (!m) return null;

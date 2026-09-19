@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.22.2';
+export const APP_VERSION = 'v0.22.3';
 export const APP_VERSION_DATE = '2026-09-19';
 
 /**
@@ -43,7 +43,7 @@ const WHATS_NEW_RELEASES = [
     // could not read memberships — PGRST201, an ambiguous embed — so nobody ever saw its post). Fixes RG-163/RG-164 (the two
     // pre-identity readiness deadlocks found at the first attempt) and flips authMode+dataMode.
     // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
-    version: 'v0.22.2',
+    version: 'v0.22.3',
     date: '2026-09-19',
     added: [
       'The league runs on its new home now. Sign in with Google once — if your Google email matches the one the commissioner has on file you are linked automatically; otherwise enter the code he gives you. Picks, records, standings and the whole chat history came across; live scores and sync are faster.',
