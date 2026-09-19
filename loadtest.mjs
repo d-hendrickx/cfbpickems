@@ -8533,7 +8533,7 @@ console.log('\n[73e] adaptertest.mjs — spawned as a subprocess, exit code + pr
   assert(!!m73e, `adaptertest.mjs printed its own pass/fail/skip summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73e ? '' : '\n' + out.slice(-800)}`);
   if (m73e) {
     assert(Number(m73e[2]) === 0, `adaptertest.mjs reports zero failed assertions (got ${m73e[2]} failed, ${m73e[1]} passed)`);
-    assert(Number(m73e[1]) >= 499, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 499) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
+    assert(Number(m73e[1]) >= 527, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 527) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
     assert(Number(m73e[3]) === 0, `adaptertest.mjs has NO remaining Part-B skips (got ${m73e[3]}) — A9b, A14b and A17 were all closed by Part B, and a skip that reappears is a follow-up nobody is tracking`);
   }
 }

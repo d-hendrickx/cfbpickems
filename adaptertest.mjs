@@ -1149,6 +1149,78 @@ await section('\n[A7] hasSupabaseDataBackend() DERIVES from the state machine (e
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-NN] the planner NEVER sends null into a NOT NULL column (live cutover defect, 2026-09-19)…', async () => {
+  // (1) The map is the SCHEMA's. Derive it from 0001_schema.sql the same way the adapter's constant
+  //     was generated, and fail on drift — a new NOT NULL column with a default that this list does
+  //     not name is exactly the column whose null would refuse a whole row.
+  const sql = readFileSync(join(__dirname, 'supabase', 'migrations', '0001_schema.sql'), 'utf8');
+  const mapped = sb._notNullColsForTest();
+  assert(Object.keys(mapped).length >= 15, `[A-NN] fixture: the map covers the routed tables (got ${Object.keys(mapped).length})`);
+  for (const [table, cols] of Object.entries(mapped)) {
+    const m = new RegExp(`create table public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`).exec(sql);
+    const derived = [];
+    for (const raw of (m ? m[1].split('\n') : [])) {
+      const line = raw.split('--')[0].trim();
+      const mm = /^([a-z_]+)\s+[a-z]/.exec(line);
+      if (mm && /\bnot null\b/.test(line) && !['primary', 'foreign', 'unique', 'check', 'constraint'].includes(mm[1])) derived.push(mm[1]);
+    }
+    assert(!!m && JSON.stringify(derived) === JSON.stringify(cols),
+      `[A-NN] NOT_NULL_COLS.${table} equals the NOT NULL columns 0001_schema.sql declares (derived ${derived.length}, mapped ${cols.length})`);
+  }
+
+  // (2) THE LIVE DEFECT, driven: a player whose record has NO `preferences` key (the Sheet never
+  //     stored one) while the served row holds the column default `{}`. Before the fix the diff saw
+  //     null !== {} and sent `preferences: null` ⇒ "violates not-null constraint" ⇒ red sync banner.
+  await hydrated({ who: 'player' });
+  let players = sb.get('cfbp_players').map((p) => ({ ...p }));
+  const mine = players.find((p) => p.playerId === 'p2');
+  delete mine.preferences;                    // exactly the live shape: the key is ABSENT
+  mine.displayName = 'Kevin NN';              // one REAL change, so a patch exists to inspect
+  sb.set('cfbp_players', players);
+  const pl = sb.planFlush().plan.filter((o) => o.key === 'cfbp_players');
+  assert(pl.length === 1 && pl[0].changed.display_name === 'Kevin NN', `[A-NN] fixture: the real change still travels (changed: ${JSON.stringify(pl[0] && Object.keys(pl[0].changed))})`);
+  assert(!('preferences' in pl[0].changed),
+    `[A-NN] an ABSENT legacy field is never sent as null into a NOT NULL column (changed: ${JSON.stringify(Object.keys(pl[0].changed))})`);
+  assert(!Object.entries(pl[0].changed).some(([c, v]) => v == null && mapped.league_members.includes(c)),
+    '[A-NN] …and no NOT NULL column carries a null anywhere in the patch');
+
+  // (3) A genuinely NULLABLE column still takes a null — this is the schema's list, not a blanket filter.
+  await hydrated({ who: 'commissioner' });
+  const weeks = sb.get('cfbp_weeks').map((w) => ({ ...w }));
+  if (weeks.length) {
+    weeks[0].actualTiebreakerValue = null;
+    const before = sb.get('cfbp_weeks')[0].actualTiebreakerValue;
+    sb.set('cfbp_weeks', weeks);
+    const wp = sb.planFlush().plan.filter((o) => o.key === 'cfbp_weeks' && o.op === 'patch');
+    assert(before == null || (wp.length === 1 && 'actual_tiebreaker_value' in wp[0].changed && wp[0].changed.actual_tiebreaker_value === null),
+      '[A-NN] a nullable column (weeks.actual_tiebreaker_value) can still be cleared to null');
+  }
+});
+
+await section('\n[A-ADD] Add Player is absent in Supabase mode (INSERT into league_members is forbidden by schema — reviewer F1, 2026-09-19)…', async () => {
+  const blank = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const app = blank(readFileSync(join(__dirname, 'js', 'app.js'), 'utf8'));
+  const markup = app.indexOf('id="admin-add-player-btn"');
+  const gate = app.lastIndexOf('isSupabaseDataMode() ?', markup);
+  assert(markup > 0 && gate > 0 && markup - gate < 900 && app.slice(gate, markup).includes('admin-add-player-note'),
+    '[A-ADD] the Add control renders only in the non-Supabase arm of an isSupabaseDataMode() branch (absent, not disabled)');
+  const h = app.indexOf("getElementById('admin-add-player-btn')?.addEventListener");
+  const body = app.slice(h, app.indexOf('addPlayer(createPlayer(', h));
+  assert(h > 0 && /if\s*\(\s*isSupabaseDataMode\(\)\s*\)\s*return/.test(body),
+    '[A-ADD] …and the click handler refuses in Supabase mode BEFORE addPlayer() (second guard)');
+});
+
+await section('\n[A-RESET] Full Factory Reset is absent in Supabase mode (it would write demo data over the live league — reviewer, 2026-09-19)…', async () => {
+  const blank = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const app = blank(readFileSync(join(__dirname, 'js', 'app.js'), 'utf8'));
+  assert(/\$\{isSupabaseDataMode\(\) \? '' : `<button[^`]*id="reset-demo-btn"/.test(app),
+    '[A-RESET] the button renders only in the non-Supabase arm (absent, not disabled)');
+  const h = app.indexOf("getElementById('reset-demo-btn')?.addEventListener");
+  const body = app.slice(h, app.indexOf('resetToDemo()', h));
+  assert(h > 0 && /if\s*\(\s*isSupabaseDataMode\(\)\s*\)\s*return/.test(body) && body.indexOf('isSupabaseDataMode') < body.indexOf('prompt('),
+    '[A-RESET] …and the handler refuses in Supabase mode before the password prompt and before resetToDemo()');
+});
+
 await section('\n[A8] the CONTACT WRITE RULE (§2.4, DI-T7.6’s write side)…', async () => {
   // A commissioner with NO contacts entry for that member: the patch carries no
   // contact column and no contact name in __absent.

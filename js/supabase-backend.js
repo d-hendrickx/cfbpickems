@@ -490,7 +490,7 @@ const READ_TABLES = [
  * `select('*')` DOES NOT WORK ON `league_members` ANY MORE, and never will
  * again: 0007 replaced the table grant with a COLUMN LIST, and PostgREST
  * expands `*` to every column of the table — so the request is refused for
- * lack of column privilege, for every caller, member or not. The fifteen
+ * lack of column privilege, for every caller, member or not. The sixteen
  * columns below are 0007's own `grant select (…)` list
  * (`0007_contact_privacy.sql:98-100`), and `rls.test.mjs`'s `LM_SELECT_COLS`
  * (`rls.test.mjs:318-319`) is the same list for the same reason.
@@ -500,6 +500,44 @@ const READ_TABLES = [
 const SELECT_COLS = Object.freeze({
   league_members: 'league_id,id,user_id,role,legacy_player_id,display_name,initials,'
     + 'alma_mater,active,notify_prefs,preferences,linked_at,extra,created_at,updated_at',
+});
+
+/**
+ * THE NOT NULL COLUMNS OF EVERY ROUTED TABLE (0001_schema.sql), and the one planner rule they buy.
+ *
+ * The projection turns a legacy field that is ABSENT into `null`. `import_rows` coalesces that back
+ * to the column default server-side; this adapter writes rows through PostgREST directly, where an
+ * explicit `null` OVERRIDES the default and a NOT NULL column refuses the whole statement. Found
+ * live at the 2026-09-19 cutover: a player record with no `preferences` key (the Sheet never had
+ * one) projected to `preferences: null`, the served row held the default `{}`, the diff saw a
+ * "change", and the first profile save raised the red sync banner ("null value in column
+ * \"preferences\" … violates not-null constraint"). The same shape waits in every weeks/games
+ * insert a commissioner makes.
+ *
+ * THE RULE: the planner NEVER sends `null` for a NOT NULL column. In a PATCH the column is left out
+ * (the server keeps its value — absent means "no opinion", never "erase"); in an INSERT the key is
+ * omitted so the column DEFAULT applies. A genuinely nullable column still takes a null (clearing a
+ * tiebreaker value, a kickoff, a claim) — this list is the schema's, not a blanket null filter.
+ * adaptertest [A-NN] derives the same map from 0001_schema.sql and fails on drift.
+ */
+const NOT_NULL_COLS = Object.freeze({
+  comments: Object.freeze(['league_id', 'id', 'author_id', 'author_kind', 'body', 'created_at', 'extra']),
+  extra_point_guesses: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'guess', 'updated_at']),
+  feedback: Object.freeze(['league_id', 'id', 'name', 'kind', 'body', 'submitted_at', 'app_version', 'site_url', 'status', 'excluded_from_export', 'extra']),
+  game_requests: Object.freeze(['league_id', 'id', 'kind', 'member_id', 'payload', 'created_at']),
+  games: Object.freeze(['league_id', 'id', 'week_id', 'data_quality', 'data_source', 'home_team', 'away_team', 'home_mascot', 'away_mascot', 'home_conference', 'away_conference', 'kickoff_confirmed', 'kickoff_date_only', 'time_window', 'spread_source', 'status', 'is_alma_mater_game', 'national_tv', 'marquee_event', 'neutral_site', 'multiplier', 'is_manual', 'league_label', 'extra', 'created_at', 'updated_at']),
+  league_kv: Object.freeze(['league_id', 'key', 'value', 'updated_at']),
+  league_members: Object.freeze(['league_id', 'id', 'role', 'display_name', 'initials', 'alma_mater', 'active', 'phone', 'phone_verified', 'notify_prefs', 'preferences', 'extra', 'created_at', 'updated_at']),
+  notifications: Object.freeze(['league_id', 'id', 'member_id', 'origin', 'event', 'title', 'body', 'created_at', 'dedup_key', 'extra']),
+  obligations: Object.freeze(['league_id', 'id', 'type', 'payer_member_id', 'recipient_member_id', 'amount_or_prize', 'status', 'created_at', 'needs_review', 'voided', 'merged_from', 'extra']),
+  picks: Object.freeze(['league_id', 'id', 'week_id', 'game_id', 'member_id', 'selected_team', 'selected_at', 'updated_at', 'locked', 'result', 'extra']),
+  reactions: Object.freeze(['league_id', 'id', 'week_id', 'game_id', 'member_id', 'emoji', 'created_at']),
+  results: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'display_name', 'correct_picks', 'incorrect_picks', 'correct_count', 'incorrect_count', 'no_decisions', 'pending', 'rank', 'is_winner', 'is_loser', 'won_by_tiebreaker', 'extra']),
+  scribe_canon: Object.freeze(['league_id', 'id', 'ord', 'approval_status', 'payload', 'created_at']),
+  scribe_learnings: Object.freeze(['league_id', 'id', 'ord', 'kind', 'status', 'payload', 'created_at']),
+  scribe_reports: Object.freeze(['league_id', 'id', 'ord', 'payload', 'created_at']),
+  tiebreaker_guesses: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'guess', 'updated_at']),
+  weeks: Object.freeze(['league_id', 'id', 'sport', 'season', 'week_number', 'label', 'round_label', 'espn_week_number', 'is_group_tiebreaker', 'start_date', 'end_date', 'status', 'data_source_mode', 'auto_lock_offset_minutes', 'auto_live_enabled', 'auto_finalize_enabled', 'pending_finalization', 'show_in_history', 'blurb', 'recap', 'tiebreaker_question', 'tiebreaker_type', 'tiebreaker_calculation_mode', 'tiebreaker_finalized', 'extra_point_enabled', 'extra', 'created_at', 'updated_at']),
 });
 
 /** cfbp key(s) fed by each table, so one select fills the right mirror keys. */
@@ -1172,10 +1210,22 @@ function _diffRows(key, route, value, leagueId) {
     if (!row || row.id == null) continue;
     seen.add(row.id);
     const old = base.get(row.id);
-    if (!old) { inserts.push(row); continue; }
+    const notNull = NOT_NULL_COLS[table] || [];
+    if (!old) {
+      // INSERT: omit a null for a NOT NULL column so the column DEFAULT applies (see NOT_NULL_COLS).
+      const ins = {};
+      for (const col of Object.keys(row)) {
+        if (row[col] == null && notNull.includes(col)) continue;
+        ins[col] = row[col];
+      }
+      inserts.push(ins);
+      continue;
+    }
     const changed = {};
     for (const col of Object.keys(row)) {
       if (col === 'league_id' || col === 'id' || volatile.has(col)) continue;
+      // PATCH: a null for a NOT NULL column is the projection's "absent", never an erase.
+      if (row[col] == null && notNull.includes(col)) continue;
       if (canonicalize(row[col]) !== canonicalize(old[col])) changed[col] = row[col];
     }
     if (route.patchCols) {
@@ -2213,6 +2263,7 @@ export function _mirrorTagForTest() { return _mirrorTag ? { ..._mirrorTag } : nu
  *  attempt throw inside the test rather than inside the code under test — and handing it a shallow
  *  copy would hand back the same frozen entries. The copy is what lets `adaptertest` prove the
  *  ORIGINAL is frozen without depending on the reference it was given. */
+export function _notNullColsForTest() { return JSON.parse(JSON.stringify(NOT_NULL_COLS)); }
 export function _routesForTest() {
   const out = {};
   for (const [k, v] of Object.entries(ROUTES)) out[k] = { ...v };

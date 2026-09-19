@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.22.3';
+export const APP_VERSION = 'v0.22.4';
 export const APP_VERSION_DATE = '2026-09-19';
 
 /**
@@ -39,7 +39,19 @@ export const APP_VERSION_DATE = '2026-09-19';
  */
 const WHATS_NEW_RELEASES = [
   {
-    // v0.22.2 — THE CUTOVER (Phase III Step 8, 2026-09-19 early; v0.22.1 shipped minutes earlier and
+    // v0.22.4 — cutover hotfix 5 (2026-09-19). Fix-only, PREPENDED per step 1 above (reviewer: renaming the
+    // cutover entry again would have made SCRIBE post its headline a second time under a new per-version id).
+    // The FIRST `fixed` item is SCRIBE's chat-post headline.
+    version: 'v0.22.4',
+    date: '2026-09-19',
+    added: [],
+    fixed: [
+      'A red "sync is OFF" banner could appear right after signing in, on the first profile save. Fixed — nothing was lost; picks and chat were never affected.',
+      'On the live league the commissioner\'s Add Player and Full Factory Reset controls are gone: players add themselves by signing in, and a reset would have written demo data over the real season.',
+    ],
+  },
+  {
+    // v0.22.3 (was v0.22.2) — THE CUTOVER (Phase III Step 8, 2026-09-19 early; v0.22.1 shipped minutes earlier and
     // could not read memberships — PGRST201, an ambiguous embed — so nobody ever saw its post). Fixes RG-163/RG-164 (the two
     // pre-identity readiness deadlocks found at the first attempt) and flips authMode+dataMode.
     // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
@@ -50,7 +62,7 @@ const WHATS_NEW_RELEASES = [
     ],
     fixed: [
       'The first cutover attempt tonight showed everyone a "We\'ll be right back" screen. Two start-up bugs, both fixed and both now covered by tests that start from a fresh phone with no sign-in.',
-      'Until the next release: @scribe answers from its stock lines, and the automatic "picks lock soon" reminders and the weekly SCRIBE trainer are paused. Push notifications, the reveal, results and the chat notices all work as before.',
+      'Until the next release: @scribe answers from its stock lines, and the automatic "picks lock soon" reminders and the weekly SCRIBE trainer are paused; My SCRIBE File, wager buttons and the Data-tab snapshots are dark too. Push notifications, the reveal, results and the chat notices all work as before.',
     ],
   },
   {
@@ -8476,10 +8488,12 @@ export function renderCommPage() {
           }).join('')}
 
           <div class="divider"></div>
+          ${isSupabaseDataMode() ? `
+          <p class="text-muted text-xs" id="admin-add-player-note">New players add themselves: they sign in with Google and choose Join a League. A member row is only ever created by the server, so there is no Add button here.</p>` : `
           <div class="flex gap-sm">
             <input class="form-input" id="admin-new-player" type="text" placeholder="New player name…" style="flex:1" />
             <button class="btn btn-secondary btn-sm" id="admin-add-player-btn">Add</button>
-          </div>
+          </div>`}
 
           <div class="divider"></div>
           <div class="card-title mb-sm">📣 Broadcast to League</div>
@@ -8722,9 +8736,9 @@ export function renderCommPage() {
           </div>
           <div class="divider"></div>
           <div class="form-group">
-            <p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>
+            ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">Full Factory Reset is not available on the live league — it would write demo data over everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>`}
             <div class="flex gap-sm flex-wrap">
-              <button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>
+              ${isSupabaseDataMode() ? '' : `<button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>`}
               <button class="btn btn-ghost btn-sm" id="logout-comm-btn">🚪 Logout Commissioner</button>
             </div>
           </div>
@@ -10223,6 +10237,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
 
   // Players + PIN management
   document.getElementById('admin-add-player-btn')?.addEventListener('click', ()=>{
+    // Supabase mode: INSERT into league_members is forbidden by schema (members are created by
+    // join_league / create_league only). The control is absent there; this is the second guard.
+    if(isSupabaseDataMode())return;
     const n=document.getElementById('admin-new-player')?.value.trim();
     if(!n)return;
     if(getPlayers().find(p=>p.displayName.toLowerCase()===n.toLowerCase())){showToast('Already exists','warning');return;}
@@ -10458,6 +10475,9 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     }
   });
   document.getElementById('reset-demo-btn')?.addEventListener('click', async e => {
+    // Supabase mode: resetToDemo() would INSERT demo members (forbidden by schema) and patch/delete
+    // demo data over the LIVE league. The control is absent there; this is the second guard (reviewer, 2026-09-19).
+    if (isSupabaseDataMode()) return;
     // Require Commissioner to re-enter password for full reset
     // UN-112: the confirm copy used to claim this deletes ALL data — now that
     // chat is wired in below, that would be a lie (chat is HIDDEN, not
