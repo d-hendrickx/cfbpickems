@@ -165,7 +165,7 @@ export async function notifyAll({ players, event, buildFor, meta = {} }) {
 import { onChat, getMessages, chatStatus } from './chat.js';
 import {
   getPlayers, getPlayer, getWeek, getNotifications, setNotifications,
-  getNotifyPushMasterFor, getNotifyCategoryPrefsFor,
+  getNotifyPushMasterFor, getNotifyCategoryPrefsFor, getSettings,
 } from './storage.js';
 import { notifyPushRelay, notifyLogFetch } from './backend.js';
 import { buildCopy, assertMetaIsBlindSafe } from './notify-copy.js';
@@ -222,6 +222,65 @@ export function destinationFor(event, ctx = {}) {
   return { tab: entry.tab, params: entry.params(ctx) };
 }
 export function _deepLinkTableForTest() { return DEEP_LINK_TABLE; }
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-T6.1's CLIENT HALF — the switch that stops this device relaying once the
+// server is doing the fan-out. Phase III Step 6.
+//
+// `notify-fanout` (supabase/functions/notify-fanout) is a database webhook on
+// `messages` INSERT that writes the `notifications` rows and calls OneSignal
+// once for the whole league. While it is ON, THIS device must not also relay,
+// or the first message after switch-on pushes twice. That is the single most
+// likely defect in the whole step, which is why the switch has a client half at
+// all and why `notifytest.mjs` [28] asserts BOTH states.
+//
+// IT IS THE SAME BOOLEAN THE FUNCTION READS. `settings.serverJobs.notifyFanout`
+// lives in the `settings` league_kv row, which the seam already mirrors as
+// `cfbp_settings` (js/supabase-projection.js:817 maps them 1:1) and every
+// device already hydrates at boot. No new storage key, no new accessor, no
+// migration — S6-D-1 (a), and the reason it was chosen.
+//
+// DEFAULT-WHEN-MISSING IS **FALSE**, which reads as "the client keeps relaying".
+// That is CONVENTIONS #10 exactly as written on this side — absent means behaves
+// as before — and it is also the deliberate inversion on the SERVER side, where
+// absent means the function does nothing. The two are not in tension: they are
+// the same rule, "an absent switch changes nothing," applied to two halves of a
+// handover. Both halves fail toward the Apps Script path that works today.
+//
+// ONLY THE LITERAL `true` SUPPRESSES. A string "true", a 1, a "yes" all leave
+// the relay running. A settings blob is commissioner-editable JSON and the one
+// shape that means "a person deliberately flipped this through the UI that
+// writes booleans" is the boolean. Byte-identical to the server's reader
+// (`_shared/job-rules.mjs isJobEnabledFromSettings`), and notifytest [28f] pins
+// the two against each other across the ambiguous shapes.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The eight switch names, in DI-T6.0(a)'s own order. A `job` outside this set
+ *  can never read as enabled — a typo'd name resolves to OFF, the same
+ *  direction as an absent one. Kept in step with `_shared/job-rules.mjs`'s
+ *  SERVER_JOBS by a test, not by memory. */
+export const SERVER_JOB_NAMES = Object.freeze([
+  'notifyFanout', 'reminders', 'scribeAsk', 'trainer',
+  'scribeClassify', 'scribeAutonomous', 'scoresRefresh', 'keepalive',
+]);
+
+/** The pure decision, over a settings blob that has already been read. Exported
+ *  so the twin can compare it against the server's reader without a seam. */
+export function serverJobEnabledIn(settings, job) {
+  if (!SERVER_JOB_NAMES.includes(job)) return false;
+  const bag = settings && typeof settings === 'object' ? settings.serverJobs : null;
+  if (!bag || typeof bag !== 'object') return false;
+  return bag[job] === true;
+}
+
+/** The seam read. Synchronous, uncached, once per use — a flip takes effect on
+ *  the next scan, which is the same "no cache longer than the invocation" rule
+ *  `_shared/jobs.js` holds itself to, and for the same reason: a cached switch
+ *  is a rollback that does not roll back. Never throws; an unreadable settings
+ *  blob reads as OFF, i.e. the client keeps relaying, i.e. push keeps working. */
+export function isServerJobEnabled(job) {
+  try { return serverJobEnabledIn(getSettings(), job); } catch { return false; }
+}
 
 // ── §4 — dedup key. `${event}|${weekId||''}|${threshold||''}|${playerId}` —
 //    deterministic, so a retried Apps Script trigger or six simultaneously-
@@ -875,6 +934,28 @@ function _scanNewChatMessages() {
   const fresh = all.filter(m => m.type === 'message' && !m.deleted && typeof m.seq === 'number' && m.seq > _chatWatermarkSeq);
   if (!fresh.length) return;
   _chatWatermarkSeq = Math.max(_chatWatermarkSeq, ...fresh.map(m => m.seq));
+  // ── DI-T6.1's CLIENT HALF, AND IT SITS **AFTER** THE WATERMARK ADVANCE ────
+  // While `settings.serverJobs.notifyFanout` is true the server fans these rows
+  // out (one `notifications` row per recipient, one OneSignal call for the
+  // league) and this device must not do it a second time. See the long note at
+  // `isServerJobEnabled` for where the boolean lives and why it is the same one
+  // the function reads.
+  //
+  // THE POSITION IS THE DESIGN, not a detail. Gating at the TOP of this
+  // function would leave `_chatWatermarkSeq` frozen wherever it stood when the
+  // switch was flipped on — so the first scan after a flip BACK would see every
+  // message of the intervening week as "fresh", trip CHAT_RELAY_BURST_CAP, and
+  // relay nothing while warning loudly. Advancing the watermark and then
+  // declining to relay means the client stays exactly in step with the room and
+  // a flip-off resumes on the very next message, cleanly. The watermark is read
+  // by nothing but this scan, so advancing it has no other effect.
+  //
+  // THIS IS THE CHAT FAN-OUT ONLY. The lifecycle notices that fire from
+  // `notifyPicksLockingSoon()` and friends are `reminders`' territory
+  // (DI-T6.2), which has its own switch and its own client half in a later
+  // phase. One switch, one path: a gate here that silenced those too would turn
+  // `notifyFanout` into an undocumented master kill switch for push.
+  if (isServerJobEnabled('notifyFanout')) return;
   // Foreground suppression (§3 step 3) happens on the RECEIVING device inside
   // the OneSignal SDK's foregroundWillDisplay hook (push-onesignal.js), not
   // here — this function's job is only "who is a candidate recipient," which

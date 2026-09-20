@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.22.4';
+export const APP_VERSION = 'v0.22.5';
 export const APP_VERSION_DATE = '2026-09-19';
 
 /**
@@ -38,6 +38,21 @@ export const APP_VERSION_DATE = '2026-09-19';
  * no card, no `<details>`, no shell, and no chat post either.
  */
 const WHATS_NEW_RELEASES = [
+  {
+    // v0.22.5 — RG-174 (chat composer draft wiped by every re-render; constant under Realtime) + Phase III
+    // Step 6 Phase 1 shipped DORMANT (notify-fanout stand-down gate in js/notifications.js, serverJobs OFF).
+    // Fix-only; the FIRST `fixed` item is SCRIBE's chat-post headline.
+    version: 'v0.22.5',
+    date: '2026-09-19',
+    added: [],
+    fixed: [
+      'Chat no longer wipes what you are typing when a new message or a score update arrives. Your draft, and your place in it, stay put.',
+      'Typing anywhere else in the app — the chat nickname panel, feedback, commissioner fields — is no longer wiped by a background update either.',
+      'On phones with push notifications on, the in-app banner no longer doubles up the notification you already got.',
+      'Your color scheme and time zone now come back when you reopen the app, and a change made just before closing it is no longer lost.',
+      'Groundwork so push notifications can be sent by the server instead of whichever phone happens to be open. Switched off for now; nothing about notifications changes today.',
+    ],
+  },
   {
     // v0.22.4 — cutover hotfix 5 (2026-09-19). Fix-only, PREPENDED per step 1 above (reviewer: renaming the
     // cutover entry again would have made SCRIBE post its headline a second time under a new per-version id).
@@ -490,6 +505,10 @@ import {
   staticQuoteHTML,
 } from './chat-ui.js';
 import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox } from './chat.js';
+// RG-176 — the ONE generic answer to the repaint hazard RG-174 fixed in one
+// place. Wired at navigateTo() below, which is the single render chokepoint
+// every Supabase Realtime repaint lands on. See js/field-preserve.js.
+import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field-preserve.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
   getScribeFrequency, isScribeAutonomousEnabled } from './scribeAgent.js';
@@ -1165,6 +1184,22 @@ function onSupabaseDataStatus(status, detail = {}) {
     return;
   }
   if (state === 'OFFLINE-READONLY') { showSupabaseOfflineBanner(sb.getStatus().lastSyncAt); return; }
+  // ══ REVIEWER N1 — THE HELD WRITE HAD NO BANNER AT ALL ═══════════════════════
+  //
+  // `status === 'offline'` reaches here with `state: 'ACTIVE'` — the adapter emits it when a WRITE
+  // never reached the server (RG-180's network hold), not when the league is unreadable. The badge
+  // was updated and then the next line took the banner DOWN, so `detail.banner` ("Couldn't reach
+  // the server. N changes still to save…") was never rendered anywhere: the player saw a 📴 badge
+  // and nothing else, while a pick sat in a queue that `_persistSnapshot()` refuses to write out
+  // while anything is dirty. If iOS kills the PWA there, the pick is gone and nobody was told.
+  //
+  // AMBER, not the red AD-06 banner, and the distinction is the whole of DI-180c's weight classes:
+  // sync is not broken and nothing has been refused — the device is off the network and holding
+  // work it still intends to send. Red is reserved for "your change was refused" and "sync is off".
+  if (status === 'offline' && Array.isArray(detail.heldOffline) && detail.heldOffline.length) {
+    showSupabaseOfflineBanner(null, String(detail.banner || detail.error || ''));
+    return;
+  }
   hideSupabaseOfflineBanner();
   if (status === 'error') {
     if (detail.error) showBackendErrorBanner(String(detail.error));
@@ -1191,11 +1226,15 @@ function onSupabaseDataStatus(status, detail = {}) {
  * interlock does the refusing, there is no second mechanism), so the banner's
  * job is to explain, not to block.
  */
-function showSupabaseOfflineBanner(at) {
+function showSupabaseOfflineBanner(at, heldText = '') {
   const when = at ? fmtBannerTime(at) : '';
-  const text = when
-    ? `You're offline. Showing your league as of ${when}. Picks can't be saved until you're back online.`
-    : "You're offline. Showing your league's last saved copy. Picks can't be saved until you're back online.";
+  // The adapter's own words when it has them (the held-write case, reviewer N1): it is the side
+  // that knows HOW MANY changes are queued, and a count invented here could only ever disagree
+  // with it. The §5.3 read-only wording is the fallback, unchanged.
+  const text = heldText
+    || (when
+      ? `You're offline. Showing your league as of ${when}. Picks can't be saved until you're back online.`
+      : "You're offline. Showing your league's last saved copy. Picks can't be saved until you're back online.");
   let el = document.getElementById('supabase-offline-banner');
   if (!el) {
     el = document.createElement('div');
@@ -1263,6 +1302,13 @@ async function afterSupabaseHydrate(reason) {
   const state = sb.getState();
   if (state === 'ACTIVE') {
     setBackendMode('supabase');
+    // RG-177 — THE FOURTH MOMENT. This is where the adapter starts SERVING,
+    // which is the instant SEC F1's write interlock stops refusing. Any
+    // device-local push-active write it refused earlier in the boot is owed and
+    // is re-applied here. A no-op on every device that owes nothing. See
+    // flushPendingPushActiveFlag() for why this re-applies the last computed
+    // answer rather than recomputing it.
+    flushPendingPushActiveFlag(`hydrate:${reason}`);
     hideSupabaseOfflineBanner();
     hideBackendErrorBanner();
     // §5.1 — the data hold clears itself the moment the league is there.
@@ -1287,6 +1333,12 @@ async function afterSupabaseHydrate(reason) {
   }
   if (state === 'ACTIVE-STALE' || state === 'OFFLINE-READONLY') {
     setBackendMode('supabase');
+    // RG-177 — ACTIVE-STALE is also a SERVING state (the adapter's probe is
+    // true for ACTIVE and ACTIVE-STALE), so a refused write can land here too.
+    // OFFLINE-READONLY shares this branch and is NOT serving for writes — the
+    // flush simply fails again there and keeps owing the value, which is the
+    // correct outcome and the reason it reports rather than assumes.
+    flushPendingPushActiveFlag(`hydrate:${reason}`);
     _repaintForSupabaseData(reason);
     return false;
   }
@@ -1316,10 +1368,45 @@ async function afterSupabaseHydrate(reason) {
   return false;
 }
 
-/** Repaint after the adapter's data changed. navigateTo() is the ONE render
- *  chokepoint and it already refuses to paint while content is withheld, so
- *  this needs no second guard of its own (security S-2). */
+/**
+ * Repaint after the adapter's data changed. navigateTo() is the ONE render
+ * chokepoint and it already refuses to paint while content is withheld, so
+ * this needs no second guard of its own (security S-2).
+ *
+ * ══ RG-179 (2026-09-19) — IT ALSO RE-APPLIES THE PLAYER'S PREFERENCES ═══════
+ *
+ * "It's not saving my color scheme preference when I close the app." It WAS
+ * saving. `league_members.preferences.theme` held the right value the whole
+ * time (adaptertest [A-PREF] pins the write and the read-back); nothing ever
+ * asked for it again.
+ *
+ * boot() applies the theme and renders both preference controls at `:1460` —
+ * before any hydrate, and on a Supabase device the Sheets snapshot prime one
+ * line above it is deliberately skipped (§1.5 item 1). So `getTheme()` there
+ * reads an EMPTY store and can only answer the league default. The
+ * hold-recovery path renders the same two controls before its own awaited
+ * `ensureSupabaseDataHydrated()`. And `resyncPlayerPreferences()` — the one
+ * function whose whole job is re-applying theme + timezone — is reachable only
+ * from the PIN-era login/logout handlers and the session-expiry reconcile, none
+ * of which run on a normal Supabase boot. Result: the palette is on the server,
+ * the page paints 'neutral' on every open, and the dropdown agrees with the
+ * page — which is indistinguishable from the preference never being saved.
+ *
+ * This function is the one place on that boot where the player RECORD is known
+ * to be on the device, so this is where the re-read belongs. Note what is NOT
+ * called: `resyncPlayerPreferences()` itself, because it also nulls
+ * `state.layoutEditing` and re-runs the OneSignal login — and this runs on
+ * EVERY hydrate, including the visibilitychange re-hydrate, so a player mid
+ * layout-edit would be kicked out of it. Only the two surfaces that are applied
+ * ONCE are re-applied. Everything else (dashboard column order, the chat
+ * accent, every rendered time) is read at PAINT time and is already healed by
+ * the navigateTo() below. boottest [25] is the guard.
+ */
 function _repaintForSupabaseData(reason) {
+  // RG-179 — the player record has just landed; ask it again. Its own catch for
+  // the same reason the repaint below has one.
+  try { applyTheme(getTheme()); renderThemeToggle(); renderTzToggle(); }
+  catch (e) { console.warn(`[sb] could not re-apply player preferences after ${reason}`, e); }
   try { navigateTo(state.currentTab || 'dashboard'); }
   catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
 }
@@ -1331,6 +1418,10 @@ export function _resetSupabaseDataForTest() {
 }
 export const _ensureSupabaseDataHydratedForTest = ensureSupabaseDataHydrated;
 export const _wireSupabaseAdapterForTest = wireSupabaseAdapter;
+/** Test seam — the adapter's status RENDERER, so boottest can drive it with the details
+ *  `adaptertest` proves the adapter really emits, without standing up a Supabase client.
+ *  `wireSupabaseAdapter()` registers this same function; production has no other caller. */
+export const _onSupabaseDataStatusForTest = onSupabaseDataStatus;
 
 document.addEventListener('DOMContentLoaded', () => { boot(); });
 
@@ -1607,6 +1698,9 @@ async function boot() {
  * listener single, which is the one step that would otherwise stack.
  */
 let _postHydrateTailDone = false;
+/** Page-lifetime, and deliberately NOT reset by `_resetAuthHoldForTest()` — see the block at the
+ *  end of this function for why a window's listeners outlive a re-driven boot. */
+let _unloadListenersWired = false;
 async function runPostHydrateTail() {
   if (_postHydrateTailDone) return;
   _postHydrateTailDone = true;
@@ -1660,7 +1754,14 @@ async function runPostHydrateTail() {
     // safe direction refreshPushActiveFlag() itself fails to, and the direction
     // the comment below already claims. Costs one write and at most one
     // redundant toast on a device that really does have push.
-    try { setPushActive(false); } catch {}
+    // RG-177 — through setPushActiveDurable(), because in dataMode:'supabase'
+    // this tail routinely runs BEFORE the adapter is serving (boot() calls it
+    // unconditionally after a hydrate that returns false when the league is not
+    // resolved yet), and SEC F1's write interlock refuses device-local keys too.
+    // The bare `try { … } catch {}` that used to be here meant the fail-closed
+    // clear silently did nothing on exactly those boots — leaving LAST session's
+    // `true` in place, which is the failure this line exists to prevent.
+    setPushActiveDurable(false);
     registerPushAdapter(new OneSignalRelayAdapter());   // §4 — provider isolation: absent adapter is also a valid state, never required
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
     setupNotifBell();
@@ -1722,8 +1823,27 @@ async function runPostHydrateTail() {
   // which drive the real functions — where `window` is globalThis and has no
   // addEventListener. An unguarded call threw out of the resume path and took
   // the rest of the tail with it.
-  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  //
+  // …and behind a latch of its OWN, not the tail's. `_postHydrateTailDone` is dropped by
+  // `_resetAuthHoldForTest()` so a suite can drive several boots in one process — but a WINDOW is
+  // not re-created between them, so a second pass would stack a second `pagehide` handler on the
+  // same window and fire two flushes per backgrounding. That is the very interleaving RG-180 hole 1
+  // is about, arriving through the test hook instead of through the DOM. Listeners are page
+  // lifetime; this latch is page lifetime; the test hook deliberately does not touch it.
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !_unloadListenersWired) {
+    _unloadListenersWired = true;
     window.addEventListener('beforeunload', () => { try { flushPush(); } catch {} });
+    // SUPABASE MODE HAD NO EQUIVALENT (found while root-causing RG-179, 2026-09-19): flushPush() is
+    // the SHEETS queue. The adapter debounces ~800ms, and a phone kills a backgrounded PWA almost at
+    // once — so any write made just before closing the app (a pick, a preference) was silently lost.
+    // `pagehide` + `visibilitychange:hidden` are the two events iOS actually delivers; `beforeunload`
+    // is not reliable there. sb.flush() is safe to over-call: it no-ops when nothing is dirty and
+    // HOLDS (never drops) when the adapter is stale or not serving. Fire-and-forget by necessity.
+    const _flushSupabaseOnHide = () => { try { if (isSupabaseDataMode()) sb.flush().catch(() => {}); } catch {} };
+    window.addEventListener('pagehide', _flushSupabaseOnHide);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('visibilitychange', () => { if (document.hidden) _flushSupabaseOnHide(); });
+    }
   }
 }
 
@@ -2756,6 +2876,35 @@ function navigateTo(tab) {
   // two answers cannot change between the redirect and the render.
   const linkFlow = linkFlowScreen();
   if ((leagueFlow || linkFlow) && tab === 'chat') tab = 'dashboard';
+  // ── RG-176 — CARRY AN IN-PROGRESS TEXT EDIT ACROSS THE REPAINT ────────────
+  //
+  // This function is where every Supabase Realtime repaint lands
+  // (onRealtimeEvent -> _repaintForSupabaseData -> here), and each of the six
+  // render functions below rebuilds its page with one `innerHTML` assignment —
+  // which DESTROYS whatever text field the player is part-way through. Under
+  // Sheets that happened minutes apart and nobody noticed; under Realtime it is
+  // every few seconds during live games. RG-174 fixed the chat composer at the
+  // chat render seam; this is the same fix for #fb-body (Rules), the
+  // commissioner panel's text inputs, and anything added later — at the
+  // chokepoint, so the next person to add a text field gets it for free.
+  //
+  // CAPTURED FROM THE OUTGOING TAB, RESTORED ONLY IF THE TAB DID NOT CHANGE. A
+  // genuine navigation is not a repaint: the player asked for a different page
+  // and there is nothing to preserve across it. `_priorTab` is read before
+  // `state.currentTab` moves, one line below.
+  //
+  // `chat-input` is skipped here because chat-ui.js's renderChatPage() carries
+  // it itself (it also has to re-run syncComposerChrome()), and renderChatPage()
+  // is reached from four places that never come through this function anyway.
+  // Restoring #page-chat twice on one pass is harmless — restoreDirtyFields()
+  // is idempotent (drafttest §11).
+  const _priorTab = state.currentTab;
+  // #page-chat HAS ONE OWNER: chat-ui.js. renderChatPage() captures, restores and stamps that node
+  // itself with `me()`, and is reached directly (inbound message) as often as through here. Two
+  // stampers with two key formats on one node meant whichever stamped LAST killed the other's next
+  // capture — the ⚙ panel lost the edit on roughly every other repaint (reviewer BLOCK, 2026-09-19).
+  const _fieldSnap = _priorTab === 'chat' ? null : captureDirtyFields(
+    document.getElementById(`page-${_priorTab}`), currentIdentityKey(), { skipIds: ['chat-input'] });
   state.currentTab = tab;
   // UN-110: drives body[data-tab="..."] CSS (chat's own header-hidden layout,
   // UN-111's tz/theme visibility). MUST come after the chat-disabled redirect
@@ -2780,6 +2929,22 @@ function navigateTo(tab) {
     renderLeagueFlowScreen(tab);
   } else {
     ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, rules: renderRulesPage, chat: renderChatPage })[tab]?.();
+  }
+  // RG-176 — put the in-progress edits back, immediately after the render that
+  // destroyed them and before anything else can steal focus. The identity key
+  // is re-read rather than reused: the guard is checked on BOTH sides, so a
+  // session change between the two halves cannot slip a previous player's text
+  // into this one's field (the reviewer BLOCK on RG-174's first fix).
+  if (tab !== 'chat') {
+    const _pageEl = document.getElementById(`page-${tab}`);
+    if (_priorTab === tab) restoreDirtyFields(_fieldSnap, _pageEl, currentIdentityKey());
+    // …and stamp whose data this markup was rendered from. A session change
+    // made on ANOTHER page never re-renders this one, so without the stamp the
+    // next player's first visit would capture the previous player's text out of
+    // the surviving nodes and restore it into their own fields — the reviewer
+    // BLOCK on RG-174's first fix, one surface over. Unconditional: it records
+    // what just happened, and signing out (a null key) clears it.
+    stampFieldOwner(_pageEl, currentIdentityKey());
   }
   // Chat polls fast only while the chat tab is open
   try { setPollMode(tab === 'chat' ? 'active' : 'passive'); updateChatBadges(); } catch {}
@@ -3081,6 +3246,15 @@ export function renderTzToggle() {
   if (!container) return;
   if (!getSession()?.playerId) { container.innerHTML = ''; return; }
   const current = getTimezone();
+  // RG-180 (reviewer, on 17b9db9) — REPAINT ONLY WHAT CHANGED. Since RG-179 this runs from
+  // `_repaintForSupabaseData()`, i.e. on EVERY Realtime repaint, and it used to replace the pills
+  // wholesale every time — throwing away the live elements (and their listeners) to redraw the
+  // same markup. Same reasoning as the theme dropdown below, where the cost is visible: a control
+  // the player is interacting with must not be rebuilt underneath them.
+  const pills = [...container.querySelectorAll('.tz-btn')];
+  if (pills.length === TIME_ZONES.length
+    && pills.every((b, i) => b.dataset.tz === TIME_ZONES[i].key)
+    && pills.every(b => b.classList.contains('active') === (b.dataset.tz === current))) return;
   container.innerHTML = TIME_ZONES.map(tz =>
     `<button class="tz-btn${tz.key === current ? ' active' : ''}" data-tz="${tz.key}">${tz.key}</button>`
   ).join('');
@@ -3182,6 +3356,22 @@ export function renderThemeToggle() {
   if (!container) return;
   if (!getSession()?.playerId) { container.innerHTML = ''; return; }
   const current = getTheme();
+  // RG-180 (reviewer, on 17b9db9) — AN OPEN DROPDOWN IS NOT REDRAWN UNDER THE PLAYER'S FINGER.
+  //
+  // RG-179 made this function run from `_repaintForSupabaseData()`, which fires on every Realtime
+  // repaint — a pick, a score, anyone's edit. Replacing `container.innerHTML` destroys the live
+  // `<select>`, and a `<select>` the player has OPEN closes mid-choice, on a phone, for a reason
+  // they cannot see. So: if the rendered control already has this theme selected and offers exactly
+  // these options, there is nothing to render and the DOM is left alone.
+  //
+  // The comparison is against the control's LIVE `value` and its option list — never against the
+  // markup string. `value` is what the player's selection moved; the `selected` ATTRIBUTE in the
+  // HTML is not, and a browser re-serialises the markup anyway, so a string compare would differ
+  // every time and the guard would silently never fire.
+  const existing = container.querySelector('#theme-select');
+  if (existing
+    && existing.value === current
+    && [...(existing.options || [])].map(o => o.value).join(',') === THEMES.map(t => t.key).join(',')) return;
   // Compact dropdown so 7+ themes don't bloat the header.
   container.innerHTML = `
     <select id="theme-select" class="theme-select" aria-label="Theme">
@@ -3272,8 +3462,88 @@ export async function refreshPushActiveFlag() {
     console.warn('[push] could not resolve push-active state; treating this device as push-INACTIVE', e);
     active = false;
   }
-  try { setPushActive(active); } catch {}
+  setPushActiveDurable(active);
   return active;
+}
+
+/**
+ * ══ RG-177 (2026-09-19) — THE FOURTH MOMENT ════════════════════════════════
+ *
+ * Drew, live on Supabase: *"we need to now remove the in app notification
+ * banner now that we have onesignal."* The gate that does exactly that has been
+ * shipped since DI-N3 (chat-ui.js showToast(), `if (getPushActive()) return;`).
+ * What broke at the cutover is the flag it reads.
+ *
+ * THE MECHANISM. js/storage.js's save() opens with SEC F1's write interlock —
+ * `if (isSupabaseWriteWithheld()) throw` — and that throw sits ABOVE the
+ * `useBackend(key)` routing check, so it refuses DEVICE-LOCAL keys too. That is
+ * correct and deliberate for the interlock's own purpose, and it is not this
+ * bug's to change (it is a security control, storage.js is off-limits, and a
+ * carve-out for one key is how interlocks acquire holes). The bug is what THIS
+ * module did with the refusal: `try { setPushActive(active); } catch {}` threw
+ * it away, so a refused write was indistinguishable from a successful one.
+ *
+ * AND NOTHING RETRIED IT. boot()'s supabase branch awaits
+ * ensureSupabaseDataHydrated('boot'), which returns FALSE immediately when the
+ * active league is not resolved yet (the membership refresh is deliberately not
+ * awaited), and then runs runPostHydrateTail() anyway. The tail is latched and
+ * is the ONLY unconditional caller of refreshPushActiveFlag() — so on a normal
+ * boot the one computation happens during the window where every write is
+ * refused, and the `if (!_sbTailRan) runPostHydrateTail()` that fires when the
+ * league lands hits the latch and returns. Net effect: push works, the flag
+ * stays false forever, and every event push delivers ALSO pops the in-app
+ * banner. Exactly what Drew reported.
+ *
+ * DI-N3 named three moments the answer can CHANGE. Supabase added a fourth that
+ * nobody added: the moment the answer can be WRITTEN.
+ *
+ * WHY A DEFERRED WRITE RATHER THAN A SECOND refreshPushActiveFlag() AT THE
+ * SERVING TRANSITION. A second computation would race the boot tail's own —
+ * which starts earlier but resolves later, because it waits on the SDK — and
+ * whichever finished last would win. isPushOptedIn() resolves FALSE on a 3s
+ * timeout, so the losing race writes "not push-active" over a correct "yes" and
+ * hands the bug straight back, intermittently. Re-applying the value the last
+ * completed computation produced has no such ordering hazard: there is only
+ * ever one answer in flight, and it is the newest one.
+ */
+let _pushActiveWriteDeferred = null;    // a value the interlock refused; null = nothing owed
+
+function setPushActiveDurable(active) {
+  try {
+    setPushActive(active);
+    _pushActiveWriteDeferred = null;
+  } catch (e) {
+    // NOT swallowed — the whole defect was that this looked like success.
+    _pushActiveWriteDeferred = !!active;
+    console.warn(`[push] the device push-active flag could not be written yet (${e?.name || e}); `
+      + `it will be re-applied the moment the adapter starts serving (RG-177)`);
+  }
+}
+
+/**
+ * Re-apply a write SEC F1's interlock refused. Called from
+ * afterSupabaseHydrate() on both transitions into a serving state — the one
+ * place in the app where a refused write becomes possible.
+ *
+ * A no-op when nothing is owed, which is every device in every other mode:
+ * googleSheets and local never refuse, so nothing is ever deferred and this
+ * costs them one null comparison per hydrate. Returns whether it wrote, for
+ * tests.
+ */
+export function flushPendingPushActiveFlag(reason = '') {
+  if (_pushActiveWriteDeferred === null) return false;
+  const want = _pushActiveWriteDeferred;
+  try {
+    setPushActive(want);
+    _pushActiveWriteDeferred = null;
+    console.info(`[push] the deferred push-active flag (${want}) was written once the adapter started serving${reason ? ` (${reason})` : ''}`);
+    return true;
+  } catch (e) {
+    // Still refused — the adapter went back to not serving between the status
+    // change and this call. Keep owing it; the next serving transition retries.
+    console.warn('[push] the deferred push-active write was refused again; it is still owed', e?.name || e);
+    return false;
+  }
 }
 
 /** N1 / DI-N5 — VISIBILITY ONLY. The unread badge is gone: `#notif-bell-badge`

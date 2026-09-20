@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v22-4';
+const CACHE_NAME = 'cfb-pickems-v22-5';
 
 const STATIC_ASSETS = [
   './',
@@ -113,6 +113,12 @@ const STATIC_ASSETS = [
   // the bytes being present, not about them executing.
   './js/supabase-backend.js',
   './js/supabase-projection.js',
+  // RG-176 (2026-09-19). Statically imported by BOTH app.js and chat-ui.js, so
+  // it is boot-critical for the same reason auth.js is — a shell cache one
+  // module short serves a graph that cannot resolve (RG-03's blank app,
+  // arriving through the cache instead of through a typo). notifytest [25e] is
+  // the guard that caught this omission before it shipped.
+  './js/field-preserve.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

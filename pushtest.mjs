@@ -888,13 +888,24 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
   //      hydrate this harness has no business building (the [9] precedent). ──
   const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,4000}?refreshPushActiveFlag\(\);/) || [''])[0];
   assert(bootBlock10.length > 0, '10-11: fixture check — the notifications boot-wiring block was located in js/app.js');
-  const clearAt10 = bootBlock10.indexOf('setPushActive(false)');
+  // RG-177 (2026-09-19) — the clear still happens here and still happens FIRST;
+  // it just goes through setPushActiveDurable() now. Under dataMode:'supabase'
+  // this tail routinely runs before the adapter is serving, and js/storage.js's
+  // SEC F1 write interlock refuses DEVICE-LOCAL keys too — so the bare
+  // `try { setPushActive(false); } catch {}` that used to be here silently did
+  // nothing on exactly the boots this assertion exists to protect, leaving last
+  // session's `true` standing anyway. The durable writer records the refusal and
+  // app.js's afterSupabaseHydrate() re-applies it the moment writes are possible
+  // (boottest [24]). Matching the bare name would now match nothing.
+  const clearAt10 = bootBlock10.indexOf('setPushActiveDurable(false)');
   // The `.then(` matters, for boottest.mjs §10E's reason: the comment beside
   // the clear NAMES ensureOneSignalInit() in prose a few lines above the real
   // call, and a bare indexOf would match the sentence and invert this.
   const initAt10  = bootBlock10.indexOf('ensureOneSignalInit().then(');
   assert(clearAt10 > -1,
     '10-12: boot clears the persisted push-active flag before it recomputes it — the stale window now fails CLOSED, which is what the comment beside refreshPushActiveFlag() already claims ("a device that has not computed it yet reads FALSE")');
+  assert(!/try \{ setPushActive\([^)]*\); \} catch \{\}/.test(bootBlock10),
+    '10-12b (RG-177): …and the clear is not written through a bare swallowing try/catch — under Supabase the write interlock refuses it, and a swallowed refusal made the fail-closed clear a no-op on precisely the boots it is for');
   assert(clearAt10 > -1 && initAt10 > -1 && clearAt10 < initAt10,
     `10-13: …and it clears BEFORE ensureOneSignalInit(), not inside its .then() — an init that never settles (no App ID, offline, SDK blocked) would otherwise leave last session's TRUE standing for the whole session (clear at ${clearAt10}, init at ${initAt10})`);
 

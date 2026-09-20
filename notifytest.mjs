@@ -46,7 +46,7 @@
  *       Code.gs is never opened for writing in either section.
  */
 
-import { readFile, writeFile, copyFile } from 'node:fs/promises';
+import { readFile, writeFile, copyFile, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 // ── DOM / browser stubs — identical shape to loadtest.mjs's, so both harnesses
@@ -2978,6 +2978,239 @@ console.log('\n[27] BUG-12 — a push that arrives (or is tapped) while the app 
     `27-13: …and it AWAITS that fetch before looking the message up (wake at ${wakeAt27}, [data-mid] lookup at ${midAt27}) — scrolling first is how the "message not in the loaded window" fallback fired prematurely, which is Drew's "I should be able to see the message"`);
   assert(/await\s+wakeChat\(|wakeChat\(\)[\s\S]{0,80}\.then\(|\.catch\([^)]*\)[\s\S]{0,40}\.then\(/.test(deepLinkSrc27),
     '27-14: …by actually waiting on the promise, not fire-and-forget — a wake whose result nothing waits for leaves the same race in place');
+}
+
+console.log('\n[28] DI-T6.1 — the client half of the notify-fanout switch (Phase III Step 6)…');
+{
+  // While `settings.serverJobs.notifyFanout` is true, the Edge Function fans a
+  // chat row out server-side: one `notifications` row per recipient and one
+  // OneSignal call for the whole league. If this device ALSO relays, the first
+  // message after switch-on pushes twice — the single most likely defect in the
+  // whole step, and the reason the switch has a client half at all.
+  //
+  // BOTH STATES ARE ASSERTED, because only one of them is the new behaviour and
+  // the OTHER is the one that must be byte-identical to today. A suppression
+  // that also fired with the switch off would be a silent end to push.
+  const chat28 = await import('./js/chat.js');
+  const relayPlayers28 = storage.getPlayers().filter(p => p.active);
+  const settingsBefore28 = storage.getSettings();
+
+  let seq28 = 0;
+  const relay28 = async (row) => {
+    storage.setNotifications([]);
+    chat28._resetForTest();
+    chat28.initChat('p1');
+    seq28 = 0;
+    chat28.ingest([{ id: `prime28_${++seq28}`, seq: seq28, ts: Date.now(), type: 'message', author: 'p1',
+                     gameTag: '', body: 'priming backfill', targetId: '', replyTo: '', notify: true, meta: null }]);
+    notif._resetChatWatermarkForTest();
+    const captured = [];
+    notif.registerPushAdapter({ isConfigured: () => true, async send(r) { captured.push(r); return { ok: true }; } });
+    notif.wireChatNotifications();
+    chat28.ingest([{ seq: ++seq28, ts: Date.now(), type: 'message', gameTag: '', targetId: '', replyTo: '',
+                     notify: true, ...row }]);
+    await new Promise(r => setTimeout(r, 10));
+    notif._clearPushAdapterForTest();
+    return captured;
+  };
+  const msg28 = (n) => ({ id: `m28_${n}`, author: 'p2', body: `who is covering ${n}`, meta: null });
+
+  // ── 28a. ABSENT — the shape every league has today, and will still have the
+  //    moment the function is deployed but not switched on. ─────────────────
+  storage.saveSetting('serverJobs', undefined);
+  const capAbsent = await relay28(msg28(1));
+  assert(capAbsent.length === relayPlayers28.length - 1,
+    `28-1: with NO serverJobs key at all the client relays exactly as it does today (${capAbsent.length} pushes, one per active player but the sender). CONVENTIONS #10 on this side: an absent switch changes nothing`);
+
+  // ── 28b. EXPLICIT FALSE — the shape after Drew flips it back off. ────────
+  storage.saveSetting('serverJobs', { notifyFanout: false });
+  const capOff = await relay28(msg28(2));
+  assert(capOff.length === relayPlayers28.length - 1,
+    `28-2: …and with notifyFanout:false it relays too (${capOff.length}) — the rollback is a flip, and a flip back has to restore push on the very next message with no deploy`);
+
+  // ── 28c. TRUE — the server is doing it; this device must not. ────────────
+  storage.saveSetting('serverJobs', { notifyFanout: true });
+  const capOn = await relay28(msg28(3));
+  assert(capOn.length === 0,
+    `28-3: with notifyFanout:true the client relays NOTHING (got ${capOn.length}). Without this the first chat message after switch-on buzzes every phone twice`);
+  assert(storage.getNotifications().length === 0,
+    '28-4: …and writes no local notification rows either — the function writes the `notifications` rows now, one per recipient, with origin:\'server\'');
+
+  // ── 28d. THE WATERMARK STILL ADVANCES WHILE SUPPRESSED. ─────────────────
+  // The gate sits AFTER the watermark advance on purpose. Gating at the top of
+  // the scan would freeze the watermark for as long as the switch is on, so the
+  // first scan after a flip BACK would see a week of messages as "fresh", trip
+  // CHAT_RELAY_BURST_CAP and relay nothing at all — the rollback would not roll
+  // back. This is the assertion that would notice.
+  {
+    storage.setNotifications([]);
+    chat28._resetForTest();
+    chat28.initChat('p1');
+    let s = 0;
+    chat28.ingest([{ id: `prime28_w`, seq: ++s, ts: Date.now(), type: 'message', author: 'p1',
+                     gameTag: '', body: 'priming backfill', targetId: '', replyTo: '', notify: true, meta: null }]);
+    notif._resetChatWatermarkForTest();
+    const captured = [];
+    notif.registerPushAdapter({ isConfigured: () => true, async send(r) { captured.push(r); return { ok: true }; } });
+    notif.wireChatNotifications();
+    storage.saveSetting('serverJobs', { notifyFanout: true });
+    for (let i = 0; i < 40; i += 1) {
+      chat28.ingest([{ id: `m28_sup_${i}`, seq: ++s, ts: Date.now(), type: 'message', author: 'p2',
+                       gameTag: '', body: `suppressed ${i}`, targetId: '', replyTo: '', notify: true, meta: null }]);
+    }
+    await new Promise(r => setTimeout(r, 10));
+    const suppressedMark = notif._chatWatermarkForTest();
+    assert(captured.length === 0 && suppressedMark >= s,
+      `28-5: forty messages arrive with the switch ON — zero pushes, and the watermark still tracks the room (at ${suppressedMark}, head ${s})`);
+    storage.saveSetting('serverJobs', { notifyFanout: false });
+    chat28.ingest([{ id: 'm28_after_flip', seq: ++s, ts: Date.now(), type: 'message', author: 'p2',
+                     gameTag: '', body: 'after the flip back', targetId: '', replyTo: '', notify: true, meta: null }]);
+    await new Promise(r => setTimeout(r, 10));
+    notif._clearPushAdapterForTest();
+    assert(captured.length === relayPlayers28.length - 1,
+      `28-6: …and the very next message after the flip back relays normally (${captured.length}), with no burst-cap trip — which is what "the rollback is a flip, not a deploy" has to mean in practice`);
+    assert(notif._chatRelayBurstTripsForTest().length === 0,
+      '28-7: …and CHAT_RELAY_BURST_CAP was never tripped, because the forty suppressed messages were never re-scanned as a backlog');
+  }
+
+  // ── 28e. ONLY THE LITERAL `true`. ───────────────────────────────────────
+  for (const [label, value] of [['the string "true"', { notifyFanout: 'true' }],
+                                ['the number 1', { notifyFanout: 1 }],
+                                ['a null bag', null],
+                                ['an empty object', {}],
+                                ['a non-object', 'notifyFanout']]) {
+    storage.saveSetting('serverJobs', value);
+    const cap = await relay28(msg28(`shape_${label.replace(/\W+/g, '')}`));
+    assert(cap.length === relayPlayers28.length - 1,
+      `28-8: ${label} does NOT suppress the relay — only the boolean does. A settings blob is commissioner-editable JSON, and a truthy string must never be able to silence push`);
+  }
+
+  // ── 28f. THE CLIENT'S READER AND THE SERVER'S ARE THE SAME DECISION. ────
+  // Not "similar" — the same answer on every shape, including the ambiguous
+  // ones above. The function reads `settings.serverJobs.<job>` out of
+  // `league_kv.settings`; the client reads it out of `cfbp_settings`, which is
+  // the SAME ROW (js/supabase-projection.js maps them 1:1). If the two readers
+  // ever disagreed, one side would relay while the other did too.
+  {
+    const rules = await import('./supabase/functions/_shared/job-rules.mjs');
+    assert(JSON.stringify([...rules.SERVER_JOBS]) === JSON.stringify([...notif.SERVER_JOB_NAMES]),
+      `28-9: the eight switch names are identical on both sides, in the same order — server ${JSON.stringify([...rules.SERVER_JOBS])}`);
+    const shapes = [
+      undefined, null, {}, { serverJobs: null }, { serverJobs: {} },
+      { serverJobs: { notifyFanout: true } }, { serverJobs: { notifyFanout: false } },
+      { serverJobs: { notifyFanout: 'true' } }, { serverJobs: { notifyFanout: 1 } },
+      { serverJobs: { notifyFanout: 0 } }, { serverJobs: 'notifyFanout' },
+      { serverJobs: { NOTIFYFANOUT: true } }, { serverJobs: { notifyFanout: true }, season: '2026' },
+    ];
+    const disagree = shapes.filter(s =>
+      rules.isJobEnabledFromSettings(s, 'notifyFanout') !== notif.serverJobEnabledIn(s, 'notifyFanout'));
+    assert(disagree.length === 0,
+      `28-10: the client's serverJobEnabledIn() and the function's isJobEnabledFromSettings() agree on all ${shapes.length} shapes, including every ambiguous one (${disagree.length} disagreements)`);
+    assert(notif.serverJobEnabledIn({ serverJobs: { notAJob: true } }, 'notAJob') === false &&
+           rules.isJobEnabledFromSettings({ serverJobs: { notAJob: true } }, 'notAJob') === false,
+      '28-11: …and a job name outside the eight reads as OFF on both sides — a typo\'d switch name is the same direction as an absent one');
+  }
+
+  // ── 28g. MUTATION CANARY — remove the suppression and 28-3 goes RED. ────
+  // Against a SCRATCH COPY. The real js/notifications.js is never opened for
+  // writing here (CLAUDE.md: commit before mutation testing, and never restore
+  // with git). The gutted copy keeps every other line, so a green here would
+  // mean the assertion above is passing for some reason other than the gate.
+  {
+    const realSrc = await readFile(new URL('./js/notifications.js', import.meta.url), 'utf8');
+    const GATE = "if (isServerJobEnabled('notifyFanout')) return;";
+    assert(realSrc.includes(GATE),
+      '28-12: the gate is one line in _scanNewChatMessages, spelled exactly as the canary below removes it');
+    // The scratch copy lives in TMPDIR, never in the repo — and its own relative
+    // imports are rewritten to absolute file URLs of the REAL js/ modules, so
+    // the mutant shares one `storage.js` and one `chat.js` with everything else
+    // in this file rather than instantiating a second, empty world.
+    const absSrc = realSrc.replace(/from '\.\/([A-Za-z0-9_.-]+\.js)'/g,
+      (_m, f) => `from '${new URL(`./js/${f}`, import.meta.url).href}'`);
+    assert(absSrc !== realSrc && absSrc.includes(GATE),
+      '28-12b: …and the import-rewrite for the scratch copy found its targets without disturbing the gate (non-vacuous)');
+    const scratch = new URL(`file://${process.env.TMPDIR || '/tmp'}/notifications.step6canary.${Date.now()}.mjs`);
+    await writeFile(scratch, absSrc.replace(GATE, '/* GATE REMOVED BY THE CANARY */'), 'utf8');
+    const gutted = await import(scratch.href);
+    storage.saveSetting('serverJobs', { notifyFanout: true });
+    storage.setNotifications([]);
+    chat28._resetForTest();
+    chat28.initChat('p1');
+    let s2 = 0;
+    chat28.ingest([{ id: 'prime28_canary', seq: ++s2, ts: Date.now(), type: 'message', author: 'p1',
+                     gameTag: '', body: 'priming backfill', targetId: '', replyTo: '', notify: true, meta: null }]);
+    gutted._resetChatWatermarkForTest();
+    const capturedGut = [];
+    gutted.registerPushAdapter({ isConfigured: () => true, async send(r) { capturedGut.push(r); return { ok: true }; } });
+    gutted.wireChatNotifications();
+    chat28.ingest([{ id: 'm28_canary', seq: ++s2, ts: Date.now(), type: 'message', author: 'p2',
+                     gameTag: '', body: 'the double push', targetId: '', replyTo: '', notify: true, meta: null }]);
+    await new Promise(r => setTimeout(r, 10));
+    gutted._clearPushAdapterForTest();
+    assert(capturedGut.length === relayPlayers28.length - 1,
+      `28-13: MUTATION CANARY — with the gate deleted the same message DOES relay (${capturedGut.length} pushes), which is the double push in a test tube. 28-3 is therefore load-bearing and not passing by accident`);
+    await rm(scratch, { force: true });
+  }
+
+  // Leave the blob exactly as it was found: every later section reads settings.
+  storage.saveSettings(settingsBefore28);
+  chat28._resetForTest();
+  notif._resetChatWatermarkForTest();
+  notif._clearPushAdapterForTest();
+  notif._resetChatRelayBurstTripsForTest();
+  storage.setNotifications([]);
+}
+
+console.log('\n[29] DI-T6.1 — the dedup key is BYTE-IDENTICAL on both sides of the switch…');
+{
+  // The `notifications` table's own unique key is
+  // (league_id, member_id, dedup_key, origin) — 0001:443 — and Apps Script's
+  // CFBP_NOTIFY_SENT ledger is keyed on the same string. A message relayed by a
+  // client and fanned out by the function must therefore produce the SAME
+  // string for the same recipient, or the two paths stop deduping against each
+  // other during the one window where both can run: a flip, a retried webhook,
+  // a device that had not re-hydrated settings yet.
+  //
+  // `_shared/job-rules.mjs` COPIED `makeDedupKey` rather than importing it —
+  // js/notifications.js imports chat.js, storage.js and backend.js, which reach
+  // localStorage, the DOM and fetch, and Deno can load none of that. So the copy
+  // is PINNED here instead of trusted: both functions are imported and compared
+  // across a table of inputs. Drift in either direction is RED.
+  const rules29 = await import('./supabase/functions/_shared/job-rules.mjs');
+  const cases = [
+    { event: 'CHAT_MESSAGE_CREATED', weekId: 'msg_1', threshold: '', playerId: 'p1' },
+    { event: 'CHAT_MESSAGE_CREATED', weekId: 'sys_lc_PICKS_LOCKING_SOON_wk9', threshold: '', playerId: 'p6' },
+    { event: 'PICKS_REMINDER', weekId: 'w_1757', threshold: '15m', playerId: 'p3' },
+    { event: 'PICKS_LOCKING_SOON', weekId: 'w_1757', threshold: 'locking-soon', playerId: 'p2' },
+    { event: 'RESULTS_FINALIZED', weekId: '', threshold: '', playerId: 'p4' },
+    { event: 'OBLIGATION_SETTLED', playerId: 'p5' },
+    { event: 'COMMISSIONER_ANNOUNCEMENT', weekId: undefined, threshold: undefined, playerId: 'p1' },
+    { event: 'CHAT_MESSAGE_CREATED', weekId: 'msg|with|pipes', threshold: '', playerId: 'p1' },
+  ];
+  const mismatches = cases.filter(c => notif.makeDedupKey(c) !== rules29.makeDedupKey(c));
+  assert(mismatches.length === 0,
+    `29-1: js/notifications.js makeDedupKey() and _shared/job-rules.mjs makeDedupKey() return the identical string for all ${cases.length} shapes, including the empty and undefined ones (${mismatches.length} mismatches)`);
+  assert(notif.makeDedupKey(cases[0]) === 'CHAT_MESSAGE_CREATED|msg_1||p1' &&
+         rules29.makeDedupKey(cases[0]) === 'CHAT_MESSAGE_CREATED|msg_1||p1',
+    '29-2: …and both are pinned to the LITERAL four-part string, so a matched pair of edits that changed the format on both sides at once is still red (Code.gs isValidDedupKey validates this shape server-side today)');
+
+  // The key the FUNCTION actually writes comes out of fanoutPlan(), not out of
+  // makeDedupKey() directly — the weekId slot carries the MESSAGE id, which is
+  // the one piece of the format a porter could plausibly get wrong, because
+  // chat has no week concept at all.
+  const plan = rules29.fanoutPlan({
+    record: { id: 'msg_42', league_id: 'L', type: 'message', author: 'p2', body: 'hi', notify: true, meta: null },
+    members: [{ id: 'p1', active: true, display_name: 'Drew', preferences: {} },
+              { id: 'p2', active: true, display_name: 'Brayden', preferences: {} }],
+    senderDisplayName: 'Brayden',
+  });
+  assert(plan.recipients.length === 1 && plan.recipients[0].memberId === 'p1',
+    '29-3: fanoutPlan() excludes the sender, exactly as the client relay does (one recipient for a two-member league)');
+  assert(plan.recipients[0].dedupKey === notif.makeDedupKey({
+    event: 'CHAT_MESSAGE_CREATED', weekId: 'msg_42', threshold: '', playerId: 'p1' }),
+    `29-4: …and the key it plans to write is the one THIS client would have sent for that row — the weekId slot carries the MESSAGE id, because chat has no week and dedup must be per-message. Got "${plan.recipients[0].dedupKey}"`);
+  assert(plan.recipients[0].dedupKey === 'CHAT_MESSAGE_CREATED|msg_42||p1',
+    '29-5: …pinned to the literal, so both sides moving together is still a red');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

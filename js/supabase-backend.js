@@ -203,7 +203,22 @@ let _mirror = new Map();               // cfbp key -> projected legacy value (th
 let _baseRows = new Map();             // cfbp key -> Map(row.id -> row) as the server last served it
 let _baseValues = new Map();           // cfbp key -> the legacy value that projection produced (kv + RG-12 checks)
 const _overlay = new Map();            // cfbp_games ONLY (§2.1): rendered, never pushed, never persisted
-const _dirty = new Map();              // cfbp key -> { fields:Set|null, leagueId, epoch, switchSeq }
+const _dirty = new Map();              // cfbp key -> { fields:Set|null, leagueId, epoch, switchSeq, seq }
+/** RG-180 hole 3 — a monotonic stamp on every `set()`. `flush()` compares the stamp it PLANNED
+ *  against the stamp the entry carries when it clears sent keys, so an edit made during the
+ *  network await is not deleted by a run that never saw it. A counter rather than a timestamp:
+ *  two `set()`s in the same millisecond are two edits. */
+let _writeSeq = 0;
+/** RG-180 hole 1 — the in-flight latch and the ONE coalesced follow-up (see `flush()`). */
+let _flushActive = false;
+let _flushCurrent = null;
+let _flushQueued = null;
+let _flushNeedsFollowUp = false;
+/** SECURITY F2 — how many operations the run currently in its op loop has already SENT, or `null`
+ *  when no run is in that loop. Read by `_refuseDirtyLoudly()`, which is called synchronously from
+ *  `dropMirror()` while the loop is suspended on an await: a queue dropped out from under a run
+ *  that had already put something on the wire may not be reported as "Nothing was sent". */
+let _inFlightSent = null;
 const _refusedKeys = new Map();        // cfbp key -> { code, serverMessage, atHydrateSeq }
 let _mirrorTag = null;                 // { leagueId, epoch, switchSeq, at }
 let _switchSeq = 0;
@@ -645,6 +660,12 @@ export function set(key, value, fields) {
     leagueId: _safe('getActiveLeagueId'),
     epoch: _safe('getIdentityEpoch'),
     switchSeq: _switchSeq,
+    // RG-180 hole 3 — the generation of THIS write. `flush()` reads it when it builds a plan and
+    // again when it clears the keys that plan sent; a difference means a newer value arrived while
+    // that network call was in flight, and the key must stay dirty. (The word "a-w-a-i-t" is spelt
+    // out of this comment on purpose: adaptertest [A1] greps this function's TEXT for it, because a
+    // read path that ever became asynchronous would pass every behavioural test on the first tick.)
+    seq: ++_writeSeq,
   });
   _schedulePush();
   return true;
@@ -965,6 +986,45 @@ function _opMoved(op) {
   if (op.epoch !== null && epochNow !== null && op.epoch !== epochNow) return true;
   const active = _safe('getActiveLeagueId');
   return !!(active && op.leagueId && active !== op.leagueId);
+}
+
+/**
+ * ══ SECURITY F2 (2026-09-19) — THE WRITE LOOP ASKS THE SAME QUESTION THE READS DO ══
+ *
+ * `_opMoved()` is applied to every asynchronous READ — the hydrate (`:811`), each
+ * `week_submission_status` (`:944`), every Realtime event. The flush's op loop was the one
+ * asynchronous path that never asked: it built a plan against one mirror and then awaited each
+ * operation with no re-check between them.
+ *
+ * What that costs, concretely. Two writes are queued, `flush()` starts, and during operation #1 the
+ * phone is handed over — `dropMirror('device-handover')` clears the queue and tells the player
+ * "Nothing was sent." Operation #2 is then sent anyway, on the one shared client, which by then
+ * carries the NEXT account's token. `flush()` reports `pushed: 2` about a queue that no longer
+ * exists. The banner and the wire disagree, and the banner is the thing six people read.
+ *
+ * `_opMoved()` alone is not enough here, and that is the whole reason this is a second predicate:
+ * a plain `dropMirror()` (handover, sign-out) moves NEITHER the switch sequence NOR the epoch NOR
+ * the active league — it nulls `_mirrorTag` and drops the state out of ACTIVE. So the tag is
+ * compared BY VALUE as well. By value deliberately: a HYDRATE landing mid-flush builds a NEW tag
+ * object carrying the SAME league, epoch and switch, and a run must not abandon itself because the
+ * league it is writing to was refreshed underneath it (adaptertest [A-FLUSH6] is that case).
+ */
+function _flushTag() {
+  return {
+    leagueId: _mirrorTag ? _mirrorTag.leagueId : null,
+    epoch: _mirrorTag ? _mirrorTag.epoch : _safe('getIdentityEpoch'),
+    switchSeq: _switchSeq,
+  };
+}
+
+function _flushTagMoved(tag) {
+  if (!tag) return true;
+  if (_opMoved(tag)) return true;
+  if (_state !== 'ACTIVE') return true;                    // HELD, SWITCHING, IDLE after a drop
+  if (!_mirrorTag) return true;                            // dropMirror(): the mirror this plan described is gone
+  return _mirrorTag.leagueId !== tag.leagueId
+    || _mirrorTag.epoch !== tag.epoch
+    || _mirrorTag.switchSeq !== tag.switchSeq;
 }
 
 /**
@@ -1584,7 +1644,92 @@ function _planRowKey(plan, key, route, leagueId) {
  * times only delays the honest error (`backend.js:602-604` gives the same
  * reasoning for a 4xx).
  */
-export async function flush() {
+/**
+ * RG-180 HOLE 1 — AT MOST ONE FLUSH RUNS, AND A CALL THAT ARRIVES MID-FLIGHT IS NOT DROPPED.
+ *
+ * `flush()` used to be the run itself. Two calls in one tick therefore built two plans from the
+ * same `_dirty` and the same `_baseRows` and sent both: the reviewer's reproduction on 5c2aa38 is
+ * `const a = sb.flush(); const b = sb.flush();`, and it is not a contrived one — `pagehide` and
+ * `visibilitychange:hidden` BOTH fire on one backgrounding, and the 800ms debounce timer can land
+ * on top of them. Live, the second INSERT is a 23505, `_refusalFrom()` turns it into a refusal, and
+ * six players read "The server refused to save cfbp_picks… Nothing was saved" about a pick that
+ * saved perfectly well — with `_refusedKeys` then blocking that key until a hydrate lands.
+ *
+ * The rule here is a LATCH plus ONE queue slot, never a queue:
+ *   • idle          → start the run, return it.
+ *   • in flight     → return the SINGLE coalesced follow-up, creating it if this is the first
+ *                     caller to ask for one. Every later caller in this window gets that same
+ *                     promise, so N callers produce at most ONE extra run.
+ *   • the slot is freed BEFORE the follow-up starts, so a caller arriving during the follow-up
+ *     queues a NEW one rather than joining a run whose plan predates its edit.
+ *
+ * A follow-up is a real run, so a newer edit made mid-flight (hole 3) goes out in it, and every
+ * caller's promise resolves with the truthful result OF THE RUN IT WAITED FOR. There is no
+ * recursion: the queued continuation calls `_startFlushRun()`, not `flush()`, and the latch is
+ * released in a `finally` so a throw cannot wedge it.
+ */
+export function flush() {
+  if (_flushActive) {
+    if (!_flushQueued) {
+      // SECURITY F2 — the follow-up is a REAL run, so it is gated by the same token the op loop
+      // checks. The queue it would send belongs to the mirror that existed when it was asked for;
+      // if that mirror is gone by the time the current run settles, the follow-up must not start.
+      const queuedTag = _flushTag();
+      _flushQueued = _settled(_flushCurrent).then(() => {
+        _flushQueued = null;
+        if (_flushTagMoved(queuedTag)) {
+          console.warn('[sb] the coalesced follow-up flush was DROPPED: the mirror it was queued for is gone'
+            + ` (state ${_state}). Nothing was sent.`);
+          return { pushed: 0, abandoned: true, sent: [], notSent: [] };
+        }
+        return _startFlushRun();
+      });
+    }
+    return _flushQueued;
+  }
+  return _startFlushRun();
+}
+
+/** Await a promise for its SETTLEMENT only — a failed run must not cancel the follow-up. */
+function _settled(p) { return Promise.resolve(p).then(() => {}, () => {}); }
+
+function _startFlushRun() {
+  // REACHABLE, and the comment here used to say it was not (reviewer N5). Both follow-up paths call
+  // this function directly off the SAME settled run: the `_flushNeedsFollowUp` continuation below
+  // was registered first and starts its run, then `flush()`'s queued continuation arrives and finds
+  // a run already active. Re-entering through `flush()` is what turns that second caller into the
+  // ONE coalesced follow-up instead of a second concurrent sender.
+  if (_flushActive) return flush();
+  _flushActive = true;
+  const run = (async () => {
+    try { return await _runFlush(); }
+    finally { _flushActive = false; }
+  })();
+  _flushCurrent = run;
+  // HOLE 3's other half: a key that stayed dirty because it was written DURING this run needs a
+  // sender. One follow-up, started as soon as this run settles, without waiting for another caller
+  // or another debounce tick. It cannot loop: `_flushNeedsFollowUp` is only set by an edit that
+  // landed while a run was in flight.
+  const followUpTag = _flushTag();
+  run.then(
+    () => {
+      if (!_flushNeedsFollowUp) return;
+      _flushNeedsFollowUp = false;
+      // SECURITY F2 — same gate as the queued follow-up: a mid-flight edit earns a second run only
+      // while the mirror it was made in is still the one this device is acting in.
+      if (_flushTagMoved(followUpTag)) {
+        console.warn('[sb] the follow-up flush for a mid-flight edit was DROPPED: the mirror it was made in is gone'
+          + ` (state ${_state}). Nothing was sent.`);
+        return;
+      }
+      flush().catch(() => {});
+    },
+    () => { _flushNeedsFollowUp = false; },
+  );
+  return run;
+}
+
+async function _runFlush() {
   if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
   if (!_dirty.size) return { pushed: 0 };
   // Held writes stay held while stale (`backend.js:930`): a plan built on a
@@ -1598,6 +1743,11 @@ export async function flush() {
 
   const { plan, refusals, stale, leagueId } = planFlush();
 
+  // RG-180 hole 3 — the generation of every dirty entry AS THIS PLAN SAW IT. Captured in the same
+  // synchronous tick the plan was built in, and compared at clear time below.
+  const plannedSeq = new Map();
+  for (const [k, entry] of _dirty) plannedSeq.set(k, entry.seq);
+
   if (stale.length) _reportStaleSwitch(stale);
 
   // A key whose refusal has not been followed by a landed hydrate is not
@@ -1610,17 +1760,51 @@ export async function flush() {
 
   const sentKeys = new Set();
   const errors = [...refusals];
+  // RG-180 — a request that never reached a server is NOT a refusal. `_writeFailure()` classifies
+  // it with the same allow-list `_classifyHydrateFailure()` uses on the read side; the key stays
+  // dirty, nothing is latched into `_refusedKeys`, and the batch STOPS — the remaining operations
+  // would fail the same way, and sending them would only multiply the noise.
+  const heldOffline = new Set();
   emit('syncing', { state: _state, pendingWrites: _dirty.size });
-  for (const op of runnable) {
-    try {
-      await _execute(client, op, leagueId);
-      sentKeys.add(op.key);
-    } catch (e) {
-      errors.push(e);
-      if (e instanceof AdapterWriteRefusedError) {
-        _refusedKeys.set(op.key, { code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq });
+
+  // SECURITY F2 — the token this plan was built under, re-checked at the TOP OF EVERY ITERATION.
+  // `_inFlightSent` is the count this run has already put on the wire, readable by
+  // `_refuseDirtyLoudly()` while the loop is suspended, so a drop cannot say "Nothing was sent"
+  // about a run that had already sent something.
+  const runTag = _flushTag();
+  _inFlightSent = 0;
+  try {
+    for (let i = 0; i < runnable.length; i++) {
+      const op = runnable[i];
+      if (_flushTagMoved(runTag)) {
+        const notSent = [...new Set(runnable.slice(i).map((o) => o.key))];
+        console.warn(`[sb] the mirror this flush was planned against is gone (state ${_state}) — the run is ABANDONED.`
+          + ` Sent before it went: ${[...sentKeys].join(', ') || 'nothing'}. NOT sent: ${notSent.join(', ')}.`
+          + ' The remaining operations are discarded, never re-addressed to whatever identity or league this device now holds.');
+        return { pushed: sentKeys.size, abandoned: true, sent: [...sentKeys], notSent };
+      }
+      try {
+        // Counted BEFORE the await, not after: the question `_refuseDirtyLoudly()` asks is "did
+        // anything go on the wire", and an operation suspended on its await has gone — whether it
+        // is acknowledged is exactly what nobody knows at that instant.
+        _inFlightSent++;
+        await _execute(client, op, leagueId);
+        sentKeys.add(op.key);
+      } catch (e) {
+        if (e && e.networkHold) {
+          heldOffline.add(op.key);
+          console.warn(`[sb] ${op.key}: the write never reached the server (${e.message}) — HELD for retry,`
+            + ' not reported as a refusal. The next hydrate rebases it and re-arms the push.');
+          break;
+        }
+        errors.push(e);
+        if (e instanceof AdapterWriteRefusedError) {
+          _refusedKeys.set(op.key, { code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq });
+        }
       }
     }
+  } finally {
+    _inFlightSent = null;
   }
 
   for (const e of errors) {
@@ -1634,10 +1818,35 @@ export async function flush() {
   // hydrate rebases it, so they see their change vanish WITH the banner that
   // explains why, never silently (§5.2 item 4).
   const failedKeys = new Set(errors.map((e) => e && e.key).filter(Boolean));
+  const requeued = [];
   for (const key of sentKeys) {
-    if (failedKeys.has(key)) continue;
-    _dirty.delete(key);
+    if (failedKeys.has(key) || heldOffline.has(key)) continue;
     _refusedKeys.delete(key);
+    // RG-180 hole 3 — THE KEY IS ONLY CLEAN IF NOBODY WROTE IT WHILE WE WERE AWAY. `set()` during
+    // the awaits above re-marks the entry with a newer `seq`; deleting it here is what silently
+    // stranded the newer value in the mirror, unsent, until some unrelated later write. The
+    // hide-flush made that window routine, because a hide fires while the player is still typing.
+    const entry = _dirty.get(key);
+    if (entry && plannedSeq.has(key) && entry.seq !== plannedSeq.get(key)) { requeued.push(key); continue; }
+    _dirty.delete(key);
+  }
+  // A DIRTY KEY THAT PRODUCED NO OPERATION IS CLEAN, NOT PENDING. Before the base advanced (hole 2)
+  // a re-save always re-diffed into a patch, so every key that reached the planner produced an op
+  // and got cleared; now that a redundant write plans nothing, that key would stay dirty for ever —
+  // reading as a phantom pending write and, worse, permanently blocking `_persistSnapshot()`
+  // (its own first line refuses while anything is dirty), so the device would stop refreshing
+  // the snapshot a warm open reads. The same generation check applies: written again since the plan
+  // was built ⇒ still dirty.
+  const planKeys = new Set(plan.map((op) => op.key));
+  for (const [key, seq] of plannedSeq) {
+    if (planKeys.has(key) || sentKeys.has(key) || failedKeys.has(key) || heldOffline.has(key) || blocked.has(key)) continue;
+    const entry = _dirty.get(key);
+    if (!entry || entry.seq !== seq) continue;
+    _dirty.delete(key);
+  }
+  if (requeued.length) {
+    _flushNeedsFollowUp = true;
+    console.info(`[sb] ${requeued.join(', ')} changed while the flush was in flight — kept dirty for the follow-up run.`);
   }
   for (const s of stale) _dirty.delete(s.key);
 
@@ -1652,7 +1861,31 @@ export async function flush() {
       banner: `The server refused to save ${[...failedKeys].join(', ') || 'a change'}: `
         + `${first.serverMessage || first.message} Nothing was saved.`,
     });
-    return { pushed: sentKeys.size, refused: [...failedKeys] };
+    return {
+      pushed: sentKeys.size,
+      refused: [...failedKeys],
+      ...(heldOffline.size ? { heldOffline: [...heldOffline] } : {}),
+    };
+  }
+
+  // RG-180 — THE WRITE THAT NEVER LEFT THE DEVICE. Not 'refused': no server judged it, nothing was
+  // latched, and the change is still queued. AD-06 is satisfied by the queue being VISIBLE
+  // (`pendingWrites`) and the badge saying offline — loud-fail is about never pretending a write
+  // landed, and this says exactly what happened. The retry path is the existing one: `online` and
+  // `visibilitychange:visible` trigger a re-hydrate, which rebases the dirty key and re-arms the
+  // push (`hydrate()`'s last two lines).
+  if (heldOffline.size) {
+    const keys = [...new Set([...heldOffline, ..._dirty.keys()])];
+    _lastError = `Couldn’t reach the server. ${keys.length} change${keys.length === 1 ? '' : 's'} `
+      + 'still to save — they’ll go out when you’re back on the network.';
+    emit('offline', {
+      state: _state,
+      error: _lastError,
+      heldOffline: [...heldOffline],
+      pendingWrites: _dirty.size,
+      banner: _lastError,
+    });
+    return { pushed: sentKeys.size, heldOffline: [...heldOffline] };
   }
 
   // A write-during-switch refusal is NOT a success, even when everything else
@@ -1744,19 +1977,236 @@ function _refusalFrom(error, { key, rowId, leagueId }) {
     { code: code || 'error', key, rowId, leagueId, serverMessage: msg });
 }
 
+/**
+ * RG-180 — A FAILURE THAT NEVER REACHED A SERVER IS NOT A REFUSAL.
+ *
+ * `_refusalFrom()` answers "the server said no" for EVERY error shape, including the two a dropped
+ * fetch produces: supabase-js may let the `TypeError: Failed to fetch` propagate, or catch it and
+ * hand back an error OBJECT with an empty `code` and that message in it. Both used to become an
+ * `AdapterWriteRefusedError`, which means a red "Nothing was saved" banner naming the SERVER for a
+ * request no server ever saw, plus a `_refusedKeys` latch that then blocks the key until a hydrate
+ * lands — on a device whose problem is that it cannot reach the network to hydrate.
+ *
+ * The allow-list is `_classifyHydrateFailure()`'s, deliberately: one classifier, one set of rules,
+ * already argued through reviewer F1/F4/F-A. With ONE narrowing — the `navigator.onLine === false`
+ * leg is not honoured here. On the READ side that leg decides whether to serve a snapshot; on the
+ * WRITE side it would turn a genuine 42501 that happened to arrive while the radio was flapping
+ * into a silent hold, and AD-06 says a refusal stays loud. So the error itself has to carry the
+ * network signal: an abort, a timeout, a fetch message, or a Postgres CONNECTION sqlstate.
+ */
+function _isWriteNetworkFailure(err) {
+  if (!err) return false;
+  const shaped = {
+    name: String((err && err.name) || ''),
+    message: String((err && err.message) || ''),
+    pgCode: String((err && (err.pgCode || err.code)) || ''),
+    httpStatus: Number((err && (err.httpStatus || err.status)) || 0) || 0,
+  };
+  if (_classifyHydrateFailure(shaped) !== 'network') return false;
+  return shaped.name === 'AbortError' || shaped.name === 'TimeoutError'
+    || NETWORK_MESSAGE_RE.test(shaped.message)
+    || CONNECTION_SQLSTATES.includes(shaped.pgCode);
+}
+
+function _networkHold(err, key) {
+  const e = new Error(`${key}: the request never reached the server (${(err && err.message) || 'network failure'})`);
+  e.networkHold = true;
+  e.key = key;
+  return e;
+}
+
+/**
+ * SECURITY F1, THE WRITE SIDE (2026-09-19) — CARRY THE HTTP STATUS, EXACTLY AS `_select()` DOES.
+ *
+ * `_select()` copies `res.status` onto the error it throws (`:750`), and the classifier's central
+ * rule — "any HTTP status is an ANSWER, and an answer may never be served as an outage" (`:1091`) —
+ * is unreachable without it. The write path handed `res.error` over RAW, and supabase-js puts the
+ * status on the RESPONSE, never on the error: `{ code: '', message: 'upstream request timeout' }`
+ * is all the error object holds for a gateway 504, so the classifier matched the network allow-list
+ * on the MESSAGE and the write went HELD.
+ *
+ * Why that is the dangerous direction. A 5xx raised AFTER the statement committed — a proxy that
+ * gave up on a slow response — is held and retried; the retry re-INSERTs a row the server already
+ * has; the 23505 that comes back is turned into "Nothing was saved" about a write that saved. That
+ * is the exact false refusal RG-180 had just removed, re-entering through the classifier. A held
+ * write is also never persisted to the device snapshot (`_persistSnapshot()` refuses while dirty),
+ * so an iOS PWA kill loses it in silence.
+ *
+ * The shape is rebuilt rather than mutated: `res.error` is the SDK's object and an Error's `name` /
+ * `message` are not enumerable, so a spread would silently drop exactly the fields the classifier
+ * reads. `code` and `details` are preserved because `_refusalFrom()` reads both.
+ */
+function _shapeWriteError(error, status) {
+  const httpStatus = Number(status ?? (error && (error.httpStatus ?? error.status)) ?? 0) || 0;
+  return {
+    name: String((error && error.name) || ''),
+    message: String((error && error.message) || (typeof error === 'string' ? error : '')),
+    code: (error && error.code) || '',
+    details: (error && error.details) || '',
+    hint: (error && error.hint) || '',
+    httpStatus,
+  };
+}
+
+function _writeFailure(error, ctx, status) {
+  const shaped = _shapeWriteError(error, status);
+  if (_isWriteNetworkFailure(shaped)) return _networkHold(shaped, ctx.key);
+  return _refusalFrom(shaped, ctx);
+}
+
+/**
+ * RG-180 hole 2 — ADVANCE THE BASE WITH WHAT THE SERVER NOW HOLDS.
+ *
+ * `_baseRows` was advanced by a hydrate (`:866`) and by Realtime (`:2204`) and by nothing else —
+ * and Realtime covers only games/weeks/picks/league_kv (`0005_realtime.sql:8`). So for every other
+ * routed table (tiebreaker_guesses, extra_point_guesses, reactions, feedback, comments,
+ * obligations, league_members…) a successful write left the base describing a server that no longer
+ * existed: insert row X, flush, edit X before the next hydrate (minutes away) and `_diffRows()`
+ * still saw X absent from base and INSERTed it again — 23505, a false "Nothing was saved", and the
+ * edit NOT saved until a hydrate rebased it. Delete row X and the mirror image: a re-sent DELETE
+ * matching no row, reported as the 42501 "policy matched no row" refusal.
+ *
+ * PREFER THE ROWS THE WRITE RETURNED. `.select(SELECT_COLS[table])` already comes back in the
+ * SERVER'S column shape — the same shape `hydrate()` stores — so folding it is exact, including
+ * every column the server defaulted or a trigger set. The sent columns are the fallback for a
+ * response that carried no body.
+ *
+ * Keyed on `row.id`, which is how `hydrate()` (`:856`) and `_foldRealtimeRow()` (`:2202`) key the
+ * same map, and merged rather than replaced — so the Realtime ECHO of this very write folds a
+ * second time and changes nothing.
+ */
+function _foldWriteIntoBase(op, returnedRows, leagueId) {
+  // A hydrate or a switch may have landed during the await; its base describes a different read
+  // and must not be patched with this write's row.
+  if (!_mirrorTag || _mirrorTag.leagueId !== leagueId) return false;
+  const base = _baseRows.get(op.key) || new Map();
+  const rows = Array.isArray(returnedRows) ? returnedRows.filter((r) => r && r.id != null) : [];
+  if (op.op === 'delete') {
+    if (op.rowId != null) base.delete(op.rowId);
+    for (const r of rows) base.delete(r.id);
+  } else if (rows.length) {
+    for (const r of rows) base.set(r.id, { ...(base.get(r.id) || {}), ...r });
+  } else if (op.op === 'insert') {
+    for (const r of op.rows || []) if (r && r.id != null) base.set(r.id, { ...(base.get(r.id) || {}), ...r });
+  } else if (op.op === 'patch' && op.rowId != null && base.has(op.rowId)) {
+    base.set(op.rowId, { ...base.get(op.rowId), ...op.changed });
+  }
+  _foldSentContactColumns(op, base);
+  _baseRows.set(op.key, base);
+  return true;
+}
+
+/**
+ * REVIEWER N3 — THE ONE COLUMN THE SERVER'S ANSWER CANNOT CARRY.
+ *
+ * `SELECT_COLS.league_members` omits email/phone/phone_verified because 0007 made the SELECT grant
+ * a column list, and the write path uses that SAME list as its `RETURNING` (it has to — a bare
+ * `.select()` is `RETURNING *` and is refused outright on that table). So an ACKNOWLEDGED contact
+ * patch comes back without the column it just wrote, the fold above cannot advance the base for it,
+ * and the next diff plans the identical patch again — on every flush, for as long as the page runs
+ * between hydrates. A phone number on the wire once is a save; on the wire every few seconds it is
+ * a pattern of chatter about the one column 0007 exists to keep quiet.
+ *
+ * SO THE SENT VALUE IS FOLDED, and the gate is the EVIDENCE, not the role (reviewer NOTE 2,
+ * 2026-09-19 — this was `_isAdmin()` until then):
+ *   • `_lastContacts.has(rowId)` — THIS hydrate actually read that row's contacts. That is true for
+ *     a commissioner on every row and for a plain member on his OWN row, because
+ *     `get_member_contacts()` returns all rows to the one and exactly his own to the other
+ *     (`0007_contact_privacy.sql:152-174`). It is the SAME predicate `_applyContactWriteRule()`
+ *     already requires before the column may be written at all (§2.4 rule 1), so the fold can never
+ *     be wider than the read that authorized the write. Gating on the role instead left a member's
+ *     own row out for no reason §2.4 states — and `cfbp_players` is ONE key, so his phone re-planned
+ *     itself on every theme, timezone, dashboard-order and chat-accent save for the life of the page;
+ *   • IN-MEMORY ONLY. `_baseRows` is not persisted — `_persistSnapshot()` writes the projected
+ *     mirror and nothing else (adaptertest [A-FLUSH7] and [A-FLUSH9] read the snapshot back to
+ *     prove it, for the commissioner and the member respectively);
+ *   • `_lastContacts` moves WITH it, and that is not optional. The rule at `_applyContactWriteRule`
+ *     drops a column whose value equals the contacts entry; leaving that entry on the OLD value
+ *     while the base holds the NEW one would silently discard a REVERT back to the old number.
+ */
+function _foldSentContactColumns(op, base) {
+  if (op.key !== 'cfbp_players' || op.op !== 'patch' || op.rowId == null) return;
+  const entry = _contactsByMember().get(op.rowId);
+  if (!entry) return;
+  const changed = op.changed || {};
+  const sent = {};
+  for (const col of CONTACT_COLUMNS) if (col in changed) sent[col] = changed[col];
+  if (!Object.keys(sent).length) return;
+  const row = base.get(op.rowId);
+  if (!row) return;
+  base.set(op.rowId, { ...row, ...sent });
+  _lastContacts.set(op.rowId, { ...entry, ...sent });
+}
+
+/** The same advance for the one column the weeks planner diffs on. The RPCs also set `locked_at` /
+ *  `locked_alma_maters` / `finalized_at` / `revealed_at`, and those are deliberately NOT invented
+ *  here: the planner already discards the client's own values for them (`_planRowKey`), so a stale
+ *  base entry for them cannot produce an operation. Status can, and did — a second save of
+ *  `cfbp_weeks` before the next hydrate re-derived the SAME transition from the stale status and
+ *  called `lock_week`/`transition_week` again, for a `bad_transition` the server was right to
+ *  raise and the commissioner had no way to read. */
+function _foldWeekStatusIntoBase(weekId, status, leagueId) {
+  if (!_mirrorTag || _mirrorTag.leagueId !== leagueId || !weekId || !status) return;
+  const base = _baseRows.get('cfbp_weeks') || new Map();
+  const old = base.get(weekId);
+  if (!old) return;
+  base.set(weekId, { ...old, status });
+  _baseRows.set('cfbp_weeks', base);
+}
+
 async function _execute(client, op, leagueId) {
+  try {
+    return await _executeOp(client, op, leagueId);
+  } catch (e) {
+    // A THROWN fetch rejection never passed through `_writeFailure()` below, because there was no
+    // response to classify. Same allow-list, applied to the exception.
+    if (e instanceof AdapterWriteRefusedError || (e && e.networkHold)) throw e;
+    if (_isWriteNetworkFailure(e)) throw _networkHold(e, op.key || (op.kind === 'finalize' ? 'cfbp_weeks' : ''));
+    throw e;
+  }
+}
+
+async function _executeOp(client, op, leagueId) {
   if (op.kind === 'rpc') {
     const res = await client.rpc(op.name, op.args);
-    if (res && res.error) throw _refusalFrom(res.error, { key: op.key, rowId: op.rowId || null, leagueId });
+    if (res && res.error) throw _writeFailure(res.error, { key: op.key, rowId: op.rowId || null, leagueId }, res.status);
+    // RG-180 hole 2, the RPC-routed ops:
+    //  • patch_kv    — advances `_baseValues`, the only thing `_kvFieldPatch()` reads. Without it a
+    //    field ADDED by one write and REMOVED by the next produced no `$unset` (the stale base has
+    //    no such field), so the server kept the removed field until a hydrate.
+    //  • lock_week / transition_week — advance the week's `status` in `_baseRows`.
+    if (op.name === 'patch_kv') _foldKvIntoBase(op, leagueId);
+    if (op.name === 'lock_week') _foldWeekStatusIntoBase(op.rowId, 'locked', leagueId);
+    if (op.name === 'transition_week') _foldWeekStatusIntoBase(op.rowId, op.args && op.args.p_to, leagueId);
     return res && res.data;
   }
   if (op.kind === 'finalize') {
     const args = _finalizeArgs(op.weekId, leagueId);
     const res = await client.rpc('finalize_week', args);
-    if (res && res.error) throw _refusalFrom(res.error, { key: 'cfbp_weeks', rowId: op.weekId, leagueId });
+    if (res && res.error) throw _writeFailure(res.error, { key: 'cfbp_weeks', rowId: op.weekId, leagueId }, res.status);
     // The three keys the RPC wrote are no longer dirty: the server owns them now.
     _dirty.delete('cfbp_results');
     _dirty.delete('cfbp_obligations');
+    _foldWeekStatusIntoBase(op.weekId, 'final', leagueId);
+    // The OBLIGATIONS the RPC just inserted exist on the server and were absent from the base, so
+    // the very next obligations write (a player marking one paid) would have INSERTed them again —
+    // 23505 on a table whose rows the league is about to start settling up from. They are folded as
+    // the PROJECTION renders them, which is the same shape `_diffRows()` compares against, so an
+    // unchanged obligation now diffs to nothing and a changed one to exactly its changed columns.
+    // `cfbp_results` needs no fold: it is `rpc-finalize` for the commissioner and `refuse` for a
+    // player, so no path reaches `_diffRows()` for it at all.
+    const sentObligations = (args.p_obligations || []).map((o) => o && o.obligationId).filter(Boolean);
+    if (sentObligations.length) {
+      try {
+        const route = ROUTES.cfbp_obligations;
+        const projected = (toRows.cfbp_obligations(_mirror.get('cfbp_obligations') || [], _ctx(leagueId)) || {})[route.table] || [];
+        const wanted = new Set(sentObligations);
+        _foldWriteIntoBase({ key: 'cfbp_obligations', op: 'insert', rows: projected.filter((r) => r && wanted.has(r.id)) }, null, leagueId);
+      } catch (e) {
+        console.warn('[sb] could not fold the finalized obligations into the base — the next hydrate will;'
+          + ' until then an obligations write may re-send an insert', e && e.message);
+      }
+    }
     return res && res.data;
   }
   if (op.kind === 'rows') {
@@ -1777,7 +2227,7 @@ async function _execute(client, op, leagueId) {
     } else {
       res = await client.from(op.table).delete().eq('league_id', leagueId).eq('id', op.rowId).select(returning);
     }
-    if (res && res.error) throw _refusalFrom(res.error, { key: op.key, rowId: op.rowId || null, leagueId });
+    if (res && res.error) throw _writeFailure(res.error, { key: op.key, rowId: op.rowId || null, leagueId }, res.status);
     // A policy that DENIES a row reports zero rows affected and NO error
     // (`rls.test.mjs:167-170` `wasRefused()` models both mechanisms). A
     // zero-row patch or delete is therefore a refusal, not a success.
@@ -1786,9 +2236,30 @@ async function _execute(client, op, leagueId) {
         `The server refused to save ${op.key}: the row-level policy matched no row for ${op.rowId}. Nothing was saved.`,
         { code: '42501', key: op.key, rowId: op.rowId, leagueId, serverMessage: 'policy matched no row' });
     }
+    // RG-180 hole 2 — the write is ACKNOWLEDGED, so the base is what the server now holds.
+    _foldWriteIntoBase(op, res && res.data, leagueId);
     return res && res.data;
   }
   throw new Error(`[sb] unknown plan op ${op.kind}`);
+}
+
+/** The kv half of the base advance. `_baseValues` holds the LEGACY value the projection produced,
+ *  and the payload the planner sent is in that same space (`stripCredentials()`d, `$unset`
+ *  included), so the fold is done in legacy space rather than from the RPC's return — which is a
+ *  jsonb column value and not necessarily what `fromRows` would have made of it. */
+function _foldKvIntoBase(op, leagueId) {
+  if (!_mirrorTag || _mirrorTag.leagueId !== leagueId) return;
+  const args = op.args || {};
+  const payload = args.p_value;
+  if (args.p_mode === 'replace') { _baseValues.set(op.key, payload); return; }
+  if (!_isPlainObject(payload)) return;
+  const prev = _isPlainObject(_baseValues.get(op.key)) ? { ..._baseValues.get(op.key) } : {};
+  const patch = { ...payload };
+  const unset = Array.isArray(patch.$unset) ? patch.$unset : [];
+  delete patch.$unset;
+  Object.assign(prev, patch);
+  for (const f of unset) delete prev[f];
+  _baseValues.set(op.key, prev);
 }
 
 /**
@@ -1986,10 +2457,27 @@ function _refuseDirtyLoudly(reason) {
   if (byId && fromId) { try { fromName = byId(fromId) || ''; } catch { fromName = ''; } }
   const toName = _safe('getLeagueName') || '';
   const isSwitch = /^league-switch/.test(String(reason));
+  // SECURITY F2 — "Nothing was sent" has to be TRUE. A flush can be suspended on an await at this
+  // instant, having already put earlier operations on the wire; the run itself is abandoned one
+  // iteration later, but what went, went. The claim is therefore made only when this run sent
+  // nothing, and replaced by the honest one when it did. No per-key claim is made, because one key
+  // can span several operations and half of them may have landed.
+  // …and that applies to BOTH branches. The switch branch's "was not saved … Re-enter it there" is
+  // the same claim in different words, made about the same queue at the same instant, and it is the
+  // more dangerous one: a player who re-enters a comment or a pick that DID save has double-posted.
+  // So it is qualified by the same evidence, and the flat wording is kept for the case where it is
+  // true. (`_reportStaleSwitch()` uses this copy too and is deliberately unchanged: it fires BEFORE
+  // the send loop, about keys discarded from the plan, so nothing it names can have gone.)
+  const sentAlready = typeof _inFlightSent === 'number' && _inFlightSent > 0;
   _lastError = isSwitch
-    ? `A change made in ${fromName || 'the league you left'} was not saved because you switched to `
-      + `${toName || 'another league'}. Re-enter it there.`
-    : `${keys.length} unsaved change${keys.length === 1 ? '' : 's'} could not be saved before this device changed hands. Nothing was sent.`;
+    ? (sentAlready
+      ? `A change made in ${fromName || 'the league you left'} may not have been saved because you switched to `
+        + `${toName || 'another league'}. Changes sent just before it may already have saved — check `
+        + `${fromName || 'that league'} before re-entering anything.`
+      : `A change made in ${fromName || 'the league you left'} was not saved because you switched to `
+        + `${toName || 'another league'}. Re-enter it there.`)
+    : `${keys.length} unsaved change${keys.length === 1 ? '' : 's'} could not be saved before this device changed hands.`
+      + (sentAlready ? ' Changes sent just before it may already have saved.' : ' Nothing was sent.');
   console.warn(`[sb] ${keys.join(', ')} were still queued when the mirror was dropped (${reason})`
     + ' — REFUSED and reported, NOT re-queued under the new league.');
   emit('refused', {
@@ -2232,6 +2720,11 @@ export function _resetForTest() {
   _overlay.clear(); _dirty.clear(); _refusedKeys.clear();
   _lastContacts = new Map();
   _mirrorTag = null; _switchSeq = 0; _hydrateSeq = 0;
+  // RG-180 — the flush latch is per-PAGE state like the rest of this list. A section that left it
+  // set would make every later `flush()` queue behind a promise that had already settled, and the
+  // suite would hang rather than fail, which is the worst way for a test to go wrong.
+  _writeSeq = 0; _flushActive = false; _flushCurrent = null; _flushQueued = null; _flushNeedsFollowUp = false;
+  _inFlightSent = null;
   _lastSyncAt = null; _lastError = null; _firstSupabaseBootDone = false;
   _listeners.clear();
   _deps = null;

@@ -97,7 +97,7 @@ function assert(cond, label) {
 // ── 1. Module import smoke test ───────────────────────────────────────────────
 console.log('\n[1] Importing all modules…');
 const mods = {};
-for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'auth', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'supabase-projection', 'chat-ui', 'app']) {
+for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'auth', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'supabase-projection', 'field-preserve', 'chat-ui', 'app']) {
   try {
     mods[m] = await import(`./js/${m}.js`);
     console.log('  ✅ js/' + m + '.js');
@@ -8533,7 +8533,7 @@ console.log('\n[73e] adaptertest.mjs — spawned as a subprocess, exit code + pr
   assert(!!m73e, `adaptertest.mjs printed its own pass/fail/skip summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73e ? '' : '\n' + out.slice(-800)}`);
   if (m73e) {
     assert(Number(m73e[2]) === 0, `adaptertest.mjs reports zero failed assertions (got ${m73e[2]} failed, ${m73e[1]} passed)`);
-    assert(Number(m73e[1]) >= 527, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 527) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
+    assert(Number(m73e[1]) >= 643, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 643 — raised from 594 by the RG-180 gate findings (SEC-F1 write-path status, SEC-F2 mid-flight drop, the N2 fold probe and the N3 contact convergence), 2026-09-19) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
     assert(Number(m73e[3]) === 0, `adaptertest.mjs has NO remaining Part-B skips (got ${m73e[3]}) — A9b, A14b and A17 were all closed by Part B, and a skip that reappears is a follow-up nobody is tracking`);
   }
 }
@@ -9080,7 +9080,7 @@ console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch76) {
     assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
     assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
-    assert(Number(summaryMatch76[2]) >= 30, `boottest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch76[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch76[2]) >= 471, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 471 — raised from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
   }
 }
 
@@ -9454,6 +9454,109 @@ console.log('\n[81] groupdtest.mjs — spawned as a subprocess, exit code + prin
     assert(summaryMatch81[1] === '✅ ALL PASS', `groupdtest.mjs itself reports ALL PASS (got: ${summaryMatch81[0]})`);
     assert(Number(summaryMatch81[3]) === 0, `groupdtest.mjs reports zero failed assertions (got ${summaryMatch81[3]} failed, ${summaryMatch81[2]} passed)`);
     assert(Number(summaryMatch81[2]) >= 100, `groupdtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch81[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 86. drafttest.mjs — spawned as a subprocess, same shape as [79]-[81] ────
+// RG-174 (2026-09-19): "the chat will delete my message halfway through me
+// typing it." Its own process for a reason this file cannot work around — it
+// needs a DOM stub where `innerHTML =` REPLACES nodes (so the #chat-input you
+// read back after a re-render is a different, empty element), which is the
+// single fact the defect lives in and the opposite of loadtest.mjs's own
+// top-level document, whose getElementById() always answers null.
+console.log('\n[86] drafttest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['drafttest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `drafttest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch86 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch86, `drafttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch86 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch86) {
+    assert(summaryMatch86[1] === '✅ ALL PASS', `drafttest.mjs itself reports ALL PASS (got: ${summaryMatch86[0]})`);
+    assert(Number(summaryMatch86[3]) === 0, `drafttest.mjs reports zero failed assertions (got ${summaryMatch86[3]} failed, ${summaryMatch86[2]} passed)`);
+    assert(Number(summaryMatch86[2]) >= 84, `drafttest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch86[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ── 87. pushtest.mjs — spawned as a subprocess, same shape as [86] ──────────
+// RG-177 (2026-09-19). pushtest.mjs owns the push-active predicate — the flag
+// that decides whether the in-app notification banner stands down because the
+// phone's push already delivered the notice (DI-N3/R10) — and until now NOTHING
+// ran it as part of the mandatory sweep. It is a standalone file for a real
+// reason (its own header: it leaves the backend singleton hydrated and
+// `_backendMode` flipped to googleSheets, which would poison every suite after
+// it), and spawning it in its OWN PROCESS answers that objection completely:
+// the poisoning cannot cross a process boundary. So the reason it was excluded
+// stops being a reason to leave it unrun.
+//
+// This is the protocol hole RG-177 exposed. The fix that broke its two
+// structural assertions would have shipped with a green mandatory sweep,
+// because the mandatory sweep had never heard of the file.
+console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['pushtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `pushtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch87 = out.match(/(✅|❌) pushtest: (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch87, `pushtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch87 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch87) {
+    assert(summaryMatch87[1] === '✅', `pushtest.mjs itself reports ALL PASS (got: ${summaryMatch87[0]})`);
+    assert(Number(summaryMatch87[3]) === 0, `pushtest.mjs reports zero failed assertions (got ${summaryMatch87[3]} failed, ${summaryMatch87[2]} passed)`);
+    assert(Number(summaryMatch87[2]) >= 73, `pushtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 81b / 81c / 81d — PHASE III STEP 6: the Edge Functions' own verification.
+//
+// THREE SUITES, ALL SPAWNED, ALL WITH FLOORS. `supabase/functions/*/test.js`
+// are DENO tests and **deno is not installed on this machine** — they have
+// never been executed and say so in their own headers. What runs today is:
+//
+//   notifyFanout.twin.mjs  drives the REAL `notify-fanout` handler through a
+//   keepalive.twin.mjs     fake Supabase client and a fake fetch, and asserts
+//                          what the function DECIDED to do — including the
+//                          ORDERINGS that are the whole of Step 6's safety
+//                          (auth before the service client; the kill switch
+//                          before any send secret, any write and any fetch;
+//                          the job_runs start row before the work).
+//   functions.check.mjs    the static half: S6-R1…R6, A3's no-log rule, the
+//                          envelope contract, and no literal secret anywhere.
+//
+// SPAWNED RATHER THAN IMPORTED for the reason [73] gives: these suites install
+// a fake `globalThis.Deno` and replace `globalThis.fetch` wholesale, which
+// would make every suite after them in THIS process non-deterministic.
+//
+// THE FLOORS ARE AT THE CURRENT COUNTS, not token numbers — a floor of 10
+// against a suite of 56 would not notice forty assertions going missing. The
+// ratchet only tightens (the adaptertest precedent, 2026-09-18).
+// ══════════════════════════════════════════════════════════════════════════
+for (const [label, file, floor, why] of [
+  ['81b', 'supabase/tests/functions/notifyFanout.twin.mjs', 61,
+   'DI-T6.1 — the fan-out handler, end to end against a fake transport (raised from 59: security audit S2, 2026-09-19, added the wrong_type webhook-config-drift pinning pair 2-10/2-11)'],
+  ['81c', 'supabase/tests/functions/keepalive.twin.mjs', 42,
+   'DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it'],
+  ['81d', 'supabase/tests/functions.check.mjs', 157,
+   'DI-T6.14(d) — the static rules over the function sources (raised from 140: security audit S2/S4, 2026-09-19, added S6-R10 (webhook body.type check) and S6-R11 (no remote/unpinned import specifier))'],
+]) {
+  console.log(`\n[${label}] ${file} — spawned as a subprocess, exit code + printed pass/fail line both checked…`);
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, [file], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `${file} exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})${result.status === 0 ? '' : '\n' + out.slice(-900)}`);
+  const m = out.match(/(\d+) passed, (\d+) failed/);
+  assert(!!m, `${file} printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${m ? '' : '\n' + out.slice(-800)}`);
+  if (m) {
+    assert(Number(m[2]) === 0, `${file} reports zero failed assertions (got ${m[2]} failed, ${m[1]} passed)`);
+    assert(Number(m[1]) >= floor, `${file} actually ran its full set (got ${m[1]}, floor ${floor}) — ${why}. Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -10262,6 +10365,41 @@ console.log('\n[85] N1 / FEAT-11 — lifecycle notices: coverage + dial independ
   assert(/unreadLifecycleCount/.test(appJsSrc) && !/unreadLifecycleCount/.test(appCode85)
          && appCode85.length === appJsSrc.length,
     '85-28: non-vacuity — the comment blanker is genuinely blanking (js/app.js DOES still mention unreadLifecycleCount in prose, and does not in code) and preserves length, so 85-26/85-27 cannot be passing because the scan matched nothing at all');
+}
+
+// ── [88] navtest.mjs — spawned as a subprocess, same shape as [78] ──────────
+// Bug B-a (2026-09-19). navtest.mjs owns the bottom-nav layout contract and,
+// more importantly, the calc()-whitespace guard: it fails on ANY calc() in
+// css/styles.css whose + or - lacks surrounding whitespace. That class of typo
+// is invalid at computed-value time when the expression contains var(), which
+// means the declaration survives parsing, WINS the cascade, and then silently
+// resolves every longhand it sets to that property's INITIAL value — it does
+// not fall back to the previous valid declaration. Two live instances were
+// found this way, both in the nav's own layout contract (.main-content's
+// padding shorthand and .submit-bar's sticky offset), and neither had ever
+// produced a console warning or a failing test. Spawned rather than inlined
+// for the same reason [78] is: it is a whole readable proof of one thing.
+//
+// It is deliberately NOT a section [58] replacement — [58] still runs above.
+// navtest §5 extends [58]'s ancestor audit to the property classes [58] never
+// covered (overflow, container-type, backdrop-filter, the individual transform
+// properties) and derives the ancestor chain from index.html instead of a
+// hardcoded selector list.
+console.log('\n[88] navtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['navtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `navtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch88 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch88, `navtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch88 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch88) {
+    assert(summaryMatch88[1] === '✅ ALL PASS', `navtest.mjs itself reports ALL PASS (got: ${summaryMatch88[0]})`);
+    assert(Number(summaryMatch88[3]) === 0, `navtest.mjs reports zero failed assertions (got ${summaryMatch88[3]} failed, ${summaryMatch88[2]} passed)`);
+    assert(Number(summaryMatch88[2]) >= 25, `navtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch88[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

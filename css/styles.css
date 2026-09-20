@@ -96,7 +96,21 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .text-secondary{color:var(--text-secondary)}.text-sm{font-size:.875rem}
 .text-xs{font-size:.75rem}.text-center{text-align:center}.ml-sm{margin-left:6px}
 .page-wrapper{min-height:100vh;display:flex;flex-direction:column}
-.main-content{flex:1;max-width:var(--max-width);margin:0 auto;width:100%;padding:0 var(--page-pad) calc(var(--nav-height)+20px)}
+/* B-a (2026-09-19): the `+` here had NO surrounding whitespace. calc() requires
+   it (CSS Values & Units L4 §10.1), and because the expression also contains
+   var(), the result was "invalid at computed-value time" rather than a parse
+   error — the declaration survived parsing, WON the cascade, and then resolved
+   all four padding longhands to their INITIAL value (0). So the one rule that
+   holds page content clear of the FIXED .bottom-nav, and gives every page its
+   side gutters, had been dead. It survived only by accident: the safe-area
+   @supports block re-declares padding-bottom validly, and a v14.1
+   belt-and-suspenders rule re-declares padding-left/right validly — but only
+   inside @media(max-width:480px). So at EVERY width above 480px there was no
+   side padding at all (reviewer correction: not just 481–599px; ≥600px gained
+   only padding-top:8px from the rule near :466, never the gutters). Measured in
+   WKWebView — 520px showed a 0px gutter, 393px was unaffected. Guarded by
+   navtest.mjs §1, which fails on ANY invalid calc() in this file. */
+.main-content{flex:1;max-width:var(--max-width);margin:0 auto;width:100%;padding:0 var(--page-pad) calc(var(--nav-height) + 20px)}
 .page-section{display:none}.page-section.active{display:block}
 .section-header{padding:20px 0 12px;border-bottom:2px solid var(--maroon-tint);margin-bottom:16px}
 .section-header h2{color:var(--maroon)}.section-header .subtitle{color:var(--text-muted);font-size:.875rem;margin-top:2px}
@@ -313,7 +327,20 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .proof-ids{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
 .id-chip{background:var(--maroon-pale);color:var(--maroon);font-family:monospace;font-size:.7rem;padding:2px 6px;border-radius:6px;border:1px solid var(--maroon-tint)}
 /* Submit bar */
-.submit-bar{position:sticky;bottom:calc(var(--nav-height)+8px);background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
+/* B-a (2026-09-19): same unspaced-`+` defect as .main-content above — this
+   offset resolved to 0 instead of 68px (measured: WKWebView reported 0px for
+   the unspaced form against 68px for the spaced control). Be precise about the
+   impact (reviewer correction): position:sticky is ALSO inert here, because
+   .main-content sets overflow-x:hidden and is therefore a scroll container that
+   never scrolls (the same trap documented at the .chat-composer rule). So the
+   bar does not stick at all today, and this offset change is LATENT — it fixes
+   nothing a player can currently see. What it prevents is the outcome the day
+   the sticky is revived: at bottom:0 the bar would stick flush to the viewport
+   bottom BEHIND .bottom-nav (nav z-index 100 vs. bar 50). The inert sticky is a
+   second, independent defect — reported to Drew, NOT fixed here, because
+   unpinning it changes the Picks page's visible behaviour and belongs to
+   user-experience. Guarded by navtest.mjs §1 and §3. */
+.submit-bar{position:sticky;bottom:calc(var(--nav-height) + 8px);background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
 .submit-progress{font-size:.875rem;color:var(--text-secondary)}
 .submit-progress strong{font-family:'Oswald',sans-serif;font-size:1.15rem;color:var(--maroon)}
 /* Leaderboard */

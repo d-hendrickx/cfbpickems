@@ -293,6 +293,31 @@ const SESSIONS = {
 
 function refuse(msg) { return { data: null, error: { code: '42501', message: msg } }; }
 function named(name) { return { data: null, error: { code: 'P0001', message: name } }; }
+/**
+ * TEACH THE FAKE: THE PRIMARY KEY (2026-09-19).
+ *
+ * Every routed table in `0001_schema.sql` is `primary key (league_id, id)` — `league_kv` is
+ * `(league_id, key)`. The fake had NO keys and NO constraints, so a second INSERT of a row the
+ * store already held simply appended a duplicate and answered 200. That is precisely the shape of
+ * the five defects the 2026-09-19 cutover night found live and this suite could not: PostgREST
+ * answers `23505` with HTTP 409, the adapter turns it into an `AdapterWriteRefusedError`, and the
+ * player gets the red "Nothing was saved" banner for a row that saved perfectly well the first time.
+ *
+ * `details` carries Postgres's own `Key (league_id, id)=(…) already exists.` wording, because the
+ * adapter's `_refusalFrom()` reads `error.code || error.details` and a test that supplied only a
+ * code would not notice if that ever changed.
+ */
+function conflict(table, r, col) {
+  return {
+    data: null,
+    status: 409,
+    error: {
+      code: '23505',
+      message: `duplicate key value violates unique constraint "${table}_pkey"`,
+      details: `Key (league_id, ${col})=(${r.league_id}, ${r[col]}) already exists.`,
+    },
+  };
+}
 
 function makeClient(st, session, opts = {}) {
   const calls = { selects: [], inserts: [], updates: [], deletes: [], rpc: [], fetches: 0 };
@@ -476,15 +501,33 @@ function makeClient(st, session, opts = {}) {
 
   function builder(table) {
     const b = {
-      _table: table, _eq: [], _in: [], _op: 'select', _cols: '*', _payload: null, _returning: false,
-      select(cols) { if (b._op === 'select') b._cols = cols || '*'; else b._returning = true; return b; },
+      _table: table, _eq: [], _in: [], _op: 'select', _cols: '*', _payload: null, _returning: false, _retCols: '*',
+      select(cols) {
+        if (b._op === 'select') b._cols = cols || '*';
+        // REVIEWER N3 — `RETURNING` IS A PROJECTION, and the fake used to ignore it.
+        // PostgREST returns the columns the request ASKED FOR, and on `league_members` the adapter
+        // asks for SELECT_COLS — which omits email/phone/phone_verified, because 0007's SELECT
+        // grant does. A fake that handed back the whole row made an acknowledged contact write look
+        // like it had advanced the base when the real server's answer cannot.
+        else { b._returning = true; b._retCols = cols || '*'; }
+        return b;
+      },
       insert(rows) { b._op = 'insert'; b._payload = Array.isArray(rows) ? rows : [rows]; return b; },
       update(patch) { b._op = 'update'; b._payload = patch; return b; },
       delete() { b._op = 'delete'; return b; },
       upsert(rows) { b._op = 'insert'; b._payload = Array.isArray(rows) ? rows : [rows]; return b; },
       eq(col, val) { b._eq.push([col, val]); return b; },
       in(col, vals) { b._in.push([col, vals]); return b; },
-      then(resolve, reject) { return Promise.resolve(run(b)).then(resolve, reject); },
+      then(resolve, reject) {
+        // REVIEWER N2 — A WRITE WHOSE RESPONSE IS SLOW ENOUGH FOR A HYDRATE TO LAND BEHIND IT.
+        // The whole of `run(b)` is deferred, not just its return: the store must not move until the
+        // caller says the request reached the server, or the test could not stage the ORDER it is
+        // about (the hydrate reads a server that does not yet hold this write).
+        if (opts.delayWrites && b._op !== 'select') {
+          return Promise.resolve(opts.delayWrites()).then(() => run(b)).then(resolve, reject);
+        }
+        return Promise.resolve(run(b)).then(resolve, reject);
+      },
     };
     return b;
   }
@@ -493,10 +536,44 @@ function makeClient(st, session, opts = {}) {
     return b._eq.every(([c, v]) => r[c] === v) && b._in.every(([c, vs]) => vs.includes(r[c]));
   }
 
+  /** The `RETURNING` list, applied. `'*'` is every column (the tables with no column grant);
+   *  anything else is exactly the columns named, which is what PostgREST hands back. */
+  function project(rows, cols) {
+    if (!cols || cols === '*') return rows.map((r) => ({ ...r }));
+    const want = String(cols).split(',').map((s) => s.trim()).filter(Boolean);
+    return rows.map((r) => {
+      const o = {};
+      for (const c of want) if (c in r) o[c] = r[c];
+      return o;
+    });
+  }
+
   function run(b) {
     calls.fetches++;
     const table = b._table;
     const grant = GRANTS[table] || [];
+    // A WRITE THAT NEVER REACHED A SERVER (2026-09-19). The read side has had `throwSelects` /
+    // `failSelects` since security F1; the WRITE side had neither, so every write test in this file
+    // ran against a server that was always reachable. Both shapes are real: supabase-js lets a
+    // `fetch` rejection propagate (`throwWrites`), and some versions catch it and hand back an
+    // error OBJECT with an empty `code` and the fetch message (`failWrites`). Checked FIRST,
+    // because a transport failure happens before any grant, policy or constraint is consulted.
+    if (b._op !== 'select') {
+      if (opts.throwWrites) throw opts.throwWrites();
+      if (opts.failWrites) {
+        const res = { data: null, error: opts.failWrites };
+        if (opts.failWriteStatus) res.status = opts.failWriteStatus;
+        return res;
+      }
+      // SECURITY F2 — A HOOK THAT FIRES *DURING* A WRITE, not before or after it.
+      //
+      // The interleaving the finding is about cannot be staged from outside: `dropMirror()` has to
+      // land while one operation of a multi-operation plan is in flight, i.e. between the plan and
+      // the NEXT operation. A setTimeout race would prove nothing deterministically. The hook runs
+      // where the request would be on the wire — after the transport checks, before the store is
+      // touched — so the operation it fires inside of is genuinely SENT and every later one is not.
+      if (opts.onWrite) opts.onWrite(table, b._op, b);
+    }
     if (!session.authenticated) return refuse(`permission denied for table ${table}`);
     if (!grant.includes(b._op)) return refuse(`permission denied for table ${table}`);
     const pol = (POLICY[table] || {})[b._op];
@@ -549,9 +626,24 @@ function makeClient(st, session, opts = {}) {
       for (const r of b._payload) {
         if (!pol(r)) return refuse(`new row violates row-level security policy for table "${table}"`);
       }
+      // THE PRIMARY KEY (see conflict() above). Checked AFTER the policy, which is the order
+      // Postgres uses: the WITH CHECK runs on a row the statement is allowed to attempt, and a
+      // unique violation aborts the whole statement — so one duplicate refuses the batch and
+      // nothing in it is stored.
+      {
+        const col = table === 'league_kv' ? 'key' : 'id';
+        const batch = new Set();
+        for (const r of b._payload) {
+          const k = `${r.league_id} ${r[col]}`;
+          if (batch.has(k) || st[table].some((x) => x.league_id === r.league_id && x[col] === r[col])) {
+            return conflict(table, r, col);
+          }
+          batch.add(k);
+        }
+      }
       const added = b._payload.map((r) => ({ extra: {}, ...r }));
       st[table].push(...added);
-      return { data: added.map((r) => ({ ...r })), error: null };
+      return { data: project(added, b._retCols), error: null };
     }
 
     const hits = st[table].filter((r) => matches(r, b) && pol(r));
@@ -563,17 +655,17 @@ function makeClient(st, session, opts = {}) {
         if (g) { const msg = g(r, b._payload, flags); if (msg) return refuse(msg); }
         Object.assign(r, b._payload);
         if (!pol(r)) return refuse(`new row violates row-level security policy for table "${table}"`);
-        out.push({ ...r });
+        out.push(r);
       }
-      return { data: out, error: null };
+      return { data: project(out, b._retCols), error: null };
     }
     calls.deletes.push({ table, eq: b._eq.slice() });
     const removed = [];
     for (const r of hits) {
       const i = st[table].indexOf(r);
-      if (i >= 0) { st[table].splice(i, 1); removed.push({ ...r }); }
+      if (i >= 0) { st[table].splice(i, 1); removed.push(r); }
     }
-    return { data: removed, error: null };
+    return { data: project(removed, b._retCols), error: null };
   }
 
   const RPC = {
@@ -700,6 +792,22 @@ function makeClient(st, session, opts = {}) {
     rpc(name, args) {
       calls.rpc.push({ name, args });
       calls.fetches++;
+      // The RPC half of throwWrites/failWrites. Scoped to the WRITING RPCs by name: a hydrate's
+      // `get_member_contacts` / `week_submission_status` must keep answering, or the test would be
+      // proving something about a hydrate rather than about a flush.
+      const WRITE_RPCS = ['patch_kv', 'lock_week', 'transition_week', 'finalize_week'];
+      if (WRITE_RPCS.includes(name)) {
+        if (opts.throwWrites) throw opts.throwWrites();
+        if (opts.failWrites) {
+          // SECURITY F1 — the RPC half. `status` sits on the RESPONSE here exactly as it does on a
+          // table write; a fake that carried it on only one of the two would let a classifier that
+          // reads the status for `from()` and not for `rpc()` pass.
+          const res = { data: null, error: opts.failWrites };
+          if (opts.failWriteStatus) res.status = opts.failWriteStatus;
+          return Promise.resolve(res);
+        }
+        if (opts.onWrite) opts.onWrite(name, 'rpc', args);
+      }
       const fn = RPC[name];
       if (!fn) return Promise.resolve({ data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name}` } });
       if (opts.rpcOverride) {
@@ -731,12 +839,18 @@ const statuses = [];
  *  IS part of the contract (§5.1, §5.2, §3.3 all specify copy), so it is read
  *  rather than assumed. */
 const bannerSeen = [];
+/** The FULL detail of every status this scenario has emitted. The banner array above reads the copy;
+ *  this reads the CONTRACT — `js/app.js`'s `onSupabaseDataStatus()` renders off named fields
+ *  (`detail.heldOffline`, `detail.banner`), and boottest [26] drives that renderer with this shape.
+ *  If the two ever drift, one of the two suites is measuring a message nobody sends. */
+const detailSeen = [];
 
 function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null } = {}) {
   sb._resetForTest();
   store.clear();
   statuses.length = 0;
   bannerSeen.length = 0;
+  detailSeen.length = 0;
   ST = makeStore();
   const session = SESSIONS[who];
   CLIENT = makeClient(ST, session, { rpcOverride, emptySelects });
@@ -769,7 +883,7 @@ function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = 
     hasSheetMirror: () => localStorage.getItem('cfbp_sheet_mirror') !== null,
     isSiteUnlocked: () => localStorage.getItem('cfbp_site_unlocked') !== null,
   });
-  sb.onStatus((s, d) => { statuses.push([s, d && d.state]); if (d && d.banner) bannerSeen.push(String(d.banner)); });
+  sb.onStatus((s, d) => { statuses.push([s, d && d.state]); detailSeen.push([s, d]); if (d && d.banner) bannerSeen.push(String(d.banner)); });
   localStorage.setItem('cfbp_device_data_owner', OWNER);
   return registered;
 }
@@ -1219,6 +1333,25 @@ await section('\n[A-RESET] Full Factory Reset is absent in Supabase mode (it wou
   const body = app.slice(h, app.indexOf('resetToDemo()', h));
   assert(h > 0 && /if\s*\(\s*isSupabaseDataMode\(\)\s*\)\s*return/.test(body) && body.indexOf('isSupabaseDataMode') < body.indexOf('prompt('),
     '[A-RESET] …and the handler refuses in Supabase mode before the password prompt and before resetToDemo()');
+});
+
+await section('\n[A-HIDE] Supabase mode flushes pending writes when the app is hidden/closed (the Sheets-only beforeunload flush left a ~800ms loss window)…', async () => {
+  const blank = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const app = blank(readFileSync(join(__dirname, 'js', 'app.js'), 'utf8'));
+  assert(/const _flushSupabaseOnHide = \(\) => \{ try \{ if \(isSupabaseDataMode\(\)\) sb\.flush\(\)\.catch\(/.test(app),
+    '[A-HIDE] the hide handler calls sb.flush() only in Supabase mode, and cannot throw or reject unhandled');
+  assert(/addEventListener\('pagehide', _flushSupabaseOnHide\)/.test(app), '[A-HIDE] wired to pagehide');
+  assert(/addEventListener\('visibilitychange', \(\) => \{ if \(document\.hidden\) _flushSupabaseOnHide\(\); \}\)/.test(app),
+    '[A-HIDE] …and to visibilitychange, on the HIDDEN edge only');
+  // Behaviour: an explicit flush() sends a debounced write immediately — nothing waits for the timer.
+  await hydrated({ who: 'commissioner' });
+  const players = sb.get('cfbp_players').map((p) => ({ ...p }));
+  players[0] = { ...players[0], preferences: { ...(players[0].preferences || {}), theme: 'hide-flush-probe' } };
+  sb.set('cfbp_players', players);
+  assert(sb.planFlush().plan.some((o) => o.key === 'cfbp_players'), '[A-HIDE] fixture: the write is pending (debounced, not yet sent)');
+  const r = await sb.flush();
+  assert(r && r.pushed >= 1 && !sb.planFlush().plan.some((o) => o.key === 'cfbp_players'),
+    `[A-HIDE] flush() pushes it NOW and leaves nothing pending (got ${JSON.stringify(r)})`);
 });
 
 await section('\n[A8] the CONTACT WRITE RULE (§2.4, DI-T7.6’s write side)…', async () => {
@@ -2499,6 +2632,933 @@ await section('\n[SEC-F1] _fail() is an ALLOW-LIST of network failures; the defa
     "SEC-F1 class rule: _fail() serves ONLY on kind === 'network' and its else branch is HELD — the default is the closed state");
   assert(/allow-list of network failures; default HELD/i.test(src),
     'SEC-F1 class rule: …and the comment states the polarity in those exact words, on ONE line, so it cannot be half-read');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-PREF] RG-179 — a player preference change is a real patch, both ways…', async () => {
+  // THE WRITE HALF of "it's not saving my color scheme preference when I close
+  // the app" (Drew, 2026-09-19). It IS saving, and this is where that is proven
+  // rather than assumed — boottest [25] owns the re-apply half.
+  //
+  // Three things could have swallowed it and none of them do:
+  //   1. NOT_NULL_COLS lists `preferences`, and the PATCH rule drops a null for
+  //      a NOT NULL column. A non-null preferences change must survive it.
+  //   2. `preferences` is a nested JSON blob compared by `canonicalize()`, which
+  //      is deep and key-order-insensitive — a change confined to `.theme` has
+  //      to register as a change.
+  //   3. `cfbp_players` is `ownRowsOnly`, so a plain member's own-row patch must
+  //      pass `_mayOperateOnRow` (0002's `league_members_update` policy allows
+  //      exactly this, and `league_members_guard` names `preferences` in its
+  //      self-editable list).
+  await hydrated({ who: 'player' });
+  const players = sb.get('cfbp_players');
+  const idx = players.findIndex((p) => p.playerId === 'p2');
+  assert(idx >= 0 && JSON.stringify(players[idx].preferences) === '{}',
+    'fixture: Kevin’s member row serves an EMPTY preferences blob — the shape a member has before he ever touched a control');
+
+  // Exactly what storage.js `_setPlayerPref()` does (`:606-616`): copy the blob,
+  // set one key, write the WHOLE array back through the seam.
+  const write = (key, value) => {
+    const all = sb.get('cfbp_players').slice();
+    const i = all.findIndex((p) => p.playerId === 'p2');
+    all[i] = { ...all[i], preferences: { ...(all[i].preferences || {}), [key]: value } };
+    sb.set('cfbp_players', all);
+  };
+
+  write('theme', 'boilermaker');
+  {
+    const { plan, refusals, stale } = sb.planFlush();
+    assert(!refusals.length && !stale.length,
+      `[A-PREF] a member's own preference write is neither refused nor stale (${refusals.map((r) => r.message).join(' | ')})`);
+    assert(plan.length === 1 && plan[0].op === 'patch' && plan[0].table === 'league_members' && plan[0].rowId === 'p2',
+      `[A-PREF] it plans exactly ONE league_members patch, on his own row (${JSON.stringify(plan.map((p) => [p.op, p.table, p.rowId]))})`);
+    assert(JSON.stringify(Object.keys(plan[0].changed)) === '["preferences"]',
+      `[A-PREF] …carrying the preferences column and nothing else — NOT_NULL_COLS drops a NULL for a NOT NULL column, never a real value (${JSON.stringify(plan[0].changed)})`);
+    assert(plan[0].changed.preferences.theme === 'boilermaker',
+      '[A-PREF] …and the nested key the player actually changed is in it (canonicalize() is deep, so a change confined to .theme is still a change)');
+  }
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.league_members.find((m) => m.id === 'p2').preferences.theme === 'boilermaker',
+    '[A-PREF] the flush lands it on the member row — the server, not just the mirror');
+
+  // The other three preferences that live in the same blob, one at a time, the
+  // way a player actually sets them. A merge bug here would silently discard
+  // whichever one he set first.
+  write('tz', 'ET');
+  await captureConsoleAsync(() => sb.flush());
+  write('sectionOrder', { dashboard: ['standings', 'slate'] });
+  await captureConsoleAsync(() => sb.flush());
+  write('accent', '#7c3aed');
+  await captureConsoleAsync(() => sb.flush());
+  {
+    const row2 = ST.league_members.find((m) => m.id === 'p2');
+    assert(row2.preferences.theme === 'boilermaker' && row2.preferences.tz === 'ET'
+      && row2.preferences.accent === '#7c3aed'
+      && JSON.stringify(row2.preferences.sectionOrder) === '{"dashboard":["standings","slate"]}',
+      `[A-PREF] all four coexist on the row — theme, timezone, dashboard column order and chat accent share ONE blob, so each write must merge rather than replace (${JSON.stringify(row2.preferences)})`);
+  }
+
+  // A REDUNDANT WRITE IS A NO-OP, AND THAT IS THE 2026-09-19 CORRECTION.
+  //
+  // This block used to assert the opposite — "a redundant write re-sends the SAME value" — and
+  // said why in as many words: "`flush()` deliberately does not fold its own RETURNING back into
+  // the base". It was not deliberate, it was RG-180 hole (2): the base advanced only on a hydrate,
+  // so every write before the next one re-diffed against a pre-flush row. On a PATCH that was
+  // merely extra bytes, which is why it read as harmless here; on an INSERT it was a 23505 and a
+  // red "Nothing was saved" banner for a row that had saved, and on a DELETE a 42501. The base is
+  // folded from the write's own RETURNING now, so the redundant write has nothing to send — and a
+  // REAL change still does, which is the assertion that keeps this from passing vacuously.
+  write('theme', 'boilermaker');
+  {
+    const again = sb.planFlush().plan;
+    assert(again.length === 0,
+      `[A-PREF] a redundant write plans NOTHING (${JSON.stringify(again.map((p) => p.changed))}) — the base advanced when the patch was acknowledged`);
+  }
+  write('theme', 'razorback');
+  {
+    const moved = sb.planFlush().plan;
+    assert(moved.length === 1 && moved[0].changed.preferences.theme === 'razorback'
+      && moved[0].changed.preferences.tz === 'ET',
+      `[A-PREF] …and a REAL change still plans exactly one patch, carrying the merged blob (${JSON.stringify(moved.map((p) => p.changed))})`);
+  }
+  await captureConsoleAsync(() => sb.flush());
+  write('theme', 'boilermaker');
+  await captureConsoleAsync(() => sb.flush());
+
+  // THE READ HALF: a fresh hydrate — i.e. closing the app and opening it again —
+  // brings every one of them back on the player record.
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const reopened = sb.get('cfbp_players').find((p) => p.playerId === 'p2');
+  assert(reopened.preferences.theme === 'boilermaker' && reopened.preferences.tz === 'ET'
+    && reopened.preferences.accent === '#7c3aed',
+    `[A-PREF] and a REOPEN reads them straight back off the member row (${JSON.stringify(reopened.preferences)}) — which is why RG-179 was never a storage defect`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// RG-180 — THE THREE HOLES IN flush(), AND THEY INTERLEAVE
+// ══════════════════════════════════════════════════════════════════════════
+//
+// The reviewer's BLOCK on 5c2aa38 (`pagehide` + `visibilitychange:hidden` -> sb.flush()) was one
+// symptom of three: both DOM events fire on ONE backgrounding, and the 800ms debounce timer can
+// land on top of them. Every section below drives TWO callers at once, because every one of these
+// was invisible to a test that drove one caller at a time — which is how all three shipped.
+//
+// The fake grew a primary key for them (see `conflict()`): without `(league_id, id)` uniqueness
+// answering 23505, hole (2) looks like a duplicate row in an array nobody reads, instead of the red
+// banner six players actually get.
+const tbPut = (weekMember, guess) => {
+  const cur = { ...(sb.get('cfbp_tiebreaker_guesses') || {}) };
+  cur[weekMember] = guess;
+  sb.set('cfbp_tiebreaker_guesses', cur);
+};
+const epPut = (weekMember, guess) => {
+  const cur = { ...(sb.get('cfbp_extra_point_guesses') || {}) };
+  if (guess === null) delete cur[weekMember]; else cur[weekMember] = guess;
+  sb.set('cfbp_extra_point_guesses', cur);
+};
+const bannersSince = (n) => bannerSeen.slice(n);
+
+await section('\n[A-FLUSH1] hole 1 — two flushes in one tick are ONE run plus ONE coalesced follow-up, never two senders…', async () => {
+  await hydrated({ who: 'commissioner' });
+  // A brand-new GAME: an INSERT, because an insert is where the missing latch stops being extra
+  // bytes and becomes a duplicate-key refusal. Cloned off a served row so every projected column
+  // is the shape the projection really produces.
+  const games = sb.get('cfbp_games').map((g) => ({ ...g }));
+  games.push({ ...games.find((g) => g.gameId === 'g1'), gameId: 'g-new' });
+  sb.set('cfbp_games', games);
+  const mark = bannerSeen.length;
+  // THE REVIEWER'S REPRODUCTION, VERBATIM: `const a = sb.flush(); const b = sb.flush();`
+  // pagehide and visibilitychange:hidden both fire on one backgrounding.
+  const a = sb.flush();
+  const b = sb.flush();
+  const [ra, rb] = await captureConsoleAsync(() => Promise.all([a, b]));
+
+  const insertCalls = CLIENT._calls.inserts.filter((i) => i.table === 'games').length;
+  assert(insertCalls === 1,
+    `[A-FLUSH1] exactly ONE insert reaches the server across both callers (sent ${insertCalls})`);
+  assert(ST.games.filter((g) => g.id === 'g-new').length === 1,
+    '[A-FLUSH1] …and the row exists exactly once');
+  assert(!bannersSince(mark).some((t) => /Nothing was saved/.test(t)),
+    `[A-FLUSH1] no "Nothing was saved" banner for a write that SAVED (${JSON.stringify(bannersSince(mark))})`);
+  assert(!sb._refusedKeysForTest().includes('cfbp_games'),
+    `[A-FLUSH1] …and cfbp_games is not latched into _refusedKeys, which would block the key until a hydrate lands (${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(!(rb && rb.refused && rb.refused.length),
+    `[A-FLUSH1] the second caller is told the truth, not a refusal (${JSON.stringify(rb)})`);
+  assert(((ra && ra.pushed) || 0) + ((rb && rb.pushed) || 0) === 1,
+    `[A-FLUSH1] exactly one caller reports having pushed the key (a=${JSON.stringify(ra)}, b=${JSON.stringify(rb)})`);
+  assert(sb._dirtyKeysForTest().length === 0,
+    `[A-FLUSH1] and nothing is left pending (${JSON.stringify(sb._dirtyKeysForTest())})`);
+
+  // THE COALESCE IS NOT A DROP. A caller that arrives mid-flight with a NEWER edit must still be
+  // sent — one follow-up run, however many callers queue behind it.
+  const mark2 = bannerSeen.length;
+  tbPut('w1__p1', 61);
+  const c = sb.flush();
+  tbPut('w1__p1', 62);
+  const d = sb.flush();
+  const e = sb.flush();
+  await captureConsoleAsync(() => Promise.all([c, d, e]));
+  const tbRow = ST.tiebreaker_guesses.find((r) => r.id === 'tb_w1__p1');
+  assert(tbRow && Number(tbRow.guess) === 62,
+    `[A-FLUSH1] three overlapping callers land the NEWEST value (server holds ${tbRow && tbRow.guess}, expected 62)`);
+  assert(!bannersSince(mark2).length,
+    `[A-FLUSH1] …with no banner at all (${JSON.stringify(bannersSince(mark2))})`);
+  assert(sb._dirtyKeysForTest().length === 0,
+    `[A-FLUSH1] …and nothing left dirty (${JSON.stringify(sb._dirtyKeysForTest())})`);
+});
+
+await section('\n[A-FLUSH2] hole 2 — a successful write advances _baseRows, so the SECOND edit patches the row instead of re-inserting it…', async () => {
+  await hydrated({ who: 'commissioner' });
+  // `extra_point_guesses` is deliberately NOT one of the four tables in the Realtime publication
+  // (0005_realtime.sql: messages, games, weeks, picks, league_kv), so nothing but a hydrate could
+  // ever rebase it — and the rehydrate tick is minutes.
+  epPut('w1__p1', 21);
+  await captureConsoleAsync(() => sb.flush());
+  const first = ST.extra_point_guesses.filter((r) => r.id === 'ep_w1__p1');
+  assert(first.length === 1 && Number(first[0].guess) === 21,
+    `[A-FLUSH2] fixture: the INSERT landed (${JSON.stringify(first.map((r) => r.guess))})`);
+
+  // NO HYDRATE between the two edits. This is the live sequence: make a guess, change your mind.
+  const mark = bannerSeen.length;
+  epPut('w1__p1', 24);
+  const plan = sb.planFlush().plan;
+  assert(plan.length === 1 && plan[0].op === 'patch',
+    `[A-FLUSH2] the second edit plans a PATCH, not a second INSERT (${JSON.stringify(plan.map((p) => [p.op, p.rowId]))})`);
+  const r2 = await captureConsoleAsync(() => sb.flush());
+  const after = ST.extra_point_guesses.filter((x) => x.id === 'ep_w1__p1');
+  assert(after.length === 1 && Number(after[0].guess) === 24,
+    `[A-FLUSH2] …and the edit is SAVED (server holds ${JSON.stringify(after.map((x) => x.guess))})`);
+  assert(!bannersSince(mark).some((t) => /Nothing was saved/.test(t)),
+    `[A-FLUSH2] …with no false "Nothing was saved" banner (${JSON.stringify(bannersSince(mark))})`);
+  assert(!sb._refusedKeysForTest().length && !sb._dirtyKeysForTest().length,
+    `[A-FLUSH2] …and nothing refused or left pending (refused ${JSON.stringify(sb._refusedKeysForTest())}, dirty ${JSON.stringify(sb._dirtyKeysForTest())}, result ${JSON.stringify(r2)})`);
+
+  // THE DELETE HALF: the same staleness with the opposite sign — the row is gone from the server
+  // and still in the base, so the next save of that key re-sends the DELETE, matches no row, and
+  // raises the "policy matched no row" refusal about a row that was deleted successfully.
+  const mark2 = bannerSeen.length;
+  epPut('w1__p1', null);
+  await captureConsoleAsync(() => sb.flush());
+  assert(!ST.extra_point_guesses.some((x) => x.id === 'ep_w1__p1'),
+    '[A-FLUSH2] fixture: the DELETE landed');
+  sb.set('cfbp_extra_point_guesses', { ...(sb.get('cfbp_extra_point_guesses') || {}) });   // a plain re-save
+  const plan2 = sb.planFlush().plan;
+  assert(!plan2.some((p) => p.op === 'delete'),
+    `[A-FLUSH2] a later save does NOT re-send the delete (${JSON.stringify(plan2.map((p) => [p.op, p.rowId]))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(mark2).some((t) => /matched no row|Nothing was saved/.test(t)),
+    `[A-FLUSH2] …so no phantom 42501 banner (${JSON.stringify(bannersSince(mark2))})`);
+  // THE OTHER SIDE OF ADVANCING THE BASE, and it has to be asserted or the fix trades a false
+  // banner for a stuck queue: a re-save that diffs to NOTHING produces no operation, so nothing
+  // ever marked the key clean. A key stuck dirty reads as a pending write in the badge and — worse
+  // — `_persistSnapshot()` refuses to run while anything is dirty, so the device would stop
+  // updating the snapshot a warm open reads.
+  assert(!sb._dirtyKeysForTest().length && sb.getStatus().pendingWrites === 0,
+    `[A-FLUSH2] …and a save with nothing to send leaves the queue EMPTY (${JSON.stringify(sb._dirtyKeysForTest())})`);
+
+  // IDEMPOTENT AGAINST THE REALTIME ECHO. The write folds the server's own returned row into the
+  // base; the Realtime event for that same write then arrives and folds it again. The second fold
+  // must change nothing — same keying (row.id), same shape.
+  const mark3 = bannerSeen.length;
+  sb.subscribeRealtime();
+  const ch = CLIENT._channels[0];
+  const picks = sb.get('cfbp_picks').map((p) => ({ ...p }));
+  const mine = picks.find((p) => p.playerId === 'p1' && p.weekId === 'w1');
+  mine.selectedTeam = 'Kansas';
+  sb.set('cfbp_picks', picks);
+  await captureConsoleAsync(() => sb.flush());
+  const serverPick = ST.picks.find((p) => p.id === mine.pickId);
+  assert(serverPick && serverPick.selected_team === 'Kansas', '[A-FLUSH2] fixture: the pick patch landed');
+  const h = ch && ch._handlers.find((x) => x.cfg && x.cfg.table === 'picks');
+  assert(!!h, '[A-FLUSH2] fixture: the picks Realtime handler is registered');
+  captureConsole(() => h.cb({ eventType: 'UPDATE', new: { ...serverPick }, old: null }));
+  const plan3 = sb.planFlush().plan;
+  assert(plan3.length === 0,
+    `[A-FLUSH2] the Realtime echo of our own write leaves NOTHING to re-send (${JSON.stringify(plan3.map((p) => [p.op, p.key, p.rowId]))})`);
+  assert(!bannersSince(mark3).length,
+    `[A-FLUSH2] …and says nothing to the player about it (${JSON.stringify(bannersSince(mark3))})`);
+  sb.unsubscribeRealtime();
+});
+
+await section('\n[A-FLUSH3] hole 3 — an edit made WHILE a flush is in flight stays dirty and goes out…', async () => {
+  await hydrated({ who: 'commissioner' });
+  // A row the hydrate already served, so this section depends on nothing hole (2) fixes.
+  tbPut('w1__p1', 50);
+  const p = sb.flush();                      // the plan is built synchronously, here
+  tbPut('w1__p1', 51);                       // …and the player changes his mind during the await
+  const r1 = await captureConsoleAsync(() => p);
+  // Read the DECISION, not the clock. The follow-up run starts the moment this one settles, so
+  // "is the key still dirty right now" is a race with the fix working; the run's own line is
+  // emitted synchronously at the point the decision is made.
+  assert(said(/changed while the flush was in flight/),
+    `[A-FLUSH3] the run KEPT the mid-flight edit dirty instead of deleting the key it had planned (result ${JSON.stringify(r1)})`);
+  assert(JSON.stringify(sb.get('cfbp_tiebreaker_guesses')['w1__p1']) === '51',
+    '[A-FLUSH3] fixture: and the newer value is in the mirror, which is what makes losing it silent');
+  await captureConsoleAsync(() => sb.flush());
+  const sent = CLIENT._calls.updates.filter((u) => u.table === 'tiebreaker_guesses').map((u) => u.patch && u.patch.guess);
+  const end = ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1');
+  assert(end && Number(end.guess) === 51,
+    `[A-FLUSH3] …and it reaches the server with NO hydrate in between (${end && end.guess})`);
+  assert(sent.length === 2 && sent[0] === 50 && sent[1] === 51,
+    `[A-FLUSH3] …in exactly ONE follow-up write carrying the NEW value (sent ${JSON.stringify(sent)})`);
+  assert(!sb._dirtyKeysForTest().length,
+    `[A-FLUSH3] …leaving nothing pending (${JSON.stringify(sb._dirtyKeysForTest())})`);
+});
+
+await section('\n[A-FLUSH4] a write that never reached a server is a NETWORK hold, not a server refusal…', async () => {
+  // AD-06 cuts both ways. A refusal must be loud; a dropped fetch must NOT be dressed as one —
+  // "The server refused to save cfbp_picks… Nothing was saved" about a request no server ever saw
+  // is the BUG-A misdirection class, and `_refusedKeys` would then block the key until a hydrate.
+  await hydrated({ who: 'commissioner' });
+  const good = CLIENT;
+  for (const [label, opt] of [
+    ['a thrown fetch (the SDK lets the rejection propagate)', { throwWrites: () => new TypeError('Failed to fetch') }],
+    ['an error OBJECT carrying the fetch message with an empty code', { failWrites: { code: '', message: 'TypeError: Failed to fetch' } }],
+    ['an aborted request', { throwWrites: () => Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }) }],
+  ]) {
+    tbPut('w1__p1', 60);
+    CLIENT = makeClient(ST, SESSIONS.commissioner, opt);
+    const mark = bannerSeen.length;
+    const res = await captureConsoleAsync(() => sb.flush());
+    assert(!bannersSince(mark).some((t) => /Nothing was saved|server refused/i.test(t)),
+      `[A-FLUSH4] ${label}: no server-refusal banner (${JSON.stringify(bannersSince(mark))})`);
+    assert(!sb._refusedKeysForTest().length,
+      `[A-FLUSH4] ${label}: …and the key is NOT latched refused (${JSON.stringify(sb._refusedKeysForTest())})`);
+    assert(sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+      `[A-FLUSH4] ${label}: …the write is HELD for retry (${JSON.stringify(sb._dirtyKeysForTest())}, result ${JSON.stringify(res)})`);
+    assert(statuses.some(([s]) => s === 'offline'),
+      `[A-FLUSH4] ${label}: …and the player is told OFFLINE, not refused (${JSON.stringify(statuses.slice(-3))})`);
+    statuses.length = 0;
+  }
+  // THE SHAPE THE RENDERER READS. `js/app.js:onSupabaseDataStatus()` decides what to put on screen
+  // from NAMED FIELDS of this detail — `heldOffline` and `banner` — and boottest [26] drives that
+  // function with exactly this shape. Asserting the fields here is what stops the two suites
+  // agreeing with each other about a message the adapter does not actually send (reviewer N1).
+  {
+    const off = detailSeen.filter(([s]) => s === 'offline').pop();
+    assert(!!off && Array.isArray(off[1].heldOffline) && off[1].heldOffline.length === 1,
+      `[A-FLUSH4] the 'offline' status carries heldOffline — the KEYS that did not go (${JSON.stringify(off && off[1])})`);
+    assert(!!off && typeof off[1].banner === 'string' && /still to save/.test(off[1].banner)
+      && typeof off[1].pendingWrites === 'number' && off[1].pendingWrites > 0,
+      `[A-FLUSH4] …and the banner copy plus the pending count the badge reads (${JSON.stringify(off && off[1])})`);
+  }
+
+  // WHAT THE PLAYER SEES ON RETURN: the held write goes out on the next flush, unchanged.
+  CLIENT = good;
+  await captureConsoleAsync(() => sb.flush());
+  const row = ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1');
+  assert(row && Number(row.guess) === 60,
+    `[A-FLUSH4] the held write lands when the network comes back (${row && row.guess})`);
+
+  // THE CLOSED DEFAULT IS INTACT: a real refusal is still loud. This is the assertion that stops
+  // the allow-list being widened into "every failure is the network".
+  tbPut('w1__p1', 64);
+  CLIENT = makeClient(ST, SESSIONS.commissioner, { failWrites: { code: '42501', message: 'permission denied for table tiebreaker_guesses' } });
+  const mark = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(bannersSince(mark).some((t) => /permission denied/.test(t) && /Nothing was saved/.test(t)),
+    `[A-FLUSH4] a 42501 is STILL a loud refusal, in the server's own words (${JSON.stringify(bannersSince(mark))})`);
+  assert(sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    '[A-FLUSH4] …and still latches the key until a hydrate lands (§5.2 item 3)');
+  CLIENT = good;
+
+  // ══ SECURITY F1 (2026-09-19) — THE WRITE PATH HAS TO CARRY THE HTTP STATUS ══
+  //
+  // `_select()` copies `res.status` onto the error it throws, which is what lets the read-side rule
+  // "any HTTP status is an ANSWER" fire (supabase-backend.js:1091-1097). The WRITE path handed
+  // `res.error` to `_writeFailure()` raw — and supabase-js puts the status on the RESPONSE, never on
+  // the error. So the single most common real outage shape, a GATEWAY answer with an empty PostgREST
+  // code, matched the network allow-list on its MESSAGE alone and was HELD.
+  //
+  // Why that is a security finding and not a cosmetic one: a 5xx raised AFTER the statement
+  // committed (a proxy that gave up on a slow response) is held and RETRIED, the retry re-INSERTs a
+  // row the server already has, and the 23505 that comes back is the false "Nothing was saved"
+  // refusal RG-180 had just removed. A held write also never reaches the device snapshot
+  // (`_persistSnapshot()` refuses while dirty), so an iOS PWA kill loses it silently.
+  //
+  // The three shapes below are one allow-list decision each: STATUS PRESENT ⇒ answered ⇒ loud;
+  // no response at all ⇒ held; a PostgREST code ⇒ loud. AD-59's closed default, from the write side.
+  for (const [label, opt, expect] of [
+    ['a gateway timeout: empty code, a message that READS like a network timeout, HTTP 504',
+      { failWrites: { code: '', message: 'upstream request timeout' }, failWriteStatus: 504 }, 'loud'],
+    ['a 502 from the edge, with the body it did not author',
+      { failWrites: { code: '', message: 'Bad Gateway' }, failWriteStatus: 502 }, 'loud'],
+    ['a duplicate key — the shape a blind retry of a committed write produces',
+      { failWrites: { code: '23505', message: 'duplicate key value violates unique constraint "tiebreaker_guesses_pkey"' }, failWriteStatus: 409 }, 'loud'],
+    ['a thrown fetch TypeError — no response exists, so there is no status to carry',
+      { throwWrites: () => new TypeError('Failed to fetch') }, 'held'],
+  ]) {
+    await hydrated({ who: 'commissioner' });          // a clean latch + a clean queue per shape
+    tbPut('w1__p1', 66);
+    CLIENT = makeClient(ST, SESSIONS.commissioner, opt);
+    const m = bannerSeen.length;
+    statuses.length = 0;
+    const res = await captureConsoleAsync(() => sb.flush());
+    const loud = bannersSince(m).some((t) => /Nothing was saved/.test(t));
+    const latched = sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses');
+    if (expect === 'loud') {
+      assert(loud && latched,
+        `[A-FLUSH4] ${label}: the server ANSWERED, so it is a LOUD refusal — not a silent hold `
+        + `(banner ${JSON.stringify(bannersSince(m))}, refusedKeys ${JSON.stringify(sb._refusedKeysForTest())}, result ${JSON.stringify(res)})`);
+      assert(!statuses.some(([s]) => s === 'offline'),
+        `[A-FLUSH4] ${label}: …and the player is never told OFFLINE about a device that is demonstrably on the network (${JSON.stringify(statuses.map(([s]) => s))})`);
+    } else {
+      assert(!loud && !latched && sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+        `[A-FLUSH4] ${label}: …stays HELD, unlatched and queued (banner ${JSON.stringify(bannersSince(m))}, dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+      assert(statuses.some(([s]) => s === 'offline'),
+        `[A-FLUSH4] ${label}: …and says offline (${JSON.stringify(statuses.map(([s]) => s))})`);
+    }
+  }
+
+  // THE RPC LEG OF THE SAME RULE. `patch_kv` / `lock_week` / `transition_week` / `finalize_week` go
+  // through `client.rpc()`, a different call site with the same defect — and a fix applied to only
+  // the table writes would leave every settings save classifiable as offline by its message.
+  await hydrated({ who: 'commissioner' });
+  sb.set('cfbp_settings', { ...(sb.get('cfbp_settings') || {}), autoRefreshInterval: 90 });
+  CLIENT = makeClient(ST, SESSIONS.commissioner, {
+    failWrites: { code: '', message: 'upstream request timeout' }, failWriteStatus: 504,
+  });
+  const mk = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(bannersSince(mk).some((t) => /Nothing was saved/.test(t)),
+    `[A-FLUSH4] an RPC write that comes back with HTTP 504 is a LOUD refusal too (${JSON.stringify(bannersSince(mk))})`);
+
+  // STRUCTURAL, because the finalize leg is a third call site and a behavioural test for it needs a
+  // live week: EVERY `_writeFailure(` call passes the response's status, not just the error.
+  const src = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8');
+  const calls = src.match(/_writeFailure\(res\.error[^\n]*/g) || [];
+  assert(calls.length >= 3 && calls.every((c) => /res\.status/.test(c)),
+    `[A-FLUSH4] every _writeFailure() call site carries the RESPONSE's status (found ${calls.length}: ${JSON.stringify(calls)}) [structural]`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FLUSH5] SECURITY F2 — AN IN-FLIGHT FLUSH KEEPS WRITING AFTER THE MIRROR IS DROPPED
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `_runFlush()` built its plan against ONE mirror and then awaited each operation in turn with no
+// re-check between them. `_opMoved()` exists and is applied to every asynchronous READ (hydrate,
+// week_submission_status, Realtime) — the write loop was the one path that never asked.
+//
+// WHAT THAT IS, CONCRETELY. Two writes are queued. `flush()` starts. During operation #1 the device
+// is handed over — `dropMirror('device-handover')` clears the queue, the mirror and the tag, and
+// tells the player "Nothing was sent." Operation #2 is then sent ANYWAY, on the one shared client,
+// which by then carries the NEXT account's JWT. The write lands (or is refused) under an identity
+// that never made it, in a league that account may not even belong to, and `flush()` reports
+// `pushed: 2` about a queue it no longer has. The banner and the wire disagree, and the banner is
+// the thing six people read.
+//
+// The rule this pins: the identity/league/switch token is checked at the TOP OF EVERY ITERATION and
+// before the coalesced follow-up starts. Remaining operations are REPORTED, never sent, and the
+// result says what was and was not sent. §3.3's three layers cover the PLAN; this is the same rule
+// applied to the EXECUTION, which is where the awaits are.
+await section('\n[A-FLUSH5] SEC-F2 — an in-flight flush STOPS the moment the mirror is dropped; nothing is sent under the next identity…', async () => {
+  // ── (a) ROWS: two operations on one key, dropped during the first ─────────
+  {
+    await hydrated({ who: 'commissioner' });
+    let dropped = 0;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, {
+      onWrite: () => { if (!dropped++) captureConsole(() => sb.dropMirror('device-handover')); },
+    });
+    const games = sb.get('cfbp_games').map((g) => ({ ...g }));
+    games.push({ ...games.find((g) => g.gameId === 'g1'), gameId: 'g-new' });     // op 1: INSERT
+    games.find((g) => g.gameId === 'g1').multiplier = 3;                          // op 2: PATCH
+    sb.set('cfbp_games', games);
+    const planned = sb.planFlush().plan;
+    assert(planned.length === 2 && planned[0].op === 'insert' && planned[1].op === 'patch',
+      `[A-FLUSH5] fixture: the plan really is two operations (${JSON.stringify(planned.map((p) => p.op))})`);
+    const mark = bannerSeen.length;
+    const res = await captureConsoleAsync(() => sb.flush());
+
+    assert(CLIENT._calls.updates.filter((u) => u.table === 'games').length === 0,
+      `[A-FLUSH5] (rows) ZERO writes reach the server after the drop (${JSON.stringify(CLIENT._calls.updates.map((u) => u.table))})`);
+    assert((ST.games.find((g) => g.id === 'g1') || {}).multiplier === 1,
+      '[A-FLUSH5] (rows) …so the row the second operation named is untouched on the server');
+    assert(res && res.abandoned === true && (res.notSent || []).includes('cfbp_games') && res.pushed === 1,
+      `[A-FLUSH5] (rows) …and the result is TRUTHFUL about what was and was not sent (${JSON.stringify(res)})`);
+    assert(bannersSince(mark).length > 0 && !bannersSince(mark).some((t) => /Nothing was sent/.test(t)),
+      `[A-FLUSH5] (rows) …and the banner does not claim "Nothing was sent" when an operation had already gone (${JSON.stringify(bannersSince(mark))})`);
+    assert(!sb._dirtyKeysForTest().length && !sb._refusedKeysForTest().length,
+      `[A-FLUSH5] (rows) …and the abandoned run writes nothing back into the dropped queue (dirty ${JSON.stringify(sb._dirtyKeysForTest())}, refused ${JSON.stringify(sb._refusedKeysForTest())})`);
+  }
+
+  // ── (b) KV, dropped by a LEAGUE SWITCH: the shared client is about to be a different league's ──
+  {
+    await hydrated({ who: 'commissioner' });
+    let n = 0;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, {
+      onWrite: (name) => { if (name === 'patch_kv' && !n++) captureConsole(() => sb.beginSwitch(LEAGUE_A, LEAGUE_B)); },
+    });
+    sb.set('cfbp_nicknames', { ...(sb.get('cfbp_nicknames') || {}), p3: 'Kobe' });
+    sb.set('cfbp_lock_overrides', { g1: 'unlocked' });
+    const kvOps = sb.planFlush().plan.filter((p) => p.name === 'patch_kv');
+    assert(kvOps.length === 2, `[A-FLUSH5] fixture: two kv operations are queued (${kvOps.length})`);
+    const res = await captureConsoleAsync(() => sb.flush());
+    const sent = CLIENT._calls.rpc.filter((r) => r.name === 'patch_kv');
+    assert(sent.length === 1,
+      `[A-FLUSH5] (kv) exactly ONE patch_kv reached the server — the second was abandoned, not sent into league B (${JSON.stringify(sent.map((r) => r.args && r.args.p_key))})`);
+    assert(!(ST.league_kv.find((r) => r.league_id === LEAGUE_A && r.key === 'lock_overrides') || {}).value?.g1,
+      '[A-FLUSH5] (kv) …and the second key is untouched on the server');
+    assert(res && res.abandoned === true,
+      `[A-FLUSH5] (kv) …and the caller is told the run was abandoned (${JSON.stringify(res)})`);
+  }
+
+  // ── (c) a TRANSITION RPC behind a row operation, dropped by SIGN-OUT ──────
+  //   The composite ordering puts the games patch first and the week transition second (§2.3), so a
+  //   sign-out during the patch is exactly the window in which a week could be moved for a league
+  //   this device has just stopped belonging to.
+  {
+    await hydrated({ who: 'commissioner' });
+    let n = 0;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, {
+      onWrite: () => { if (!n++) captureConsole(() => sb.dropMirror('sign-out')); },
+    });
+    const games = sb.get('cfbp_games').map((g) => ({ ...g }));
+    games.find((g) => g.gameId === 'g1').multiplier = 4;
+    sb.set('cfbp_games', games);
+    const weeks = sb.get('cfbp_weeks').map((w) => ({ ...w }));
+    weeks.find((w) => w.weekId === 'w1').status = 'draft';
+    sb.set('cfbp_weeks', weeks);
+    const plan = sb.planFlush().plan;
+    assert(plan.length === 2 && plan[0].kind === 'rows' && plan[1].name === 'transition_week',
+      `[A-FLUSH5] fixture: the plan is [games patch, transition_week] (${JSON.stringify(plan.map((p) => p.name || p.op))})`);
+    await captureConsoleAsync(() => sb.flush());
+    assert(!CLIENT._calls.rpc.some((r) => r.name === 'transition_week'),
+      `[A-FLUSH5] (rpc) the transition never fires after the sign-out (${JSON.stringify(CLIENT._calls.rpc.map((r) => r.name))})`);
+    assert((ST.weeks.find((w) => w.id === 'w1') || {}).status === 'open',
+      '[A-FLUSH5] (rpc) …and the week is exactly where the commissioner left it on the server');
+  }
+
+  // ── (d) THE COALESCED FOLLOW-UP IS GATED BY THE SAME TOKEN ────────────────
+  //   `flush()`'s one queue slot starts a REAL run when the current one settles. A drop during the
+  //   first run must not be followed by a second run that sends the (now foreign) queue.
+  {
+    await hydrated({ who: 'commissioner' });
+    let n = 0;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, {
+      onWrite: () => { if (!n++) captureConsole(() => sb.dropMirror('device-handover')); },
+    });
+    tbPut('w1__p1', 77);
+    const a = sb.flush();
+    const b = sb.flush();                    // queues the single follow-up
+    await captureConsoleAsync(() => Promise.all([a, b]));
+    await new Promise((r) => setTimeout(r, 0));
+    const after = ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1');
+    assert(CLIENT._calls.updates.filter((u) => u.table === 'tiebreaker_guesses').length <= 1,
+      `[A-FLUSH5] (follow-up) the coalesced run does not re-send a dropped queue (${CLIENT._calls.updates.length} writes, guess ${after && after.guess})`);
+    assert(!sb._dirtyKeysForTest().length,
+      `[A-FLUSH5] (follow-up) …and nothing is left queued under the dropped mirror (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FLUSH6] REVIEWER N2 — A HYDRATE THAT LANDS BETWEEN A WRITE AND ITS BASE FOLD
+// ══════════════════════════════════════════════════════════════════════════
+//
+// THE NOTE THIS SECTION EXISTS TO SETTLE. Reviewer N2 reads: `_foldWriteIntoBase()` guards
+// `leagueId` but not `_hydrateSeq`, so a hydrate landing mid-flight replaces `_baseRows` and the
+// late fold can "re-add a row the fresher hydrate says is gone", whose next diff plans a DELETE
+// matching no row — a false 42501. The prescribed fix was to capture `_hydrateSeq` at plan time and
+// SKIP the fold if it moved.
+//
+// WHAT THE INTERLEAVING ACTUALLY DOES, staged below rather than argued: when a hydrate lands while
+// a key's write is in flight, that key is STILL DIRTY (`_runFlush()` clears sent keys only after
+// the loop), so `hydrate()`'s rebase re-grafts the device's own value back over the fresh
+// projection (`supabase-backend.js:894-904`). The mirror therefore KEEPS the written row, and the
+// fold is what keeps `_baseRows` in agreement with it. Skipping the fold leaves base WITHOUT a row
+// the mirror HAS — which plans a second INSERT and earns the 23505 that RG-180 hole 2 was opened
+// to remove. The direction of the defect is the opposite of the one the note describes, and it is
+// the direction that was already reported live.
+//
+// The second half stages the note's own premise — another device deletes the row between our write
+// and the hydrate's read — and shows where it really ends: the write itself matches no row and is
+// refused, so no fold happens at all.
+//
+// Either way this section is the guard: it pins what the base must look like after a mid-flight
+// hydrate, so a future change to the fold (in either direction) has to answer to it.
+await section('\n[A-FLUSH6] N2 — a hydrate that lands behind an in-flight write leaves NOTHING to re-send…', async () => {
+  // ── (a) the ordinary order: the hydrate reads a server that does not yet hold our write ──
+  await hydrated({ who: 'commissioner' });
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const seqBefore = sb._hydrateSeqForTest();
+  CLIENT = makeClient(ST, SESSIONS.commissioner, { delayWrites: () => gate });
+  epPut('w1__p1', 21);                                   // an INSERT — the shape that earns a 23505
+  const p = sb.flush();                                  // parked: the request has not reached the server
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  assert(sb._hydrateSeqForTest() > seqBefore,
+    '[A-FLUSH6] fixture: a hydrate really did land while the write was in flight (_baseRows was replaced)');
+  release();
+  await captureConsoleAsync(() => p);
+  assert(ST.extra_point_guesses.filter((r) => r.id === 'ep_w1__p1').length === 1,
+    `[A-FLUSH6] fixture: the write landed exactly once (${JSON.stringify(ST.extra_point_guesses.map((r) => r.id))})`);
+  assert(Number((sb.get('cfbp_extra_point_guesses') || {})['w1__p1']) === 21,
+    '[A-FLUSH6] fixture: and the rebase kept the device’s own value in the mirror (the graft, :894-904)');
+
+  const mark = bannerSeen.length;
+  epPut('w1__p1', 21);                                   // a plain re-save: the diff decides everything
+  const plan = sb.planFlush().plan;
+  assert(plan.length === 0,
+    `[A-FLUSH6] the post-hydrate base and the mirror AGREE — nothing is re-sent (${JSON.stringify(plan.map((o) => [o.op, o.rowId]))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(mark).some((t) => /Nothing was saved|matched no row|duplicate key/.test(t)),
+    `[A-FLUSH6] …and the player is told nothing, because nothing went wrong (${JSON.stringify(bannersSince(mark))})`);
+  assert(ST.extra_point_guesses.filter((r) => r.id === 'ep_w1__p1').length === 1,
+    '[A-FLUSH6] …and the row still exists exactly once on the server');
+
+  // ── (b) the note's own premise: another device DELETES the row behind our write ──
+  {
+    await hydrated({ who: 'commissioner' });
+    epPut('w1__p1', 30);
+    await captureConsoleAsync(() => sb.flush());         // the row now exists on the server and in base
+    let go;
+    const gate2 = new Promise((r) => { go = r; });
+    CLIENT = makeClient(ST, SESSIONS.commissioner, { delayWrites: () => gate2 });
+    epPut('w1__p1', 31);                                 // a PATCH this time
+    const q = sb.flush();
+    ST.extra_point_guesses = ST.extra_point_guesses.filter((r) => r.id !== 'ep_w1__p1');   // another device
+    await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+    const m2 = bannerSeen.length;
+    go();
+    const res = await captureConsoleAsync(() => q);
+    assert(!ST.extra_point_guesses.some((r) => r.id === 'ep_w1__p1'),
+      '[A-FLUSH6] (b) fixture: the row really is gone from the server');
+    assert((res && res.refused && res.refused.length) || bannersSince(m2).some((t) => /matched no row/.test(t)),
+      `[A-FLUSH6] (b) a write whose row vanished under it is REFUSED, loudly — so there is no returned row to fold anywhere (${JSON.stringify(res)}, ${JSON.stringify(bannersSince(m2))})`);
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FLUSH7] REVIEWER N3 — A CONTACT PATCH RE-SENDS ITSELF ON EVERY FLUSH
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `SELECT_COLS.league_members` omits email/phone/phone_verified on purpose (0007 made the SELECT
+// grant a column list; the values come back only from `get_member_contacts()`). The write path uses
+// that SAME list as its `RETURNING`, which is correct — a bare `.select()` is refused outright on
+// that table. But it means an ACKNOWLEDGED contact write comes back WITHOUT the column it wrote, so
+// `_foldWriteIntoBase()` cannot advance the base for it: the next diff sees the mirror's phone
+// against a base that has none, plans the same patch again, and does so on EVERY flush until a
+// hydrate lands. A phone number on the wire once is a save; on the wire every eight seconds it is a
+// pattern of chatter about the one column 0007 exists to keep quiet.
+//
+// The fold merges the SENT contact columns back into the IN-MEMORY base — and nothing else:
+//   • `_baseRows` is never persisted (`_persistSnapshot()` writes the projected mirror only), which
+//     the last assertion here proves by reading the snapshot rather than by asserting the intent;
+//   • it runs only for a caller who READ those contacts this hydrate — the same evidence §2.4
+//     rule 1 requires before the column may be written at all.
+await section('\n[A-FLUSH7] N3 — an acknowledged contact patch converges instead of re-sending itself…', async () => {
+  await hydrated({ who: 'commissioner' });
+  const players = sb.get('cfbp_players').map((p) => ({ ...p }));
+  const kevin = players.find((p) => p.playerId === 'p2');
+  assert(!!kevin, '[A-FLUSH7] fixture: the commissioner can see every member');
+  kevin.phone = '+15550009999';
+  sb.set('cfbp_players', players);
+  const first = sb.planFlush().plan.filter((o) => o.op === 'patch' && o.rowId === 'p2');
+  assert(first.length === 1 && first[0].changed.phone === '+15550009999',
+    `[A-FLUSH7] fixture: the contact write rule lets the commissioner's patch through (${JSON.stringify(first.map((o) => o.changed))})`);
+  const mark = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert((ST.league_members.find((m) => m.id === 'p2') || {}).phone === '+15550009999',
+    '[A-FLUSH7] fixture: …and the server took it');
+  assert(!bannersSince(mark).length, `[A-FLUSH7] fixture: …quietly (${JSON.stringify(bannersSince(mark))})`);
+
+  // THE FINDING: a re-save with nothing new in it must plan nothing.
+  const before = CLIENT._calls.updates.filter((u) => u.table === 'league_members').length;
+  sb.set('cfbp_players', sb.get('cfbp_players').map((p) => ({ ...p })));
+  const again = sb.planFlush().plan;
+  assert(again.length === 0,
+    `[A-FLUSH7] the acknowledged contact column is folded into the base, so the next flush plans NOTHING (${JSON.stringify(again.map((o) => [o.op, o.rowId, Object.keys(o.changed || {})]))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(CLIENT._calls.updates.filter((u) => u.table === 'league_members').length === before,
+    '[A-FLUSH7] …and no second patch reaches the wire carrying a phone number');
+  assert(!sb._dirtyKeysForTest().length,
+    `[A-FLUSH7] …and the key does not get stuck dirty either (${JSON.stringify(sb._dirtyKeysForTest())})`);
+
+  // THE FOLD MOVES THE EVIDENCE WITH IT, and this is the assertion that forces it to. §2.4 rule 1
+  // drops a contact column whose value EQUALS the `get_member_contacts()` entry ("the server
+  // already has it"). Advance the base without advancing that entry and a REVERT to the previously
+  // read number is dropped in silence: the base says 1111, the diff emits the original, the rule
+  // compares it to a stale entry that still reads the original, and deletes it. The commissioner
+  // watches a phone number change back and stay changed on his screen only.
+  {
+    const own = (n) => {
+      const all = sb.get('cfbp_players').map((p) => ({ ...p }));
+      all.find((p) => p.playerId === 'p1').phone = n;
+      sb.set('cfbp_players', all);
+    };
+    own('+15550001111');
+    await captureConsoleAsync(() => sb.flush());
+    assert((ST.league_members.find((m) => m.id === 'p1') || {}).phone === '+15550001111',
+      '[A-FLUSH7] fixture: the commissioner changes his own number');
+    own('+15550000001');                                  // …and changes his mind, back to the read value
+    const revert = sb.planFlush().plan;
+    assert(revert.length === 1 && revert[0].changed.phone === '+15550000001',
+      `[A-FLUSH7] a REVERT to the previously-read number is still sent — the contacts evidence moved with the base (${JSON.stringify(revert.map((o) => o.changed))})`);
+    await captureConsoleAsync(() => sb.flush());
+    assert((ST.league_members.find((m) => m.id === 'p1') || {}).phone === '+15550000001',
+      '[A-FLUSH7] …and the server holds the reverted value');
+  }
+
+  // THE SNAPSHOT IS THE PROJECTED MIRROR, NOT THE BASE. Security's adjacent concern on the insert
+  // fallback: rows the planner SENT are folded into `_baseRows`, and for `league_members` those
+  // rows carry contact columns. `_persistSnapshot()` must not be able to see them — it writes
+  // `_mirror` and nothing else, so a row-shaped key (snake_case `phone_verified`, `member_id`,
+  // `league_id`) appearing in the snapshot would mean a base row had leaked into it.
+  const snapRaw = localStorage.getItem(sb._snapshotKeyForTest());
+  assert(!!snapRaw, '[A-FLUSH7] fixture: the device snapshot was written (nothing dirty)');
+  assert(!/"phone_verified"|"league_id"|"member_id"/.test(String(snapRaw)),
+    '[A-FLUSH7] nothing ROW-SHAPED — and so nothing from _baseRows — reaches the device snapshot');
+
+  // A PLAIN MEMBER GETS THE SAME FOLD, ON HIS OWN ROW — amended 2026-09-19 (reviewer NOTE 2).
+  // This block asserted the OPPOSITE until then: the fold was gated on `_isAdmin()` and the
+  // asymmetry was pinned here as "the narrow reading of §2.4 rule 1". It was narrower than the rule
+  // itself, which asks for EVIDENCE — a `get_member_contacts()` entry from the current hydrate — and
+  // a member has exactly that for his own row. [A-FLUSH9] owns what the asymmetry actually cost.
+  await hydrated({ who: 'player' });
+  const me = sb.get('cfbp_players').map((p) => ({ ...p }));
+  me.find((p) => p.playerId === 'p2').phone = '+15550007777';
+  sb.set('cfbp_players', me);
+  await captureConsoleAsync(() => sb.flush());
+  assert((ST.league_members.find((m) => m.id === 'p2') || {}).phone === '+15550007777',
+    '[A-FLUSH7] a plain member’s own contact write still saves');
+  sb.set('cfbp_players', sb.get('cfbp_players').map((p) => ({ ...p })));
+  const memberAgain = sb.planFlush().plan;
+  assert(memberAgain.length === 0,
+    `[A-FLUSH7] …and converges the same way — the fold follows the contacts he READ, not the role he holds (${JSON.stringify(memberAgain.map((o) => Object.keys(o.changed || {})))})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FLUSH8] REVIEWER NOTE 1 — F2 HONESTY WAS APPLIED TO ONE BRANCH OF A TWO-BRANCH REPORTER
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `_refuseDirtyLoudly()` is called from `dropMirror()` for THREE reasons — a league switch, a
+// device handover and a sign-out — and it writes the banner in two branches. c6b2f50 taught the
+// non-switch branch to read `_inFlightSent` and stop claiming "Nothing was sent" about a run that
+// had already put an operation on the wire. The LEAGUE-SWITCH branch was left saying, flatly, "A
+// change made in X was not saved because you switched to Y. Re-enter it there."
+//
+// That claim is made from the same instant, about the same queue. `_dirty` is not cleared until
+// AFTER `_runFlush()`'s loop, so at the moment of the drop it still names keys whose operation is
+// suspended on its await — already sent, acknowledgement unknown. [A-FLUSH5] (kv) stages exactly
+// that: two `patch_kv` operations, the switch fired from inside the first write. The player is then
+// told to re-enter a change that DID save, and re-entering it is a double post — on `cfbp_comments`
+// or `cfbp_chat` a visible duplicate, on a pick an edit the player believes he is making for the
+// first time.
+//
+// So the honesty is asserted PER BRANCH and in both directions: the qualified wording when
+// something went, the flat wording when nothing did. A branch that cannot say the true thing is
+// worse than no banner, because the player acts on it.
+await section('\n[A-FLUSH8] NOTE 1 — the drop banner is honest on EVERY branch, not just the handover one…', async () => {
+  // Two kv operations, the drop fired from inside the FIRST write. Returns the banners raised and
+  // how many operations actually reached the server, so "honest" is measured against the wire and
+  // not against the adapter's own opinion.
+  const dropDuringFirstWrite = async (drop) => {
+    await hydrated({ who: 'commissioner' });
+    let n = 0;
+    CLIENT = makeClient(ST, SESSIONS.commissioner, {
+      onWrite: (name) => { if (name === 'patch_kv' && !n++) captureConsole(() => drop()); },
+    });
+    sb.set('cfbp_nicknames', { ...(sb.get('cfbp_nicknames') || {}), p3: 'Kobe' });
+    sb.set('cfbp_lock_overrides', { g1: 'unlocked' });
+    const mark = bannerSeen.length;
+    const res = await captureConsoleAsync(() => sb.flush());
+    return { res, banners: bannersSince(mark), sent: CLIENT._calls.rpc.filter((r) => r.name === 'patch_kv').length };
+  };
+  // The same two operations, dropped BEFORE any flush runs: nothing has been sent, and the flat
+  // wording is the true one. This is the direction that keeps the fix from being "delete the claim".
+  const dropWithNothingInFlight = async (drop) => {
+    await hydrated({ who: 'commissioner' });
+    sb.set('cfbp_nicknames', { ...(sb.get('cfbp_nicknames') || {}), p3: 'Kobe' });
+    sb.set('cfbp_lock_overrides', { g1: 'unlocked' });
+    const mark = bannerSeen.length;
+    captureConsole(() => drop());
+    return { banners: bannersSince(mark), sent: CLIENT._calls.rpc.filter((r) => r.name === 'patch_kv').length };
+  };
+
+  // ── (a) LEAGUE SWITCH, mid-flight — the branch NOTE 1 is about ────────────
+  {
+    const { banners, sent } = await dropDuringFirstWrite(() => sb.beginSwitch(LEAGUE_A, LEAGUE_B));
+    assert(sent === 1, `[A-FLUSH8] (switch) fixture: one operation really did reach the server before the switch (${sent})`);
+    assert(banners.length > 0, `[A-FLUSH8] (switch) fixture: a banner was raised (${JSON.stringify(banners)})`);
+    assert(!banners.some((t) => /was not saved because you switched/.test(t)),
+      `[A-FLUSH8] (switch) the banner does NOT claim the change "was not saved" while an operation was already on the wire (${JSON.stringify(banners)})`);
+    assert(banners.some((t) => /may already have saved/.test(t)),
+      `[A-FLUSH8] (switch) …it says what the handover branch says — changes sent just before it may already have saved (${JSON.stringify(banners)})`);
+    assert(!banners.some((t) => /^(?!.*may already have saved).*Re-enter it there/.test(t)),
+      `[A-FLUSH8] (switch) …and nobody is told to re-enter something that may have saved, which is how a pick or a comment gets double-posted (${JSON.stringify(banners)})`);
+    assert(banners.some((t) => /IRB Pick/.test(t)),
+      `[A-FLUSH8] (switch) …while still NAMING the league the change was made in — the honesty may not cost the player the one fact he needs (${JSON.stringify(banners)})`);
+  }
+
+  // ── (b) LEAGUE SWITCH with nothing in flight — the flat wording is TRUE here ──
+  {
+    const { banners, sent } = await dropWithNothingInFlight(() => sb.beginSwitch(LEAGUE_A, LEAGUE_B));
+    assert(sent === 0, `[A-FLUSH8] (switch, idle) fixture: nothing was sent (${sent})`);
+    assert(banners.some((t) => /was not saved because you switched/.test(t) && /Re-enter it there/.test(t)),
+      `[A-FLUSH8] (switch, idle) …so the flat "was not saved — re-enter it there" is kept, because it is true (${JSON.stringify(banners)})`);
+  }
+
+  // ── (c) SIGN-OUT, mid-flight — c6b2f50's branch, pinned rather than assumed ──
+  {
+    const { banners, sent } = await dropDuringFirstWrite(() => sb.dropMirror('sign-out'));
+    assert(sent === 1, `[A-FLUSH8] (sign-out) fixture: one operation reached the server first (${sent})`);
+    assert(!banners.some((t) => /Nothing was sent/.test(t)) && banners.some((t) => /may already have saved/.test(t)),
+      `[A-FLUSH8] (sign-out) a sign-out mid-flight says what went, not "Nothing was sent" (${JSON.stringify(banners)})`);
+  }
+
+  // ── (d) DEVICE HANDOVER with nothing in flight — the flat claim is TRUE here ──
+  {
+    const { banners, sent } = await dropWithNothingInFlight(() => sb.dropMirror('device-handover'));
+    assert(sent === 0, `[A-FLUSH8] (handover, idle) fixture: nothing was sent (${sent})`);
+    assert(banners.some((t) => /Nothing was sent/.test(t)),
+      `[A-FLUSH8] (handover, idle) …so "Nothing was sent" is kept — the fix is honesty, not the deletion of every claim (${JSON.stringify(banners)})`);
+  }
+
+  // ── (e) THE STALE-SWITCH REPORTER IS A DIFFERENT ONE, AND IT DOES NOT LIE ──
+  //   `_reportStaleSwitch()` uses the same "was not saved … Re-enter it there" copy, so it was
+  //   audited too. It fires from `_runFlush()` BEFORE the send loop, about keys whose captured
+  //   token no longer matches the mirror and which are therefore DISCARDED FROM THE PLAN — never
+  //   sent, this run or any other. Its claim is true by construction, and this assertion is what
+  //   would notice if that ordering ever changed.
+  {
+    await hydrated({ who: 'commissioner' });
+    sb.set('cfbp_nicknames', { ...(sb.get('cfbp_nicknames') || {}), p3: 'Kobe' });   // captured under A
+    ACTIVE_LEAGUE = LEAGUE_B;
+    await captureConsoleAsync(() => sb.hydrate(LEAGUE_B, { epoch: EPOCH }));         // re-tagged to B ([A6] layer 2)
+    const { plan, stale } = sb.planFlush();
+    assert(stale.some((s) => s.key === 'cfbp_nicknames'),
+      `[A-FLUSH8] (stale) fixture: the write captured under A really is stale against B's mirror (${JSON.stringify(stale)})`);
+    assert(!plan.some((o) => o.key === 'cfbp_nicknames'),
+      '[A-FLUSH8] (stale) …and it is DISCARDED FROM THE PLAN before the send loop starts');
+    const mark = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    const nickSent = CLIENT._calls.rpc.filter((r) => r.name === 'patch_kv' && r.args && r.args.p_key === 'nicknames').length;
+    assert(nickSent === 0 && bannersSince(mark).some((t) => /was not saved because you switched/.test(t)),
+      `[A-FLUSH8] (stale) …so _reportStaleSwitch()'s identical copy is TRUE by construction and is left alone (${nickSent} sent, ${JSON.stringify(bannersSince(mark))})`);
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-FLUSH9] REVIEWER NOTE 2 — THE CONTACT FOLD WAS GATED ON ROLE, NOT ON EVIDENCE
+// ══════════════════════════════════════════════════════════════════════════
+//
+// N3's fold was scoped to `_isAdmin()` with the reasoning that the commissioner is the caller who
+// read every member's contacts this hydrate. The SECOND half of that sentence is the real rule:
+// `get_member_contacts()` returns all rows to him and EXACTLY ONE — his own — to a plain member
+// (`0007_contact_privacy.sql:152-174`), and `_lastContacts` holds precisely what this hydrate read.
+// So `_lastContacts.has(rowId)` is the same predicate `_applyContactWriteRule` already uses to
+// decide whether the column may be WRITTEN at all (§2.4 rule 1). Gating the fold on the role
+// instead of on the evidence left the member's own row outside it for no reason the rule states.
+//
+// What that cost, in the app rather than in the abstract: `cfbp_players` is ONE key, and a theme,
+// timezone, dashboard-order or chat-accent change writes the whole array through it ([A-PREF]).
+// With the base never advancing for his phone, every one of those saves re-planned the phone patch
+// too — the member's number back on the wire on every preference change, for the life of the page,
+// about the one column 0007 exists to keep quiet.
+//
+// The in-memory boundary is unchanged and is re-proved for the member case below: `_baseRows` and
+// `_lastContacts` are not persisted, and `_persistSnapshot()` writes the projected mirror only.
+await section('\n[A-FLUSH9] NOTE 2 — the contact fold follows the EVIDENCE, so a member’s own phone stops riding along on every theme save…', async () => {
+  await hydrated({ who: 'player' });                       // Kevin, p2 — reads his own contacts only
+  const setOn = (playerId, patch) => {
+    const all = sb.get('cfbp_players').map((p) => ({ ...p }));
+    Object.assign(all.find((p) => p.playerId === playerId), patch);
+    sb.set('cfbp_players', all);
+  };
+
+  setOn('p2', { phone: '+15550007777' });
+  const first = sb.planFlush().plan;
+  assert(first.length === 1 && first[0].changed.phone === '+15550007777',
+    `[A-FLUSH9] fixture: a member's own contact write is planned (0007 allows it) (${JSON.stringify(first.map((o) => Object.keys(o.changed || {})))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert((ST.league_members.find((m) => m.id === 'p2') || {}).phone === '+15550007777',
+    '[A-FLUSH9] fixture: …and the server took it');
+
+  // THE FINDING, in the shape the app actually produces it: he changes his THEME.
+  setOn('p2', { preferences: { theme: 'boilermaker' } });
+  const second = sb.planFlush().plan;
+  assert(second.length === 1 && second[0].rowId === 'p2',
+    `[A-FLUSH9] fixture: the theme change is one patch on his own row (${JSON.stringify(second.map((o) => [o.op, o.rowId]))})`);
+  assert(!('phone' in (second[0].changed || {})),
+    `[A-FLUSH9] the second plan carries NO phone column — the acknowledged contact write advanced his base (${JSON.stringify(Object.keys(second[0].changed || {}))})`);
+  const wireBefore = CLIENT._calls.updates.filter((u) => u.table === 'league_members').length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(!CLIENT._calls.updates.slice(wireBefore).some((u) => u.patch && 'phone' in u.patch),
+    `[A-FLUSH9] …and no phone number reaches the wire for a theme change (${JSON.stringify(CLIENT._calls.updates.slice(wireBefore).map((u) => Object.keys(u.patch || {})))})`);
+
+  // A REVERT STILL SENDS: the evidence moved with the base for the member too, so §2.4 rule 1's
+  // "the server already has it" comparison is made against the CURRENT number, not a stale one.
+  setOn('p2', { phone: '+15550000002' });
+  const revert = sb.planFlush().plan;
+  assert(revert.length === 1 && revert[0].changed.phone === '+15550000002',
+    `[A-FLUSH9] a member's revert to his previously-read number is still sent (${JSON.stringify(revert.map((o) => o.changed))})`);
+  await captureConsoleAsync(() => sb.flush());
+
+  // EVIDENCE, NOT ROLE — proved by removing the evidence. With no `get_member_contacts()` entry for
+  // his row, §2.4 rule 1 drops the column at the planner and the fold has nothing to fold: the gate
+  // is the contacts map, not `isAdmin`.
+  sb._setContactsForTest([]);
+  setOn('p2', { phone: '+15550008888' });
+  const noEvidence = sb.planFlush().plan;
+  assert(!noEvidence.some((o) => 'phone' in (o.changed || {})),
+    `[A-FLUSH9] with the contacts evidence gone, no contact column is planned at all — the fold cannot outlive the read that authorized it (${JSON.stringify(noEvidence.map((o) => Object.keys(o.changed || {})))})`);
+
+  // THE IN-MEMORY BOUNDARY, re-proved for the member case ([A-FLUSH7]'s read-back, his side of it).
+  await hydrated({ who: 'player' });
+  setOn('p2', { phone: '+15550006666' });
+  await captureConsoleAsync(() => sb.flush());
+  setOn('p2', { preferences: { theme: 'razorback' } });
+  await captureConsoleAsync(() => sb.flush());
+  const snapRaw = localStorage.getItem(sb._snapshotKeyForTest());
+  assert(!!snapRaw, '[A-FLUSH9] fixture: the device snapshot was written (nothing dirty)');
+  assert(!/"phone_verified"|"league_id"|"member_id"/.test(String(snapRaw)),
+    `[A-FLUSH9] nothing ROW-SHAPED — and so nothing from the member's folded _baseRows — reaches the device snapshot`);
+});
+
+await section('\n[A-HIDE2] 5c2aa38 re-validated: two hide events plus the debounce timer are ONE network write per op…', async () => {
+  await hydrated({ who: 'commissioner' });
+  tbPut('w1__p1', 70);                       // arms the ~800ms debounce timer
+  const before = CLIENT._calls.updates.filter((u) => u.table === 'tiebreaker_guesses').length;
+  const h1 = sb.flush();                     // pagehide
+  const h2 = sb.flush();                     // visibilitychange:hidden — same backgrounding
+  await captureConsoleAsync(() => Promise.all([h1, h2]));
+  const sent = CLIENT._calls.updates.filter((u) => u.table === 'tiebreaker_guesses').length - before;
+  assert(sent === 1, `[A-HIDE2] one update for one edit across both hide events (sent ${sent})`);
+  assert(sb.getStatus().pendingWrites === 0,
+    `[A-HIDE2] …and the debounce timer has nothing left to send (${sb.getStatus().pendingWrites} pending)`);
+  // The timer itself must not fire a third write. A macrotask is enough to prove it was cleared:
+  // flush() disarms it at the top of the run, so a pending timer cannot outlive the run.
+  await new Promise((r) => setTimeout(r, 0));
+  const later = CLIENT._calls.updates.filter((u) => u.table === 'tiebreaker_guesses').length - before;
+  assert(later === 1, `[A-HIDE2] …and nothing else follows it (${later})`);
+  // THE OFFLINE HIDE: backgrounded with no network. Nothing may be reported as refused, and the
+  // write must survive to the next foreground.
+  tbPut('w1__p1', 71);
+  const good = CLIENT;
+  CLIENT = makeClient(ST, SESSIONS.commissioner, { throwWrites: () => new TypeError('Failed to fetch') });
+  const mark = bannerSeen.length;
+  await captureConsoleAsync(() => Promise.all([sb.flush(), sb.flush()]));
+  assert(!bannersSince(mark).some((t) => /Nothing was saved/.test(t)) && !sb._refusedKeysForTest().length,
+    `[A-HIDE2] hidden + offline says nothing about a refusal (${JSON.stringify(bannersSince(mark))})`);
+  assert(sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    '[A-HIDE2] …and the write is still queued when the app comes back');
+  CLIENT = good;
+  await captureConsoleAsync(() => sb.flush());
+  const row = ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1');
+  assert(row && Number(row.guess) === 71, `[A-HIDE2] …and then it saves (${row && row.guess})`);
+});
+
+await section('\n[A-HIDE3] the hide listeners are registered ONCE per page, though the tail has two callers…', async () => {
+  const blank = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const app = blank(readFileSync(join(__dirname, 'js', 'app.js'), 'utf8'));
+  assert(/let _unloadListenersWired = false;/.test(app)
+    && /&& !_unloadListenersWired\) \{\s*_unloadListenersWired = true;/.test(app),
+    '[A-HIDE3] the unload/hide listener block is behind its own page-lifetime latch, set on entry [structural]');
+  const reset = app.slice(app.indexOf('export function _resetAuthHoldForTest'), app.indexOf('export function showGoogleSignInGate'));
+  assert(reset.length > 0 && !/_unloadListenersWired/.test(reset),
+    '[A-HIDE3] …and the test hook that drops _postHydrateTailDone does NOT drop it — a window keeps its listeners across a re-driven boot, and a suite that re-armed them would be measuring a page that cannot exist [structural]');
+  assert((app.match(/addEventListener\('pagehide'/g) || []).length === 1
+    && (app.match(/addEventListener\('beforeunload'/g) || []).length === 1,
+    '[A-HIDE3] …and there is exactly one registration site for each of the two unload events [structural]');
 });
 
 _realLog(`\n${pass} passed, ${fail} failed, ${SKIPPED.length} skipped.`);

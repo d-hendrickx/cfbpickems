@@ -33,7 +33,9 @@
 # nothing to keep afterwards, so there is no hurry to delete it — but when pg_cron lands, one of
 # the two should go, and this file is the one that can be removed without a migration.
 #
-# WHY A GET ON `/rest/v1/` AND NOT A TABLE READ: the root of the REST API answers with the OpenAPI
+# SUPERSEDED 2026-09-19 — see the ping step: Supabase now serves the `/rest/v1/` root to the
+# service_role key only, so the ping became a one-row anon read that Postgres itself refuses.
+# ORIGINAL RATIONALE, kept for the record — WHY A GET ON `/rest/v1/` AND NOT A TABLE READ: the root of the REST API answers with the OpenAPI
 # document for the schema. It touches no table, needs no policy, and cannot be affected by a future
 # grant change — so it proves the PROJECT is awake without asserting anything about the data.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -86,7 +88,7 @@ jobs:
           esac
           echo "Pinging ${SUPABASE_URL}/rest/v1/"
 
-      - name: GET /rest/v1/ and fail loudly on any non-2xx
+      - name: Ask Postgres one question and fail loudly unless it answers
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -101,15 +103,34 @@ jobs:
           #   single most useful thing in the log. The explicit test below is what fails the job.
           # The anon key goes in BOTH `apikey` and `Authorization`, which is what PostgREST behind
           # Supabase expects; `apikey` alone is accepted today and the pair is the documented form.
+          # 2026-09-19 — THE ROOT `/rest/v1/` NO LONGER ANSWERS THE ANON KEY. Supabase now serves the
+          # OpenAPI document to the service_role key only ("Invalid API key … Only the service_role
+          # API key can be used for this endpoint"), so the original ping failed HTTP 401 with a
+          # perfectly good secret. The service-role key must never live in a GitHub secret for a
+          # ping, so this asks POSTGRES a question the anon role is NOT allowed to answer instead:
+          # a one-row read of `leagues`. The expected reply is 401 with SQLSTATE 42501 in the body —
+          # permission denied BY THE DATABASE, which is proof the request went through the gateway,
+          # PostgREST and Postgres and came back. A refused KEY looks different (no 42501), and is
+          # still reported as the secret problem it is. Verified with the public anon key.
+          body=$(mktemp)
           code=$(curl --silent --show-error --location --max-time 30 \
-                      --output /dev/null --write-out '%{http_code}' \
+                      --output "$body" --write-out '%{http_code}' \
                       -H "apikey: ${SUPABASE_ANON_KEY}" \
                       -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
-                      "${SUPABASE_URL}/rest/v1/")
+                      "${SUPABASE_URL}/rest/v1/leagues?select=id&limit=1")
           echo "HTTP ${code}"
           case "$code" in
-            2??) echo "Project is awake." ;;
+            2??)
+              # A 2xx must be PostgREST's JSON, not some status page reached through --location
+              # (a paused project answering a redirect to a 200 page would otherwise read "awake").
+              if head -c 1 "$body" | grep -q '[[{]'; then echo "Project is awake."
+              else echo "::error::HTTP ${code} but the body is not JSON — that is not PostgREST answering. The project may be paused."; exit 1; fi ;;
             000) echo "::error::No HTTP response at all (DNS, TLS or timeout) — the project may be PAUSED or the URL is wrong."; exit 1 ;;
-            401|403) echo "::error::HTTP ${code} — the project answered, so it is awake, but the anon key was REFUSED. Check the SUPABASE_ANON_KEY secret; it may have been rotated."; exit 1 ;;
-            *) echo "::error::HTTP ${code} from ${SUPABASE_URL}/rest/v1/ — the keep-alive ping did not succeed."; exit 1 ;;
+            401|403)
+              if grep -q '"42501"' "$body"; then
+                echo "Project is awake — Postgres itself refused the anon read (42501), which is the expected answer."
+              else
+                echo "::error::HTTP ${code} without a 42501 from Postgres — the anon KEY was refused. Check the SUPABASE_ANON_KEY secret; it may have been rotated."; exit 1
+              fi ;;
+            *) echo "::error::HTTP ${code} from ${SUPABASE_URL}/rest/v1/leagues — the keep-alive ping did not succeed."; exit 1 ;;
           esac

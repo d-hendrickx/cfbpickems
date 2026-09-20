@@ -3054,6 +3054,725 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
   }
 }
 
+console.log('\n[23] DI-T6.1 — the notify-fanout client gate is a SCAN-TIME read, never a boot-time one…');
+{
+  // Step 6's rollback is "flip one boolean; it takes effect on the next
+  // invocation, with no deploy." On the server that is `isJobEnabled()`'s one
+  // uncached select per invocation. On the CLIENT the equivalent hazard is a
+  // boot-time decision: read the switch once at boot — or, worse, decline to
+  // wire the relay at all when it is on — and a flip does nothing until every
+  // player closes and reopens the app. On an installed iOS PWA that can be days.
+  //
+  // notifytest [28] owns the behaviour in both states. THIS section owns the
+  // boot-time property, which no behavioural test taken inside one session can
+  // see: the wiring is unconditional and the read happens at scan time.
+  const { readFileSync } = await import('node:fs');
+  const notifSrc23 = readFileSync(new URL('./js/notifications.js', import.meta.url), 'utf8');
+  const appSrc23 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const storage23 = await import('./js/storage.js');
+  const notif23 = await import('./js/notifications.js');
+
+  // ── (a) THE WIRING IS UNCONDITIONAL. ────────────────────────────────────
+  assert(/wireChatNotifications\(\)/.test(appSrc23),
+    '[23] fixture: boot() still calls wireChatNotifications()');
+  {
+    // The 400 characters before the call — no serverJobs term may appear in
+    // them. A `if (!isServerJobEnabled('notifyFanout')) wireChatNotifications()`
+    // would pass every behavioural test written inside one session and still be
+    // the defect: the watermark would never be seeded, so a flip back would
+    // meet the whole intervening week as a backlog.
+    const at = appSrc23.indexOf('wireChatNotifications()');
+    const before = appSrc23.slice(Math.max(0, at - 400), at);
+    assert(!/serverJobs|isServerJobEnabled|notifyFanout/.test(before),
+      '[23] boot() wires the chat relay UNCONDITIONALLY — the switch is not consulted anywhere near the wiring, so a mid-season flip needs no app restart on six phones');
+  }
+
+  // ── (b) THE GATE LIVES INSIDE THE SCAN. ─────────────────────────────────
+  {
+    const scanAt = notifSrc23.indexOf('function _scanNewChatMessages()');
+    const gateAt = notifSrc23.indexOf("if (isServerJobEnabled('notifyFanout')) return;");
+    const wireAt = notifSrc23.indexOf('export function wireChatNotifications(');
+    assert(scanAt > -1 && gateAt > -1, '[23] fixture: both _scanNewChatMessages() and the gate line were located');
+    assert(gateAt > scanAt && (wireAt === -1 || gateAt < wireAt || scanAt < wireAt),
+      `[23] the gate is INSIDE _scanNewChatMessages (scan@${scanAt}, gate@${gateAt}) — one read per scan, which is the same "no cache longer than the invocation" rule _shared/jobs.js holds itself to`);
+    const watermarkAt = notifSrc23.indexOf('_chatWatermarkSeq = Math.max(_chatWatermarkSeq');
+    assert(watermarkAt > -1 && watermarkAt < gateAt,
+      `[23] …and it sits AFTER the watermark advance (watermark@${watermarkAt}, gate@${gateAt}). Gating first would freeze the watermark for as long as the switch is on, and the flip back would arrive as a burst-cap trip instead of a resumed relay`);
+  }
+
+  // ── (c) NO MODULE-LEVEL CACHE. ──────────────────────────────────────────
+  {
+    const fnAt = notifSrc23.indexOf('export function isServerJobEnabled(');
+    const body = notifSrc23.slice(fnAt, notifSrc23.indexOf('\n}', fnAt) + 2);
+    assert(/getSettings\(\)/.test(body),
+      '[23] isServerJobEnabled() reads the seam on every call — getSettings() is synchronous, so there is nothing to gain by caching and a cached switch is a rollback that does not roll back');
+    assert(!/let\s+_serverJobs|const\s+_serverJobsCache|_cachedServerJobs/.test(notifSrc23),
+      '[23] …and no module-scope cache of the switch exists anywhere in the module');
+  }
+
+  // ── (d) EACH WAY, LIVE, WITHIN ONE SESSION. ─────────────────────────────
+  {
+    const before23 = storage23.getSettings();
+    storage23.saveSetting('serverJobs', { notifyFanout: true });
+    const on = notif23.isServerJobEnabled('notifyFanout');
+    storage23.saveSetting('serverJobs', { notifyFanout: false });
+    const off = notif23.isServerJobEnabled('notifyFanout');
+    storage23.saveSetting('serverJobs', undefined);
+    const absent = notif23.isServerJobEnabled('notifyFanout');
+    assert(on === true && off === false && absent === false,
+      `[23] the same module answers true, then false, then false-when-absent WITHOUT a reload (got ${on}/${off}/${absent}) — which is what makes the rollback a flip`);
+    assert(notif23.isServerJobEnabled('notAJob') === false,
+      '[23] …and a job name outside the eight reads as OFF, the same direction as an absent one');
+    storage23.saveSettings(before23);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [24] RG-177 — "we need to now remove the in app notification banner now that
+//      we have onesignal."  (Drew, live on Supabase, 2026-09-19)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// WHAT WAS ALREADY BUILT, AND WHY THE REPORT IS STILL TRUE. The in-app toast is
+// ALREADY supposed to stand down on a device where push is carrying the notice:
+// chat-ui.js's showToast() opens with `if (getPushActive()) return;` (N1/DI-N3,
+// R10), and playBlip() carries the same gate. It is deliberately KEPT on a
+// device where push is NOT active, because being silenced on both surfaces at
+// once is UN-N3's failure. So the report is not "the gate was never built" —
+// it is "the gate reads a flag that, after the Supabase cutover, can no longer
+// be written."
+//
+// THE ROOT CAUSE, one mechanism, two halves:
+//
+//   (1) js/storage.js's save() begins with SEC F1's write interlock —
+//       `if (isSupabaseWriteWithheld()) throw` — and that throw happens ABOVE
+//       the `useBackend(key)` routing check. So it refuses DEVICE-LOCAL keys
+//       too, including KEYS.PUSH_ACTIVE, whenever the Supabase adapter is not
+//       SERVING (IDLE / HYDRATING / SWITCHING / HELD / OFFLINE-READONLY).
+//       refreshPushActiveFlag() wrote through `try { … } catch {}`, so the
+//       refusal was swallowed in silence.
+//
+//   (2) …and nothing ever retried it. boot()'s supabase branch runs
+//       `await ensureSupabaseDataHydrated('boot')` — which RETURNS FALSE
+//       IMMEDIATELY when the active league is not resolved yet, because
+//       applyAuthModeDecision()'s membership refresh is deliberately not
+//       awaited — and then runs `await runPostHydrateTail()` UNCONDITIONALLY.
+//       The tail is latched (`_postHydrateTailDone`), and it is the only
+//       unconditional caller of refreshPushActiveFlag(). So on a normal boot
+//       the one computation happens while every write is refused, and the
+//       `if (!_sbTailRan) runPostHydrateTail()` that fires when the league
+//       finally lands hits the latch and returns immediately.
+//
+// The net effect on Drew's phone: push works, `cfbp_push_active` stays false
+// forever, and every event push delivers ALSO pops the in-app banner.
+//
+// DI-N3 named three moments the answer can change (boot-after-init, a
+// permission grant, a master-toggle flip). Supabase added a FOURTH that nobody
+// added — the moment the answer can be WRITTEN AT ALL.
+console.log('\n[24] RG-177 — the push-active flag survives a boot where the adapter is not serving yet…');
+{
+  const { readFileSync } = await import('node:fs');
+  const appMod24     = await import('./js/app.js');
+  const storage24    = await import('./js/storage.js');
+  const auth24       = await import('./js/auth.js');
+  const push24       = await import('./js/push-onesignal.js');
+  const appSrc24     = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const chatUiSrc24  = readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  const storageSrc24 = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8');
+
+  const saved24 = {
+    document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch,
+    matchMedia: globalThis.matchMedia, Notification: globalThis.Notification,
+    PushSubscriptionOptions: globalThis.PushSubscriptionOptions,
+    OneSignalDeferred: globalThis.OneSignalDeferred,
+  };
+  const setNav24 = (v) => { try { globalThis.navigator = v; }
+    catch { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } };
+
+  // A device on which push genuinely IS carrying the notices: configured App
+  // ID, a browser the SDK supports, permission granted, OneSignal reporting a
+  // live subscription. All three of DI-N3's terms true.
+  const installPushActiveDevice = () => {
+    push24._resetForTest({});
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'abad65e9-e9d8-4b69-b342-c43947a7189a' }) });
+    setNav24({ userAgent: 'Mozilla/5.0 (Linux; Android 14) Chrome/127', vendor: 'Google Inc.', maxTouchPoints: 1, serviceWorker: {} });
+    globalThis.matchMedia = () => ({ matches: false });
+    globalThis.Notification = { permission: 'granted', requestPermission: async () => 'granted' };
+    globalThis.PushSubscriptionOptions = function () {};
+    globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
+    globalThis.OneSignalDeferred = { push: (fn) => { fn({ User: { PushSubscription: { optedIn: true } } }); } };
+  };
+
+  // ── (a) THE MECHANISM: a DEVICE-LOCAL write is refused too ───────────────
+  {
+    auth24.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+      supabaseUrl: 'https://tbmkhnsigeoxqpttciuy.supabase.co', supabaseAnonKey: 'anon' });
+    auth24._setHasSupabaseDataBackendForTest(false);              // the adapter is not serving
+    assert(/KEYS\.PUSH_ACTIVE,/.test(storageSrc24.slice(storageSrc24.indexOf('const DEVICE_LOCAL_KEYS'), storageSrc24.indexOf('const DEVICE_LOCAL_KEYS') + 1400)),
+      '[24] fixture: KEYS.PUSH_ACTIVE really is in DEVICE_LOCAL_KEYS — it never goes near a backend');
+    let threw = null;
+    try { storage24.setPushActive(true); } catch (e) { threw = e; }
+    assert(threw && threw.name === 'AuthModeMismatchError',
+      `[24] SEC F1's write interlock refuses a DEVICE-LOCAL key too, because it runs ABOVE save()'s useBackend() routing check (got ${threw && threw.name})`);
+    assert(storage24.getPushActive() === false,
+      '[24] …and the READ still works (load() routes device-local keys straight to localStorage), so the refusal is invisible to every caller');
+  }
+
+  // ── (b) THE DEFECT, END TO END, IN THE ORDER A REAL BOOT PRODUCES IT ─────
+  // Drew's boot, step by step: the tail runs before the league resolves (so
+  // every write is refused), it computes the one push-active answer it will
+  // ever compute, and THEN the membership lands and the adapter starts serving.
+  // Pre-fix the answer was lost in the gap and the flag stayed false for the
+  // life of the page — so every event push delivers ALSO popped the in-app
+  // banner, on a phone where push demonstrably works.
+  {
+    installPushActiveDevice();
+    auth24._setHasSupabaseDataBackendForTest(false);              // boot: the league is not resolved yet
+    const computed = await appMod24.refreshPushActiveFlag();      // the boot tail's one call
+    assert(computed === true,
+      `[24] fixture: all three of DI-N3's terms are true on this device, so the predicate COMPUTES push-active (got ${computed}) — without this every assertion below is vacuous`);
+    assert(storage24.getPushActive() === false,
+      '[24] …and DURING the non-serving window the flag still reads false, which is right: the interlock is a security control and is not weakened for one key. Content is withheld in that window anyway, and false is the fail-closed direction (UN-N3 — show the toast rather than silence the player)');
+
+    auth24._setHasSupabaseDataBackendForTest(true);               // the league lands; the adapter SERVES
+    assert(typeof appMod24.flushPendingPushActiveFlag === 'function',
+      '[24] app.js exposes the flush that the adapter-serving transition calls');
+    if (typeof appMod24.flushPendingPushActiveFlag === 'function') appMod24.flushPendingPushActiveFlag('test');
+    assert(storage24.getPushActive() === true,
+      '[24] THE BUG: once the adapter is serving, a device where push genuinely carries the notices READS as push-active. False here means the computed answer was thrown away by a swallowed write and nothing ever retried it — the in-app banner keeps firing alongside every push, forever');
+  }
+
+  // ── (c) THE RETRY IS A RE-APPLY, NOT A RECOMPUTE ─────────────────────────
+  // Deliberate: a second refreshPushActiveFlag() at the serving transition
+  // would race the boot tail's own call (which starts earlier but resolves
+  // later — it waits on the SDK), and isPushOptedIn() resolves FALSE on a 3s
+  // timeout, so the losing race writes "not push-active" over a correct "yes"
+  // and hands the bug back intermittently. Proven by taking the device's push
+  // support AWAY before the flush: a recompute would now answer false.
+  {
+    installPushActiveDevice();
+    auth24._setHasSupabaseDataBackendForTest(false);
+    await appMod24.refreshPushActiveFlag();
+    globalThis.Notification = { permission: 'denied', requestPermission: async () => 'denied' };
+    auth24._setHasSupabaseDataBackendForTest(true);
+    appMod24.flushPendingPushActiveFlag('test');
+    assert(storage24.getPushActive() === true,
+      '[24] the flush WRITES the value the last completed computation produced; it does not ask the SDK again (a second async read at this moment is a race with the boot tail\'s, and the loser silences a working device)');
+    assert(appMod24.flushPendingPushActiveFlag('test') === false,
+      '[24] …and it owes nothing on a second call — one deferred write, written once');
+  }
+
+  // ── (d) FAIL-CLOSED IS DURABLE TOO (UN-N3) ───────────────────────────────
+  // The opposite bug, and it is the one that silences a player: a handset whose
+  // permission was revoked between sessions boots reading LAST session's true.
+  // boot() clears the flag for exactly that reason — and that clear was being
+  // refused by the same interlock, leaving the stale `true` in place and
+  // swallowing every in-app notice on a device receiving nothing.
+  {
+    auth24._setHasSupabaseDataBackendForTest(false);
+    globalThis.Notification = { permission: 'denied', requestPermission: async () => 'denied' };
+    const computed = await appMod24.refreshPushActiveFlag();
+    assert(computed === false, `[24] fixture: permission revoked, so the predicate computes push-INACTIVE (got ${computed})`);
+    auth24._setHasSupabaseDataBackendForTest(true);
+    if (typeof appMod24.flushPendingPushActiveFlag === 'function') appMod24.flushPendingPushActiveFlag('test');
+    assert(storage24.getPushActive() === false,
+      '[24] …and the fail-closed CLEAR is just as durable — a device that can no longer receive a push must go back to showing the in-app notice, or it is silenced on both surfaces at once (UN-N3)');
+  }
+
+  // ── (e) THE BOOT ORDER THAT MAKES (b) THE NORMAL CASE [structural] ───────
+  {
+    const bootBody24 = appSrc24.slice(appSrc24.indexOf('async function boot() {'), appSrc24.indexOf('async function runPostHydrateTail'));
+    assert(/if \(isSupabaseDataMode\(\)\) \{\s*\n\s*await ensureSupabaseDataHydrated\('boot'\);\s*\n\s*await runPostHydrateTail\(\);/.test(bootBody24),
+      '[24] boot() runs the post-hydrate tail UNCONDITIONALLY after the adapter hydrate [structural]');
+    const ensureBody24 = appSrc24.slice(appSrc24.indexOf('async function ensureSupabaseDataHydrated('), appSrc24.indexOf('/** The landing half'));
+    assert(/const leagueId = getActiveLeagueId\(\);\s*\n\s*if \(!leagueId\) return false;/.test(ensureBody24),
+      '[24] …and that hydrate returns FALSE immediately when the league is not resolved yet — so the tail routinely runs while every write is refused [structural]');
+    assert(/let _postHydrateTailDone = false;/.test(appSrc24) && /if \(_postHydrateTailDone\) return;/.test(appSrc24),
+      '[24] …and the tail is LATCHED, so the `if (!_sbTailRan) runPostHydrateTail()` that fires when the league lands cannot re-run refreshPushActiveFlag() [structural]');
+
+    const afterBody24 = appSrc24.slice(appSrc24.indexOf('async function afterSupabaseHydrate('), appSrc24.indexOf('function _repaintForSupabaseData('));
+    assert((afterBody24.match(/flushPendingPushActiveFlag\(/g) || []).length >= 2,
+      '[24] afterSupabaseHydrate() flushes the refused write on BOTH serving transitions (ACTIVE and ACTIVE-STALE) — the one place the adapter starts serving [structural]');
+    // Comment lines stripped — this file's own docstring QUOTES the old line
+    // verbatim to explain the defect, and a grep that cannot tell code from
+    // prose would fail on the explanation of the fix.
+    const code24 = appSrc24.split('\n').filter(l => !/^\s*(\*|\/\/)/.test(l)).join('\n');
+    assert(!/try \{ setPushActive\([^)]*\); \} catch \{\}/.test(code24),
+      '[24] no call site writes the flag through a bare swallowing try/catch any more — that swallow is what made a refused write indistinguishable from a successful one [structural]');
+    assert(/setPushActiveDurable\(false\);/.test(code24) && /setPushActiveDurable\(active\);/.test(code24),
+      '[24] …both writers (boot\'s fail-closed clear and refreshPushActiveFlag\'s answer) go through the durable writer [structural]');
+  }
+
+  // ── (f) THE GATE ITSELF IS UNTOUCHED, IN BOTH DIRECTIONS ────────────────
+  // Drew's request was to stop the banner on a device that HAS push. It was not
+  // to remove the fallback for a device that does not — that stays until he
+  // rules otherwise (UN-N3 fails closed, and the decision is his).
+  {
+    const toastFn24 = (chatUiSrc24.match(/function showToast\(msg, \{ force = false \} = \{\}\) \{[\s\S]*?\n\}/) || [''])[0];
+    assert(toastFn24.length > 0, '[24] fixture: chat-ui.js showToast() body located');
+    assert(/^function showToast\(msg, \{ force = false \} = \{\}\) \{\n  if \(getPushActive\(\)\) return;/.test(toastFn24),
+      '[24] the push-active gate is still the FIRST statement in showToast(), ahead of the `force` escape hatch — the banner Drew actually saw ("Picks are in") is a FORCED toast, so a gate below `force` would leave exactly that one untouched');
+    assert(/if \(getPushActive\(\)\) return;/.test(chatUiSrc24.slice(chatUiSrc24.indexOf('function playBlip('), chatUiSrc24.indexOf('function playBlip(') + 1200)),
+      '[24] …and playBlip() still carries it too — a notification the player HEARS is one of them');
+    assert(!/getPushActive/.test(appSrc24.slice(appSrc24.indexOf('function showBackendErrorBanner'), appSrc24.indexOf('function showBackendErrorBanner') + 1200)),
+      '[24] the red loud-fail banner is NOT gated on push and never becomes one (AD-06) — it is not a notification surface');
+  }
+
+  // ── restore ──────────────────────────────────────────────────────────────
+  auth24._setHasSupabaseDataBackendForTest(null);
+  auth24.configureAuth({});
+  push24._resetForTest({});
+  globalThis.document = saved24.document; setNav24(saved24.navigator); globalThis.fetch = saved24.fetch;
+  globalThis.matchMedia = saved24.matchMedia; globalThis.Notification = saved24.Notification;
+  globalThis.PushSubscriptionOptions = saved24.PushSubscriptionOptions;
+  globalThis.OneSignalDeferred = saved24.OneSignalDeferred;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [25] RG-179 — "it's not saving my color scheme preference when I close the
+//      app."  (Drew, commissioner, live v0.22.4 on Supabase, 2026-09-19)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// IT IS SAVING. The write lands: `setTheme()` -> `_setPlayerPref()`
+// (storage.js:606-616) -> `save(cfbp_players, …)` -> the adapter's diff emits
+// exactly one `league_members.preferences` patch, the server takes it, and the
+// next hydrate reads it straight back (adaptertest [A-PREF] pins that half).
+// Nothing about the projection, the NOT NULL rule or the RLS guard is involved.
+//
+// WHAT ACTUALLY FAILS IS THE RE-APPLY, and it is a boot-order cascade:
+//
+//   1. `applyTheme()` has exactly THREE call sites (app.js): boot()'s one-liner,
+//      `resyncPlayerPreferences()`, and the dropdown's own change handler.
+//   2. boot()'s call runs at app.js:1460 — long before any hydrate, and on a
+//      Supabase device the Sheets snapshot prime one line above it is SKIPPED
+//      on purpose (`supabaseDevice ? 0 : primeFromMirror()`, §1.5 item 1). So
+//      `getTheme()` there reads an EMPTY store and can only ever answer
+//      'neutral'. Same for the two toggle renders beside it, and same again on
+//      the hold-recovery path, which renders both toggles BEFORE its awaited
+//      `ensureSupabaseDataHydrated('hold-recovery')`.
+//   3. `resyncPlayerPreferences()` — the one function whose whole job is
+//      "re-apply the player's theme + timezone" — is called ONLY from the
+//      PIN-era login/logout handlers and the session-expiry reconcile. None of
+//      them runs on a normal Supabase boot.
+//   4. So the moment the player RECORD finally arrives (afterSupabaseHydrate ->
+//      _repaintForSupabaseData) nothing re-reads the preference. `refreshHeader()`
+//      does not; `navigateTo()` does not.
+//
+// Net effect on Drew's phone: the palette he picked is sitting in
+// `league_members.preferences.theme` and the app paints 'neutral' on every
+// open, with the dropdown agreeing — which is indistinguishable from "it didn't
+// save." The same cascade hits the timezone PILL (the times themselves recover,
+// because every formatter re-reads getTimezone() at paint time — the pill is
+// rendered once and never again). Dashboard column order and the chat prefs are
+// NOT affected, and that is asserted below rather than assumed: both are read at
+// render time, so the post-hydrate repaint already heals them.
+//
+// RG-177's class exactly, one layer over: a correct value, and no moment at
+// which the thing that consumes it is asked again.
+console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied when the adapter starts serving…');
+{
+  restoreClock();
+  const { readFileSync } = await import('node:fs');
+  const appMod25   = await import('./js/app.js');
+  const auth25     = await import('./js/auth.js');
+  const storage25  = await import('./js/storage.js');
+  const sb25       = await import('./js/supabase-backend.js');
+  const appSrc25   = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  const saved25 = { document: globalThis.document, fetch: globalThis.fetch, localStorage: globalThis.localStorage };
+  const LEAGUE25 = 'L-irb';
+  const ME25 = 'm-drew';
+
+  // ── the DOM the three preference surfaces actually touch, and nothing else ──
+  const store25 = new Map();
+  globalThis.localStorage = {
+    getItem: k => (store25.has(k) ? store25.get(k) : null),
+    setItem: (k, v) => store25.set(k, String(v)),
+    removeItem: k => store25.delete(k),
+    clear: () => store25.clear(),
+  };
+  const reg25 = new Map();
+  /**
+   * RG-180 — THE STUB MODELS THE TWO CONTROLS, not just the markup string.
+   *
+   * The reviewer's note on 17b9db9 is that `renderThemeToggle()` now runs on every Realtime
+   * repaint and replaced the `<select>` wholesale, closing an OPEN dropdown mid-choice. A guard
+   * against that has to compare the control's LIVE `value` — which is what the player's selection
+   * moves — and NOT the markup, because the `selected` attribute never moves with it and a browser
+   * re-serialises innerHTML anyway. A stub that answered `querySelector() -> null` could not tell
+   * a guard that works from one that never fires, so it is taught to parse what was rendered and
+   * hand back stable element objects whose IDENTITY is the assertion: same object, same dropdown.
+   */
+  const parseControls = (html) => {
+    const out = [];
+    if (/<select id="theme-select"/.test(html)) {
+      const options = [...html.matchAll(/<option value="([^"]+)"([^>]*)>/g)]
+        .map(m => ({ value: m[1], _selected: /\bselected\b/.test(m[2] || '') }));
+      const chosen = options.find(o => o._selected) || options[0];
+      out.push({
+        _sel: ['#theme-select', 'select'], id: 'theme-select', options,
+        value: chosen ? chosen.value : '',
+        addEventListener() {}, removeEventListener() {},
+        classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+        dataset: {},
+      });
+    }
+    for (const m of html.matchAll(/<button class="tz-btn([^"]*)" data-tz="([^"]+)"/g)) {
+      const classes = new Set(['tz-btn', ...String(m[1] || '').trim().split(/\s+/).filter(Boolean)]);
+      out.push({
+        _sel: ['.tz-btn', 'button'], dataset: { tz: m[2] },
+        addEventListener() {}, removeEventListener() {},
+        classList: {
+          add: c => classes.add(c), remove: c => classes.delete(c),
+          toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)),
+          contains: c => classes.has(c),
+        },
+      });
+    }
+    return out;
+  };
+  const mkEl = (id) => {
+    const el = {
+      id, _html: '', _kids: [], hidden: false, attrs: {}, style: {},
+      set innerHTML(v) { this._html = String(v); this._kids = parseControls(this._html); },
+      get innerHTML() { return this._html; },
+      setAttribute(k, v) { this.attrs[k] = v; }, getAttribute(k) { return this.attrs[k] ?? null; },
+      addEventListener() {}, removeEventListener() {},
+      querySelector(sel) { return this._kids.find(k => k._sel.includes(sel)) || null; },
+      querySelectorAll(sel) { return this._kids.filter(k => k._sel.includes(sel)); },
+      appendChild(c) { return c; }, remove() { reg25.delete(id); },
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    };
+    reg25.set(id, el);
+    return el;
+  };
+  const themeToggle25 = mkEl('theme-toggle');
+  const tzToggle25 = mkEl('tz-toggle');
+  const bodyClasses25 = new Set();
+  globalThis.document = {
+    hidden: false,
+    addEventListener() {}, removeEventListener() {},
+    getElementById: id => reg25.get(id) || null,
+    createElement: () => mkEl(''),
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    // applyTheme() spreads body.classList and swaps the one `theme-*` entry, so
+    // this stub has to be a real iterable set — reading it back IS the assertion.
+    body: {
+      appendChild(el) { return el; }, dataset: {},
+      classList: {
+        add: c => bodyClasses25.add(c), remove: c => bodyClasses25.delete(c),
+        toggle: (c, on) => (on ? bodyClasses25.add(c) : bodyClasses25.delete(c)),
+        contains: c => bodyClasses25.has(c),
+        [Symbol.iterator]: () => bodyClasses25[Symbol.iterator](),
+      },
+    },
+    head: { appendChild: el => el }, title: '',
+  };
+  globalThis.fetch = async () => { throw new Error('network disabled in boottest [25]'); };
+  // The post-hydrate tail runs for real on this path; chat-ui's init wants one.
+  if (typeof globalThis.MutationObserver !== 'function') {
+    globalThis.MutationObserver = class { observe() {} disconnect() {} takeRecords() { return []; } };
+  }
+
+  // ── the league, as the server holds it: Drew picked Purdue and Eastern ─────
+  const MEMBER_ROW = {
+    league_id: LEAGUE25, id: ME25, user_id: 'u-drew', role: 'commissioner', legacy_player_id: ME25,
+    display_name: 'Drew', initials: 'DH', alma_mater: 'Iowa State', active: true,
+    notify_prefs: {}, preferences: { theme: 'boilermaker', tz: 'ET', sectionOrder: { dashboard: ['standings', 'slate'] }, accent: '#7c3aed' },
+    linked_at: null, extra: {}, created_at: null, updated_at: null,
+  };
+  const TABLES25 = ['league_kv', 'league_members', 'weeks', 'games', 'picks', 'results', 'obligations',
+    'tiebreaker_guesses', 'extra_point_guesses', 'reactions', 'feedback', 'comments',
+    'notifications', 'scribe_learnings', 'scribe_canon', 'scribe_reports', 'game_requests'];
+  const ST25 = {};
+  for (const t of TABLES25) ST25[t] = [];
+  ST25.league_members = [MEMBER_ROW];
+  ST25.weeks = [{ league_id: LEAGUE25, id: 'w1', sport: 'cfb', season: '2026', week_number: 1, label: 'Week 1', status: 'open', extra: {} }];
+
+  /** A PostgREST-shaped read-only fake. Reads only: [25] never writes. */
+  const CLIENT25 = {
+    from(table) {
+      const q = { table, filters: [] };
+      const api = {
+        select() { return api; },
+        eq(c, v) { q.filters.push([c, v]); return api; },
+        then(res, rej) {
+          const rows = (ST25[q.table] || []).filter(r => q.filters.every(([c, v]) => r[c] === v));
+          return Promise.resolve({ data: rows, error: null }).then(res, rej);
+        },
+      };
+      return api;
+    },
+    rpc(name, args) {
+      if (name === 'get_member_contacts') {
+        return Promise.resolve({ data: ST25.league_members.filter(m => m.league_id === args.p_league)
+          .map(m => ({ member_id: m.id, email: null, phone: '', phone_verified: false })), error: null });
+      }
+      if (name === 'week_submission_status') return Promise.resolve({ data: [], error: null });
+      return Promise.resolve({ data: null, error: { code: 'P0001', message: `no rpc ${name}` } });
+    },
+  };
+
+  // ── identity: signed in, memberships resolved, league pointed at ──────────
+  auth25._resetAuthForTest();
+  appMod25._resetSupabaseDataForTest();
+  appMod25._resetAuthHoldForTest();
+  sb25._resetForTest();
+  auth25.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+    supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+  auth25._setMembershipsForTest([{ leagueId: LEAGUE25, memberId: ME25, role: 'commissioner', displayName: 'Drew', leagueName: 'IRB Pick ’Ems' }]);
+  auth25.setActiveLeagueId(LEAGUE25);
+  auth25._setAccountUserIdForTest('u-drew');
+  assert(auth25.getSupabaseSession()?.playerId === ME25,
+    'fixture: auth.js derives the signed-in member, so getTheme()/setTheme() resolve a player record at all');
+
+  // The adapter, wired exactly as app.js wires it except for the one client.
+  sb25.init({
+    register: auth25.registerSupabaseDataBackend,
+    getClient: () => CLIENT25,
+    getActiveLeagueId: auth25.getActiveLeagueId,
+    getIdentityEpoch: auth25.getIdentityEpoch,
+    getAccountUserId: auth25.getAccountUserId,
+    getDeviceDataOwnerTuple: auth25.getDeviceDataOwnerTuple,
+    getDeviceDataOwner: auth25.getDeviceDataOwner,
+    getLeagueName: () => 'IRB Pick ’Ems',
+    getLeagueNameById: () => 'IRB Pick ’Ems',
+    getSession: auth25.getSupabaseSession,
+    hasValidSupabaseSession: auth25.hasValidSupabaseSession,
+    isPrivilegeHeld: auth25.isPrivilegeHeld,
+    clearMirror: () => {}, setSiteUnlocked: () => {},
+    hasSheetMirror: () => false, isSiteUnlocked: () => true,
+  });
+  storage25.setBackendMode('supabase');
+
+  // ── (a) THE BOOT MOMENT — an empty store can only answer 'neutral' ────────
+  {
+    assert(storage25.getTheme() === 'neutral' && storage25.getTimezone() === 'PT',
+      `[25] before the hydrate the seam answers the league defaults (${storage25.getTheme()}/${storage25.getTimezone()}) — which is all boot()'s one applyTheme() can ever read on a Supabase device`);
+    const bootBody25 = appSrc25.slice(appSrc25.indexOf('async function boot() {'), appSrc25.indexOf('async function runPostHydrateTail'));
+    assert(/const primedKeys = supabaseDevice \? 0 : primeFromMirror\(\);/.test(bootBody25),
+      '[25] …and that is by design: a Supabase device deliberately primes NO Sheets snapshot before that line (§1.5 item 1) [structural]');
+    assert(/applyTheme\(getTheme\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
+      '[25] fixture: boot() really does apply the theme at that point [structural]');
+  }
+
+  // ── (b) THE BOOT-TIME PAINT — what the player is actually left looking at ──
+  // The mirror is EMPTY here, which is the whole point: this is the state
+  // app.js:1460 and the hold-recovery path both produce on a Supabase device.
+  {
+    bodyClasses25.clear();
+    bodyClasses25.add('theme-neutral');    // boot()'s applyTheme(getTheme()), which can only read 'neutral'
+    appMod25.renderThemeToggle();
+    appMod25.renderTzToggle();
+    assert(/value="neutral" selected/.test(themeToggle25.innerHTML),
+      '[25] fixture: the boot-time toggle render selects the DEFAULT theme, because there is no player record on the device yet');
+    assert(/class="tz-btn active" data-tz="PT"/.test(tzToggle25.innerHTML),
+      '[25] fixture: …and the timezone pill lights the DEFAULT zone for the same reason');
+  }
+
+  // ── (c) THE DEFECT, END TO END, THROUGH THE REAL LANDING PATH ────────────
+  {
+    let landed = null;
+    try { landed = await appMod25._ensureSupabaseDataHydratedForTest('boot'); }
+    catch (e) { landed = `threw: ${e && e.message}`; }
+    assert(landed === true,
+      `[25] fixture: the REAL landing path ran to the serving branch (got ${JSON.stringify(landed)}) — without this every assertion below is vacuous`);
+    assert(sb25.getState() === 'ACTIVE', `fixture: the adapter is serving (state ${sb25.getState()})`);
+
+    // THE VALUE IS SAVED, and this is the proof: it came back off the member row.
+    const me = storage25.getPlayer(ME25);
+    assert(me?.preferences?.theme === 'boilermaker' && me?.preferences?.tz === 'ET',
+      `[25] the preference round-trips: the member row's theme and tz arrive intact on the player record (${JSON.stringify(me?.preferences || null)}) — so "it isn't saving" is a claim about the RE-APPLY, not about the write`);
+    assert(storage25.getTheme() === 'boilermaker' && storage25.getTimezone() === 'ET',
+      `[25] …and the seam answers them (${storage25.getTheme()}/${storage25.getTimezone()}): every ingredient of the right paint is on the device`);
+
+    assert(bodyClasses25.has('theme-boilermaker') && !bodyClasses25.has('theme-neutral'),
+      `[25] THE BUG: once the player record is serving, the page wears the player's OWN theme (body has ${JSON.stringify([...bodyClasses25])}). Leaving 'theme-neutral' on is what Drew sees on every open, and it is indistinguishable from the preference never having been saved`);
+    assert(/value="boilermaker" selected/.test(themeToggle25.innerHTML),
+      '[25] …and the dropdown agrees with the page. A toggle still selecting the default is the same report wearing a second costume — and a page that repainted while the control did not would be worse, not better');
+    assert(/class="tz-btn active" data-tz="ET"/.test(tzToggle25.innerHTML),
+      `[25] …and the timezone PILL too — same cascade, same fix. The times themselves recover on their own (every formatter re-reads getTimezone() at paint time); the pill is rendered once and never again (got ${tzToggle25.innerHTML.slice(0, 160)})`);
+  }
+
+  // ── (d) THE TWO THAT ARE *NOT* AFFECTED, stated so the row cannot overclaim ─
+  {
+    assert(JSON.stringify(storage25.getSectionOrder('dashboard')) === JSON.stringify(['standings', 'slate']),
+      '[25] dashboard column order needs no re-apply: it is read at RENDER time, so the post-hydrate navigateTo() already heals it');
+    assert(storage25.getAccent() === '#7c3aed',
+      '[25] …and the chat accent likewise — read at render time by chat-ui, which initialises in the post-hydrate tail');
+  }
+
+  // ── (f) RG-180 — THE REPAINT MUST NOT REBUILD A CONTROL THE PLAYER IS USING ─
+  //
+  // The cost of the RG-179 fix, found at review: these two renders now run on EVERY Realtime
+  // repaint (a pick, a score, anyone's edit), and both replaced their container's innerHTML
+  // unconditionally. Replacing the `<select>` closes a dropdown the player has OPEN, mid-choice,
+  // on a phone, for a reason they cannot see — a repaint they did not ask for eating an
+  // interaction they did. Nothing may repaint unless the rendered control disagrees with the
+  // value or the options.
+  {
+    const selBefore = themeToggle25.querySelector('#theme-select');
+    const pillsBefore = tzToggle25.querySelectorAll('.tz-btn');
+    assert(!!selBefore && selBefore.value === 'boilermaker' && pillsBefore.length === 4,
+      `[25] fixture: the stub is modelling a live <select> (${selBefore && selBefore.value}) and ${pillsBefore.length} tz pills`);
+    appMod25.renderThemeToggle();
+    appMod25.renderTzToggle();
+    assert(themeToggle25.querySelector('#theme-select') === selBefore,
+      '[25] a repaint with nothing changed leaves the SAME <select> in the DOM — an open dropdown is not closed under the player’s finger');
+    assert(tzToggle25.querySelectorAll('.tz-btn')[0] === pillsBefore[0],
+      '[25] …and the same tz pills, listeners and all');
+
+    // …and it still repaints when the value really moves, which is the whole of RG-179. Seeded
+    // through the adapter's test seeder rather than setTheme(), so this asserts about the RENDER
+    // and not about a write path adaptertest [A-PREF] already owns.
+    const players = sb25.get('cfbp_players').map(p => (p.playerId === ME25
+      ? { ...p, preferences: { ...p.preferences, theme: 'razorback', tz: 'CT' } } : p));
+    sb25._seedMirrorForTest('cfbp_players', players);
+    appMod25.renderThemeToggle();
+    appMod25.renderTzToggle();
+    const selAfter = themeToggle25.querySelector('#theme-select');
+    assert(selAfter !== selBefore && selAfter.value === 'razorback',
+      `[25] …but a theme that actually CHANGED still re-renders the control (${selAfter && selAfter.value})`);
+    assert(tzToggle25.querySelectorAll('.tz-btn').find(b => b.classList.contains('active')).dataset.tz === 'CT',
+      '[25] …and the tz pill follows the value too — the guard is "already correct", never "already rendered"');
+  }
+
+  // ── (e) THE STRUCTURE THAT KEEPS IT FIXED ───────────────────────────────
+  {
+    const repaintBody25 = appSrc25.slice(appSrc25.indexOf('function _repaintForSupabaseData(reason) {'),
+      appSrc25.indexOf('export function _resetSupabaseDataForTest'));
+    assert(/applyTheme\(getTheme\(\)\)/.test(repaintBody25),
+      '[25] the adapter-serving repaint re-applies the theme — this is the ONE place on a Supabase boot where the player record is known to exist [structural]');
+    assert(/renderThemeToggle\(\)/.test(repaintBody25) && /renderTzToggle\(\)/.test(repaintBody25),
+      '[25] …and re-renders both preference controls with it, so the page and the control can never disagree [structural]');
+    const ensureBody25 = appSrc25.slice(appSrc25.indexOf('async function ensureSupabaseDataHydrated('), appSrc25.indexOf('/** The landing half'));
+    assert(/_repaintForSupabaseData\('snapshot'\)/.test(ensureBody25),
+      '[25] …and the device-snapshot prime goes through the same function, so a warm open paints the right palette on the FIRST frame rather than after the network [structural]');
+    const code25 = appSrc25.split('\n').filter(l => !/^\s*(\*|\/\/)/.test(l)).join('\n');
+    const applyCalls25 = (code25.match(/(?<!function )\bapplyTheme\(/g) || []).length;
+    assert(applyCalls25 === 4,
+      `[25] applyTheme() has exactly four CALL sites — boot, resyncPlayerPreferences, the dropdown, and the adapter repaint (found ${applyCalls25}). A fifth means somebody added a second re-apply path instead of using this one [structural]`);
+    assert(!/resyncPlayerPreferences\(\);\s*$/m.test(repaintBody25),
+      '[25] …and the repaint does NOT call resyncPlayerPreferences(): that function also nulls state.layoutEditing and re-runs the OneSignal login, and a visibilitychange re-hydrate would then cancel an in-progress layout edit [structural]');
+  }
+
+  // ── restore ─────────────────────────────────────────────────────────────
+  sb25._resetForTest();
+  storage25.setBackendMode('local');
+  auth25.configureAuth({});
+  auth25._resetAuthForTest();
+  appMod25._resetSupabaseDataForTest();
+  globalThis.document = saved25.document;
+  globalThis.fetch = saved25.fetch;
+  globalThis.localStorage = saved25.localStorage;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [26] REVIEWER N1 — a HELD-OFFLINE write had a banner written for it and no
+//      renderer to put it on screen (RG-180 follow-up, 2026-09-19)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The adapter does the honest half. When a write never reaches the server it emits
+// `'offline'` with `heldOffline` (the keys that did not go), `pendingWrites`, and a
+// `banner` reading "Couldn't reach the server. N changes still to save — they'll go
+// out when you're back on the network." (supabase-backend.js, the `heldOffline.size`
+// branch of `_runFlush()`; adaptertest [A-FLUSH4] asserts that shape against the real
+// adapter, which is what stops this section testing a message nobody sends).
+//
+// `onSupabaseDataStatus()` threw it away. `status === 'offline'` arrives with
+// `state: 'ACTIVE'` — the league is loaded and readable; it is the WRITE that is
+// stuck — so the OFFLINE-READONLY branch did not match, and the very next line
+// called `hideSupabaseOfflineBanner()` and fell through to the end of the function.
+// Net effect on a phone in a stadium: the badge flips to 📴 and nothing else
+// happens. The pick is in a queue, `_persistSnapshot()` refuses to write the
+// snapshot while anything is dirty, and if iOS reaps the PWA the pick is gone with
+// no record that it ever existed and no moment at which the player was told.
+//
+// The banner is AMBER (DI-180c's weight classes): nothing was refused and sync is
+// not broken — the device is off the network holding work it still means to send.
+// Red stays reserved for a refusal and for sync being off.
+console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'s own words on screen…');
+{
+  restoreClock();
+  const appMod26 = await import('./js/app.js');
+  const saved26 = { document: globalThis.document };
+
+  // A DOM stub small enough to read: a registry keyed by id, so `getElementById`
+  // can find a node `createElement` made and `appendChild` attached — which is the
+  // exact sequence both banner helpers use.
+  const reg26 = new Map();
+  const mkEl26 = () => {
+    const el = {
+      _id: '', className: '', _html: '', style: {}, textContent: '', _kids: [],
+      get id() { return this._id; },
+      set id(v) { this._id = String(v); if (this._id) reg26.set(this._id, this); },
+      set innerHTML(v) { this._html = String(v); }, get innerHTML() { return this._html; },
+      setAttribute() {}, getAttribute() { return null; },
+      addEventListener() {}, removeEventListener() {},
+      appendChild(c) { this._kids.push(c); if (c && c._id) reg26.set(c._id, c); return c; },
+      querySelector() { return null; }, querySelectorAll() { return []; },
+      remove() { if (this._id) reg26.delete(this._id); },
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    };
+    return el;
+  };
+  globalThis.document = {
+    hidden: false,
+    addEventListener() {}, removeEventListener() {},
+    getElementById: id => reg26.get(id) || null,
+    createElement: () => mkEl26(),
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    body: { appendChild(el) { if (el && el._id) reg26.set(el._id, el); return el; }, dataset: {},
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } } },
+    head: { appendChild: el => el }, title: '',
+  };
+
+  const offline26 = () => reg26.get('supabase-offline-banner') || null;
+  const red26 = () => reg26.get('backend-error-banner') || null;
+  // The detail the adapter really emits (adaptertest [A-FLUSH4] pins these field names).
+  const HELD_TEXT = 'Couldn’t reach the server. 2 changes still to save — they’ll go out when you’re back on the network.';
+  const HELD_DETAIL = {
+    state: 'ACTIVE', error: HELD_TEXT, heldOffline: ['cfbp_picks', 'cfbp_tiebreaker_guesses'],
+    pendingWrites: 2, banner: HELD_TEXT,
+  };
+
+  appMod26._onSupabaseDataStatusForTest('offline', HELD_DETAIL);
+  const banner26 = offline26();
+  assert(!!banner26, '[26] a held-offline write puts a banner on screen at all — the defect was that it did not');
+  assert(!!banner26 && banner26.innerHTML.includes('still to save'),
+    `[26] …carrying the ADAPTER's own words, including how many changes are queued (${banner26 ? banner26.innerHTML : 'no banner'})`);
+  assert(!!banner26 && /auth-banner-offline/.test(banner26.className),
+    `[26] …in the AMBER weight class, not the red one (class "${banner26 ? banner26.className : ''}")`);
+  assert(!red26(), '[26] …and the red AD-06 sync banner stays down: nothing was refused and sync is not broken');
+
+  // IT COMES DOWN WHEN THE HELD WRITES LAND. 'synced' is what the adapter emits once the queue
+  // drains, and the banner must not outlive the condition it describes.
+  appMod26._onSupabaseDataStatusForTest('synced', { state: 'ACTIVE', pushed: 2, pendingWrites: 0 });
+  assert(!offline26(), '[26] …and it is cleared the moment the held writes go out');
+
+  // A RETRY THAT FAILS AGAIN RE-RAISES IT, with the new count — the adapter re-emits on every
+  // failed flush, and a renderer that only showed it once would go quiet on the second failure.
+  appMod26._onSupabaseDataStatusForTest('syncing', { state: 'ACTIVE', pendingWrites: 2 });
+  assert(!offline26(), '[26] a retry attempt takes it down while the attempt is in flight');
+  appMod26._onSupabaseDataStatusForTest('offline', { ...HELD_DETAIL, heldOffline: ['cfbp_picks'], pendingWrites: 1,
+    banner: 'Couldn’t reach the server. 1 change still to save — they’ll go out when you’re back on the network.' });
+  assert(!!offline26() && /1 change still to save/.test(offline26().innerHTML),
+    `[26] …and comes back with the new count when it fails again (${offline26() ? offline26().innerHTML : 'no banner'})`);
+
+  // NO REGRESSION ON §5.3. OFFLINE-READONLY is a different state with different copy — the league
+  // itself is being served from the device snapshot — and it must still get its own wording.
+  appMod26._onSupabaseDataStatusForTest('offline', { state: 'OFFLINE-READONLY', heldOffline: [], pendingWrites: 0 });
+  assert(!!offline26() && /Showing your league/.test(offline26().innerHTML),
+    `[26] the §5.3 read-only banner still says what IT says (${offline26() ? offline26().innerHTML : 'no banner'})`);
+
+  // AND A REFUSAL IS STILL RED. The two paths share a status channel and must not share a voice.
+  appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', keys: ['cfbp_picks'],
+    banner: 'The server refused to save cfbp_picks: permission denied. Nothing was saved.' });
+  assert(!!red26() && /Nothing was saved/.test(red26().innerHTML),
+    '[26] a REFUSAL is still the red banner, in the server’s own words (AD-06 stays loud)');
+
+  globalThis.document = saved26.document;
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 restoreClock();
 // REVIEWER F8 (sixth gate) — write-then-exit-in-the-callback. `console.log()`

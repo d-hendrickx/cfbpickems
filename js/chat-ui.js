@@ -93,6 +93,12 @@ import {
 } from './storage.js';
 import { formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE, CHAT_ACCENTS } from './data-model.js';
 import { calculateAtsWinner } from './scoring.js';
+// RG-176 — the generic repaint-survival mechanism. app.js wires it at
+// navigateTo(), but renderChatPage() is ALSO reached from four places that
+// never pass through navigateTo() (an inbound chat event, the ⚙ toggle, a
+// transport flip, the read-marker tick), so this module drives the same pair
+// itself for its own page. See js/field-preserve.js for the four rules.
+import { captureDirtyFields, restoreDirtyFields, stampFieldOwner, isComposing } from './field-preserve.js';
 
 export const chatDigest = _digest;
 
@@ -1713,6 +1719,24 @@ export function renderChatPage() {
   // F2 (UN-165) — a non-empty query REPLACES the message-list area with
   // search results; an OPEN-but-empty query leaves the normal feed rendered
   // unchanged (States table: "Empty query... message list unchanged").
+  // RG-174 — read the in-progress draft off the LIVE composer before the
+  // innerHTML write below destroys it. See captureComposerDraft().
+  const draft = captureComposerDraft();
+  // RG-176 — and the SAME hazard for every other text field on this page: the
+  // ⚙ prefs panel's #pref-nick / #pref-initials. Those are DURABLE synced
+  // state, not a scratch draft, so the rule is stricter than the composer's:
+  // only a DIRTY field (value ≠ the value the markup rendered) is carried, or
+  // a display-name change made on another device would be clobbered by the
+  // stale copy this device happened to render. bindPrefsPanel() listens on
+  // 'change', which fires on BLUR — so a repaint mid-edit loses the edit
+  // outright, not merely the caret.
+  //
+  // `chat-input` is EXCLUDED: captureComposerDraft() above already owns it, and
+  // a restored draft also needs syncComposerChrome() (its grown height and
+  // character count), which the generic pair knows nothing about. Two owners
+  // for one field is how a restore ends up racing itself.
+  const prefsFields = captureDirtyFields(c, me(), { skipIds: ['chat-input'] });
+
   const searchQuery = U.searchQuery.trim();
   const scrollBodyHTML = (U.searchOpen && searchQuery)
     ? searchResultsHTML(searchQuery)
@@ -1742,6 +1766,20 @@ export function renderChatPage() {
   `;
 
   bindChatPage();
+  // RG-174 — put the draft back onto the FRESH composer, after bindChatPage()
+  // so the restored text lands on a node whose listeners are already live.
+  restoreComposerDraft(draft);
+  // RG-176 — and the prefs fields, for the same reason and at the same moment.
+  // The owner key is re-read HERE rather than reused from the capture: the
+  // identity guard has to be checked on BOTH sides, or a session change that
+  // happened between the two halves would slip through.
+  restoreDirtyFields(prefsFields, c, me());
+  // RG-176 — stamp WHOSE data this markup was rendered from, for exactly the
+  // reason `_composerOwner` below exists: the next render may happen after a
+  // session change made on another page, and the text left in these nodes would
+  // otherwise be carried into the new player's fields.
+  stampFieldOwner(c, me());
+  _composerOwner = me();
   watchChatStickyMetrics();
   if (U.searchOpen) {
     // Focus (and restore caret position) rather than scroll-to-bottom — this
@@ -1861,6 +1899,126 @@ function composerHTML() {
     </div>
     <div class="chat-mention-menu" id="chat-mention-menu" style="display:none"></div>
   </div>`;
+}
+
+// ── RG-174 — THE IN-PROGRESS DRAFT SURVIVES A RE-RENDER ──────────────────────
+/**
+ * Drew, 2026-09-19: "the chat will delete my message halfway through me
+ * typing it."
+ *
+ * renderChatPage() rebuilds `#page-chat` with ONE innerHTML assignment, and
+ * composerHTML() emits an empty `#chat-input` textarea element. (Written that
+ * way deliberately: a literal opening textarea TAG in a comment is read as a
+ * real one by xsstest [7c]'s source sweep, which then treats everything up to
+ * the next close tag as an unescaped textarea body.) So every
+ * re-render hands the player a brand-new, blank composer — the node they were
+ * typing into no longer exists. That has been true since the composer shipped;
+ * what changed at the Supabase cutover is the FREQUENCY. renderChatPage() now
+ * runs on every inbound chat event, every Realtime table event
+ * (app.js `onRealtimeEvent` -> `_repaintForSupabaseData` -> navigateTo), every
+ * rehydrate tick, every auth/membership refresh and every pg_cron week flip —
+ * i.e. every few seconds during live games, instead of every few minutes under
+ * Sheets. A latent defect became a constant one.
+ *
+ * FIXED HERE, at the render seam, rather than at any of those triggers: the
+ * triggers are all legitimate (the feed genuinely must repaint when a message
+ * arrives), there are five of them in two modules, and chat-ui.js cannot see
+ * four of them. One capture/restore pair around the single innerHTML write
+ * covers every caller of renderChatPage() that exists now or later.
+ *
+ * The precedent is eleven lines above it in the same function: `U.searchQuery`
+ * + the focus/setSelectionRange restore renderChatPage() already performs for
+ * the SEARCH input, for exactly this reason ("a text input that loses focus on
+ * every keystroke would be unusable"). Nothing is persisted to storage — a
+ * draft is not durable state and there is no draft key to write it to.
+ *
+ * DELIBERATELY SCOPED to a NON-EMPTY draft. An empty composer has nothing to
+ * lose, and re-focusing one on every repaint would pop the on-screen keyboard
+ * open every few seconds on a phone — a new bug in the same place. Focus is
+ * likewise only RESTORED, never granted: a composer the player wasn't in stays
+ * unfocused (drafttest §7).
+ */
+// WHOSE draft is in the box. Stamped by renderChatPage() after every render with the session
+// player it rendered FOR. The textarea outlives a session change made on ANOTHER page (Picks →
+// Log Out / Switch Player never re-renders chat), so without this the next player's first visit
+// to Chat would capture the previous player's text and restore it into THEIR composer — and a
+// tap on Send would post A's words under B's name into the permanent log (RG-51 class; reviewer
+// BLOCK on v0.22.5, 2026-09-19). A draft is only ever carried across a re-render for the SAME
+// verified player; on any mismatch it is dropped, never restored.
+let _composerOwner = null;
+
+// RG-176 — THE BRAND. captureComposerDraft() is the SOLE producer for
+// restoreComposerDraft(), and that is now asserted rather than assumed
+// (reviewer follow-up on RG-174). The producer is where all three guards live —
+// the `_composerOwner` identity check, the non-empty rule, and the IME check
+// below — so a caller that hand-rolled its own snapshot object would bypass all
+// three at once while looking exactly like the supported path.
+const COMPOSER_DRAFT_BRAND = 'chat-ui/composerDraft/v1';
+
+function captureComposerDraft() {
+  if (typeof document === 'undefined') return null;
+  if (!me() || me() !== _composerOwner) return null;
+  // RG-176 — the IME guard (reviewer follow-up on RG-174). Between
+  // compositionstart and compositionend the browser holds a preedit buffer that
+  // is NOT yet part of `value`; snapshotting mid-composition captures half a
+  // word and restoring it races the IME's own commit. js/field-preserve.js owns
+  // the one composition watch for the whole app.
+  if (isComposing()) return null;
+  const input = document.getElementById('chat-input');
+  const value = input?.value || '';
+  if (!value) return null;
+  const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : value.length;
+  return {
+    __src: COMPOSER_DRAFT_BRAND,
+    value,
+    start: typeof input.selectionStart === 'number' ? input.selectionStart : end,
+    end,
+    focused: document.activeElement === input,
+  };
+}
+
+function restoreComposerDraft(snap) {
+  if (!snap) return;
+  if (snap.__src !== COMPOSER_DRAFT_BRAND) {
+    console.error('[chat-ui] restoreComposerDraft() was handed a snapshot captureComposerDraft() did not produce — refusing');
+    return;
+  }
+  if (isComposing()) return;          // RG-176 — never write over a live composition
+  const input = document.getElementById('chat-input');
+  if (!input) return;                 // signed out, chat disabled, or search open — nothing to restore onto
+  if (input.value) return;            // defensive: never clobber text the fresh markup put there itself
+  input.value = snap.value;
+  input.setSelectionRange?.(snap.start, snap.end);
+  syncComposerChrome(input);          // a multi-line draft must come back at its grown height, with its char count
+  if (snap.focused) input.focus();
+}
+
+/** Test-only seams (the `_prefsPanelHTMLForTest` convention, and RG-27's rule
+ *  that an assertion runs against the SHIPPED function rather than a copy).
+ *  drafttest §14 uses them to prove the brand check refuses a forged snapshot
+ *  while the genuine pair still works. Production never calls these. */
+export const _captureComposerDraftForTest = () => captureComposerDraft();
+export const _restoreComposerDraftForTest = (snap) => restoreComposerDraft(snap);
+
+/**
+ * The composer's height + character count, kept in one place because the
+ * 'input' listener (bindChatPage) and the draft restore above both have to
+ * produce the same chrome for the same text. Deliberately does NOT touch the
+ * mention menu: the listener still calls maybeMentionMenu() itself, because
+ * re-opening an @-menu the player never re-typed is not "preserving" anything.
+ */
+function syncComposerChrome(input) {
+  if (!input) return;
+  if (input.style) {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight || 0, 120) + 'px';
+  }
+  const count = document.getElementById('chat-count');
+  if (count) {
+    const len = (input.value || '').length;
+    count.style.display = len >= 900 ? 'inline' : 'none';
+    count.textContent = `${len}/1000`;
+  }
 }
 
 function currentComposerTag() {
@@ -2172,12 +2330,11 @@ function bindChatPage() {
 
   // composer
   const input = document.getElementById('chat-input');
-  const count = document.getElementById('chat-count');
   input?.addEventListener('input', () => {
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-    const len = input.value.length;
-    if (count) { count.style.display = len >= 900 ? 'inline' : 'none'; count.textContent = `${len}/1000`; }
+    // RG-174 — the autosize + char count moved into syncComposerChrome() so the
+    // draft restore produces identical chrome for identical text. Behaviour of
+    // this listener is otherwise unchanged.
+    syncComposerChrome(input);
     maybeMentionMenu(input);
   });
   input?.addEventListener('keydown', e => {

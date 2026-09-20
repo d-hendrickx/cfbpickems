@@ -8115,7 +8115,11 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         // transport's "is the mirror serving" probe. app.js does not CALL it — it passes the
         // reference — so the transport can refuse a fetch from a mirror that is not serving
         // without importing the adapter itself (AD-16: chatTransport imports only backend.js).
-        'isReady'],
+        'isReady',
+        // 2026-09-19 (found while root-causing RG-179): the hide/close handler calls `sb.flush()` so a
+        // debounced write made just before the PWA is backgrounded is sent, not lost. Lifecycle only —
+        // it moves no data through app.js; flush() itself holds (never drops) when not serving.
+        'flush'],
       'auth.js': ['beginSwitch', 'switchLeague', 'dropMirror', 'hasDeviceSnapshot'],
       'storage.js': ['isReady', 'getState', 'get', 'set'],
     };
