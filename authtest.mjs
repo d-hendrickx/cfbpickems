@@ -9512,21 +9512,45 @@ console.log('\n[49] Step 6 Phase 4 (trainer) — the LOW-FREQUENCY staleness rul
 
   // (j) END TO END, THROUGH THE RENDERED CARD — the weekly cadence label actually reaches the
   //    "may be dead" sentence, not just the pure function.
+  //
+  // ── THE CLOCK IS INJECTED (RG-193 closure, 2026-09-21). ────────────────────
+  // This assertion used to run against the card's OWN real, unmocked clock and
+  // a flip time 30 days in the past — which made it a FLAKE, not a test: the
+  // escalation depends on where the wall clock sits relative to the most recent
+  // Monday 09:00 America/Chicago slot plus its 6-hour grace, so the suite went
+  // red for six hours every Monday morning and green the rest of the week. It
+  // was failing, on main, for exactly that reason when this branch started.
+  //
+  // `renderBackgroundJobsAdminSectionHTML({ now })` takes the same injectable
+  // `now` `jobOverdueMs()` has always taken, so BOTH sides of the window are
+  // now pinned at fixed instants and the suite reads the same at any hour.
   resetAll();
   auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
     supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
   storage.setBackendMode('local');
   app._setBgJobsCacheForTest({ leagueId: 'L-x', rows: [], fetchedAt: Date.now(), loading: false, error: null });
   storage.saveSetting('serverJobs', { trainer: true });
-  // A real, long-past flip time so the card's OWN (real, unmocked) clock reads it as overdue too —
-  // the pure-function proof above is what pins the ARITHMETIC; this pins that the card actually
-  // calls it with the right job name and renders the label jobCadenceLabel() produces.
-  storage.saveSetting('serverJobsFlippedAt', { trainer: new Date(Date.now() - 30 * 86400000).toISOString() });
-  const html49 = app.renderBackgroundJobsAdminSectionHTML();
-  const at = html49.indexOf('SCRIBE Trainer');
-  const trainerBlock = at === -1 ? '' : html49.slice(at, at + 320);
+  const flipped49 = MON_9AM_CHICAGO_UTC - 30 * 86400000;   // a month before the slot
+  storage.saveSetting('serverJobsFlippedAt', { trainer: new Date(flipped49).toISOString() });
+  const blockAt = (html) => {
+    const i = html.indexOf('SCRIBE Trainer');
+    return i === -1 ? '' : html.slice(i, i + 320);
+  };
+  // PAST THE GRACE WINDOW — 8 hours after the slot, 2 past the 6-hour grace.
+  const trainerBlock = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 8 * 3600000 }));
   assert(/expected weekly \(Mon 09:00 America\/Chicago\)\. This job may be dead\./.test(trainerBlock),
     `[49] (j) a trainer switch flipped a month ago with no run -> escalates with the WEEKLY cadence label, not a minutes-based one (got ${JSON.stringify(trainerBlock)})`);
+  // INSIDE THE GRACE WINDOW — 3 hours after the same slot. The informative
+  // sentence, NOT the alarm. Without this case the assertion above would pass
+  // just as happily against a card that escalated unconditionally.
+  const trainerBlockGrace = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 3 * 3600000 }));
+  assert(/has not run yet\./.test(trainerBlockGrace) && !/may be dead/.test(trainerBlockGrace),
+    `[49] (j2) …and three hours after the slot — inside the 6-hour grace — the SAME fixture reads "has not run yet", not "may be dead" (got ${JSON.stringify(trainerBlockGrace)})`);
+  // AND THE INJECTED CLOCK IS REALLY THE ONE BEING USED: an instant BEFORE the
+  // flip-time's own week cannot be overdue, whatever the real wall clock says.
+  const trainerBlockEarly = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: flipped49 + 3600000 }));
+  assert(!/may be dead/.test(trainerBlockEarly),
+    `[49] (j3) …and an instant one hour after the flip is never overdue — proof the card read the injected clock rather than Date.now() (got ${JSON.stringify(trainerBlockEarly)})`);
 
   app._setBgJobsCacheForTest({});
   storage.saveSetting('serverJobs', {});

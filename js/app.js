@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.1';
-export const APP_VERSION_DATE = '2026-09-20';
+export const APP_VERSION = 'v0.23.2';
+export const APP_VERSION_DATE = '2026-09-21';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -51,6 +51,15 @@ export const APP_VERSION_DATE = '2026-09-20';
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.2',
+    date: '2026-09-21',
+    added: [],
+    fixed: [
+      'Second half of the push notification fix. Some phones still said "Push is on" when the phone had actually lost its registration with the notification service, so nothing arrived. The app now checks with the phone itself, re-registers on its own when it can, and the 🔔 screen shows a Reconnect button when it cannot.',
+      'If the 🔔 screen shows Reconnect, tap it once. That is the only thing anyone should need to do.',
+    ],
+  },
   {
     version: 'v0.23.1',
     date: '2026-09-20',
@@ -617,7 +626,7 @@ import {
 import {
   sendTestPush, pollTestPushResult, testPushResultCopy, testPushRefusalCopy,
   serverPushOffCopy,
-  breakdownLine, newestBreakdown,
+  breakdownLine, newestBreakdown, jobCountsSummary,
   checkPushReach, reachLine, reachHeaderCopy,
   reportAppVersionOnce, fetchMemberAppVersions, versionLine, versionSummary,
   timeAgo as pushTimeAgo,
@@ -4297,6 +4306,17 @@ function pushFailureMessage(res) {
     'init-failed':         "Push setup failed. Fully close and reopen the app, then try again.",
     'request-failed':      "Push setup failed. Fully close and reopen the app, then try again.",
     'init-already-spent':  "Push setup already ran and didn't finish. Fully close and reopen the app, then try again.",
+    // ── RG-193 (2026-09-21) — the two reasons the re-subscribe path can emit.
+    //    'no-endpoint' is the honest end of the line: permission is granted,
+    //    the record was torn down and rebuilt, and this browser still produced
+    //    no push endpoint. It is NOT "try again" — the retry already happened,
+    //    inside the call — so the copy asks for the one thing that sometimes
+    //    does fix it. 're-subscribed' is a SUCCESS and never reaches a failure
+    //    toast; it is mapped here because [24e] requires every reason the
+    //    module can emit to have a sentence, and an unmapped success would fall
+    //    through to "Could not enable push" if anyone ever routed it here.
+    'no-endpoint':         "This device still isn't registered for push. Fully close and reopen the app; if it still doesn't take, remove the app from your home screen and add it again.",
+    're-subscribed':       "Push is on for this device.",
     // ── commissioner-side setup gaps. A player retrying forever will never
     //    fix these, so the copy says whose problem it is. 'web-push-not-enabled'
     //    is the LIVE one: the league's push app has no Web Push platform
@@ -14462,9 +14482,9 @@ export function _setBgJobsCacheForTest(patch) {
   _bgJobsCache = { leagueId: null, rows: null, fetchedAt: 0, loading: false, error: null, ...patch };
 }
 
-function _bgJobTimeAgo(iso) {
+function _bgJobTimeAgo(iso, now = Date.now()) {
   if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
+  const ms = now - new Date(iso).getTime();
   if (!(ms >= 0)) return 'just now';
   const mins = Math.floor(ms / 60000);
   if (mins < 1) return 'just now';
@@ -14480,7 +14500,14 @@ function _bgJobTimeAgo(iso) {
  * Exported for the same reason `renderFeedbackAdminSectionHTML` is: a test
  * seam that does not require the DOM.
  */
-export function renderBackgroundJobsAdminSectionHTML() {
+export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) {
+  // `now` IS A TEST SEAM AND NOTHING ELSE — production calls this with no
+  // argument and gets the wall clock it always had. It exists because the
+  // staleness sentences below are the only thing on this card that depends on
+  // the current instant, and authtest [49](j) could not pin them: with a real
+  // clock, "a weekly job is overdue" is true for 162 hours a week and false for
+  // six, so the suite went red every Monday morning (2026-09-21) for a card
+  // that was behaving perfectly.
   if (!isSupabaseDataMode()) return '';
   const bag = (getSettings().serverJobs) || {};
   // REVIEWER R1 — the sibling map, read here and nowhere else. `bag` above
@@ -14524,22 +14551,22 @@ export function renderBackgroundJobsAdminSectionHTML() {
       if (!flippedAt) {
         statusLine = 'Switched on — has not run yet.';
       } else {
-        const overdueMs = hasStaleness ? jobOverdueMs(job, new Date(flippedAt).getTime()) : null;
+        const overdueMs = hasStaleness ? jobOverdueMs(job, new Date(flippedAt).getTime(), now) : null;
         if (overdueMs != null) {
           failed = true;
-          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt)}, still no run — expected ${cadenceLabel}. This job may be dead.`;
+          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt, now)}, still no run — expected ${cadenceLabel}. This job may be dead.`;
         } else {
-          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt)} — has not run yet.`;
+          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt, now)} — has not run yet.`;
         }
       }
     } else if (!last.finishedAt) {
       failed = true;
-      statusLine = `Last ran ${_bgJobTimeAgo(last.startedAt)} · FAILED — no result recorded`;
+      statusLine = `Last ran ${_bgJobTimeAgo(last.startedAt, now)} · FAILED — no result recorded`;
     } else if (!last.ok) {
       failed = true;
-      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)} · FAILED — ${String(last.error || 'unknown error').slice(0, 140)}`;
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)} · FAILED — ${String(last.error || 'unknown error').slice(0, 140)}`;
     } else if (last.skipped) {
-      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)} · nothing to do`;
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)} · nothing to do`;
     } else {
       // S-F2 (Step 6 PHASE 5 security gate, 2026-09-20) — WHO SET IT OFF.
       // `scribe-classify`/`scribe-autonomous` are class-U: a PLAYER's device
@@ -14551,21 +14578,26 @@ export function renderBackgroundJobsAdminSectionHTML() {
       // forcing paid posts. `payload.actorMemberId` (written by
       // `_shared/runs.js`, off the VERIFIED JWT, never a body field) is pulled
       // out of the generic count list and rendered as a name.
-      const { actorMemberId, ...rest } = last.payload || {};
+      const { actorMemberId } = last.payload || {};
       const actorName = actorMemberId
         ? ((getPlayers().find(p => p && p.playerId === actorMemberId) || {}).displayName || actorMemberId)
         : '';
-      const counts = Object.entries(rest).map(([k, v]) => `${k}: ${v}`).join(', ');
-      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)}${actorName ? ` · by ${actorName}` : ''}${counts ? ` · ${counts}` : ''}`;
+      // RG-193 (2026-09-21) — the counts line moved to `jobCountsSummary()` in
+      // js/push-selftest.js. It renders the same `key: value` pairs it always
+      // did, drops the structures that used to come out as "[object Object]",
+      // and spells out the push outcome that `pushed: N` on its own could not:
+      // that number meant "OneSignal returned HTTP 200" for two days.
+      const counts = jobCountsSummary(last.payload || {});
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)}${actorName ? ` · by ${actorName}` : ''}${counts ? ` · ${counts}` : ''}`;
     }
     // Staleness — the failure mode `job_runs` exists to make visible at all:
     // a scheduled job that has quietly stopped running looks, to every OTHER
     // check, exactly like a job with nothing to do.
     if (built && on && last && last.finishedAt && hasStaleness) {
-      const overdueMs = jobOverdueMs(job, new Date(last.finishedAt).getTime());
+      const overdueMs = jobOverdueMs(job, new Date(last.finishedAt).getTime(), now);
       if (overdueMs != null) {
         failed = true;
-        const minsSince = Math.round((Date.now() - new Date(last.finishedAt).getTime()) / 60000);
+        const minsSince = Math.round((now - new Date(last.finishedAt).getTime()) / 60000);
         statusLine = `No run in ${minsSince} min — expected ${cadenceLabel}. This job may be dead.`;
       }
     }

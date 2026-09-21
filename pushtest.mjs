@@ -1318,6 +1318,10 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
   let CALLS = [];
   let sdk = null;
   let scriptDelayMs = 5;
+  /** The BROWSER's own push endpoint, as pushManager.getSubscription() sees it.
+   *  Section-scoped and mutable: the whole point of [12i3] is a device where the
+   *  SDK's record and the browser's endpoint disagree, and then stop disagreeing. */
+  let browserSub = false;
 
   /** The shipped v16 contract, the clauses that matter here.
    *
@@ -1326,18 +1330,44 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
    *  resolves instantly and changes nothing, which is why "✅ Push enabled" could
    *  be shown over a device that is still unsubscribed. Only
    *  `User.PushSubscription.optIn()` creates the subscription. */
-  function makeSdk({ initMs = 30, subscribed = true, optInCreates = true, loginGate = null } = {}) {
+  function makeSdk({ initMs = 30, subscribed = true, optInCreates = true, loginGate = null, token,
+                     endpointMintedBy = 'optIn' } = {}) {
     let inited = false;
+    // RG-193 [12i3] — `endpointMintedBy` models the v16 behaviour the reviewer
+    // named as the crux: `optIn()` SHORT-CIRCUITS when the SDK's own model
+    // already believes this device is opted in, so the call returns cleanly and
+    // mints nothing. 'recycle' = only an optOut()-then-optIn() cycle produces a
+    // real browser endpoint; 'never' = not even that works.
+    const mint = (via) => { if (endpointMintedBy === via) browserSub = true; };
     const sub = {
       optedIn: subscribed,
       id: subscribed ? 'sub-abc' : undefined,
       async optIn() {
         CALLS.push('optIn');
         if (!optInCreates) return;
+        // The short-circuit itself: already opted in ⇒ nothing happens at all.
+        if (sub.optedIn === true && sub.id) { mint('optIn'); return; }
         sub.optedIn = true;
         sub.id = 'sub-new';
+        if (token !== undefined) sub.token = 'tok-new';
+        mint('optIn');
+        mint('recycle-in-progress');
+      },
+      async optOut() {
+        CALLS.push('optOut');
+        sub.optedIn = false;
+        sub.id = undefined;
+        browserSub = false;
+        // The next optIn() is now a REAL one (no short-circuit), so a fixture
+        // whose endpoint is minted by the recycle arms it here.
+        if (endpointMintedBy === 'recycle') endpointMintedBy = 'recycle-in-progress';
       },
     };
+    // RG-193 [12m] — `token` is the v16 field that says a PUSH ENDPOINT exists
+    // for this device. It is left ABSENT unless a scenario names it, because
+    // that is the shape of every browser whose SDK build does not expose it, and
+    // an absent field must never read as "no token" (see [12m]).
+    if (token !== undefined) sub.token = token;
     const user = { PushSubscription: sub, externalId: '' };
     return {
       async init() { await new Promise(r => setTimeout(r, initMs)); inited = true; CALLS.push('init'); },
@@ -1365,9 +1395,10 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
   }
 
   function installWorld({ permission = 'granted', subscribed = true, initMs = 30, scriptMs = 5,
-                          optInCreates = true, loginGate = null } = {}) {
+                          optInCreates = true, loginGate = null, token, swSubscription,
+                          endpointMintedBy = 'optIn' } = {}) {
     CALLS = [];
-    sdk = makeSdk({ initMs, subscribed, optInCreates, loginGate });
+    sdk = makeSdk({ initMs, subscribed, optInCreates, loginGate, token, endpointMintedBy });
     scriptDelayMs = scriptMs;
     globalThis.OneSignalDeferred = [];
     globalThis.document = {
@@ -1375,7 +1406,18 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
       head: { appendChild(s) { const t = setTimeout(() => { drain(); s.onload?.(); }, scriptDelayMs); t?.unref?.(); } },
       body: { dataset: {} },
     };
-    setNav({ userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130', vendor: 'Google Inc.', maxTouchPoints: 0, serviceWorker: {} });
+    // `swSubscription` (RG-193): undefined = a navigator that cannot be asked
+    // at all (no getRegistration), which is every scenario written before this
+    // and must stay unchanged. true/false = the browser's OWN answer about
+    // whether a push endpoint exists for the registered worker — MUTABLE, so a
+    // scenario can model an endpoint that only appears after a re-subscribe.
+    browserSub = !!swSubscription;
+    const serviceWorker = swSubscription === undefined ? {} : {
+      getRegistration: async () => ({
+        pushManager: { getSubscription: async () => (browserSub ? { endpoint: 'https://push.example/x' } : null) },
+      }),
+    };
+    setNav({ userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130', vendor: 'Google Inc.', maxTouchPoints: 0, serviceWorker });
     globalThis.matchMedia = () => ({ matches: false });
     globalThis.Notification = { permission };
     globalThis.PushSubscriptionOptions = function () {};
@@ -1559,6 +1601,123 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
       `12i-4: …and it names the remaining problem and what to do, rather than "Could not enable push". Got ${JSON.stringify(bad.message)}`);
   }
 
+  // ── [12i2] RG-193 — THE STALE RECORD THAT MADE RECONNECT A NO-OP ────────
+  //
+  // Drew's iPhone, 2026-09-21, on the v0.23.1 build that shipped the auto
+  // re-subscribe: permission granted, the app reporting "Push is on for this
+  // device", and OneSignal holding NO iOS subscription for anyone in the
+  // league. The re-subscribe ran and did nothing, silently, because its
+  // idempotency shortcut read the SAME local values the status line was
+  // reading:
+  //
+  //     if (sub.optedIn === true && sub.id) return;   // "already subscribed"
+  //
+  // `optedIn` and `id` come from the SDK's own store. They survive a
+  // subscription the BROWSER no longer has — which is exactly the state that
+  // needed repairing. So the one button that could have fixed the outage
+  // returned ok:'opted-in' without calling optIn(), and the phone stayed
+  // silent.
+  {
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: false });
+    push._resetForTest();
+    const res = await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(CALLS.includes('optIn'),
+      `12i2: the SDK says "already subscribed" and the BROWSER has no push endpoint ⇒ optIn() is called anyway. The idempotency shortcut must not be satisfied by the same stale record that produced the wrong status line. Got ${JSON.stringify(CALLS)}`);
+    assert(res.ok === true,
+      `12i2-1: …and the repair reports itself honestly (got ${JSON.stringify(res)})`);
+  }
+  {
+    // THE CONTROL — a device that is genuinely subscribed is still left alone.
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: true });
+    push._resetForTest();
+    await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(!CALLS.includes('optIn'),
+      `12i2-2: CONTROL — a device the browser AND the SDK both agree is subscribed is untouched: optIn() is not called on every boot (got ${JSON.stringify(CALLS)})`);
+  }
+  {
+    // …and the browser we cannot ask is unchanged: the shortcut still applies.
+    installWorld({ permission: 'granted', subscribed: true });
+    push._resetForTest();
+    await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(!CALLS.includes('optIn'),
+      `12i2-3: …and where the browser cannot be asked at all, behaviour is exactly what it was — an unanswerable question is not a reason to re-subscribe a working device (got ${JSON.stringify(CALLS)})`);
+  }
+
+  // ── [12i3] REVIEWER #2 — WHEN optIn() ITSELF IS THE NO-OP ───────────────
+  //
+  // The crux the reviewer named, and the one case [12i2] does not cover: v16's
+  // `optIn()` short-circuits when the SDK's OWN model already says this device
+  // is opted in. On a device whose record survived a subscription the browser
+  // no longer has, that means calling optIn() — which is what [12i2] now
+  // guarantees happens — still mints nothing, and the phone stays silent with
+  // every layer reporting success.
+  //
+  // So the browser is re-asked AFTER the call, and if there is still no
+  // endpoint the subscription is RECYCLED: optOut() then optIn(), once per page
+  // load. It cannot prompt (permission is already granted — the function
+  // refuses outright otherwise, and that precondition is checked before any of
+  // this), and it never runs unasked: `maybeAutoOptInPush()` (js/app.js) gates
+  // the boot path on the player's own master preference.
+  {
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: false, endpointMintedBy: 'recycle' });
+    push._resetForTest();
+    const res = await keepAlive(push.ensurePushSubscription());
+    await settle();
+    const seq = CALLS.filter((c) => c === 'optIn' || c === 'optOut');
+    assert(JSON.stringify(seq) === JSON.stringify(['optIn', 'optOut', 'optIn']),
+      `12i3: optIn() short-circuits and mints nothing, so the subscription is RECYCLED — optOut() then optIn(), in that order and only after the first attempt was shown to have failed. Got ${JSON.stringify(CALLS)}`);
+    assert(res.ok === true,
+      `12i3-1: …and the repair reports success only because the BROWSER now holds an endpoint, not because a call returned (got ${JSON.stringify(res)})`);
+    // The identity is asserted by the CALLER after the subscription exists
+    // (enablePushOnThisDevice/maybeAutoOptInPush both do this, in that order),
+    // so the scenario does it too before reading the three-fact status.
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.ok === true && st.browserSubscription === true,
+      `12i3-2: …and the honest status agrees: this device can now actually receive a push (got ${JSON.stringify(st)})`);
+  }
+  {
+    // EVEN THE RECYCLE FAILS — the device is genuinely unable to subscribe.
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: false, endpointMintedBy: 'never' });
+    push._resetForTest();
+    const res = await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(res.ok === false,
+      `12i3-3: a recycle that still produces no endpoint is a FAILURE, said plainly. "We tried twice" is not a reason to claim success (got ${JSON.stringify(res)})`);
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.ok === false && st.hasSubscription === false,
+      `12i3-4: …and the status stays "not registered" (got ${JSON.stringify(st)})`);
+    const card = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', st);
+    assert(/isn't registered for push yet/.test(card),
+      '12i3-5: …and the 🔔 screen says so, rather than the affirmative it was showing on a phone that could receive nothing');
+  }
+  {
+    // BOUNDED — one cycle per page load. Two calls must not produce two
+    // recycles: a device that cannot subscribe would otherwise churn its own
+    // subscription on every render.
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: false, endpointMintedBy: 'never' });
+    push._resetForTest();
+    await keepAlive(push.ensurePushSubscription());
+    await settle();
+    await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(CALLS.filter((c) => c === 'optOut').length === 1,
+      `12i3-6: the recycle is spent once per page load, however many times the button is tapped (got ${JSON.stringify(CALLS)})`);
+  }
+  {
+    // AND THE CONTROL — a device whose FIRST optIn() works is never recycled.
+    installWorld({ permission: 'granted', subscribed: false, swSubscription: false, endpointMintedBy: 'optIn' });
+    push._resetForTest();
+    const res = await keepAlive(push.ensurePushSubscription());
+    await settle();
+    assert(res.ok === true && !CALLS.includes('optOut'),
+      `12i3-7: CONTROL — when the first optIn() genuinely mints an endpoint, nothing is torn down (got ${JSON.stringify(CALLS)})`);
+  }
+
   // ── [12j] COORDINATOR RULING — NO ACTION NEEDED FROM PLAYERS ─────────────
   // Five of six players cannot be asked to find a settings screen. Where
   // permission is ALREADY granted the subscription can be created with no
@@ -1700,6 +1859,83 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
       '12g-1: …and that call site awaits ensureOneSignalInit() before it touches the SDK. Deleting the await is the mutation this section exists to catch');
   }
 
+  // ── [12m] RG-193 — A SUBSCRIPTION ID IS NOT A PUSH ENDPOINT ─────────────
+  //
+  // Drew's iPhone, 2026-09-21: the app says "Push is on for this device"
+  // (permission granted AND a subscription id AND the external id linked),
+  // OneSignal accepted a notification for that external id — and the phone
+  // showed nothing. `PushSubscription.id` is OneSignal's own record id; the
+  // thing a push is actually delivered to is the TOKEN, which iOS only hands
+  // over once `pushManager.subscribe()` has genuinely succeeded. A record with
+  // an id and no token is not deliverable, and the status line must not claim
+  // it is.
+  //
+  // THE ABSENT FIELD IS THE CAREFUL PART. Where the SDK does not expose `token`
+  // at all we must not invent a negative — that would put "this device isn't
+  // registered" and a Reconnect button in front of players whose push works
+  // fine. Absent ⇒ unchanged behaviour (CONVENTIONS #10); present-and-empty ⇒
+  // not deliverable.
+  {
+    installWorld({ permission: 'granted', subscribed: true, token: '' });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.hasSubscription === false && st.ok === false,
+      `12m: a subscription record with an id but NO TOKEN is not a reachable device, and the status says so instead of "push is on". Got ${JSON.stringify(st)}`);
+    const card = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', st);
+    assert(/isn't registered for push yet/.test(card) && /notif-priming-btn/.test(card),
+      '12m-1: …so the 🔔 screen offers Reconnect, which calls optIn() — the one call that can actually mint a subscription with a token');
+  }
+  {
+    installWorld({ permission: 'granted', subscribed: true, token: 'tok-abc' });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.ok === true && st.hasSubscription === true,
+      `12m-2: …and a subscription WITH a token is reachable, exactly as before. Got ${JSON.stringify(st)}`);
+    assert(!JSON.stringify(st).includes('tok-abc'),
+      '12m-3: …and the token VALUE is never copied out — its presence is the only fact this line needs, and this status is meant to be read out loud to the commissioner');
+  }
+  {
+    // ── THE ONE DREW'S IPHONE IS IN. The SDK reports a subscription (and no
+    // `token` field at all), while the BROWSER — which is the thing that
+    // actually holds the push endpoint — has none. OneSignal's dashboard
+    // agreed with the browser: not one iOS subscription in the whole league.
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: false });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.hasSubscription === false && st.ok === false && st.browserSubscription === false,
+      `12m-5: the BROWSER's own pushManager.getSubscription() outranks the SDK's cached record — no endpoint means no push, whatever OneSignal's local store remembers. Got ${JSON.stringify(st)}`);
+    const card = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', st);
+    assert(/isn't registered for push yet/.test(card),
+      '12m-6: …and the 🔔 screen says so instead of "Push is on for this device", which is what it said on a phone that could not receive anything');
+  }
+  {
+    installWorld({ permission: 'granted', subscribed: true, swSubscription: true });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.ok === true && st.browserSubscription === true,
+      `12m-7: …and a browser that DOES hold an endpoint still reads ok (got ${JSON.stringify(st)})`);
+    assert(!JSON.stringify(st).includes('push.example'),
+      '12m-8: …and the endpoint URL is never copied out — only whether one exists');
+  }
+  {
+    // The browser/SDK build that does not expose the field at all.
+    installWorld({ permission: 'granted', subscribed: true });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.ok === true && st.hasSubscription === true,
+      `12m-4: an SDK that does not expose \`token\` AT ALL is unchanged — an absent field never reads as a negative (CONVENTIONS #10), or every device on such a build would be told it is broken. Got ${JSON.stringify(st)}`);
+  }
+
   // Restore the suite's own globals — every later section (and any suite that
   // imports this one's modules) must not inherit a push fixture.
   globalThis.document = savedG.document; setNav(savedG.navigator); globalThis.fetch = savedG.fetch;
@@ -1707,6 +1943,90 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
   globalThis.PushSubscriptionOptions = savedG.PushSubscriptionOptions;
   globalThis.OneSignalDeferred = savedG.OneSignalDeferred;
   push._resetForTest();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[13] RG-193 — the copy for "OneSignal has no device for this account"…');
+// The server can now tell the difference between "a notification was created
+// for you" and "we asked, and the push service has no device under your name"
+// (notifyFanout.twin.mjs [12]). These are the sentences that difference turns
+// into — and the reason the difference is worth having at all: the second one
+// has an action attached and the first does not.
+{
+  const pst = await import('./js/push-selftest.js');
+  const run = (payload, over = {}) => ({ ok: true, skipped: null, error: null, payload, ...over });
+
+  const noSub = pst.testPushResultCopy(run({
+    recipients: 1, recorded: 1, pushed: 0,
+    onesignal: { outcome: 'no_subscribers', invalid: 0 },
+    breakdown: [{ memberId: 'p1', notified: true, pushed: false, reason: 'no_subscription' }],
+  }), { sentAgo: '3s ago' });
+  assert(/no device registered/i.test(noSub.text),
+    `13-1: a run whose OneSignal outcome was "nothing deliverable" says the push service has NO DEVICE for this account — not the old "accepted it for 1 device", which is the sentence that told Drew delivery worked while his phone sat silent. Got ${JSON.stringify(noSub.text)}`);
+  assert(!/accepted it for/.test(noSub.text) && noSub.tone !== 'ok',
+    '13-2: …and it is not toned or worded as a success');
+  assert(/Locker Room/.test(noSub.text),
+    '13-3: …while still saying the message DID post, so the rest of the pathway is confirmed short of the phone buzz');
+
+  const partial = pst.testPushResultCopy(run({
+    recipients: 1, recorded: 1, pushed: 0,
+    onesignal: { outcome: 'created_partial', invalid: 1 },
+    breakdown: [{ memberId: 'p1', notified: true, pushed: false, reason: 'no_subscription' }],
+  }), { sentAgo: '3s ago' });
+  assert(/no device registered/i.test(partial.text),
+    '13-4: …and the same is true when OneSignal created the notification but named THIS account among the ids it does not know');
+
+  assert(/accepted it for 1 device/.test(pst.testPushResultCopy(run({
+    recipients: 1, recorded: 1, pushed: 1, onesignal: { outcome: 'created', invalid: 0 },
+  }), { sentAgo: '3s ago' }).text),
+    '13-5: CONTROL — a genuinely created notification still gets the "accepted it for 1 device" line, unchanged');
+  assert(/no subscribed device/.test(pst.testPushResultCopy(run({ pushed: 0, recorded: 1 })).text),
+    '13-6: CONTROL — a run row from BEFORE this change (no `onesignal` field) still gets its old sentence. An old row must not start rendering a claim it never made');
+
+  const line = pst.breakdownLine({ memberId: 'p3', notified: true, pushed: false, reason: 'no_subscription' }, () => 'Kevin');
+  assert(line.text === 'Kevin — no device registered with the push service' && line.icon === '⛔',
+    `13-7: DI-205's per-player line names the new reason in the commissioner's own terms — "eligible, but the push did not go out" would send him to the wrong place entirely. Got ${JSON.stringify(line)}`);
+  assert(line.tone === 'bad',
+    '13-8: …and it is a bad-tone line: a player with no registered device gets nothing at all until somebody tells them');
+}
+{
+  // The Background-jobs "Last ran …" line. `onesignal` is an OBJECT on the
+  // payload, and the card's counts line renders `key: value` pairs — so without
+  // a reader for it the most important fact on the row would render as the
+  // literal string "[object Object]".
+  const pst = await import('./js/push-selftest.js');
+  const summary = pst.jobCountsSummary({
+    recipients: 5, recorded: 5, pushed: 0,
+    onesignal: { outcome: 'no_subscribers', invalid: 0, id: '' },
+    breakdown: [{ memberId: 'p1' }], meta: { messageId: 'msg_1' },
+  });
+  assert(/pushed: 0/.test(summary) && /no device registered/i.test(summary),
+    `13-9: the commissioner's Background-jobs line says WHY a fan-out pushed nobody, in words — the "pushed: 5" that meant "HTTP 200" is the whole reason this defect survived two days. Got ${JSON.stringify(summary)}`);
+  assert(!/\[object Object\]/.test(summary),
+    '13-10: …and nothing on that line renders as "[object Object]" — the breakdown array and the meta object are not counts and do not belong in a counts line');
+  assert(/recipients: 5/.test(summary) && /recorded: 5/.test(summary),
+    '13-11: …while every genuine COUNT still shows, in the same `key: value` shape the card has always used');
+  const partial = pst.jobCountsSummary({ recipients: 5, recorded: 5, pushed: 4, onesignal: { outcome: 'created_partial', invalid: 1, id: 'x' } });
+  assert(/1 with no device/i.test(partial),
+    `13-12: …and a partial send says how many of the five the push service does not know. Got ${JSON.stringify(partial)}`);
+  // REVIEWER #4 — a `created` run must not render a BARE "pushed: N" either.
+  // That number is exactly what read `pushed: 5` for two days while meaning
+  // "HTTP 200", so even the success line now says what the count is a count OF.
+  // The word "delivered" appears nowhere: OneSignal reports what it ACCEPTED,
+  // and only a phone buzzing proves the rest (A2's Evidence Rule).
+  const clean = pst.jobCountsSummary({ recipients: 5, recorded: 5, pushed: 5, onesignal: { outcome: 'created', invalid: 0, id: 'x' } });
+  assert(/accepted by the push service for 5 devices/.test(clean),
+    `13-13: a clean fan-out says what was ACCEPTED, not a bare "pushed: 5". Got ${JSON.stringify(clean)}`);
+  assert(!/deliver/i.test(clean),
+    '13-13a: …and never the word "delivered" — the API reports acceptance, and the phone is the only proof of arrival');
+  assert(/recipients: 5, recorded: 5, pushed: 5/.test(clean),
+    '13-13b: …while the counts themselves are still rendered exactly as they always were');
+  const one = pst.jobCountsSummary({ recipients: 1, recorded: 1, pushed: 1, onesignal: { outcome: 'created', invalid: 0, id: 'x' } });
+  assert(/for 1 device\b/.test(one) && !/1 devices/.test(one),
+    `13-13c: …and it is singular for one device (got ${JSON.stringify(one)})`);
+  const appSrc13 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  assert(/jobCountsSummary\(/.test(appSrc13),
+    '13-14: …and app.js actually renders through it — a pure copy function nothing calls is a sentence nobody reads');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -787,6 +787,53 @@ export async function isPushOptedIn() {
  * member id the app already renders on every screen, and three booleans. It is
  * meant to be read out loud to the commissioner.
  */
+/**
+ * ══ RG-193 (2026-09-21) — THE BROWSER'S OWN RECORD, WHICH OUTRANKS THE SDK'S ══
+ *
+ * Drew's iPhone reported "Push is on for this device" — permission granted, a
+ * subscription id present, the external id linked — while OneSignal's dashboard
+ * held NO iOS subscription for the whole league (one stale Chrome record, and
+ * that one flagged "no longer receiving notifications").
+ *
+ * `OneSignal.User.PushSubscription.id` is the SDK's own record id, read from
+ * its local store. It can survive a subscription that the browser no longer
+ * has: a service-worker registration that was replaced, an endpoint the push
+ * service expired, a PWA re-installed from the home screen. The thing a push is
+ * actually delivered to is the browser's `PushSubscription` — and the browser
+ * will tell us, synchronously enough, whether one exists.
+ *
+ * NEVER READS THE ENDPOINT OR THE KEYS. `getSubscription()` returns an object
+ * carrying the full endpoint URL and the auth keys; the only thing taken off it
+ * is whether it is null. Nothing else is copied, logged or returned.
+ *
+ * "COULD NOT ASK" IS NOT "NO". A browser with no `navigator.serviceWorker`, a
+ * registration that has not resolved, a `pushManager` that throws — all resolve
+ * `{known:false}`, and the caller then falls back to exactly the behaviour it
+ * had before this existed. Inventing a negative here would put "this device
+ * isn't registered" in front of players whose push works.
+ */
+const BROWSER_SUB_TIMEOUT_MS = 2500;
+export async function readBrowserPushSubscription() {
+  const unknown = { known: false, subscribed: false };
+  try {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return unknown;
+    if (typeof navigator.serviceWorker.getRegistration !== 'function') return unknown;
+    const ask = (async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg || !reg.pushManager || typeof reg.pushManager.getSubscription !== 'function') return unknown;
+      const sub = await reg.pushManager.getSubscription();
+      return { known: true, subscribed: !!sub };
+    })();
+    const timer = new Promise((resolve) => {
+      const t = _setTimeout(() => resolve(unknown), BROWSER_SUB_TIMEOUT_MS);
+      t?.unref?.();
+    });
+    return await Promise.race([ask, timer]);
+  } catch {
+    return unknown;
+  }
+}
+
 export async function pushDeviceStatus() {
   const state = await subscriptionState();
   const base = {
@@ -818,8 +865,16 @@ export async function pushDeviceStatus() {
         // holds, and it also survives a reload this page knows nothing about.
         // Fall back only when the SDK does not expose it.
         const sdkExternalId = (typeof OneSignal?.User?.externalId === 'string') ? OneSignal.User.externalId : null;
-        resolve({ known: true, optedIn: sub?.optedIn === true, hasSubscription: !!sub?.id, sdkExternalId });
-      } catch { resolve({ known: true, optedIn: false, hasSubscription: false, sdkExternalId: null }); }
+        // RG-193 — `token` is what a push is DELIVERED to; `id` is only
+        // OneSignal's record of this device. A record with an id and no token
+        // is not deliverable, and iOS hands the token over only once
+        // `pushManager.subscribe()` has genuinely succeeded. Read as a
+        // THREE-state (`undefined` = the SDK build does not expose it at all),
+        // because an absent field must never read as a negative — that would
+        // tell working devices they are broken (CONVENTIONS #10).
+        const token = sub && typeof sub.token === 'string' ? sub.token : undefined;
+        resolve({ known: true, optedIn: sub?.optedIn === true, hasSubscription: !!sub?.id, token, sdkExternalId });
+      } catch { resolve({ known: true, optedIn: false, hasSubscription: false, token: undefined, sdkExternalId: null }); }
     });
   });
   const timer = new Promise((resolve) => {
@@ -834,13 +889,34 @@ export async function pushDeviceStatus() {
     ? sub.sdkExternalId
     : _boundExternalId;
   const linked = !!externalId;
+
+  // ── RG-193 — "HAS A SUBSCRIPTION" IS NOW EVIDENCED, NOT ASSERTED ──────────
+  //
+  // Three sources, in order of how much they actually prove:
+  //   browser  `pushManager.getSubscription()` — the endpoint a push is sent
+  //            to. Decisive when we can ask at all.
+  //   token    the SDK's own copy of that endpoint's token. Decisive when the
+  //            build exposes it.
+  //   id       OneSignal's record id. Proves a record, not a device.
+  // Each one only ever NARROWS the answer, and each is skipped when it cannot
+  // be obtained — so a device this code cannot interrogate reports exactly what
+  // it reported before.
+  const browser = await readBrowserPushSubscription();
+  const tokenExposed = typeof sub.token === 'string';
+  const hasSubscription = !!sub.hasSubscription
+    && (!tokenExposed || sub.token !== '')
+    && (!browser.known || browser.subscribed);
   return {
     ...base,
     optedIn: sub.optedIn,
-    hasSubscription: sub.hasSubscription,
+    hasSubscription,
+    // Never the token VALUE, and never the endpoint — only whether one is
+    // there. This object is meant to be read out loud to the commissioner.
+    tokenKnown: tokenExposed,
+    browserSubscription: browser.known ? browser.subscribed : null,
     linked,
     externalId,
-    ok: sub.optedIn && sub.hasSubscription && linked,
+    ok: sub.optedIn && hasSubscription && linked,
   };
 }
 
@@ -868,16 +944,74 @@ export async function ensurePushSubscription() {
   }
   const init = await ensureOneSignalInit();
   if (!init.ok) return { ok: false, reason: init.reason, detail: init.detail };
+  // ══ RG-193 (2026-09-21) — THE SHORTCUT THAT MADE THIS A NO-OP ════════════
+  //
+  // The early return below used to be `if (sub.optedIn === true && sub.id)
+  // return;` and nothing else. Both of those come from the SDK's OWN store, and
+  // both survive a subscription the browser no longer has — which is precisely
+  // the state this function exists to repair. On Drew's iPhone that shortcut
+  // fired, `optIn()` was never called, and the call reported `ok:'opted-in'`
+  // over a device OneSignal had no subscription for at all.
+  //
+  // So the browser is asked FIRST, and its answer outranks the cache. "Could
+  // not ask" leaves the old behaviour exactly as it was: a device we cannot
+  // interrogate is not re-subscribed on every boot.
+  const browser = await readBrowserPushSubscription();
   const ran = await new Promise((resolve) => {
     _callSdk(async (OneSignal) => {
       const sub = OneSignal?.User?.PushSubscription;
       if (!sub || typeof sub.optIn !== 'function') throw new Error('OneSignal.User.PushSubscription.optIn is unavailable');
-      if (sub.optedIn === true && sub.id) return;   // already subscribed — nothing to do
+      const staleRecord = browser.known && !browser.subscribed;
+      if (sub.optedIn === true && sub.id && !staleRecord) return;   // genuinely subscribed — nothing to do
       await sub.optIn();
     }, resolve);
   });
-  return ran ? { ok: true, reason: 'opted-in' } : { ok: false, reason: 'opt-in-failed' };
+  if (!ran) return { ok: false, reason: 'opt-in-failed' };
+
+  // ══ RG-193, REVIEWER #2 — WHEN `optIn()` ITSELF IS THE NO-OP ══════════════
+  //
+  // Calling optIn() is not the same as having subscribed. v16's optIn()
+  // SHORT-CIRCUITS when the SDK's own model already believes this device is
+  // opted in — the same belief that produced the wrong status line in the first
+  // place — so on exactly the device this function exists to repair, the call
+  // returns cleanly and mints nothing.
+  //
+  // So the BROWSER is asked again, and its answer decides. Still no endpoint ⇒
+  // the record is recycled: optOut() then optIn(), which forces the SDK through
+  // a real `pushManager.subscribe()`.
+  //
+  // BOUNDED TO ONE CYCLE PER PAGE LOAD. A device that genuinely cannot
+  // subscribe (an iOS build that will not mint a token, a blocked push service)
+  // must not tear its own subscription down and rebuild it on every render;
+  // one attempt is a repair, a loop is a fault of our own making.
+  //
+  // IT CANNOT PROMPT. This function refuses outright unless
+  // `Notification.permission === 'granted'` (see its top), which is what makes
+  // every call below prompt-free by construction rather than by care. And it is
+  // never reached unasked: the boot path (`maybeAutoOptInPush()`, js/app.js)
+  // gates on the player's own master push preference before it calls here.
+  const after = await readBrowserPushSubscription();
+  if (!(after.known && !after.subscribed)) return { ok: true, reason: 'opted-in' };
+  if (_recycleSpent) return { ok: false, reason: 'no-endpoint' };
+  _recycleSpent = true;
+  const recycled = await new Promise((resolve) => {
+    _callSdk(async (OneSignal) => {
+      const sub = OneSignal?.User?.PushSubscription;
+      if (!sub || typeof sub.optOut !== 'function' || typeof sub.optIn !== 'function') {
+        throw new Error('OneSignal.User.PushSubscription.optOut is unavailable');
+      }
+      await sub.optOut();
+      await sub.optIn();
+    }, resolve);
+  });
+  const final = await readBrowserPushSubscription();
+  if (final.known && !final.subscribed) return { ok: false, reason: 'no-endpoint' };
+  return recycled ? { ok: true, reason: 're-subscribed' } : { ok: false, reason: 'opt-in-failed' };
 }
+
+/** The one-recycle-per-page-load latch. Page state, like every other latch in
+ *  this module, and reset by `_resetForTest()` for the same reason they are. */
+let _recycleSpent = false;
 
 /** Triggers the native permission prompt — must be called from a genuine user
  *  gesture (DI-A2's "Turn On" button handler), never on first paint. */
@@ -1068,6 +1202,9 @@ export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
   // exact class of false-positive this whole section exists to remove.
   _boundExternalId = '';
   _desiredTarget = '';
+  // RG-193 — the one-recycle-per-page budget is per-PAGE state too. A scenario
+  // inheriting the previous one's spent latch would silently skip the repair.
+  _recycleSpent = false;
   _staleReassertBudget = MAX_STALE_REASSERTS;
   _lastCompletedGen = 0;
   _identityGen++;                 // voids any retry still armed from the last scenario

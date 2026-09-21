@@ -241,6 +241,22 @@ export function testPushResultCopy(run, { sentAgo = 'just now', serverPushOff = 
   if (mine && mine.reason === 'category_off') {
     return { tone: 'warn', text: "Not sent as a push — you've muted the Chat category. It still posted to chat." };
   }
+  // ── RG-193 (2026-09-21) — THE ANSWER THE SERVER NOW HAS AND DID NOT BEFORE.
+  //
+  // `payload.onesignal.outcome` comes from OneSignal's own response body, which
+  // until this release was never read: a 200 was counted as a send, so this
+  // function was handed `pushed: 1` for a push that was never created and said
+  // "accepted it for 1 device — check your phone" at a phone that was never
+  // going to buzz. Checked BEFORE the `pushed > 0` branch so an evidenced
+  // negative always outranks a count.
+  const outcome = p.onesignal && typeof p.onesignal === 'object' ? String(p.onesignal.outcome || '') : '';
+  const mineNoDevice = mine && mine.reason === 'no_subscription';
+  if (mineNoDevice || ((outcome === 'no_subscribers' || outcome === 'created_partial') && pushed === 0)) {
+    return {
+      tone: 'warn',
+      text: `Sent ${sentAgo}, but the push service has no device registered for your account — open the app on the phone you expect the push on, then tap Reconnect on the 🔔 screen. The message still posted to your Locker Room.`,
+    };
+  }
   if (pushed > 0) {
     return {
       tone: 'ok',
@@ -298,11 +314,75 @@ export function breakdownLine(entry, nameOf) {
       return { icon: '➖', tone: 'muted', text: `${name} — already had this one` };
     case 'not_addressed':
       return { icon: '➖', tone: 'muted', text: `${name} — not the recipient of this one` };
+    // RG-193 — OneSignal's own answer: it holds no subscription under that
+    // member's external id. A DIFFERENT instruction from every line above it —
+    // nothing on the server can fix this one; that player has to open the app.
+    case 'no_subscription':
+      return { icon: '⛔', tone: 'bad', text: `${name} — no device registered with the push service` };
     case 'push_not_sent':
       return { icon: '⚠️', tone: 'warn', text: `${name} — eligible, but the push did not go out` };
     default:
       return { icon: '⚠️', tone: 'warn', text: `${name} — ${String(entry.reason)}` };
   }
+}
+
+/**
+ * RG-193 — THE "Last ran …" COUNTS LINE, and why it is a function now.
+ *
+ * The Background-jobs card renders a run's payload as `key: value` pairs. Two
+ * things were wrong with that the moment a push outcome joined the payload:
+ *
+ *   1. `onesignal` is an OBJECT, and `${v}` on an object is "[object Object]" —
+ *      so the one fact that explains a fan-out that reached nobody would have
+ *      rendered as noise. (`breakdown` and `meta` already did exactly that.)
+ *   2. THE NUMBER WAS NEVER THE PROBLEM. `pushed: 5` was perfectly legible for
+ *      two days while it meant "OneSignal returned HTTP 200". A count needs the
+ *      outcome beside it or it is a claim nobody can check.
+ *
+ * So: counts stay exactly as they were rendered before (same order, same
+ * `key: value` shape), non-count values are dropped rather than stringified,
+ * and the push outcome is spelled out in words — OURS, from a closed set the
+ * server also uses. PURE, so `pushtest.mjs` asserts the sentence.
+ */
+export function jobCountsSummary(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const parts = [];
+  for (const [k, v] of Object.entries(p)) {
+    if (k === 'onesignal' || k === 'actorMemberId') continue;
+    // A count line carries counts. An array or an object on this row is a
+    // structure with its own renderer (breakdown) or an id the card does not
+    // show (meta) — never something to interpolate into a sentence.
+    if (v !== null && typeof v === 'object') continue;
+    parts.push(`${k}: ${v}`);
+  }
+  const os = p.onesignal && typeof p.onesignal === 'object' ? p.onesignal : null;
+  if (os) {
+    const invalid = Number(os.invalid || 0);
+    const pushed = Number(p.pushed || 0);
+    // REVIEWER #4 — THE SUCCESS LINE GETS WORDS TOO. A bare `pushed: 5` is the
+    // exact string that read as a delivered fan-out for two days while it meant
+    // "OneSignal returned HTTP 200", so even the good outcome now says what the
+    // number is a count OF.
+    //
+    // "ACCEPTED", NEVER "DELIVERED" — the API reports what it took, and the
+    // phone buzzing is the only proof of arrival (A2's Evidence Rule; the same
+    // word `testPushResultCopy()` has always used).
+    //
+    // The reviewer's sentence ends "— check your phone". That tail belongs to
+    // the self-test line, which is about the reader's OWN device and already
+    // carries it verbatim; THIS line is a fan-out to five other people's
+    // phones, where "check your phone" would be advice the reader cannot act
+    // on. Deviation noted here rather than taken silently.
+    const phrase = {
+      created: `accepted by the push service for ${pushed} device${pushed === 1 ? '' : 's'}`,
+      created_partial: invalid ? `${invalid} with no device registered` : 'partly delivered',
+      no_subscribers: 'no device registered for any recipient',
+      rejected: 'the push service refused it',
+      http_error: 'the push service could not be reached',
+    }[String(os.outcome || '')];
+    if (phrase) parts.push(phrase);
+  }
+  return parts.join(', ');
 }
 
 /** The newest notify-fanout run that actually carries a breakdown. Used both by
