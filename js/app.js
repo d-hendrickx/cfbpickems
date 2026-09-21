@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.0';
+export const APP_VERSION = 'v0.23.1';
 export const APP_VERSION_DATE = '2026-09-20';
 
 /**
@@ -51,6 +51,15 @@ export const APP_VERSION_DATE = '2026-09-20';
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.1',
+    date: '2026-09-20',
+    added: [],
+    fixed: [
+      'Push notifications are fixed. Since the move to Google sign-in, phones were not being matched to their player, so notifications were sent but never arrived — for anyone. Just opening the app reconnects your phone; there is nothing to tap.',
+      'The 🔔 screen now tells the truth about this device: "Push is on for this device", or exactly what is missing, with a Reconnect button when there is something to fix.',
+    ],
+  },
   {
     version: 'v0.23.0',
     date: '2026-09-20',
@@ -388,7 +397,7 @@ import {
   resetCurrentWeekData,
   exportAllData, exportAllDataRaw,
   // Groups A/B (2026-09-10) — notification category prefs, DI-A4
-  getNotifyPushMaster, setNotifyPushMaster, getNotifyCategoryPrefs, setNotifyCategoryPref,
+  getNotifyPushMaster, setNotifyPushMaster, getNotifyPushMasterFor, getNotifyCategoryPrefs, setNotifyCategoryPref,
   // Build 2b, E3-E5 (2026-09-10, UN-161…163) — SCRIBE Trainer output
   getScribeLearnings, setScribeLearnings, getScribeCanon, setScribeCanon, getScribeReports,
   // FEAT-8a (2026-09-12, UN-179, DI-179d) — per-player Dashboard/Standings section order
@@ -597,7 +606,8 @@ import { buildCopy } from './notify-copy.js';
 import {
   ensureOneSignalInit, loginOneSignal, logoutOneSignal, wireForegroundSuppression,
   wireNotificationClicks,
-  subscriptionState, requestPushPermission, isPushOptedIn,
+  subscriptionState, requestPushPermission, isPushOptedIn, pushDeviceStatus,
+  ensurePushSubscription,
 } from './push-onesignal.js';
 // ── DI-204/205/206/218 — the push self-test family. Its own module because
 //    every decision in it is a PURE function of a server answer, which is what
@@ -1902,9 +1912,17 @@ async function runPostHydrateTail() {
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
     setupNotifBell();
     renderNotifBell();
-    const sess0 = getSession();
     ensureOneSignalInit().then(() => {
+      // RG-192 — READ THE SESSION HERE, NOT BEFORE THE AWAIT. The snapshot used
+      // to be taken above this call; in supabase mode a boot whose memberships
+      // had not landed yet therefore re-asserted playerId null and skipped the
+      // login on a device that WAS signed in by the time the SDK was ready.
+      const sess0 = getSession();
       if (sess0?.playerId) loginOneSignal(sess0.playerId);
+      // RG-192 gate — register a device that is ALLOWED to notify but has no
+      // subscription, without prompting and without asking the player to do
+      // anything. Fire-and-forget; every precondition is inside it.
+      maybeAutoOptInPush(sess0?.playerId || null);
       // BUG-12 (2026-09-12) — "When I receive a push notification it doesn't show
       // up in the chat for at least 30 seconds after the notification." Both
       // OneSignal hooks now also force ONE chat fetch through the chat engine's
@@ -4068,8 +4086,60 @@ function renderNotifBell() {
   btn.hidden = false;
 }
 
-function renderPrimingCardHTML(pushState) {
-  if (pushState === 'granted' || pushState === 'unconfigured') return '';
+/**
+ * ══ RG-192 (2026-09-20) — "PUSH IS ON" HAD NO EVIDENCE BEHIND IT ════════════
+ *
+ * Drew's iPhone, live: iOS Settings → Notifications shows Pick 'Ems ALLOWED,
+ * this screen showed NO card at all and every box ticked — while OneSignal had
+ * no subscription for that handset. `pushState === 'granted'` returned '' here,
+ * so the one state that can be quietly broken was the one state that rendered
+ * nothing, and there was no button anywhere that would have fixed it. The
+ * master toggle beneath is a PLAYER preference; it knows nothing about this
+ * device.
+ *
+ * `device` is js/push-onesignal.js's pushDeviceStatus() — the AND of the three
+ * facts that have to hold before this app may claim push is on (permission, a
+ * live subscription, the external id attached). Null means the caller could not
+ * resolve it; that renders the old silence rather than an invented verdict.
+ */
+const PUSH_STATUS_ON = 'Push is on for this device.';
+const PUSH_STATUS_UNREACHABLE_TITLE = "Push isn't reaching this device";
+const PUSH_STATUS_NO_SUBSCRIPTION = "Notifications are allowed, but this device isn't registered for push yet. Tap Reconnect and it will be.";
+const PUSH_STATUS_NOT_LINKED = "This device is registered for push but isn't linked to your account yet, so nothing addressed to you arrives. Tap Reconnect to link it.";
+const PUSH_STATUS_BTN = 'Reconnect';
+/** REVIEWER (RG-192 gate) — the SDK could not be reached, so we do not know.
+ *  NO button: a Reconnect that cannot reach the SDK is a promise the app cannot
+ *  keep, and "isn't registered" would be a claim about the device we never made. */
+const PUSH_STATUS_UNKNOWN = "Couldn't check push on this device — the notification service didn't load. Check your connection or content blocker and reopen the app.";
+/** The two remaining-problem lines used AFTER a Reconnect tap. They are separate
+ *  strings from the card's because the card's end in "Tap Reconnect", which is
+ *  no longer useful advice to somebody who just did. */
+const PUSH_STATUS_STILL_NO_SUBSCRIPTION = "This device still isn't registered for push. Fully close the app, reopen it, and try again.";
+const PUSH_STATUS_STILL_NOT_LINKED = "Push is on, but this device isn't linked to your account yet. Fully close the app, reopen it, and try again.";
+
+function renderPrimingCardHTML(pushState, device = null) {
+  if (pushState === 'unconfigured') return '';
+  if (pushState === 'granted') {
+    if (!device) return '';
+    if (device.known === false) {
+      return `<div class="card notif-priming-card" id="notif-priming-card">
+    <p class="text-muted text-sm" id="notif-push-status">${escHtml(PUSH_STATUS_UNKNOWN)}</p>
+  </div>`;
+    }
+    if (device.ok) {
+      return `<div class="card notif-priming-card" id="notif-priming-card">
+    <p class="text-muted text-sm" id="notif-push-status">✅ ${escHtml(PUSH_STATUS_ON)}</p>
+  </div>`;
+    }
+    // The same card shell and the same button id as every other state, so
+    // bindNotifSettingsBody() needs no new branch.
+    const body = device.hasSubscription ? PUSH_STATUS_NOT_LINKED : PUSH_STATUS_NO_SUBSCRIPTION;
+    return `<div class="card notif-priming-card" id="notif-priming-card">
+    <div class="notif-priming-title">${escHtml(PUSH_STATUS_UNREACHABLE_TITLE)}</div>
+    <p class="text-muted text-sm" id="notif-push-status">${escHtml(body)}</p>
+    <button class="btn btn-primary btn-sm" id="notif-priming-btn">${escHtml(PUSH_STATUS_BTN)}</button>
+  </div>`;
+  }
   const copy = {
     'never-asked': { title: 'Enable push notifications', body: "Get notified for chat, pick reminders, and results — even when the app is closed.", btn: 'Turn On' },
     denied:        { title: 'Push is off', body: "You turned off notifications for this device. You'll still see everything here — to turn push back on, check your phone's notification settings for this app.", btn: null },
@@ -4125,11 +4195,11 @@ function renderNotifPrefsCardHTML() {
  * to attach a push subscription to, and the category toggles live on the player
  * record — so it gets one line of copy instead of a modal that looks broken.
  */
-export async function renderNotifSettingsBodyHTML(playerId, pushState) {
+export async function renderNotifSettingsBodyHTML(playerId, pushState, device = null) {
   if (!playerId) {
     return `<p class="text-muted text-sm" style="text-align:center;padding:24px 0">Sign in on the Picks tab to choose what you get notified about.</p>`;
   }
-  return `${renderPrimingCardHTML(pushState)}${renderNotifPrefsCardHTML()}`;
+  return `${renderPrimingCardHTML(pushState, device)}${renderNotifPrefsCardHTML()}`;
 }
 
 /** The brief skeleton shown while subscriptionState() resolves (it is async and
@@ -4238,6 +4308,111 @@ function pushFailureMessage(res) {
   }[reason] || "Could not enable push — see the console for details.";
 }
 
+/**
+ * ══ REVIEWER BLOCK (RG-192 gate, 2026-09-20) — THE BUTTON HAS TO FIX THE STATE
+ *    IT IS OFFERED FOR ═══════════════════════════════════════════════════════
+ *
+ * WHAT WAS WRONG. This handler called requestPushPermission() and then toasted
+ * "✅ Push enabled" on `ok`. For the state the Reconnect button is actually
+ * offered for — permission GRANTED, no subscription — that call reduces to
+ * `Notifications.requestPermission()` on an already-granted device, which
+ * resolves instantly and creates nothing. The player got a green tick and no
+ * push. Nothing in the app called optIn(), the one v16 call that creates the
+ * subscription.
+ *
+ * THE ORDER IS THE FIX, and each step is here for its own reason:
+ *   1. permission — unchanged; still the only thing allowed to prompt.
+ *   2. SUBSCRIPTION — ensurePushSubscription() → User.PushSubscription.optIn().
+ *      Never reached without permission already granted (optIn() would prompt).
+ *   3. IDENTITY — the external id, attached AFTER there is a subscription to
+ *      attach it to.
+ *   4. RE-READ. The verdict comes from pushDeviceStatus(), not from the return
+ *      value of the call we just made. Trusting the call is how "✅ Push
+ *      enabled" got printed over a dead device in the first place; three facts
+ *      re-read from the SDK is the only claim this app is entitled to make.
+ *
+ * Exported so pushtest can drive the REAL sequence rather than a copy of it.
+ */
+export async function enablePushOnThisDevice(playerId) {
+  const res = await requestPushPermission();
+  if (!res.ok) return { ok: false, message: pushFailureMessage(res) };
+  const sub = await ensurePushSubscription();
+  if (!sub.ok) console.warn('[push] the subscription could not be created:', sub.reason, sub.detail || '');
+  if (playerId) {
+    try { await loginOneSignal(playerId); }
+    catch (e) { console.warn('[push] could not attach the push identity after the grant', e); }
+  }
+  const status = await pushDeviceStatus();
+  if (status.ok) return { ok: true, message: PUSH_STATUS_ON, status };
+  if (status.known === false)      return { ok: false, message: PUSH_STATUS_UNKNOWN, status };
+  if (!status.hasSubscription || !status.optedIn) return { ok: false, message: PUSH_STATUS_STILL_NO_SUBSCRIPTION, status };
+  return { ok: false, message: PUSH_STATUS_STILL_NOT_LINKED, status };
+}
+
+/**
+ * ══ COORDINATOR RULING (RG-192 gate, 2026-09-20) — NO ACTION NEEDED FROM
+ *    PLAYERS ═════════════════════════════════════════════════════════════════
+ *
+ * Five of six players are not going to be walked through a settings screen, and
+ * the commissioner cannot tell from the outside whether they did. Where the
+ * browser has ALREADY granted permission, the subscription can be created with
+ * no prompt and no tap at all — so boot does it.
+ *
+ * FOUR PRECONDITIONS, each of which is a way this could otherwise become a
+ * worse bug than the one it fixes:
+ *   • permission === 'granted' — optIn() RAISES the native prompt when it is
+ *     not, and a permission sheet on first paint is exactly what DI-A2 forbids.
+ *     This is what makes the path prompt-free BY CONSTRUCTION, not by care.
+ *   • a signed-in, linked member — a subscription with nobody attached is the
+ *     orphan this whole regression is about.
+ *   • the player's master pref is ON — master off means they said no, and the
+ *     app does not overrule a preference it exists to honour.
+ *   • the device is not already subscribed AND linked — nothing to do.
+ * Plus: once per page load, and a status we could not READ (`known:false`)
+ * changes nothing, because acting on an unknown is guessing.
+ */
+let _autoOptInTried = false;
+/** Test-only — page-lifetime latch, same convention as the rest of this file. */
+export function _resetAutoOptInForTest() { _autoOptInTried = false; }
+export async function maybeAutoOptInPush(playerId) {
+  if (_autoOptInTried) return false;
+  _autoOptInTried = true;
+  try {
+    if (!playerId) return false;
+    // …FOR THIS PLAYER ID, not for whoever the session happens to say is here.
+    // This function is handed the id it is about to bind, so reading the
+    // preference by that same id makes it impossible for the two to disagree —
+    // which is the same rule js/notifications.js:324 already follows on the
+    // send side, so a player cannot be subscribed here and filtered there.
+    if (!getNotifyPushMasterFor(playerId)) return false;
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return false;
+    // The SDK has to be up before its answer means anything. Boot already calls
+    // this inside ensureOneSignalInit().then(), so on the real path it is the
+    // memoized result; stating it here keeps the function correct for any other
+    // caller and keeps `known:false` meaning "blocked", not "too early".
+    const init = await ensureOneSignalInit();
+    if (!init.ok) return false;
+    const before = await pushDeviceStatus();
+    if (before.known === false) return false;
+    if (before.hasSubscription && before.optedIn && before.linked) return false;
+    let created = false;
+    if (!before.hasSubscription || !before.optedIn) {
+      const sub = await ensurePushSubscription();
+      if (!sub.ok) { console.warn('[push] boot could not create the push subscription:', sub.reason); return false; }
+      created = true;
+    }
+    // Always re-assert the identity: the device may have had a subscription all
+    // along with nobody attached to it, which is the live defect.
+    await loginOneSignal(playerId);
+    refreshPushActiveFlag();
+    console.info('[push] this device was allowed to notify but not reachable; it has been registered and linked without prompting', created ? '(new subscription)' : '(existing subscription)');
+    return true;
+  } catch (e) {
+    console.warn('[push] the boot-time push registration could not complete', e);
+    return false;
+  }
+}
+
 function bindNotifSettingsBody(ov, playerId) {
   ov.querySelector('#notif-priming-btn')?.addEventListener('click', async (ev) => {
     // Reviewer ruling (2026-09-10): requestPushPermission() can be in flight for
@@ -4251,8 +4426,8 @@ function bindNotifSettingsBody(ov, playerId) {
     if (btn.disabled) return;
     btn.disabled = true;
     try {
-      const res = await requestPushPermission();
-      showToast(res.ok ? '✅ Push enabled' : pushFailureMessage(res), res.ok ? 'success' : 'error');
+      const res = await enablePushOnThisDevice(playerId);
+      showToast(res.ok ? `✅ ${res.message}` : res.message, res.ok ? 'success' : 'error');
       // N1 / DI-N3 — a permission change is one of the two events that can flip
       // pushActive, so the device flag is recomputed here rather than left to
       // the next boot. Without this, a player who just tapped Turn On would
@@ -4283,7 +4458,16 @@ async function refreshNotifSettingsBody(ov, playerId) {
   const body = ov.querySelector('#notif-center-body');
   if (!body) return;
   const st = await subscriptionState();
-  body.innerHTML = await renderNotifSettingsBodyHTML(playerId, st);
+  // RG-192 — the three-fact truth, resolved only when the coarse state is
+  // 'granted' (it is the one state that can be quietly broken; every other state
+  // already renders a card that says what is missing). Fails to `null` — the old
+  // silence — rather than to an invented verdict in either direction.
+  let device = null;
+  if (st === 'granted') {
+    try { device = await pushDeviceStatus(); }
+    catch (e) { console.warn('[push] could not resolve this device\'s push status', e); }
+  }
+  body.innerHTML = await renderNotifSettingsBodyHTML(playerId, st, device);
   bindNotifSettingsBody(ov, playerId);
 }
 

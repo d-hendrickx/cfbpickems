@@ -1266,6 +1266,450 @@ console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[12] RG-192 — the external id is never attached, so no player is reachable…');
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// THE REPORT (Drew, live, 2026-09-20). The new commissioner "Check who can
+// receive push" answers: p1 — 1 device. p2…p6 — NO device registered. Meanwhile
+// notify-fanout records `recipients:5, pushed:5` for every chat message, because
+// "pushed" only means OneSignal ACCEPTED an `include_external_user_ids` request;
+// with no subscription behind an external id nothing is delivered and nobody can
+// tell. A desk analysis had already concluded from reading the code that
+// "the client logs into OneSignal with getSession().playerId and the identity is
+// stable" (SESSION_LOG_091126_SUPABASE.md, DECISION MEMO — UN-183 item 14). It
+// was never verified on a device. It is wrong.
+//
+// THE MECHANISM, and why the Supabase cutover is what turned it on.
+//
+//   `loginOneSignal()` / `logoutOneSignal()` do NOT wait for the SDK to be
+//   initialised. They await the App ID and then push a callback onto
+//   `window.OneSignalDeferred`. The v16 SDK drains that queue by INVOKING each
+//   callback — it does not await them in series — so every callback queued
+//   before the first drain runs while `OneSignal.init()` is still an unsettled
+//   promise, and `OneSignal.login()` on an uninitialised SDK THROWS. The throw
+//   lands in push-onesignal.js's `catch (err) { console.warn(...) }` and is
+//   never retried.
+//
+//   In PIN mode that never bit: `getSession()` was a synchronous localStorage
+//   read, so the only caller was app.js's boot tail, INSIDE
+//   `ensureOneSignalInit().then(...)` — i.e. after init. In `authMode:'supabase'`
+//   identity arrives on an auth EVENT: js/app.js's chokepoint
+//   (applyIdentityDeltaIfChanged -> resyncPlayerPreferences, app.js:3832) fires
+//   from `wireAuthUIEvents()` during `applyAuthModeDecision()` — and that is
+//   ABOVE the hydrate, while `ensureOneSignalInit()` is only reached afterwards
+//   in `runPostHydrateTail()` (app.js:1906). The hydrate cannot even start until
+//   memberships resolve (it needs the active league), so on a Supabase boot the
+//   login is queued FIRST, essentially always. The cutover inverted the order.
+//
+// THE FIXTURE models exactly the two SDK facts this turns on, and nothing else:
+// the queue is invoked rather than awaited, and login before init throws.
+{
+  const savedG = {
+    document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch,
+    matchMedia: globalThis.matchMedia, Notification: globalThis.Notification,
+    PushSubscriptionOptions: globalThis.PushSubscriptionOptions,
+    OneSignalDeferred: globalThis.OneSignalDeferred,
+  };
+  const setNav = (v) => { try { globalThis.navigator = v; }
+    catch { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } };
+  const keepAlive = async (p) => { const ka = setInterval(() => {}, 5); try { return await p; } finally { clearInterval(ka); } };
+  const settle = (ms = 250) => keepAlive(new Promise(r => setTimeout(r, ms)));
+
+  let CALLS = [];
+  let sdk = null;
+  let scriptDelayMs = 5;
+
+  /** The shipped v16 contract, the clauses that matter here.
+   *
+   *  `requestPermission()` deliberately creates NO subscription (reviewer BLOCK,
+   *  2026-09-20): on a device where permission is ALREADY granted the v16 call
+   *  resolves instantly and changes nothing, which is why "✅ Push enabled" could
+   *  be shown over a device that is still unsubscribed. Only
+   *  `User.PushSubscription.optIn()` creates the subscription. */
+  function makeSdk({ initMs = 30, subscribed = true, optInCreates = true, loginGate = null } = {}) {
+    let inited = false;
+    const sub = {
+      optedIn: subscribed,
+      id: subscribed ? 'sub-abc' : undefined,
+      async optIn() {
+        CALLS.push('optIn');
+        if (!optInCreates) return;
+        sub.optedIn = true;
+        sub.id = 'sub-new';
+      },
+    };
+    const user = { PushSubscription: sub, externalId: '' };
+    return {
+      async init() { await new Promise(r => setTimeout(r, initMs)); inited = true; CALLS.push('init'); },
+      async login(id) {
+        // Read from the shipped SDK: every public User/Notifications call asserts
+        // initialisation first and throws when it has not happened yet.
+        if (!inited) { CALLS.push(`login:THREW(${id})`); throw new Error('OneSignal must be initialized before calling login'); }
+        if (loginGate) await loginGate(id);           // [12c2] — a SLOW login, held open on purpose
+        CALLS.push(`login(${id})`);
+        user.externalId = String(id);
+      },
+      async logout() {
+        if (!inited) { CALLS.push('logout:THREW'); throw new Error('OneSignal must be initialized before calling logout'); }
+        CALLS.push('logout');
+        user.externalId = '';
+      },
+      User: user,
+      Notifications: { addEventListener() {}, async requestPermission() { CALLS.push('requestPermission'); } },
+    };
+  }
+  function drain() {
+    const pending = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred : [];
+    globalThis.OneSignalDeferred = { push: (fn) => { fn(sdk); } };
+    pending.forEach(fn => fn(sdk));     // INVOKED, not awaited in series — the SDK's own shape
+  }
+
+  function installWorld({ permission = 'granted', subscribed = true, initMs = 30, scriptMs = 5,
+                          optInCreates = true, loginGate = null } = {}) {
+    CALLS = [];
+    sdk = makeSdk({ initMs, subscribed, optInCreates, loginGate });
+    scriptDelayMs = scriptMs;
+    globalThis.OneSignalDeferred = [];
+    globalThis.document = {
+      createElement: () => ({ src: '', defer: false, onload: null, onerror: null }),
+      head: { appendChild(s) { const t = setTimeout(() => { drain(); s.onload?.(); }, scriptDelayMs); t?.unref?.(); } },
+      body: { dataset: {} },
+    };
+    setNav({ userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130', vendor: 'Google Inc.', maxTouchPoints: 0, serviceWorker: {} });
+    globalThis.matchMedia = () => ({ matches: false });
+    globalThis.Notification = { permission };
+    globalThis.PushSubscriptionOptions = function () {};
+    globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
+    // Answers config.json AND stays harmless to any backend.js push timer that
+    // an earlier section left armed — this section waits on real timers, so a
+    // debounced flushPush() can land inside it. The extra `ok/data/chatHead`
+    // keys are exactly what js/backend.js's `call()` needs to not throw.
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ oneSignalAppId: 'abad65e9-0000-0000-0000-000000000000', ok: true, data: {}, chatHead: 0, count: 0 }),
+    });
+  }
+
+  const push = await import('./js/push-onesignal.js');
+  // Already evaluated by section [11]; this resolves the cached module, so the
+  // push fixture installed above cannot re-run app.js's module-level work.
+  const appMod = await import('./js/app.js');
+
+  // ── [12a] THE REPRODUCTION — a Supabase boot, in its real order ────────────
+  // The identity chokepoint runs before the boot tail, which is what a Supabase
+  // boot always does. Nobody is linked afterwards.
+  {
+    installWorld();
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p2'));      // app.js:3832 — resyncPlayerPreferences()
+    await keepAlive(push.ensureOneSignalInit());     // app.js:1906 — runPostHydrateTail()
+    await settle();
+    assert(CALLS.includes('login(p2)'),
+      `12a: A SUPABASE BOOT LINKS THE DEVICE. OneSignal.login('p2') must actually reach the SDK — an external id that was never attached is a player who receives nothing while notify-fanout records pushed:1 for them. Got ${JSON.stringify(CALLS)}`);
+    assert(!CALLS.some(c => /THREW/.test(c)),
+      `12a-1: …and it is never called against an uninitialised SDK. The throw is swallowed by a console.warn and never retried, which is why this has been silent since the cutover. Got ${JSON.stringify(CALLS)}`);
+    assert(push.boundExternalId() === 'p2',
+      '12a-2: …and the module can SAY which external id this device is bound to, so the honest status line and the commissioner\'s reachability check cannot disagree with the SDK');
+  }
+
+  // ── [12b] THE LATE SDK — a slow phone must still end up linked ────────────
+  // ensureOneSignalInit() races SDK_READY_TIMEOUT_MS and resolves
+  // {ok:false,'sdk-not-loaded'} when the SDK is slower than the bound. That
+  // answer is deliberately NOT memoized, so a bounded retry finds the real one.
+  {
+    installWorld({ scriptMs: 320 });
+    push._resetForTest({ sdkReadyMs: 60 });
+    const init = await keepAlive(push.ensureOneSignalInit());
+    assert(init.ok === false && init.reason === 'sdk-not-loaded',
+      '12b: fixture — the SDK is slower than the ready bound, so the boot path gets sdk-not-loaded (exactly what a cold phone on hotel wifi gets)');
+    await keepAlive(push.loginOneSignal('p3'));
+    await settle(1500);
+    assert(CALLS.includes('login(p3)'),
+      `12b-1: A LATE SDK STILL GETS THE LOGIN. The retry is bounded, not infinite, and it exists because the alternative is a device that is silently unreachable for the whole session. Got ${JSON.stringify(CALLS)}`);
+  }
+
+  // ── [12c] ORDER IS STILL THE APP'S ORDER (DI-180q / security F-3) ─────────
+  // The handover sequences logout-then-login deliberately. Awaiting init must
+  // not reorder them, or the incoming player is bound to nobody — the exact
+  // defect the serialization chain was written to prevent.
+  {
+    installWorld();
+    push._resetForTest({ sdkReadyMs: 400 });
+    const pOut = push.logoutOneSignal();
+    const pIn = push.loginOneSignal('p4');
+    await keepAlive(Promise.all([pOut, pIn]));
+    await settle();
+    const seq = CALLS.filter(c => c === 'logout' || c === 'login(p4)');
+    assert(JSON.stringify(seq) === JSON.stringify(['logout', 'login(p4)']),
+      `12c: logout-then-login still lands in call order. Got ${JSON.stringify(CALLS)}`);
+    assert(push.boundExternalId() === 'p4',
+      '12c-1: …and the device ends bound to the INCOMING player, not to nobody');
+  }
+
+  // ── [12d] A REAL SIGN-OUT STILL UNBINDS ──────────────────────────────────
+  {
+    installWorld();
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p5'));
+    await settle();
+    await keepAlive(push.logoutOneSignal());
+    await settle();
+    assert(CALLS.includes('login(p5)') && CALLS.indexOf('logout') > CALLS.indexOf('login(p5)'),
+      `12d: a sign-out after a session still calls OneSignal.logout() — a handed-off phone must stop receiving the previous player's pushes (DI-180q). Got ${JSON.stringify(CALLS)}`);
+    assert(push.boundExternalId() === '',
+      '12d-1: …and the module reports itself UNBOUND afterwards, so the status line says "not linked" rather than repeating the last player it saw');
+  }
+
+  // ── [12e] NO PROMPT, EVER, ON THE BOOT PATH ──────────────────────────────
+  // Re-asserting identity must never raise the native permission sheet. A
+  // never-asked device is linked-or-not silently; only the Turn On button asks.
+  {
+    installWorld({ permission: 'default' });
+    let prompted = 0;
+    const base = makeSdk({ initMs: 10 });
+    sdk = { ...base, Notifications: { addEventListener() {}, async requestPermission() { prompted++; } } };
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p6'));
+    await settle();
+    assert(prompted === 0,
+      '12e: the boot-time re-assert NEVER calls requestPermission() — a permission sheet on first paint is a different bug and a worse one');
+  }
+
+  // ── [12f] THE HONEST STATUS LINE (UN-204's "push is on" must be TRUE) ────
+  // Drew's iPhone: iOS Settings shows Pick 'Ems allowed, the app's 🔔 screen
+  // shows no priming card at all and every box ticked — while OneSignal has no
+  // subscription for it. renderPrimingCardHTML() returns '' for 'granted'
+  // (app.js:4072), so permission-granted-but-unsubscribed is INVISIBLE and has
+  // no button back. Three facts, not one: permission AND a subscription id AND
+  // the external id attached.
+  {
+    installWorld({ subscribed: false });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.ensureOneSignalInit());
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.permission === 'granted',
+      '12f: fixture — the browser really has permission (this is the state that renders nothing today)');
+    assert(st.hasSubscription === false && st.linked === false,
+      `12f-1: …but the device has NO subscription and NO external id, and the status says so rather than staying silent. Got ${JSON.stringify(st)}`);
+    assert(st.ok === false,
+      '12f-2: …so "push is on for this device" is FALSE. It is an AND of the three facts — permission alone has never been enough, and saying so is the whole point of the line');
+
+    installWorld({ subscribed: true });
+    push._resetForTest({ sdkReadyMs: 400 });
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st2 = await keepAlive(push.pushDeviceStatus());
+    assert(st2.ok === true && st2.linked === true && st2.hasSubscription === true,
+      `12f-3: …and a genuinely reachable device reports ok — all three facts true, external id attached. Got ${JSON.stringify(st2)}`);
+    assert(st2.externalId === 'p1' && !/@/.test(JSON.stringify(st2)),
+      '12f-4: …reporting the league member id the app already renders everywhere, and no email or token (this line is meant to be read out to the commissioner)');
+  }
+
+  // ── [12h] THE SCREEN SAYS IT — app.js's own render, driven directly ──────
+  // The status only helps if the player can see it, and the state that was
+  // invisible is the one that had to change: permission granted, card empty.
+  {
+    const ON  = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', { ok: true, hasSubscription: true, linked: true, permission: 'granted' });
+    const OFF = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', { ok: false, hasSubscription: false, linked: false, permission: 'granted' });
+    const HALF = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', { ok: false, hasSubscription: true, linked: false, permission: 'granted' });
+    assert(/Push is on for this device/.test(ON),
+      '12h: a genuinely reachable device says so in one line — the affirmative the 🔔 screen never had');
+    assert(!/notif-priming-btn/.test(ON),
+      '12h-1: …and offers NO button, because there is nothing to fix');
+    assert(/isn't reaching this device/.test(OFF) && /notif-priming-btn/.test(OFF),
+      `12h-2: THE REPORTED STATE — permission granted, no subscription — now renders a card AND the one button that fixes it. It rendered absolutely nothing before. Got: ${OFF.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 200)}`);
+    assert(/isn't registered for push yet/.test(OFF) && /isn't linked to your account/.test(HALF),
+      '12h-3: …and the two ways it can be broken get different sentences, because "no subscription" and "subscribed but unlinked" are different problems with the same symptom');
+    assert(!/Push is on for this device/.test(OFF) && !/Push is on for this device/.test(HALF),
+      '12h-4: …and neither broken state is ever allowed to claim push is on');
+    const UNKNOWN = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', null);
+    assert(!/Push is on for this device/.test(UNKNOWN) && !/isn't reaching/.test(UNKNOWN),
+      '12h-5: a status we could NOT resolve renders the old silence, never a guess in either direction');
+  }
+
+  // ── [12i] REVIEWER BLOCK — "Reconnect" MUST ACTUALLY RECONNECT ──────────
+  // The card offered a Reconnect button for permission-granted-but-unsubscribed
+  // and then called requestPushPermission(), whose Notifications.requestPermission()
+  // resolves INSTANTLY when permission is already granted and creates nothing. It
+  // then toasted "✅ Push enabled" over a device that was still unsubscribed —
+  // a button that cannot fix the state it is offered for, and a success message
+  // for a failure. Nothing in the app called optIn(), the v16 call that actually
+  // creates the subscription.
+  {
+    installWorld({ permission: 'granted', subscribed: false });
+    push._resetForTest();
+    const out = await keepAlive(appMod.enablePushOnThisDevice('p1'));
+    await settle();
+    assert(CALLS.includes('optIn'),
+      `12i: Reconnect calls OneSignal.User.PushSubscription.optIn() — the ONLY v16 call that creates a subscription. requestPermission() on an already-granted device creates nothing. Got ${JSON.stringify(CALLS)}`);
+    assert(CALLS.indexOf('optIn') > -1 && CALLS.indexOf('optIn') < CALLS.indexOf('login(p1)'),
+      `12i-1: …and the identity is asserted AFTER the subscription exists, so the external id lands on a real subscription. Got ${JSON.stringify(CALLS)}`);
+    assert(out.ok === true && /Push is on for this device/.test(out.message),
+      `12i-2: …and the success message is only reached once permission AND subscription AND linkage are all true — it RE-READS the device rather than trusting the call it just made. Got ${JSON.stringify(out.message)}`);
+
+    // …and the failure direction: an optIn() that creates nothing must NOT report success.
+    installWorld({ permission: 'granted', subscribed: false, optInCreates: false });
+    push._resetForTest();
+    const bad = await keepAlive(appMod.enablePushOnThisDevice('p1'));
+    await settle();
+    assert(bad.ok === false && !/Push is on/.test(bad.message),
+      `12i-3: an optIn() that produced no subscription is NEVER reported as enabled — the re-read is what makes the message honest, and this is the assertion that fails if anyone trusts the call's own return. Got ${JSON.stringify(bad.message)}`);
+    assert(/still isn't registered/.test(bad.message),
+      `12i-4: …and it names the remaining problem and what to do, rather than "Could not enable push". Got ${JSON.stringify(bad.message)}`);
+  }
+
+  // ── [12j] COORDINATOR RULING — NO ACTION NEEDED FROM PLAYERS ─────────────
+  // Five of six players cannot be asked to find a settings screen. Where
+  // permission is ALREADY granted the subscription can be created with no
+  // prompt at all, so boot does it: once per page, only for a signed-in linked
+  // member whose master pref is on.
+  {
+    installWorld({ permission: 'granted', subscribed: false });
+    push._resetForTest();
+    appMod._resetAutoOptInForTest();
+    const did = await keepAlive(appMod.maybeAutoOptInPush('p1'));
+    await settle();
+    assert(did === true && CALLS.includes('optIn'),
+      `12j: a granted-but-unsubscribed device subscribes ITSELF at boot — the player does nothing. Got ${JSON.stringify(CALLS)}`);
+    assert(!CALLS.includes('requestPermission'),
+      `12j-1: …and NO permission request is made on this path, ever. It is prompt-free by construction (permission is already granted); a prompt on first paint would be a worse bug than the one being fixed. Got ${JSON.stringify(CALLS)}`);
+    assert(CALLS.includes('login(p1)'),
+      '12j-2: …and the external id is attached to the subscription it just created');
+
+    // ONCE PER PAGE.
+    const again = await keepAlive(appMod.maybeAutoOptInPush('p1'));
+    assert(again === false,
+      '12j-3: once per page load — a boot path that can re-enter must not re-run it');
+
+    // NOT when the player has switched push off.
+    installWorld({ permission: 'granted', subscribed: false });
+    push._resetForTest(); appMod._resetAutoOptInForTest();
+    // The preference lives on the PLAYER RECORD (storage.js:733), which is the
+    // same place js/notifications.js reads it from when it decides whom to send
+    // to — so the fixture sets it there rather than through a session-scoped
+    // writer that would prove nothing about the id being bound.
+    const priorP1 = (storage.getPlayers() || []).find(x => x.playerId === 'p1') || null;
+    storage.savePlayer({ playerId: 'p1', displayName: 'Drew', active: true, preferences: { notifyPushMaster: false } });
+    const offRes = await keepAlive(appMod.maybeAutoOptInPush('p1'));
+    await settle();
+    assert(offRes === false && !CALLS.includes('optIn'),
+      `12j-4: MASTER OFF means the player said no. Subscribing them anyway would be the app overriding a preference it is supposed to honour. Got ${JSON.stringify(CALLS)}`);
+    storage.savePlayer(priorP1 || { playerId: 'p1', displayName: 'Drew', active: true, preferences: { notifyPushMaster: true } });
+
+    // NOT when permission was never asked for, and NOT when it was refused.
+    for (const perm of ['default', 'denied']) {
+      installWorld({ permission: perm, subscribed: false });
+      push._resetForTest(); appMod._resetAutoOptInForTest();
+      const r = await keepAlive(appMod.maybeAutoOptInPush('p1'));
+      await settle();
+      assert(r === false && !CALLS.includes('optIn') && !CALLS.includes('requestPermission'),
+        `12j-5 (${perm}): without permission already granted this path does NOTHING — optIn() would raise the very prompt this must never raise. Got ${JSON.stringify(CALLS)}`);
+    }
+
+    // NOT for a signed-out device — there is no member id to attach.
+    installWorld({ permission: 'granted', subscribed: false });
+    push._resetForTest(); appMod._resetAutoOptInForTest();
+    const anon = await keepAlive(appMod.maybeAutoOptInPush(null));
+    await settle();
+    assert(anon === false && !CALLS.includes('optIn'),
+      '12j-6: …and not for a signed-out device: a subscription with nobody attached is exactly the orphan this whole fix is about');
+
+    // STRUCTURAL — it is actually wired into boot, not merely exported.
+    const appSrc12 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const bootBlock12 = (appSrc12.match(/Groups A\/B — notifications boot wiring[\s\S]{0,4500}?refreshPushActiveFlag\(\);/) || [''])[0];
+    assert(bootBlock12.includes('maybeAutoOptInPush('),
+      '12j-7: …and the boot wiring really calls it — an exported function nothing calls fixes nobody');
+  }
+
+  // ── [12k] REVIEWER — "I COULD NOT CHECK" IS NOT "NOT REGISTERED" ────────
+  // A blocked/unloaded SDK cannot answer, and reporting that as "this device
+  // isn't registered" offers a Reconnect button that cannot keep its promise.
+  {
+    installWorld({ permission: 'granted', subscribed: true, scriptMs: 100000 });   // the SDK never lands
+    push._resetForTest({ sdkReadyMs: 40 });
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.known === false && st.ok === false,
+      `12k: an SDK that never answers resolves UNKNOWN, not "not registered" — and unknown is never ok. Got ${JSON.stringify(st)}`);
+    const card = await appMod.renderNotifSettingsBodyHTML('p1', 'granted', st);
+    assert(/didn't load/.test(card) && !/notif-priming-btn/.test(card),
+      `12k-1: …and the card says we could not check, with NO button — a Reconnect that cannot reach the SDK is a promise the app cannot keep. Got: ${card.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 220)}`);
+    assert(!/isn't registered for push yet/.test(card),
+      '12k-2: …and it never uses the "not registered" sentence, which would be a claim about the device we did not actually make');
+  }
+
+  // ── [12k2] THE EXTERNAL ID COMES FROM THE SDK WHEN THE SDK KNOWS IT ─────
+  {
+    installWorld({ permission: 'granted', subscribed: true });
+    push._resetForTest();
+    await keepAlive(push.loginOneSignal('p1'));
+    await settle();
+    const st = await keepAlive(push.pushDeviceStatus());
+    assert(st.externalId === 'p1' && st.known === true && st.ok === true,
+      `12k2: the status reads OneSignal.User.externalId — the SDK's own answer outranks this page's memory of what it asked for. Got ${JSON.stringify(st)}`);
+  }
+
+  // ── [12c2] SECURITY F-2 — A SLOW CALL MUST NOT WIN ──────────────────────
+  // _callSdk deliberately does not hold the chain, so a slow login(A) can land
+  // AFTER a later logout()/login(B). Landing late must not be allowed to leave
+  // the SDK on the superseded identity: the stale completion re-asserts whatever
+  // the app currently wants.
+  {
+    let releaseA = null;
+    installWorld({ permission: 'granted', subscribed: true,
+      loginGate: (id) => (id === 'A' ? new Promise(r => { releaseA = r; }) : Promise.resolve()) });
+    push._resetForTest();
+    await keepAlive(push.loginOneSignal('A'));     // queued and INVOKED, now hanging inside login('A')
+    await settle(60);
+    await keepAlive(push.logoutOneSignal());
+    await settle(60);
+    releaseA?.();                                   // the stale login finally lands
+    await settle(300);
+    assert(CALLS[CALLS.length - 1] === 'logout',
+      `12c2: a slow login('A') that resolves AFTER a sign-out leaves the device LOGGED OUT — the stale completion re-asserts the current target instead of silently winning. Got ${JSON.stringify(CALLS)}`);
+    assert(push.boundExternalId() === '',
+      '12c2-1: …and the module agrees it is unbound, so the status line cannot claim a linkage the SDK no longer has');
+
+    let releaseA2 = null;
+    installWorld({ permission: 'granted', subscribed: true,
+      loginGate: (id) => (id === 'A' ? new Promise(r => { releaseA2 = r; }) : Promise.resolve()) });
+    push._resetForTest();
+    await keepAlive(push.loginOneSignal('A'));
+    await settle(60);
+    await keepAlive(push.loginOneSignal('B'));
+    await settle(60);
+    releaseA2?.();
+    await settle(300);
+    assert(CALLS[CALLS.length - 1] === 'login(B)',
+      `12c2-2: …and after a player switch the device ends on B, never back on A. Got ${JSON.stringify(CALLS)}`);
+    assert(push.boundExternalId() === 'B', '12c2-3: …and the binding says B');
+  }
+
+  // ── [12g] STRUCTURAL — nothing may call the SDK ahead of init again ──────
+  // The defect was an ORDERING one, and an ordering defect walks back in the
+  // moment someone adds a second `OneSignalDeferred.push` beside the first. Every
+  // SDK call in the module goes through one helper that awaits init.
+  {
+    const src = await readFile(new URL('./js/push-onesignal.js', import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const userCalls = code.match(/OneSignal\.(login|logout)\s*\(/g) || [];
+    assert(userCalls.length === 2,
+      `12g: exactly ONE call site each for OneSignal.login()/logout() (got ${userCalls.length}) — two call sites is two orderings, and one of them will be the wrong one`);
+    const idx = code.indexOf('async function _assertIdentity');
+    assert(idx > -1 && /await ensureOneSignalInit\(\)/.test(code.slice(idx, idx + 1600)),
+      '12g-1: …and that call site awaits ensureOneSignalInit() before it touches the SDK. Deleting the await is the mutation this section exists to catch');
+  }
+
+  // Restore the suite's own globals — every later section (and any suite that
+  // imports this one's modules) must not inherit a push fixture.
+  globalThis.document = savedG.document; setNav(savedG.navigator); globalThis.fetch = savedG.fetch;
+  globalThis.matchMedia = savedG.matchMedia; globalThis.Notification = savedG.Notification;
+  globalThis.PushSubscriptionOptions = savedG.PushSubscriptionOptions;
+  globalThis.OneSignalDeferred = savedG.OneSignalDeferred;
+  push._resetForTest();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} pushtest: ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

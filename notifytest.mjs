@@ -1857,7 +1857,12 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
     ua = 'Mozilla/5.0 (Linux; Android 14) Chrome/127', vendor = 'Google Inc.',
     maxTouchPoints = 1, standalone = false, sdkCompatible = true, permission = 'default',
   } = {}) {
-    const state = { initCalls: 0, initOpts: null, configFetches: 0 };
+    // RG-192 — the fake SDK records identity calls now. It has to: the module no
+    // longer touches OneSignal until init has COMPLETED, so the ordering these
+    // sections assert can no longer be read off the raw OneSignalDeferred array
+    // (by the time the calls are queued, the SDK has replaced it with its own
+    // immediate-invoke object — which is exactly what the real SDK does).
+    const state = { initCalls: 0, initOpts: null, configFetches: 0, identityCalls: [] };
     const fakeOneSignal = {
       async init(opts) {
         state.initCalls++; state.initOpts = opts;
@@ -1870,6 +1875,8 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
         if (initBehaviour === 'throw')           throw new Error('IndexedDB unavailable');
         if (initBehaviour === 'throw-object')    throw { success: false, code: 2, description: 'This app is not configured for web push.' };
       },
+      async login(id) { state.identityCalls.push(`login:${id}`); },
+      async logout() { state.identityCalls.push('logout'); },
       Notifications: {
         async requestPermission() {
           if (permBehaviour === 'sw-missing') throw new Error('OneSignal service worker not found!');
@@ -2018,7 +2025,22 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
   const stripComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ');
   const pushSrc = await readFile(pushSrcPath, 'utf8');
   const appSrc  = await readFile(appSrcPath, 'utf8');
-  const OK_REASONS = new Set(['granted', 'initialized']);
+  // Success reasons, plus (RG-192 gate, 2026-09-20) the four emitted by
+  // ensurePushSubscription(). Those four are NEVER handed to pushFailureMessage():
+  // they are consumed inside app.js's enablePushOnThisDevice(), which answers with
+  // the DEVICE-STATUS copy instead — because after a Reconnect tap the useful
+  // sentence is what is still wrong with this device, not which internal call
+  // returned what. pushtest [12i-3]/[12i-4] assert that path renders the
+  // remaining-problem copy and never a generic toast, which is the same guarantee
+  // this rule exists to give; listing them here is the exemption, not a loophole,
+  // and a NEW reason still lands in `unmapped` until somebody decides where it goes.
+  const OK_REASONS = new Set([
+    'granted', 'initialized',
+    'opted-in',            // ensurePushSubscription() success
+    'opt-in-failed',       // -> PUSH_STATUS_STILL_NO_SUBSCRIPTION
+    'not-granted',         // unreachable from the UI (permission is checked first)
+    'native-unavailable',  // the native shell; the card has its own copy (DI-210e)
+  ]);
   //   Captures the whole right-hand side of `reason:` and harvests every
   //   string literal in it, so a reason produced by a TERNARY
   //   (`reason: x ? 'config-unreachable' : 'not-configured'`) is scanned too —
@@ -2153,7 +2175,7 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
   // THE STUB IS THE REPRODUCTION: the FIRST read is slower than the second.
   {
     const APP_ID_F2 = 'abad65e9-1111-2222-3333-444444444444';
-    installPushStubs({ sdkCompatible: true, standalone: true });
+    const stF2 = installPushStubs({ sdkCompatible: true, standalone: true });
     push._resetForTest();
     let reads = 0;
     globalThis.fetch = async () => {
@@ -2168,12 +2190,13 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
     const pOut = push.logoutOneSignal();
     const pIn = push.loginOneSignal('mB');
     await Promise.all([pOut, pIn]);
-    const osSeq = [];
-    const queued = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred.splice(0) : [];
-    for (const cb of queued) {
-      await cb({ login: id => osSeq.push(`login:${id}`), logout: () => osSeq.push('logout') });
-    }
-    assert(osSeq.length === 2, `[24k] fixture: both OneSignal calls were queued (${JSON.stringify(osSeq)})`);
+    // RG-192 — read the ORDER OFF THE SDK, not off the queue. The module hands
+    // the SDK nothing until init has completed, and by then the SDK owns the
+    // queue object; what has to hold is the order the two calls REACH OneSignal,
+    // which is what this records.
+    await withKeepAlive(new Promise(r => { const t = setTimeout(r, 30); t?.unref?.(); }));
+    const osSeq = stF2.identityCalls;
+    assert(osSeq.length === 2, `[24k] fixture: both OneSignal calls really reached the SDK (${JSON.stringify(osSeq)})`);
     assert(osSeq[0] === 'logout',
       `[24k] SEC F-2 — the LOGOUT is queued FIRST even when its config read is the slower one (${JSON.stringify(osSeq)}). The other order leaves the handset bound to nobody.`);
     assert(osSeq[osSeq.length - 1] === 'login:mB',
@@ -2215,7 +2238,7 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
     const APP_ID_F3 = 'abad65e9-5555-6666-7777-888888888888';
     const observed = [];
     for (let gap = 0; gap <= 8; gap++) {
-      installPushStubs({ sdkCompatible: true, standalone: true });
+      const stF3 = installPushStubs({ sdkCompatible: true, standalone: true });
       push._resetForTest();
       // Resolves entirely in MICROTASKS — no timer anywhere — so the gap loop
       // below can actually step through `_appId`'s assignment instead of being
@@ -2227,14 +2250,12 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
       for (let i = 0; i < gap; i++) await Promise.resolve();
       const pIn = push.loginOneSignal('mB');
       await Promise.all([pOut, pIn]);
-      // Drain any trailing microtasks the chain may still be traversing.
+      // Drain any trailing microtasks the chain may still be traversing, plus one
+      // macrotask for the SDK <script> to land (RG-192: init must COMPLETE before
+      // either call is allowed to reach OneSignal).
       for (let i = 0; i < 8; i++) await Promise.resolve();
-      const seq = [];
-      const queued = Array.isArray(globalThis.OneSignalDeferred) ? globalThis.OneSignalDeferred.splice(0) : [];
-      for (const cb of queued) {
-        await cb({ login: id => seq.push(`login:${id}`), logout: () => seq.push('logout') });
-      }
-      observed.push({ gap, seq });
+      await withKeepAlive(new Promise(r => { const t = setTimeout(r, 30); t?.unref?.(); }));
+      observed.push({ gap, seq: stF3.identityCalls });
     }
     const wrong = observed.filter(o => JSON.stringify(o.seq) !== JSON.stringify(['logout', 'login:mB']));
     assert(observed.every(o => o.seq.length === 2),
@@ -2690,21 +2711,27 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
       // events that flip the device's push-active flag). Both are injected, so
       // this still EXECUTES the real handler source rather than a copy of it.
       let pushFlagRefreshes = 0;
-      new Function('ov', 'showToast', 'requestPushPermission', 'pushFailureMessage', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', src)(
-        ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, () => 'nope', async () => {},
+      // RG-192 gate (2026-09-20): the handler now calls enablePushOnThisDevice(),
+      // which does permission -> optIn() -> identity -> RE-READ. requestPushPermission()
+      // alone could not fix the state the Reconnect button is offered for. The
+      // injected name changes; everything this section asserts (one call, disabled
+      // for the duration, one toast, re-enabled after, the push-active recompute)
+      // is unchanged, because the reviewer ruling it guards is unchanged.
+      new Function('ov', 'showToast', 'enablePushOnThisDevice', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', src)(
+        ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, async () => {},
         () => { pushFlagRefreshes++; }, 'p1');
       const t1 = handler({ currentTarget: btn });
       const disabledDuring = btn.disabled;
       const t2 = handler({ currentTarget: btn });        // the impatient second tap
       await settle();
-      releases.forEach(r => r({ ok: true, reason: 'granted' }));
+      releases.forEach(r => r({ ok: true, message: 'Push is on for this device.' }));
       await Promise.all([t1, t2]); await settle();
       return { calls, disabledDuring, toasts, enabledAfter: btn.disabled === false, pushFlagRefreshes };
     };
 
     const real = await runTaps(handlerSrc);
     assert(real.calls === 1,
-      `[25g] two taps while the prompt is open produce exactly ONE requestPushPermission() call (got ${real.calls}) — two would mean two native prompts racing for one Notification.permission, and two toasts that can disagree`);
+      `[25g] two taps while the prompt is open produce exactly ONE enablePushOnThisDevice() call (got ${real.calls}) — two would mean two native prompts racing for one Notification.permission, and two toasts that can disagree`);
     assert(real.disabledDuring === true, '[25g] the button is disabled for the duration of the await');
     assert(real.toasts === 1, '[25g] …and exactly one toast is shown');
     assert(real.enabledAfter === true, '[25g] the button is re-enabled afterwards (a dismissed prompt leaves the card on never-asked, and it must stay tappable)');

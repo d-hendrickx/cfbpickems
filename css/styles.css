@@ -3020,6 +3020,29 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
 body.native-shell .site-gate[data-gate-state="google"]{
   background:#14110E;align-items:flex-start;
   padding-top:max(24px, calc(50vh - 44.68px));
+  overflow-y:auto;-webkit-overflow-scrolling:touch;
+}
+/* Reviewer round 2 — landscape safety. A flat min(calc(50vh - 44.68px),30vh)
+   clamp was checked and REJECTED: at the 402x874pt portrait reference,
+   50vh-44.68px = 392.32px but 30vh = 262.2px, so that clamp would ALSO fire
+   in portrait and pull the block ~130px higher than today — failing the
+   "portrait must be pixel-identical" requirement. A height media query does
+   not have that problem: it only overrides padding-top below the threshold,
+   so portrait (874px tall, or any height above 500px) is completely
+   unaffected by this rule and still resolves via the calc() above.
+   max-height:500px covers every enabled iOS landscape orientation on every
+   current device (the shortest, iPhone SE/mini families, is ~375pt tall in
+   landscape) while sitting comfortably below the shortest portrait height
+   in the supported device set, so it can never misfire in portrait. Below
+   that threshold this reverts to the shared gate's plain top-anchored 24px
+   (matching the PIN/hold gates' own default) instead of attempting a 50vh
+   centering that has too little room to work with; overflow-y:auto above
+   is the actual clipping guarantee for a still-too-long multi-line error,
+   in either orientation. */
+@media (max-height:500px){
+  body.native-shell .site-gate[data-gate-state="google"]{
+    padding-top:24px;align-items:flex-start;
+  }
 }
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-wordmark{
   font-family:Georgia,'Times New Roman',Baskerville,serif;
@@ -3031,21 +3054,34 @@ body.native-shell .site-gate[data-gate-state="google"] .site-gate-tagline{
   color:#C9A24B;font-size:.7rem;font-weight:400;letter-spacing:.071em;
   line-height:1.15;margin-bottom:28px;
 }
-/* .site-gate-subtitle keeps the shared #888 muted gray on native (DI-216e —
-   "no reason to invent a Gold-muted variant for one line of text"); the
-   base rule's text-transform:lowercase is the ONE thing overridden — A1's
-   sentence-case "Sign in to make your picks." would otherwise render
-   lowercase despite the sentence-case HTML content, since that rule applies
-   regardless of platform. .site-gate-error/.site-gate-notice stay
-   semantic/muted, untouched, for the reason DI-216e gives. */
+/* Drew, after the simulator screenshot (2026-09-20): "The font needs to all
+   follow the munera theme, not the irb pickems theme." The wordmark/tagline
+   above already do; everything BELOW them (sub-line, button label, message
+   slot) was still inheriting .site-gate-inner's monospace/all-lowercase/
+   wide-tracking typewriter face, which reads as the OLD "irb pick 'ems"
+   gate's typography, not Munera's. Every one of these three elements now
+   gets the SAME serif family the tagline uses (no Baskerville — that's the
+   wordmark's own accent, per the launch-screen SVG), normal-case, and
+   tighter serif-appropriate tracking (.03em, mid the requested .02-.04em
+   band, vs the monospace face's .06-.15em). Colors are UNCHANGED throughout
+   — #888 muted sub-line/notice, #C9A24B Gold button, and critically
+   .site-gate-error stays exactly #f44 (loud-fail must always look like an
+   error; only its FACE changes here, never its color, size or margin). */
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-subtitle{
-  text-transform:none;
+  font-family:Georgia,'Times New Roman',serif;
+  font-size:1rem;letter-spacing:.03em;text-transform:none;
 }
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-btn{
   border-color:#C9A24B;color:#C9A24B;
+  font-family:Georgia,'Times New Roman',serif;
+  font-size:1rem;letter-spacing:.03em;text-transform:none;min-height:44px;
 }
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-btn:hover{
   background:#C9A24B;color:#14110E;
+}
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-error,
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-notice{
+  font-family:Georgia,'Times New Roman',serif;letter-spacing:.03em;
 }
 /* .google-g-mark is NOT scoped or overridden here — Google's OAuth branding
    guidelines govern that chip on every platform (DI-216e/g). */

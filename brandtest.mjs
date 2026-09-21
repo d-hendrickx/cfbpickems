@@ -363,12 +363,24 @@ console.log('\n[12] A2/A1 — the Georgia/Baskerville serif stacks and the 50vh 
   // Global uniqueness — these font-family values may not leak into any OTHER
   // rule in the file (web's monospace .site-gate-inner, the hold gate, the
   // PIN gate title/subtitle, etc. must all stay untouched).
-  const georgiaCount = (cssSrc.match(/Georgia/g) || []).length;
-  const baskervilleCount = (cssSrc.match(/Baskerville/g) || []).length;
-  assert(georgiaCount === 2,
-    `[12j] "Georgia" appears EXACTLY twice in styles.css — once in the wordmark rule, once in the tagline rule, and nowhere else (got ${georgiaCount})`);
+  // Counted against CODE only (comments stripped) — this file's own prose
+  // legitimately discusses "Baskerville" by name when explaining why a given
+  // rule does NOT use it (same stripComments technique brand.js's SCRIBE/
+  // MunerAI guard uses in [4] above), so a raw count would be thrown off by
+  // its own documentation rather than measuring the actual declarations.
+  const stripCssComments = (src) => src.replace(/\/\*[\s\S]*?\*\//g, ' ');
+  const cssCode = stripCssComments(cssSrc);
+  const georgiaCount = (cssCode.match(/Georgia/g) || []).length;
+  const baskervilleCount = (cssCode.match(/Baskerville/g) || []).length;
+  assert(cssCode.length < cssSrc.length,
+    '[12-pre] non-vacuity: stripCssComments() actually removed characters — a no-op strip would make 12j/12k below count comment prose too');
+  // Since Drew's font-follow-up ([14] below), the serif family also covers
+  // the sub-line, the button and the message slot (one rule, two selectors)
+  // — five rule-sites total, all still inside the SAME native-scoped block.
+  assert(georgiaCount === 5,
+    `[12j] "Georgia" appears EXACTLY five times in styles.css's CODE — wordmark, tagline, sub-line, button, and the grouped error/notice rule, ALL inside the native-scoped block, and nowhere else (got ${georgiaCount})`);
   assert(baskervilleCount === 1,
-    `[12k] "Baskerville" appears EXACTLY once — only in the wordmark rule (the tagline stack omits it, per the SVG) — (got ${baskervilleCount})`);
+    `[12k] "Baskerville" appears EXACTLY once in styles.css's CODE — only in the wordmark rule's actual declaration (every other native-text rule uses the plain Georgia/Times New Roman/serif stack, per the SVG's own tagline face) — (got ${baskervilleCount})`);
   // No OTHER rule anywhere in the file overrides .site-gate-subtitle's
   // text-transform outside this native-scoped block (the hold gate has its
   // own, unrelated override at a DIFFERENT selector — [data-gate-state="hold"]
@@ -415,13 +427,13 @@ console.log('\n[13] Reviewer R1 items 2/3 — Ink/Gold hexes pinned; the 44.68px
   assert(!googleMarkInNativeBlock,
     '[13f] .google-g-mark has NO rule anywhere under the native-scoped block — untouched on every platform');
 
-  // Error text must stay semantic red — never overridden inside the native
-  // block, regardless of how many other Munera colours this DI adds.
-  const errorInNativeBlock = new RegExp(
-    'body\\.native-shell \\.site-gate\\[data-gate-state="google"\\][^{]*\\.site-gate-error'
-  ).test(cssSrc);
-  assert(!errorInNativeBlock,
-    '[13g] .site-gate-error has NO rule anywhere under the native-scoped block — error text stays the shared semantic #f44 on every platform, never re-themed to Gold/Ink (loud-fail must always look like an error)');
+  // Error text must stay semantic red. Since Drew's font-follow-up (below,
+  // [14]) the native block DOES carry a rule for .site-gate-error — but it
+  // may declare ONLY typography (font-family/letter-spacing), never a color.
+  const errorNativeRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-error(?:,\s*\n?body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-notice)?\{([^}]*)\}/.exec(cssSrc);
+  assert(!!errorNativeRule, '[13-pre] the native-scoped .site-gate-error rule (possibly grouped with .site-gate-notice) exists (fixture check for 13g)');
+  assert(!!errorNativeRule && !/color:/.test(errorNativeRule[1]),
+    `[13g] the native-scoped .site-gate-error rule declares NO color property (got "${errorNativeRule?.[1]}") — only its FACE may change here, never its color; it stays the shared semantic #f44 on every platform (loud-fail must always look like an error)`);
   assert(/\.site-gate-error\{color:#f44/.test(cssSrc),
     '[13h] .site-gate-error\'s own (shared, unscoped) rule is still exactly #f44 — sanity check that 13g isn\'t vacuously passing because the rule itself vanished');
 
@@ -449,6 +461,130 @@ console.log('\n[13] Reviewer R1 items 2/3 — Ink/Gold hexes pinned; the 44.68px
   assert(Number.isFinite(cssConstant), '[13-pre] non-vacuity: the padding-top rule\'s calc() constant was actually parsed');
   assert(Math.abs(derivedHalf - cssConstant) < 0.005,
     `[13i] the padding-top calc() constant (${cssConstant}px) EQUALS half the wordmark+tagline block's height, DERIVED here from the SAME declared font-size/line-height/margin-bottom values [12] already parsed (derived ${derivedHalf}px) — editing any one of those three properties on either element now turns this assertion RED instead of silently de-centring the block`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [14] Drew, after the simulator screenshot (2026-09-20): "The font needs to
+// all follow the munera theme, not the irb pickems theme." Everything BELOW
+// the wordmark+tagline block — sub-line, button label, message slot — was
+// still inheriting .site-gate-inner's monospace/lowercase/wide-tracking
+// typewriter face. Pins the serif takeover on all three, the button's
+// min-height:44px tap target, and that NONE of this leaked outside the
+// native-scoped block (web stays byte-identical, proven separately in [9]).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[14] Drew\'s font follow-up — sub-line/button/message slot go serif, native-scoped only…');
+{
+  const cssSrc = await readFile(path.join(root, 'css', 'styles.css'), 'utf8');
+  const subtitleRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-subtitle\{([^}]*)\}/.exec(cssSrc);
+  const btnRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-btn\{([^}]*)\}/.exec(cssSrc);
+  const errNoticeRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-error,\s*\nbody\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-notice\{([^}]*)\}/.exec(cssSrc);
+
+  assert(!!subtitleRule, '[14-pre] the native-scoped .site-gate-subtitle rule exists (fixture check for 14a-c)');
+  assert(!!btnRule, '[14-pre] the native-scoped .site-gate-btn rule exists (fixture check for 14d-g)');
+  assert(!!errNoticeRule, '[14-pre] the grouped native-scoped .site-gate-error/.site-gate-notice rule exists (fixture check for 14h-i)');
+
+  const SERIF = "Georgia,'Times New Roman',serif";
+  if (subtitleRule) {
+    assert(subtitleRule[1].includes(`font-family:${SERIF}`),
+      '[14a] the sub-line uses the Munera serif stack (no Baskerville — that\'s the wordmark\'s own accent)');
+    assert(/letter-spacing:\.0[2-4]em/.test(subtitleRule[1]),
+      `[14b] the sub-line's letter-spacing is in the requested .02-.04em serif-appropriate band (got "${subtitleRule[1].match(/letter-spacing:[^;]*/)?.[0]}")`);
+    assert(/font-size:1rem/.test(subtitleRule[1]),
+      '[14c] the sub-line is sized ≈1rem, per the requested hierarchy');
+  }
+  if (btnRule) {
+    assert(btnRule[1].includes(`font-family:${SERIF}`),
+      '[14d] the button (and its inherited label span) uses the Munera serif stack');
+    assert(/letter-spacing:\.0[2-4]em/.test(btnRule[1]),
+      `[14e] the button's letter-spacing is in the .02-.04em band (got "${btnRule[1].match(/letter-spacing:[^;]*/)?.[0]}")`);
+    assert(/font-size:1rem/.test(btnRule[1]),
+      '[14f] the button label is sized ≈1rem, per the requested hierarchy');
+    assert(/text-transform:none/.test(btnRule[1]),
+      '[14g] the native button overrides text-transform to none — the shared .site-gate-btn\'s lowercase would otherwise render "continue with google" despite the capitalized "Continue with Google" HTML content (same class of bug [12l] already fixed for the sub-line)');
+    assert(/min-height:44px/.test(btnRule[1]),
+      '[14g2] the native button carries min-height:44px — the reviewer-flagged ~36px tap target, fixed on native only (web\'s pre-existing height is explicitly out of scope, deferred)');
+  }
+  if (errNoticeRule) {
+    assert(errNoticeRule[1].includes(`font-family:${SERIF}`),
+      '[14h] the message slot (error AND notice tone) uses the Munera serif stack');
+    assert(/letter-spacing:\.0[2-4]em/.test(errNoticeRule[1]),
+      `[14i] the message slot's letter-spacing is in the .02-.04em band (got "${errNoticeRule[1].match(/letter-spacing:[^;]*/)?.[0]}")`);
+  }
+
+  // Cross-scope exclusivity — NONE of this leaked onto the shared (web)
+  // rules. The base .site-gate-subtitle/.site-gate-btn/.site-gate-error/
+  // .site-gate-notice rules must still show the ORIGINAL monospace-era
+  // face — proving web is unaffected at the CSS-source level too (on top of
+  // [9]'s rendered-HTML byte-identity proof, which cannot see CSS at all).
+  const baseSubtitle = /(?<!google"\] )\.site-gate-subtitle\{([^}]*)\}/.exec(cssSrc);
+  const baseBtn = /^\.site-gate-btn\{([^}]*)\}/m.exec(cssSrc);
+  const baseError = /^\.site-gate-error\{([^}]*)\}/m.exec(cssSrc);
+  const baseNotice = /^\.site-gate-notice\{([^}]*)\}/m.exec(cssSrc);
+  assert(!!baseSubtitle && /text-transform:lowercase/.test(baseSubtitle[1]) && !baseSubtitle[1].includes('font-family'),
+    '[14j] the SHARED (web) .site-gate-subtitle rule still text-transform:lowercase and declares no font-family — untouched');
+  assert(!!baseBtn && /text-transform:lowercase/.test(baseBtn[1]) && baseBtn[1].includes("font-family:'Courier New',monospace") && !/min-height/.test(baseBtn[1]),
+    '[14k] the SHARED (web) .site-gate-btn rule is still monospace/lowercase with no min-height — untouched');
+  assert(!!baseError && !baseError[1].includes('font-family') && !!baseNotice && !baseNotice[1].includes('font-family'),
+    '[14l] the SHARED (web) .site-gate-error/.site-gate-notice rules declare no font-family — untouched');
+
+  // [13i] must still hold — the wordmark+tagline block above the sub-line is
+  // unchanged by this pass, so the derived 44.68px centering constant must
+  // be unaffected. Re-verified here (not assumed) as its own assertion,
+  // reading the SAME rules [12]/[13] already parse.
+  const wordmarkRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-wordmark\{([^}]*)\}/.exec(cssSrc);
+  const taglineRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-tagline\{([^}]*)\}/.exec(cssSrc);
+  const gateRule = /body\.native-shell \.site-gate\[data-gate-state="google"\]\{([^}]*)\}/.exec(cssSrc);
+  const parseHeight = (rule) => {
+    const remSize = Number(rule.match(/font-size:([\d.]+)rem/)?.[1]);
+    const lineHeight = Number(rule.match(/line-height:([\d.]+)/)?.[1]);
+    const marginBottom = Number(rule.match(/margin-bottom:(\d+)px/)?.[1]);
+    if (![remSize, lineHeight, marginBottom].every(Number.isFinite)) return NaN;
+    return (remSize * 16 * lineHeight) + marginBottom;
+  };
+  const derivedHalf = wordmarkRule && taglineRule
+    ? (parseHeight(wordmarkRule[1]) + parseHeight(taglineRule[1])) / 2 : NaN;
+  const cssConstant = Number(gateRule?.[1].match(/calc\(50vh - ([\d.]+)px\)/)?.[1]);
+  assert(Number.isFinite(derivedHalf) && Number.isFinite(cssConstant) && Math.abs(derivedHalf - cssConstant) < 0.005,
+    `[14m] [13i]'s derived-centering constant STILL holds after this pass (constant=${cssConstant}px, derived=${derivedHalf}px) — the wordmark+tagline block above the sub-line was not touched by this change, verified here rather than assumed`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [15] Reviewer round 2 — landscape safety. A flat min(calc(...),30vh) clamp
+// was checked against the 402x874pt portrait reference and REJECTED (30vh=
+// 262.2px < 392.32px, so it would have fired in portrait too). A height
+// media query is used instead, scoped to max-height:500px so portrait is
+// provably untouched; overflow-y:auto is the actual anti-clipping guarantee.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[15] Reviewer R2 — landscape safety: height media query (native-scoped only) + overflow-y:auto…');
+{
+  const cssSrc = await readFile(path.join(root, 'css', 'styles.css'), 'utf8');
+  const gateRule = /body\.native-shell \.site-gate\[data-gate-state="google"\]\{([^}]*)\}/.exec(cssSrc);
+  assert(!!gateRule && /overflow-y:auto/.test(gateRule[1]) && /-webkit-overflow-scrolling:touch/.test(gateRule[1]),
+    '[15a] the native gate carries overflow-y:auto and -webkit-overflow-scrolling:touch, so a too-long multi-line error can scroll rather than clip, in either orientation');
+
+  const mediaBlockMatch = /@media \(max-height:500px\)\{\s*(body\.native-shell[^}]*\{[^}]*\})\s*\}/.exec(cssSrc);
+  assert(!!mediaBlockMatch, '[15-pre] the @media (max-height:500px) block exists (fixture check for 15b-d)');
+  if (mediaBlockMatch) {
+    assert(mediaBlockMatch[1].startsWith('body.native-shell .site-gate[data-gate-state="google"]{'),
+      '[15b] the media-query rule is scoped to the SAME native-only selector as every other rule in this block — it cannot ever apply on web');
+    assert(/padding-top:24px/.test(mediaBlockMatch[1]),
+      '[15c] below the 500px height threshold, padding-top reverts to a flat 24px (matching the shared gate\'s own default) rather than attempting a 50vh centering with too little room');
+    assert(/align-items:flex-start/.test(mediaBlockMatch[1]),
+      '[15d] the media-query rule keeps align-items:flex-start (consistent with the base native rule, not re-centering)');
+  }
+  // Exactly one @media (max-height:...) block in the whole file, and it is
+  // the one just checked — this rule was not accidentally duplicated
+  // elsewhere, and no OTHER max-height query silently competes with it.
+  const maxHeightQueryCount = (cssSrc.match(/@media \(max-height:/g) || []).length;
+  assert(maxHeightQueryCount === 1,
+    `[15e] exactly one @media (max-height:...) query exists in styles.css (got ${maxHeightQueryCount})`);
+
+  // Portrait must be pixel-identical to before this pass: at 874px (or any
+  // height > 500px) the media query's own condition is false, so the ONLY
+  // padding-top in effect is the unchanged max(24px, calc(50vh - 44.68px))
+  // — re-verified here (not assumed) that this base rule is untouched.
+  assert(!!gateRule && /padding-top:max\(24px, ?calc\(50vh - 44\.68px\)\)/.test(gateRule[1]),
+    '[15f] the base (portrait / >500px height) padding-top rule is UNCHANGED — max(24px, calc(50vh - 44.68px)) — so portrait rendering is pixel-identical to before this pass');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

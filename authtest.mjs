@@ -139,6 +139,75 @@ let createdScripts = [];
  */
 const byClass = new Map();
 function setClassEls(sel, els) { byClass.set(sel, els); }
+
+/**
+ * ══ RG-192 (2026-09-20) — THE HARNESS HAS TO LAND THE SDK NOW ════════════════
+ *
+ * js/push-onesignal.js used to push `OneSignal.login()` straight onto
+ * `window.OneSignalDeferred` and hope. In production that queue is drained by
+ * INVOKING each callback while `OneSignal.init()` is still an unsettled promise,
+ * so the login threw "must be initialized" into a console.warn and no player in
+ * the league was ever addressable. The fix is that the module now refuses to
+ * touch the SDK until init has COMPLETED.
+ *
+ * Which means a harness that never lands the <script> can no longer observe ANY
+ * identity call — section [17]'s assertions were measuring a queue that, in
+ * production, was guaranteed to fail. So this stub does what the CDN does: fire
+ * `onload`, then drain the ONE init callback the module queues behind it. Only
+ * the init callback can ever be pending at that instant, precisely because
+ * identity calls are now queued AFTER init resolves — which is the property the
+ * whole fix rests on, asserted directly in pushtest [12a]/[12g].
+ *
+ * Idempotent per page: loadSdkScript() memoizes, so this runs once per suite.
+ */
+const FAKE_OS_FOR_INIT = { init: async () => {}, login: async () => {}, logout: async () => {} };
+function landOneSignalSdk(el) {
+  if (!el || !/onesignal/i.test(String(el.src || ''))) return;
+  const t1 = setTimeout(() => {
+    el.onload?.();                       // loadSdkScript() resolves true
+    const t2 = setTimeout(() => {        // …and startInitOnce() has queued init by now
+      const q = globalThis.window.OneSignalDeferred;
+      if (Array.isArray(q) && q.length) { const cb = q.shift(); try { cb(FAKE_OS_FOR_INIT); } catch {} }
+    }, 0);
+    t2?.unref?.();
+  }, 0);
+  t1?.unref?.();
+}
+
+/**
+ * RG-192 — DRAIN BY POLLING, NOT BY COUNTING TICKS.
+ *
+ * Two things changed under these fixtures and both break a fixed tick count:
+ *   • an identity call is now several async hops deep (the config read, then the
+ *     await on init) before it queues anything at all; and
+ *   • the module awaits each SDK callback's COMPLETION before the serialization
+ *     chain starts the next link, so a logout-then-login pair can never be in
+ *     the queue at the same instant — the login is only queued once the logout's
+ *     callback has been invoked. A single splice could therefore only ever see
+ *     the first of a pair, which is exactly the ordering these sections assert.
+ *
+ * So: wait for something to appear, invoke it, and go round again. Bounded on
+ * both axes, so a call that genuinely never happens still fails fast rather than
+ * hanging the suite.
+ */
+async function pumpOneSignalQueue(os, { rounds = 8, ticks = 40 } = {}) {
+  // The FIRST callback the module ever queues is its own `OneSignal.init()`, and
+  // whichever drainer reaches it first must be able to satisfy it: the init
+  // outcome is memoized for the life of the page, so one init() that throws
+  // because the fixture's fake SDK had no `init` would pin push to 'init-failed'
+  // for the whole suite. A caller's own `init`, if it supplies one, still wins.
+  const sdk = { init: async () => {}, ...os };
+  for (let round = 0; round < rounds; round++) {
+    let queue = globalThis.window.OneSignalDeferred;
+    for (let i = 0; i < ticks && (!Array.isArray(queue) || !queue.length); i++) {
+      await new Promise(r => setTimeout(r, 0));
+      queue = globalThis.window.OneSignalDeferred;
+    }
+    if (!Array.isArray(queue) || !queue.length) return;
+    for (const cb of queue.splice(0, queue.length)) { try { await cb(sdk); } catch {} }
+  }
+}
+
 function freshDom() {
   registry.clear();
   byClass.clear();
@@ -157,7 +226,7 @@ function freshDom() {
     querySelector(sel){ return (byClass.get(sel) || [])[0] || null; },
     querySelectorAll(sel){ return byClass.get(sel) || []; },
     body: { appendChild(el) { this.lastChild = el; if (el?.id) registry.set(el.id, el); }, classList: fakeClassList(), dataset:{}, lastChild: null },
-    head: { appendChild(el) { if (el?.id) registry.set(el.id, el); return el; } },
+    head: { appendChild(el) { if (el?.id) registry.set(el.id, el); landOneSignalSdk(el); return el; } },
     title: '',
   };
   createdScripts = [];
@@ -168,6 +237,12 @@ globalThis.location = { origin: 'https://irbfootball.test' };
 try { globalThis.navigator = { serviceWorker: undefined, clipboard: { writeText: async () => {} } }; }
 catch { Object.defineProperty(globalThis, 'navigator', { value: { serviceWorker: undefined, clipboard: { writeText: async () => {} } }, configurable: true }); }
 globalThis.requestAnimationFrame = fn => fn();
+// RG-192 — pushSupportLevel() mirrors the SDK shim's OWN compatibility test, so
+// without this the module reads 'unsupported' here and (correctly) never touches
+// OneSignal at all, which would make every identity assertion below vacuous.
+// This is the "a browser that can do web push" fixture, nothing more.
+globalThis.PushSubscriptionOptions = function () {};
+globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
 globalThis.fetch = async () => { throw new Error('network disabled in authtest'); };
 globalThis.matchMedia = () => ({ matches: false });
 globalThis.confirm = () => true;
@@ -1014,10 +1089,7 @@ console.log('\n[17] Reviewer B3 / SEC F3 — the session-change chokepoint…');
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drainOneSignal = async (os) => {
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
-    const queue = globalThis.window.OneSignalDeferred || [];
-    const pending = queue.splice(0, queue.length);
-    for (const cb of pending) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
 
   // ── SIGN OUT ────────────────────────────────────────────────────────────
@@ -1173,10 +1245,7 @@ console.log('\n[17b] REVIEWER F-1 — a token refresh must not eat a half-filled
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drainOneSignal = async (os) => {
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
-    const queue = globalThis.window.OneSignalDeferred || [];
-    const pending = queue.splice(0, queue.length);
-    for (const cb of pending) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
 
   let fakeUser = { id: 'u1', email: 'kevin@example.com' };
@@ -1246,10 +1315,7 @@ console.log('\n[17c] REVIEWER F-2 — a league switch changes identity, so it cl
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drainOneSignal = async (os) => {
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
-    const queue = globalThis.window.OneSignalDeferred || [];
-    const pending = queue.splice(0, queue.length);
-    for (const cb of pending) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
 
   resetAll();
@@ -1874,10 +1940,7 @@ console.log('\n[17e] REVIEWER FINDING 1 — joining/creating a league IS an iden
   const realFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drainOneSignal = async (os) => {
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
-    const queue = globalThis.window.OneSignalDeferred || [];
-    const pending = queue.splice(0, queue.length);
-    for (const cb of pending) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
   const ROW_A = { league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Drew', active: true, leagues: { name: 'League A' } };
   const ROW_B = { league_id: 'L-B', id: 'mB', role: 'player', display_name: 'Drew', active: true, leagues: { name: 'League B' } };
@@ -3015,10 +3078,7 @@ console.log('\n[29] DI-180o(b) — an EXPIRY suspends the slate; it does not dis
   const realFetch29 = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drain = async (os = { login: () => {}, logout: () => {} }) => {
-    for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0));
-    const queue = globalThis.window.OneSignalDeferred || [];
-    const pending = queue.splice(0, queue.length);
-    for (const cb of pending) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
   const ROW_DREW = { league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Drew', active: true, leagues: { name: 'League A' } };
   const ROW_KEVIN = { league_id: 'L-A', id: 'mK', role: 'player', display_name: 'Kevin', active: true, leagues: { name: 'League A' } };
@@ -6104,9 +6164,7 @@ console.log('\n[42] DI-180q — whose data is on this phone? (Drew\'s ruling, op
   const realFetch42 = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
   const drainOS42 = async (os) => {
-    await tick42(6);
-    const queue = globalThis.window.OneSignalDeferred || [];
-    for (const cb of queue.splice(0, queue.length)) { try { await cb(os); } catch {} }
+    await pumpOneSignalQueue(os);   // RG-192 — poll, don't count ticks
   };
 
   try {

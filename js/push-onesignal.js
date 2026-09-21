@@ -435,9 +435,203 @@ function _queueOneSignalCall(fn) {
   return _osChain;
 }
 
+/**
+ * ══ RG-192 (2026-09-20) — THE EXTERNAL ID WAS NEVER ATTACHED ════════════════
+ *
+ * LIVE EVIDENCE. The commissioner's "Check who can receive push" (Edge Function
+ * push-reach) answered: p1 — 1 device; p2…p6 — NO device registered. Meanwhile
+ * notify-fanout had been recording `recipients:5, pushed:5` for every chat
+ * message since the server-push flip, because "pushed" only means OneSignal
+ * ACCEPTED an `include_external_user_ids` request. With no subscription behind
+ * an external id, nothing is delivered and NOTHING ANYWHERE SAYS SO.
+ *
+ * THE MECHANISM. Both functions below used to await the App ID and then push a
+ * callback straight onto `window.OneSignalDeferred`, on the documented-sounding
+ * but wrong assumption that "OneSignal queues calls made via OneSignalDeferred"
+ * means the SDK will hold them until init finishes. It does not. The v16 SDK
+ * drains that queue by INVOKING each callback — it does not await them in
+ * series — so every callback queued before the first drain runs while
+ * `OneSignal.init()` is still an unsettled promise, and every public SDK call
+ * asserts initialisation first and THROWS. The throw landed in the `catch` here
+ * as a console.warn, and nothing ever retried it.
+ *
+ * WHY IT ONLY STARTED BITING AT THE SUPABASE CUTOVER. In PIN mode
+ * `getSession()` was a synchronous localStorage read, so the only caller was
+ * app.js's boot tail — INSIDE `ensureOneSignalInit().then(...)`, i.e. after
+ * init, which is why this worked for a year. In `authMode:'supabase'` identity
+ * arrives on an auth EVENT, and app.js's chokepoint (app.js:3832) fires from
+ * `wireAuthUIEvents()` during `applyAuthModeDecision()` — ABOVE the hydrate,
+ * while `ensureOneSignalInit()` is only reached afterwards, in
+ * `runPostHydrateTail()` (app.js:1906). The hydrate cannot even begin until
+ * memberships resolve (it needs the active league), so on a Supabase boot the
+ * login is queued FIRST, essentially always. The cutover inverted the order and
+ * the failure was silent on both ends.
+ *
+ * THE FIX IS ONE CHOKEPOINT. `_assertIdentity()` below is the ONLY place in this
+ * module that calls `OneSignal.login()`/`OneSignal.logout()`, and it awaits
+ * `ensureOneSignalInit()` first — which also means an identity change now LOADS
+ * the SDK rather than queueing into a script that was never requested. It never
+ * prompts (init only; the permission sheet stays exclusively behind the Turn On
+ * button), it never touches storage, and it can never raise the red sync banner.
+ *
+ * WHAT IS DELIBERATELY UNCHANGED: the serialization chain (security F-3) still
+ * decides the ORDER — a handover's logout-then-login still lands in call order,
+ * because each first attempt runs as its own chain link, in the order the app
+ * called. Only the bounded RETRIES are generation-guarded, so a retry belonging
+ * to an identity this device has already left can never overwrite a newer one.
+ */
+
+/** Bounded, and bounded on purpose. Three attempts over ~5s covers a slow SDK
+ *  (`ensureOneSignalInit()` resolves 'sdk-not-loaded' at its ready timeout
+ *  without memoizing that answer, so a later attempt re-awaits the same single
+ *  init and gets the real one). A fourth attempt would buy a device that is
+ *  never coming back nothing, and an unbounded loop is a background timer on
+ *  every phone in the league. */
+const IDENTITY_RETRY_DELAYS_MS = [400, 4000];
+/** Reasons worth a retry: the SDK/its config might still turn up. Everything
+ *  else ('unsupported-browser', 'not-installed-ios', 'not-configured',
+ *  'web-push-not-enabled', 'app-id-mismatch', 'wrong-site-origin') is a settled
+ *  fact about this device or this league, and retrying it is a lie told to a
+ *  timer. */
+const RETRYABLE_INIT_REASONS = new Set(['sdk-not-loaded', 'config-unreachable', 'init-failed']);
+
+/**
+ * The real timers, captured (and bound) at import.
+ *
+ * Every timer below is an INTERNAL BOUND — "give up waiting on the SDK", "try
+ * the identity again" — not work the app scheduled and not work anything else
+ * is entitled to observe. Capturing them here makes those bounds independent of
+ * whatever replaces the global later, which matters in both directions: a page
+ * that wraps setTimeout cannot delay or swallow a bound, and a harness that
+ * replaces setTimeout to capture ITS OWN next tick cannot have that tick
+ * overwritten by a background push retry. The second direction is not
+ * hypothetical — it cost loadtest.mjs [72] three assertions, and the same shape
+ * on a real page (an analytics wrapper, a polyfill) would be invisible.
+ *
+ * `.bind()` rather than a bare reference: `window.setTimeout` called unbound
+ * throws "Illegal invocation" in some browsers.
+ */
+const _timerHost = (typeof window !== 'undefined' && window && typeof window.setTimeout === 'function') ? window : globalThis;
+const _setTimeout = _timerHost.setTimeout.bind(_timerHost);
+const _clearTimeout = _timerHost.clearTimeout.bind(_timerHost);
+
+/** The external id this PAGE has actually attached, as proven by a login() that
+ *  returned rather than threw. '' means unbound. Read by pushDeviceStatus() as a
+ *  FALLBACK only — the SDK's own `User.externalId` outranks it when present — so
+ *  the player-facing status line cannot claim a linkage the SDK never made. */
+let _boundExternalId = '';
+/** Bumped by every login/logout. A retry whose generation is stale is dropped. */
+let _identityGen = 0;
+/** The identity the app most recently ASKED for ('' = signed out). Security F-2:
+ *  a stale SDK call that lands late re-asserts THIS, rather than being allowed to
+ *  leave the device on a superseded identity. */
+let _desiredTarget = '';
+/** Bounded re-assert budget, refilled by every login/logout. Without a bound, two
+ *  calls that keep landing out of order could ping-pong forever on a bad link. */
+const MAX_STALE_REASSERTS = 3;
+let _staleReassertBudget = MAX_STALE_REASSERTS;
+/** The highest generation whose SDK call has actually COMPLETED. This is what
+ *  separates "superseded, and a later call is still on its way" (harmless — that
+ *  later call is the one that wins) from "superseded, and it landed AFTER the
+ *  call that superseded it" (the real hazard: the SDK is now on the wrong
+ *  identity and nothing else is coming). Only the second re-asserts. */
+let _lastCompletedGen = 0;
+
+/**
+ * Queue `fn(OneSignal)` and report the outcome to `done(ok)` — LATER, off the
+ * chain.
+ *
+ * IT DOES NOT HOLD THE SERIALIZATION CHAIN, and that is deliberate. Ordering is
+ * established by the ORDER THE CALLBACKS ARE PUSHED, which is chain order;
+ * waiting here for the SDK to actually invoke one would park every later
+ * identity call behind a queue that only the SDK can drain — up to the full
+ * ready bound on a device where it never does, which is exactly the class of
+ * stall this module has been bitten by before.
+ *
+ * `done(false)` on a throw OR on the SDK never draining, so the caller's bounded
+ * retry is armed in both cases.
+ */
+function _callSdk(fn, done) {
+  let settled = false;
+  const finish = (v) => { if (!settled) { settled = true; try { done(v); } catch { /* a reporter must never break the queue */ } } };
+  const t = _setTimeout(() => finish(false), SDK_READY_TIMEOUT_MS);
+  t?.unref?.();   // node-only; keeps test harnesses from hanging on the timer
+  window.OneSignalDeferred = window.OneSignalDeferred || [];
+  window.OneSignalDeferred.push(async (OneSignal) => {
+    try { await fn(OneSignal); _clearTimeout(t); finish(true); }
+    catch (err) { _clearTimeout(t); console.warn('[push-onesignal] identity call failed', err); finish(false); }
+  });
+}
+
+/**
+ * Assert `target` ('' = signed out) on the SDK, once, and arm a bounded retry if
+ * it could not be done. THE ONLY caller of OneSignal.login()/logout().
+ */
+async function _assertIdentity(target, gen, attempt = 0) {
+  // A retry for an identity this device has already left is dropped. The FIRST
+  // attempt is never dropped — it is the app's own call, in the app's own order.
+  if (attempt > 0 && gen !== _identityGen) return;
+  const init = await ensureOneSignalInit();
+  if (attempt > 0 && gen !== _identityGen) return;
+  if (!init.ok) {
+    if (RETRYABLE_INIT_REASONS.has(init.reason)) _scheduleIdentityRetry(target, gen, attempt);
+    return;
+  }
+  _callSdk(
+    target ? (OneSignal => OneSignal.login(String(target))) : (OneSignal => OneSignal.logout()),
+    (ok) => {
+      // ══ SECURITY F-2 (RG-192 gate, 2026-09-20) — A SLOW CALL MUST NOT WIN ══
+      //
+      // _callSdk deliberately does not hold the chain (see its header), which
+      // buys ordering of the PUSHES but not of the COMPLETIONS: a login('A')
+      // that the SDK takes seconds to resolve can land after a logout() or a
+      // login('B') has already been pushed and run. The old `return` here was
+      // right about not recording a stale binding — and wrong about the device,
+      // which is now sitting on A with nobody noticing.
+      //
+      // So a stale completion does not merely decline to record; it RE-ASSERTS
+      // whatever the app currently wants. Budgeted rather than unconditional,
+      // because two calls that keep landing out of order must converge, not
+      // ping-pong.
+      // Landed out of order ONLY if something newer has already completed. A
+      // completion that is merely superseded by a call still in flight needs no
+      // help: that call was pushed after this one and will be invoked after it.
+      const landedOutOfOrder = gen < _lastCompletedGen;
+      if (gen > _lastCompletedGen) _lastCompletedGen = gen;
+      if (gen !== _identityGen) {
+        if (!landedOutOfOrder) return;
+        if (_staleReassertBudget <= 0) {
+          console.warn('[push-onesignal] a superseded identity call landed late and the re-assert budget is spent; this device may be bound to the wrong id until it is reloaded');
+          return;
+        }
+        _staleReassertBudget--;
+        const want = _desiredTarget;
+        _queueOneSignalCall(() => _assertIdentity(want, _identityGen));
+        return;
+      }
+      if (ok) { _boundExternalId = target ? String(target) : ''; return; }
+      _scheduleIdentityRetry(target, gen, attempt);
+    },
+  );
+}
+
+function _scheduleIdentityRetry(target, gen, attempt) {
+  const delay = IDENTITY_RETRY_DELAYS_MS[attempt];
+  if (delay === undefined) {
+    console.warn('[push-onesignal] could not attach the push identity after', IDENTITY_RETRY_DELAYS_MS.length + 1,
+      'attempts — this device will not receive push until it is reloaded or Turn On is tapped');
+    return;
+  }
+  const t = _setTimeout(() => {
+    if (gen !== _identityGen) return;
+    _queueOneSignalCall(() => _assertIdentity(target, gen, attempt + 1));
+  }, delay);
+  t?.unref?.();   // node-only; never holds a test harness (or Node) open
+}
+
 /** Associate the current device with `playerId` (correction #2 pairs this with
- *  logoutOneSignal() below). Safe to call before init resolves — OneSignal
- *  queues calls made via OneSignalDeferred. No-ops when not configured.
+ *  logoutOneSignal() below). Idempotent: safe — and expected — to call on every
+ *  boot and every identity change. No-ops when not configured.
  *
  *  ORDER AGAINST logoutOneSignal() IS STRUCTURAL, NOT LUCK: both go through
  *  `_queueOneSignalCall()` above, so the app's call order is the queue order
@@ -452,15 +646,10 @@ export async function loginOneSignal(playerId) {
   // inert shape as the "no App ID" early return below (undefined).
   if (isNativeShell()) return;
   if (!playerId) return;
-  return _queueOneSignalCall(async () => {
-    const appId = await loadAppId();
-    if (!appId) return;
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async (OneSignal) => {
-      try { await OneSignal.login(String(playerId)); }
-      catch (err) { console.warn('[push-onesignal] login failed', err); }
-    });
-  });
+  const gen = ++_identityGen;
+  _desiredTarget = String(playerId);
+  _staleReassertBudget = MAX_STALE_REASSERTS;
+  return _queueOneSignalCall(() => _assertIdentity(String(playerId), gen));
 }
 
 /** correction #2 — MUST be called on sign-out and on player switch, or a
@@ -472,16 +661,19 @@ export async function logoutOneSignal() {
   // (auth.js is EXCLUSIVE to the Supabase thread right now). Same inert
   // shape as loginOneSignal()'s native guard, above.
   if (isNativeShell()) return;
-  return _queueOneSignalCall(async () => {
-    const appId = await loadAppId();
-    if (!appId) return;
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    window.OneSignalDeferred.push(async (OneSignal) => {
-      try { await OneSignal.logout(); }
-      catch (err) { console.warn('[push-onesignal] logout failed', err); }
-    });
-  });
+  const gen = ++_identityGen;
+  _desiredTarget = '';
+  _staleReassertBudget = MAX_STALE_REASSERTS;
+  // Dropped IMMEDIATELY, not on the SDK's answer: from this instant the app's
+  // own idea of "who is this device" is nobody, and the status line must say so
+  // even if the SDK call is still in flight or fails.
+  _boundExternalId = '';
+  return _queueOneSignalCall(() => _assertIdentity('', gen));
 }
+
+/** The external id this device is currently bound to, '' when unbound. Proven
+ *  by a login() that returned — never by what the app intended. */
+export function boundExternalId() { return _boundExternalId; }
 
 /**
  * Best-effort read of the current permission/subscription state for the
@@ -568,6 +760,123 @@ export async function isPushOptedIn() {
     });
     return await Promise.race([read, timer]);
   } catch { return false; }
+}
+
+/**
+ * ══ RG-192, THE OTHER HALF — "PUSH IS ON" HAS TO BE TRUE ════════════════════
+ *
+ * Drew's iPhone, live: iOS Settings → Notifications shows Pick 'Ems ALLOWED,
+ * the app's 🔔 screen shows no priming card at all and every box ticked — and
+ * OneSignal has no subscription for that device. The app said push was on. It
+ * was not, and there was no button anywhere that would have fixed it, because
+ * app.js's renderPrimingCardHTML() returns '' for 'granted' and the master
+ * toggle is a PLAYER preference that knows nothing about this handset.
+ *
+ * "Push is on for this device" is an AND of THREE facts, and the reason this
+ * function exists is that the app had only ever checked the first:
+ *
+ *   permission === 'granted'   the browser will allow a notification
+ *   hasSubscription            OneSignal has a live subscription record here
+ *   linked                     …with THIS player's external id attached to it
+ *
+ * Any of the three false means the server can address the player, OneSignal can
+ * accept the request, and the phone can stay silent — which is exactly what the
+ * whole league has been living in since the cutover.
+ *
+ * Never throws, never waits forever, and carries NOTHING sensitive: the league
+ * member id the app already renders on every screen, and three booleans. It is
+ * meant to be read out loud to the commissioner.
+ */
+export async function pushDeviceStatus() {
+  const state = await subscriptionState();
+  const base = {
+    state,
+    permission: (typeof Notification !== 'undefined' && Notification.permission) || 'unsupported',
+    // REVIEWER (RG-192 gate) — `known` SEPARATES "I ASKED AND THE ANSWER IS NO"
+    // FROM "I COULD NOT ASK". A blocked extension, a 404'd CDN, an SDK that
+    // never drains its queue: all of those leave us with no answer, and
+    // reporting no-answer as "this device isn't registered" puts a Reconnect
+    // button on screen that cannot keep its promise. For a state below
+    // 'granted' the browser's own synchronous permission IS the answer, so
+    // those are known by definition.
+    known: true,
+    hasSubscription: false,
+    optedIn: false,
+    linked: false,
+    externalId: '',
+    ok: false,
+  };
+  if (state !== 'granted') return base;
+  const read = new Promise((resolve) => {
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    window.OneSignalDeferred.push((OneSignal) => {
+      try {
+        const sub = OneSignal?.User?.PushSubscription;
+        // REVIEWER — the SDK's OWN external id outranks this page's memory of
+        // what it asked for. `_boundExternalId` is a page-local record of a
+        // login() that returned; `User.externalId` is what OneSignal actually
+        // holds, and it also survives a reload this page knows nothing about.
+        // Fall back only when the SDK does not expose it.
+        const sdkExternalId = (typeof OneSignal?.User?.externalId === 'string') ? OneSignal.User.externalId : null;
+        resolve({ known: true, optedIn: sub?.optedIn === true, hasSubscription: !!sub?.id, sdkExternalId });
+      } catch { resolve({ known: true, optedIn: false, hasSubscription: false, sdkExternalId: null }); }
+    });
+  });
+  const timer = new Promise((resolve) => {
+    // The HARDENED timer (see _setTimeout's header): an internal bound must not
+    // be capturable by whatever replaced the global.
+    const t = _setTimeout(() => resolve({ known: false, optedIn: false, hasSubscription: false, sdkExternalId: null }), OPTED_IN_TIMEOUT_MS);
+    t?.unref?.();   // node-only; keeps test harnesses from hanging on the timer
+  });
+  const sub = await Promise.race([read, timer]);
+  if (!sub.known) return { ...base, known: false };
+  const externalId = (sub.sdkExternalId !== null && sub.sdkExternalId !== undefined)
+    ? sub.sdkExternalId
+    : _boundExternalId;
+  const linked = !!externalId;
+  return {
+    ...base,
+    optedIn: sub.optedIn,
+    hasSubscription: sub.hasSubscription,
+    linked,
+    externalId,
+    ok: sub.optedIn && sub.hasSubscription && linked,
+  };
+}
+
+/**
+ * ══ REVIEWER BLOCK (RG-192 gate, 2026-09-20) — THE CALL THAT ACTUALLY CREATES
+ *    THE SUBSCRIPTION ════════════════════════════════════════════════════════
+ *
+ * NOTHING in this app called `OneSignal.User.PushSubscription.optIn()`. The
+ * Turn On button called `Notifications.requestPermission()`, which on a device
+ * whose permission is ALREADY granted resolves instantly and creates nothing —
+ * so the button offered for "permission granted, no subscription" could not fix
+ * the state it was offered for, and then said "✅ Push enabled" over it.
+ *
+ * PRECONDITION, LOAD-BEARING: permission must already be 'granted'. v16's
+ * `optIn()` will RAISE THE NATIVE PERMISSION PROMPT when it is not, which is
+ * precisely what the boot path must never do. Both callers check first, and the
+ * check is repeated here so a third caller cannot get it wrong.
+ *
+ * Idempotent: a device that already has a live subscription is left alone.
+ */
+export async function ensurePushSubscription() {
+  if (isNativeShell()) return { ok: false, reason: 'native-unavailable' };
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted') {
+    return { ok: false, reason: 'not-granted' };
+  }
+  const init = await ensureOneSignalInit();
+  if (!init.ok) return { ok: false, reason: init.reason, detail: init.detail };
+  const ran = await new Promise((resolve) => {
+    _callSdk(async (OneSignal) => {
+      const sub = OneSignal?.User?.PushSubscription;
+      if (!sub || typeof sub.optIn !== 'function') throw new Error('OneSignal.User.PushSubscription.optIn is unavailable');
+      if (sub.optedIn === true && sub.id) return;   // already subscribed — nothing to do
+      await sub.optIn();
+    }, resolve);
+  });
+  return ran ? { ok: true, reason: 'opted-in' } : { ok: false, reason: 'opt-in-failed' };
 }
 
 /** Triggers the native permission prompt — must be called from a genuine user
@@ -753,6 +1062,15 @@ export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
   // flight because the previous scenario's fetch stub never resolved, wait
   // forever (not harmless). Reset with the rest.
   _osChain = Promise.resolve();
+  // RG-192 — the identity binding is per-PAGE state too, and it is the one thing
+  // pushDeviceStatus() answers from. A binding left over from the previous
+  // scenario would let the next one report a linkage it never made, which is the
+  // exact class of false-positive this whole section exists to remove.
+  _boundExternalId = '';
+  _desiredTarget = '';
+  _staleReassertBudget = MAX_STALE_REASSERTS;
+  _lastCompletedGen = 0;
+  _identityGen++;                 // voids any retry still armed from the last scenario
   _scriptPromise = null;
   _initOnce = null;
   _configUnreachable = false;
