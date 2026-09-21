@@ -226,6 +226,12 @@ function makeFakeClient(overrides = {}) {
         // written as well as on what came back.
         update(patch) { b._update = patch; return b; },
         eq(col, val) { b._eq.push([col, val]); return b; },
+        // REVIEWER R2 — auth.js getJobRuns() is the first caller in this file
+        // to chain .order()/.limit(); recorded on `b`, same shape as `_eq`,
+        // so a scenario's `overrides.from(table, b)` can see exactly which
+        // job/limit this particular call was for.
+        order(col, opts) { b._order = [col, opts]; return b; },
+        limit(n) { b._limit = n; return b; },
         then(resolve, reject) {
           const result = overrides.from ? overrides.from(table, b) : { data: [], error: null };
           return Promise.resolve(result).then(resolve, reject);
@@ -9224,6 +9230,255 @@ console.log('\n[46] The PRE-LINK dead end — zero memberships in the shipping f
   app._resetLinkFlowForTest();
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[47] REVIEWER R2 (Step 6 Phase 2 gate) — getJobRuns() asks PER JOB, not one shared limit…');
+{
+  // THE DEFECT: one `.limit(100)` shared across every job in a single query.
+  // `notify-fanout` writes a row per chat message; a busy Saturday's burst
+  // fills the whole window and pushes `reminders`/`keepalive` — which write
+  // far less often — clean out of it. The card would then report a job that
+  // is actually running fine as "has not run yet".
+  resetAll();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+
+  const NOW47 = Date.now();
+  const row47 = (job, run, offsetMs) => ({
+    job, run_id: run, actor: job === 'notify-fanout' ? 'webhook' : 'cron', ok: true,
+    skipped: null, error: null, payload: {},
+    started_at: new Date(NOW47 - offsetMs).toISOString(),
+    finished_at: new Date(NOW47 - offsetMs + 200).toISOString(),
+  });
+  // 150 notify-fanout rows, ALL newer than the one reminders/keepalive row —
+  // exactly a Saturday chat burst arriving after the last cron tick.
+  const burst47 = Array.from({ length: 150 }, (_, i) => row47('notify-fanout', `nf_${i}`, i * 1000));
+  const fixture47 = [...burst47, row47('reminders', 'rem_1', 86400000), row47('keepalive', 'ka_1', 3600000)];
+
+  const calls47 = [];
+  installFakeSupabase({
+    from(table, b) {
+      calls47.push({ table, eq: [...b._eq] });
+      if (table !== 'job_runs') return { data: [], error: null };
+      const jobEq = b._eq.find(([col]) => col === 'job');
+      let rows = jobEq ? fixture47.filter(r => r.job === jobEq[1]) : fixture47.slice();
+      rows = rows.sort((a, c) => new Date(c.started_at) - new Date(a.started_at));
+      if (b._limit) rows = rows.slice(0, b._limit);
+      return { data: rows, error: null };
+    },
+  });
+
+  const out47 = await auth.getJobRuns('L-x', { limit: 10, jobs: ['notify-fanout', 'reminders', 'keepalive'] });
+
+  assert(calls47.filter(c => c.table === 'job_runs').length === 3,
+    `[47] one query PER JOB, not one shared query across all jobs (got ${calls47.filter(c => c.table === 'job_runs').length})`);
+  assert(calls47.every(c => c.eq.some(([col]) => col === 'job')),
+    '[47] every one of those queries is scoped with .eq(\'job\', …) — never a bare read of the whole table');
+  assert(out47.some(r => r.job === 'reminders'),
+    '[47] R1: the reminders row SURVIVES a 150-row notify-fanout burst (a single shared limit(10) would have dropped it)');
+  assert(out47.some(r => r.job === 'keepalive'),
+    '[47] R1: …so does keepalive, for the same reason');
+  assert(out47.filter(r => r.job === 'notify-fanout').length === 10,
+    `[47] notify-fanout still gets its own top-10, unaffected by sharing the call with the other two jobs (got ${out47.filter(r => r.job === 'notify-fanout').length})`);
+  assert(out47[0].job === 'notify-fanout' && out47.at(-1).job !== 'notify-fanout',
+    '[47] the MERGED list is still sorted most-recent-first overall, so `(rowsByJob[job]||[])[0]` in the card still finds each job\'s latest row');
+
+  let threw47 = null;
+  try { await auth.getJobRuns('L-x', { limit: 10 }); } catch (e) { threw47 = e; }
+  assert(threw47 && /jobs must be a non-empty array/.test(threw47.message),
+    `[47] a missing \`jobs\` list is REFUSED outright — no silent fallback to the old shared-limit shape (got ${threw47 && threw47.message})`);
+
+  auth._resetAuthForTest();
+  app._resetAuthUIWiringForTest();
+  app._resetAuthHoldForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[48] REVIEWER R1 (Step 6 Phase 2 gate) — a job that has NEVER run must eventually ESCALATE…');
+{
+  // THE DEFECT: with no `job_runs` row at all, the card said "Switched on —
+  // has not run yet." forever, whether the job flipped on ten minutes ago or
+  // ten days ago. That is exactly Phase 2's likeliest real failure — a cron or
+  // Vault secret misconfigured so the function never runs at all — and exactly
+  // what UN-194 exists to catch. Escalation now hangs off `serverJobsFlippedAt`,
+  // a SIBLING settings map the toggle handler writes beside the strict-boolean
+  // `serverJobs` switch (§ the toggle handler's own comment, js/app.js).
+  resetAll();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+  app._setBgJobsCacheForTest({ leagueId: 'L-x', rows: [], fetchedAt: Date.now(), loading: false, error: null });
+
+  const jobBlock48 = (html, label) => {
+    const at = html.indexOf(label);
+    return at === -1 ? '' : html.slice(at, at + 320);
+  };
+
+  // (a) the switch is ON, but no flip time was ever recorded (an old switch,
+  // flipped before this shipped) — CONVENTIONS #10 default-when-missing: falls
+  // back to the ORIGINAL sentence, unchanged.
+  storage.saveSetting('serverJobs', { reminders: true, keepalive: true, notifyFanout: true });
+  storage.saveSetting('serverJobsFlippedAt', {});
+  let html48 = app.renderBackgroundJobsAdminSectionHTML();
+  assert(/Switched on — has not run yet\./.test(jobBlock48(html48, 'Pick reminders')),
+    '[48] (a) no recorded flip time -> the ORIGINAL sentence, byte-identical (an old switch predates this field)');
+
+  // (b) flipped 6 minutes ago; reminders' cadence is 5 min, so 6 < 3×5=15 —
+  // informative, NOT yet escalated.
+  storage.saveSetting('serverJobsFlippedAt', { reminders: new Date(Date.now() - 6 * 60000).toISOString() });
+  html48 = app.renderBackgroundJobsAdminSectionHTML();
+  const remBlockB = jobBlock48(html48, 'Pick reminders');
+  assert(/Switched on 6 min ago — has not run yet\./.test(remBlockB),
+    `[48] (b) 6 min after flip (< 3×5min cadence) — informative, not yet a dead-job claim (got ${JSON.stringify(remBlockB)})`);
+  assert(!/This job may be dead/.test(remBlockB), '[48] (b) …and specifically NOT escalated yet');
+
+  // (c) flipped 20 minutes ago; 20 > 3×5=15 — ESCALATE, same "may be dead"
+  // wording a job that ran once and then went silent already gets.
+  storage.saveSetting('serverJobsFlippedAt', { reminders: new Date(Date.now() - 20 * 60000).toISOString() });
+  html48 = app.renderBackgroundJobsAdminSectionHTML();
+  const remBlockC = jobBlock48(html48, 'Pick reminders');
+  assert(/Switched on 20 min ago, still no run — expected every 5 min\. This job may be dead\./.test(remBlockC),
+    `[48] (c) 20 min after flip with STILL no run -> escalates (got ${JSON.stringify(remBlockC)})`);
+
+  // (d) EVENT-DRIVEN jobs (notifyFanout has no cadence entry) never escalate on
+  // silence, however long — there is no schedule to be late against.
+  storage.saveSetting('serverJobsFlippedAt', {
+    reminders: new Date(Date.now() - 20 * 60000).toISOString(),
+    notifyFanout: new Date(Date.now() - 10 * 24 * 60 * 60000).toISOString(),
+  });
+  html48 = app.renderBackgroundJobsAdminSectionHTML();
+  const nfBlockD = jobBlock48(html48, 'Chat push (notify-fanout)');
+  assert(!/This job may be dead/.test(nfBlockD),
+    `[48] (d) an event-driven job (no cadence constant) NEVER escalates on silence, however long the wait (got ${JSON.stringify(nfBlockD)})`);
+  assert(/Switched on \d+d ago — has not run yet\./.test(nfBlockD),
+    `[48] (d) …it still reports WHEN it was switched on, just never as "may be dead" (got ${JSON.stringify(nfBlockD)})`);
+
+  // (e) a job that HAS run keeps using `last.finishedAt`'s existing staleness
+  // check — this branch is additive, not a replacement of that one.
+  app._setBgJobsCacheForTest({
+    leagueId: 'L-x', fetchedAt: Date.now(), loading: false, error: null,
+    rows: [{ job: 'keepalive', runId: 'ka_1', actor: 'cron', ok: true, skipped: null, error: null,
+      payload: {}, startedAt: new Date(Date.now() - 500000).toISOString(),
+      finishedAt: new Date(Date.now() - 20 * 60 * 60000).toISOString() }],
+  });
+  storage.saveSetting('serverJobsFlippedAt', { keepalive: new Date(Date.now() - 40 * 60 * 60000).toISOString() });
+  html48 = app.renderBackgroundJobsAdminSectionHTML();
+  const kaBlockE = jobBlock48(html48, 'Keep-alive heartbeat');
+  // Coordinator's shared-foundation pass (2026-09-20) — jobOverdueMs()/jobCadenceLabel() unify
+  // this sentence with the (c) branch above, which already said "every 5 min" (WITH the unit);
+  // this branch used to omit it ("expected every 360."), an inconsistency fixed as a side effect
+  // of adding the low-frequency (weekly) staleness rule for `trainer` — both branches now share
+  // one cadence-label formatter, so both carry the unit.
+  assert(/No run in \d+ min — expected every 360 min\. This job may be dead\./.test(kaBlockE),
+    `[48] (e) a job that HAS run still escalates off its OWN last.finishedAt, unchanged by this fix (got ${JSON.stringify(kaBlockE)})`);
+
+  app._setBgJobsCacheForTest({});
+  storage.saveSetting('serverJobs', {});
+  storage.saveSetting('serverJobsFlippedAt', {});
+  auth._resetAuthForTest();
+  app._resetAuthUIWiringForTest();
+  app._resetAuthHoldForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[49] Step 6 Phase 4 (trainer) — the LOW-FREQUENCY staleness rule…');
+{
+  // WHY [48]'s "3x cadence" RULE CANNOT APPLY TO A WEEKLY JOB. 3x a 5-minute cadence (reminders)
+  // is 15 minutes; 3x a 360-minute cadence (keepalive) is 18 hours — both meaningfully "broken" on
+  // that timescale. 3x trainer's WEEKLY cadence is three weeks, which is not a staleness rule, it
+  // is a way to notice a dead cron job around Thanksgiving having been broken since Week 1.
+  // `mostRecentWeeklySlotMs()`/`jobOverdueMs()` (js/app.js) replace the multiplier with "how late
+  // past the job's OWN most recent scheduled slot, with a small grace window" for any job on
+  // `SERVER_JOB_SCHEDULE` — tested here at the PURE-FUNCTION level (both accept an injectable
+  // `now`), because a DOM-rendering test would otherwise be flaky against the real wall clock the
+  // day this suite happens to run.
+  //
+  // FIXED REFERENCE POINT, DELIBERATELY IN A NO-DST MONTH. 2026-01-05 is a real Monday (verified
+  // independently: `new Date(Date.UTC(2026,0,5)).getUTCDay() === 1`), and January is outside the
+  // US DST window (second Sunday of March -> first Sunday of November), so America/Chicago is a
+  // FIXED UTC-6 (CST) for every instant used below — no DST-edge ambiguity to reason about here at
+  // all (that named limitation is exercised, if anywhere, only twice a year and is not what this
+  // section is proving).
+  const MON_9AM_CHICAGO_UTC = Date.UTC(2026, 0, 5, 15, 0, 0); // 09:00 CST = 15:00 UTC
+
+  // (a) mostRecentWeeklySlotMs(): AT the slot -> itself.
+  assert(app.mostRecentWeeklySlotMs({ weekday: 1, hour: 9, timeZone: 'America/Chicago' }, new Date(MON_9AM_CHICAGO_UTC)) === MON_9AM_CHICAGO_UTC,
+    '[49] (a) exactly at Monday 09:00 America/Chicago -> that same instant');
+
+  // (b) …a few hours LATER the same Monday -> still that morning's slot, not a future one.
+  assert(app.mostRecentWeeklySlotMs({ weekday: 1, hour: 9, timeZone: 'America/Chicago' }, new Date(MON_9AM_CHICAGO_UTC + 3 * 3600000)) === MON_9AM_CHICAGO_UTC,
+    '[49] (b) three hours after Monday 09:00 -> the most recent slot is still that morning\'s');
+
+  // (c) …one second BEFORE the slot -> the PREVIOUS week's slot (exactly 7 days earlier), not
+  //    this week's (which has not happened yet from "now"'s point of view).
+  assert(app.mostRecentWeeklySlotMs({ weekday: 1, hour: 9, timeZone: 'America/Chicago' }, new Date(MON_9AM_CHICAGO_UTC - 1000)) === MON_9AM_CHICAGO_UTC - 7 * 86400000,
+    '[49] (c) one second before Monday 09:00 -> falls back a full week, not forward to a slot that has not occurred yet');
+
+  // (d) …two days later (Wednesday) -> still the SAME Monday's slot (nothing between Monday and
+  //    the next Monday changes the answer).
+  assert(app.mostRecentWeeklySlotMs({ weekday: 1, hour: 9, timeZone: 'America/Chicago' }, new Date(MON_9AM_CHICAGO_UTC + 2 * 86400000)) === MON_9AM_CHICAGO_UTC,
+    '[49] (d) Wednesday, same week -> still Monday\'s own slot, unchanged by the two days that passed');
+
+  // (e) jobOverdueMs('trainer', …): CAUGHT UP — the last known-good point (sinceMs) is AFTER the
+  //    most recent slot, so no scheduled slot has occurred since -> never overdue, however long
+  //    "now" is after that.
+  assert(app.jobOverdueMs('trainer', MON_9AM_CHICAGO_UTC + 1000, MON_9AM_CHICAGO_UTC + 5 * 3600000) === null,
+    '[49] (e) caught up (sinceMs after the slot) -> null, not overdue, even five hours later');
+
+  // (f) …WITHIN GRACE — a slot occurred since sinceMs, but fewer than graceHours (6) have passed
+  //    since it -> still null (informative "has not run yet," not "may be dead").
+  const longAgo = MON_9AM_CHICAGO_UTC - 30 * 86400000; // a month before the slot — definitely stale
+  assert(app.jobOverdueMs('trainer', longAgo, MON_9AM_CHICAGO_UTC + 3 * 3600000) === null,
+    '[49] (f) a slot passed, but only 3 of the 6 grace hours have -> null, not yet overdue');
+
+  // (g) …PAST GRACE — the same stale sinceMs, now 8 hours after the slot (> the 6-hour grace) ->
+  //    overdue by roughly 2 hours (8h - 6h grace), a positive number of milliseconds.
+  const overdueMs = app.jobOverdueMs('trainer', longAgo, MON_9AM_CHICAGO_UTC + 8 * 3600000);
+  assert(typeof overdueMs === 'number' && overdueMs > 0 && Math.abs(overdueMs - 2 * 3600000) < 1000,
+    `[49] (g) 8 hours after the slot (2 past the 6h grace) -> overdue by ~2h (got ${overdueMs})`);
+
+  // (h) sinceMs covers LAST week's slot, and "now" has not yet reached THIS week's slot (Sunday
+  //    night) -> the most recent slot AS OF "now" is still last week's, which sinceMs already
+  //    covers -> null, even though sinceMs is nowhere near "now" in absolute terms.
+  const justAfterLastWeeksSlot = (MON_9AM_CHICAGO_UTC - 7 * 86400000) + 1000;
+  assert(app.jobOverdueMs('trainer', justAfterLastWeeksSlot, MON_9AM_CHICAGO_UTC - 12 * 3600000) === null,
+    '[49] (h) "now" is Sunday night, before this week\'s slot -> the most recent slot is still last week\'s, already covered by sinceMs');
+
+  // (i) an event-driven job (no SERVER_JOB_CADENCE_MIN or SERVER_JOB_SCHEDULE entry) never
+  //    escalates through this path either, mirroring [48] (d)'s cadence-based version of the claim.
+  assert(app.jobOverdueMs('notifyFanout', longAgo, MON_9AM_CHICAGO_UTC + 800 * 3600000) === null,
+    '[49] (i) an event-driven job (notifyFanout) is never overdue through jobOverdueMs, however far "now" is pushed out');
+
+  // (j) END TO END, THROUGH THE RENDERED CARD — the weekly cadence label actually reaches the
+  //    "may be dead" sentence, not just the pure function.
+  resetAll();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+  app._setBgJobsCacheForTest({ leagueId: 'L-x', rows: [], fetchedAt: Date.now(), loading: false, error: null });
+  storage.saveSetting('serverJobs', { trainer: true });
+  // A real, long-past flip time so the card's OWN (real, unmocked) clock reads it as overdue too —
+  // the pure-function proof above is what pins the ARITHMETIC; this pins that the card actually
+  // calls it with the right job name and renders the label jobCadenceLabel() produces.
+  storage.saveSetting('serverJobsFlippedAt', { trainer: new Date(Date.now() - 30 * 86400000).toISOString() });
+  const html49 = app.renderBackgroundJobsAdminSectionHTML();
+  const at = html49.indexOf('SCRIBE Trainer');
+  const trainerBlock = at === -1 ? '' : html49.slice(at, at + 320);
+  assert(/expected weekly \(Mon 09:00 America\/Chicago\)\. This job may be dead\./.test(trainerBlock),
+    `[49] (j) a trainer switch flipped a month ago with no run -> escalates with the WEEKLY cadence label, not a minutes-based one (got ${JSON.stringify(trainerBlock)})`);
+
+  app._setBgJobsCacheForTest({});
+  storage.saveSetting('serverJobs', {});
+  storage.saveSetting('serverJobsFlippedAt', {});
+  auth._resetAuthForTest();
+  app._resetAuthUIWiringForTest();
+  app._resetAuthHoldForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  storage.setBackendMode('local');
+}
 
 // ── REVIEWER F8 (sixth gate, 2026-09-17) — THE SUMMARY LINE MUST SURVIVE THE
 //    EXIT ──────────────────────────────────────────────────────────────────────

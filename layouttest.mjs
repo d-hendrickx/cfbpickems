@@ -1225,7 +1225,21 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
     'A10j: no confirm() on Reset — this app reserves confirm() for money-affecting commissioner actions, and Reset is one tap to undo by hand');
 
   // CSS house rules.
-  const cssBlock = css.slice(css.indexOf('FEAT-8a / UN-179'));
+  //
+  // iOS Munera thread, PASS 1b (2026-09-20) — BOUNDED, not sliced to EOF.
+  // The unbounded slice(start) below used to reach the literal end of
+  // styles.css, which was harmless only because nothing had been appended
+  // after UN-179's own CSS yet. The instant any later thread appends new
+  // CSS at the bottom of the file (exactly what this pass's one native-
+  // scoped rule block does), this test's scope silently widens to include
+  // code that was never UN-179's to answer for, and a hardcoded color in
+  // THAT later block fails A10k as if UN-179 itself regressed. Bounded at
+  // the next dated section's own header comment instead, restoring the
+  // test's actual intent: scan UN-179's CSS block, not "everything after
+  // it, forever."
+  const un179Start = css.indexOf('FEAT-8a / UN-179');
+  const un179End = css.indexOf('FEAT-3 / DI-200f', un179Start);
+  const cssBlock = css.slice(un179Start, un179End > un179Start ? un179End : undefined);
   assert(cssBlock.length > 800, 'A10k-0: fixture check — the UN-179 CSS block was located');
   const codeLines = cssBlock.split('\n').filter(l => !/^\s*(\/\*|\*|\/\/)/.test(l));
   assert(!codeLines.some(l => /#[0-9a-fA-F]{3,8}\b/.test(l)),

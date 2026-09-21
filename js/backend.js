@@ -20,6 +20,10 @@
  *   cfbp_backend_config = { url, token }
  */
 
+// DI-208g / S-C14 (iOS Munera, PASS 1b, Drew "Approve", 2026-09-19/20) — see
+// call()'s first line, below.
+import { isNativeOrigin } from './platform.js';
+
 const CFG_KEY = 'cfbp_backend_config';
 
 /**
@@ -763,6 +767,23 @@ export async function requestWithMisrouteGuard(action, send) {
 }
 
 async function call(action, payload = {}) {
+  // ── DI-208g / S-C14 — THE NATIVE-ORIGIN REFUSAL, BEFORE EVEN THE ALLOW-LIST
+  //    GUARD BELOW ──────────────────────────────────────────────────────────
+  // AD-67: the iOS shell never speaks Apps Script, for ANY action, INDEPENDENT
+  // of `_dataMode` — security-reviewer's AMENDMENT 1 finding F2 was exactly
+  // that a `_dataMode`-keyed guard fails OPEN on an offline cold boot before a
+  // config read has set the mode (`_dataMode` defaults 'sheets'). This check
+  // is a fact about the RUNTIME ORIGIN, not the data mode, so it cannot be
+  // bypassed the same way. `isNativeOrigin()` (js/platform.js) is
+  // ORIGIN-POSITIVE (S-C1/S-C8's shape): a spoofed `window.Capacitor` on a
+  // real `https:` origin does NOT trigger this — only the genuine native
+  // scheme does — so this can never be used to downgrade a real web session.
+  // Loud throw, no fallback (CLAUDE.md's loud-fail rule): the caller's own
+  // catch surfaces this through the existing sync-error banner exactly as any
+  // other backend failure does.
+  if (isNativeOrigin()) {
+    throw new Error('Backend refused: Google Sheets/Apps Script is never reachable from the native app (AD-67).');
+  }
   // ── DI §2.7 — THE ALLOW-LIST GUARD, BEFORE ANYTHING ELSE ──────────────────
   // Above getBackendConfig(), above the body construction, above every retry
   // wrapper, and therefore unambiguously BEFORE ANY fetch(). The refusal is a

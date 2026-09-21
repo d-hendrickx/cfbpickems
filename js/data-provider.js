@@ -49,6 +49,34 @@ const CORS_FALLBACKS = [
   url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
 
+// ── SECURITY S1 (Step 6 Phase 6 gate, 2026-09-20) — THE PROXIES ARE A BROWSER
+//    AFFORDANCE AND MUST NEVER BE REACHED FROM A SERVER. ──────────────────────
+//
+// The three entries above exist for ONE reason: a browser cannot read ESPN's
+// scoreboard when ESPN's CORS headers say no, so the request is bounced off an
+// anonymous third party. `supabase/functions/scores-refresh` calls the same
+// `refreshScoresByEventIds()` server-to-server, where there is no CORS at all —
+// so a proxy hop there buys nothing and costs everything: it would hand a
+// third party the shape of this league's live-window traffic, and it would let
+// an ATTACKER-CONTROLLED response body (allorigins' `{contents:"…"}` wrapper is
+// parsed below, by us) decide what score the service-role client writes into
+// `public.games`. There is no CORS failure that makes that trade worth making.
+//
+// So the option is threaded, with a DEFAULT THAT CHANGES NOTHING for the six
+// browsers (CONVENTIONS #10's direction: absent ⇒ behaves exactly as before).
+// The function passes `allowProxy:false` explicitly and it is the only caller
+// that does. Pinned by supabase/tests/functions/scoresRefresh.twin.mjs:326
+// [10-1] (the server reaches zero proxies) and refreshtest.mjs:517 [5h-1] /
+// refreshtest.mjs:524 [5h-3] (…while the browser's fallback is unchanged).
+const FETCH_TIMEOUT_MS = 12000;
+
+/** SECURITY S1 — the server path's own ceilings, applied ONLY when a caller asks
+ *  for them (`maxBytes: 0` is the browser default and takes the untouched
+ *  `res.json()` branch below). A scoreboard page is ~1 MB at its largest; the
+ *  cap is generous enough that a real payload can never trip it and small enough
+ *  that a redirected/hostile endpoint cannot stream an Edge invocation to death. */
+export const SERVER_FETCH_DEFAULTS = Object.freeze({ allowProxy: false, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024 });
+
 const _state = {
   lastFetchUrl:       null,
   lastFetchTimestamp: null,
@@ -178,7 +206,11 @@ export async function fetchCurrentCFBGames(almaMaters = ALMA_MATERS) {
  * bucket by sport; `espnEventIds` is retained for historical compatibility
  * but is not required.
  */
-export async function refreshScoresByEventIds(espnEventIds = [], storedGames = []) {
+export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [], fetchOptions = {}) {
+  // SECURITY S1 — `fetchOptions` is forwarded to resilientFetch() UNCHANGED and
+  // is empty for every browser call site (js/app.js's doRefreshScores()), so the
+  // client behaviour is byte-identical. `scores-refresh/index.js` is the one
+  // caller that fills it: { allowProxy:false, timeoutMs, maxBytes }.
   // Bucket games by sport (default cfb)
   const bySport = new Map();
   for (const g of storedGames) {
@@ -190,7 +222,7 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
   // Fetch each sport's scoreboard in parallel
   const fetches = [...bySport.keys()].map(async sport => {
     const url = buildEspnUrl({ sport });
-    const result = await resilientFetch(url);
+    const result = await resilientFetch(url, ALMA_MATERS, fetchOptions);
     return { sport, result };
   });
   const settled = await Promise.all(fetches);
@@ -261,14 +293,24 @@ export function getLastFetchUrl()  { return _state.lastFetchUrl; }
 
 // ─── RESILIENT FETCH ──────────────────────────────────────────────────────────
 
-async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS) {
-  const directResult = await attemptFetch(espnUrl, 'direct');
+async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS, { allowProxy = true, timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0 } = {}) {
+  const directResult = await attemptFetch(espnUrl, 'direct', { timeoutMs, maxBytes });
   if (directResult.ok) return finalise(directResult, espnUrl, 'direct', almaMaters);
+
+  // SECURITY S1 — the ONE early return. A server caller's direct fetch failing
+  // is an honest error, not an invitation to ask a stranger. Nothing below this
+  // line runs for `allowProxy:false`, so there is no path — not a retry, not a
+  // catch, not a later branch — on which a proxy URL can be constructed.
+  if (!allowProxy) {
+    const directErr = `ESPN direct fetch failed: ${directResult.error || 'unknown error'}`;
+    _state.lastQualityReport = buildFailReport(espnUrl, directErr);
+    return { games: [], error: directErr, usingDemo: false, espnUrl };
+  }
 
   for (let i = 0; i < CORS_FALLBACKS.length; i++) {
     const proxyUrl = CORS_FALLBACKS[i](espnUrl);
     const label    = ['allorigins', 'corsproxy.io', 'codetabs'][i];
-    const result   = await attemptFetch(proxyUrl, label);
+    const result   = await attemptFetch(proxyUrl, label, { timeoutMs, maxBytes });
     if (result.ok) return finalise(result, espnUrl, `proxy:${label}`, almaMaters);
     console.warn(`[DataProvider] ${label} failed:`, result.error);
   }
@@ -278,10 +320,23 @@ async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS) {
   return { games: [], error: errorMsg, usingDemo: false, espnUrl };
 }
 
-async function attemptFetch(url, method) {
+async function attemptFetch(url, method, { timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0 } = {}) {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(12000), headers: { Accept: 'application/json' } });
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json' } });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status} from ${method}` };
+    // SECURITY S1 — the size cap is OPT-IN (`maxBytes: 0` = off) so the browser
+    // keeps the exact `res.json()` call it has always made. The capped branch
+    // reads text first because that is the only point at which the body's size
+    // is knowable without trusting a header the peer wrote.
+    if (maxBytes > 0) {
+      const declared = Number(res.headers?.get?.('content-length') || 0);
+      if (declared > maxBytes) return { ok: false, error: `response too large from ${method}`, method };
+      const text = await res.text();
+      if (text.length > maxBytes) return { ok: false, error: `response too large from ${method}`, method };
+      const rawCapped  = JSON.parse(text);
+      const dataCapped = rawCapped?.contents ? JSON.parse(rawCapped.contents) : rawCapped;
+      return { ok: true, data: dataCapped, method };
+    }
     const raw  = await res.json();
     const data = raw?.contents ? JSON.parse(raw.contents) : raw;
     return { ok: true, data, method };

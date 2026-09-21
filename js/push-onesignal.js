@@ -42,6 +42,8 @@
  * procedure. See service-worker.js's header for the other half.
  */
 
+import { isNativeShell } from './platform.js';
+
 const ONESIGNAL_SDK_URL = 'https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js';
 
 /** How long to wait for the SDK to drain OneSignalDeferred before calling it
@@ -212,6 +214,11 @@ export function pushSupportLevel() {
  *  pushSupportLevel()'s note, does NOT prove the SDK itself arrived). */
 let _scriptPromise = null;
 function loadSdkScript() {
+  // DI-210e — the native iOS shell never loads the OneSignal web SDK; native
+  // push (send + device identity) is parked on the Supabase thread's Step 6
+  // Phase 2 (AD-67). Same inert shape the module already resolves on a
+  // failed <script> load (s.onerror above), so no caller sees a new shape.
+  if (isNativeShell()) return Promise.resolve(false);
   if (_scriptPromise) return _scriptPromise;
   _scriptPromise = new Promise((resolve) => {
     const s = document.createElement('script');
@@ -359,6 +366,13 @@ function startInitOnce(appId) {
  * dashboard setting.
  */
 export async function ensureOneSignalInit() {
+  // DI-210e — suppress, don't remove. The web SDK must not load/init inside
+  // the native shell (AD-67: no Apps Script, and native push waits on the
+  // Supabase thread's Step 6 Phase 2). Reuses the exact inert shape the
+  // module already returns for a browser it refuses outright, so every
+  // existing caller (app.js's pushFailureMessage(), the Notification
+  // Center) needs zero new branches to stay correct.
+  if (isNativeShell()) return { ok: false, reason: 'unsupported-browser' };
   const appId = await loadAppId();
   // Two very different states that used to share one answer: config.json was
   // read and simply has no App ID (feature not live yet — nothing to retry),
@@ -431,6 +445,12 @@ function _queueOneSignalCall(fn) {
  *  gate) made them share one config read; security F-3 (eighth) made the sharing
  *  unnecessary for correctness. */
 export async function loginOneSignal(playerId) {
+  // DI-210e (PASS 1b) — guarded at THIS entry, not at app.js's call site, so
+  // the .then() chain after ensureOneSignalInit() in app.js needs no edit:
+  // ensureOneSignalInit() already resolves inert on native (DI-210e, pass
+  // 1a), and every function its .then() calls next no-ops here too. Same
+  // inert shape as the "no App ID" early return below (undefined).
+  if (isNativeShell()) return;
   if (!playerId) return;
   return _queueOneSignalCall(async () => {
     const appId = await loadAppId();
@@ -447,6 +467,11 @@ export async function loginOneSignal(playerId) {
  *  handed-off phone keeps receiving the previous player's pushes. Serialized
  *  against loginOneSignal() through the same chain (security F-3). */
 export async function logoutOneSignal() {
+  // DI-210e (PASS 1b) — guarded HERE, at the function's own entry, so
+  // js/auth.js's `logoutOneSignal()` call site near :51 needs NO edit
+  // (auth.js is EXCLUSIVE to the Supabase thread right now). Same inert
+  // shape as loginOneSignal()'s native guard, above.
+  if (isNativeShell()) return;
   return _queueOneSignalCall(async () => {
     const appId = await loadAppId();
     if (!appId) return;
@@ -471,8 +496,19 @@ export async function logoutOneSignal() {
  * never-asked/denied/granted split — the browser's own `Notification.permission`
  * is synchronous and authoritative for that. OneSignal is only consulted (by
  * the caller, separately) for finer subscription detail once granted.
+ *
+ * DI-210e item 2 (PASS 1b) — a SIXTH state, 'native-unavailable', checked
+ * FIRST and before any async config read: inside the native shell, native
+ * push waits on the Supabase thread's Step 6 Phase 2 (AD-67), and the
+ * Notification Center's priming card must say so honestly rather than
+ * showing web-push copy or the nonsensical "Add to Home Screen" instructions
+ * (that install step makes no sense inside an app already installed via
+ * TestFlight). Both of app.js's subscriptionState() consumers
+ * (refreshPushActiveFlag(), refreshNotifSettingsBody()) get this for free —
+ * neither needs its own native branch.
  */
 export async function subscriptionState() {
+  if (isNativeShell()) return 'native-unavailable';
   if (!(await isPushConfigured())) return 'unconfigured';
   // Support is decided by the SDK's OWN predicate (pushSupportLevel), so the
   // card we render and the SDK's willingness to load can never disagree —
@@ -512,6 +548,11 @@ export async function subscriptionState() {
 const OPTED_IN_TIMEOUT_MS = 3000;
 export async function isPushOptedIn() {
   try {
+    // DI-210e (PASS 1b) — defense-in-depth. subscriptionState() already
+    // resolves 'native-unavailable' on the shell, so refreshPushActiveFlag()
+    // (app.js) never reaches this call in production — but a direct caller
+    // must not pay OPTED_IN_TIMEOUT_MS's 3s wait on native either.
+    if (isNativeShell()) return false;
     if (typeof window === 'undefined') return false;
     if (!(await isPushConfigured())) return false;
     const read = new Promise((resolve) => {
@@ -632,6 +673,12 @@ export async function requestPushPermission() {
  *     one that most needs to be current.
  */
 export function wireForegroundSuppression(destinationForEvent, onForegroundPush) {
+  // DI-210e (PASS 1b) — guarded at entry so app.js's boot call site needs no
+  // edit. Native never loads the SDK (loadSdkScript()'s own guard above), so
+  // window.OneSignalDeferred would just queue a callback the SDK never
+  // drains — a latent no-op today, but a real timer/leak the day a native
+  // OneSignal path exists. Returning here keeps the shell's queue empty.
+  if (isNativeShell()) return;
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   window.OneSignalDeferred.push(async (OneSignal) => {
     try {
@@ -677,6 +724,8 @@ export function wireForegroundSuppression(destinationForEvent, onForegroundPush)
  * question. Its only job is "something arrived; go look now."
  */
 export function wireNotificationClicks(onClick) {
+  // DI-210e (PASS 1b) — same reasoning as wireForegroundSuppression() above.
+  if (isNativeShell()) return;
   window.OneSignalDeferred = window.OneSignalDeferred || [];
   window.OneSignalDeferred.push(async (OneSignal) => {
     try {

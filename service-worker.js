@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v22-5';
+const CACHE_NAME = 'cfb-pickems-v23-0';
 
 const STATIC_ASSETS = [
   './',
@@ -119,6 +119,26 @@ const STATIC_ASSETS = [
   // arriving through the cache instead of through a typo). notifytest [25e] is
   // the guard that caught this omission before it shipped.
   './js/field-preserve.js',
+  // iOS Munera PASS 1b (2026-09-20). Both statically imported by app.js
+  // (platform.js also by push-onesignal.js/sw-register.js/backend.js/
+  // chatTransport.js) — boot-critical for the same reason auth.js is: a
+  // shell cache one module short serves a graph that cannot resolve
+  // (RG-03's blank app, arriving through the cache instead of through a
+  // typo). notifytest [25e] is the guard that catches this omission before
+  // it ships.
+  './js/platform.js',
+  './js/brand.js',
+  // DI-204/205/206/218 (the combined release, 2026-09-20). Statically imported by app.js for the
+  // Background-jobs card's push self-test sub-section — boot-critical for exactly the same reason
+  // field-preserve.js and platform.js are: a shell cache one module short serves a graph that
+  // CANNOT RESOLVE, and the symptom is RG-03's blank app arriving through the cache rather than
+  // through a typo.
+  //
+  // CAUGHT BY notifytest [25e], which is the third time that rule has earned its place (RG-176,
+  // the iOS pair, now this one). `loadtest.mjs` did not spawn `notifytest.mjs` when this was found;
+  // it does as of the v0.23.0 release cut (spawn [93], ratcheted floor), so this list is now covered
+  // by the mandatory sweep.
+  './js/push-selftest.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

@@ -2295,6 +2295,14 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
   assert(mutant !== pushSrc, '[24j-a] the mutation actually changed the scratch text (non-vacuous)');
   const mutantPath = `${scratchDir}/push-onesignal.bare-boolean.${Date.now()}.mjs`;
   await writeFile(mutantPath, mutant, 'utf8');
+  // DI-208c/DI-210e (iOS Munera thread, 2026-09-19) — push-onesignal.js now
+  // has one real sibling import, `import { isNativeShell } from
+  // './platform.js'`, for its native-shell guard. The mutant is imported
+  // from a flat scratch dir with no sibling file, so that relative import
+  // would otherwise 404 — a scratch-only COPY of the real js/platform.js
+  // sits next to the mutant purely to satisfy module resolution; it is
+  // never the mutation target and nothing here asserts against it.
+  await copyFile(fileURLToPath(new URL('./js/platform.js', import.meta.url)), `${scratchDir}/platform.js`);
   const mutantMod = await import(`file://${mutantPath}`);
   installPushStubs({ permBehaviour: 'sw-missing' });
   mutantMod._resetForTest({ sdkReadyMs: 60, promptMs: 60 });
@@ -3095,6 +3103,19 @@ console.log('\n[28] DI-T6.1 — the client half of the notify-fanout switch (Pha
     const rules = await import('./supabase/functions/_shared/job-rules.mjs');
     assert(JSON.stringify([...rules.SERVER_JOBS]) === JSON.stringify([...notif.SERVER_JOB_NAMES]),
       `28-9: the eight switch names are identical on both sides, in the same order — server ${JSON.stringify([...rules.SERVER_JOBS])}`);
+    // 28-9b (final release gate, v0.23.0): every switch name has a BUILT entry in the card. Phase 6
+    // shipped its function, migration and warning copy but never touched SERVER_JOB_BUILT, so the
+    // scoresRefresh row rendered "Not built yet" with a disabled checkbox — invisible to a
+    // 1754-assertion green sweep because no assertion tied the two tables together.
+    {
+      const { readFile: rf289 } = await import('node:fs/promises');
+      const src289 = await rf289(new URL('./js/app.js', import.meta.url), 'utf8');
+      const m289 = src289.match(/const SERVER_JOB_BUILT = Object\.freeze\(\{([^}]*)\}\)/);
+      assert(!!m289, '28-9b: SERVER_JOB_BUILT literal found in js/app.js (fixture check)');
+      const built289 = m289 ? [...m289[1].matchAll(/(\w+):\s*true/g)].map((x) => x[1]) : [];
+      const missing289 = [...notif.SERVER_JOB_NAMES].filter((j) => !built289.includes(j));
+      assert(missing289.length === 0, `28-9b: every SERVER_JOB_NAMES entry is marked built in the Background-jobs card — missing: ${JSON.stringify(missing289)}`);
+    }
     const shapes = [
       undefined, null, {}, { serverJobs: null }, { serverJobs: {} },
       { serverJobs: { notifyFanout: true } }, { serverJobs: { notifyFanout: false } },
@@ -3211,6 +3232,128 @@ console.log('\n[29] DI-T6.1 — the dedup key is BYTE-IDENTICAL on both sides of
     `29-4: …and the key it plans to write is the one THIS client would have sent for that row — the weekId slot carries the MESSAGE id, because chat has no week and dedup must be per-message. Got "${plan.recipients[0].dedupKey}"`);
   assert(plan.recipients[0].dedupKey === 'CHAT_MESSAGE_CREATED|msg_42||p1',
     '29-5: …pinned to the literal, so both sides moving together is still a red');
+}
+
+console.log('\n[30] DI-T6.2/DI-T6.14(b) — js/reminder-rules.js is a PARALLEL extraction of backend/notifyServer.mjs, verified BEHAVIOURALLY (both modules run under plain Node, so this can EXECUTE both sides across shared fixtures rather than diff text)…');
+{
+  const rules30 = await import('./js/reminder-rules.js');
+
+  // 30a — the constants are identical values, not just identical names.
+  assert(JSON.stringify(rules30.REMINDER_THRESHOLDS) === JSON.stringify(server.REMINDER_THRESHOLDS),
+    '30a: REMINDER_THRESHOLDS is byte-identical between js/reminder-rules.js and backend/notifyServer.mjs');
+  assert(rules30.LOCKING_SOON_MS === server.LOCKING_SOON_MS,
+    '30a: …and so is LOCKING_SOON_MS');
+
+  // 30b — the pure helpers, EXECUTED against the same fixtures. Any drift in
+  // logic (not just presentation) is a mismatched return value here.
+  const games30 = [{ weekId: 'w1', kickoff: '2026-10-03T17:00:00.000Z' }, { weekId: 'w1', kickoff: '2026-10-03T20:00:00.000Z' }];
+  assert(rules30.firstKickoffMs(games30) === server.firstKickoffMs(games30),
+    '30b: firstKickoffMs() agrees on a two-game week');
+  assert(rules30.firstKickoffMs([]) === server.firstKickoffMs([]),
+    '30b: …and on an empty list (both null)');
+
+  const week30 = { weekId: 'w1', picksLockAt: null, autoLockOffsetMinutes: 45 };
+  assert(rules30.effectiveLockAtMs(week30, games30) === server.effectiveLockAtMs(week30, games30),
+    '30b: effectiveLockAtMs() agrees when deriving lock from kickoff - offset');
+  const week30b = { weekId: 'w1', picksLockAt: '2026-10-03T16:00:00.000Z', autoLockOffsetMinutes: 45 };
+  assert(rules30.effectiveLockAtMs(week30b, games30) === server.effectiveLockAtMs(week30b, games30),
+    '30b: …and when picksLockAt is set explicitly');
+
+  const weeks30 = [
+    { weekId: 'wA', status: 'open' },
+    { weekId: 'wB', status: 'open' },
+  ];
+  const gamesFor30 = [
+    { weekId: 'wA', kickoff: '2026-10-10T17:00:00.000Z' },
+    { weekId: 'wB', kickoff: '2026-10-03T17:00:00.000Z' },
+  ];
+  const selA = rules30.selectActiveOpenWeek({ weeks: weeks30, activeWeekId: null, games: gamesFor30 });
+  const selB = server.selectActiveOpenWeek({ weeks: weeks30, activeWeekId: null, games: gamesFor30 });
+  assert(JSON.stringify(selA) === JSON.stringify(selB) && selA?.weekId === 'wB',
+    `30b: selectActiveOpenWeek() agrees on the earliest-lock tiebreak with no active pointer (both picked ${JSON.stringify(selA?.weekId)})`);
+
+  const prefCases30 = [
+    { player: { preferences: {} }, category: 'pickReminders' },
+    { player: { preferences: { notifyPushMaster: false } }, category: 'pickReminders' },
+    { player: { preferences: { notifyPushMaster: true, notifyCategories: { pickReminders: false } } }, category: 'pickReminders' },
+    { player: null, category: null },
+  ];
+  for (const [i, c] of prefCases30.entries()) {
+    assert(rules30.resolveServerPushIntent(c) === server.resolveServerPushIntent(c),
+      `30b: resolveServerPushIntent() agrees for case ${i}`);
+  }
+
+  for (const raw of [null, undefined, 'false', 'FALSE', ' False ', 'true', 'anything']) {
+    assert(rules30.readNameNonSubmittersFlag(raw) === server.readNameNonSubmittersFlag(raw),
+      `30b: readNameNonSubmittersFlag(${JSON.stringify(raw)}) agrees`);
+  }
+
+  for (const dk of ['PICKS_REMINDER|w1|24h|p1', '', 'no-pipes-at-all', 'a|b|c|d|e', '|w1|24h|p1']) {
+    assert(rules30.isValidDedupKey(dk) === server.isValidDedupKey(dk),
+      `30b: isValidDedupKey(${JSON.stringify(dk)}) agrees`);
+  }
+
+  // 30c — computeReminderPlan(): identical DECISIONS (who, which threshold,
+  // which dedup key, which body), with the ONE DOCUMENTED additive field
+  // (`title`) on js/reminder-rules.js's side and nowhere else. Comparing the
+  // two plans field-by-field (rather than JSON.stringify equality) is what
+  // makes that addition visible as a NAMED difference instead of failing the
+  // whole assertion.
+  const now30 = new Date('2026-10-03T15:50:00.000Z').getTime(); // 10 min before an 18:20 lock
+  const week30c = { weekId: 'w1', status: 'open', dataSourceMode: 'manual', weekNumber: 5, picksLockAt: '2026-10-03T18:20:00.000Z', autoLockOffsetMinutes: 30 };
+  const games30c = [{ weekId: 'w1', kickoff: '2026-10-03T18:50:00.000Z' }];
+  const players30c = [
+    { playerId: 'p1', displayName: 'Drew', active: true },
+    { playerId: 'p2', displayName: 'Brayden', active: true },
+  ];
+  const picks30c = [{ weekId: 'w1', playerId: 'p1' }];
+  const planA = rules30.computeReminderPlan({ week: week30c, games: games30c, picks: picks30c, players: players30c, now: now30 });
+  const planB = server.computeReminderPlan({ week: week30c, games: games30c, picks: picks30c, players: players30c, now: now30 });
+
+  assert(planA.remindersPlan.length > 0 && planA.remindersPlan.length === planB.remindersPlan.length,
+    `30c: both sides produce the same NUMBER of reminder candidates (got A=${planA.remindersPlan.length} B=${planB.remindersPlan.length})`);
+  const stripTitle = (r) => { const { title, ...rest } = r; return rest; };
+  assert(JSON.stringify(planA.remindersPlan.map(stripTitle)) === JSON.stringify(planB.remindersPlan),
+    '30c: …and every candidate is IDENTICAL once the additive `title` field is set aside (playerId, dedupKey, threshold, remaining, category, body all match)');
+  assert(planA.remindersPlan.every((r) => typeof r.title === 'string' && r.title.length > 0),
+    '30c: …and js/reminder-rules.js DOES carry a real title on every candidate — buildCopy() already computed it; this module keeps it instead of discarding it a second time');
+
+  assert(!!planA.lockingSoonPlan === !!planB.lockingSoonPlan,
+    '30c: both sides agree on whether the locking-soon window has opened');
+  if (planA.lockingSoonPlan) {
+    const { title: titleA, ...restA } = planA.lockingSoonPlan;
+    const { ...restB } = planB.lockingSoonPlan;
+    assert(JSON.stringify(restA) === JSON.stringify(restB),
+      '30c: …and the locking-soon plan is IDENTICAL once `title` is set aside (entries, body, meta, copyEvent, nonSubmitters, submittedCount, totalPlayers, nameNonSubmitters all match)');
+    assert(typeof titleA === 'string' && titleA.length > 0,
+      '30c: …with a real title on js/reminder-rules.js\'s side');
+  }
+
+  // 30d — REVIEWER R6 (Step 6 Phase 2 gate, 2026-09-20): everything above only
+  // ever calls computeReminderPlan() with `nameNonSubmitters` left at its
+  // default (true). The COUNT-ONLY branch (`PICKS_LOCKING_SOON_COUNT_ONLY`,
+  // js/reminder-rules.js:210-215) had never been driven through this twin at
+  // all, so a drift there — the exact shape [23c]/[23g] already guard on the
+  // Code.gs side — would have gone unnoticed on the reminders/index.js side.
+  // A FRESH `now` — `now30` (10 min before an 18:20 lock, 2h30m out) is
+  // BEFORE the 1h locking-soon window even opens, which is why [30c]'s
+  // `!!planA.lockingSoonPlan === !!planB.lockingSoonPlan` held trivially
+  // (both null). 30d needs the window genuinely open on both sides.
+  const now30d = new Date('2026-10-03T17:50:00.000Z').getTime(); // 30 min before the same 18:20 lock
+  const planNamedFalse30 = rules30.computeReminderPlan({ week: week30c, games: games30c, picks: picks30c, players: players30c, now: now30d, nameNonSubmitters: false });
+  const planNamedFalse30b = server.computeReminderPlan({ week: week30c, games: games30c, picks: picks30c, players: players30c, now: now30d, nameNonSubmitters: false });
+  assert(!!planNamedFalse30.lockingSoonPlan && !!planNamedFalse30b.lockingSoonPlan,
+    '30d: fixture: the locking-soon window is open with a real non-submitter on BOTH sides — the branch this asserts on is actually reached, not skipped as a no-op');
+  assert(planNamedFalse30.lockingSoonPlan.copyEvent === 'PICKS_LOCKING_SOON_COUNT_ONLY' && planNamedFalse30b.lockingSoonPlan.copyEvent === 'PICKS_LOCKING_SOON_COUNT_ONLY',
+    `30d: nameNonSubmitters:false selects the COUNT-ONLY copy event on BOTH sides (got A=${planNamedFalse30.lockingSoonPlan.copyEvent} B=${planNamedFalse30b.lockingSoonPlan.copyEvent})`);
+  const { title: titleFalse30, ...restFalse30 } = planNamedFalse30.lockingSoonPlan;
+  const { ...restFalse30b } = planNamedFalse30b.lockingSoonPlan;
+  assert(JSON.stringify(restFalse30) === JSON.stringify(restFalse30b),
+    '30d: …and the two plans are IDENTICAL once `title` is set aside — critically, the body carries NO NAME in this branch on either side (the blind-adjacent guarantee [23e]/[23g] already hold for Code.gs, now pinned for reminder-rules.js too)');
+  assert(!/Brayden/.test(restFalse30.body) && !/Brayden/.test(restFalse30b.body),
+    `30d: the non-submitter's NAME does not leak into the count-only body on either side (A=${JSON.stringify(restFalse30.body)}, B=${JSON.stringify(restFalse30b.body)})`);
+  assert(typeof titleFalse30 === 'string' && titleFalse30.length > 0,
+    '30d: js/reminder-rules.js still carries its additive `title` in the count-only branch too');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

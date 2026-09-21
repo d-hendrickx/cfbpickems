@@ -845,7 +845,28 @@ const bannerSeen = [];
  *  If the two ever drift, one of the two suites is measuring a message nobody sends. */
 const detailSeen = [];
 
-function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null } = {}) {
+/**
+ * [A-RETRY] — FAKE TIMERS, because a bounded backoff tested with real sleeps is a suite that
+ * takes twelve seconds per scenario and still proves nothing about the SCHEDULE. The adapter's
+ * retry timer goes through the injected `setTimer`/`clearTimer` seam (the same discipline
+ * `auth.js`'s `_setRefreshDeadlineForTest` uses), so a test drives milliseconds instead of waiting
+ * them. The callback the adapter registers RETURNS its promise, which `setTimeout` ignores in a
+ * browser and this queue awaits — so `runNext()` resolves only once the retry has actually run.
+ */
+function makeFakeTimers() {
+  const q = [];
+  let id = 0;
+  return {
+    set: (fn, ms) => { const h = ++id; q.push({ h, fn, ms }); return h; },
+    clear: (h) => { const i = q.findIndex((t) => t.h === h); if (i >= 0) q.splice(i, 1); },
+    delays: () => q.map((t) => t.ms),
+    count: () => q.length,
+    async runNext() { const t = q.shift(); if (!t) return null; await t.fn(); return t; },
+  };
+}
+
+function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null,
+  timers = null, refreshSession = null, random = null } = {}) {
   sb._resetForTest();
   store.clear();
   statuses.length = 0;
@@ -882,6 +903,12 @@ function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = 
     // storage.js's getSiteUnlocked().
     hasSheetMirror: () => localStorage.getItem('cfbp_sheet_mirror') !== null,
     isSiteUnlocked: () => localStorage.getItem('cfbp_site_unlocked') !== null,
+    // [A-RETRY] — the three seams the bounded write retry uses. `random` defaults to 0 so the
+    // jitter term is deterministic and the SCHEDULE itself can be asserted; one case overrides it
+    // to 1 to prove the jitter is really applied and really bounded.
+    random: random || (() => 0),
+    ...(timers ? { setTimer: timers.set, clearTimer: timers.clear } : {}),
+    ...(refreshSession ? { refreshSession } : {}),
   });
   sb.onStatus((s, d) => { statuses.push([s, d && d.state]); detailSeen.push([s, d]); if (d && d.banner) bannerSeen.push(String(d.banner)); });
   localStorage.setItem('cfbp_device_data_owner', OWNER);
@@ -2065,9 +2092,14 @@ await section('\n[§2.1] the per-key ROUTING TABLE is complete and refuses by de
   const declared = [...keysBlock.matchAll(/'(cfbp_[a-z_]+)'/g)].map((m) => m[1]);
   assert(declared.length >= 20, `storage.js's KEYS block was parsed (${declared.length} cfbp_* keys)`);
   const routes = sb._routesForTest();
-  const deviceLocal = new Set(['cfbp_avail_games', 'cfbp_session', 'cfbp_site_unlocked',
-    'cfbp_whatsnew_posted', 'cfbp_wager_resurfaced', 'cfbp_lifecycle_posted', 'cfbp_push_active',
-    'cfbp_backend_config']);
+  // S-C16 (round 1 gate, Drew-approved for this one purpose) — DERIVED from
+  // js/storage.js's own device-local list via its read-only test export,
+  // not a hand-maintained second copy. The hand-maintained copy this
+  // replaced went stale the moment cfbp_shell_ui_state (DI-210b) was added
+  // to storage.js and this file was not — the exact drift this change
+  // exists to stop from recurring. Nothing else in this file changed.
+  const storageMod = await import('./js/storage.js');
+  const deviceLocal = storageMod.getDeviceLocalKeysForTest();
   const unrouted = declared.filter((k) => !deviceLocal.has(k) && !(k in routes));
   assert(unrouted.length === 0,
     `every non-device-local cfbp_* key has a declared route (unrouted: ${JSON.stringify(unrouted)})`);
@@ -2976,8 +3008,23 @@ await section('\n[A-FLUSH4] a write that never reached a server is a NETWORK hol
   // refusal RG-180 had just removed. A held write also never reaches the device snapshot
   // (`_persistSnapshot()` refuses while dirty), so an iOS PWA kill loses it silently.
   //
-  // The three shapes below are one allow-list decision each: STATUS PRESENT ⇒ answered ⇒ loud;
+  // The four shapes below are one allow-list decision each: STATUS PRESENT ⇒ answered ⇒ loud;
   // no response at all ⇒ held; a PostgREST code ⇒ loud. AD-59's closed default, from the write side.
+  //
+  // ══ AMENDED 2026-09-20 (RG-202) — *WHEN* LOUD, NOT *WHETHER* ══════════════════════════════════
+  //
+  // These three assertions used to read the FIRST attempt and require the red banner there. They
+  // were right about the classification and wrong about the timing, and the cost landed on Drew:
+  // a red "Cross-device sync is OFF on this device" every time a request hiccuped, resolved every
+  // time by one tap of Retry. A banner that is wrong most of the time stops being read, which is
+  // the failure mode AD-06 exists to prevent.
+  //
+  // WHAT IS UNCHANGED, and it is the whole of the security finding: an ANSWER is still never an
+  // OUTAGE. None of these three may ever emit 'offline', reach OFFLINE-READONLY or serve a
+  // snapshot — `_isWriteNetworkFailure()` is untouched and still refuses all three. Each is
+  // asserted below across the WHOLE lifecycle instead of at one instant: quiet while the bounded
+  // schedule runs, LOUD and latched the moment it is exhausted, never 'offline' at any point, and
+  // never clean until a server confirmed the write.
   for (const [label, opt, expect] of [
     ['a gateway timeout: empty code, a message that READS like a network timeout, HTTP 504',
       { failWrites: { code: '', message: 'upstream request timeout' }, failWriteStatus: 504 }, 'loud'],
@@ -2988,40 +3035,60 @@ await section('\n[A-FLUSH4] a write that never reached a server is a NETWORK hol
     ['a thrown fetch TypeError — no response exists, so there is no status to carry',
       { throwWrites: () => new TypeError('Failed to fetch') }, 'held'],
   ]) {
-    await hydrated({ who: 'commissioner' });          // a clean latch + a clean queue per shape
+    const tf = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: tf });   // a clean latch + a clean queue per shape
     tbPut('w1__p1', 66);
     CLIENT = makeClient(ST, SESSIONS.commissioner, opt);
     const m = bannerSeen.length;
     statuses.length = 0;
     const res = await captureConsoleAsync(() => sb.flush());
-    const loud = bannersSince(m).some((t) => /Nothing was saved/.test(t));
-    const latched = sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses');
     if (expect === 'loud') {
-      assert(loud && latched,
-        `[A-FLUSH4] ${label}: the server ANSWERED, so it is a LOUD refusal — not a silent hold `
+      assert(!bannersSince(m).some((t) => /Nothing was saved/.test(t)) && !sb._refusedKeysForTest().length,
+        `[A-FLUSH4] ${label}: the FIRST attempt is quiet — a hiccup is not a breakage `
         + `(banner ${JSON.stringify(bannersSince(m))}, refusedKeys ${JSON.stringify(sb._refusedKeysForTest())}, result ${JSON.stringify(res)})`);
+      // Exhaust the bounded schedule against the same failing client.
+      let guard = 0;
+      while (tf.count() && guard++ < 6) await captureConsoleAsync(() => tf.runNext());
+      assert(bannersSince(m).some((t) => /Nothing was saved/.test(t))
+        && sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+        `[A-FLUSH4] ${label}: …and once the retries are exhausted the server ANSWERED, so it is a LOUD refusal — not a silent hold `
+        + `(banner ${JSON.stringify(bannersSince(m))}, refusedKeys ${JSON.stringify(sb._refusedKeysForTest())})`);
+      assert(sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+        `[A-FLUSH4] ${label}: …with the write still queued: no retry path ever drops or cleans a change (${JSON.stringify(sb._dirtyKeysForTest())})`);
       assert(!statuses.some(([s]) => s === 'offline'),
-        `[A-FLUSH4] ${label}: …and the player is never told OFFLINE about a device that is demonstrably on the network (${JSON.stringify(statuses.map(([s]) => s))})`);
+        `[A-FLUSH4] ${label}: …and the player is never told OFFLINE about a device that is demonstrably on the network, at ANY point in the schedule (${JSON.stringify(statuses.map(([s]) => s))})`);
     } else {
+      const loud = bannersSince(m).some((t) => /Nothing was saved/.test(t));
+      const latched = sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses');
       assert(!loud && !latched && sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
         `[A-FLUSH4] ${label}: …stays HELD, unlatched and queued (banner ${JSON.stringify(bannersSince(m))}, dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
       assert(statuses.some(([s]) => s === 'offline'),
         `[A-FLUSH4] ${label}: …and says offline (${JSON.stringify(statuses.map(([s]) => s))})`);
+      assert(tf.count() === 0,
+        `[A-FLUSH4] ${label}: …and arms no write-retry timer: the network hold has its own recovery (the online/visible re-hydrate), and two schedules for one queue is a storm (${JSON.stringify(tf.delays())})`);
     }
   }
 
   // THE RPC LEG OF THE SAME RULE. `patch_kv` / `lock_week` / `transition_week` / `finalize_week` go
   // through `client.rpc()`, a different call site with the same defect — and a fix applied to only
   // the table writes would leave every settings save classifiable as offline by its message.
-  await hydrated({ who: 'commissioner' });
+  const tRpc = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: tRpc });
   sb.set('cfbp_settings', { ...(sb.get('cfbp_settings') || {}), autoRefreshInterval: 90 });
   CLIENT = makeClient(ST, SESSIONS.commissioner, {
     failWrites: { code: '', message: 'upstream request timeout' }, failWriteStatus: 504,
   });
   const mk = bannerSeen.length;
   await captureConsoleAsync(() => sb.flush());
+  // RG-202 — same amendment as the table-write loop above: the RPC leg is retried on the same
+  // bounded schedule and is LOUD once it is exhausted. The classification is what this assertion
+  // guards, and it is unchanged: a 504 on an RPC is an ANSWER, never an outage.
+  assert(!bannersSince(mk).some((t) => /Nothing was saved/.test(t)) && tRpc.count() === 1,
+    `[A-FLUSH4] an RPC write that comes back with HTTP 504 is retried, quietly, first (${JSON.stringify(bannersSince(mk))}, ${JSON.stringify(tRpc.delays())})`);
+  let rpcGuard = 0;
+  while (tRpc.count() && rpcGuard++ < 6) await captureConsoleAsync(() => tRpc.runNext());
   assert(bannersSince(mk).some((t) => /Nothing was saved/.test(t)),
-    `[A-FLUSH4] an RPC write that comes back with HTTP 504 is a LOUD refusal too (${JSON.stringify(bannersSince(mk))})`);
+    `[A-FLUSH4] …and an RPC write that comes back with HTTP 504 is a LOUD refusal too once the retries are exhausted (${JSON.stringify(bannersSince(mk))})`);
 
   // STRUCTURAL, because the finalize leg is a third call site and a behavioural test for it needs a
   // live week: EVERY `_writeFailure(` call passes the response's status, not just the error.
@@ -3559,6 +3626,517 @@ await section('\n[A-HIDE3] the hide listeners are registered ONCE per page, thou
   assert((app.match(/addEventListener\('pagehide'/g) || []).length === 1
     && (app.match(/addEventListener\('beforeunload'/g) || []).length === 1,
     '[A-HIDE3] …and there is exactly one registration site for each of the two unload events [structural]');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-LSV] DI-218 (migration 0018) — THE TWO NEW `league_members` COLUMNS ARE
+// INVISIBLE TO THE ADAPTER'S DIFF/UPSERT PATH.
+//
+// `last_seen_version` and `last_seen_at` are written by ONE thing — the DEFINER
+// `report_app_version()` RPC, stamping the caller's own row. The adapter must
+// never read them, never send them, and above all never NULL them.
+//
+// THE FAILURE THIS PREVENTS IS NOT HYPOTHETICAL: it is RG-39's field-blanking
+// class, and the 2026-09-19 cutover defect NOT_NULL_COLS exists because of. A
+// projection that produced `last_seen_version: null` on every player record
+// (the Sheet never had the field) would send that null in the first profile
+// save, and every member's reported version would be erased by the first person
+// to edit a nickname.
+//
+// THREE INDEPENDENT REASONS IT CANNOT HAPPEN, all asserted, because any one of
+// them alone could be edited away by someone who did not know about the other
+// two:
+//   1. the PROJECTION does not emit the columns, so they never enter a row;
+//   2. `SELECT_COLS.league_members` does not name them, so they are never in
+//      `_base` either and cannot appear as a "change";
+//   3. the SELECT GRANT in 0018 does not include them, so even a hand-written
+//      `.select('last_seen_version')` would be 42501.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-LSV] DI-218 — last_seen_version/last_seen_at never reach the adapter\'s diff or upsert…', async () => {
+  const NEW_COLS = ['last_seen_version', 'last_seen_at'];
+  const selectCols = sb._selectColsForTest ? sb._selectColsForTest() : null;
+  const notNull = sb._notNullColsForTest();
+
+  assert(Array.isArray(notNull.league_members) && notNull.league_members.length > 0,
+    '[A-LSV] fixture check — NOT_NULL_COLS.league_members was read (an empty read would make the next assertion vacuous)');
+  assert(NEW_COLS.every((c) => !notNull.league_members.includes(c)),
+    '[A-LSV] neither column is in NOT_NULL_COLS.league_members — correct, because both are NULLABLE in 0018; listing them there would make the planner SKIP a legitimate null on some other nullable column by implying a rule that is not the schema\'s');
+
+  // 1. The projection.
+  // `playerId` / `displayName` — THE REAL PLAYER-RECORD SHAPE. Corrected at the combined release
+  // (2026-09-20, reviewer BLOCK R1): this fixture said `{ id, name }`, which is not the shape
+  // `PLAYER_COLS` reads (js/supabase-projection.js:545 maps legacy `playerId` -> column `id` and
+  // legacy `displayName` -> `display_name`), so the projected row carried `id: undefined` and the
+  // assertions below — which only ask whether two OTHER columns are absent — passed over it. The
+  // same wrong shape in js/app.js's `nameOf` was a live rendering defect; here it was a fixture
+  // quietly proving less than it claimed. Fixed in both places together.
+  const projected = proj.toRows.cfbp_players(
+    [{ playerId: 'p1', displayName: 'Drew', initials: 'DH', active: true, almaMater: '', preferences: {} }],
+    { leagueId: LEAGUE_A, memberIds: ['p1'], now: NOW },
+  );
+  const rows = (projected && projected.league_members) || [];
+  assert(rows.length === 1,
+    `[A-LSV] fixture check — the player projection produced a league_members row (got ${rows.length})`);
+  assert(rows[0].id === 'p1' && rows[0].display_name === 'Drew',
+    `[A-LSV] fixture check — …and it carries the MAPPED id and display name, proving the input shape is the one PLAYER_COLS actually reads (got ${JSON.stringify({ id: rows[0].id, display_name: rows[0].display_name })})`);
+  assert(rows.every((r) => NEW_COLS.every((c) => !Object.prototype.hasOwnProperty.call(r, c))),
+    `[A-LSV] the projection emits NEITHER column — not as a value and not as an explicit null, so neither can enter an INSERT or a PATCH at all (got ${JSON.stringify(Object.keys(rows[0]))})`);
+
+  // 2. The read column list.
+  const src = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8');
+  const selBlock = src.slice(src.indexOf('const SELECT_COLS'), src.indexOf('const SELECT_COLS') + 600);
+  assert(/league_members:/.test(selBlock),
+    '[A-LSV] fixture check — SELECT_COLS.league_members was located in the source');
+  assert(NEW_COLS.every((c) => !selBlock.includes(c)),
+    '[A-LSV] …and it names NEITHER column, so neither is ever in `_base` — a column the adapter cannot see cannot be diffed, and a column that is never diffed can never be sent back as an erase (RG-39)');
+
+  // 3. The grant, in the migration itself.
+  const mig = readFileSync(join(__dirname, 'supabase', 'migrations', '0018_push_selftest.sql'), 'utf8');
+  const grants = mig.match(/grant select[\s\S]{0,200}?on public\.league_members/g) || [];
+  assert(grants.length === 0,
+    `[A-LSV] …and 0018 issues NO new select grant on league_members at all, so even a hand-written .select('last_seen_version') is 42501 for every client role (found ${grants.length})`);
+  assert(/member_app_versions/.test(mig),
+    '[A-LSV] …the commissioner reads them through the DEFINER member_app_versions() RPC instead — the same "a DEFINER RPC, not a widened grant" shape 0007 uses for the contact columns, and for the same reason: a grant cannot be narrowed to one reader');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-OBL] / [A-LATCH] / [A-RETRY] — RG-202: "I keep getting the banner"
+//
+// Drew, 2026-09-20, commissioner, his own devices: "Cross-device sync is OFF on this device.
+// Still unsaved: cfbp_obligations. … I keep getting the banner and manually hit retry and it
+// resolves." Three defects, in the order they fire:
+//
+//  1. [A-OBL]   THE FINALIZE BATCH SENDS THE NEW OBLIGATION TWICE. `planFlush()` builds the
+//               obligations INSERT against the base as it stood BEFORE the run; `finalize_week`
+//               then inserts those same rows itself (`_finalizeArgs`) and folds them into the
+//               base. The already-planned insert still goes, PostgREST answers 23505/409, and the
+//               commissioner gets "The server refused to save cfbp_obligations … Nothing was
+//               saved" about an obligation that saved. Every week, on every finalize.
+//  2. [A-LATCH] THE LATCH OUTLIVES THE THING IT DESCRIBES. `_refusedKeys` is released by exactly
+//               one event — a later SUCCESSFUL write of that same key — although the code's own
+//               comments say "latched until a hydrate lands". After the hydrate the key re-diffs
+//               to nothing and goes CLEAN, so the latch now describes a key that is saved and not
+//               pending; every subsequent flush of any key re-raises the red banner with the
+//               fallback wording `Still unsaved: cfbp_obligations.` (which is exactly the string
+//               Drew quoted — it can only appear once `_lastError` has been cleared by a
+//               successful hydrate). The Retry button only re-hydrates, so it hides the banner
+//               without clearing the latch, and the banner comes straight back.
+//  3. [A-RETRY] A HICCUP IS NOT A BREAKAGE. Every answered-but-transient write failure — 408/425/
+//               429/5xx, a 401 on a token that is about to refresh, a 23505 a re-diff would
+//               dissolve — went to the red banner on the first attempt with no retry at all.
+//
+// AD-59 IS NOT WIDENED BY ANY OF THIS. `_isWriteNetworkFailure()` is unchanged: a 504 is still not
+// "the network did not answer", still never reaches OFFLINE-READONLY and still never serves a
+// snapshot. What changes is only WHEN an answered failure escalates to the red banner.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Swap the client for one that fails every write with a given shape, keeping the same store. */
+function failingClient(failWrites, failWriteStatus = 0) {
+  return makeClient(ST, SESSIONS.commissioner, failWriteStatus
+    ? { failWrites, failWriteStatus }
+    : { failWrites });
+}
+
+await section('\n[A-OBL] a finalize never sends the new obligation twice (RG-202 root cause)…', async () => {
+  await hydrated({ who: 'commissioner' });
+  const g = sb.get('cfbp_games').map((x) => ({ ...x }));
+  g.find((x) => x.gameId === 'g3').atsWinner = 'Iowa';
+  sb.set('cfbp_games', g);
+  const wk = sb.get('cfbp_weeks').map((x) => ({ ...x }));
+  wk.find((x) => x.weekId === 'w2').status = 'final';
+  sb.set('cfbp_weeks', wk);
+  sb.set('cfbp_results', [...sb.get('cfbp_results'), {
+    resultId: 'wr_w2_p2', weekId: 'w2', playerId: 'p2', displayName: 'Kevin',
+    correctPicks: 0, incorrectPicks: 1, correctCount: 0, incorrectCount: 1,
+    noDecisions: 0, pending: 0, tiebreakerGuess: null, tiebreakerDelta: null,
+    rank: 2, isWinner: false, isLoser: true, wonByTiebreaker: false,
+  }]);
+  // The obligation `reconcileWeeklyObligation()` creates in the SAME synchronous tick as the
+  // status change (js/app.js:15303-15304 inside finalizeWeek) — the real shape, not a contrived one.
+  sb.set('cfbp_obligations', [...sb.get('cfbp_obligations'), {
+    obligationId: 'ob2', type: 'weekly', weekId: 'w2', payerPlayerId: 'p2', recipientPlayerId: 'p1',
+    amountOrPrize: 'beer', status: 'unpaid', createdAt: new Date(NOW).toISOString(), paidAt: null,
+    needsReview: false, reviewNote: null, voided: false, voidedAt: null, voidReason: null,
+    mergedInto: null, mergedFrom: [],
+  }]);
+  const mark = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+
+  assert(ST.obligations.filter((o) => o.id === 'ob2').length === 1,
+    `[A-OBL] the obligation is on the server exactly once (${ST.obligations.filter((o) => o.id === 'ob2').length})`);
+  assert(CLIENT._calls.inserts.filter((i) => i.table === 'obligations').length === 0,
+    `[A-OBL] and NO obligations INSERT statement was issued at all — finalize_week already carried it `
+    + `(${JSON.stringify(CLIENT._calls.inserts.filter((i) => i.table === 'obligations'))})`);
+  assert(!sb._refusedKeysForTest().includes('cfbp_obligations'),
+    `[A-OBL] …so cfbp_obligations is NOT latched refused (${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(!bannersSince(mark).some((t) => /Nothing was saved|duplicate key/i.test(t)),
+    `[A-OBL] …and the commissioner sees no "Nothing was saved" banner for a write that saved (${JSON.stringify(bannersSince(mark))})`);
+  assert(!sb._dirtyKeysForTest().includes('cfbp_obligations'),
+    `[A-OBL] …and the key ends CLEAN (${JSON.stringify(sb._dirtyKeysForTest())})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-NARROW-DIVERGE] — SECURITY F1 on the RG-202 gate (MEDIUM, 2026-09-20)
+//
+// `_narrowInsertAgainstBase()` dropped a planned INSERT row whenever the base merely held the SAME
+// ID, and the call site then counted the key as SENT. For the finalize case that is exactly right —
+// the base row IS the row we were about to send. But the base can move mid-run for reasons that
+// bring DIFFERENT content with them (a Realtime echo of another device's row, a hydrate that lands
+// behind an in-flight write), and in that case the dropped row is the one carrying THIS device's
+// value. Marked clean, never sent, silently replaced at the next hydrate: a loud-fail violation of
+// exactly the kind AD-06 exists to stop, introduced by the fix for a loud-fail violation.
+//
+// The staging is [A-FLUSH6]'s, because it is the real mechanism rather than a poke at internals:
+// `delayWrites` parks the first operation of a two-operation plan, another device's row lands on
+// the server, and a hydrate replaces `_baseRows` before the second operation is sent.
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-NARROW-DIVERGE] an INSERT is narrowed away only when the base row is what we were about to send…', async () => {
+  // ── (a) DIVERGENT content: the row must NOT be silently abandoned ──────────────────────────
+  await hydrated({ who: 'commissioner' });
+  const good = CLIENT;
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  CLIENT = makeClient(ST, SESSIONS.commissioner, { delayWrites: () => gate });
+  // Two operations, in a known order: the games patch is `_planOrder` 0, the guesses INSERT is 3.
+  const games = sb.get('cfbp_games').map((x) => ({ ...x }));
+  games.find((x) => x.gameId === 'g1').homeScore = 14;
+  sb.set('cfbp_games', games);
+  epPut('w1__p1', 21);                                   // a NEW row -> an INSERT
+  assert(sb.planFlush().plan.some((o) => o.op === 'insert' && o.key === 'cfbp_extra_point_guesses'),
+    '[A-NARROW-DIVERGE] fixture — the guesses operation really is an INSERT');
+  const p = sb.flush();                                  // parked on the games patch
+  // Another device inserts the SAME id with a DIFFERENT value, and a hydrate lands behind us.
+  ST.extra_point_guesses.push(row({ league_id: LEAGUE_A, id: 'ep_w1__p1', week_id: 'w1', member_id: 'p1', guess: 99, updated_at: new Date(NOW).toISOString() }));
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const mark = bannerSeen.length;
+  release();
+  await captureConsoleAsync(() => p);
+
+  assert(Number((sb.get('cfbp_extra_point_guesses') || {})['w1__p1']) === 21,
+    `[A-NARROW-DIVERGE] fixture — the rebase kept this device's own value in the mirror (${JSON.stringify((sb.get('cfbp_extra_point_guesses') || {})['w1__p1'])})`);
+  assert(!CLIENT._calls.inserts.some((i) => i.table === 'extra_point_guesses'),
+    `[A-NARROW-DIVERGE] the doomed INSERT is still not sent — re-sending it would be a 23505 (${JSON.stringify(CLIENT._calls.inserts.map((i) => i.table))})`);
+  // THE FINDING: it must not be marked clean with nothing sent.
+  //
+  // NOTHING BELOW CALLS flush(). The run has to have ARMED the follow-up itself
+  // (`_flushNeedsFollowUp`), and these ticks only let that armed run settle — an earlier draft of
+  // this section flushed by hand here, which made the arming invisible and let a mutant that
+  // removed it pass. If no follow-up was armed, the value simply never goes and every assertion
+  // below fails.
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  await new Promise((r) => setImmediate(r));
+  const serverRow = ST.extra_point_guesses.find((r) => r.id === 'ep_w1__p1');
+  assert(!!serverRow && Number(serverRow.guess) === 21,
+    `[A-NARROW-DIVERGE] the device's value REACHES THE SERVER, as a PATCH against the advanced base (${serverRow && serverRow.guess})`);
+  assert(ST.extra_point_guesses.filter((r) => r.id === 'ep_w1__p1').length === 1,
+    '[A-NARROW-DIVERGE] …exactly once, with no duplicate row');
+  assert(!sb._dirtyKeysForTest().includes('cfbp_extra_point_guesses'),
+    `[A-NARROW-DIVERGE] …and only THEN is the key clean (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!bannersSince(mark).some((t) => /Nothing was saved/.test(t)),
+    `[A-NARROW-DIVERGE] …with no red banner at any point: nothing was refused (${JSON.stringify(bannersSince(mark))})`);
+  CLIENT = good;
+
+  // ── (b) EQUAL content: the finalize case still narrows to nothing ──────────────────────────
+  // The same staging, except the row another device lands is byte-identical to the one we planned.
+  // There is genuinely nothing left to send, so the key is clean and no follow-up is armed —
+  // without this half, the fix above could have been "never narrow", which re-opens RG-202.
+  await hydrated({ who: 'commissioner' });
+  let release2;
+  const gate2 = new Promise((r) => { release2 = r; });
+  CLIENT = makeClient(ST, SESSIONS.commissioner, { delayWrites: () => gate2 });
+  const games2 = sb.get('cfbp_games').map((x) => ({ ...x }));
+  games2.find((x) => x.gameId === 'g1').homeScore = 17;
+  sb.set('cfbp_games', games2);
+  epPut('w1__p2', 44);
+  const q = sb.flush();
+  ST.extra_point_guesses.push(row({ league_id: LEAGUE_A, id: 'ep_w1__p2', week_id: 'w1', member_id: 'p2', guess: 44, updated_at: new Date(NOW).toISOString() }));
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const mark2 = bannerSeen.length;
+  release2();
+  await captureConsoleAsync(() => q);
+  assert(!CLIENT._calls.inserts.some((i) => i.table === 'extra_point_guesses'),
+    '[A-NARROW-DIVERGE] (b) an identical row is still narrowed out of the statement');
+  assert(!sb._dirtyKeysForTest().includes('cfbp_extra_point_guesses'),
+    `[A-NARROW-DIVERGE] (b) …and the key IS clean, because there is nothing left to send (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!bannersSince(mark2).some((t) => /Nothing was saved/.test(t)),
+    `[A-NARROW-DIVERGE] (b) …and nothing is reported to the player (${JSON.stringify(bannersSince(mark2))})`);
+});
+
+await section('\n[A-LATCH] the refusal latch may not outlive the thing it describes…', async () => {
+  // A genuine refusal, latched. Then the condition goes away (the row is on the server, so the
+  // re-diff after a hydrate plans nothing) and the key goes clean. The banner must go with it.
+  await hydrated({ who: 'commissioner' });
+  const good = CLIENT;
+  tbPut('w1__p1', 77);
+  CLIENT = failingClient({ code: '42501', message: 'permission denied for table tiebreaker_guesses' });
+  await captureConsoleAsync(() => sb.flush());
+  assert(sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    '[A-LATCH] fixture — a 42501 latches the key (if it did not, the rest of this section proves nothing)');
+
+  // The server now holds the value anyway (another device wrote it), so the hydrate rebases the
+  // key and the next flush has nothing to send for it.
+  ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1').guess = 77;
+  CLIENT = good;
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  const mark = bannerSeen.length;
+  statuses.length = 0;
+  const res = await captureConsoleAsync(() => sb.flush());
+  assert(!sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    `[A-LATCH] fixture — the key is no longer dirty after the rebase (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!sb._refusedKeysForTest().length,
+    `[A-LATCH] …so the latch is RELEASED — a key with nothing left to save is not "still unsaved" (${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(!bannersSince(mark).some((t) => /Still unsaved/.test(t)),
+    `[A-LATCH] …and no "Still unsaved:" banner is raised for it (${JSON.stringify(bannersSince(mark))})`);
+  assert(statuses.some(([s]) => s === 'synced') && !statuses.some(([s]) => s === 'refused'),
+    `[A-LATCH] …the run reports SYNCED, so app.js takes the red banner down with no tap (${JSON.stringify(statuses.map(([s]) => s))}, ${JSON.stringify(res)})`);
+
+  // THE OTHER HALF, and it is the one that keeps AD-06 loud: a key that IS still dirty keeps its
+  // latch, so reviewer F6 ('synced' may not be emitted while a refused key is still unsaved) holds.
+  await hydrated({ who: 'commissioner' });
+  const good2 = CLIENT;
+  tbPut('w1__p1', 78);
+  CLIENT = failingClient({ code: '42501', message: 'permission denied for table tiebreaker_guesses' });
+  await captureConsoleAsync(() => sb.flush());
+  CLIENT = good2;
+  statuses.length = 0;
+  sb.set('cfbp_reactions', { ...sb.get('cfbp_reactions'), w9: { g9: { hot: ['p2'] } } });
+  await captureConsoleAsync(() => sb.flush());
+  assert(sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    '[A-LATCH] a refused key that is STILL DIRTY keeps its latch (the release is "nothing left to save", never "time passed")');
+  assert(!statuses.some(([s]) => s === 'synced'),
+    `[A-LATCH] …and no 'synced' is emitted while it is unsaved (reviewer F6 intact) (${JSON.stringify(statuses.map(([s]) => s))})`);
+});
+
+await section('\n[A-RETRY] a transient write failure is retried automatically, bounded, before any red banner…', async () => {
+  // ── 1. FAILS, THEN SUCCEEDS: no red banner, one successful write, no duplicate ──────────────
+  const timers = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers });
+  const good = CLIENT;
+  tbPut('w1__p1', 81);
+  CLIENT = failingClient({ code: '', message: 'Service Unavailable' }, 503);
+  let mark = bannerSeen.length;
+  statuses.length = 0;
+  const first = await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(mark).length,
+    `[A-RETRY1] a 503 raises NO banner at all on the first attempt (${JSON.stringify(bannersSince(mark))})`);
+  assert(!sb._refusedKeysForTest().length,
+    `[A-RETRY1] …and latches nothing (${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    `[A-RETRY1] …the write stays QUEUED and the key stays named as unsaved (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!statuses.some(([s]) => s === 'refused'),
+    `[A-RETRY1] …no 'refused' status (${JSON.stringify(statuses.map(([s]) => s))})`);
+  assert(!statuses.some(([s]) => s === 'offline'),
+    `[A-RETRY1] …and never 'offline' either: the server ANSWERED, and AD-59's rule that an answer is not an outage is untouched (${JSON.stringify(statuses.map(([s]) => s))})`);
+  assert(timers.delays().length === 1 && timers.delays()[0] === 1000,
+    `[A-RETRY1] …exactly one retry is scheduled, at ~1s (${JSON.stringify(timers.delays())})`);
+  assert(first && Array.isArray(first.retrying) && first.retrying.includes('cfbp_tiebreaker_guesses'),
+    `[A-RETRY1] …and the run names what it is retrying (${JSON.stringify(first)})`);
+
+  CLIENT = good;
+  const before = CLIENT._calls.updates.length;
+  await timers.runNext();
+  assert(CLIENT._calls.updates.length === before + 1,
+    `[A-RETRY1] the retry sends the write exactly ONCE (${CLIENT._calls.updates.length - before})`);
+  assert(ST.tiebreaker_guesses.filter((x) => x.id === 'tb_w1__p1').length === 1
+    && Number(ST.tiebreaker_guesses.find((x) => x.id === 'tb_w1__p1').guess) === 81,
+    '[A-RETRY1] …the value lands, with no duplicate row');
+  assert(!sb._dirtyKeysForTest().length && !sb._refusedKeysForTest().length,
+    `[A-RETRY1] …the key ends CLEAN and unlatched (${JSON.stringify(sb._dirtyKeysForTest())}, ${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(statuses.some(([s]) => s === 'synced'),
+    `[A-RETRY1] …and the state clears itself with no tap (${JSON.stringify(statuses.map(([s]) => s))})`);
+  assert(timers.count() === 0, '[A-RETRY1] …and no further retry is left armed');
+
+  // ── 2. PERSISTENT FAILURE: red only after the bounded schedule, key still listed ────────────
+  const t2 = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: t2 });
+  tbPut('w1__p1', 82);
+  CLIENT = failingClient({ code: '', message: 'Service Unavailable' }, 503);
+  mark = bannerSeen.length;
+  statuses.length = 0;
+  await captureConsoleAsync(() => sb.flush());
+  const schedule = [];
+  for (let i = 0; i < 3; i++) {
+    schedule.push(t2.delays()[0]);
+    await captureConsoleAsync(() => t2.runNext());
+  }
+  assert(JSON.stringify(schedule) === JSON.stringify([1000, 3000, 8000]),
+    `[A-RETRY2] the backoff is bounded and ascending — 1s, 3s, 8s, then stop (${JSON.stringify(schedule)})`);
+  assert(t2.count() === 0, `[A-RETRY2] …and nothing is left armed after the last one (${t2.count()})`);
+  assert(bannersSince(mark).some((t) => /Nothing was saved/.test(t)),
+    `[A-RETRY2] …and only THEN does the red banner go up (${JSON.stringify(bannersSince(mark))})`);
+  assert(sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    '[A-RETRY2] …with the key latched');
+  assert(sb._dirtyKeysForTest().includes('cfbp_tiebreaker_guesses'),
+    `[A-RETRY2] …and STILL listed as unsaved: nothing was dropped and nothing was marked clean (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  assert(!statuses.some(([s]) => s === 'offline'),
+    `[A-RETRY2] …and the player is never told "offline" about a device that is demonstrably on the network (${JSON.stringify(statuses.map(([s]) => s))})`);
+
+  // ── 3. A NON-TRANSIENT REFUSAL IS RED IMMEDIATELY, WITH NO RETRIES ─────────────────────────
+  for (const [label, shape, status] of [
+    ['42501 — an RLS/privilege refusal', { code: '42501', message: 'permission denied for table tiebreaker_guesses' }, 0],
+    ['a 403 from the edge', { code: '', message: 'Forbidden' }, 403],
+    ['a 400 PostgREST rejects outright', { code: 'PGRST102', message: 'invalid request body' }, 400],
+    ['23502 — a not-null violation, which no re-diff dissolves', { code: '23502', message: 'null value in column "guess" violates not-null constraint' }, 0],
+  ]) {
+    const t3 = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: t3 });
+    tbPut('w1__p1', 83);
+    CLIENT = failingClient(shape, status);
+    const m = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    assert(t3.count() === 0, `[A-RETRY3] ${label}: NO retry is scheduled (${JSON.stringify(t3.delays())})`);
+    assert(bannersSince(m).some((t) => /Nothing was saved/.test(t)),
+      `[A-RETRY3] ${label}: …the red banner goes up immediately (${JSON.stringify(bannersSince(m))})`);
+    assert(sb._refusedKeysForTest().includes('cfbp_tiebreaker_guesses'),
+      `[A-RETRY3] ${label}: …and the key is latched`);
+  }
+
+  // ── 4. IDENTITY CHANGE MID-BACKOFF: the retry is ABANDONED, never re-addressed ──────────────
+  const t4 = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: t4 });
+  tbPut('w1__p1', 84);
+  CLIENT = failingClient({ code: '', message: 'Service Unavailable' }, 503);
+  await captureConsoleAsync(() => sb.flush());
+  assert(t4.count() === 1, '[A-RETRY4] fixture — a retry is armed');
+  CLIENT = good;
+  const sentBefore = CLIENT._calls.updates.length;
+  EPOCH = 99;                                   // the device is now a different identity
+  await captureConsoleAsync(() => t4.runNext());
+  assert(CLIENT._calls.updates.length === sentBefore,
+    `[A-RETRY4] a retry whose identity moved sends NOTHING (${CLIENT._calls.updates.length - sentBefore})`);
+  // THE RETRY'S OWN GATE, not the flush's. `_runFlush()` has an abandon check of its own, so an
+  // assertion that only reads "nothing was sent" or "something said ABANDONED" passes even with
+  // the retry's gate deleted — the mutation proof found exactly that. These two are specific to
+  // `_runRetry()`: its own wording, and its own reset of the schedule (a run that abandoned inside
+  // `_runFlush()` leaves the attempt counter where it was).
+  assert(said(/automatic write retry was ABANDONED/),
+    `[A-RETRY4] …and the RETRY says so in its own words, before it ever reaches a flush (${JSON.stringify(_captured.slice(-3))})`);
+  assert(sb._retryStateForTest().attempt === 0,
+    `[A-RETRY4] …and the schedule is reset rather than carried across an identity (${JSON.stringify(sb._retryStateForTest())})`);
+  assert(t4.count() === 0, '[A-RETRY4] …and does not re-arm itself');
+
+  // ── 5. TWO KEYS FAILING: ONE retry in flight, not one per key ───────────────────────────────
+  const t5 = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: t5 });
+  tbPut('w1__p1', 85);
+  epPut('w1__p1', 3);
+  CLIENT = failingClient({ code: '', message: 'Service Unavailable' }, 503);
+  await captureConsoleAsync(() => sb.flush());
+  assert(t5.count() === 1,
+    `[A-RETRY5] two failing keys arm exactly ONE retry, not one per key — six phones must not storm (${JSON.stringify(t5.delays())})`);
+  assert(sb._dirtyKeysForTest().length === 2,
+    `[A-RETRY5] …and both keys stay queued (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  CLIENT = good;
+  await captureConsoleAsync(() => t5.runNext());
+  assert(!sb._dirtyKeysForTest().length,
+    `[A-RETRY5] …and one retry run carries both (${JSON.stringify(sb._dirtyKeysForTest())})`);
+
+  // ── 6. AN AUTH-CLASS FAILURE REFRESHES THE SESSION FIRST ────────────────────────────────────
+  const t6 = makeFakeTimers();
+  let refreshes = 0;
+  await hydrated({ who: 'commissioner', timers: t6, refreshSession: async () => { refreshes++; CLIENT = ST._good; } });
+  ST._good = CLIENT;
+  tbPut('w1__p1', 86);
+  CLIENT = failingClient({ code: 'PGRST301', message: 'JWT expired' });
+  const m6 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(m6).length,
+    `[A-RETRY6] a JWT-expired write raises no banner on the first attempt (${JSON.stringify(bannersSince(m6))})`);
+  assert(t6.count() === 1, '[A-RETRY6] …and arms a retry');
+  await captureConsoleAsync(() => t6.runNext());
+  assert(refreshes === 1,
+    `[A-RETRY6] …the session is refreshed exactly once BEFORE the retry, through the host's own single-flight path (${refreshes})`);
+  assert(!sb._dirtyKeysForTest().length && !sb._refusedKeysForTest().length,
+    `[A-RETRY6] …and the write then lands (${JSON.stringify(sb._dirtyKeysForTest())}, ${JSON.stringify(sb._refusedKeysForTest())})`);
+
+  // ── 7. A CONFLICT RE-DIFFS AGAINST A FRESH BASE INSTEAD OF GOING RED ───────────────────────
+  // A 23505 means the server ALREADY HOLDS the row. Re-sending the same insert is guaranteed to
+  // fail the same way; the honest retry is to re-read and diff again, which turns the insert into
+  // nothing (or into a patch). This is the shape SECURITY F1 warned a blind 5xx retry would
+  // produce, and it is why the 5xx retry above is safe.
+  const t7 = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: t7 });
+  const good7 = CLIENT;
+  // Make the write an INSERT: the row is absent from the base this hydrate read. This is exactly
+  // the shape RG-202's finalize duplicate produced live — a row the client believes is new and the
+  // server already holds.
+  ST.tiebreaker_guesses = ST.tiebreaker_guesses.filter((x) => x.id !== 'tb_w1__p1');
+  await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+  tbPut('w1__p1', 91);
+  assert(sb.planFlush().plan.some((o) => o.op === 'insert' && o.key === 'cfbp_tiebreaker_guesses'),
+    '[A-RETRY7] fixture — the planned operation really is an INSERT (a patch would prove nothing about 23505)');
+  CLIENT = failingClient({ code: '23505', message: 'duplicate key value violates unique constraint "tiebreaker_guesses_pkey"' }, 409);
+  const m7 = bannerSeen.length;
+  const selectsBefore = good7._calls.selects.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(!bannersSince(m7).length,
+    `[A-RETRY7] a 23505 raises no banner on the first attempt (${JSON.stringify(bannersSince(m7))})`);
+  assert(t7.count() === 1, '[A-RETRY7] …and arms a retry');
+  // The row IS on the server, which is what the conflict was telling us.
+  ST.tiebreaker_guesses.push(row({ league_id: LEAGUE_A, id: 'tb_w1__p1', week_id: 'w1', member_id: 'p1', guess: 91, updated_at: new Date(NOW).toISOString() }));
+  CLIENT = good7;
+  await captureConsoleAsync(() => t7.runNext());
+  assert(good7._calls.selects.length > selectsBefore,
+    '[A-RETRY7] …the retry RE-READS first: a conflict is re-diffed against a fresh base, never blindly re-sent');
+  assert(good7._calls.inserts.filter((i) => i.table === 'tiebreaker_guesses').length === 0,
+    `[A-RETRY7] …so no duplicate INSERT is issued (${JSON.stringify(good7._calls.inserts.filter((i) => i.table === 'tiebreaker_guesses'))})`);
+  assert(!sb._refusedKeysForTest().length && !sb._dirtyKeysForTest().length,
+    `[A-RETRY7] …and nothing is left refused or pending (${JSON.stringify(sb._refusedKeysForTest())}, ${JSON.stringify(sb._dirtyKeysForTest())})`);
+
+  // ── 9. F2 — A WEEK-STATUS RPC THAT COMMITTED AND THEN LOST ITS RESPONSE ─────────────────────
+  //
+  // `finalize_week` raises `bad_transition` when the week is not live (0003_functions.sql:386), and
+  // PostgREST hands that back as P0001 with HTTP 400 — class `hard`, so the commissioner got
+  // "The server refused to save cfbp_weeks: bad_transition. Nothing was saved." about a week that
+  // finalized perfectly. It is the 23505 of the RPC path: the retry of a committed write, judged
+  // against the state that write itself produced. It is classified `conflict`, which RE-READS —
+  // and the re-read is what distinguishes the two outcomes below, neither of which is assumed.
+  {
+    // (a) IT DID COMMIT. The server already holds 'final'; the rebase dissolves the operation.
+    const t9 = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: t9 });
+    const wk9 = sb.get('cfbp_weeks').map((x) => ({ ...x }));
+    wk9.find((x) => x.weekId === 'w2').status = 'final';
+    sb.set('cfbp_weeks', wk9);
+    ST.weeks.find((w) => w.id === 'w2').status = 'final';     // the lost response: it committed
+    const m9 = bannerSeen.length;
+    statuses.length = 0;
+    await captureConsoleAsync(() => sb.flush());
+    assert(!bannersSince(m9).some((t) => /Nothing was saved/.test(t)),
+      `[A-RETRY9] (a) a bad_transition on a finalize raises no banner on the first attempt (${JSON.stringify(bannersSince(m9))})`);
+    assert(t9.count() === 1, `[A-RETRY9] (a) …it arms a re-read instead (${JSON.stringify(t9.delays())})`);
+    await captureConsoleAsync(() => t9.runNext());
+    assert(!bannersSince(m9).some((t) => /Nothing was saved/.test(t)),
+      `[A-RETRY9] (a) …and the rebase finds the week already final, so the operation vanishes and nothing is reported (${JSON.stringify(bannersSince(m9))})`);
+    assert(!sb._refusedKeysForTest().length && !sb._dirtyKeysForTest().includes('cfbp_weeks'),
+      `[A-RETRY9] (a) …the run ends CLEAN (${JSON.stringify(sb._refusedKeysForTest())}, ${JSON.stringify(sb._dirtyKeysForTest())})`);
+  }
+  {
+    // (b) IT DID NOT. A genuine bad transition is NEVER silenced by the re-read.
+    const t10 = makeFakeTimers();
+    await hydrated({ who: 'commissioner', timers: t10 });
+    const wk10 = sb.get('cfbp_weeks').map((x) => ({ ...x }));
+    wk10.find((x) => x.weekId === 'w2').status = 'final';
+    sb.set('cfbp_weeks', wk10);
+    ST.weeks.find((w) => w.id === 'w2').status = 'locked';    // another device moved it back
+    const m10 = bannerSeen.length;
+    await captureConsoleAsync(() => sb.flush());
+    let guard = 0;
+    while (t10.count() && guard++ < 6) await captureConsoleAsync(() => t10.runNext());
+    assert(bannersSince(m10).some((t) => /bad_transition|Nothing was saved|Refusing to finalize/i.test(t)),
+      `[A-RETRY9] (b) a GENUINE bad transition still ends RED — the re-read is a check, not a silencer (${JSON.stringify(bannersSince(m10))})`);
+    assert(sb._dirtyKeysForTest().includes('cfbp_weeks'),
+      `[A-RETRY9] (b) …with the change still queued and still named as unsaved (${JSON.stringify(sb._dirtyKeysForTest())})`);
+  }
+
+  // ── 8. THE JITTER IS REAL AND BOUNDED ───────────────────────────────────────────────────────
+  const t8 = makeFakeTimers();
+  await hydrated({ who: 'commissioner', timers: t8, random: () => 1 });
+  tbPut('w1__p1', 88);
+  CLIENT = failingClient({ code: '', message: 'Service Unavailable' }, 503);
+  await captureConsoleAsync(() => sb.flush());
+  assert(t8.delays()[0] > 1000 && t8.delays()[0] <= 1400,
+    `[A-RETRY8] the delay carries a bounded jitter term, so six phones do not re-send in lockstep (${JSON.stringify(t8.delays())})`);
 });
 
 _realLog(`\n${pass} passed, ${fail} failed, ${SKIPPED.length} skipped.`);

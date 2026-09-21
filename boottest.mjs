@@ -3749,10 +3749,31 @@ console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'
   appMod26._onSupabaseDataStatusForTest('synced', { state: 'ACTIVE', pushed: 2, pendingWrites: 0 });
   assert(!offline26(), '[26] …and it is cleared the moment the held writes go out');
 
+  // ══ RG-202 gate, reviewer note 3 (2026-09-20) — 'syncing' MUST NOT CLEAR THE AMBER BANNER ══
+  //
+  // This assertion used to read `!offline26()` — "a retry attempt takes it down while the attempt
+  // is in flight". That was defensible while 'syncing' meant only "a flush has just started".
+  // RG-202's bounded write retry emits 'syncing' AGAIN for every backoff attempt, so the amber
+  // held-offline banner went down and stayed down for the whole schedule while the player's picks
+  // were still queued — the banner disappearing is indistinguishable, on screen, from the queue
+  // having drained. Only evidence that the queue is EMPTY may take it down, and the only status
+  // that carries that evidence is 'synced' (asserted above) or a 'syncing' that says so.
+  appMod26._onSupabaseDataStatusForTest('offline', HELD_DETAIL);
+  assert(!!offline26(), '[26] fixture — the amber banner is up before the retry attempt');
+  appMod26._onSupabaseDataStatusForTest('syncing', { state: 'ACTIVE', pendingWrites: 2 });
+  assert(!!offline26(),
+    `[26] a retry attempt does NOT take the amber banner down while its keys are still queued (${offline26() ? 'up' : 'gone'})`);
+  appMod26._onSupabaseDataStatusForTest('syncing',
+    { state: 'ACTIVE', retrying: ['cfbp_picks'], attempt: 2, maxAttempts: 3, pendingWrites: 1 });
+  assert(!!offline26(),
+    `[26] …and neither does the RG-202 retry status, which names what it is still holding (${offline26() ? 'up' : 'gone'})`);
+  // …but a 'syncing' that reports an EMPTY queue may: that is a hydrate starting on a device with
+  // nothing pending, and leaving the banner up would be the opposite error.
+  appMod26._onSupabaseDataStatusForTest('syncing', { state: 'ACTIVE', pendingWrites: 0 });
+  assert(!offline26(), '[26] …while a syncing status reporting an EMPTY queue does take it down');
+
   // A RETRY THAT FAILS AGAIN RE-RAISES IT, with the new count — the adapter re-emits on every
   // failed flush, and a renderer that only showed it once would go quiet on the second failure.
-  appMod26._onSupabaseDataStatusForTest('syncing', { state: 'ACTIVE', pendingWrites: 2 });
-  assert(!offline26(), '[26] a retry attempt takes it down while the attempt is in flight');
   appMod26._onSupabaseDataStatusForTest('offline', { ...HELD_DETAIL, heldOffline: ['cfbp_picks'], pendingWrites: 1,
     banner: 'Couldn’t reach the server. 1 change still to save — they’ll go out when you’re back on the network.' });
   assert(!!offline26() && /1 change still to save/.test(offline26().innerHTML),

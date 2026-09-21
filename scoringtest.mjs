@@ -1132,6 +1132,113 @@ console.log('\n[25] FEAT-5 / DI-202j — wagers never influence pickem scores…
   localStorage.removeItem('cfbp_wager_resurfaced');
 }
 
+// ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
+console.log('\n[26] PHASE 5 — the Edge Function stand-down gate: byte-identical when off/absent, and NEVER a double dispatch when on…');
+{
+  // `scribeAutonomousRemote`/`scribeClassifyRemote` now branch on
+  // `isServerJobEnabled('scribeAutonomous'|'scribeClassify')` BEFORE falling through to the legacy
+  // `remoteTransport` relay this whole file already drives. The mutation this canary exists to
+  // catch is Phase 1's own: a switch flipped on while the OLD path is ALSO still live sends the
+  // same event twice (there, two pushes; here, two paid model calls / two chat posts).
+  const auth26 = await import('./js/auth.js');
+  const notifications26 = await import('./js/notifications.js');
+
+  function setServerJob26(job, value) {
+    const s = storage.getSettings();
+    storage.saveSettings({ ...s, serverJobs: { ...(s.serverJobs || {}), [job]: value } });
+  }
+  // `resetAll()` (this file's shared fixture reset) does not touch `serverJobs` — nothing else in
+  // this file sets it, so it was never a gap until this section. Cleared explicitly, HERE, rather
+  // than added to the shared reset: a stray `serverJobs.scribeAutonomous:true` surviving from one
+  // 26-* block into the next would make a LATER block's "switch is off" assumption silently false.
+  function clearServerJobs26() {
+    const s = storage.getSettings();
+    storage.saveSettings({ ...s, serverJobs: {} });
+  }
+  clearServerJobs26();
+
+  // ── OFF / ABSENT — byte-identical to the pre-Phase-5 path: the legacy relay fires, exactly once,
+  //    and nothing about its call shape changed. ──────────────────────────────────────────────────
+  {
+    resetAll();
+    clearServerJobs26();
+    const calls = wireStub({ autonomousResult: { ok: true, posted: true, responseMessageId: 'x' } });
+    const r = await scribeAgent.scribeAutonomousRemote({ trigger: 'streak', subject: 's1', evidence: { gameTag: 'g1' }, playerId: 'p1' });
+    assert(calls.autonomous.length === 1, `26-1: switch ABSENT ⇒ the legacy relay fires exactly once (got ${calls.autonomous.length})`);
+    assert(r.posted === true, '26-2: …and the result is the legacy relay\'s own, unwrapped');
+    assert(notifications26.isServerJobEnabled('scribeAutonomous') === false, '26-3: fixture check — the switch really is absent for this run');
+  }
+  {
+    resetAll();
+    clearServerJobs26();
+    setServerJob26('scribeAutonomous', false);
+    const calls = wireStub();
+    await scribeAgent.scribeAutonomousRemote({ trigger: 'streak', subject: 's1', evidence: {}, playerId: 'p1' });
+    assert(calls.autonomous.length === 1, `26-4: switch explicitly FALSE ⇒ same as absent — the legacy relay fires exactly once (got ${calls.autonomous.length})`);
+  }
+  {
+    resetAll();
+    clearServerJobs26();
+    const calls = wireStub({ classifyResult: { ok: true, points: 35 } });
+    const r = await scribeAgent.scribeClassifyRemote({ messageId: 'm1' });
+    assert(calls.classify.length === 1 && r.points === 35, `26-5: scribeClassifyRemote — same shape (got ${calls.classify.length} calls, points ${r.points})`);
+  }
+
+  // ── ON — the legacy relay is NEVER invoked, even once. In this Node harness `getSupabaseClient()`
+  //    returns null (no `window.supabase`), so the Edge path itself resolves to a clean
+  //    `{ok:false, error:'no_client'}` — the assertion that matters is not what the Edge path
+  //    returns here, it is that the OLD path's call counter stays at ZERO. A double-dispatch bug
+  //    would show up as `calls.autonomous.length === 1` even with the switch on. ────────────────
+  {
+    resetAll();
+    clearServerJobs26();
+    setServerJob26('scribeAutonomous', true);
+    auth26.setActiveLeagueId('league-26-fixture');
+    const calls = wireStub({ autonomousResult: { ok: true, posted: true } });
+    const r = await scribeAgent.scribeAutonomousRemote({ trigger: 'streak', subject: 's1', evidence: { gameTag: 'g1' }, playerId: 'p1' });
+    assert(calls.autonomous.length === 0, `26-6: switch ON ⇒ the LEGACY relay is NEVER called (got ${calls.autonomous.length} calls) — this is the double-dispatch canary`);
+    assert(r.ok === false, `26-7: fixture check — the Edge path itself was actually attempted (no real Supabase client in this harness, so it reports no_client rather than silently succeeding) (got ${JSON.stringify(r)})`);
+    auth26.setActiveLeagueId(null);
+  }
+  {
+    resetAll();
+    clearServerJobs26();
+    setServerJob26('scribeClassify', true);
+    auth26.setActiveLeagueId('league-26-fixture');
+    const calls = wireStub({ classifyResult: { ok: true, points: 35 } });
+    await scribeAgent.scribeClassifyRemote({ messageId: 'm1' });
+    assert(calls.classify.length === 0, `26-8: switch ON ⇒ the LEGACY classify relay is NEVER called (got ${calls.classify.length} calls)`);
+    auth26.setActiveLeagueId(null);
+  }
+  {
+    // No active league at all ⇒ transport_unwired, not a guess at which league to ask, and STILL
+    // never falls through to the legacy relay (a fallback there would be the exact silent-second-
+    // transport shape AD-02/AD-16 exist to prevent).
+    resetAll();
+    clearServerJobs26();
+    setServerJob26('scribeAutonomous', true);
+    auth26.setActiveLeagueId(null);
+    const calls = wireStub();
+    const r = await scribeAgent.scribeAutonomousRemote({ trigger: 'streak', subject: 's1', evidence: {}, playerId: 'p1' });
+    assert(r.skipped === 'transport_unwired' && calls.autonomous.length === 0,
+      `26-9: switch ON with no active league ⇒ transport_unwired, and the legacy relay is STILL never touched (got ${JSON.stringify(r)}, ${calls.autonomous.length} legacy calls)`);
+  }
+
+  // ── isScribeAutonomousReady() reflects BOTH readiness paths. ────────────────────────────────────
+  {
+    resetAll();
+    clearServerJobs26();
+    scribeAgent.wireScribeRemoteTransport({ autonomous: null, classify: null });
+    assert(scribeAgent.isScribeAutonomousReady() === false, '26-10: neither the switch nor the legacy transport is available ⇒ not ready');
+    setServerJob26('scribeAutonomous', true);
+    assert(scribeAgent.isScribeAutonomousReady() === true, '26-11: the server switch alone is sufficient — no legacy transport needs to be wired for readiness to be true');
+  }
+
+  resetAll();
+  clearServerJobs26();
+}
+// ═══ END STEP 6 PHASE 5 ═══
+
 console.log('\n══════════════════════════════════════════════════');
 console.log(fail === 0 ? `✅ ALL PASS — ${pass} passed, ${fail} failed` : `❌ FAILURES — ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.

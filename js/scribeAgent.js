@@ -37,6 +37,20 @@ import { getSettings, getScribeLearnings, getScribeCanon } from './storage.js';
 import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
 import { scribeAskRemote as scribeAskRemoteBackend, runTrainerRemote as runTrainerRemoteBackend, scribeAutonomousRemote as scribeAutonomousRemoteBackend, scribeClassifyRemote as scribeClassifyRemoteBackend } from './backend.js';
 import { chatTransportMode, askScribe } from './chatTransport.js';
+// ── PHASE III STEP 6 (Phases 3/4/5) — the class-U Edge Function seam ────────
+// `getSupabaseClient`/`getActiveLeagueId` from js/auth.js (no cycle: auth.js imports backend.js,
+// supabase-backend.js and push-onesignal.js, never this module) — the SAME client/session
+// js/supabase-backend.js's adapter uses (auth.js's own §1.1 rule: "one session, one token, one
+// onAuthStateChange" — a second createClient() would race this one's own refresh loop).
+import { getSupabaseClient, getActiveLeagueId } from './auth.js';
+// `isServerJobEnabled` from js/notifications.js (same non-cycle, and the SAME reader DI-T6.1's
+// own client gate already uses for `notifyFanout` — one function, one shared boolean-in-settings
+// reader, not a second copy of it here). Reviewer note 5 (2026-09-20): a second implementation of
+// "is this server job on" is exactly the parallel abstraction AD-02 forbids for storage, applied
+// to a flag whose two sides disagreeing means a double paid model call. `isServerJobEnabled()`
+// never throws and reads OFF on an unreadable blob, which is the safe direction for this gate too
+// (an unreadable blob keeps the legacy path working).
+import { isServerJobEnabled } from './notifications.js';
 
 export function isScribeInteractiveEnabled() {
   return getSettings().scribeInteractiveEnabled !== false;
@@ -90,9 +104,59 @@ export function getActiveContext() {
  *  `adminPasswordHash` is the commissioner credential the server requires
  *  (reviewer SIGNIFICANT #8) — `btoa(password)`, produced at the call site
  *  from a prompt, never read out of the synced settings blob, so the person
- *  triggering paid model calls has to actually know the password. */
+ *  triggering paid model calls has to actually know the password.
+ *
+ *  ── REVIEWER NOTE 5 (2026-09-20) — THE LEGACY PATH IS GATED HERE, STRUCTURALLY. ──
+ *  The switch-on's real risk is a DOUBLE SPEND, not a double post: while
+ *  `settings.serverJobs.trainer` is true, an Apps Script `runTrainer` is a
+ *  second, independent paid Anthropic call — against the frozen Google Sheet,
+ *  so it is not even analysing real data, and it draws on no budget this
+ *  project can see. js/app.js's button already branches on the switch, but a
+ *  branch at ONE call site is a convention, not a guarantee: the next caller
+ *  of this exported function would reopen it silently. So the refusal lives
+ *  INSIDE the relay. Once the switch is true, NO code path in this build can
+ *  reach Apps Script's runTrainer — the caller gets the standard envelope
+ *  shape back (`{ok:true, skipped:'disabled'}`, DI-T6.0(f)) so app.js's
+ *  existing `result.skipped` branch renders it without a new branch.
+ *
+ *  This bounds only THIS build. A phone on an OLDER cached shell has no
+ *  knowledge of the switch and still calls Apps Script directly — which is
+ *  why deleting the Apps Script Monday trigger is a HARD, numbered
+ *  precondition of the F4 switch-on (docs/SUPABASE_LIVE_RUNBOOK.md §S6F4-P0),
+ *  not a tidy-up afterwards. Code cannot close a stale-client hole; a deleted
+ *  trigger can. */
 export async function runTrainerRemote({ adminPasswordHash = '' } = {}) {
+  if (isServerJobEnabled('trainer')) {
+    return { ok: true, skipped: 'disabled',
+      error: 'The server Trainer is switched on — the legacy Apps Script Trainer is not called from this build' };
+  }
   return runTrainerRemoteBackend({ adminPasswordHash });
+}
+
+/**
+ * Phase III Step 6 PHASE 4 (`trainer`, DI-T6.4). The MANUAL entry point, class U — invoked ONLY
+ * when `isServerJobEnabled('trainer')` is true (js/app.js's own gate; this function does not
+ * re-check the switch, the same division of labour DI-T6.1's `notifications.js` gate uses).
+ *
+ * NO CREDENTIAL IS SENT. Unlike `runTrainerRemote()` above, the Edge Function derives the caller
+ * from the SIGNED-IN SUPABASE SESSION's own JWT (`_shared/auth.js`'s `requireCommissioner()`) —
+ * there is no `adminPasswordHash` for it to check, and sending one would be a second, unused
+ * credential on the wire. `supabase-js`'s `functions.invoke()` attaches the current session's
+ * access token automatically; this module never touches a token directly.
+ *
+ * Returns the SAME envelope shape `runTrainerRemote()` does (`{ok, skipped?, error?, runId, …}` —
+ * DI-T6.0(f)), so `js/app.js`'s click handler branches on it identically regardless of which path
+ * answered — DI-T6.0(f)'s whole point.
+ */
+export async function runTrainerViaEdgeFunction() {
+  const client = getSupabaseClient();
+  const leagueId = getActiveLeagueId();
+  if (!client || !leagueId) {
+    return { ok: false, error: 'Not signed in to a league — cannot reach the Trainer function' };
+  }
+  const { data, error } = await client.functions.invoke('trainer', { body: { league_id: leagueId } });
+  if (error) throw error;
+  return data;
 }
 
 /**
@@ -224,21 +288,53 @@ export function _restoreScribeRemoteTransportForTest() {
   remoteTransport = { autonomous: scribeAutonomousRemoteBackend, classify: scribeClassifyRemoteBackend };
 }
 
-/** True only when autonomy could ACTUALLY post right now from this device:
- *  the client gate is on AND the transport is wired. js/scribeLines.js checks
- *  this BEFORE it reserves a SCRIBE cooldown on an autonomous candidate — see
- *  the long note at `considerAutonomous` for why reserving a cooldown for a
- *  post that can never happen would silence the free tier-0 lines. */
-export function isScribeAutonomousReady() {
-  return isScribeAutonomousEnabled() && !!(remoteTransport && remoteTransport.autonomous);
+// ── PHASE III STEP 6, PHASE 5 — THE EDGE FUNCTION SEAM, DEFINED HERE, GATED ON THE SAME BOOLEAN
+//    `js/notifications.js`'s `isServerJobEnabled()` ALREADY READS. ──────────────────────────────
+//
+// Mirrors `scribeAskRemote`'s own mode branch (this file, above): the choice of transport is made
+// ONCE, at the top of each relay, and the two paths never both run — the double-post failure mode
+// this switch exists to avoid is the exact analogue of DI-T6.1's double-push for notify-fanout.
+//
+// WHEN THE SWITCH IS ABSENT OR FALSE, THIS CODE IS BYTE-IDENTICAL TO WHAT SHIPPED BEFORE PHASE 5:
+// the `isServerJobEnabled(...)` branch below is a NEW early return that falls through to every
+// existing line, unedited, when it does not fire. A mutation canary (`scoringtest.mjs`, the D1
+// gate's own home) proves the OLD path still runs exactly once when the switch is off/absent, and
+// that it does NOT ALSO run when the switch is on — the shape `notifytest.mjs [28]` already proves
+// for `js/notifications.js`.
+async function invokeScribeEdgeFunction(name, body) {
+  const client = getSupabaseClient();
+  if (!client) return { ok: false, error: 'no_client' };
+  try {
+    const { data, error } = await client.functions.invoke(name, { body });
+    if (error) return { ok: false, error: String((error && error.message) || error) };
+    return data || { ok: false, error: 'empty_response' };
+  } catch {
+    return { ok: false, error: 'unreachable' };
+  }
 }
 
-/** Relay to backend/Code.gs's `scribeAutonomous` action (D1). Never throws —
- *  an autonomous opportunity that cannot reach the server is DROPPED, never
- *  surfaced and never retried (C1: mentions fall back to a canned line,
- *  autonomous posts fall back to silence). */
+/** True only when autonomy could ACTUALLY post right now from this device:
+ *  the client gate is on AND (the server switch is on, or the legacy transport is wired).
+ *  js/scribeLines.js checks this BEFORE it reserves a SCRIBE cooldown on an autonomous candidate —
+ *  see the long note at `considerAutonomous` for why reserving a cooldown for a post that can never
+ *  happen would silence the free tier-0 lines. */
+export function isScribeAutonomousReady() {
+  if (!isScribeAutonomousEnabled()) return false;
+  if (isServerJobEnabled('scribeAutonomous')) return true;
+  return !!(remoteTransport && remoteTransport.autonomous);
+}
+
+/** Relay to `scribe-autonomous` (DI-T6.5) when the server switch is on, else to backend/Code.gs's
+ *  `scribeAutonomous` action (D1), UNCHANGED. Never throws — an autonomous opportunity that cannot
+ *  reach the server is DROPPED, never surfaced and never retried (C1: mentions fall back to a
+ *  canned line, autonomous posts fall back to silence). */
 export async function scribeAutonomousRemote({ trigger, subject = '', evidence = {}, playerId = '' } = {}) {
   if (!isScribeAutonomousEnabled()) return { ok: true, skipped: 'disabled_client' };
+  if (isServerJobEnabled('scribeAutonomous')) {
+    const leagueId = getActiveLeagueId();
+    if (!leagueId) return { ok: true, skipped: 'transport_unwired' };
+    return invokeScribeEdgeFunction('scribe-autonomous', { leagueId, trigger, subject, evidence, playerId });
+  }
   if (!remoteTransport || !remoteTransport.autonomous) return { ok: true, skipped: 'transport_unwired' };
   try {
     return await remoteTransport.autonomous({ trigger, subject, evidence, playerId });
@@ -247,12 +343,18 @@ export async function scribeAutonomousRemote({ trigger, subject = '', evidence =
   }
 }
 
-/** Relay to backend/Code.gs's `scribeClassify` action (D-2, correction #6).
- *  Returns `{ points }` — 0 for anything that is not a confident claim, and
- *  0 for every failure path, so a classifier outage can only ever make
- *  SCRIBE quieter. */
+/** Relay to `scribe-classify` (DI-T6.5) when the server switch is on, else to backend/Code.gs's
+ *  `scribeClassify` action (D-2, correction #6), UNCHANGED. Returns `{ points }` — 0 for anything
+ *  that is not a confident claim, and 0 for every failure path, so a classifier outage can only
+ *  ever make SCRIBE quieter. */
 export async function scribeClassifyRemote({ messageId } = {}) {
   if (!isScribeAutonomousEnabled()) return { ok: true, skipped: 'disabled_client', points: 0 };
+  if (isServerJobEnabled('scribeClassify')) {
+    const leagueId = getActiveLeagueId();
+    if (!leagueId) return { ok: true, skipped: 'transport_unwired', points: 0 };
+    const r = await invokeScribeEdgeFunction('scribe-classify', { leagueId, messageId });
+    return { ...r, points: Number(r && r.points) || 0 };
+  }
   if (!remoteTransport || !remoteTransport.classify) return { ok: true, skipped: 'transport_unwired', points: 0 };
   try {
     const r = await remoteTransport.classify({ messageId });

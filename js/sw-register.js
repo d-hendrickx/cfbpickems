@@ -58,6 +58,8 @@
  * is unchanged; CACHE_NAME is simply the load-bearing half of it.
  */
 
+import { isNativeOrigin } from './platform.js';
+
 /** Filename of a worker URL, query and hash stripped. `''` for anything unparseable. */
 export function swScriptBasename(url) {
   if (!url) return '';
@@ -220,6 +222,20 @@ export async function setupServiceWorker({
   log = (...a) => console.log(...a),
   warn = (...a) => console.warn(...a),
 } = {}) {
+  // DI-210e — no service-worker registration inside the native shell; the
+  // bundled iOS app has no cache-busting-via-SW story of its own (that's
+  // DI-208d's job) and the shell must never fight a page it doesn't own for
+  // a worker at scope '/'. Same inert shape the module already returns when
+  // there's no navigator.serviceWorker at all, so callers need no new branch.
+  //
+  // S-C1 (security-reviewer, round 1 gate) — ORIGIN-POSITIVE, not
+  // isNativeShell() alone. A persistent spoof of window.Capacitor on the
+  // real irbfootball.com origin must NOT suppress registration: that would
+  // let a compromised page pin whatever worker happened to be installed
+  // and silently block every future update check (a downgrade-persistence
+  // attack). isNativeOrigin() additionally requires the native scheme,
+  // which a page served over https: can never fake.
+  if (isNativeOrigin()) return { action: 'unsupported', registration: null };
   if (!nav || !nav.serviceWorker) return { action: 'unsupported', registration: null };
 
   const controller = nav.serviceWorker.controller;

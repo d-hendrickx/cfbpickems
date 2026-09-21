@@ -161,6 +161,17 @@ const KEYS = {
   // actually receiving pushes, which is UN-N3's exact failure (not enabling
   // push must never be the same as going blind).
   PUSH_ACTIVE: 'cfbp_push_active',
+  // DI-210b (iOS Munera, 2026-09-20) — the native shell's own scroll/tab-state
+  // survival across a WKWebView background→foreground reload. `{ tab, scrollTop,
+  // savedAt }`, overwritten in place (not appended) — this is a snapshot of
+  // "where this device was," not a log. DEVICE-LOCAL for the same reason SESSION
+  // is: it is a fact about THIS handset's webview, not league state, and it must
+  // never reach the sync seam (a shared write here would bounce every device to
+  // whichever phone last backgrounded the app). Read only on native boot
+  // (isNativeShell()); written only on the native App plugin's `pause` event.
+  // Absent/garbage reads as null — "nothing to restore," which is exactly
+  // today's behaviour (navigateTo() already defaults to state.currentTab).
+  SHELL_UI_STATE: 'cfbp_shell_ui_state',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -258,7 +269,26 @@ const DEVICE_LOCAL_KEYS = new Set([
   // laptop, which has no push at all.
   KEYS.PUSH_ACTIVE,
   'cfbp_backend_config',
+  // DI-210b — see the KEYS comment above. Device-local for the same reason
+  // SESSION is: a shared write would let one handset's scroll position bounce
+  // every other device in the league.
+  KEYS.SHELL_UI_STATE,
 ]);
+
+/**
+ * S-C16 (round 1 gate, Drew-approved for adaptertest.mjs's one purpose).
+ * A READ-ONLY export of the same Set above — a frozen COPY, never the live
+ * reference, so no importer can mutate the real routing table. Exists so
+ * adaptertest.mjs's §2.1 "which keys are device-local" list can be DERIVED
+ * from this one source instead of hand-maintaining a second copy that
+ * drifts every time a new device-local key is added here (exactly what
+ * happened with cfbp_shell_ui_state, above). Nothing else changes: every
+ * existing caller still uses the module-private `DEVICE_LOCAL_KEYS`
+ * directly; this export adds no new behaviour, only visibility.
+ */
+export function getDeviceLocalKeysForTest() {
+  return new Set(DEVICE_LOCAL_KEYS);
+}
 
 /**
  * DI §4.3 — the ONE derived, read-only mirror key. Deliberately NOT in `KEYS`
@@ -1410,6 +1440,20 @@ export function setLifecyclePosted(chatId) {
 // that matters is a device that shows no toast while receiving no push.
 export function getPushActive() { return load(KEYS.PUSH_ACTIVE) === true; }
 export function setPushActive(on) { save(KEYS.PUSH_ACTIVE, !!on); }
+
+// ─── SHELL UI STATE, PER DEVICE (DI-210b, iOS Munera, 2026-09-20) ────────────
+// Accessor pair per CONVENTIONS #8. `getShellUiState()` default-when-missing
+// (CONVENTIONS #10) is `null` — "nothing was ever saved," never a guessed tab.
+// Only ever read on a native boot and only ever written from the native App
+// plugin's `pause` handler (both in js/app.js); never through the sync seam
+// (DEVICE_LOCAL_KEYS above).
+export function getShellUiState() {
+  const v = load(KEYS.SHELL_UI_STATE);
+  return (v && typeof v === 'object' && typeof v.tab === 'string') ? v : null;
+}
+export function setShellUiState(tab, scrollTop) {
+  save(KEYS.SHELL_UI_STATE, { tab: String(tab || ''), scrollTop: Number(scrollTop) || 0, savedAt: new Date().toISOString() });
+}
 
 // ─── GAME REQUESTS (FEAT-2 / UN-175, DI-175d, 2026-09-12) ────────────────────
 // A player flags a game they want on a future slate; the commissioner sees it

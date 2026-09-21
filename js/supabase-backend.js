@@ -219,6 +219,10 @@ let _flushNeedsFollowUp = false;
  *  `dropMirror()` while the loop is suspended on an await: a queue dropped out from under a run
  *  that had already put something on the wire may not be reported as "Nothing was sent". */
 let _inFlightSent = null;
+/** RG-202 — the bounded automatic write retry. `_retryAttempt` counts retries SCHEDULED since the
+ *  last fully successful flush; `_retryTimer` is the ONE armed retry (never one per key). */
+let _retryAttempt = 0;
+let _retryTimer = null;
 const _refusedKeys = new Map();        // cfbp key -> { code, serverMessage, atHydrateSeq }
 let _mirrorTag = null;                 // { leagueId, epoch, switchSeq, at }
 let _switchSeq = 0;
@@ -262,6 +266,21 @@ const DEP_DEFAULTS = {
   isSiteUnlocked: null,                    // () => boolean — storage.js's own getSiteUnlocked()
   onRealtimeEvent: null,                   // §4.2 — Part B repaints from this
   now: () => Date.now(),
+  // ── RG-202, the bounded write retry (see `_scheduleRetry`) ────────────────
+  // `refreshSession` is the HOST's session-recovery path, injected rather than reached for: the
+  // token is auth.js's to refresh, behind its single-flight round, its strike counter and its
+  // identity-epoch guard (`auth.js:1356`). A second refresher in this module would be a second
+  // owner of the session. `null` (unwired) means the retry simply happens without one.
+  refreshSession: null,                    // () => Promise<any>
+  // The jitter seam and the timer seam, so the SCHEDULE is assertable without sleeping it.
+  random: () => Math.random(),
+  setTimer: (fn, ms) => {
+    const h = setTimeout(fn, ms);
+    // Node-only (adaptertest/boottest): a pending retry must not hold the process open.
+    if (h && typeof h.unref === 'function') h.unref();
+    return h;
+  },
+  clearTimer: (h) => clearTimeout(h),
 };
 
 function _dep(name) {
@@ -782,7 +801,11 @@ export async function hydrate(leagueId, { epoch = null, reason = 'hydrate' } = {
     switchSeq: _switchSeq,
   };
   if (_mirror.size === 0 && _state !== 'OFFLINE-READONLY') _setState('HYDRATING', reason);
-  emit('syncing', { state: _state, reason });
+  // RG-202 gate, reviewer note 3 — `pendingWrites` is carried on EVERY 'syncing', because
+  // `onSupabaseDataStatus()` now uses it to decide whether the amber held-offline banner may come
+  // down. A 'syncing' without it would read as "the queue is empty" and take the banner down on a
+  // device that is still holding picks.
+  emit('syncing', { state: _state, reason, pendingWrites: _dirty.size });
 
   let rowsByTable;
   let contacts = [];
@@ -1765,6 +1788,13 @@ async function _runFlush() {
   // dirty, nothing is latched into `_refusedKeys`, and the batch STOPS — the remaining operations
   // would fail the same way, and sending them would only multiply the noise.
   const heldOffline = new Set();
+  // RG-202 — keys this run could not send for a reason a later attempt may resolve. NOT errors:
+  // nothing is latched, nothing is reported as a refusal, and the schedule below decides whether
+  // this is still a hiccup or has become a breakage.
+  const heldRetry = new Map();           // key -> { cls, diag }
+  // SECURITY F1 on the RG-202 gate — keys whose planned INSERT met a DIVERGENT base row. They are
+  // neither sent nor clean: the follow-up re-diffs them against the advanced base.
+  const divergedKeys = new Set();
   emit('syncing', { state: _state, pendingWrites: _dirty.size });
 
   // SECURITY F2 — the token this plan was built under, re-checked at the TOP OF EVERY ITERATION.
@@ -1783,18 +1813,39 @@ async function _runFlush() {
           + ' The remaining operations are discarded, never re-addressed to whatever identity or league this device now holds.');
         return { pushed: sentKeys.size, abandoned: true, sent: [...sentKeys], notSent };
       }
+      // RG-202 — THE BASE MAY HAVE MOVED SINCE THE PLAN WAS BUILT, WITHIN THIS VERY RUN.
+      // `diverged` means a row we planned exists on the server with OTHER content: it is not sent
+      // (that could only be a 23505), and the key is NOT finished — it stays dirty and earns a
+      // follow-up run that will diff it against the advanced base as a PATCH (security F1).
+      const narrowed = _narrowInsertAgainstBase(op);
+      if (narrowed.diverged) { divergedKeys.add(op.key); _flushNeedsFollowUp = true; }
+      if (narrowed.op === null) {
+        if (!narrowed.diverged) sentKeys.add(op.key);
+        continue;
+      }
       try {
         // Counted BEFORE the await, not after: the question `_refuseDirtyLoudly()` asks is "did
         // anything go on the wire", and an operation suspended on its await has gone — whether it
         // is acknowledged is exactly what nobody knows at that instant.
         _inFlightSent++;
-        await _execute(client, op, leagueId);
-        sentKeys.add(op.key);
+        await _execute(client, narrowed.op, leagueId);
+        if (!narrowed.diverged) sentKeys.add(op.key);
       } catch (e) {
         if (e && e.networkHold) {
           heldOffline.add(op.key);
           console.warn(`[sb] ${op.key}: the write never reached the server (${e.message}) — HELD for retry,`
             + ' not reported as a refusal. The next hydrate rebases it and re-arms the push.');
+          break;
+        }
+        // RG-202 — AN ANSWER THAT A SECOND ATTEMPT COULD CHANGE IS NOT YET A REFUSAL. The batch
+        // STOPS for the same reason a network hold stops it: the remaining operations would meet
+        // the same server, and sending them only multiplies the noise. Every key that did not go
+        // stays dirty (it is still in `planKeys`, so the clean-up below leaves it alone).
+        const cls = e && e.retryClass;
+        if ((cls === 'transient' || cls === 'auth' || cls === 'conflict') && _retryAttempt < RETRY_BACKOFF_MS.length) {
+          heldRetry.set(op.key, { cls, diag: (e && e.diag) || '' });
+          console.warn(`[sb] ${op.key}: the write was answered with a failure that a retry may resolve`
+            + ` (${(e && e.diag) || cls}) — HELD, not reported as a refusal. Nothing was dropped and nothing was marked clean.`);
           break;
         }
         errors.push(e);
@@ -1850,6 +1901,31 @@ async function _runFlush() {
   }
   for (const s of stale) _dirty.delete(s.key);
 
+  // ══ RG-202 — A LATCH MAY NOT OUTLIVE THE THING IT DESCRIBES ═══════════════
+  //
+  // `_refusedKeys` was released by exactly ONE event: a later successful write of that same key
+  // (the `_refusedKeys.delete(key)` in the sentKeys loop above). §5.2 item 3 and this function's
+  // own comments both say the latch is "held until a hydrate lands", and it was not — which is the
+  // whole of "I keep getting the banner and manually hit retry and it resolves". The sequence:
+  //   1. a write is refused (for RG-202's finalize duplicate, a 23505 about a row that SAVED);
+  //   2. a hydrate lands, rebasing the key and clearing `_lastError` (`hydrate():920`);
+  //   3. the key now diffs to NOTHING, so the run above deletes it from `_dirty` — it is saved;
+  //   4. …and the latch is still set, so every later flush of ANY key falls into the
+  //      `_refusedKeys.size` branch and re-raises the RED banner with its fallback wording,
+  //      `Still unsaved: <key>.`, about a key that is saved and not pending. The Retry button only
+  //      re-hydrates (`app.js:2025`), so it hides the banner without clearing the latch.
+  //
+  // THE RELEASE IS EVIDENCE, NOT TIME: a refused key with nothing left in `_dirty` has nothing
+  // left to save. A key that is STILL dirty keeps its latch, so reviewer F6 — 'synced' may not be
+  // emitted while a refused key is unsaved — is untouched, and so is AD-06: this can only take a
+  // banner down, never mark an unsaved change clean.
+  for (const key of [..._refusedKeys.keys()]) {
+    if (_dirty.has(key)) continue;
+    _refusedKeys.delete(key);
+    console.info(`[sb] ${key} has nothing left to save — the refusal latch is RELEASED.`
+      + ' A latch that outlives its condition is a banner that cannot be cleared by anything the player does.');
+  }
+
   if (errors.length) {
     const first = errors[0];
     _lastError = first.message;
@@ -1874,6 +1950,35 @@ async function _runFlush() {
   // landed, and this says exactly what happened. The retry path is the existing one: `online` and
   // `visibilitychange:visible` trigger a re-hydrate, which rebases the dirty key and re-arms the
   // push (`hydrate()`'s last two lines).
+  // ══ RG-202 — THE QUIET STATE, WHILE THE RETRY SCHEDULE RUNS ═══════════════
+  //
+  // At most the existing "saving…" badge: no banner field, so `onSupabaseDataStatus()` renders
+  // nothing at all and the red AD-06 banner is reserved for what it is for. `_lastError` is NOT
+  // set, because nothing has been refused yet. Everything else stays exactly as loud as it was —
+  // the key is still in `_dirty`, `pendingWrites` still counts it, `_persistSnapshot()` still
+  // refuses while it is dirty, and a player who submits picks now still gets the existing
+  // unconfirmed-writes warning.
+  if (heldRetry.size) {
+    const kinds = new Set([...heldRetry.values()].map((v) => v.cls));
+    // One kind for the run, worst-first: a session that needs refreshing is the precondition for
+    // everything else, and a conflict needs a re-read that a plain re-send would not do.
+    const kind = kinds.has('auth') ? 'auth' : (kinds.has('conflict') ? 'conflict' : 'transient');
+    const nextRetryInMs = _scheduleRetry(kind);
+    emit('syncing', {
+      state: _state,
+      retrying: [...heldRetry.keys()],
+      retryClass: kind,
+      attempt: _retryAttempt,
+      maxAttempts: RETRY_BACKOFF_MS.length,
+      nextRetryInMs,
+      pendingWrites: _dirty.size,
+      // The diagnostic RG-202 asks for, on the detail channel the 🩺 panel reads. Class, status
+      // and code only — never a token, never row data, never the server's own message.
+      diag: [...heldRetry.entries()].map(([k, v]) => `${k}: ${v.diag}`),
+    });
+    return { pushed: sentKeys.size, retrying: [...heldRetry.keys()], attempt: _retryAttempt, nextRetryInMs };
+  }
+
   if (heldOffline.size) {
     const keys = [...new Set([...heldOffline, ..._dirty.keys()])];
     _lastError = `Couldn’t reach the server. ${keys.length} change${keys.length === 1 ? '' : 's'} `
@@ -1919,6 +2024,11 @@ async function _runFlush() {
 
   _lastSyncAt = new Date().toISOString();
   _lastError = null;
+  // RG-202 — the schedule resets on a CONFIRMED SERVER WRITE and on nothing else. Not on a
+  // hydrate: a conflict retry hydrates, so resetting there would let one 23505 rearm three more
+  // attempts for ever. Three retries, then red, is the bound.
+  _retryAttempt = 0;
+  _cancelRetry('the queue went through');
   if (!_dirty.size) _persistSnapshot();
   emit('synced', { state: _state, pushed: sentKeys.size, pendingWrites: _dirty.size });
   return { pushed: sentKeys.size };
@@ -2016,6 +2126,157 @@ function _networkHold(err, key) {
 }
 
 /**
+ * ══ RG-202 — "THE RED BANNER MUST MEAN *THIS IS REALLY BROKEN*" ═════════════
+ *
+ * Drew, 2026-09-20: "I keep getting the banner and manually hit retry and it resolves… I get the
+ * banner way too often and it easily resolves with the manual retry, very annoying."
+ *
+ * `_isWriteNetworkFailure()` above answers ONE question — did this request reach a server — and it
+ * is deliberately unchanged by this block. AD-59's closed default stands: a 504 is an ANSWER, is
+ * never called an outage, never reaches OFFLINE-READONLY and never serves a snapshot.
+ *
+ * This function answers a SECOND, different question about the answers that DID come back: is this
+ * the kind of "no" that a second attempt could turn into a "yes"?
+ *
+ *   'transient'  the server (or something in front of it) was momentarily unable — 408 request
+ *                timeout, 425 too early, 429 rate limited, any 5xx, and the four Postgres classes
+ *                that describe a busy server rather than a bad request (40001 serialization,
+ *                40P01 deadlock, 53300 too many connections, 55P03 lock not available).
+ *   'auth'       401 / PGRST301. The token expired between the debounce tick and the request —
+ *                the classic "wake the app from background and type" race. A refresh makes it a
+ *                different request, not the same one retried.
+ *   'conflict'   23505 / 409. The server ALREADY HOLDS this row. Re-sending is guaranteed to fail
+ *                identically; the honest retry is to re-read and diff again.
+ *   'hard'       everything else, and it is the DEFAULT: 42501 and every other privilege refusal,
+ *                403, every 4xx that is not auth/conflict/rate, every constraint violation that a
+ *                re-diff cannot dissolve (23502/23503/23514), every named RPC exception, an empty
+ *                error, a malformed one. A failure this module cannot name is not one it may
+ *                quietly retry — the direction that costs a red banner, not a lost write.
+ *
+ * WHAT DOES NOT CHANGE: nothing is dropped, nothing is marked clean without a confirmed server
+ * write, and the key stays in `_dirty` (so it stays in the unsaved list and in the pre-submit
+ * warning) for the whole of the retry schedule and after it. Only the BANNER waits.
+ */
+const TRANSIENT_HTTP_STATUSES = frozenList([408, 425, 429, 500, 502, 503, 504, 507, 508]);
+const TRANSIENT_SQLSTATES = frozenList(['40001', '40P01', '53300', '55P03']);
+
+function _writeFailureClass(shaped, ctx) {
+  const pgCode = String((shaped && (shaped.pgCode || shaped.code)) || '');
+  const status = Number((shaped && (shaped.httpStatus || shaped.status)) || 0) || 0;
+  // The named server answers first, exactly as `_classifyHydrateFailure()` orders them: if the
+  // server said WHICH thing went wrong, that is what happened.
+  if (pgCode === '42501') return 'hard';
+  // ══ F2 (RG-202 gate, 2026-09-20) — THE 23505 OF THE RPC PATH ══════════════════════════════
+  //
+  // `finalize_week` / `lock_week` / `transition_week` each raise `bad_transition` when the week is
+  // not in the status the step requires (0003_functions.sql:288/297/332/386), and PostgREST hands
+  // it back as a P0001 with HTTP 400. So a call that COMMITTED and then lost its response — a
+  // proxy that gave up, a handset that slept mid-request — is retried against the state that very
+  // call produced, and answers `bad_transition` about a week that finalized perfectly. Class
+  // `hard` made that a red "Nothing was saved", which is the identical false refusal the 23505
+  // branch above exists to prevent, arriving through the RPC door.
+  //
+  // `conflict` does NOT mean "ignore it". It means RE-READ: `_runRetry()` hydrates, and the fresh
+  // base decides. If the week really is at the target status the operation diffs to nothing and
+  // the run ends clean; if it is NOT, `_planWeekStatus()` raises its own client-side
+  // `bad_transition` refusal against the real status and the run ends RED. A genuine bad
+  // transition is never silenced — it is checked instead of assumed. (adaptertest [A-RETRY9] (a)
+  // and (b) are those two outcomes, and neither is inferred from the other.)
+  if (ctx && (ctx.opKind === 'finalize' || ctx.rpcName === 'transition_week' || ctx.rpcName === 'lock_week')
+    && String((shaped && shaped.message) || '').trim() === 'bad_transition') return 'conflict';
+  if (pgCode === '23505' || status === 409) return 'conflict';
+  if (pgCode === 'PGRST301' || pgCode === '401' || status === 401) return 'auth';
+  if (TRANSIENT_SQLSTATES.includes(pgCode)) return 'transient';
+  if (TRANSIENT_HTTP_STATUSES.includes(status)) return 'transient';
+  return 'hard';
+}
+
+/** The diagnostic line RG-202 asks for, and the whole of what it may contain: the error CLASS, the
+ *  HTTP status, the PostgREST/Postgres code and the exception name. Never a token, never a row, and
+ *  never the server's message — `details` on a 23505 carries key VALUES. */
+function _writeDiag(shaped, cls) {
+  const status = Number((shaped && (shaped.httpStatus || shaped.status)) || 0) || 0;
+  return `class=${cls} http=${status || 'none'} pg=${String((shaped && (shaped.pgCode || shaped.code)) || '') || 'none'}`
+    + ` name=${String((shaped && shaped.name) || '') || 'none'}`;
+}
+
+/** The backoff. THREE automatic attempts and then the red banner — bounded by construction, so a
+ *  server that is genuinely down cannot turn six phones into a retry storm. The `online` /
+ *  `visibilitychange:visible` re-hydrate remains the recovery AFTER escalation: it rebases the key
+ *  and re-arms the push, and the latch is then released by the run that clears it. */
+const RETRY_BACKOFF_MS = frozenList([1000, 3000, 8000]);
+const RETRY_JITTER = 0.4;
+
+/**
+ * Arm the ONE retry. Returns the delay it scheduled, or `null` when the schedule is exhausted or a
+ * retry is already armed — the caller reads `null` as "escalate" only when `_retryAttempt` has run
+ * out, which is the check it makes before holding the failure in the first place.
+ *
+ * ONE TIMER, NOT ONE PER KEY. A run holds every key it could not send; the retry is a whole flush
+ * run, so one timer carries all of them. Jittered, because six handsets that all saw the same 503
+ * must not come back in lockstep.
+ */
+function _scheduleRetry(kind) {
+  if (_retryTimer !== null) return null;
+  const base = RETRY_BACKOFF_MS[_retryAttempt];
+  if (base == null) return null;
+  let r = Number(_safe('random'));
+  if (!Number.isFinite(r) || r < 0 || r > 1) r = 0;
+  const delay = Math.round(base * (1 + RETRY_JITTER * r));
+  _retryAttempt++;
+  const tag = _flushTag();
+  _retryTimer = _safe('setTimer', () => {
+    _retryTimer = null;
+    // Returned, not awaited: `setTimeout` discards it in a browser, and the injected test timer
+    // awaits it — so a suite can drive the schedule without sleeping it.
+    return _runRetry(kind, tag).catch((e) => console.warn('[sb] the automatic write retry threw', e && e.message));
+  }, delay);
+  console.info(`[sb] a write failed in a way that is plausibly transient (${kind}) — automatic retry`
+    + ` ${_retryAttempt}/${RETRY_BACKOFF_MS.length} in ${delay}ms. Nothing was dropped; the key stays queued and stays named as unsaved.`);
+  return delay;
+}
+
+function _cancelRetry(why) {
+  if (_retryTimer === null) return;
+  _safe('clearTimer', _retryTimer);
+  _retryTimer = null;
+  if (why) console.info(`[sb] the armed write retry was cancelled: ${why}`);
+}
+
+async function _runRetry(kind, tag) {
+  // The same abandon-on-identity-change gate every other deferred sender in this module uses: a
+  // queue is addressed to the mirror it was made in, never to whatever this device now holds.
+  if (_flushTagMoved(tag)) {
+    _retryAttempt = 0;
+    console.warn(`[sb] an automatic write retry was ABANDONED: the mirror it was scheduled for is gone (state ${_state}).`
+      + ' Nothing was sent, and it is never re-addressed to another identity or league.');
+    return;
+  }
+  if (kind === 'auth') {
+    // The token, not the request, is what was wrong. auth.js owns the refresh (single-flight,
+    // strike-counted, epoch-guarded); if it is unwired this is a no-op and the retry still runs.
+    try { await _safe('refreshSession'); }
+    catch (e) { console.warn('[sb] the session refresh before an auth-class write retry failed', e && e.message); }
+    if (_flushTagMoved(tag)) {
+      _retryAttempt = 0;
+      console.warn('[sb] an automatic write retry was ABANDONED after the session refresh: the identity moved. Nothing was sent.');
+      return;
+    }
+  }
+  if (kind === 'conflict') {
+    // RE-DIFF AGAINST A FRESH BASE. A 23505 says the server already holds the row, so the plan
+    // this run would rebuild from the stale base is the same doomed insert. `hydrate()` replaces
+    // the base and its own tail re-arms the push for whatever is still genuinely dirty — which is
+    // the mechanism that turns the insert into a patch, or into nothing at all.
+    const leagueId = _mirrorTag ? _mirrorTag.leagueId : _safe('getActiveLeagueId');
+    await hydrate(leagueId, { reason: 'write-conflict-rebase' });
+    await flush().catch(() => {});
+    return;
+  }
+  await flush().catch(() => {});
+}
+
+/**
  * SECURITY F1, THE WRITE SIDE (2026-09-19) — CARRY THE HTTP STATUS, EXACTLY AS `_select()` DOES.
  *
  * `_select()` copies `res.status` onto the error it throws (`:750`), and the classifier's central
@@ -2031,6 +2292,19 @@ function _networkHold(err, key) {
  * is the exact false refusal RG-180 had just removed, re-entering through the classifier. A held
  * write is also never persisted to the device snapshot (`_persistSnapshot()` refuses while dirty),
  * so an iOS PWA kill loses it in silence.
+ *
+ * AMENDED 2026-09-20 (RG-202), and the amendment is to the CONSEQUENCE, never to the rule above.
+ * A 5xx is still an ANSWER: it is still not `_isWriteNetworkFailure()`, still never reaches
+ * OFFLINE-READONLY, still never serves a snapshot, and still never says "offline" to a player on a
+ * working network. What changed is that it is now RETRIED — three bounded, jittered attempts
+ * (`_writeFailureClass`, `_scheduleRetry`) before the red banner, because the alternative Drew
+ * lived with was a red "sync is OFF" banner every time a request hiccuped, which is how a loud
+ * signal stops being read at all. The paragraph above names the one hazard that creates, and it is
+ * closed at both ends: a re-sent INSERT can no longer carry a row the base already holds
+ * (`_narrowInsertAgainstBase`), and a 23505 is no longer a refusal at all — it is the 'conflict'
+ * class, which RE-READS and re-diffs instead of re-sending (`_runRetry`). The snapshot point still
+ * stands and is unchanged: a queued write is not persisted, which is why the schedule is bounded
+ * in seconds rather than minutes.
  *
  * The shape is rebuilt rather than mutated: `res.error` is the SDK's object and an Error's `name` /
  * `message` are not enumerable, so a spread would silently drop exactly the fields the classifier
@@ -2051,7 +2325,14 @@ function _shapeWriteError(error, status) {
 function _writeFailure(error, ctx, status) {
   const shaped = _shapeWriteError(error, status);
   if (_isWriteNetworkFailure(shaped)) return _networkHold(shaped, ctx.key);
-  return _refusalFrom(shaped, ctx);
+  const e = _refusalFrom(shaped, ctx);
+  // RG-202 — the session branch of `_refusalFrom()` built its Error without a `key`, so `failedKeys`
+  // came back EMPTY for a 401 and the banner said "The server refused to save a change" about a
+  // write whose key it knew perfectly well. The key is the one thing the player can act on.
+  if (!e.key) e.key = ctx.key;
+  e.retryClass = _writeFailureClass(shaped, ctx);
+  e.diag = _writeDiag(shaped, e.retryClass);
+  return e;
 }
 
 /**
@@ -2154,6 +2435,82 @@ function _foldWeekStatusIntoBase(weekId, status, leagueId) {
   _baseRows.set('cfbp_weeks', base);
 }
 
+/**
+ * ══ RG-202 ROOT CAUSE — THE FINALIZE BATCH SENT THE NEW OBLIGATION TWICE ════
+ *
+ * Drew's banner ("Still unsaved: cfbp_obligations") starts here, and it starts on every week
+ * finalize. `finalizeWeek()` (`app.js:15582` -> `reconcileWeeklyObligation` -> `saveObligation`)
+ * creates the weekly obligation in the SAME synchronous tick as the week's status change, so one
+ * flush carries both keys. `planFlush()` builds the obligations INSERT from the base as it stood
+ * BEFORE anything was sent; `_planOrder()` then puts the finalize (2) ahead of it (3);
+ * `finalize_week` inserts those very rows itself (`_finalizeArgs`) and folds them into the base —
+ * and the already-planned INSERT goes anyway, because it was computed before the fold existed.
+ * PostgREST answers 23505/409, `_refusalFrom()` turns it into a refusal, and the commissioner is
+ * told "Nothing was saved" about an obligation that saved perfectly. `_refusedKeys` then latches
+ * the key, which is what makes the banner keep coming back (see the latch release in `_runFlush`).
+ *
+ * THE FIX IS AT THE SEND, NOT AT THE PLAN, and deliberately. `_baseRows` is this module's single
+ * statement of "what the server now holds", and it can move between the plan and the send for
+ * THREE reasons, not one: this fold, a Realtime echo of another device's insert, and a hydrate
+ * that landed mid-run. Narrowing here covers all three with one rule, where re-planning would
+ * cover only the one that was noticed.
+ *
+ * ══ SECURITY F1 ON THE RG-202 GATE (MEDIUM, 2026-09-20) — SAME ID IS NOT SAME ROW ═════════════
+ *
+ * The first version of this function dropped a row whenever the base merely held its ID, and the
+ * caller then counted the key as SENT. For the finalize case that is correct, because the base row
+ * IS the row we were about to send — the fold put it there from the same projection. For the other
+ * two it is not: a Realtime echo and a mid-run hydrate both bring ANOTHER DEVICE'S content under
+ * the same id, and the row being dropped is then the one carrying THIS device's value. Marked
+ * clean, never sent, silently overwritten at the next hydrate — a loud-fail violation introduced
+ * by the fix for a loud-fail violation, and the reason this now compares CONTENT.
+ *
+ * THE SAFETY ARGUMENT, stated so it can be checked rather than trusted:
+ *   • EQUAL — every column the INSERT would send matches the base row (volatile columns excluded,
+ *     for the reason `_diffRows` excludes them: the projection re-stamps them on every run and
+ *     comparing them would make every row look changed). Sending it could only ever be a 23505
+ *     about a row that is already exactly right, so dropping it loses NOTHING. If that empties the
+ *     statement the key is genuinely clean: there is no longer anything to send for it.
+ *   • DIVERGENT — the row is still not sent, because an INSERT of an id the server holds is a
+ *     guaranteed 23505 whatever its content. But the key is NOT counted as sent, NOT cleaned, and
+ *     a follow-up run is armed, so the very next plan diffs this device's value against the
+ *     ADVANCED base and emits it as a PATCH. The value reaches the server; it just takes the verb
+ *     the server will accept.
+ *   • The decision is never "assume"; both branches end with the local value either already on the
+ *     server or still queued and still named in the unsaved list.
+ *
+ * Returns `{ op, diverged }`: the op to send (possibly a narrowed copy), or `op: null` when the
+ * statement is empty. `diverged` is the caller's instruction not to treat this key as finished.
+ */
+function _narrowInsertAgainstBase(op) {
+  const unchanged = { op, diverged: false };
+  if (!op || op.kind !== 'rows' || op.op !== 'insert' || !Array.isArray(op.rows)) return unchanged;
+  const base = _baseRows.get(op.key);
+  if (!base || !base.size) return unchanged;
+  const volatile = new Set(VOLATILE_COLS[op.table] || []);
+  const rows = [];
+  let equal = 0;
+  let diverged = 0;
+  for (const r of op.rows) {
+    const old = r && r.id != null ? base.get(r.id) : undefined;
+    if (!old) { rows.push(r); continue; }
+    const same = Object.keys(r).every((col) => col === 'id' || volatile.has(col)
+      || canonicalize(r[col]) === canonicalize(old[col]));
+    if (same) equal++; else diverged++;
+  }
+  if (!equal && !diverged) return unchanged;
+  if (equal) {
+    console.info(`[sb] ${op.key}: ${equal} row(s) planned as an INSERT are already in the base the server last`
+      + ' confirmed, with the same content — dropped from the statement. Re-sending them would be a 23505 about rows that saved.');
+  }
+  if (diverged) {
+    console.warn(`[sb] ${op.key}: ${diverged} row(s) planned as an INSERT now exist in the base with DIFFERENT content`
+      + ' — the statement is dropped (an INSERT of an existing id can only be a 23505) but the key stays DIRTY and a'
+      + ' follow-up run will send this device\'s value as a PATCH against the advanced base. Nothing was marked clean.');
+  }
+  return { op: rows.length ? { ...op, rows } : null, diverged: diverged > 0 };
+}
+
 async function _execute(client, op, leagueId) {
   try {
     return await _executeOp(client, op, leagueId);
@@ -2169,7 +2526,7 @@ async function _execute(client, op, leagueId) {
 async function _executeOp(client, op, leagueId) {
   if (op.kind === 'rpc') {
     const res = await client.rpc(op.name, op.args);
-    if (res && res.error) throw _writeFailure(res.error, { key: op.key, rowId: op.rowId || null, leagueId }, res.status);
+    if (res && res.error) throw _writeFailure(res.error, { key: op.key, rowId: op.rowId || null, leagueId, opKind: 'rpc', rpcName: op.name }, res.status);
     // RG-180 hole 2, the RPC-routed ops:
     //  • patch_kv    — advances `_baseValues`, the only thing `_kvFieldPatch()` reads. Without it a
     //    field ADDED by one write and REMOVED by the next produced no `$unset` (the stale base has
@@ -2183,7 +2540,7 @@ async function _executeOp(client, op, leagueId) {
   if (op.kind === 'finalize') {
     const args = _finalizeArgs(op.weekId, leagueId);
     const res = await client.rpc('finalize_week', args);
-    if (res && res.error) throw _writeFailure(res.error, { key: 'cfbp_weeks', rowId: op.weekId, leagueId }, res.status);
+    if (res && res.error) throw _writeFailure(res.error, { key: 'cfbp_weeks', rowId: op.weekId, leagueId, opKind: 'finalize' }, res.status);
     // The three keys the RPC wrote are no longer dirty: the server owns them now.
     _dirty.delete('cfbp_results');
     _dirty.delete('cfbp_obligations');
@@ -2489,6 +2846,11 @@ function _refuseDirtyLoudly(reason) {
 export function dropMirror(reason = '') {
   unsubscribeRealtime();
   if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
+  // RG-202 — the armed retry describes a queue that is about to be gone. Its own `_flushTag` gate
+  // would abandon it anyway; cancelling here is the same reasoning as `_pushTimer` above, applied
+  // one line later, and it keeps a dropped mirror from leaving a timer alive on the device.
+  _cancelRetry(`dropMirror:${reason}`);
+  _retryAttempt = 0;
   const refused = _refuseDirtyLoudly(reason);
   _mirror = new Map();
   _baseRows = new Map();
@@ -2725,12 +3087,18 @@ export function _resetForTest() {
   // suite would hang rather than fail, which is the worst way for a test to go wrong.
   _writeSeq = 0; _flushActive = false; _flushCurrent = null; _flushQueued = null; _flushNeedsFollowUp = false;
   _inFlightSent = null;
+  // RG-202 — same reasoning as the flush latch: a retry left armed by one section would fire
+  // inside the next one, against a mirror it knows nothing about.
+  _cancelRetry(null); _retryAttempt = 0;
   _lastSyncAt = null; _lastError = null; _firstSupabaseBootDone = false;
   _listeners.clear();
   _deps = null;
 }
 export function _setStateForTest(next, reason = 'test') { return _setState(next, reason); }
 export function _dirtyKeysForTest() { return [..._dirty.keys()]; }
+/** RG-202 — the retry schedule, readable without reaching into the module. */
+export function _retryStateForTest() { return { attempt: _retryAttempt, armed: _retryTimer !== null, backoff: [...RETRY_BACKOFF_MS] }; }
+export function _writeFailureClassForTest(shaped) { return _writeFailureClass(shaped); }
 export function _refusedKeysForTest() { return [..._refusedKeys.keys()]; }
 export function _overlayForTest() { return _overlay.get('cfbp_games') || new Map(); }
 export function _setContactsForTest(list) {

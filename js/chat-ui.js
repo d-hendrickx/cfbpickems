@@ -1967,6 +1967,10 @@ function captureComposerDraft() {
   const input = document.getElementById('chat-input');
   const value = input?.value || '';
   if (!value) return null;
+  // RG-191 — a draft a send has already taken is not a draft. See
+  // consumeComposerDraft() below for why the statement order in doSend() is not
+  // enough on its own.
+  if (_consumedDraft !== null && value === _consumedDraft) return null;
   const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : value.length;
   return {
     __src: COMPOSER_DRAFT_BRAND,
@@ -1991,6 +1995,63 @@ function restoreComposerDraft(snap) {
   input.setSelectionRange?.(snap.start, snap.end);
   syncComposerChrome(input);          // a multi-line draft must come back at its grown height, with its char count
   if (snap.focused) input.focus();
+}
+
+// ── RG-191 — A SENT DRAFT IS CONSUMED BEFORE ANYTHING CAN RE-RENDER ──────────
+/**
+ * Drew, 2026-09-19, on v0.22.5: "it is remembering my message in the chat, but
+ * is still there after I hit send." A second tap would have double-posted it.
+ *
+ * WHY: doSend() read `#chat-input` once at the top and cleared THAT reference
+ * after the send. But `sendMessage()` is not quiet — chat.js's sendEvent()
+ * ingests the event optimistically and ingest() calls notify('events')
+ * SYNCHRONOUSLY, which runs this module's own handleChatEvent() ->
+ * `if (chatPageActive()) renderChatPage()` from inside the send call. That
+ * repaint captured a draft that was still full (the clear hadn't run yet),
+ * replaced the textarea, and restored the sent text onto the NEW node. The
+ * clear then emptied the OLD, detached one, which nobody can see. RG-174's
+ * draft preservation didn't cause this; it made an already-stale reference
+ * visible, and on a phone it happened on every single send.
+ *
+ * THE SIGNAL, not the ordering. The composer is cleared through a FRESH
+ * lookup, before anything can repaint, and the text that was taken is recorded
+ * so captureComposerDraft() refuses it for the duration of the send. Order
+ * alone would fix today's call graph and break again the first time a line
+ * moves or a new repaint trigger lands between two statements — which is
+ * exactly the shape of the defect being fixed.
+ *
+ * ONE-SHOT, on purpose. The token is released the moment doSend() finishes
+ * (in a `finally`, so a throw in the repaint cannot strand it). A token that
+ * outlived its send would refuse a player's next draft whenever they re-typed
+ * the same words — RG-174, handed back, for "lol".
+ */
+let _consumedDraft = null;
+
+/** Takes the composer's text and empties it. Re-queries by id: doSend() must
+ *  never clear a node it looked up before the send. Returns the text taken. */
+function consumeComposerDraft() {
+  const live = (typeof document !== 'undefined') ? document.getElementById('chat-input') : null;
+  const text = live?.value || '';
+  _consumedDraft = text;
+  if (live) {
+    live.value = '';
+    live.setSelectionRange?.(0, 0);
+    syncComposerChrome(live);        // shrink the box back and drop the char count
+  }
+  return text;
+}
+
+/** The send didn't take — give the player their sentence back. Releases the
+ *  token too: from here on this is an ordinary in-progress draft. */
+function restoreConsumedDraft() {
+  const text = _consumedDraft;
+  _consumedDraft = null;
+  if (text == null || text === '') return;
+  const live = (typeof document !== 'undefined') ? document.getElementById('chat-input') : null;
+  if (!live || live.value) return;   // never clobber anything typed since
+  live.value = text;
+  live.setSelectionRange?.(text.length, text.length);
+  syncComposerChrome(live);
 }
 
 /** Test-only seams (the `_prefsPanelHTMLForTest` convention, and RG-27's rule
@@ -2096,7 +2157,23 @@ function doSend() {
   const self = me(); if (!self) return;
   const gameTag = currentComposerTag();
   const mentions = extractMentions(body);
-  const sentId = sendMessage({ body, gameTag, replyTo: U.replyTo || '', author: self, mentions });
+  // RG-191 — empty the LIVE composer BEFORE the send, and mark the text as
+  // consumed. sendMessage() repaints this page synchronously (see
+  // consumeComposerDraft()), so a clear that runs afterwards clears a node that
+  // no longer exists and the player watches their sent message sit in the box.
+  consumeComposerDraft();
+  let sentId;
+  try {
+    sentId = sendMessage({ body, gameTag, replyTo: U.replyTo || '', author: self, mentions });
+  } catch (err) {
+    // Nothing was queued, so nothing was sent — give the words back rather than
+    // making the player retype them. (The ordinary transport failure is NOT
+    // this path: that message is queued, shown pending, and retryable in the
+    // feed. This is a refusal before the queue.)
+    console.error('[chat-ui] send refused before the message was queued — the draft has been put back', err);
+    restoreConsumedDraft();
+    return;
+  }
   // SCRIBE participates as a member — it reads the Locker Room, it isn't summoned.
   // UN-160 (E2) — triggerMessageId threads the just-sent human message's own
   // id into any resulting SCRIBE response's meta, so a rating/rewrite against
@@ -2105,8 +2182,10 @@ function doSend() {
     scribeInspectMessage({ author: self, authorName: nameOf(self), body, gameTag, standings: standingsCtx(), triggerMessageId: sentId });
   } catch {}
   U.replyTo = null; U.tagStripped = false;
-  if (input) input.value = '';
-  renderChatPage();
+  // The token stays armed across this repaint — it is the last one that could
+  // put the sent text back — and is released in `finally` so a throw in the
+  // render can never strand it (see _consumedDraft).
+  try { renderChatPage(); } finally { _consumedDraft = null; }
 }
 
 function standingsCtx() {

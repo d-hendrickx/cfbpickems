@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.22.5';
-export const APP_VERSION_DATE = '2026-09-19';
+export const APP_VERSION = 'v0.23.0';
+export const APP_VERSION_DATE = '2026-09-20';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -37,7 +37,32 @@ export const APP_VERSION_DATE = '2026-09-19';
  * A release whose `added` and `fixed` are BOTH empty renders nothing anywhere —
  * no card, no `<details>`, no shell, and no chat post either.
  */
+// Release v0.23.0 (2026-09-20) — this SUPERSEDES v0.22.7 (never deployed) and
+// folds v0.22.7's real content into this one entry so it reaches players as
+// THIS release, per Drew's cut instruction. v0.22.8 (native-shell wiring,
+// web-inert) had no entry and is skipped here too — nothing player-visible
+// on the web from that pass. Ships Phase III Step 6 Phases 2–6 (migrations
+// 0013–0018, all UNAPPLIED; nine Edge Functions, all DORMANT until switched
+// on one at a time AFTER this deploy) plus the push self-test Background-jobs
+// card. The FIRST `fixed` item is SCRIBE's chat-post headline (RG-191).
+// Copy scope is deliberately narrow per Drew's cut instruction: the Send-box
+// fix, the FINAL-post reliability fix (RG-192), the server-jobs rollout note
+// (phrased as NOT YET ON — the jobs are switched on individually after this
+// deploys), and one commissioner-only line. No internal IDs, no invented
+// stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.0',
+    date: '2026-09-20',
+    added: [],
+    fixed: [
+      'After you hit Send, the chat box clears again. In the last update it kept your sent message in the box, so a second tap could post it twice.',
+      'The red "Cross-device sync is OFF" banner no longer shows up for a hiccup. The app now retries a failed save on its own a few times first, and only shows the banner if it really cannot get through.',
+      "Final score results now post to the Locker Room no matter whose phone has the app open. Before this, if nobody happened to have the app open when a game went final, that result never posted at all.",
+      'Live scores, lock reminders, and SCRIBE are moving to run on our server instead of on a player’s phone, so they keep working even with the app closed. Rolling out over the next few days — not all on yet.',
+      '📲 Commissioner: send yourself a real test push, see who can actually receive one, and check which app version each phone is on — all from Comm → Data.',
+    ],
+  },
   {
     // v0.22.5 — RG-174 (chat composer draft wiped by every re-render; constant under Realtime) + Phase III
     // Step 6 Phase 1 shipped DORMANT (notify-fanout stand-down gate in js/notifications.js, serverJobs OFF).
@@ -377,6 +402,9 @@ import {
   // N1 (2026-09-12, UN-204, DI-N1 gate 3 / DI-N3) — the lifecycle device ledger
   // and the per-device push-active flag. Both device-local; see storage.js.
   getLifecyclePosted, setLifecyclePosted, setPushActive,
+  // DI-210b (iOS Munera, 2026-09-20) — the native shell's own scroll/tab-state
+  // survival across a WKWebView reload. Device-local; see storage.js.
+  getShellUiState, setShellUiState,
   GAME_REQUEST_CAP, centralDateKey, foldGameRequests,
   groupGameRequests, gameRequestMatchesWeek, countOpenGameRequests,
   submitGameRequest, withdrawGameRequest,
@@ -454,6 +482,10 @@ import {
   linkMemberByEmail, linkMember, unlinkMember,
   getClaimCodes, issueClaimCode, listLeagueMembers, getMemberContacts,
   setMemberRole, setMemberActive,
+  // DI-T6.13 (UN-194, Phase 2) — the Background jobs card's on-demand read. Same shape as
+  // getMemberContacts above (a plain async Supabase call in auth.js, never a raw client import
+  // here); job_runs is not part of the synchronous storage seam.
+  getJobRuns,
   normalizeClaimCode, isClaimCodeShape,
   // DI-180q + brief §3b — the confirmation card's one-time re-download line is
   // conditioned on the device clear having ACTUALLY fired, which only
@@ -511,7 +543,7 @@ import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage
 import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field-preserve.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
-  getScribeFrequency, isScribeAutonomousEnabled } from './scribeAgent.js';
+  getScribeFrequency, isScribeAutonomousEnabled, runTrainerViaEdgeFunction } from './scribeAgent.js';
 // Build 3, Group D pass 2 (2026-09-11) — the approved copy tables (FREQUENCY_*
 // / MEMORY_COPY, from SCRIBE_COPY_GROUP_D_091126.md) and the ONE impure
 // week-signal wrapper pass 1 built for these two call sites. Imported rather
@@ -552,6 +584,14 @@ import {
   wireChatNotifications, destinationFor,
   LIFECYCLE_EVENTS, CATEGORY_OF_EVENT,
   registerPushAdapter, OneSignalRelayAdapter,
+  // Phase III Step 6 — ONE client gate shared by every phase: DI-T6.1's
+  // notify-fanout gate, DI-T6.4's own, and DI-T6.6's scoresRefresh check (see
+  // the note at runAutoRefreshTick()). There is no second implementation.
+  isServerJobEnabled,
+  // DI-T6.13 (UN-194) — the Background jobs card's canonical job list. Imported rather than
+  // re-declared: it is the SAME names `_shared/job-rules.mjs`'s SERVER_JOBS and this file's
+  // own `isServerJobEnabled()` already key off, kept in step by notifytest.mjs [29], not by memory.
+  SERVER_JOB_NAMES,
 } from './notifications.js';
 import { buildCopy } from './notify-copy.js';
 import {
@@ -559,6 +599,43 @@ import {
   wireNotificationClicks,
   subscriptionState, requestPushPermission, isPushOptedIn,
 } from './push-onesignal.js';
+// ── DI-204/205/206/218 — the push self-test family. Its own module because
+//    every decision in it is a PURE function of a server answer, which is what
+//    lets pushtest.mjs assert the sentence the commissioner actually reads. It
+//    renders nothing and touches no DOM: the Background-jobs card below owns
+//    the markup and the escaping.
+import {
+  sendTestPush, pollTestPushResult, testPushResultCopy, testPushRefusalCopy,
+  serverPushOffCopy,
+  breakdownLine, newestBreakdown,
+  checkPushReach, reachLine, reachHeaderCopy,
+  reportAppVersionOnce, fetchMemberAppVersions, versionLine, versionSummary,
+  timeAgo as pushTimeAgo,
+} from './push-selftest.js';
+
+// ── iOS Munera thread, PASS 1b (2026-09-20) — the platform + brand seams ─────
+// DI-208c step 1 / AD-68: `isNativeShell()` is the ONE predicate every
+// native-vs-web branch below must call — no second implementation.
+// DI-213a/DI-213k: the two brand-string call sites and the native-only header
+// wordmark. Both modules are zero-dependency, zero-top-level-side-effect
+// (their own headers) — importing them costs a web boot nothing.
+import { isNativeShell } from './platform.js';
+import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js';
+
+// DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
+// this module can reach `document.body` without touching index.html's inline
+// theme-bootstrap script (the named repeat-defect site, deliberately not
+// edited here — AD-68/DI-208c). Module-level `<script type="module">` code
+// runs after the DOM has parsed but before `DOMContentLoaded`/boot(), which
+// is earlier than every other hook this file has. On the real web case
+// (isNativeShell() always false — nothing in cfb-pickems/ ever sets
+// window.Capacitor) this is a single false-check, byte-identical to not
+// having run at all: the class is never added, so no CSS rule scoped under
+// it can ever apply. Guarded for loadtest.mjs's DOM stub, where
+// `document.body` exists but is a bare object with a no-op classList.
+if (typeof document !== 'undefined' && document.body && isNativeShell()) {
+  try { document.body.classList.add('native-shell'); } catch {}
+}
 
 // ─── STATE ────────────────────────────────────────────────────────────────────
 
@@ -1156,8 +1233,25 @@ function wireSupabaseAdapter() {
     // A missing accessor reports "NOT VERIFIED", never success.
     hasSheetMirror: hasSheetMirrorOnDevice,
     isSiteUnlocked,
+    // RG-202 — the adapter's bounded write retry refreshes the session before an AUTH-class
+    // attempt (a 401/PGRST301 on a token that expired between the debounce tick and the request —
+    // the "wake from background and type" race). The refresh is auth.js's, not the adapter's:
+    // this is the single-flight, strike-counted, epoch-guarded round the rest of the app already
+    // goes through, so a write retry can never become a second owner of the session.
+    refreshSession: () => refreshMembershipsAndSession(),
     // §4.2 — Realtime folds into the mirror; the repaint is app.js's.
-    onRealtimeEvent: () => { _repaintForSupabaseData('realtime'); },
+    //
+    // R2 (2026-09-20) — AND THE CATCH-UP EMITTER, because this is where a
+    // server-performed status transition ARRIVES. While
+    // `settings.serverJobs.scoresRefresh` is on, a game going LIVE or FINAL is
+    // an Edge Function's write landing here as a row change with no before/after
+    // pair — nothing on this device "saw" the transition, so nothing would post
+    // the kickoff or the FINAL/ATS line. reconcileGameEvents() answers from
+    // STATE instead ("is there already a sys_kick_<id>/sys_final_<id>?") and is
+    // idempotent across all six phones by deterministic id. Cheap: it is a fold
+    // lookup per game of the current week, and it returns immediately when the
+    // week is demo or absent. Guard: refreshtest.mjs:540 [5i-1].
+    onRealtimeEvent: () => { _repaintForSupabaseData('realtime'); reconcileGameEvents(getCurrentWeek()); },
   });
   sb.onStatus(onSupabaseDataStatus);
 }
@@ -1200,7 +1294,18 @@ function onSupabaseDataStatus(status, detail = {}) {
     showSupabaseOfflineBanner(null, String(detail.banner || detail.error || ''));
     return;
   }
-  hideSupabaseOfflineBanner();
+  // ══ RG-202 gate, reviewer note 3 — ONLY EVIDENCE OF AN EMPTY QUEUE TAKES THE AMBER DOWN ══
+  //
+  // This line used to run unconditionally, which was defensible while 'syncing' meant only "a
+  // flush has just started". RG-202's bounded write retry emits 'syncing' again for every backoff
+  // attempt, so the amber held-offline banner went down and stayed down for the whole schedule
+  // while the picks were still queued — and a banner vanishing is, on screen, indistinguishable
+  // from the queue having drained. That is the RG-180 defect this banner was added to fix,
+  // reappearing through the retry. The adapter carries `pendingWrites` on every 'syncing' emit;
+  // a missing count means an emitter that knows nothing about the queue, and is treated as empty
+  // so no other caller's behaviour changes. 'synced' — which is emitted only once the queue has
+  // actually gone through — is still what clears it in the ordinary case.
+  if (!(status === 'syncing' && Number(detail.pendingWrites) > 0)) hideSupabaseOfflineBanner();
   if (status === 'error') {
     if (detail.error) showBackendErrorBanner(String(detail.error));
     // §5.2 last paragraph — a REFUSED READ may mean a role changed under us.
@@ -1324,6 +1429,21 @@ async function afterSupabaseHydrate(reason) {
     sb.subscribeRealtime();
     refreshHeader();
     _repaintForSupabaseData(reason);
+    // R2, call site (iii) — THE BOOT/RE-HYDRATE CATCH-UP. The case this one
+    // exists for is the one nobody is watching: every game of a Saturday goes
+    // final while the server refreshes scores and not one phone is open. The
+    // first app opened afterwards folds the chat log, sees no `sys_final_<id>`
+    // for games that are FINAL in the mirror, and posts them — once, league-wide,
+    // by deterministic id. A no-op on every hydrate where nothing is owed.
+    //
+    // THE FOLD IS ALREADY PRIMED BY HERE, which is what keeps this from being a
+    // redundant append every boot: `initChatUI({phase:'early'})` runs well above
+    // this line and primes the device-local events cache synchronously. On a
+    // fresh install with no cache the fold can still be empty at this instant —
+    // and the consequence is bounded and safe rather than visible: the post is
+    // appended, the server answers `deduped:true` off its own unique id, and
+    // nothing new appears in the room.
+    reconcileGameEvents(getCurrentWeek());
     if (!_sbTailRan) {
       _sbTailRan = true;
       try { await runPostHydrateTail(); }
@@ -1468,6 +1588,9 @@ async function boot() {
     getIdentityEpoch,                    // js/auth.js — RECOMMENDED: a same-phone account handover never moves the league.
     onAdapterSynced: (cb) => sb.onStatus((status) => { if (status === 'synced') cb(); }),
                                          // amendment A7 — RECOMMENDED: re-sends a parked ritual post on the flush.
+    getSettings,                         // js/storage.js — Step 6 Phase 3 (DI-T6.3): askScribe()'s
+                                         // client-half switch read, injected rather than imported so
+                                         // chatTransport.js keeps importing EXACTLY js/backend.js (S5/T5.11).
   });
   // Then the adapter itself: registration only — no client, no storage read, no
   // timer, no hydrate. In the flag-off world every line of it stays dormant,
@@ -1594,6 +1717,19 @@ async function boot() {
   // the gate, not by withholding the paint.
   if (!isSiteUnlocked()) showSitePinGate();
   revealApp();   // paint happens NOW — hydration overlaps sign-in/PIN entry
+  // DI-213k (PASS 1b) — the native-only header wordmark. Cheap and idempotent
+  // on web (isNativeShell() false → immediate return); one-time on native.
+  try { initNativeWordmark(); } catch {}
+  // DI-210b (PASS 1b) — restore the tab/scroll the native shell last saw,
+  // before ANY render below picks a default. Web is unaffected: the guard
+  // inside restoreNativeShellUiState() itself is the same isNativeShell()
+  // check, and `rendered`/state.currentTab are still 'picks' (state.js's own
+  // default) on every web boot exactly as before.
+  restoreNativeShellUiState();
+  // DI-208d (PASS 1b) — the update-available nudge. Deliberately NOT awaited:
+  // a background, informational network check must never delay paint or
+  // hydrate. No-ops immediately on web (isNativeShell() false, first line).
+  checkNativeShellStaleness();
 
   // ── AUTH-MODE GATE (DI-180f) ────────────────────────────────────────────────
   // ONE function, called from boot() here and re-called verbatim by DI-180l's
@@ -1650,10 +1786,10 @@ async function boot() {
     } else if (deployed.ok === false && deployed.reason === 'malformed') {
       console.error('[backend] config.json malformed:', deployed.error);
       backendErrorBanner = `config.json is invalid (${deployed.error}). Cross-device sync is OFF.`;
-      if (!rendered) { setBackendMode('local'); initStorage(); navigateTo('dashboard'); rendered = true; }
+      if (!rendered) { setBackendMode('local'); initStorage(); navigateTo(bootDefaultTab()); rendered = true; }
     } else {
       // No config anywhere — fork-friendly local-only mode.
-      if (!rendered) { setBackendMode('local'); initStorage(); navigateTo('dashboard'); rendered = true; }
+      if (!rendered) { setBackendMode('local'); initStorage(); navigateTo(bootDefaultTab()); rendered = true; }
     }
   } catch (err) {
     // LOUD failure (unchanged policy): players + commissioner must KNOW their
@@ -1661,7 +1797,7 @@ async function boot() {
     const msg = String(err.message || err);
     console.error('[backend] hydrate failed:', err);
     backendErrorBanner = msg;
-    if (!rendered) { setBackendMode('local'); initStorage(); navigateTo('dashboard'); rendered = true; }
+    if (!rendered) { setBackendMode('local'); initStorage(); navigateTo(bootDefaultTab()); rendered = true; }
   }
   if (backendErrorBanner) showBackendErrorBanner(backendErrorBanner);
 
@@ -1818,6 +1954,29 @@ async function runPostHydrateTail() {
     }
   } catch (e) { console.warn('[notifications] deep-link parse failed', e); }
 
+  // ── DI-218 / UN-209 — REPORT THIS DEVICE'S APP VERSION. One hook, here.
+  //
+  // WHY HERE: this tail runs exactly once per load, AFTER a hydrate that
+  // returned ACTIVE — so the league is resolved, the session is proven, and the
+  // RPC has something true to say. Reporting earlier would fire on boots where
+  // `my_member_id()` has no answer yet and log a harmless failure every time.
+  //
+  // FIRE-AND-FORGET, AND FAILURE IS SILENT TO THE PLAYER. `reportAppVersionOnce`
+  // catches everything itself and only console.warns. THIS MUST NEVER RAISE THE
+  // RED BANNER (AD-06): that banner means "your picks may not be saving", and
+  // spending it on a diagnostic column would teach six people to ignore the one
+  // warning that matters. The `.catch()` here is belt-and-braces for the
+  // promise, not a second error path.
+  //
+  // NO STORED LEDGER. The server decides whether there is anything new to say —
+  // `report_app_version()` returns without writing when the version has not
+  // changed. See js/push-selftest.js's header for why a device-local key would
+  // have been the wrong subject (a member, not a device) and would have buried
+  // 0004's audit_log.
+  try {
+    reportAppVersionOnce(APP_VERSION).catch(() => {});
+  } catch (e) { console.warn('[version] the app-version report could not be started', e); }
+
   // Guarded because this tail is now reachable from TWO callers (boot() and the
   // hold-gate resume), and one of them runs in environments — the Node suites,
   // which drive the real functions — where `window` is globalThis and has no
@@ -1914,7 +2073,191 @@ function hideBackendErrorBanner() {
 function revealApp() {
   // Defer one tick so the DOM has actually painted the new layout first.
   requestAnimationFrame(() => document.body.classList.remove('cfbp-booting'));
+  // DI-210a (PASS 1b) — the ONE call site. boot() reaches revealApp() before
+  // the PIN gate decision, before hydrate, and before EVERY hold/error branch
+  // (the sign-in gate and the signed-in shell both paint through here — it is
+  // whichever boot path paints first, and there is only one), so hooking
+  // SplashScreen.hide() here also covers "the loud-fail banner path" per the
+  // DI: showBackendErrorBanner()/showAuthUnavailableBanner() can only ever
+  // run AFTER this line in the boot sequence, so the splash is already gone
+  // by the time either could show. Guarded end to end: no-ops on web
+  // (isNativeShell() false) and no-ops if the plugin is missing.
+  hideNativeSplashScreen();
 }
+
+/** DI-210a — SplashScreen.hide(), native only. The native shell project's
+ *  own Capacitor config sets `launchAutoHide:false` (DI-208a's spike PASS),
+ *  which means the native shell holds its launch image until THIS call —
+ *  never a flash of unstyled content, and never a splash stuck up forever
+ *  if this line is missing. Idempotent: the plugin no-ops a second hide()
+ *  call. (AD-65's no-build boundary: this file names no path outside
+ *  cfb-pickems/ — the pairing with the OTHER project's config is enforced
+ *  by that project's own configtest.mjs, not by a cross-reference here.) */
+function hideNativeSplashScreen() {
+  if (!isNativeShell()) return;
+  try { window.Capacitor?.Plugins?.SplashScreen?.hide?.(); } catch {}
+}
+
+/** DI-210a — one light haptic impact on a genuine "success" moment. No-ops
+ *  on web and no-ops if the Haptics plugin is missing (guarded end to end,
+ *  same shape as hideNativeSplashScreen() above). `style` mirrors the
+ *  plugin's own ImpactStyle enum ('LIGHT'|'MEDIUM'|'HEAVY'); 'LIGHT' is the
+ *  DI's stated choice for both call sites. */
+function nativeHapticImpact(style = 'LIGHT') {
+  if (!isNativeShell()) return;
+  try { window.Capacitor?.Plugins?.Haptics?.impact?.({ style }); } catch {}
+}
+
+/**
+ * DI-208d (PASS 1b) — "update available" nudge. A SEPARATE channel from
+ * showBackendErrorBanner()/showSessionExpiredBanner() — same precedent,
+ * distinct DOM node, own class, own id — so a sync failure and a stale-
+ * bundle nudge never look like the same problem and never clobber each
+ * other. Non-blocking, dismissible only by tapping through (small, does not
+ * cover app chrome). Tap opens the hardcoded literal `https://irbfootball.com`
+ * via the native Browser plugin (security condition 11 — never derived from
+ * the fetched response).
+ */
+function showUpdateAvailableBanner() {
+  if (document.getElementById('update-available-banner')) return;
+  const el = document.createElement('div');
+  el.id = 'update-available-banner';
+  el.className = 'update-available-banner';
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  el.innerHTML = `<span>A newer version of Pick 'Ems is live. Tap to open it in Safari while you wait for the next app update.</span>`;
+  el.addEventListener('click', () => {
+    try { window.Capacitor?.Plugins?.Browser?.open?.({ url: 'https://irbfootball.com' }); } catch {}
+  });
+  document.body.appendChild(el);
+}
+
+/** DI-208d — parses the `-vNN-N` suffix either a CACHE_NAME or (via the same
+ *  shape derived from APP_VERSION) this bundle's own version encodes.
+ *  Returns `[minor, patch]` or `null` for anything unparseable — an
+ *  unparseable value must never compare as "newer" in either direction. */
+function _parseCacheVersionTag(cacheName) {
+  const m = /-v(\d+)-(\d+)$/.exec(String(cacheName || ''));
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+/** This bundle's own [minor, patch], derived from APP_VERSION rather than a
+ *  fifth version-stamp location (coordinator note C2 / RG-04's own lesson —
+ *  the four existing stamps already move together at every release).
+ *
+ *  Round 1 gate, item F — the old regex was anchored to the literal `v0.`,
+ *  which would silently return null forever the day APP_VERSION crosses to
+ *  v1.x, permanently disabling the staleness check with no error anywhere.
+ *  Generalized to `v<major>.<minor>.<patch>` — any major digit parses.
+ *  [minor, patch] is still the RETURNED shape (not [major, minor, patch]):
+ *  CACHE_NAME's own format (`cfb-pickems-v<minor>-<patch>`, see
+ *  _parseCacheVersionTag() above) has never encoded a major component, so a
+ *  three-part comparison against a two-part live value would compare digits
+ *  that don't mean the same thing on both sides. That CACHE_NAME shape is
+ *  not this function's to redesign; generalizing the regex closes the
+ *  "silently dies at v1.x" defect without inventing a new comparison this
+ *  DI never asked for. */
+function _bundledVersionTag(version = APP_VERSION) {
+  const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(String(version || ''));
+  return m ? [Number(m[2]), Number(m[3])] : null;
+}
+function _isNewerTag(bundled, live) {
+  if (!bundled || !live) return false;
+  if (live[0] !== bundled[0]) return live[0] > bundled[0];
+  return live[1] > bundled[1];
+}
+
+/**
+ * DI-208d (PASS 1b) — the staleness check itself. Native only; a background,
+ * informational check that is NEVER a gate on app function — any failure
+ * (offline, non-2xx, oversized body, no match) is a SILENT no-op, exactly as
+ * the DI requires. Security condition 10, followed exactly:
+ *   - fetches the LIVE service-worker.js (never app.js — ~800KB; C2), never
+ *     the bundled copy;
+ *   - `redirect:'error'` — a redirected response is treated as untrusted;
+ *   - `response.ok` required;
+ *   - a ~64KB byte cap on the body;
+ *   - ONE anchored, bounded regex (`CACHE_NAME\s*=\s*['"]([A-Za-z0-9._-]
+ *     {1,64})['"]`) — no `eval`/`Function`;
+ *   - the fetched text is NEVER rendered — only the matched capture group is
+ *     read, and even that only feeds a numeric comparison, never the DOM.
+ * "Newer" is a genuine numeric comparison (condition: "a rollback must not
+ * nudge"), not a not-equal check.
+ */
+const SW_FETCH_BYTE_CAP = 64 * 1024;
+const SW_CACHE_NAME_RE = /CACHE_NAME\s*=\s*['"]([A-Za-z0-9._-]{1,64})['"]/;
+
+/**
+ * Round 1 gate, item F — the cap now bounds the DOWNLOAD, not just the
+ * parse. `await res.text()` buffers the ENTIRE body before any length check
+ * ran, so an untrusted response with no Content-Length (or a lying one)
+ * could make this background check allocate an unbounded amount of memory
+ * before ever reaching the cap comparison. Enforced two ways, both before
+ * any byte reaches a string:
+ *   1. Content-Length, WHEN PRESENT, is checked first — a fast rejection
+ *      that needs no read at all.
+ *   2. The body is read via its stream reader with a running byte count,
+ *      cancelling the stream and returning null the instant the cap is
+ *      crossed — a response that lies about Content-Length (or omits it)
+ *      still cannot exceed the cap.
+ * Any failure (no reader available, a read that throws, a cap breach) is a
+ * silent `null` — the caller's existing no-op-on-anything-unexpected
+ * contract, never a special case.
+ */
+async function _readBoundedText(res, capBytes) {
+  const declaredLen = Number(res?.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLen) && declaredLen > capBytes) return null;
+  const reader = res?.body?.getReader?.();
+  if (!reader) {
+    // No streaming reader in this environment — one buffered read, still
+    // capped on the way out (defense in depth, not the primary guard).
+    try {
+      const text = await res.text();
+      return (typeof text === 'string' && text.length > 0 && text.length <= capBytes) ? text : null;
+    } catch { return null; }
+  }
+  let received = 0;
+  const chunks = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value?.byteLength || 0;
+      if (received > capBytes) { try { await reader.cancel(); } catch {} return null; }
+      if (value) chunks.push(value);
+    }
+  } catch { return null; }
+  if (received === 0) return null;
+  const buf = new Uint8Array(received);
+  let offset = 0;
+  for (const c of chunks) { buf.set(c, offset); offset += c.byteLength; }
+  try { return new TextDecoder('utf-8').decode(buf); } catch { return null; }
+}
+
+async function checkNativeShellStaleness() {
+  if (!isNativeShell()) return;
+  try {
+    const res = await fetch('https://irbfootball.com/service-worker.js', { redirect: 'error' });
+    if (!res || !res.ok) return;
+    const text = await _readBoundedText(res, SW_FETCH_BYTE_CAP);
+    if (typeof text !== 'string' || text.length === 0) return;
+    const m = SW_CACHE_NAME_RE.exec(text);
+    if (!m) return;
+    const liveTag = _parseCacheVersionTag(m[1]);
+    const bundledTag = _bundledVersionTag();
+    if (_isNewerTag(bundledTag, liveTag)) showUpdateAvailableBanner();
+  } catch {
+    // Offline / network failure / anything else — silent no-op (this is a
+    // background informational check, never a gate on app function).
+  }
+}
+
+// Test seams (round 1 gate, item F) — same `_xForTest` pattern as elsewhere.
+export const _readBoundedTextForTest = _readBoundedText;
+export const _bundledVersionTagForTest = _bundledVersionTag;
+export const _parseCacheVersionTagForTest = _parseCacheVersionTag;
+export const _isNewerTagForTest = _isNewerTag;
+export const _checkNativeShellStalenessForTest = checkNativeShellStaleness;
+export const SW_FETCH_BYTE_CAP_FOR_TEST = SW_FETCH_BYTE_CAP;
 
 // AD-06 (UN-110 consequence): .app-header — and with it #sync-badge — is
 // display:none on the chat tab. One function, two targets, so they cannot
@@ -2017,6 +2360,12 @@ export function checkPickRevealDue() {
   if (!due.length) return;
   const week = due[0];
   emitPickRevealEvent(week);
+  // DI-210a (PASS 1b) — one of the two named "success" haptic moments: the
+  // week-lock reveal. No-ops on web; a device that is not the one FIRST
+  // detecting the reveal (this ran on someone else's phone first) never
+  // reaches this line at all, which is fine — the DI asks for a haptic when
+  // the reveal happens on THIS device, not a guarantee every device feels it.
+  nativeHapticImpact('LIGHT');
   done.push(week.weekId);
   try { localStorage.setItem(key, JSON.stringify(done.slice(-20))); } catch {}
 }
@@ -3008,7 +3357,11 @@ function refreshHeader() {
       ${wl.dates ? `<span class="week-heading-dates">${escHtml(wl.dates)}</span>` : ''}
     </span>`;
   } else {
-    el.innerHTML = '<strong>CFB Pickems</strong>';
+    // DI-213a (PASS 1b) — shell brand, not league name: web says "CFB
+    // Pickems" (byte-identical to the literal it replaces, brandtest.mjs
+    // proves this), native says "Munera." escHtml around every interpolated
+    // value, per S-C2 — even a today-static string, once it is a variable.
+    el.innerHTML = `<strong>${escHtml(getShellBrandName())}</strong>`;
   }
 }
 
@@ -3153,6 +3506,131 @@ export function renderLeaguePill() {
 }
 
 /**
+ * DI-213k (PASS 1b, Drew: "Add a header wordmark (Recommended)") — a
+ * NATIVE-ONLY text wordmark ("MUNERA") beside the existing #league-pill.
+ * `renderLeaguePill()` above is untouched, verbatim — this function only
+ * ever inserts a SIBLING element in front of it.
+ *
+ * "On web the element must not exist in the DOM at all" (per the approved
+ * DI, not merely hidden) — so this never runs on web: created exactly once,
+ * gated on isNativeShell(), idempotent (checks for its own id first). Called
+ * once from boot(), the same place the native-shell body class is settled.
+ */
+function initNativeWordmark() {
+  if (!isNativeShell()) return;
+  if (document.getElementById('brand-wordmark')) return;
+  const league = document.getElementById('league-pill');
+  if (!league || !league.parentNode) return;
+  const wm = document.createElement('span');
+  wm.id = 'brand-wordmark';
+  wm.className = 'brand-wordmark';
+  wm.innerHTML = escHtml(getShellWordmark() || '');
+  league.parentNode.insertBefore(wm, league);
+}
+
+let _nativeAppLifecycleWired = false;
+// S-C17 / reviewer #2 (round 1 gate) — the FIXED allow-list. A saved tab is
+// only ever honoured if it is one of these six AND its #page-<tab> section
+// actually exists in this build's DOM — a stale save from a future build
+// that renamed/removed a tab must fall back to the normal default, never a
+// blank shell. Reviewer #3 (round 1 gate) — this flag is what "the restore
+// won" actually means: set true only once a saved tab passes BOTH checks,
+// and read by the three boot fallback paths below (bootDefaultTab()) so
+// they can tell "nothing to restore" apart from "restore happened."
+const NATIVE_SHELL_VALID_TABS = ['picks', 'dashboard', 'leaderboard', 'commissioner', 'rules', 'chat'];
+let _nativeShellTabRestored = false;
+
+/**
+ * DI-210b (PASS 1b) — restore, at boot, the tab (+ scroll) the native shell
+ * last saw before a WKWebView background→foreground reload. Read-only here;
+ * the write side is the `pause` listener wired below. Web is unaffected:
+ * getShellUiState() only ever returns non-null after a native `pause` has
+ * written it, and DEVICE_LOCAL_KEYS keeps the key off the sync seam
+ * entirely, so no other device (or a web session on the same account) can
+ * ever be handed a phone's saved tab.
+ *
+ * STATED LIMITATION (reviewer #3, round 1 gate): this only wins the THREE
+ * named cold-boot fallback paths (bootDefaultTab(), below) and every
+ * pre-existing `navigateTo(state.currentTab || 'dashboard')` call site
+ * (already the majority of post-hydrate navigation, unmodified). A path
+ * that hard-navigates to a FIXED tab for its own reason — the signed-out
+ * PIN/Google gate is an OVERLAY, not a tab change, so it does not conflict;
+ * an explicit sign-out's own reset of state.currentTab is that flow's own
+ * concern and is left exactly as it was — is not touched here, by design,
+ * rather than threading a native check through every navigateTo() call in
+ * the app.
+ */
+function restoreNativeShellUiState() {
+  if (!isNativeShell()) return;
+  try {
+    const saved = getShellUiState();
+    const tab = saved && saved.tab;
+    const tabValid = typeof tab === 'string'
+      && NATIVE_SHELL_VALID_TABS.includes(tab)
+      && !!document.getElementById('page-' + tab);
+    if (tabValid) {
+      state.currentTab = tab;
+      _nativeShellTabRestored = true;
+    }
+    // S-C17 — the scroll restore must never fire against a different tab
+    // than the one actually saved (reviewer #3): captured here, re-checked
+    // at fire time, two frames later, against whatever state.currentTab
+    // turns out to be by then (a hold/gate/error path could have changed
+    // it in the interim).
+    if (tabValid && Number.isFinite(saved.scrollTop) && saved.scrollTop > 0) {
+      const top = saved.scrollTop;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try { if (state.currentTab === tab) window.scrollTo({ top }); } catch {}
+      }));
+    }
+  } catch {}
+  wireNativeShellPauseState();
+}
+
+/**
+ * DI-210b / reviewer #3 — the three named cold-boot fallback paths (no
+ * config, malformed config, hydrate threw) hardcoded 'dashboard'
+ * unconditionally, which would silently overwrite a just-restored native
+ * tab the instant one of those legacy/error branches fired — exactly the
+ * "silent jump to Dashboard" the DI forbids. Everywhere ELSE in this file
+ * that already reads `state.currentTab || 'dashboard'` needs no change:
+ * restoreNativeShellUiState() runs before all of them, so the restored
+ * value is already sitting in state.currentTab by the time they read it.
+ */
+function bootDefaultTab() {
+  return (isNativeShell() && _nativeShellTabRestored) ? state.currentTab : 'dashboard';
+}
+
+// Test seams (S-C17 / reviewer #2/#3, round 1 gate) — same pattern as every
+// other `_xForTest` export in this file. `_resetNativeShellRestoreForTest()`
+// lets a suite exercise restoreNativeShellUiState() more than once without
+// carrying the wired-listener/restored latches across scenarios.
+export const _restoreNativeShellUiStateForTest = restoreNativeShellUiState;
+export function _nativeShellTabRestoredForTest() { return _nativeShellTabRestored; }
+export const _bootDefaultTabForTest = bootDefaultTab;
+export function _resetNativeShellRestoreForTest() {
+  _nativeShellTabRestored = false;
+  _nativeAppLifecycleWired = false;
+}
+
+/**
+ * DI-210b — the write side. Capacitor's App plugin fires `pause` when the
+ * shell is backgrounded; that is the DI's named moment to snapshot
+ * state.currentTab (+ scrollTop) to the device-local, never-synced key.
+ * Wired at most once (boot() calls restoreNativeShellUiState() exactly
+ * once); guarded end to end, same shape as every other native hook here.
+ */
+function wireNativeShellPauseState() {
+  if (_nativeAppLifecycleWired) return;
+  _nativeAppLifecycleWired = true;
+  try {
+    window.Capacitor?.Plugins?.App?.addListener?.('pause', () => {
+      try { setShellUiState(state.currentTab, window.scrollY || 0); } catch {}
+    });
+  } catch {}
+}
+
+/**
  * UN-127 (item 4, 2026-08-27; RELOCATED same day on Drew's explicit ruling):
  * a quiet, always-reachable shortcut to the feedback form. Drew's stated
  * goal is VOLUME — "everyone submits a lot" — so this needs to work from
@@ -3280,10 +3758,40 @@ function applyTheme(themeKey) {
   body.classList.add('theme-' + key);
   try {
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) {
+    // Round 1 gate, item H — RESTORED short-circuit. The PASS 1b edit called
+    // getComputedStyle() unconditionally, paying a style-computation cost on
+    // every applyTheme() even on a page with no theme-color meta tag at all
+    // (a real cost, and a behaviour change from the original `if (meta) {…}`
+    // guard). On WEB, `native` below is always false, so this branch is
+    // byte-identical to the original: skip entirely when there is no meta.
+    // On native, the status bar needs the resolved colour even when the web
+    // meta tag happens to be absent, so the guard is `meta || native`, not
+    // `meta` alone.
+    const native = isNativeShell();
+    if (meta || native) {
       const c = getComputedStyle(body).getPropertyValue('--maroon').trim();
-      if (c) meta.setAttribute('content', c);
+      if (meta && c) meta.setAttribute('content', c);
+      // DI-210a (PASS 1b) — status bar theming, native only. Reuses this
+      // SAME resolved --maroon value (no new theme concept); called at boot
+      // (resyncPlayerPreferences()'s applyTheme(getTheme()) call) and at
+      // every theme-change (the toggle's applyTheme(key) call), per the DI.
+      if (native && c) syncNativeStatusBar(c);
     }
+  } catch {}
+}
+
+/** DI-210a — StatusBar plugin, native only. Guarded end to end: no-ops on
+ *  web, no-ops if the plugin is missing (a native build before the plugin
+ *  loads, or this file evaluated under a bare Capacitor spoof). 'DARK' style
+ *  means light (white) status-bar text/icons, correct against every one of
+ *  the seven college themes' --maroon (all dark-enough backgrounds). */
+function syncNativeStatusBar(color) {
+  if (!isNativeShell()) return;
+  try {
+    const StatusBar = window.Capacitor?.Plugins?.StatusBar;
+    if (!StatusBar) return;
+    StatusBar.setBackgroundColor?.({ color });
+    StatusBar.setStyle?.({ style: 'DARK' });
   } catch {}
 }
 
@@ -3571,6 +4079,12 @@ function renderPrimingCardHTML(pushState) {
     // OneSignal's SDK refuses to load outside the installed app).
     'needs-install': { title: "Install to get push", body: "Push needs the home-screen app. Tap Share → Add to Home Screen, then open IRB Pick 'Ems from the icon and come back here.", btn: null },
     unsupported:   { title: "Push isn't available here", body: "This browser can't do push notifications. You'll still see everything in the app — try an iPhone home-screen install, or Chrome on Android.", btn: null },
+    // DI-210e item 2 (iOS Munera, PASS 1b) — the native shell's own state,
+    // never the 'needs-install' copy above (that "Add to Home Screen" step
+    // is nonsensical inside an app already installed via TestFlight).
+    // subscriptionState() (js/push-onesignal.js) resolves this state FIRST,
+    // before any async config read, whenever isNativeShell() is true.
+    'native-unavailable': { title: "Push is coming to the app", body: "Native push notifications aren't available in this app yet — they're coming in a future update. For push today, use irbfootball.com in Safari.", btn: null },
   }[pushState];
   if (!copy) return '';
   return `<div class="card notif-priming-card" id="notif-priming-card">
@@ -6022,6 +6536,10 @@ function submitPicks(week, games) {
   showToast(syncBroken
     ? '✅ Picks saved locally. ⚠️ Sync still off — picks not yet shared.'
     : (wasEditing ? '✅ Picks updated!' : '✅ Picks submitted! Good luck!'),'success');
+  // DI-210a (PASS 1b) — the other of the two named "success" haptic moments:
+  // a successful pick submission. Fires even on the syncBroken path (the
+  // submit itself still succeeded locally); no-ops on web.
+  nativeHapticImpact('LIGHT');
   setTimeout(()=>{ renderPicksPage(); window.scrollTo({ top: 0 }); },300);   // UN-115 (DI-115b): submitted view replaces the form
 }
 /**
@@ -8580,6 +9098,16 @@ export function renderCommPage() {
         </div>
       </div>`);
 
+    // Background jobs (DI-T6.13, UN-194, Phase 2) — directly after Export
+    // Data, same tab (RG-10). Supabase-only (renders '' under the legacy
+    // Sheets backend, where there is no serverJobs switch and no job_runs
+    // table to read).
+    sections.push(renderBackgroundJobsAdminSectionHTML());
+    if (isSupabaseDataMode() && !_bgJobsCache.loading &&
+        (_bgJobsCache.rows === null || _bgJobsCache.leagueId !== getActiveLeagueId())) {
+      refreshBackgroundJobsCard();
+    }
+
     // Feedback review + CSV (UN-122/123) — directly after Export Data, same
     // tab (RG-10). NOT part of exportFullCsvBundle — Drew was offered that
     // and did not select it.
@@ -8873,7 +9401,18 @@ export function renderCommPage() {
       if (s < 86400) return `${Math.floor(s/3600)}h ago`;
       return new Date(iso).toLocaleString();
     };
-    sections.push(`
+    // DI-208g / S-C14 (PASS 1b, 2026-09-19/20, Drew "Approve") — the Cloud
+    // Sync card and its be-* handlers are not rendered/bound inside the
+    // native shell. AD-67: the iOS app never speaks Apps Script, full stop;
+    // security-reviewer's AMENDMENT 1 finding F1 was that this card renders
+    // unconditionally with live URL/token inputs that a shell could actually
+    // POST through (a real path to Apps Script the runtime refusal in
+    // js/backend.js's call() alone does not make disappear from the UI).
+    // isNativeShell() (not isNativeOrigin()) is correct here: hiding a card
+    // is cosmetic, not the security boundary — that boundary is the
+    // origin-positive refusal in backend.js/chatTransport.js, which a
+    // spoofed Capacitor on https: cannot pass either way.
+    if (!isNativeShell()) sections.push(`
       <div class="admin-section" data-comm-tab="data">
         <div class="admin-section-title">☁️ Cloud Sync (Google Sheets)</div>
         <div class="card">
@@ -10082,6 +10621,58 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('export-obligations-csv-btn')?.addEventListener('click', exportObligationsCSV);
   document.getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);
 
+  // ── Background jobs (DI-T6.13, UN-194, Phase 2) ──
+  document.getElementById('background-jobs-refresh-btn')?.addEventListener('click', () => refreshBackgroundJobsCard());
+  // ── DI-204/206/218 — the push self-test sub-section's three controls.
+  document.getElementById('push-selftest-btn')?.addEventListener('click', () => { handleSendTestPush(); });
+  document.getElementById('push-reach-btn')?.addEventListener('click', () => { handlePushReachCheck(); });
+  document.getElementById('push-breakdown-toggle')?.addEventListener('click', () => {
+    _pushSelfTest = { ..._pushSelfTest, breakdownOpen: !_pushSelfTest.breakdownOpen };
+    renderCommPage();
+  });
+  document.querySelectorAll('.server-job-toggle').forEach((el) => {
+    el.addEventListener('change', () => {
+      const job = el.dataset.job;
+      const next = el.checked;
+      // DI-T6.13: "turning a job ON must carry the double-push/'all six
+      // phones on this version' warning in copy where it applies; turning
+      // OFF is always allowed."
+      if (next && SERVER_JOB_ON_WARNING[job] && !confirm(`${SERVER_JOB_ON_WARNING[job]}\n\nContinue?`)) {
+        el.checked = false;
+        return;
+      }
+      const bag = { ...(getSettings().serverJobs || {}), [job]: next };
+      // REVIEWER R1 — a SIBLING map, not a new field on `bag`. `serverJobs.<job>`
+      // stays a strict boolean forever: the Edge Functions' `isJobEnabledFromSettings`
+      // and this file's own `serverJobEnabledIn()` both compare `=== true`, and
+      // widening that shape to `{on, at}` would break both readers on the exact
+      // day this ships. `serverJobsFlippedAt` is a second, independent settings
+      // key written by the SAME save, so a job's on/off state and "when was it
+      // last touched" can never silently drift apart, and no existing reader is
+      // even aware the new key exists (CONVENTIONS #10: absent -> unknown flip
+      // time -> the pre-existing "has not run yet" copy, never an escalation).
+      const flippedAtBag = { ...(getSettings().serverJobsFlippedAt || {}), [job]: new Date().toISOString() };
+      // AD-06 loud-fail: `saveSetting()` writes the seam's in-memory mirror
+      // synchronously; a REFUSED write (e.g. a session that lost commissioner
+      // privilege mid-page) surfaces through the app's EXISTING backend
+      // sync-failure banner, the same path every other settings edit in this
+      // panel already relies on — this handler does not invent a second one.
+      // The try/catch below only guards a synchronous throw from the seam
+      // itself (a malformed value, a storage-mode error), which is the class
+      // of failure this handler CAN see immediately.
+      try {
+        saveSetting('serverJobs', bag);
+        saveSetting('serverJobsFlippedAt', flippedAtBag);
+      } catch (err) {
+        el.checked = !next;
+        showToast(`Could not update the switch: ${err && err.message ? err.message : err}`, 'error');
+        return;
+      }
+      showToast(`${next ? '✅ Enabled' : '⏸ Disabled'} ${SERVER_JOB_LABELS[job] || job}`, next ? 'success' : 'warning');
+      renderCommPage();
+    });
+  });
+
   // ── SCRIBE Trainer (Build 2b, E5b, 2026-09-10, UN-161…163) ──
   document.getElementById('scribe-run-trainer-btn')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
@@ -10099,7 +10690,17 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     }
     btn.disabled = true; const original = btn.textContent; btn.textContent = 'Running…';
     try {
-      const result = await runTrainerRemote({ adminPasswordHash });
+      // ── Phase III Step 6 PHASE 4 (trainer) — DI-T6.4's client half. ─────────────────────────
+      // Call the Edge Function ONLY when `settings.serverJobs.trainer` is true; otherwise this
+      // button's behaviour is BYTE-IDENTICAL to today (the Apps Script relay below, unchanged).
+      // The Edge path does its OWN, real auth check server-side (`is_commissioner`, off the
+      // signed-in Supabase session) — the password prompt above is the same "this spends real
+      // money" client-side confirmation gate the factory-reset flow uses, kept for both paths
+      // rather than removed, and `adminPasswordHash` is simply not sent to the new function
+      // (it has no use for it; it derives the caller from the JWT).
+      const result = isServerJobEnabled('trainer')
+        ? await runTrainerViaEdgeFunction()
+        : await runTrainerRemote({ adminPasswordHash });
       if (result && result.skipped) {
         // Not a failure — a deliberate no-op (kill switch off, hourly floor,
         // or too little rated feedback in the window to say anything).
@@ -12913,7 +13514,7 @@ export function renderRulesPage() {
     ${renderReleaseNotesCardHTML()}
 
     <div class="app-version-footer" title="Build version">
-      CFB Pickems ${escHtml(APP_VERSION)} · ${escHtml(APP_VERSION_DATE)}
+      ${escHtml(getShellBrandName())} ${escHtml(APP_VERSION)} · ${escHtml(APP_VERSION_DATE)}
     </div>`;
 
   // Wire feedback handler (Priority 13)
@@ -13383,6 +13984,691 @@ export function renderScribeTrainerAdminSectionHTML() {
         ${pendingHTML}
       </div>
     </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-T6.13 (UN-194) — THE BACKGROUND JOBS CARD, Phase 2's first item.
+//
+// Read-only is sufficient per the reviewer's gating condition on Phase 1
+// (amendment B1): last run per job, plus the `Switched on … has not run yet`
+// / staleness line. This card is what makes that gate satisfiable at all —
+// no second `settings.serverJobs` switch may flip until it ships.
+//
+// A job whose function is not built yet renders with a DISABLED toggle and a
+// stated reason — never a live switch over a path that does not exist.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** Human label per switch. Kept here (a UI concern) rather than alongside
+ *  `SERVER_JOB_NAMES` (a decision-logic concern shared with Deno). */
+const SERVER_JOB_LABELS = Object.freeze({
+  notifyFanout: 'Chat push (notify-fanout)',
+  reminders: 'Pick reminders',
+  scribeAsk: '@scribe replies',
+  trainer: 'SCRIBE Trainer',
+  scribeClassify: 'SCRIBE auto-classify',
+  scribeAutonomous: 'SCRIBE unprompted posts',
+  scoresRefresh: 'Live score refresh',
+  keepalive: 'Keep-alive heartbeat',
+});
+/** The `job_runs.job` value each switch's function writes — snake/kebab,
+ *  not the camelCase switch name (`_shared/runs.js`'s JOB_NAME constants). */
+const SERVER_JOB_RUN_NAME = Object.freeze({
+  notifyFanout: 'notify-fanout', reminders: 'reminders', scribeAsk: 'scribe-ask',
+  trainer: 'trainer', scribeClassify: 'scribe-classify', scribeAutonomous: 'scribe-autonomous',
+  scoresRefresh: 'scores-refresh', keepalive: 'keepalive',
+});
+/** Which functions actually exist to deploy, as of this build. Everything
+ *  else renders DISABLED with a stated reason (§0.3 item 2: deploying is not
+ *  switching on, and an unbuilt function must never look like a live switch).
+ *  `scribeAsk` (Step 6 Phase 3, DI-T6.3) joins this list at the coordinator's
+ *  shared-foundation pass, 2026-09-20 — the function, its twin (23/23) and
+ *  the client gate in js/chatTransport.js all exist; the card must say so.
+ *  `trainer` (Step 6 Phase 4, DI-T6.4) joins at the same pass — both entry
+ *  points exist, `trainer.twin.mjs` is green, and js/app.js's "Run Trainer
+ *  now" button (below) already gates on the switch.
+ *  `scribeClassify`/`scribeAutonomous` (Step 6 Phase 5, DI-T6.5) join at the coordinator's Phase
+ *  4/5 reconciliation pass, 2026-09-20 — both functions exist, both twins are green
+ *  (27/27, 56/56), and `js/scribeAgent.js`'s `scribeClassifyRemote()`/`scribeAutonomousRemote()`
+ *  already branch on `isServerJobEnabled(...)` before ever touching the legacy relay (the
+ *  mutation canary is `scoringtest.mjs [26]`, the same shape `notifytest.mjs [28g]` established
+ *  for notify-fanout: byte-identical when off/absent, and the legacy relay's call counter proven
+ *  at ZERO when the switch is on). Switched on FIFTH, TOGETHER (DI-T6.5's own text) — the runbook
+ *  is written to flip both in the same sitting, never one without the other. */
+const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true });
+/** Expected cadence in minutes, for the staleness line — only for jobs that
+ *  fire AT LEAST DAILY. `notify-fanout` and `scribeAsk` are both EVENT-DRIVEN
+ *  (a webhook / a `functions.invoke()` per `@scribe` mention): their "last
+ *  run" is the last event that needed one, which has no fixed cadence to be
+ *  late against, so NEITHER escalates to "may be dead" on silence — a quiet
+ *  week with nobody typing `@scribe` is not a failure (DI-T6.13's own table
+ *  only defines a staleness row for a SCHEDULED job; an event-driven one has
+ *  nothing to be stale AGAINST).
+ *
+ *  `scribeClassify`/`scribeAutonomous` are ALSO EVENT-DRIVEN, for the same reason and DELIBERATELY
+ *  absent from both this map and `SERVER_JOB_SCHEDULE` below (coordinator's Phase 4/5
+ *  reconciliation pass, 2026-09-20): each fires per candidate chat message / per scored
+ *  opportunity from whichever of six clients' own `js/scribeLines.js` first crosses the dial —
+ *  there is no cron slot to be late against, and a quiet Tuesday with nobody making a bold claim
+ *  is not a failure. `hasStaleness` below (neither map has an entry for either job) already
+ *  produces the correct "never escalate on silence" render with no code change needed here beyond
+ *  their absence.
+ *
+ *  `scoresRefresh` (Step 6 Phase 6) IS DELIBERATELY NOT HERE either, although 0017 schedules it
+ *  every minute: most ticks find no refreshable game and are due-list no-ops, so "minutes since
+ *  the last recorded run" is not a health signal on a Tuesday. Final-release gate note 2,
+ *  2026-09-20 — stated rather than left implicit.
+ *
+ *  `trainer` IS DELIBERATELY NOT HERE — see `SERVER_JOB_SCHEDULE` below. A
+ *  weekly job's "3x cadence" is three weeks, which is not a staleness rule,
+ *  it is a way to notice a dead cron job around Thanksgiving having been
+ *  broken since Week 1. */
+const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360 });
+// ═══ BEGIN STEP 6 PHASE 4 (trainer) — LOW-FREQUENCY JOBS NEED A DIFFERENT RULE ═══
+/**
+ * `SERVER_JOB_CADENCE_MIN`'s "3x cadence" rule is right for anything that fires at least daily —
+ * 3x5min=15min (reminders), 3x360min=18h (keepalive): being three cycles late is meaningfully
+ * broken on that timescale. Applied literally to a WEEKLY job it stops being a staleness rule at
+ * all: 3x weekly is three weeks, and a cron misconfiguration would then run silently for three
+ * Mondays — nearly a month — before this card said anything, which is exactly the quiet failure
+ * UN-194 exists to catch quickly. So a job on a schedule slower than daily is escalated against
+ * its OWN next expected SLOT instead, with a small grace window for ordinary run latency (an
+ * Anthropic round trip, one retry) rather than a multiple of the whole cadence.
+ *
+ * `weekday`: 0=Sun…6=Sat (`Date.getDay()`'s own numbering, so no second convention to remember).
+ * `hour`: the LOCAL hour in `timeZone` the job is scheduled for. `graceHours`: how late past that
+ * slot is still "hasn't run yet" rather than "may be dead".
+ *
+ * `trainer`: Monday 09:00 America/Chicago — 0015's pg_cron schedule (DI-T6.4, amendment A1: pinned
+ * to the Apps Script project's own timeZone, read from its manifest, not assumed).
+ */
+const SERVER_JOB_SCHEDULE = Object.freeze({
+  trainer: Object.freeze({ weekday: 1, hour: 9, timeZone: 'America/Chicago', graceHours: 6 }),
+});
+
+/**
+ * One-pass `Intl`-based timezone wall-clock -> UTC-instant conversion.
+ *
+ * A NAMED LIMITATION, same spirit as `capMessageBody()`'s UTF-16 note (`_shared/text-cap.mjs`):
+ * this is a SINGLE re-derivation of the zone's UTC offset at the target instant, not a full
+ * DST-safe zoned-datetime library. It can be off by the DST shift (1 hour) for a slot that falls
+ * exactly on a US spring-forward/fall-back Sunday night into Monday morning — twice a year, for
+ * one specific weekly slot, and only ever by 1 hour against a 6-hour grace window. Acceptable for
+ * a UI staleness HINT; nothing here spends money or writes data — the pg_cron schedule itself is
+ * server-side (`0015_step6_trainer.sql`) and entirely unaffected by this client-side estimate.
+ */
+function zonedWallClockToUtcMs(y, mo, d, h, mi, timeZone) {
+  const guess = Date.UTC(y, mo - 1, d, h, mi, 0);
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+  const p = Object.fromEntries(fmt.formatToParts(new Date(guess)).map((x) => [x.type, x.value]));
+  const shown = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day),
+    p.hour === '24' ? 0 : Number(p.hour), Number(p.minute), 0);
+  return guess - (shown - guess);
+}
+
+/** The most recent occurrence of `{weekday, hour}` (see `SERVER_JOB_SCHEDULE`'s header for the
+ *  numbering) in `timeZone`, at or before `now`. Exported for the same reason
+ *  `_setBgJobsCacheForTest` is: a pure function a test can drive directly without the DOM. */
+export function mostRecentWeeklySlotMs({ weekday, hour, timeZone }, now = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone, weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hour12: false,
+  });
+  const p = Object.fromEntries(fmt.formatToParts(now).map((x) => [x.type, x.value]));
+  const WD = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const nowWeekday = WD[p.weekday];
+  const nowHour = p.hour === '24' ? 0 : Number(p.hour);
+  let daysBack = (nowWeekday - weekday + 7) % 7;
+  if (daysBack === 0 && nowHour < hour) daysBack = 7; // today IS the day, but the hour hasn't come yet
+  const todayLocalMidnightMs = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day));
+  const target = new Date(todayLocalMidnightMs - daysBack * 86400000);
+  return zonedWallClockToUtcMs(target.getUTCFullYear(), target.getUTCMonth() + 1, target.getUTCDate(), hour, 0, timeZone);
+}
+
+/**
+ * Is `job` overdue right now, and by how many ms? `sinceMs` is the last point we KNOW the job was
+ * caught up as of — the switch's flip time for a job that has never run, or the last SUCCESSFUL
+ * finish for one that has. Returns `null` for "not overdue" (including event-driven jobs with no
+ * cadence/schedule entry at all, which can never be overdue).
+ *
+ * UNIFIES the "never run yet" and "ran before, went quiet" cases (both `renderBackgroundJobsAdminSectionHTML()`
+ * call sites below): both are really the same question — has an expected cycle passed with no run
+ * recorded since `sinceMs`? — asked against different reference points. This also means the
+ * existing `SERVER_JOB_CADENCE_MIN` jobs (reminders, keepalive) get byte-identical behaviour to
+ * before (`(now - sinceMs) > cadence * 3 minutes`, algebraically the same inequality), and only the
+ * schedule-based branch is new.
+ */
+export function jobOverdueMs(job, sinceMs, now = Date.now()) {
+  if (sinceMs == null) return null;
+  const cadence = SERVER_JOB_CADENCE_MIN[job];
+  if (cadence) {
+    const lateMs = (now - sinceMs) - cadence * 3 * 60000;
+    return lateMs > 0 ? lateMs : null;
+  }
+  const schedule = SERVER_JOB_SCHEDULE[job];
+  if (schedule) {
+    const slotMs = mostRecentWeeklySlotMs(schedule, new Date(now));
+    if (slotMs <= sinceMs) return null; // caught up: no scheduled slot has occurred since sinceMs
+    const lateMs = (now - slotMs) - schedule.graceHours * 3600000;
+    return lateMs > 0 ? lateMs : null;
+  }
+  return null; // event-driven — nothing to be late against
+}
+
+/** Human cadence phrase for the staleness sentence — "expected every N min" for a
+ *  `SERVER_JOB_CADENCE_MIN` job, "expected weekly (Mon 09:00 America/Chicago)" for a
+ *  `SERVER_JOB_SCHEDULE` one. */
+function jobCadenceLabel(job) {
+  const cadence = SERVER_JOB_CADENCE_MIN[job];
+  if (cadence) return `every ${cadence} min`;
+  const schedule = SERVER_JOB_SCHEDULE[job];
+  if (schedule) {
+    const day = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][schedule.weekday];
+    return `weekly (${day} ${String(schedule.hour).padStart(2, '0')}:00 ${schedule.timeZone})`;
+  }
+  return '';
+}
+// ═══ END STEP 6 PHASE 4 ═══
+/** The double-push warning copy (DI-T6.13: "turning a job ON must carry the
+ *  double-push/'all six phones on this version' warning in copy where it
+ *  applies"). Only the jobs that replace a live client-side path need it.
+ *
+ *  `scribeAsk` DELIBERATELY GETS DIFFERENT COPY, NOT THE DOUBLE-ANSWER
+ *  WARNING THE OTHER THREE CARRY (coordinator's shared-foundation pass,
+ *  2026-09-20 double-answer analysis). Unlike notify-fanout/reminders/
+ *  scores-refresh, `@scribe` has no always-on CLIENT BACKGROUND LOOP
+ *  competing with the server for the same work — `askScribe()` is invoked
+ *  once, by the ASKER's own device, inline in the same call that decides
+ *  whether to reach the server at all (js/chatTransport.js:1019-1051). A
+ *  stale device's `askScribe()` either never learned to call the function
+ *  (Step 5's stub) or reads the SAME `settings.serverJobs.scribeAsk` switch
+ *  before falling back — there is no parallel path for it to race against,
+ *  so it is structurally unable to post BOTH a real answer and a canned one
+ *  for the same message. The one genuine race Step 6 names (a real reply
+ *  landing at the same moment as a client-side timeout's own canned post)
+ *  is closed at the DATABASE, not by device timing: both target the
+ *  identical deterministic id `scribe_llm_<triggerMessageId>`, and
+ *  `chat_append`'s `on conflict do nothing` (AD-11) admits only the first —
+ *  DI-T6.3's own text calls this out ("a genuine race collapses to one
+ *  row"). What a stale device costs instead is a FIDELITY gap, not a
+ *  duplication risk: it keeps getting Step 5's canned pool while a
+ *  freshly-updated device gets real, tool-backed answers — confusing (some
+ *  players seem to get a smarter SCRIBE than others) but never wrong and
+ *  never doubled. Named honestly rather than reusing the double-push
+ *  sentence, which would overstate the risk this switch actually carries. */
+const SERVER_JOB_ON_WARNING = Object.freeze({
+  // CORRECTED (narrow re-gate, 2026-09-20) — the three warnings below used to say "only flip this
+  // on once every device is on the latest app version," which asks Drew for something he cannot
+  // do: see or confirm another player's phone. Unlike scribe-autonomous/scribe-classify, there is
+  // NO Apps Script action to close for these three — the client relay/scan is kept deliberately as
+  // each job's own fallback while devices catch up (§S6F1-R: "the client relay, which was never
+  // removed… resumes as soon as each device re-hydrates"), so there is no gate to name here. What
+  // changed instead: the App version last seen list (DI-218, ships this release) replaces the
+  // guesswork with an actual read, and the wording below states the real, bounded, self-resolving
+  // residual rather than a precondition nobody can execute.
+  notifyFanout: 'An older phone keeps relaying chat push too until it updates, so players may see a message pushed twice in the meantime — that gap closes on its own as each device catches up. The App version last seen list below shows who has updated (DI-218).',
+  reminders: 'An older phone keeps running its own reminder scan until it updates, which can double a reminder push for that one player in the meantime — self-resolving as each device catches up. The App version last seen list below shows who has updated (DI-218). Only flip this on after notify-fanout has run clean for a full weekend.',
+  scoresRefresh: 'An older phone keeps refreshing scores on its own too until it updates — extra ESPN calls from that one device, not anything other players see. The App version last seen list below shows who has updated (DI-218), if you want to check.',
+  scribeAsk: 'This spends money per question (Anthropic). No double-answer risk — an old phone just keeps getting the canned pool instead of a real answer until it updates. Confusing if players compare notes, not unsafe.',
+  // ═══ BEGIN STEP 6 PHASE 4 (trainer) ═══
+  // DOUBLE-RUN ANALYSIS, done the way Phase 3 did it for scribeAsk (that comment above is the
+  // precedent). `isServerJobEnabled('trainer')`'s branch (js/app.js's "Run Trainer now" handler)
+  // reads the synchronous storage seam, so a FULLY-UPDATED commissioner device always sees the
+  // switch's true, current state — there is no "stale settings" risk within one loaded bundle.
+  // The real risk is a device running an OLD cached app.js bundle from BEFORE this branch existed
+  // at all (a stale service-worker cache, not a stale settings read): that device's "Run Trainer
+  // now" button has no knowledge of the switch and always calls the legacy Apps Script path. With
+  // the switch ON, that is a SECOND, INDEPENDENT Trainer implementation a commissioner could
+  // trigger within the same hour as the Edge Function's own one-per-hour manual floor — Apps
+  // Script has no visibility into `scribe_rate`'s shared budget key and would track its own old
+  // Script Properties total separately. Unlike notify-fanout/reminders/scores-refresh this is NOT
+  // a duplicate of the SAME content (Apps Script's Trainer reads the FROZEN Google Sheet, which
+  // stopped moving at cutover, so its report is stale/near-empty rather than a copy of the real
+  // one) — it is a genuine double-SPEND risk (two paid Anthropic calls, tracked in two unrelated
+  // places) rather than a double-answer or double-push risk.
+  trainer: 'This spends money per run (Anthropic), on a one-per-hour floor. Before flipping this on, delete the Apps Script Monday Trainer trigger (§S6F4-P0) — that closes the SCHEDULED double-run, which fires every Monday regardless of any device’s version. The manual “Run Trainer now” button is commissioner-only and is closed structurally in this build already, so it only matters that YOUR OWN browser has this build — nobody else’s device.',
+  // ═══ END STEP 6 PHASE 4 ═══
+  // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
+  // STALE-CLIENT ANALYSIS, done the way Phase 3/4 did it for scribeAsk/trainer (both comments
+  // above are the precedent). `js/scribeAgent.js`'s `scribeClassifyRemote()`/
+  // `scribeAutonomousRemote()` branch on `isServerJobEnabled('scribeClassify'|'scribeAutonomous')`
+  // BEFORE ever falling through to the legacy `remoteTransport` relay (Apps Script's own
+  // `scribeClassify`/`scribeAutonomous` actions) — a FULLY-UPDATED device always takes exactly one
+  // path, proven by `scoringtest.mjs [26]`'s mutation canary (the legacy relay's call counter is
+  // ZERO when the switch is on, in every branch that canary drives).
+  //
+  // THE REAL RISK, as with trainer, is a device running an OLD CACHED app.js bundle from BEFORE
+  // this switch-check code existed at all — a stale service-worker cache, not a stale settings
+  // read. That device's `scribeClassifyRemote()`/`scribeAutonomousRemote()` have no knowledge of
+  // `isServerJobEnabled` and always call the Apps Script path directly. `js/scribeLines.js`'s
+  // always-on client loop (`considerAutonomous()`/`scribeTrigger()`) runs on EVERY phone
+  // independently, so with the switch ON: (a) `scribe-classify` — a stale device still asks Apps
+  // Script to classify a message the Edge Function may have already classified, spending a second
+  // Anthropic call Apps Script's own CFBP_SCRIBE_LOG tracks separately from this month's Supabase
+  // budget; worse, (b) `scribe-autonomous` — a stale device's own opportunity score can independently
+  // clear the dial and call Apps Script's `scribeAutonomous`, which has NO knowledge of the Edge
+  // Function's `autonomous:global`/`autonomous:post:<id>` cooldown tickets (they live in
+  // `scribe_rate`, a table Apps Script never reads) — so a stale device can post a SECOND
+  // unprompted SCRIBE reply for the same event within the same ten minutes, the exact double-post
+  // this switch exists to retire.
+  //
+  // CORRECTED (narrow re-gate, 2026-09-20) — this used to say the precondition was confirming all
+  // six players' devices on paper, which Drew cannot do: he has no way to see or ask about another
+  // player's phone. THE ACTUAL GATE, per §S6F5-P0's own gate-closure rewrite, is closing the Apps
+  // Script `scribeAutonomous`/`scribeClassify` ACTIONS first — a `Code.gs` edit Drew makes alone —
+  // so a stale device's legacy call returns `{skipped:'retired_step6_f5'}` before it can ever reach
+  // Apps Script's own cooldown or post anything, regardless of which release that device is on. No
+  // device survey is required or sufficient; the closure is what makes the survey unnecessary.
+  scribeClassify: 'This spends money per classified message (Anthropic, capped by the daily classify cap and the shared monthly budget). A STALE cached device (has not loaded the current app version) still calls the old Apps Script classifier directly — a second paid call Apps Script tracks in its own log, invisible to this month’s Supabase spend cap. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
+  scribeAutonomous: 'This spends money per unprompted post (Anthropic) and posts to the room without being asked. A STALE cached device has no knowledge of this switch or of the Edge Function’s cooldown — it can independently score the same event and post a SECOND unprompted SCRIBE reply within the same ten minutes, which is the exact double-post this switch exists to prevent. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
+  // ═══ END STEP 6 PHASE 5 ═══
+});
+
+/** Module-level cache — `job_runs` is not part of the synchronous storage
+ *  seam (CONVENTIONS #9), so this card's data arrives asynchronously and is
+ *  re-rendered into place, the same shape every other async admin action in
+ *  this file already uses (e.g. "Refresh Scores" -> await -> renderCommPage()). */
+let _bgJobsCache = { leagueId: null, rows: null, fetchedAt: 0, loading: false, error: null };
+
+/** Test seam, same shape as `_setMemberCardDataForTest` — lets a suite drive
+ *  `renderBackgroundJobsAdminSectionHTML()`'s rendering directly against a
+ *  chosen `job_runs` fixture without a real (or fake) network round trip
+ *  through `getJobRuns()`. Production never calls this. */
+export function _setBgJobsCacheForTest(patch) {
+  _bgJobsCache = { leagueId: null, rows: null, fetchedAt: 0, loading: false, error: null, ...patch };
+}
+
+function _bgJobTimeAgo(iso) {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!(ms >= 0)) return 'just now';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
+
+/**
+ * Pure: reads only `getSettings()` (synchronous, always current) and the
+ * module-level `_bgJobsCache` (populated by `refreshBackgroundJobsCard()`).
+ * Exported for the same reason `renderFeedbackAdminSectionHTML` is: a test
+ * seam that does not require the DOM.
+ */
+export function renderBackgroundJobsAdminSectionHTML() {
+  if (!isSupabaseDataMode()) return '';
+  const bag = (getSettings().serverJobs) || {};
+  // REVIEWER R1 — the sibling map, read here and nowhere else. `bag` above
+  // stays untouched so `isServerJobEnabled()`/`isJobEnabledFromSettings()`
+  // keep seeing a strict boolean forever (see the toggle handler's comment).
+  const flippedAtBag = (getSettings().serverJobsFlippedAt) || {};
+  const rowsByJob = {};
+  for (const r of (_bgJobsCache.rows || [])) {
+    (rowsByJob[r.job] = rowsByJob[r.job] || []).push(r);
+  }
+
+  const rowsHtml = SERVER_JOB_NAMES.map((job) => {
+    const on = bag[job] === true;
+    const built = !!SERVER_JOB_BUILT[job];
+    const label = SERVER_JOB_LABELS[job] || job;
+    const last = (rowsByJob[SERVER_JOB_RUN_NAME[job] || job] || [])[0] || null;
+    // Step 6 Phase 4 (trainer) — `jobOverdueMs()`/`jobCadenceLabel()` unify the short-cadence
+    // (SERVER_JOB_CADENCE_MIN) and low-frequency (SERVER_JOB_SCHEDULE) staleness rules; see their
+    // own headers above. `hasStaleness` gates both branches below the same way the old bare
+    // `cadence` truthiness check did — event-driven jobs (neither map has an entry) never escalate.
+    const hasStaleness = (job in SERVER_JOB_CADENCE_MIN) || (job in SERVER_JOB_SCHEDULE);
+    const cadenceLabel = jobCadenceLabel(job);
+
+    let statusLine;
+    let failed = false;
+    if (!built) {
+      statusLine = 'Not built yet — a later phase adds this.';
+    } else if (!on) {
+      statusLine = "Off — the app's own path is handling this.";
+    } else if (!last) {
+      // REVIEWER R1 — a job that has NEVER run could otherwise say "has not run
+      // yet" forever, which is exactly Phase 2's likeliest failure (cron/Vault
+      // misconfigured) and exactly what UN-194 exists to catch. `flippedAt` is
+      // read from the SIBLING map, never from `bag` (that stays a strict
+      // boolean). Absent flippedAt (an old switch flipped before this landed,
+      // or a job with no cadence/schedule to be late against) falls back to
+      // the original sentence — CONVENTIONS #10, unchanged behaviour when the
+      // field is missing. Event-driven jobs (e.g. notifyFanout) are NEVER
+      // escalated on silence — there is no schedule to be late against.
+      const flippedAt = flippedAtBag[job];
+      if (!flippedAt) {
+        statusLine = 'Switched on — has not run yet.';
+      } else {
+        const overdueMs = hasStaleness ? jobOverdueMs(job, new Date(flippedAt).getTime()) : null;
+        if (overdueMs != null) {
+          failed = true;
+          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt)}, still no run — expected ${cadenceLabel}. This job may be dead.`;
+        } else {
+          statusLine = `Switched on ${_bgJobTimeAgo(flippedAt)} — has not run yet.`;
+        }
+      }
+    } else if (!last.finishedAt) {
+      failed = true;
+      statusLine = `Last ran ${_bgJobTimeAgo(last.startedAt)} · FAILED — no result recorded`;
+    } else if (!last.ok) {
+      failed = true;
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)} · FAILED — ${String(last.error || 'unknown error').slice(0, 140)}`;
+    } else if (last.skipped) {
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)} · nothing to do`;
+    } else {
+      // S-F2 (Step 6 PHASE 5 security gate, 2026-09-20) — WHO SET IT OFF.
+      // `scribe-classify`/`scribe-autonomous` are class-U: a PLAYER's device
+      // starts them, and they spend money and post to a permanent room. Every
+      // row used to read `actor: 'user'` and nothing else, so a commissioner
+      // looking at eleven unprompted SCRIBE posts could not tell whether that
+      // was six phones doing their job or one person holding a console open —
+      // which is the only question worth asking when the concern is a member
+      // forcing paid posts. `payload.actorMemberId` (written by
+      // `_shared/runs.js`, off the VERIFIED JWT, never a body field) is pulled
+      // out of the generic count list and rendered as a name.
+      const { actorMemberId, ...rest } = last.payload || {};
+      const actorName = actorMemberId
+        ? ((getPlayers().find(p => p && p.playerId === actorMemberId) || {}).displayName || actorMemberId)
+        : '';
+      const counts = Object.entries(rest).map(([k, v]) => `${k}: ${v}`).join(', ');
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt)}${actorName ? ` · by ${actorName}` : ''}${counts ? ` · ${counts}` : ''}`;
+    }
+    // Staleness — the failure mode `job_runs` exists to make visible at all:
+    // a scheduled job that has quietly stopped running looks, to every OTHER
+    // check, exactly like a job with nothing to do.
+    if (built && on && last && last.finishedAt && hasStaleness) {
+      const overdueMs = jobOverdueMs(job, new Date(last.finishedAt).getTime());
+      if (overdueMs != null) {
+        failed = true;
+        const minsSince = Math.round((Date.now() - new Date(last.finishedAt).getTime()) / 60000);
+        statusLine = `No run in ${minsSince} min — expected ${cadenceLabel}. This job may be dead.`;
+      }
+    }
+
+    return `
+      <div class="flex-between server-job-row" style="padding:8px 0;border-bottom:1px solid var(--border);align-items:center;gap:12px">
+        <div style="flex:1;min-width:0">
+          <div>${escHtml(label)}</div>
+          <div class="text-xs" style="${failed ? 'color:var(--loss)' : 'color:var(--text-muted)'}">${escHtml(statusLine)}</div>
+        </div>
+        <label style="min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;flex-shrink:0" title="${built ? '' : escHtml('Not built yet')}">
+          <input type="checkbox" class="server-job-toggle" data-job="${escHtml(job)}" ${on ? 'checked' : ''} ${built ? '' : 'disabled'} style="width:22px;height:22px">
+        </label>
+      </div>`;
+  }).join('');
+
+  const errorHtml = _bgJobsCache.error
+    ? `<p class="text-xs mt-sm" style="color:var(--loss)">Could not load job history: ${escHtml(String(_bgJobsCache.error))}</p>`
+    : '';
+
+  return `
+    <div class="admin-section" data-comm-tab="data">
+      <div class="admin-section-title">🛠 Background jobs</div>
+      <div class="card">
+        <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
+          <p class="text-muted text-xs" style="margin:0">Server-side jobs on Supabase, replacing the old Google Sheet triggers one at a time. Off means the app's own client-side path is still doing the work.</p>
+          <button class="btn btn-secondary btn-sm" id="background-jobs-refresh-btn">🔄 Refresh</button>
+        </div>
+        ${rowsHtml}
+        ${errorHtml}
+        ${renderPushSelfTestHTML()}
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-204 / DI-205 / DI-206 / DI-218 — THE PUSH SELF-TEST SUB-SECTION.
+//
+// INSIDE the Background jobs card (DI-204a/DI-206a), not a new card and not a
+// new tab: this is a third piece of the same operator-tooling surface, and the
+// card is already `data-comm-tab="data"` (RG-10 — an untagged admin-section
+// renders on all five tabs).
+//
+// EVERY SENTENCE HERE COMES FROM `js/push-selftest.js`, which is pure and
+// suite-driven. This function's only job is markup, escaping and tap targets.
+// A copy string written inline here would be a string no test can reach.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** All four asynchronous answers this sub-section renders. Module-level for the
+ *  same reason `_bgJobsCache` is: none of it is in the synchronous storage seam
+ *  (CONVENTIONS #9), so it arrives late and is re-rendered into place. */
+let _pushSelfTest = {
+  busy: '',              // '' | 'test' | 'reach' — which button is in flight
+  result: null,          // { tone, text } from testPushResultCopy/testPushRefusalCopy
+  breakdown: null,       // DI-205's array, from the matched run
+  breakdownOpen: false,
+  reach: null,           // push-reach's whole envelope
+  versions: null,        // DI-218's rows, or null before the first load
+};
+
+/** Test seam, same shape as `_setBgJobsCacheForTest`. Production never calls it. */
+export function _setPushSelfTestForTest(patch) {
+  _pushSelfTest = { busy: '', result: null, breakdown: null, breakdownOpen: false, reach: null, versions: null, ...patch };
+}
+
+/** tone -> CSS custom property. NO NEW COLOR TOKEN (DI-206f): `⚠️` reuses
+ *  `--loss` rather than inventing a warn color, so all seven themes are correct
+ *  by construction. */
+const PUSH_TONE_COLOR = Object.freeze({
+  ok: 'var(--win)', bad: 'var(--loss)', warn: 'var(--loss)', muted: 'var(--text-muted)',
+});
+
+/** One rendered line. `escHtml` on BOTH the text and the icon — the icon is a
+ *  constant today, and escaping it costs nothing and cannot rot. */
+function pushLineHTML({ icon = '', tone = 'muted', text = '', action = '' }) {
+  return `
+    <div class="text-xs" style="padding:3px 0;color:${PUSH_TONE_COLOR[tone] || 'var(--text-muted)'}">
+      ${escHtml(icon)} ${escHtml(text)}
+      ${action ? `<div class="text-xs" style="color:var(--text-muted);padding-left:18px">${escHtml(action)}</div>` : ''}
+    </div>`;
+}
+
+export function renderPushSelfTestHTML() {
+  if (!isSupabaseDataMode()) return '';
+  const s = _pushSelfTest;
+  // `playerId` / `displayName` — THE ACTUAL PLAYER-RECORD SHAPE (js/storage.js:941,
+  // js/supabase-projection.js:545's PLAYER_COLS). Corrected at the combined release, 2026-09-20,
+  // reviewer BLOCK R1: this read `x.id === id` and `.name`, neither of which is a field on a
+  // player record, so EVERY lookup fell through to the `|| id` fallback and every line on all
+  // three lists rendered a raw member id — "Tell p_1724_ab3x to open the app". 129 pushtest
+  // assertions passed over it because the suite injected its own `nameOf` fixture and never drove
+  // this one.
+  //
+  // THE IDS REALLY DO LINE UP, checked rather than assumed: PLAYER_COLS maps
+  // `{ legacy: 'playerId', column: 'id' }`, so the client's `playerId` IS `league_members.id` —
+  // the same value `send_test_push`, `notify-fanout`, `push-reach` and `member_app_versions` all
+  // return. There is no mapping step to apply, and adding one would be wrong.
+  //
+  // SAME SHAPE AS THE APP'S OTHER ROSTER LOOKUP (js/app.js:12173, the obligations list), rather
+  // than a new helper — there is no shared exported one to call.
+  //
+  // FALLING BACK TO THE ID IS DELIBERATE, and is not the defect above: with the field names right,
+  // it fires only for an id that is genuinely not on the roster (a removed member with a stale
+  // OneSignal registration, say), and for an operator card that id is the most useful thing to
+  // show. What was wrong before was that it fired for EVERYBODY.
+  //
+  // A CONCISE ARROW BODY, NOT A `return` STATEMENT, on purpose: xsstest's [9c]
+  // classifier scans every `return` lexically inside the enclosing function, so
+  // a `return p.displayName` here would be read as one of THIS function's returns and
+  // denied — even though every name it produces is escaped downstream by
+  // pushLineHTML(). The expression form keeps the rule meaningful instead of
+  // arguing with it.
+  const nameOf = (id) => (getPlayers().find((x) => x.playerId === id) || {}).displayName || id;
+
+  // ── DI-204 — the test push.
+  const testResult = s.result ? pushLineHTML({ icon: s.result.tone === 'ok' ? '✅' : s.result.tone === 'bad' ? '⛔' : '⚠️', ...s.result }) : '';
+  const breakdownHtml = (s.breakdown && s.breakdownOpen)
+    ? (s.breakdown.map((e) => pushLineHTML(breakdownLine(e, nameOf))).join('') || pushLineHTML({ icon: '➖', text: 'No recipients on that run.' }))
+    : '';
+  // The caret and the count are hoisted out of the template, and the label uses
+  // a `·` rather than parentheses: xsstest's [9c] site scanner tracks bracket
+  // depth to find the end of a `${…}`, and a bare `(` sitting in the literal
+  // TEXT between two interpolations makes it read the following words as code
+  // ("identifier Who — never assigned in this file"). Cheaper to write the
+  // label without the paren than to teach the scanner about prose.
+  const breakdownCount = s.breakdown ? s.breakdown.length : 0;
+  const breakdownCaret = s.breakdownOpen ? '▾' : '▸';
+  const breakdownToggle = breakdownCount
+    ? `<button class="btn btn-secondary btn-sm" id="push-breakdown-toggle" style="min-height:44px">${escHtml(breakdownCaret)} Who it reached · ${numHtml(breakdownCount)}</button>`
+    : '';
+
+  // ── DI-206 — the reachability check.
+  const reachHeader = s.reach ? reachHeaderCopy(s.reach) : null;
+  const eligibility = newestBreakdown(_bgJobsCache.rows || []);
+  const eligById = new Map((eligibility ? eligibility.breakdown : []).map((e) => [e.memberId, e]));
+  const reachHtml = (s.reach && Array.isArray(s.reach.results) && s.reach.results.length)
+    ? s.reach.results.map((r) => pushLineHTML(reachLine(r, eligById.get(r.memberId) || null, nameOf))).join('')
+    : '';
+
+  // ── DI-218 — last-seen app version.
+  const versionRows = s.versions || [];
+  const versionHtml = versionRows.length
+    ? versionRows.map((e) => pushLineHTML(versionLine(e, APP_VERSION, nameOf))).join('')
+    : `<div class="text-xs" style="color:var(--text-muted)">${escHtml(s.versions ? 'No members reported.' : 'Loading…')}</div>`;
+
+  // Two full-width ≥44px buttons at phone width (CONVENTIONS #17); the
+  // `.server-job-row` flex pattern already shipping in this card takes over at
+  // 600px, which is why they are laid out with the same flex-between shape.
+  return `
+    <div style="border-top:1px solid var(--border);margin-top:12px;padding-top:12px">
+      <div class="flex-between" style="align-items:center;gap:8px;flex-wrap:wrap">
+        <div class="text-xs" style="flex:1;min-width:180px;color:var(--text-muted)">Send yourself a real push through the live pathway. Only you can see the chat message it posts.</div>
+        <button class="btn btn-secondary" id="push-selftest-btn" style="min-height:44px"${s.busy ? ' disabled' : ''}>${s.busy === 'test' ? 'Sending…' : '📲 Send test push to my devices'}</button>
+      </div>
+      ${testResult}
+      ${breakdownToggle}
+      ${breakdownHtml}
+
+      <div class="flex-between" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <div class="text-xs" style="flex:1;min-width:180px;color:var(--text-muted)">Ask OneSignal whether each player has a device registered at all. Not real-time — a phone that just had notifications revoked can still show green for a while.</div>
+        <button class="btn btn-secondary" id="push-reach-btn" style="min-height:44px"${s.busy ? ' disabled' : ''}>${s.busy === 'reach' ? 'Checking…' : '🔎 Check who can receive push'}</button>
+      </div>
+      ${reachHeader && reachHeader.text ? pushLineHTML({ icon: '⚠️', ...reachHeader }) : ''}
+      ${reachHtml}
+
+      <div style="margin-top:12px">
+        <div class="text-xs" style="color:var(--text-muted)">App version last seen${versionRows.length ? ` · ${escHtml(versionSummary(versionRows, APP_VERSION))}` : ''}</div>
+        ${versionHtml}
+      </div>
+    </div>`;
+}
+
+/**
+ * DI-204's whole click path. B3's mechanism: fire the RPC, then POLL
+ * `job_runs` for the run whose `payload.meta.messageId` is the id we were
+ * handed — never "the newest notify-fanout row", which on a Saturday belongs to
+ * somebody's chat message.
+ *
+ * A1 CARRIED FORWARD: there is NO client-side push pre-check here and there
+ * must not be one. The laptop running Comm → Data is not the target device; a
+ * browser with notifications blocked must still be able to send to the phone.
+ * The only gate that stops a push is the server-side preference check
+ * `notify-fanout` applies to real traffic, which is why the result copy and the
+ * actual behaviour can never disagree.
+ */
+async function handleSendTestPush() {
+  if (_pushSelfTest.busy) return;
+  // ── REVIEWER BLOCK R2 (2026-09-20) — REFUSE BEFORE SENDING WHEN THE JOB IS OFF.
+  //
+  // `notify-fanout` returns `skipped:'disabled'` BEFORE `startRun()` (its §3 — a flip-off is a
+  // true stop, and notifyFanout.twin.mjs asserts zero job_runs writes on that path). So with the
+  // switch off there is no run row for `pollTestPushResult()` to find: it would time out and the
+  // card would say "the server hasn't reported back yet" — a soft, blameless-sounding line for a
+  // situation this device knows the exact answer to. That is the shape AD-06 forbids.
+  //
+  // This is NOT the client-side push pre-check A1 forbids (see this function's header). A1 is
+  // about the DEVICE's own notification permission, which the laptop running Comm → Data has no
+  // business asserting on the phone's behalf. This is about a SERVER-SIDE job switch the
+  // commissioner set himself, in this very card, three rows above the button — a fact, not a guess.
+  //
+  // Nothing is inserted: we do not call `sendTestPush()` at all, so no private message is written
+  // to the Locker Room for a push that provably cannot follow it.
+  if (!isServerJobEnabled('notifyFanout')) {
+    _pushSelfTest = { ..._pushSelfTest, busy: '', result: serverPushOffCopy() };
+    renderCommPage();
+    return;
+  }
+  _pushSelfTest = { ..._pushSelfTest, busy: 'test', result: null, breakdown: null, breakdownOpen: false };
+  renderCommPage();
+  const sentAtIso = new Date().toISOString();
+  const sent = await sendTestPush();
+  if (!sent.ok) {
+    _pushSelfTest = { ..._pushSelfTest, busy: '', result: testPushRefusalCopy(sent) };
+    renderCommPage();
+    return;
+  }
+  const run = await pollTestPushResult(getActiveLeagueId(), sent.id);
+  _pushSelfTest = {
+    ..._pushSelfTest,
+    busy: '',
+    // …AND AGAIN ON TIMEOUT (BLOCK R2). The switch can be flipped off by another tab, or by this
+    // commissioner himself, between the send and the poll's last attempt. `serverPushOff` is read
+    // HERE rather than captured above so the answer reflects the state now, not thirty seconds ago.
+    result: testPushResultCopy(run, {
+      sentAgo: pushTimeAgo(sentAtIso) || 'just now',
+      serverPushOff: !isServerJobEnabled('notifyFanout'),
+    }),
+    breakdown: run && run.payload && Array.isArray(run.payload.breakdown) ? run.payload.breakdown : null,
+  };
+  // The run we just found is also the freshest eligibility data DI-206's merge
+  // reads, so pull the card's job history forward rather than leaving it a
+  // minute stale.
+  renderCommPage();
+  refreshBackgroundJobsCard();
+}
+
+/** DI-206's click path. One synchronous request/response — unlike DI-204 there
+ *  is nothing to poll for, because nothing happens out of band. */
+async function handlePushReachCheck() {
+  if (_pushSelfTest.busy) return;
+  _pushSelfTest = { ..._pushSelfTest, busy: 'reach', reach: null };
+  renderCommPage();
+  const res = await checkPushReach();
+  _pushSelfTest = { ..._pushSelfTest, busy: '', reach: res };
+  renderCommPage();
+}
+
+/** DI-218's read. Fire-and-forget from the card's own refresh; a failure leaves
+ *  the line reading "No members reported" rather than taking the card down. */
+export async function refreshMemberAppVersions() {
+  if (!isSupabaseDataMode() || !getActiveLeagueId()) return;
+  const rows = await fetchMemberAppVersions();
+  _pushSelfTest = { ..._pushSelfTest, versions: rows };
+  renderCommPage();
+}
+
+/**
+ * Populates `_bgJobsCache` from `job_runs` and re-renders the Comm panel.
+ * Fire-and-forget from `renderCommPage()` when the cache is empty or stale
+ * for the active league; also the `#background-jobs-refresh-btn` handler.
+ *
+ * A FAILED FETCH STILL MARKS THE CACHE "LOADED" (an empty `rows: []`, never
+ * left `null`) — otherwise a persistent failure would re-trigger a fetch on
+ * every single render forever. The error is shown; the commissioner's own
+ * 🔄 Refresh button is the retry.
+ */
+export async function refreshBackgroundJobsCard({ rerender = true } = {}) {
+  if (!isSupabaseDataMode() || _bgJobsCache.loading) return;
+  const leagueId = getActiveLeagueId();
+  if (!leagueId) return;
+  _bgJobsCache = { ..._bgJobsCache, loading: true };
+  try {
+    // REVIEWER R2 — per-job, not one shared limit; see getJobRuns()'s own
+    // header. `SERVER_JOB_RUN_NAME`'s values are the canonical `job_runs.job`
+    // strings, the same list `renderBackgroundJobsAdminSectionHTML()` groups by.
+    const rows = await getJobRuns(leagueId, { limit: 10, jobs: Object.values(SERVER_JOB_RUN_NAME) });
+    _bgJobsCache = { leagueId, rows, fetchedAt: Date.now(), loading: false, error: null };
+  } catch (err) {
+    _bgJobsCache = { leagueId, rows: _bgJobsCache.rows || [], fetchedAt: Date.now(), loading: false, error: err && err.message ? err.message : String(err) };
+  }
+  // DI-218 — the version line loads with the rest of the card, once, on the
+  // same trigger. Fire-and-forget with its own catch: a diagnostic column must
+  // never be able to take the Background jobs card down with it.
+  if (_pushSelfTest.versions === null) {
+    refreshMemberAppVersions().catch(() => { _pushSelfTest = { ..._pushSelfTest, versions: [] }; });
+  }
+  if (rerender) renderCommPage();
 }
 
 /**
@@ -14425,6 +15711,53 @@ export async function runAutoRefreshTick() {
   // simulated scores get walked over by whatever ESPN currently returns —
   // which is what was causing "demo resets after a few seconds."
   if (week.dataSourceMode === 'demo' || week.dataSourceMode === 'manual') return;
+  // ══ DI-T6.6's CLIENT GATE (Phase III Step 6, Phase 6) ══════════════════════
+  //
+  // While `settings.serverJobs.scoresRefresh` is true, the `scores-refresh`
+  // Edge Function is the one writing home_score/away_score/status/ats_winner —
+  // on a pg_cron schedule, server-to-server, for every league inside a live
+  // window (supabase/functions/scores-refresh). If THIS tick also fetched
+  // ESPN, the two writers could interleave and — on a non-commissioner device
+  // — the local overlay (js/supabase-backend.js `_overlay`) would show
+  // whichever fetch happened to land last, purely by timing. The UI still
+  // updates: `games` is already Realtime-subscribed (Step 4), so the server's
+  // write reaches every screen the same way a commissioner's own write always
+  // has.
+  //
+  // ONLY THE WRITE STANDS DOWN — corrected at the validation gate (R1,
+  // 2026-09-20). The first version of this gate returned before the fetch, and
+  // that quietly took four player-visible things with it: the quarter/clock and
+  // red-zone marks (in-memory only, five readers, no server path and no columns
+  // to have one), SCRIBE's live coverage-flip/upset detectors, and the two
+  // per-game chat posts. The tick now runs a DISPLAY-ONLY poll and an idempotent
+  // reconcile instead — see doRefreshScores()'s `displayOnly` header and
+  // reconcileGameEvents(). `tickAutoTransition()` above and the re-render below
+  // are unchanged.
+  //
+  // THE MANUAL "Refresh Scores" BUTTON IS NOT GATED. It calls doRefreshScores()
+  // directly (not through this tick) and stays a FULL write: same ESPN source,
+  // same columns, whole-row last-write-wins against the server's own write.
+  // Accepted at the validation gate and recorded in the runbook's F6 section —
+  // it is the commissioner's escape hatch on the day the function is switched
+  // on, which is the one day it is most likely to be wanted.
+  //
+  // BYTE-IDENTICAL WHEN ABSENT/FALSE: `isServerJobEnabled()` reads the same
+  // `settings.serverJobs.<job>` shape DI-T6.1's client gate already reads, with
+  // the same CONVENTIONS #10 inversion (absent -> false -> the client keeps
+  // fetching, exactly as it does today). refreshtest.mjs [4] is the mutation
+  // canary — notifytest.mjs [28g] is the precedent this follows.
+  if (isServerJobEnabled('scoresRefresh')) {
+    // R1 — A DISPLAY-ONLY PASS, NOT A SKIPPED ONE. The ESPN fetch still happens
+    // (quarter/clock/red-zone have no columns and no server path — see
+    // doRefreshScores()'s `displayOnly` header); what stands down is every
+    // write. R2's reconcile then posts any kickoff/final chat event the server's
+    // own write left un-announced. Both are idempotent.
+    await doRefreshScores(week,getGames(week.weekId),{ displayOnly: true });
+    reconcileGameEvents(week);
+    if (state.currentTab==='dashboard') renderDashboard();
+    else if (state.currentTab==='picks') updatePicksLiveStatusInPlace(getGames(week.weekId));
+    return;
+  }
   // Keep score DATA fresh no matter which tab is showing.
   await doRefreshScores(week,getGames(week.weekId));
   // Re-render only the surface that's safe to rebuild wholesale. Dashboard's
@@ -14730,7 +16063,67 @@ function anyRedZoneOnScreen(games) {
   return (games || []).some(g => !!redZoneDisplay(liveStatusById.get(g.gameId), g));
 }
 
-export async function doRefreshScores(week,games) {
+/**
+ * REVIEWER R1 (Step 6 Phase 6 validation gate, 2026-09-20) — `displayOnly`.
+ *
+ * ══ WHAT THE FIRST VERSION OF THE DI-T6.6 CLIENT GATE GOT WRONG ═════════════
+ * The gate stood the whole tick's ESPN call down when
+ * `settings.serverJobs.scoresRefresh` is on, on the reasoning that the server
+ * had taken over "the score refresh". The server took over the score WRITE.
+ * This one function also owned four things the server does not do and cannot:
+ *
+ *   1. `liveStatusById` — quarter/clock/red-zone, in-memory only, never
+ *      persisted (there are no `period`/`clock` columns on `public.games` at
+ *      all). FIVE readers depend on it: renderGameCard, the dashboard table and
+ *      the compact dashboard (liveStatusDisplay/liveStatusDisplayShort), plus
+ *      redZoneDisplay's two call sites. With the fetch gone, every one of them
+ *      renders nothing — the score moves and the clock is simply absent.
+ *   2. `scribeLiveGameCheck()` — the coverage-flip and upset-watch detectors,
+ *      which need the BEFORE and AFTER of the same poll.
+ *   3. `emitKickoffEvent()`   } — see reconcileGameEvents() below; these two
+ *   4. `emitGameFinalEvent()` }   moved OUT of this function's transition
+ *                                 detection entirely, because a transition the
+ *                                 server performed is one no client observed.
+ *
+ * So the switch does not stop the poll. It makes it DISPLAY-ONLY: same fetch,
+ * same parse, `liveStatusById` filled exactly as before, `scribeLiveGameCheck`
+ * run against an IN-MEMORY merge of the ESPN update — and NOT ONE `saveGame()`,
+ * because the server is the single writer of score/status/actualWinner and two
+ * writers is the interleaving the DI's gate existed to prevent.
+ *
+ * `displayOnly:false` (the default, and every existing call site) is
+ * byte-for-byte today's function.
+ *
+ * THE MANUAL "Refresh Scores" BUTTON STAYS A FULL WRITE, both call sites
+ * unchanged (js/app.js's commissioner refresh and the dashboard button). Same
+ * ESPN source, same columns, whole-row last-write-wins — accepted at the
+ * validation gate and written into the runbook's F6 section.
+ *
+ * Guards: refreshtest.mjs:412 [5a-1] (liveStatusById still filled),
+ * refreshtest.mjs:414 [5a-2] (zero writes), refreshtest.mjs:419 [5a-4]
+ * (scribeLiveGameCheck ran against a real merge), refreshtest.mjs:305 [4-3b]
+ * (the same, through the tick).
+ */
+/**
+ * May THIS session write the graded columns of a game row?
+ *
+ * Only `atsWinner` is asked about today (reviewer note 1). The score/status
+ * fields are a different question with a different answer — they ARE on the
+ * adapter's `GAME_SCORE_FIELDS` allow-list, so a player device's write of those
+ * is an accepted render-only overlay, and standing them down would take the
+ * live score off five screens.
+ *
+ * Non-Supabase modes answer TRUE unconditionally: under the Sheet every device
+ * wrote every column, and this must not change behaviour on a rollback
+ * (CONVENTIONS #10's direction).
+ */
+function mayPersistGameGrading() {
+  if (!isSupabaseDataMode()) return true;
+  const s = getSession();
+  return !!(s && s.isAdmin);
+}
+
+export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
   // Which games should we ask ESPN about?
   //   - Regular CFB pipeline games (isManual falsy, espnEventId set)      → yes
   //   - Manual out-of-league games with FULL ESPN linking (both espnSport
@@ -14765,6 +16158,26 @@ export async function doRefreshScores(week,games) {
     if (liveStatus) {
       liveStatusById.set(upd.gameId, { ...liveStatus, capturedAt: Date.now() });
     }
+    // ══ R1 — THE DISPLAY-ONLY PASS ENDS HERE, ONE LINE BELOW THE ONE THING IT
+    //    EXISTS FOR. ═══════════════════════════════════════════════════════════
+    // `liveStatusById` is already filled (above, unconditionally, exactly as
+    // before). What is skipped is every WRITE and both transition emitters —
+    // the server owns those columns while the switch is on, and a status
+    // transition it performed is not one this poll may claim to have seen.
+    // `scribeLiveGameCheck` still runs, against an IN-MEMORY merge: `stored`
+    // is the mirror's row (what the server last wrote) and `merged` is that row
+    // with THIS ESPN payload's score/status laid over it, which is precisely the
+    // before/after pair the coverage-flip detector needs. `merged` is never
+    // persisted and never handed to anything else.
+    if (displayOnly) {
+      try {
+        if (upd.status === GAME_STATUS.LIVE) {
+          const merged = { ...stored, homeScore: upd.homeScore, awayScore: upd.awayScore, status: upd.status, actualWinner: upd.actualWinner };
+          scribeLiveGameCheck(stored, merged);
+        }
+      } catch(e){ console.warn('[refresh] display-only live events', e); }
+      continue;
+    }
     // Item 2 Pass A: saveGame()'s object below is an EXPLICIT ALLOW-LIST of
     // persisted fields. detail/shortDetail/name/quarter/clock are
     // INTENTIONALLY NOT included — they're transient (liveStatusById, above)
@@ -14783,7 +16196,22 @@ export async function doRefreshScores(week,games) {
         const fresh=getGame(upd.gameId);
         const ats=calculateAtsWinner(fresh);
         if (ats) {
-          saveGame({...fresh, atsWinner: ats});
+          // ══ REVIEWER NOTE 1 (re-gate 2026-09-20) — COMMISSIONER ONLY ═══════
+          //
+          // This line ran on all six phones. `atsWinner` is NOT in the
+          // adapter's GAME_SCORE_FIELDS allow-list (js/supabase-backend.js) and
+          // `cfbp_games` routes to `player:'overlay'`, so on the five player
+          // devices `_setOverlay()` threw AdapterWriteRefusedError out of
+          // storage.save() — synchronously, BEFORE emitGameFinalEvent() on the
+          // next line, inside this same try. The player saw nothing (the
+          // adapter emits no status here and the catch below is a console.warn)
+          // and the FINAL chat post simply never happened on their phone.
+          //
+          // Nobody needs the persist except the writer: js/scoring.js:106 reads
+          // `game.atsWinner ?? calculateAtsWinner(game)`, so every device that
+          // cannot write computes the identical answer from the stored spread.
+          // js/scoring.js and the adapter's field list are both untouched.
+          if (mayPersistGameGrading()) saveGame({...fresh, atsWinner: ats});
           const gp=getPicks(week.weekId).filter(p=>p.gameId===upd.gameId);
           emitGameFinalEvent(fresh, ats,
             gp.filter(p=>p.selectedTeam===ats).map(p=>p.playerId),
@@ -14793,6 +16221,108 @@ export async function doRefreshScores(week,games) {
     }
   }
   if(errors.length)console.warn('[Refresh]',errors);
+}
+
+/**
+ * REVIEWER R2 — THE IDEMPOTENT CATCH-UP EMITTER for the two per-game chat
+ * posts. UN-192 / DI-T6.6, added at the Phase 6 validation gate (2026-09-20).
+ *
+ * ══ WHY AN EMITTER THAT LOOKS AT STATE, RATHER THAN ONE THAT WATCHES A
+ *    TRANSITION ════════════════════════════════════════════════════════════
+ * `doRefreshScores()` posts 🏈 Kickoff and FINAL-with-ATS-attribution by
+ * comparing the row BEFORE its own write with the row after. That works only
+ * for a device that performed the write. Once `scoresRefresh` is on, no device
+ * does: the transition happens inside an Edge Function and arrives on six
+ * phones as a Realtime row change with no before/after pair attached. The two
+ * posts would simply stop — silently, on the one surface the league actually
+ * reads during a game. That was the reviewer's BLOCK.
+ *
+ * Both posts are `notify:false` (no push, no server involvement needed) and
+ * both carry DETERMINISTIC ids into an append-only log — `sys_kick_<gameId>`
+ * and `sys_final_<gameId>` (js/chat-ui.js emitKickoffEvent / emitGameFinalEvent).
+ * So "has this already been posted?" is answerable locally, and posting twice
+ * is not a thing that can happen: the fold dedupes by id (chat.js ingest()
+ * leaves an existing item untouched) and the server dedupes by id too —
+ * `chat_append_system` is `on conflict (league_id,id) do nothing` and answers
+ * `{deduped:true}` with the EXISTING row's seq/ts (0010_step5_chat_system.sql).
+ * That is a SUCCESS on flushOutbox()'s path, not a refusal: no red banner, no
+ * retry, no storm. Six phones reconciling the same game produce one row.
+ *
+ * ── THE MONEY MATH DOES NOT MOVE. `calculateAtsWinner()` is still js/scoring.js
+ *    on the client, and this function does not write it: the server already
+ *    writes `ats_winner` in the same breath as the score
+ *    (supabase/functions/_shared/job-rules.mjs buildGamesPatch), so the stored
+ *    row carries it by the time this sees FINAL. The in-memory
+ *    `calculateAtsWinner(game)` fallback below covers the switch-OFF and
+ *    manual-entry paths and is deliberately NOT persisted — `atsWinner` is not
+ *    in the adapter's GAME_SCORE_FIELDS overlay list, so a save of it from one
+ *    of the five PLAYER phones is a refusal, and a refusal is a red banner
+ *    (js/supabase-backend.js). finalizeWeek() still persists it, from the
+ *    commissioner's device, exactly as before.
+ *
+ * ── THE TWO PRECONDITIONS THAT ARE NOT OPTIMISATIONS. ───────────────────────
+ *   • A game that is FINAL never gets a kickoff post. A "🏈 Kickoff" arriving
+ *     after the result is noise, and the log is append-only — it could not be
+ *     taken back.
+ *   • A kickoff post is only attempted once the stored kickoff time has PASSED.
+ *     `chat_append_system` refuses `sys_kick_<game>` unless
+ *     `g.kickoff <= now()`, and it refuses by RAISING — which rolls back the
+ *     whole append batch, including any human message batched with it, and
+ *     leaves the id unconsumed so the next tick tries again. Mirroring the
+ *     server's own rule here is what keeps a TBD-kickoff game from turning into
+ *     a once-a-minute failing append.
+ *
+ * `emitGameFinalEvent()`'s `arePicksPublic()` gate is UNTOUCHED (RG-45). A
+ * blocked post leaves the id unconsumed on purpose, so the complete event —
+ * with its right/wrong roster — still arrives the moment the week goes public.
+ *
+ * Called from three places, all of which may fire for the same game:
+ *   (i)   after every display-only poll (runAutoRefreshTick),
+ *   (ii)  after a Realtime `games` change lands in the mirror,
+ *   (iii) after the boot hydrate, for the current week.
+ *
+ * Returns counts for the tests; production ignores them.
+ * Guards: refreshtest.mjs:431 [5b-1] (one kickoff), :448 [5d-1] (one final with
+ * the right rosters), :453 [5d-3] (never a kickoff after FINAL), :467 [5e-1]
+ * (blocked by the blind rule, id unconsumed), :486 [5f-1] (kickoff not yet
+ * passed), :508 [5g-3] (no double-post with the switch OFF).
+ */
+export function reconcileGameEvents(week) {
+  const out = { kickoffs: 0, finals: 0 };
+  try {
+    if (!week || week.dataSourceMode === 'demo') return out;
+    const games = getGames(week.weekId);
+    if (!games.length) return out;
+    const picks = getPicks(week.weekId);
+    const nowMs = Date.now();
+    for (const game of games) {
+      if (!game || !game.gameId) continue;
+      if (game.status === GAME_STATUS.LIVE) {
+        const kickedOff = game.kickoff ? new Date(game.kickoff).getTime() <= nowMs : false;
+        if (kickedOff && !getChatMessage(`sys_kick_${game.gameId}`)) {
+          emitKickoffEvent(game);
+          // COUNTED ONLY IF IT LANDED. The emitters can decline (RG-45's
+          // arePicksPublic gate is inside emitGameFinalEvent), and a count that
+          // said "1 posted" when the id is still unconsumed would be a number
+          // that reads as reassurance and means nothing.
+          if (getChatMessage(`sys_kick_${game.gameId}`)) out.kickoffs += 1;
+        }
+      }
+      if (game.status === GAME_STATUS.FINAL && !getChatMessage(`sys_final_${game.gameId}`)) {
+        const ats = game.atsWinner || calculateAtsWinner(game);
+        if (!ats) continue;                       // not gradeable yet — no post, id stays free
+        // The SAME winner/loser derivation doRefreshScores() uses, so a post
+        // written by this path and one written by the legacy path are the same
+        // sentence about the same people.
+        const gp = picks.filter(p => p.gameId === game.gameId);
+        emitGameFinalEvent(game, ats,
+          gp.filter(p => p.selectedTeam === ats).map(p => p.playerId),
+          gp.filter(p => p.selectedTeam !== ats && ats !== 'no_decision').map(p => p.playerId));
+        if (getChatMessage(`sys_final_${game.gameId}`)) out.finals += 1;   // see above
+      }
+    }
+  } catch (e) { console.warn('[reconcileGameEvents]', e); }
+  return out;
 }
 
 // ─── EXPORT SUITE ─────────────────────────────────────────────────────────────
@@ -15567,9 +17097,35 @@ export function ensureSupabaseSdkLoaded({ timeoutMs = SUPABASE_SDK_LOAD_TIMEOUT_
       console.error(`[auth] the vendored Supabase SDK neither loaded nor errored within ${timeoutMs}ms:`, SUPABASE_SDK_SRC);
       resolve(false);
     }, timeoutMs);
-    // Node-only (authtest/boottest): keep a 10s deadline from holding the
-    // process open. No-op in a browser, where timers do not keep anything alive.
-    if (typeof deadlineTimer?.unref === 'function') deadlineTimer.unref();
+    // RG-192 (2026-09-20) — THE DEADLINE IS NOT UNREF'D, AND MUST NOT BE.
+    //
+    // This line used to read `if (typeof deadlineTimer?.unref === 'function')
+    // deadlineTimer.unref();`, with the rationale "Node-only: keep a 10s
+    // deadline from holding the process open; no-op in a browser." The browser
+    // half is true — `unref` does not exist there, so removing it changes
+    // nothing about production behaviour. The Node half was the defect: this
+    // timer is the ONLY thing that can settle the returned promise when the
+    // injected <script> fires neither `load` nor `error` (the "third event is
+    // neither event" case documented above — and the invariable behaviour of
+    // every DOM stub in this repo's suites). An unref'd timer cannot hold
+    // Node's event loop open, so the promise settled only while some
+    // UNRELATED ref'd handle happened to be alive somewhere else in the
+    // process. When one was not, Node found no work left, exited, and reported
+    // the caller's `await` as an unsettled top-level await — exit 13, zero
+    // failed assertions, no assertion to point at.
+    //
+    // That is how it failed: authtest.mjs's SDK fixtures were borrowing the
+    // 750ms chat outbox-flush timer armed by the boot-time "What's New" chat
+    // post. A release with no WHATS_NEW entry for its APP_VERSION stops
+    // posting, and ~811 assertions later the suite exited 13 (RG-192). A
+    // promise whose one guarantee is droppable by the host is not a guarantee.
+    //
+    // The measured cost of holding the loop is nil: the deadline is already
+    // cancelled the instant the race is decided (clearDeadline() on load, on
+    // error, and on a synchronous inject failure), so a ref'd timer can only
+    // ever hold the process for the remainder of a deadline that is genuinely
+    // still pending. Full-suite timings before/after: authtest 2.7s → 4.1s,
+    // boottest 113.4s → 114.0s, both green.
   });
   const loaded = new Promise(resolve => {
     try {
@@ -16505,6 +18061,20 @@ export function _resetAuthHoldForTest() {
  * DI-180a/b/d — "Continue with Google" replaces showSitePinGate() one-for-
  * one in authMode:'supabase'. Reuses #site-gate-overlay/.site-gate/
  * .site-gate-inner CSS VERBATIM (DI-180e) — only the inner content differs.
+ *
+ * DI-216 (2026-09-20, coordinator amendments A1-A6) — on native ONLY
+ * (isNativeShell()), the gate's chrome goes Munera: the "welcome to / irb
+ * pick 'ems" eyebrow+title is replaced by the wordmark/tagline block
+ * (getShellWordmark()/getShellTagline(), both escHtml'd — S-C2), the
+ * sub-line switches to sentence case, and a `data-gate-state="google"`
+ * attribute is added for CSS targeting (mirrors the hold gate's
+ * `data-gate-state="hold"`). The button node itself — id, markup, handler,
+ * .google-g-mark chip — is IDENTICAL on both platforms; only its color
+ * inherits from the new `body.native-shell .site-gate[data-gate-state=
+ * "google"]` CSS block (styles.css). On web, `isNativeShell()` is false by
+ * absence (js/platform.js's own header comment) so this branch is
+ * unreachable and the markup below is byte-identical to before DI-216
+ * (brandtest.mjs [9], DI-216j/A3).
  */
 export function showGoogleSignInGate() {
   const s = getSettings();
@@ -16513,7 +18083,20 @@ export function showGoogleSignInGate() {
   document.getElementById('site-gate-overlay')?.remove();
   const wrap = document.createElement('div');
   wrap.id = 'site-gate-overlay';
-  wrap.innerHTML = `
+  const native = isNativeShell();
+  wrap.innerHTML = native ? `
+    <div class="site-gate" data-gate-state="google">
+      <div class="site-gate-inner">
+        <div class="site-gate-wordmark">${escHtml(getShellWordmark() || '')}</div>
+        <div class="site-gate-tagline">${escHtml(getShellTagline() || '')}</div>
+        <div class="site-gate-subtitle">Sign in to make your picks.</div>
+        <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
+          <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
+          <span id="google-gate-btn-label">Continue with Google</span>
+        </button>
+        <div id="google-gate-message" style="display:none"></div>
+      </div>
+    </div>` : `
     <div class="site-gate">
       <div class="site-gate-inner">
         <div class="site-gate-title-top">${escHtml(titleTop)}</div>

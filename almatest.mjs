@@ -1718,6 +1718,17 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players
     'ob2025',                                                  // last season's obligation ids
+    // Release v0.23.0 (Phase III Step 6 Phases 2–6, 2026-09-20): the
+    // Background-jobs card's per-job switches. `serverJobs` is `{job:
+    // boolean}` and `serverJobsFlippedAt` is `{job: ISO timestamp}` — both
+    // keyed by SERVER_JOB_LABELS' fixed, small set of job names (eight
+    // today: notifyFanout, reminders, scribeAsk, trainer, scribeClassify,
+    // scribeAutonomous, scoresRefresh, keepalive; `push-reach` is a
+    // one-shot commissioner action, not a switch, so it never appears in
+    // either map), same bounded-map shape as commPanelSectionsCollapsed/
+    // dashboardColumnOrder above. Neither can grow beyond the number of
+    // jobs this codebase ships.
+    'serverJobs', 'serverJobsFlippedAt',
     // commissioner free text — unbounded in principle, human-typed in practice.
     // Flagged to Drew 2026-09-04 as the only remaining unbounded settings
     // writers; neither has a maxlength or a size guard.

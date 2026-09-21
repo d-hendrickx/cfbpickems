@@ -1468,6 +1468,150 @@ console.log("\n[27d] RG-144 Mutation-prove — delete the resolver call on a SCR
     'MUTATION CANARY: with the resolver bypassed on a scratch source string, "Brayden" is stored verbatim exactly as the live Sheet shows — [27]\'s headline assertion is capable of going red');
 }
 
+console.log("\n[28] REVIEWER BLOCK 1 (2026-09-20) — THE PORTED INPUT ASSEMBLY IS BYTE-IDENTICAL TO CODE.GS…");
+{
+  // Reviewer BLOCK 1: the Supabase trainer sent the model a "materially simpler" input while the
+  // prompt riding with it promised COMPUTED METRICS, CONVERSATION AFTERMATH and RAW TEXT FEEDBACK.
+  // `js/scribe-trainer-rules.js` now carries the real port. "Ported faithfully" is a claim that has
+  // to be TESTED, and this is the strongest available form of that test: run Code.gs's own function
+  // in the vm sandbox against a fixture, run the ported one in Node against the SAME fixture, and
+  // compare the strings. Not a substring check — `===`.
+  const rules = await import('./js/scribe-trainer-rules.js');
+  const env28 = buildSandbox();
+  const base = Date.now();
+
+  const events28 = [
+    { type: 'message', id: 'h1', seq: 1, author: 'p1', gameTag: '', ts: base, body: 'kickoff talk', meta: {} },
+    { type: 'message', id: 's1', seq: 2, author: 'scribe', gameTag: '', ts: base + 1000, body: 'a line', meta: { trigger: 'autonomous' } },
+    { type: 'message', id: 'h2', seq: 3, author: 'p2', gameTag: '', ts: base + 2000, replyTo: 's1', body: 'ha', meta: {} },
+    { type: 'message', id: 'h3', seq: 4, author: 'p3', gameTag: 'gameX', ts: base + 2500, body: 'different thread', meta: {} },
+    { type: 'message', id: 's2', seq: 5, author: 'scribe', gameTag: '', ts: base + 4000, body: 'another line', meta: {} },
+    { type: 'message', id: 'src1', seq: 6, author: 'p1', gameTag: '', ts: base + 5000, body: 'I went to Purdue', meta: {} },
+    { type: 'feedback', id: 'f1', seq: 7, author: 'p1', targetId: 's1', ts: base + 6000, meta: { category: 'rating', value: 'hit' } },
+    { type: 'feedback', id: 'f2', seq: 8, author: 'p2', targetId: 's2', ts: base + 6100, meta: { category: 'rating', value: 'mid' } },
+    { type: 'feedback', id: 'f3', seq: 9, author: 'p1', targetId: 's2', ts: base + 6200, meta: { category: 'rewrite', value: 'should have said X' } },
+    { type: 'feedback', id: 'f4', seq: 10, author: 'p2', targetId: 'h1', ts: base + 6300, meta: { category: 'weigh_in', value: 'this needed a jab' } },
+    { type: 'feedback', id: 'f5', seq: 11, author: 'p2', targetId: 'src1', ts: base + 6400, meta: { category: 'remember_this', value: true } },
+  ];
+  const players28 = {
+    p1: { playerId: 'p1', displayName: 'Kevin', active: true },
+    p2: { playerId: 'p2', displayName: 'Koby', active: true },
+    p3: { playerId: 'p3', displayName: 'Jacob', active: false },
+  };
+  const learnings28 = [
+    { kind: 'learning', status: 'approved', category: 'tone', confidence: 0.95, instruction: 'be terser' },
+    { kind: 'learning', status: 'pending', category: 'tone', confidence: 0.5, instruction: 'not this one' },
+    { kind: 'experiment', status: 'pending', experiment: 'shorter posts', reason: 'ratings', confidence: 0.6 },
+  ];
+
+  // ── the GAS side ──
+  const gasFeedback = env28.gs.scribeTrainerExtractFeedback_(events28);
+  const gasAftermath = env28.gs.scribeTrainerComputeAftermath_(events28);
+  const gasMetrics = env28.gs.scribeTrainerComputeMetrics_(events28, gasFeedback, players28);
+  const gasSources = env28.gs.scribeTrainerRememberThisSources_(events28, players28);
+  const gasContinuity = env28.gs.scribeTrainerContinuityText_(learnings28);
+  const gasInput = env28.gs.scribeTrainerBuildInputText_(
+    events28, gasFeedback, gasAftermath, gasMetrics, learnings28, gasSources, players28);
+
+  // ── the ported side ──
+  const portFeedback = rules.extractFeedback(events28);
+  const portAftermath = rules.computeAftermath(events28);
+  const portMetrics = rules.computeMetrics(events28, portFeedback, players28);
+  const portSources = rules.rememberThisSources(events28, players28);
+  const portContinuity = rules.continuityText(learnings28);
+  const portInput = rules.buildTrainerInputText({
+    events: events28, feedbackEvents: portFeedback, aftermath: portAftermath, metrics: portMetrics,
+    learnings: learnings28, factSources: portSources, playersById: players28,
+  });
+
+  assert(gasInput.length > 800, `fixture check: the GAS builder produced a real input (got ${gasInput.length} chars) — comparing two empty strings would pass trivially`);
+  assert(JSON.stringify(portFeedback) === JSON.stringify(gasFeedback), 'extractFeedback() matches scribeTrainerExtractFeedback_ exactly');
+  assert(JSON.stringify(portAftermath) === JSON.stringify(gasAftermath),
+    `computeAftermath() matches scribeTrainerComputeAftermath_ exactly — the section the prompt calls CONVERSATION AFTERMATH (GAS: ${JSON.stringify(gasAftermath)})`);
+  assert(portContinuity === gasContinuity, 'continuityText() matches scribeTrainerContinuityText_ BYTE FOR BYTE');
+  assert(portInput === gasInput,
+    'buildTrainerInputText() matches scribeTrainerBuildInputText_ BYTE FOR BYTE — same sections, same order, same caps, same exclusions. This is the assertion reviewer BLOCK 1 asked for');
+
+  // The promises the prompt makes are all kept by this fixture's own input.
+  for (const { promise, section } of rules.PROMPT_PROMISES) {
+    assert(portInput.includes(section),
+      `PROMPT-PROMISE "${promise}" has a real section behind it in the built input ("${section.slice(0, 40)}…")`);
+  }
+  assert(portInput.includes('should have said X') && portInput.includes('this needed a jab'),
+    'the player-authored REWRITE and WEIGH-IN text actually travel — the specific bytes the old builder never sent');
+  assert(portInput.includes('- s1: 1 human replies, directReply=true'),
+    'the aftermath line for a real SCRIBE response is present with its computed numbers');
+  assert(portInput.includes('I went to Purdue'),
+    'the 📌-flagged source body travels, so a fact_candidate citing it is something a human can verify');
+
+  // ── THE BLIND RULE, at the builder. Chat text only, never a pick. ──
+  const picky = events28.concat([
+    { type: 'message', id: 'pk', seq: 12, author: 'p1', gameTag: '', ts: base + 7000, body: 'ordinary chat',
+      meta: { selectedTeam: 'BAMA_SECRET_PICK', tiebreakerGuess: 47 } },
+  ]);
+  const pickyInput = rules.buildTrainerInputText({
+    events: picky, feedbackEvents: rules.extractFeedback(picky), aftermath: rules.computeAftermath(picky),
+    metrics: rules.computeMetrics(picky, rules.extractFeedback(picky), players28),
+    learnings: learnings28, factSources: rules.rememberThisSources(picky, players28), playersById: players28,
+  });
+  assert(!pickyInput.includes('BAMA_SECRET_PICK') && !pickyInput.includes('47') && !pickyInput.includes('selectedTeam'),
+    'BLIND RULE — a planted pick and tiebreaker guess on an event\'s meta reach the prompt NOWHERE: the builder reads bodies, ids and counts, never a selection. A mutation that dumped the raw events would go red here');
+}
+
+console.log("\n[28b] BLOCK 1 Mutation-prove — delete a section from the ported builder and [28] goes red…");
+{
+  // Scratch string only — never the file (CLAUDE.md's own rule: commit before mutation testing,
+  // mutate a copy, never `git restore`).
+  const { readFile } = await import('node:fs/promises');
+  const rulesSrc = await readFile(fileURLToPath(new URL('./js/scribe-trainer-rules.js', import.meta.url)), 'utf8');
+  const marker = "parts.push('RAW TEXT FEEDBACK (rewrites + weigh-in text";
+  assert(rulesSrc.includes(marker), 'fixture check: the RAW TEXT FEEDBACK section really is in the shipped builder');
+  const mutated = rulesSrc.replace(marker, "parts.push('REMOVED FOR TEST (rewrites + weigh-in text");
+  assert(mutated !== rulesSrc, 'fixture check: the mutation changed the in-memory source string');
+  const mod = await import('data:text/javascript;base64,' + Buffer.from(mutated).toString('base64'));
+  const mutInput = mod.buildTrainerInputText({
+    events: [], feedbackEvents: [], aftermath: [],
+    metrics: { humanMessagesPerInterjection: null, ratingMix: { hit: 0, mid: 0, tooMuch: 0 }, rewriteCount: 0, weighInFlags: [],
+      dataset: { responsesEvaluated: 0, responsesWithRatings: 0, ratingEvents: 0, textFeedbackItems: 0, playerRewrites: 0, autonomousInterjections: 0 } },
+    learnings: [], factSources: [], playersById: {},
+  });
+  assert(!mutInput.includes('RAW TEXT FEEDBACK'),
+    'MUTATION CANARY: with the section renamed on a scratch copy, the promised "RAW TEXT FEEDBACK" heading is gone — [28]\'s promise loop and the byte comparison are both capable of going red');
+}
+
+console.log("\n[29] REVIEWER NOTE 5 (2026-09-20) — once serverJobs.trainer is TRUE, no path in this build reaches Apps Script's runTrainer…");
+{
+  // THE RISK the F4 switch-on actually carries is a double SPEND: while the Supabase Trainer is on,
+  // an Apps Script `runTrainer` is a second paid Anthropic call against the frozen Sheet, drawn on
+  // no ledger this project can see. js/app.js's button branches on the switch — but a branch at ONE
+  // call site is a convention, not a guarantee. The refusal is inside the relay, so this is a
+  // property of the MODULE, not of one handler, and it is tested as one.
+  const storageMod29 = await import('./js/storage.js');
+  const scribeAgent29 = await import('./js/scribeAgent.js');
+  const settings29 = storageMod29.getSettings();
+
+  storageMod29.saveSetting('serverJobs', { trainer: false });
+  // OFF: the relay is reached. `js/backend.js` has no configured backend under this harness, so
+  // the observable is simply that it does NOT return the switch refusal.
+  const off = await scribeAgent29.runTrainerRemote({ adminPasswordHash: 'x' }).catch((e) => ({ threw: String(e && e.message) }));
+  assert(!(off && off.skipped === 'disabled' && /server Trainer is switched on/.test(String(off.error || ''))),
+    `29-1: with the switch OFF the legacy Apps Script relay is still reached — the rollback path is intact and byte-identical to today (got ${JSON.stringify(off).slice(0, 120)})`);
+
+  storageMod29.saveSetting('serverJobs', { trainer: true });
+  // `.catch()` so that REMOVING the gate is a clean RED here rather than an unhandled rejection
+  // that kills the suite before it can print a summary — a mutation whose symptom is "no output"
+  // is indistinguishable from a harness problem, which is the failure mode the flush shim at the
+  // bottom of this file exists to prevent. Proven: mutation M10 (2026-09-20) turns 29-2 red.
+  const on = await scribeAgent29.runTrainerRemote({ adminPasswordHash: 'x' })
+    .catch((e) => ({ threw: String(e && e.message ? e.message : e) }));
+  assert(on && on.ok === true && on.skipped === 'disabled',
+    `29-2: with the switch ON the relay REFUSES, in the standard DI-T6.0(f) envelope shape, so js/app.js's existing result.skipped branch renders it with no new branch (got ${JSON.stringify(on)})`);
+  assert(/server Trainer is switched on/.test(String(on.error || '')),
+    '29-3: …and the reason says why, so a commissioner who clicks the button is told rather than left with a silent no-op');
+
+  storageMod29.saveSetting('serverJobs', settings29.serverJobs === undefined ? {} : settings29.serverJobs);
+}
+
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.

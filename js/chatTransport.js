@@ -62,6 +62,9 @@
  */
 
 import { getBackendConfig, isBackendConfigured, requestWithMisrouteGuard } from './backend.js';
+// DI-208g / S-C14 (iOS Munera, PASS 1b, Drew "Approve", 2026-09-19/20) — see
+// get()/post()'s first line, below.
+import { isNativeOrigin } from './platform.js';
 
 /**
  * BUG-A (2026-09-11) — this module has its OWN fetch calls (get/post below), so
@@ -300,6 +303,16 @@ export function installSupabaseChat(deps = {}) {
     getClient, getLeagueId, rowToMessage, isReady,
     getIdentityEpoch = () => null,
     onAdapterSynced = null,
+    // Step 6 Phase 3 (scribeAsk, DI-T6.3) — OPTIONAL, INJECTED, not imported.
+    // `askScribe()`'s client-half gate needs `settings.serverJobs.scribeAsk`
+    // (S6-D-1 (a)'s own switch). `js/storage.js`'s `getSettings()` cannot be
+    // imported directly here: S5/T5.11 pins that this module imports EXACTLY
+    // `js/backend.js` and nothing else, so a flag-off device downloads not
+    // one extra byte of the chat/storage/auth graph. The caller (js/app.js,
+    // which already imports storage.js for a hundred other reasons) supplies
+    // the function instead — the same injection shape `getClient`/
+    // `getLeagueId`/`rowToMessage` already use for exactly this reason.
+    getSettings = () => ({}),
   } = deps || {};
   const required = { getClient, getLeagueId, rowToMessage, isReady };
   for (const [slot, fn] of Object.entries(required)) {
@@ -316,7 +329,10 @@ export function installSupabaseChat(deps = {}) {
   if (onAdapterSynced !== null && typeof onAdapterSynced !== 'function') {
     throw new TypeError('installSupabaseChat({ onAdapterSynced }) must be a function when supplied.');
   }
-  _sbChat = { getClient, getLeagueId, rowToMessage, isReady, getIdentityEpoch };
+  if (typeof getSettings !== 'function') {
+    throw new TypeError('installSupabaseChat({ getSettings }) must be a function when supplied.');
+  }
+  _sbChat = { getClient, getLeagueId, rowToMessage, isReady, getIdentityEpoch, getSettings };
   // A7 — subscribe to the adapter's `synced` signal, and drop any previous subscription first so a
   // re-install cannot leave two listeners racing the same parked set.
   if (typeof _adapterSyncedOff === 'function') { try { _adapterSyncedOff(); } catch { /* a dead unsubscriber is not this module's problem */ } }
@@ -376,6 +392,10 @@ function _sbCall(name, ...args) {
 function sbClient() { return _sbCall('getClient'); }
 function sbLeague() { const v = _sbCall('getLeagueId'); return v ? String(v) : ''; }
 function sbEpoch() { const v = _sbCall('getIdentityEpoch'); return v === undefined ? null : v; }
+/** Step 6 Phase 3 — the injected `getSettings()`. `_sbCall` already returns
+ *  `null` on a missing/throwing dependency; normalised to `{}` here so every
+ *  caller can read `.serverJobs` without a second null check. */
+function sbSettings() { const v = _sbCall('getSettings'); return v && typeof v === 'object' ? v : {}; }
 
 /** The token every asynchronous Supabase chat operation is issued under, and the predicate that
  *  says it has moved. `_opMoved()`'s discipline (js/supabase-backend.js:873, reviewer F2): no
@@ -647,10 +667,17 @@ function classify(action, err) {
 }
 
 async function get(action, params = {}) {
-  // FIRST LINE, before the config read and before any fetch — §7.3. The order
-  // matters: a device in Supabase data mode may still hold a perfectly valid
-  // Sheets config, so "not configured" would never fire and the request would
-  // go out.
+  // DI-208g / S-C14 — THE NATIVE-ORIGIN REFUSAL, before even §7.3's interlock
+  // below. Same reasoning as js/backend.js's call(): AD-67 is independent of
+  // dataMode, so this cannot key off the interlock (which is a §7.3/dataMode
+  // concern) — it keys off isNativeOrigin() instead, which a spoofed
+  // window.Capacitor on a real https: origin cannot pass (origin-positive,
+  // S-C1/S-C8's shape).
+  if (isNativeOrigin()) throw new Error('Chat transport refused: Google Sheets/Apps Script is never reachable from the native app (AD-67).');
+  // FIRST LINE (of the §7.3 half), before the config read and before any
+  // fetch. The order matters: a device in Supabase data mode may still hold a
+  // perfectly valid Sheets config, so "not configured" would never fire and
+  // the request would go out.
   if (interlocked()) throw new ChatTransportUnavailableError(action);
   const c = getBackendConfig();
   if (!c || !c.url) throw new Error('Backend not configured');
@@ -670,6 +697,11 @@ async function get(action, params = {}) {
 }
 
 async function post(action, payload = {}) {
+  // DI-208g / S-C14 — same refusal, same position, for the write half. See
+  // get()'s comment above; `appendEvents()` is the one that matters most
+  // here — an append that reached the production Sheet could not be taken
+  // back, so this runs before even §7.3's own "before any fetch" rule.
+  if (isNativeOrigin()) throw new Error('Chat transport refused: Google Sheets/Apps Script is never reachable from the native app (AD-67).');
   // §7.3 — same rule, same position, for the write half. `appendEvents()` is
   // the one that matters most: an append that reached the production Sheet
   // could not be taken back.
@@ -978,13 +1010,59 @@ export async function fetchMetrics(days = 7) {
  * THE CONTRACT STEP 6 MUST HONOUR, fixed here so Step 6 cannot re-open AD-16:
  *   request   { leagueId, triggerMessageId, playerId, weekId, gameTag, webSearch }
  *   response  { ok, responseMessageId | null, disabled?, deduped?, error? }
- * Step 6 replaces the body below with `client.functions.invoke('scribe-ask', …)` and touches
- * nothing else; the Edge Function writes the ack and the reply with the SERVICE ROLE, which is
- * what 0002:290's "service-role only" sentence always meant.
+ *
+ * STEP 6 PHASE 3 (DI-T6.3) — IMPLEMENTED. `settings.serverJobs.scribeAsk` is
+ * THE SAME switch the function reads (`_shared/jobs.js isJobEnabled()`) — one
+ * boolean, two readers, S6-D-1 (a)'s own reasoning. Default-when-missing is
+ * FALSE on this side too: an absent/stale settings blob means "keep doing
+ * what Step 5 shipped" (the canned pool), never a silent switch-on the
+ * player would notice as SCRIBE suddenly answering with real numbers before
+ * Drew ever flipped anything (DI-T6.0(a)'s deliberate CONVENTIONS #10
+ * inversion, mirrored client-side the same way DI-T6.1's notify-fanout gate
+ * already mirrors it in js/notifications.js).
+ *
+ * A REFUSED / OVER-BUDGET / TIMED-OUT ANSWER DEGRADES TO THE CANNED PATH,
+ * NEVER AN ERROR TOAST (this function's whole contract, restated because it
+ * is the one rule an edit here could quietly break): every branch below
+ * that is not a clean success returns Step 5's `{ok:true, unavailable:true,
+ * responseMessageId:null}` shape, so `fireScribeMention()`'s existing
+ * `r.ok && r.responseMessageId` test is the only thing that ever decides
+ * "did SCRIBE really answer," exactly as it did before this function had a
+ * body. Nothing here ever throws past this function's own boundary or
+ * resolves to a rejected promise.
  */
-export async function askScribe({ triggerMessageId = '', playerId = '', weekId = '', gameTag = '', webSearch = false } = {}) {
-  void triggerMessageId; void playerId; void weekId; void gameTag; void webSearch;
-  return { ok: true, unavailable: true, responseMessageId: null };
+export async function askScribe({ leagueId: leagueIdArg, triggerMessageId = '', playerId = '', weekId = '', gameTag = '', webSearch = false } = {}) {
+  const CANNED = Object.freeze({ ok: true, unavailable: true, responseMessageId: null });
+  try {
+    if (routeOrRefuse('askScribe') !== 'supabase') return CANNED;
+    const bag = sbSettings().serverJobs;
+    if (!(bag && typeof bag === 'object' && bag.scribeAsk === true)) return CANNED;
+
+    const client = sbClient();
+    const leagueId = leagueIdArg || sbLeague();
+    if (!client || !leagueId || !triggerMessageId) return CANNED;
+
+    const { data, error } = await client.functions.invoke('scribe-ask', {
+      body: { leagueId, triggerMessageId, playerId, weekId, gameTag, webSearch },
+    });
+    if (error || !data || typeof data !== 'object') return CANNED;
+
+    // The server's envelope (DI-T6.0(f)): { ok, skipped?, error?, runId, …payload }.
+    // `data.ok === false` (a real Anthropic failure) and every `skipped`
+    // reason (disabled/not_configured/deduped/throttled/budget) all degrade
+    // the SAME way here — the reason distinguishes nothing the player sees;
+    // only `responseMessageId` and `deduped` (Step 5's own contract fields)
+    // cross this boundary.
+    if (data.ok === false) return CANNED;
+    if (data.skipped) {
+      return { ok: true, unavailable: data.skipped !== 'deduped', deduped: data.skipped === 'deduped', responseMessageId: data.responseMessageId || null };
+    }
+    return { ok: true, responseMessageId: data.responseMessageId || null, deduped: false, refusal: !!data.refusal };
+  } catch {
+    // A refusal/timeout/network failure must degrade, never throw past
+    // `fireScribeMention()`'s own try/catch into an error toast.
+    return CANNED;
+  }
 }
 
 /**

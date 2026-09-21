@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=22-5" />
+  <link rel="stylesheet" href="css/styles.css?v=23-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -233,7 +233,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=22-5"></script>
+<script type="module" src="js/app.js?v=23-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -250,7 +250,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=22-5' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=23-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

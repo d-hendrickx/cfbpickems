@@ -2363,6 +2363,82 @@ export async function getMemberContacts(leagueId) {
 }
 
 /**
+ * DI-T6.13 (UN-194) — the Background jobs card's read. `job_runs` (0012) is not part of the
+ * synchronous storage seam: it is an operational log the seam's KEYS never mirror (§4's
+ * READ_TABLES list in supabase-backend.js does not name it), so this is a plain, on-demand,
+ * async `.from().select()` — the same shape `get_member_contacts` above uses for a commissioner-
+ * gated read, minus the RPC: `job_runs` already grants SELECT to `authenticated` directly
+ * (0012's own policy is the access control), so no DEFINER wrapper is needed here the way contacts
+ * needed one to escape a column exclusion.
+ *
+ * RLS DOES THE FILTERING. A plain member's own client would get zero rows back (the policy is
+ * `is_commissioner(league_id) or is_platform_admin()`); this function does not additionally check
+ * who is calling, on purpose — the same "the database is the boundary, not the client" posture
+ * every other Supabase read in this file already has.
+ *
+ * @returns {Array<{job:string, runId:string, actor:string, ok:boolean, skipped:string|null,
+ *   error:string|null, payload:object, startedAt:string, finishedAt:string|null}>}
+ *   Most-recent-first, one row per invocation that had work to do (DI-T6.13: a switched-off job
+ *   writes no row at all — the card's "Off" state comes from `settings.serverJobs`, not from here).
+ *
+ * REVIEWER R2 (2026-09-20) — ONE `.limit(N)` OVER EVERY JOB TOGETHER WAS THE
+ * BUG. `notify-fanout` writes a row per chat message; a busy Saturday can write
+ * hundreds. Under a single shared `limit(100)` those rows fill the whole
+ * window and push `reminders`/`keepalive` — which write far less often — clean
+ * out of it, so the card reports a job that is actually running as "has not
+ * run yet". Fixed by asking once PER JOB, each with its OWN `limit`, so a
+ * high-volume job can never crowd a low-volume one out of the result.
+ *
+ * `jobs` is REQUIRED (not defaulted to "every job_runs row for this league")
+ * on purpose: naming the exact set queried is what makes the per-job shape
+ * legible at the call site, the same reason every column here is named rather
+ * than `select('*')`. The one caller (`refreshBackgroundJobsCard()`) passes
+ * `Object.values(SERVER_JOB_RUN_NAME)` — the same canonical job list the card
+ * already renders from.
+ *
+ * RLS is unchanged and still does the actual security work: each of the N
+ * queries below carries the same `.eq('league_id', leagueId)` the single query
+ * used to, and `job_runs`' own SELECT policy (0012) is untouched.
+ */
+export async function getJobRuns(leagueId, { limit = 10, jobs } = {}) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  if (!Array.isArray(jobs) || jobs.length === 0) {
+    throw new Error('getJobRuns: jobs must be a non-empty array of job_runs.job values — '
+      + 'a single limit shared across every job silently drops rows for a low-volume job '
+      + 'behind a high-volume one (REVIEWER R2)');
+  }
+  const perJob = await Promise.all(jobs.map(async (job) => {
+    const { data, error } = await client
+      .from('job_runs')
+      .select('job,run_id,actor,ok,skipped,error,payload,started_at,finished_at')
+      .eq('league_id', leagueId)
+      .eq('job', job)
+      .order('started_at', { ascending: false })
+      .limit(limit);
+    if (error) throw error;
+    return data || [];
+  }));
+  return perJob.flat()
+    .map(r => ({
+      job: r.job,
+      runId: r.run_id,
+      actor: r.actor,
+      ok: !!r.ok,
+      skipped: r.skipped || null,
+      error: r.error || null,
+      payload: r.payload || {},
+      startedAt: r.started_at,
+      finishedAt: r.finished_at || null,
+    }))
+    // Merged across N per-job queries — re-sort so the combined list is still
+    // most-recent-first overall, which keeps each job's OWN subsequence in the
+    // same order too (a stable sort over already-descending runs), so the
+    // card's `(rowsByJob[job] || [])[0]` still picks up the latest row per job.
+    .sort((a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime());
+}
+
+/**
  * DI-182b/d — the member list behind the League Members card.
  *
  * WHAT IT DOES NOT ASK FOR IS THE POINT. The column list is explicit and

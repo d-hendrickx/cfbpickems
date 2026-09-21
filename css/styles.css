@@ -88,7 +88,16 @@ body.theme-neutral {
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{height:100%;font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:smooth}
-body{min-height:100%;background:var(--bg);color:var(--text-primary);font-family:'Inter',system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+/* RG-188 (B-c, 2026-09-19): `overflow-x:hidden` then `overflow-x:clip`, and the
+   pair must stay in that order. hidden CLIPS sideways overflow (what v14 wanted)
+   but per CSS Overflow 3 it also drags the other axis's `visible` to `auto`,
+   making this element a SCROLL CONTAINER that never scrolls — which steals the
+   scrollport from every position:sticky descendant. clip clips identically and
+   is explicitly NOT a scroll container. The hidden line stays first as the
+   cascade fallback for engines without clip (Safari <16, Chrome <90); the
+   project's floor is iOS 16.4, so every real device takes the clip. Same change
+   on .page-wrapper and .main-content — all three are in the chain. */
+body{min-height:100%;background:var(--bg);color:var(--text-primary);font-family:'Inter',system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden;overflow-x:clip}
 h1,h2,h3,h4,.font-display{font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.02em;line-height:1.2}
 h1{font-size:2rem}h2{font-size:1.4rem}h3{font-size:1.1rem}
 h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
@@ -330,17 +339,35 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 /* B-a (2026-09-19): same unspaced-`+` defect as .main-content above — this
    offset resolved to 0 instead of 68px (measured: WKWebView reported 0px for
    the unspaced form against 68px for the spaced control). Be precise about the
-   impact (reviewer correction): position:sticky is ALSO inert here, because
-   .main-content sets overflow-x:hidden and is therefore a scroll container that
+   impact (reviewer correction): position:sticky was ALSO inert here, because
+   .main-content set overflow-x:hidden and was therefore a scroll container that
    never scrolls (the same trap documented at the .chat-composer rule). So the
-   bar does not stick at all today, and this offset change is LATENT — it fixes
-   nothing a player can currently see. What it prevents is the outcome the day
-   the sticky is revived: at bottom:0 the bar would stick flush to the viewport
-   bottom BEHIND .bottom-nav (nav z-index 100 vs. bar 50). The inert sticky is a
-   second, independent defect — reported to Drew, NOT fixed here, because
-   unpinning it changes the Picks page's visible behaviour and belongs to
-   user-experience. Guarded by navtest.mjs §1 and §3. */
-.submit-bar{position:sticky;bottom:calc(var(--nav-height) + 8px);background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
+   bar did not stick at all, and this offset change was LATENT when it shipped.
+
+   RG-188 (B-c, 2026-09-19) fixed that second defect — the three ancestors now
+   use overflow-x:clip, so the viewport is the nearest scrollport and this rule
+   finally does what it says. The 8px offset above is what now keeps the bar off
+   the fixed nav: at bottom:0 it would pin flush to the viewport bottom BEHIND
+   .bottom-nav (nav z-index 100 vs. bar 50), invisible and untappable. The
+   companion number is .main-content's +20px bottom reserve: because 20 > 8, the
+   bar's resting position is always 12px above its pinned position, which is why
+   a short slate can never make sticky shove the bar up over the tiebreaker.
+   Change either number and re-read that sentence.
+
+   THE env() TERM IS NOT OPTIONAL (reviewer BLOCK, RG-188 round 2). On a notched
+   iPhone .bottom-nav GROWS by env(safe-area-inset-bottom) — see its @supports
+   override — so an offset built from --nav-height alone is short by the inset
+   and the bar pins INSIDE the opaque nav: measured at a 34px inset, nav top 758
+   vs. bar bottom 784, i.e. 26px under it, with Submit untappable. Written inline
+   with a 0px fallback rather than in the @supports block, matching the two
+   sibling rules that already got this right (#auth-banner-stack and
+   #page-chat .chat-jump-latest). .main-content's @supports override adds the
+   same inset to its bottom reserve, so the 20 > 8 margin above survives
+   unchanged on the installed app. Guarded by navtest.mjs [1], [3], [6] (a CLASS
+   audit: ANY offset clearing the nav must carry the inset) and [7], which
+   measures all of it in a real engine at 393×852, including a variant with the
+   inset substituted at 34px. */
+.submit-bar{position:sticky;bottom:calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + 8px);background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
 .submit-progress{font-size:.875rem;color:var(--text-secondary)}
 .submit-progress strong{font-family:'Oswald',sans-serif;font-size:1.15rem;color:var(--maroon)}
 /* Leaderboard */
@@ -824,6 +851,20 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
    cooler than the expiry amber so the two are distinguishable when both are up. */
 .auth-banner-offline{background:#4a5a06;border-top:3px solid #2c3703}
 
+/* DI-208d (iOS Munera, PASS 1b, 2026-09-20) — the "update available" nudge.
+   Native-only in practice (js/app.js only ever creates this element when
+   isNativeShell() is true), but styled unconditionally like every other
+   fixed banner here rather than gated a second time in CSS. A SEPARATE
+   channel from .backend-error-banner/.auth-banner (own class, own node,
+   informational blue-teal — not red, not amber — so it never reads as a
+   sync or auth problem): small, bottom-anchored, clears the bottom nav and
+   the safe area the same way #auth-banner-stack does. */
+.update-available-banner{position:fixed;left:0;right:0;
+  bottom:calc(var(--nav-height) + env(safe-area-inset-bottom,0px));
+  z-index:9999;padding:10px 14px;font-family:'Inter',sans-serif;font-size:.82rem;
+  text-align:center;color:#fff;background:#0a5a6b;border-top:3px solid #063e49;
+  box-shadow:0 -2px 8px rgba(0,0,0,.25);cursor:pointer}
+
 /* Demo simulation */
 #demo-score-controls{margin-top:8px}
 
@@ -1042,9 +1083,35 @@ label[for="week-show-history"],label:has(#week-show-history){
 *, *::before, *::after { box-sizing: border-box; }
 
 /* Belt-and-suspenders: prevent any descendant from forcing the wrapper wider
-   than the viewport. */
-.page-wrapper { overflow-x: hidden; max-width: 100vw; }
-.main-content { overflow-x: hidden; }
+   than the viewport.
+   RG-188 (B-c, 2026-09-19): hidden → hidden-then-clip, for the reason spelled
+   out at the body rule near the top of this file. These two rules, plus body's,
+   were the three scroll containers that made `position:sticky` inert everywhere
+   inside the app — RG-17 (chat composer), RG-16 (loud-fail banner) and finally
+   B-c (the Picks submit bar) are all the same mechanism. `clip` keeps the
+   sideways clipping these rules exist for (proven at 320/375/393/768px with a
+   deliberately 1200px-wide child, navtest [7]) while leaving overflow-y
+   `visible`, so the viewport is the nearest scrollport again.
+   Do NOT collapse the pair to one declaration and do NOT reorder it: the
+   `hidden` line is the fallback for engines that do not know `clip`.
+
+   ONE REAL DIFFERENCE BESIDES THE SCROLLPORT (reviewer note, round 1):
+   `overflow:hidden` establishes a block formatting context; `overflow:clip` does
+   not. A BFC contains floats and stops margins collapsing through. Inert here,
+   for three specific reasons rather than optimism: this stylesheet declares
+   `float` nowhere at all; `.page-wrapper` is `display:flex`, which already
+   establishes a formatting context for its children and blocks margin collapse;
+   and `.main-content` is a flex ITEM of that wrapper, which is itself already
+   blockified and non-collapsing. `body`'s only in-flow child is .page-wrapper.
+   Measured, not assumed: every box on the Picks page (document height and each
+   element's rect, all three states) is identical before and after this change —
+   only the sticky bar moves. If a float is ever introduced above .main-content,
+   re-read this paragraph. */
+.page-wrapper { overflow-x: hidden; overflow-x: clip; max-width: 100vw; }
+.main-content { overflow-x: hidden; overflow-x: clip; }
+/* The RG-188 scope hold that goes with these three rules is NOT here — it has to
+   sit after .comm-tabbar's own rule to win the cascade. Search "RG-188, the
+   deliberate SCOPE HOLD". */
 
 /* Narrow viewports — tighten page padding so 12+content+12 fits an iPhone SE
    width (375px) without bleeding past. v14.1: bumped from 12→14px so cards
@@ -1528,6 +1595,37 @@ label[for="week-show-history"],label:has(#week-show-history){
 .comm-tab-icon { font-size: 1.05rem; line-height: 1; }
 .comm-tab-label { font-size: .72rem; letter-spacing: .04em; text-transform: uppercase; }
 
+/* ── RG-188, the deliberate SCOPE HOLD ───────────────────────────────────────
+   Read this before "fixing" either line below.
+
+   B-c's fix (body/.page-wrapper/.main-content: overflow-x hidden → clip, up
+   near the v14 block) gives the app a working scrollport again. That revives
+   EVERY position:sticky rule in the stylesheet, not just the Picks submit bar
+   that was reported. Two of them had been silently inert since the day they
+   were written, and reviving them changes what all six players see on every
+   page — a design question for Drew, not a defect fix, so B-c holds them at
+   today's behaviour:
+
+     .app-header  — would pin to the top of every page. UN-110 shows Drew
+                    guarding vertical space (the header is removed outright on
+                    the chat tab), so this is his call to make.
+     .comm-tabbar — its `top:0` was written when nothing else was sticky. With a
+                    sticky header present it would pin UNDERNEATH the opaque
+                    .app-header (z-index 100 vs 50) and read as half-clipped.
+
+   `relative`, not `static`: a sticky that never sticks renders identically to
+   relative, and relative keeps their `z-index` applying (z-index is ignored on
+   static boxes), so this holds today's rendering byte-for-byte instead of
+   quietly making a new stacking decision.
+
+   To revive either one, delete its line here — and give .comm-tabbar a `top`
+   that clears the header in the same edit. This block must stay AFTER both
+   rules it overrides; moved earlier in the file it silently stops applying.
+   navtest [6] and [7] assert the hold, in the source and in a real engine, so
+   it cannot lapse in either direction unnoticed. */
+.app-header { position: relative; }
+.comm-tabbar { position: relative; }
+
 /* Default: hide all sections; the active-tab rule below re-shows the ones
    matching the current tab. We're explicit about which selectors hide so the
    section-header (h2 "Commissioner Panel"), the .comm-tabbar itself, and the
@@ -1847,10 +1945,12 @@ label[for="week-show-history"],label:has(#week-show-history){
 
    Why this survives the trap that killed UN-104's first attempt (v0.17.4:
    position:sticky was inert because `.page-wrapper`/`.main-content` both set
-   overflow-x:hidden, which makes overflow-y compute to `auto`, making THEM
+   overflow-x:hidden, which made overflow-y compute to `auto`, making THEM
    the nearest scrolling ancestor instead of the viewport): this uses NO
    position:sticky anywhere. Flex distribution and a bounded overflow:auto
-   child are unaffected by an ancestor's overflow-x:hidden. */
+   child were unaffected by an ancestor's overflow-x:hidden, and are unaffected
+   by RG-188's change of those rules to overflow-x:clip (B-c, 2026-09-19) — the
+   trap itself is gone, but nothing here depended on it either way. */
 #page-chat.active{display:flex;flex-direction:column;
   height:calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom,0px));
   padding-top:env(safe-area-inset-top,0px);
@@ -1984,9 +2084,14 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    stay pinned above the bottom nav instead of scrolling away at the bottom of
    the page. v0.17.4 tried position:sticky here and found it INERT —
    .page-wrapper and .main-content both set overflow-x:hidden, so overflow-y
-   computes to auto, they become the nearest scrolling ancestor, and they
-   never scroll — so that rule was removed rather than left for someone to
+   computed to auto, they became the nearest scrolling ancestor, and they
+   never scrolled — so that rule was removed rather than left for someone to
    "fix" a rule that was never applying.
+   PAST TENSE SINCE RG-188 (B-c, 2026-09-19): those three ancestors now use
+   overflow-x:clip and are no longer scroll containers, so position:sticky DOES
+   work inside .main-content today. The history above is why this composer does
+   not use it; it is no longer a statement about what the stylesheet does. The
+   flex mechanism below stays — it does not depend on sticky either way.
    UN-110 (batch 4) actually delivers the original pin, via a different
    mechanism: the composer is now an ordinary `flex:0 0 auto` item in
    `#page-chat.active`'s bounded flex column (see that block, above) — it
@@ -2836,3 +2941,111 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
   .wager-actions{flex-direction:row;justify-content:flex-end}
   .wager-btn{width:auto;min-width:120px}
 }
+
+/* ── iOS Munera thread, PASS 1b (2026-09-20) — the ONE native-scoped CSS
+   rule block, per DI-213k/DI-210a. Every rule below is scoped under
+   body.native-shell, a class js/app.js only ever adds when isNativeShell()
+   is true (js/platform.js) — nothing in cfb-pickems/ ever sets it on the web
+   case, so this block cannot apply there. No new CSS custom property, no
+   new font, no icon-rule exception. ────────────────────────────────────── */
+body.native-shell .brand-wordmark{
+  font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.12em;
+  font-size:.78rem;color:#fff;text-transform:uppercase;margin-right:8px;
+  white-space:nowrap;
+}
+/* DI-210a — default iOS tap-highlight gray rectangles, native only (the web
+   PWA/browser case is unaffected — this never applies there). */
+body.native-shell{-webkit-tap-highlight-color:transparent}
+/* DI-210a — system context menu on long-press, scoped to cards/pick chips
+   ONLY (not global — genuine text selection elsewhere, e.g. chat message
+   bodies, must stay unaffected). */
+body.native-shell .card,
+body.native-shell .pick-chip{-webkit-touch-callout:none}
+
+/* DI-216 (approved 2026-09-20, coordinator amendments A1-A6) — the native
+   sign-in gate goes Munera. Reuses .site-gate/.site-gate-inner/.site-gate-btn
+   verbatim (DI-216h); this is the ONE new rule block. Double-gated on
+   body.native-shell (js/app.js only ever adds that class when isNativeShell()
+   is true, this file's own comment above) AND [data-gate-state="google"]
+   (js/app.js only ever sets that attribute on native — DI-216j/A3), so
+   nothing here can ever apply on the web. Colors are the literal Munera
+   palette (Ink/Gold), not --gold/--maroon — those are per-theme decorative
+   tokens (RG-42/RG-44) unrelated to this brand-chrome surface. */
+/* Coordinator correction (2026-09-20) — A1/A2 are BINDING, not optional:
+   A2 — the wordmark/tagline font-family, weight and letter-spacing are taken
+   DIRECTLY from the iOS shell's launch-screen SVG source (read at execute
+   time), not approximated. The SVG's <text> elements declare no
+   font-weight, so their computed weight is normal/400 — copied verbatim.
+   Letter-spacing there is an absolute unit (28 / 4, on a 176 / 56 font-size)
+   — converted to the equivalent em ratio so it scales with our own font-size
+   choice: 28/176 = 0.159em, 4/56 = 0.071em. The wordmark:tagline SIZE RATIO
+   is 176:56 = 22:7 exactly — 2.2rem:0.7rem below preserves that ratio
+   exactly (2.2 / 0.7 = 22/7) while choosing an absolute size that fits this
+   gate's 320px column (the SVG's own absolute sizes are splash-canvas scale
+   and would not fit here — A2 asks for the RATIO/typeface, not the literal
+   px). Both are iOS system fonts already available with no @import, no
+   bundled file, no image — same reasoning as gen-assets.mjs's own header
+   comment for why the launch image never ships a font file either.
+   A1 — vertical continuity. The SVG's own layout math (gen-assets.mjs
+   textLayout(), gap multiplier 1.0x, commit 00546b8) centers the
+   wordmark+tagline block at exactly 50% of the (square) canvas height — not
+   merely "near the top," the EXACT vertical center. .site-gate's shared
+   align-items:center instead centers the WHOLE column (wordmark+tagline+
+   subtitle+button+message), which — because of the content BELOW the
+   block — lands the block's own center well above 50vh, not "a few points"
+   off: on a 402x874pt viewport (iPhone 18 Pro) with this rule's own font
+   metrics (wordmark 2.2rem/line-height 1.15/margin-bottom 8px = 48.48px;
+   tagline 0.7rem/line-height 1.15/margin-bottom 28px = 40.88px; block
+   height B=89.36px), naive column-centering puts the block's center at
+   ~398.5px — about 38.5px too high. Fixed here, natively-scoped only, by
+   switching this ONE variant to align-items:flex-start and pushing it down
+   with padding-top:calc(50vh - B/2) — i.e. the block's CENTER, not its top
+   edge, lands at exactly 50vh (the SAME fraction the SVG uses), on any
+   device height, not just the 874px reference. The tail (subtitle+button+
+   message) then flows normally below it — comfortably clear of
+   env(safe-area-inset-bottom): total column height (~166px) leaves >300px
+   of margin below on the reference viewport, an order of magnitude more
+   than any safe-area inset. justify-content (horizontal centering) is
+   untouched — this only overrides the cross-axis (vertical) property.
+   Reviewer note (accepted, 2026-09-20) — landscape is enabled in the iOS
+   project and .site-gate is fixed/non-scrolling; at a 375pt landscape
+   HEIGHT, calc(50vh - 44.68px) alone would be calc(187.5px - 44.68px) =
+   142.8px, leaving too little room above a multi-line error message and
+   pushing it toward the very bottom edge. max(24px, calc(...)) restores
+   the shared gate's original 24px top padding as a FLOOR on short
+   viewports — the block simply stops being exactly 50vh-centered once the
+   viewport is too short for that to leave reasonable room, which is the
+   correct tradeoff (matches every other gate's fixed 24px on all four
+   sides) rather than letting it crowd the bottom edge. */
+body.native-shell .site-gate[data-gate-state="google"]{
+  background:#14110E;align-items:flex-start;
+  padding-top:max(24px, calc(50vh - 44.68px));
+}
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-wordmark{
+  font-family:Georgia,'Times New Roman',Baskerville,serif;
+  color:#C9A24B;font-size:2.2rem;font-weight:400;letter-spacing:.159em;
+  line-height:1.15;text-transform:uppercase;margin-bottom:8px;
+}
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-tagline{
+  font-family:Georgia,'Times New Roman',serif;
+  color:#C9A24B;font-size:.7rem;font-weight:400;letter-spacing:.071em;
+  line-height:1.15;margin-bottom:28px;
+}
+/* .site-gate-subtitle keeps the shared #888 muted gray on native (DI-216e —
+   "no reason to invent a Gold-muted variant for one line of text"); the
+   base rule's text-transform:lowercase is the ONE thing overridden — A1's
+   sentence-case "Sign in to make your picks." would otherwise render
+   lowercase despite the sentence-case HTML content, since that rule applies
+   regardless of platform. .site-gate-error/.site-gate-notice stay
+   semantic/muted, untouched, for the reason DI-216e gives. */
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-subtitle{
+  text-transform:none;
+}
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-btn{
+  border-color:#C9A24B;color:#C9A24B;
+}
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-btn:hover{
+  background:#C9A24B;color:#14110E;
+}
+/* .google-g-mark is NOT scoped or overridden here — Google's OAuth branding
+   guidelines govern that chip on every platform (DI-216e/g). */

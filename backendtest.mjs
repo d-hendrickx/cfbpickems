@@ -608,8 +608,13 @@ console.log('\n[13] Client read paths — the token is on every request');
   const jsDir = fileURLToPath(new URL('./js/', import.meta.url));
   const fetchers = fs.readdirSync(jsDir).filter(f => f.endsWith('.js'))
     .filter(f => /\bfetch\s*\(/.test(fs.readFileSync(jsDir + f, 'utf8')));
-  assert(JSON.stringify(fetchers.sort()) === JSON.stringify(['backend.js', 'chatTransport.js', 'data-provider.js', 'extra-point.js', 'push-onesignal.js']),
-    `[13c] exactly five modules call fetch() — the two backend transports plus ESPN/ESPN-summary/config.json (got: ${fetchers.join(', ')})`);
+  // iOS Munera thread, PASS 1b (2026-09-20) — app.js joined this list.
+  // DI-208d's checkNativeShellStaleness() adds ONE new fetch() call, native
+  // only, to the LIVE service-worker.js (never the backend URL, never
+  // app.js's own ~800KB) — the loop below proves it never reaches the
+  // backend the same way it already proves this for the other three.
+  assert(JSON.stringify(fetchers.sort()) === JSON.stringify(['app.js', 'backend.js', 'chatTransport.js', 'data-provider.js', 'extra-point.js', 'push-onesignal.js']),
+    `[13c] exactly six modules call fetch() — the two backend transports, ESPN/ESPN-summary/config.json, and app.js's DI-208d staleness check (got: ${fetchers.join(', ')})`);
   const beSrc = fs.readFileSync(jsDir + 'backend.js', 'utf8');
   const txSrc = fs.readFileSync(jsDir + 'chatTransport.js', 'utf8');
   assert(/JSON\.stringify\(\{\s*action,\s*token:\s*c\.token,/.test(beSrc),
@@ -620,10 +625,17 @@ console.log('\n[13] Client read paths — the token is on every request');
     '[13c] chatTransport.js post() puts the token on every POST');
   for (const [f, s] of [['data-provider.js', fs.readFileSync(jsDir + 'data-provider.js', 'utf8')],
                         ['extra-point.js', fs.readFileSync(jsDir + 'extra-point.js', 'utf8')],
-                        ['push-onesignal.js', fs.readFileSync(jsDir + 'push-onesignal.js', 'utf8')]]) {
+                        ['push-onesignal.js', fs.readFileSync(jsDir + 'push-onesignal.js', 'utf8')],
+                        ['app.js', fs.readFileSync(jsDir + 'app.js', 'utf8')]]) {
     assert(!/getBackendConfig\(\)[\s\S]{0,400}?fetch\s*\(/.test(s),
-      `[13c] ${f} does not fetch the backend URL (its fetch() calls go to ESPN / config.json)`);
+      `[13c] ${f} does not fetch the backend URL (its fetch() calls go to ESPN / config.json${f === 'app.js' ? ' / the live service-worker.js' : ''})`);
   }
+  // app.js's fetch() specifically: only ever the hardcoded live
+  // service-worker.js literal, never app.js itself and never derived from
+  // anything the response returns (security condition 11).
+  const appSrc13c = fs.readFileSync(jsDir + 'app.js', 'utf8');
+  assert(/fetch\('https:\/\/irbfootball\.com\/service-worker\.js',\s*\{\s*redirect:\s*'error'\s*\}\)/.test(appSrc13c),
+    "[13c] app.js's one fetch() call is the hardcoded literal https://irbfootball.com/service-worker.js with redirect:'error' (security condition 10)");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

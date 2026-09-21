@@ -758,6 +758,189 @@ console.log('\n[16] #page-chat is stamped by chat-ui.js alone…');
   document.getElementById('pref-nick').value = document.getElementById('pref-nick').defaultValue;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// RG-191 (2026-09-19) — THE SENT MESSAGE STAYS IN THE BOX
+// ═══════════════════════════════════════════════════════════════════════════
+// Drew, live on v0.22.5: "it is remembering my message in the chat, but is
+// still there after I hit send." A second tap would double-post it.
+//
+// WHY §5 ABOVE WENT GREEN AGAINST THE BROKEN CODE, AND WHY THIS SECTION IS
+// SEPARATE FROM IT: §5 taps Send with NO chat.js subscriber registered. In
+// production initChatUI() calls `onChat(handleChatEvent)` (chat-ui.js), so
+// sendMessage() -> sendEvent() -> ingest() -> notify('events') runs
+// handleChatEvent -> `if (chatPageActive()) renderChatPage()` SYNCHRONOUSLY,
+// inside the send call, i.e. BEFORE doSend's trailing clear. Every assertion
+// below is about that window, so the subscriber is wired here exactly the way
+// initChatUI() wires it — the harness's own send path has to be the app's.
+console.log('\n[17] Tapping Send with the REAL chat.js subscriber wired (production wiring)…');
+const _unsubRG177 = chat.onChat(chatUi._handleChatEventForTest);
+{
+  const uiSrc = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  assert(/onChat\(handleChatEvent\);/.test(uiSrc),
+    'fixture [structural]: initChatUI() registers handleChatEvent as a chat.js subscriber — the wiring this section reproduces');
+
+  storage.clearSession(); storage.setSession('p1', false, true);
+  chatUi.renderChatPage();
+  // NON-VACUITY: a send really does repaint the page from inside sendMessage().
+  // If this ever goes false, every assertion below is testing a quieter app
+  // than the one the players have.
+  const beforeNode = document.getElementById('chat-input');
+  chat.sendMessage({ body: 'proof that a send repaints', gameTag: '', author: 'p1', mentions: [] });
+  assert(document.getElementById('chat-input') !== beforeNode,
+    'fixture: a send repaints #page-chat SYNCHRONOUSLY (ingest -> notify -> handleChatEvent -> renderChatPage) — so anything doSend does AFTER the send call lands on a detached node');
+}
+{
+  // THE REPORTED BUG.
+  const SENT = 'kihoon is not covering that and you know it';
+  chatUi.renderChatPage();
+  const typed = typeDraft(SENT, 5);
+  typed._fire('input');
+  assert(document.getElementById('chat-input')?.value === SENT, 'fixture: the message is in the composer before the tap');
+
+  document.getElementById('chat-send')._fire('click');            // the REAL doSend()
+
+  // Re-QUERY. The node the player is looking at, not the one the test held.
+  const live = document.getElementById('chat-input');
+  assert(!!live && live.value === '',
+    `after Send the LIVE composer is empty — got ${JSON.stringify(live && live.value)} (THE REPORTED BUG: the sent text is still in the box and a second tap double-posts it)`);
+  assert(!!live && live.selectionStart === 0, `and the caret is back at the start — got ${live && live.selectionStart}`);
+  assert(chat.getMessages({ tag: 'all' }).filter(m => m.body === SENT).length === 1,
+    'the message was posted exactly once');
+
+  // …and it does not come back on the next repaint, from either direction.
+  chatUi.renderChatPage();
+  assert(document.getElementById('chat-input')?.value === '',
+    `a later repaint does not resurrect the sent text — got ${JSON.stringify(document.getElementById('chat-input')?.value)}`);
+  chat.ingest([ev(61, { author: 'p2', body: 'someone else talks' })], undefined, { caughtUp: true });
+  assert(document.getElementById('chat-input')?.value === '',
+    'nor does an inbound message arriving a moment later');
+  assert(chat.getMessages({ tag: 'all' }).filter(m => m.body === SENT).length === 1,
+    'and the room still holds exactly ONE copy of it');
+}
+{
+  // The Enter-key send path (desktop) reaches doSend() through a different
+  // listener and must clear the same way.
+  const SENT = 'enter key, same rules';
+  const realMM = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: true });                // desktop: Enter sends
+  chatUi.renderChatPage();
+  typeDraft(SENT, 4)._fire('keydown', { key: 'Enter', shiftKey: false });
+  const live = document.getElementById('chat-input');
+  assert(!!live && live.value === '',
+    `Enter-to-send clears the LIVE composer too — got ${JSON.stringify(live && live.value)}`);
+  assert(chat.getMessages({ tag: 'all' }).filter(m => m.body === SENT).length === 1,
+    'and posts exactly once (not once per repaint)');
+  globalThis.matchMedia = realMM;
+}
+{
+  // THE INVERSE, with the subscriber wired — RG-174 must not regress. An
+  // UNSENT draft still survives the repaint a real inbound message causes.
+  chatUi.renderChatPage();
+  typeDraft('mine, still unsent', 4);
+  chat.ingest([ev(62, { author: 'p2', body: 'kihoon speaks' })], undefined, { caughtUp: true });
+  const s = composerState();
+  assert(!!s && s.value === 'mine, still unsent',
+    `an inbound message still leaves an UNSENT draft alone (RG-174 non-regression) — got ${JSON.stringify(s?.value)}`);
+  assert(!!s && s.start === 4 && s.focused === true, 'with its caret and focus');
+  document.getElementById('chat-input').value = '';
+}
+{
+  // A REFUSED send keeps the words. Whitespace-only never posts, and must not
+  // be treated as "consumed" — the player still has something in the box.
+  chatUi.renderChatPage();
+  typeDraft('   ', 3);
+  document.getElementById('chat-send')._fire('click');
+  assert(chat.getMessages({ tag: 'all' }).filter(m => !m.body.trim()).length === 0, 'a whitespace-only tap posts nothing');
+  chatUi.renderChatPage();
+  assert(document.getElementById('chat-input')?.value === '   ',
+    `a refused send leaves the composer contents alone — got ${JSON.stringify(document.getElementById('chat-input')?.value)}`);
+  document.getElementById('chat-input').value = '';
+}
+{
+  // A FAILED send keeps the words. Fault-injected at the REAL failure point
+  // inside the REAL sendEvent() (chat.js's uuid()), so the send throws before
+  // anything is queued or posted. The player must get their sentence back —
+  // clearing the box first must not mean losing it when the send doesn't take.
+  const WORDS = 'twenty says brayden folds';
+  chatUi.renderChatPage();
+  typeDraft(WORDS, 6);
+  const realCrypto = globalThis.crypto;
+  Object.defineProperty(globalThis, 'crypto', {
+    value: { randomUUID() { throw new Error('injected: send refused'); } }, configurable: true,
+  });
+  let threw = null, logged = 0;
+  const realErr = console.error;
+  console.error = () => { logged++; };                  // the failure is EXPECTED here; keep the log readable
+  try { document.getElementById('chat-send')._fire('click'); } catch (e) { threw = e; }
+  console.error = realErr;
+  Object.defineProperty(globalThis, 'crypto', { value: realCrypto, configurable: true });
+  assert(logged === 1, `the refusal is reported to the console, not swallowed silently — got ${logged} call(s)`);
+  assert(chat.getMessages({ tag: 'all' }).filter(m => m.body === WORDS).length === 0,
+    'fixture: the injected failure really did stop the message being posted');
+  const live = document.getElementById('chat-input');
+  assert(!!live && live.value === WORDS,
+    `a send that FAILS puts the player's words back in the composer — got ${JSON.stringify(live && live.value)} (losing a sentence to a failed send is the same bug wearing the other shoe)`);
+  assert(!threw, `and the failure does not escape the click handler (got ${threw?.message})`);
+  // …and the restored draft behaves like any other draft afterwards.
+  chatUi.renderChatPage();
+  assert(document.getElementById('chat-input')?.value === WORDS, 'the restored draft then survives a repaint like any other');
+  document.getElementById('chat-input').value = '';
+}
+{
+  // The token is ONE-SHOT. A player who sends "lol" and immediately types
+  // "lol" again must keep the second one across a repaint — a sent-text guard
+  // that outlived its send would silently hand RG-174 back for that text.
+  chatUi.renderChatPage();
+  typeDraft('lol', 3);
+  document.getElementById('chat-send')._fire('click');
+  assert(document.getElementById('chat-input')?.value === '', 'fixture: "lol" sent and the box is clear');
+  typeDraft('lol', 3);
+  chatUi.renderChatPage();
+  assert(document.getElementById('chat-input')?.value === 'lol',
+    're-typing the SAME text straight after sending it still survives a repaint (the consumed-draft signal is one-shot, not a text blocklist)');
+  document.getElementById('chat-input').value = '';
+}
+{
+  // STRUCTURAL — the order the fix depends on, pinned. The clear has to happen
+  // BEFORE the send call, on a node re-queried at that moment; "clear after,
+  // using the reference we took at the top" is precisely what shipped.
+  const uiSrc = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+  // Comment-blanked (§16's `blank`): the assertions below are about the order
+  // the CODE runs in, and a comment naming one of these functions would
+  // otherwise answer for it.
+  const blankSrc = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+  const doSendFn = blankSrc((uiSrc.match(/function doSend\(\) \{[\s\S]*?\n\}/) || [''])[0]);
+  assert(doSendFn.length > 0, 'doSend() body located [structural]');
+  assert(doSendFn.indexOf('consumeComposerDraft(') > 0
+      && doSendFn.indexOf('consumeComposerDraft(') < doSendFn.indexOf('sendMessage('),
+    'doSend() consumes the draft BEFORE it calls sendMessage() — the send repaints synchronously, so anything after it is too late [structural]');
+  assert(!/\binput\.value\s*=\s*''/.test(doSendFn),
+    'doSend() never clears through the reference it took before the send — that node is detached by then [structural]');
+  const consumeFn = blankSrc((uiSrc.match(/function consumeComposerDraft\(\)[\s\S]*?\n\}/) || [''])[0]);
+  assert(/getElementById\('chat-input'\)/.test(consumeFn),
+    'consumeComposerDraft() re-queries #chat-input by id rather than being handed a node [structural]');
+  const captureFn = blankSrc((uiSrc.match(/function captureComposerDraft\(\)[\s\S]*?\n\}/) || [''])[0]);
+  assert(/_consumedDraft/.test(captureFn),
+    'captureComposerDraft() honours the consumed-draft signal, so a repaint racing the send cannot re-capture the sent text [structural]');
+
+  // The REPLY SHEET composer, audited the same way. It is NOT vulnerable —
+  // #chat-sheet-input lives in a wrapper appended to document.body, outside
+  // the #page-chat subtree renderChatPage() replaces, and the only repaint a
+  // send can trigger there (handleChatEvent -> renderSheetMessages) writes
+  // #chat-sheet-scroll, never the composer. Those two facts are the whole
+  // audit, so they are what gets pinned.
+  assert(/document\.body\.appendChild\(wrap\)/.test(uiSrc),
+    'the game-thread sheet is mounted on document.body, OUTSIDE the #page-chat subtree renderChatPage() rebuilds [structural]');
+  const handleFn = blankSrc((uiSrc.match(/function handleChatEvent\(kind, detail\) \{[\s\S]*?\n\}\nexport const _handleChatEventForTest/) || [''])[0]);
+  assert(handleFn.length > 0, 'handleChatEvent() body located [structural]');
+  assert(!/renderSheetComposer\(/.test(handleFn),
+    'no inbound chat event rebuilds the SHEET composer — only a deliberate gesture does, so sendSheetMessage()\'s node cannot go stale under it [structural]');
+  const sheetScroll = blankSrc((uiSrc.match(/function renderSheetMessages\(\) \{[\s\S]*?\n\}/) || [''])[0]);
+  assert(/getElementById\('chat-sheet-scroll'\)/.test(sheetScroll) && !/getElementById\('chat-sheet-composer'\)/.test(sheetScroll),
+    'the sheet repaint a send triggers writes #chat-sheet-scroll only, never the composer [structural]');
+}
+_unsubRG177();
+
 // ── Result ───────────────────────────────────────────────────────────────────
 globalThis.setTimeout = _realSetTimeout;
 process.stdout.write(`\n${'─'.repeat(70)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n${'─'.repeat(70)}\n`,

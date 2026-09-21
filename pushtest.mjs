@@ -913,6 +913,359 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// [11] DI-204 / DI-205 / DI-206 / DI-218 — THE PUSH SELF-TEST FAMILY'S CLIENT.
+//
+// Everything here is a PURE function of a server answer, which is the whole
+// reason `js/push-selftest.js` is its own module: the assertions below are
+// about the sentence the commissioner will actually read, not about a snapshot
+// of HTML. A copy string written inline in app.js would be a string no test
+// could reach.
+//
+// WHAT THIS CANNOT PROVE, said plainly: none of it touches a database or a
+// browser. That the RLS policy hides the row is rls.test.mjs's (live, on
+// cfbp-test); that the webhook fires is Drew's browser checklist; that the
+// phone buzzes is the phone.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
+{
+  const pst = await import('./js/push-selftest.js');
+
+  // ── DI-204h — every state, one sentence each.
+  {
+    const run = (payload, over = {}) => ({ ok: true, skipped: null, error: null, payload, ...over });
+    const t = (r, o) => pst.testPushResultCopy(r, o).text;
+
+    assert(/accepted it for 1 device/.test(t(run({ pushed: 1, recorded: 1 }), { sentAgo: '2s ago' })),
+      '11-1: OneSignal accepted it ⇒ the "accepted it for N device(s) — check your phone" line');
+    assert(!/deliver/i.test(t(run({ pushed: 1, recorded: 1 }))),
+      '11-2: A2 EVIDENCE RULE — the word "delivered" appears NOWHERE in the success copy. OneSignal reports what was TARGETED; the phone buzzing is the only proof of arrival, which is exactly why Drew is standing there watching it');
+    assert(/only you can see it/.test(t(run({ pushed: 1, recorded: 1 }))),
+      '11-3: …and it says the chat post is private, which is the clause of UN-206 a commissioner would otherwise have to take on faith');
+    assert(/no subscribed device/.test(t(run({ pushed: 0, recorded: 1 }))),
+      '11-4: recorded but not pushed and no preference blocked it ⇒ "no subscribed device for your account"');
+    assert(/push notifications are turned off/.test(t(run({ pushed: 0, recorded: 1, breakdown: [{ memberId: 'p1', reason: 'master_off' }] }))),
+      '11-5: the master switch off is named as the master switch, from the SERVER\'s own breakdown — the same check real traffic gets, so the copy and the behaviour cannot disagree');
+    assert(/muted the Chat category/.test(t(run({ pushed: 0, recorded: 1, breakdown: [{ memberId: 'p1', reason: 'category_off' }] }))),
+      '11-6: …and the category mute is named as the category mute — they need different instructions');
+    assert(/still posted to chat/i.test(t(run({ pushed: 0, recorded: 1, breakdown: [{ memberId: 'p1', reason: 'master_off' }] }))),
+      '11-7: …and both say the message DID post, so the rest of the pathway is still confirmed short of the phone buzz');
+    assert(/couldn't work out who the test was for/.test(t(run({ recipients: 0, direct: 'unresolved' }, { skipped: 'no_work' }))),
+      '11-8: B4\'s worst case has its OWN loud copy, and it says plainly that nothing went to anyone else');
+    assert(/Test push failed — boom/.test(t(run({}, { ok: false, error: 'boom' }))),
+      '11-9: a server failure is LOUD and quotes the reason (AD-06 — never softened, never a silent fallback)');
+    assert(/hasn't reported back yet/.test(t(null, { sentAgo: '20s ago' })),
+      '11-10: B3 — no matching run inside the poll window is the HONEST line, never a false success');
+    // ── 11-11 REWRITTEN AT THE COMBINED RELEASE (2026-09-20, reviewer BLOCK R2).
+    //
+    // It used to read `t(run({}, { skipped: 'disabled' }))` and pin the copy on that branch. That
+    // branch WAS UNREACHABLE: `notify-fanout` returns `skipped:'disabled'` before `startRun()`
+    // (its §3; notifyFanout.twin.mjs :115 asserts zero job_runs writes on that path), so no run
+    // row carrying that state can ever exist for `testPushResultCopy()` to be handed. The
+    // assertion passed for 129 runs over copy the system could not produce — which is worse than
+    // no assertion, because it read as coverage of the case Drew would actually hit.
+    //
+    // The reachable state is CLIENT-SIDE, off the switch the card already holds. Pinned here on
+    // BOTH of its routes.
+    assert(/switched off/.test(pst.serverPushOffCopy().text)
+      && /notify-fanout/.test(pst.serverPushOffCopy().text),
+      '11-11: the switch-off state names the job AND the card section a commissioner has to go to, so the line is actionable rather than merely true');
+    assert(pst.serverPushOffCopy().tone === 'warn',
+      '11-11a: …and it is a warn, not an ok — nothing was sent');
+    assert(/can't be sent until it's on/.test(pst.serverPushOffCopy().text),
+      '11-11b: …and it says plainly that NOTHING was sent, rather than implying a message posted anyway (the removed branch claimed "It still posted to your Locker Room", which was false — the RPC is never reached)');
+    assert(pst.testPushResultCopy(null, { sentAgo: '20s ago', serverPushOff: true }).text === pst.serverPushOffCopy().text,
+      '11-11c: …and the TIMEOUT route answers with the SAME sentence when the switch is off, so a switch flipped mid-poll cannot fall back to "hasn\'t reported back yet"');
+    assert(/hasn't reported back yet/.test(pst.testPushResultCopy(null, { sentAgo: '20s ago', serverPushOff: false }).text),
+      '11-11d: …while a genuine no-answer with the switch ON still gets the honest "hasn\'t reported back yet" — the new branch narrows that line, it does not replace it');
+    {
+      const src11 = await readFile(new URL('./js/push-selftest.js', import.meta.url), 'utf8');
+      const code11 = src11.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+      assert(!/skipped\s*===\s*'disabled'/.test(code11),
+        '11-11e: …and the unreachable `skipped === \'disabled\'` branch is GONE from the source, not merely untested — a dead branch is a future false assertion waiting for someone to notice it is uncovered');
+    }
+    assert(/not configured/i.test(t(run({}, { skipped: 'not_configured' }))),
+      '11-12: an unconfigured OneSignal is reported as a SERVER problem, never as a player problem');
+  }
+
+  // ── DI-204h's refusal states.
+  {
+    assert(/wait 12s/.test(pst.testPushRefusalCopy({ reason: 'rate_limited', waitSeconds: 12 }).text),
+      '11-13: the rate-limit copy uses the SERVER\'s own remaining seconds, so the countdown and the gate can never disagree');
+    assert(pst.interpretRpcError({ message: 'rate_limited:7' }).waitSeconds === 7,
+      '11-14: …parsed out of the RPC\'s raise message, which is where that number is decided');
+    assert(pst.interpretRpcError({ message: 'ERROR: not_commissioner' }).reason === 'not_commissioner',
+      '11-15: the commissioner refusal is recognised as its own state');
+    assert(/only the commissioner/.test(pst.testPushRefusalCopy({ reason: 'not_commissioner' }).text),
+      '11-16: …and rendered as its own sentence');
+  }
+
+  // ── B3 — the poll matches on the MESSAGE ID, never on "the newest run".
+  {
+    const rows = [
+      { job: 'notify-fanout', finishedAt: 'x', payload: { meta: { messageId: 'somebody_elses' }, pushed: 5 } },
+      { job: 'notify-fanout', finishedAt: 'x', payload: { meta: { messageId: 'sys_test_mine' }, pushed: 1 } },
+    ];
+    const hit = await pst.pollTestPushResult('L', 'sys_test_mine', { getRuns: async () => rows, sleep: async () => {} });
+    assert(hit && hit.payload.pushed === 1,
+      '11-17: B3 — the poll finds the run whose payload.meta.messageId MATCHES, not the newest one. On a Saturday the newest notify-fanout row belongs to somebody\'s chat message, and reporting a stranger\'s fan-out as your own result is worse than reporting nothing');
+    const inflight = [{ job: 'notify-fanout', finishedAt: null, payload: { meta: { messageId: 'sys_test_mine' } } }];
+    let ticks = 0;
+    const none = await pst.pollTestPushResult('L', 'sys_test_mine', {
+      getRuns: async () => inflight, sleep: async () => { ticks += 1; },
+      now: () => (ticks >= 3 ? 1e12 : 0), timeoutMs: 1000,
+    });
+    assert(none === null,
+      '11-18: …a START row with no finishedAt is a run still in flight — the poll keeps waiting rather than reporting a half-written row as the answer');
+    const broken = await pst.pollTestPushResult('L', 'x', {
+      getRuns: async () => { throw new Error('job_runs unreadable'); }, sleep: async () => {}, now: (() => { let n = 0; return () => (n += 1e6); })(),
+    });
+    assert(broken === null,
+      '11-19: …and a THROWING getJobRuns degrades to the honest "hasn\'t reported back yet" line rather than taking the button down');
+  }
+
+  // ── DI-205 — the per-player breakdown lines.
+  {
+    const nameOf = (id) => ({ p1: 'Drew', p2: 'Brayden', p3: 'Kevin', p4: 'Koby' })[id] || '';
+    const line = (e) => pst.breakdownLine(e, nameOf);
+    assert(line({ memberId: 'p1', reason: null }).text === 'Drew — pushed', '11-20: a reachable player');
+    assert(line({ memberId: 'p2', reason: 'category_off' }).text === 'Brayden — muted (Chat category off)', '11-21: a muted category');
+    assert(line({ memberId: 'p3', reason: 'master_off' }).text === 'Kevin — push notifications off', '11-22: push off');
+    assert(line({ memberId: 'p4', reason: 'inactive' }).text === 'Koby — not an active member', '11-23: an inactive member');
+    assert(line({ memberId: 'p9', reason: null }).text === 'p9 — pushed',
+      '11-24: an id the roster does not know renders as the ID rather than as a blank line — a member who left is still visible');
+    assert(line({ memberId: 'p1', reason: 'something_new' }).icon === '⚠️',
+      '11-25: a reason this client has never seen renders as a WARNING with the raw word, not as a success. A server that grows a new reason must not read as "pushed" here');
+  }
+
+  // ── DI-206 — the reachability lines, and the merge's honesty about what it
+  //    does not know.
+  {
+    const nameOf = (id) => ({ p1: 'Drew', p2: 'Brayden', p5: 'Kihoon' })[id] || '';
+    const l = (r, e) => pst.reachLine(r, e, nameOf);
+    assert(/1 device \(iPhone\) can receive push/.test(l({ memberId: 'p5', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, null).text),
+      '11-26: a device found');
+    assert(/Preferences unknown/.test(l({ memberId: 'p5', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, null).text),
+      '11-27: DI-206d — with NO recent send to read preferences from, the preference half is labelled UNKNOWN, never assumed to be on. That is the difference between a diagnostic and a guess');
+    assert(!/unknown/i.test(l({ memberId: 'p5', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, { reason: null }).text),
+      '11-28: …and with real eligibility data the hedge disappears');
+    assert(/no device registered/.test(l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null).text),
+      '11-29: zero devices — the one fact this check proves decisively');
+    assert(/accept the notification prompt/.test(l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null).action),
+      '11-30: …with the per-state ACTION line DI-206e requires: what to actually tell that player');
+    const failed = l({ memberId: 'p1', deviceCount: null, kinds: [], lookupOk: false }, null);
+    assert(/couldn't check/.test(failed.text) && !/no device/.test(failed.text),
+      '11-31: C1 — a FAILED LOOKUP renders as "couldn\'t check" and NEVER as "no device". Telling Drew that Kevin has no phone when OneSignal simply did not answer sends him to Kevin with the wrong instruction');
+    assert(/turned off in Settings/.test(l({ memberId: 'p1', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, { reason: 'master_off' }).text),
+      '11-32: a registered device with push off is a DIFFERENT line from no device, and a different instruction');
+    assert(/2 devices \(iPhone, Web\)/.test(l({ memberId: 'p1', deviceCount: 2, kinds: ['iPhone', 'Web'], lookupOk: true }, { reason: null }).text),
+      '11-33: multiple devices, mixed kinds');
+    assert(!/receiving|delivered|will get/i.test(l({ memberId: 'p1', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, { reason: null }).text),
+      '11-34: the copy says "CAN receive push" and never claims a push will arrive — OneSignal\'s `enabled` can lag a revoked OS permission by a day (DI-206i.4)');
+    assert(/isn't configured/.test(pst.reachHeaderCopy({ skipped: 'not_configured' }).text),
+      '11-35: the unconfigured state is a SERVER problem line, not five identical player lines');
+    assert(/wait 42s/.test(pst.reachHeaderCopy({ rateLimited: true, retryAfterSeconds: 42 }).text),
+      '11-36: the whole-check rate limit counts down from the server\'s own number');
+    assert(/Reachability check failed/.test(pst.reachHeaderCopy({ ok: false, error: 'onesignal_unreachable' }).text),
+      '11-37: a total failure is loud (AD-06)');
+  }
+
+  // ── DI-218 — the version line.
+  {
+    const nameOf = (id) => ({ p1: 'Drew', p2: 'Brayden' })[id] || '';
+    const now = Date.parse('2026-09-20T12:00:00Z');
+    const cur = pst.versionLine({ memberId: 'p1', version: 'v0.22.7', seenAt: '2026-09-20T10:00:00Z' }, 'v0.22.7', nameOf, now);
+    assert(cur.stale === false && cur.icon === '✅' && /Drew — v0\.22\.7 · since 2h ago/.test(cur.text),
+      `11-38: a player on the current version is not highlighted, and the time is labelled "since" — report_app_version writes ONLY on change, so the timestamp is when they FIRST arrived on that version, not when they last opened the app (got ${cur.text})`);
+    const old = pst.versionLine({ memberId: 'p2', version: 'v0.22.5', seenAt: '2026-09-18T10:00:00Z' }, 'v0.22.7', nameOf, now);
+    assert(old.stale === true && old.icon === '⚠️',
+      '11-39: anyone NOT on APP_VERSION is highlighted — the whole point of this column is the Step 6 switch-on precondition ("only flip this on once every device is on the latest app version"), which until now nothing in the system could check');
+    const never = pst.versionLine({ memberId: 'p2', version: '', seenAt: null }, 'v0.22.7', nameOf, now);
+    assert(never.stale === true && /never reported/.test(never.text),
+      '11-40: a member who has never reported reads `never`, not blank and not "unknown" — that is the case the commissioner must not read past');
+    assert(/2 of 3 not on v0\.22\.7 yet/.test(pst.versionSummary(
+      [{ version: 'v0.22.7' }, { version: 'v0.22.5' }, { version: '' }], 'v0.22.7')),
+      '11-41: the summary counts the stragglers, including the never-reported one');
+    assert(/All 2 on v0\.22\.7/.test(pst.versionSummary([{ version: 'v0.22.7' }, { version: 'v0.22.7' }], 'v0.22.7')),
+      '11-42: …and says so plainly when everyone is up to date');
+  }
+
+  // ── DI-218's boot hook: once per load, and NEVER the red banner.
+  {
+    pst._resetVersionReportForTest();
+    assert(await pst.reportAppVersionOnce('v0.22.7', null) === 'skipped',
+      '11-43: no league ⇒ the hook does nothing at all (and does not consume its once-per-load latch)');
+    assert(await pst.reportAppVersionOnce('', 'L') === 'skipped', '11-44: …and neither does a missing version');
+  }
+
+  // ── The storage seam: this module stores NOTHING. Asserted over the SOURCE,
+  //    because the claim is an absence and an absence has no runtime handle.
+  {
+    const { readFileSync } = await import('node:fs');
+    const raw = readFileSync('js/push-selftest.js', 'utf8');
+    // COMMENTS BLANKED, LENGTH PRESERVED (functions.check.mjs's `strip`). The
+    // file's own header EXPLAINS that it reaches no localStorage and stores
+    // nothing — a rule that a sentence describing it can defeat is the RG-49
+    // shape, where prose satisfies the check the prose is about.
+    const src = raw
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    assert(raw.length === src.length && /storage seam/.test(raw) && !/storage seam/.test(src),
+      '11-45a: fixture check — the comment blanker is genuinely blanking and preserves length, so the two assertions below cannot pass by matching nothing');
+    assert(!/localStorage/.test(src),
+      '11-45: AD-02 — js/push-selftest.js never touches localStorage');
+    assert(!/from '\.\/storage\.js'/.test(src),
+      '11-46: …and it adds no storage key at all. The design input asked for a device ledger; the SERVER is the memory instead (report_app_version returns without writing when the version has not changed), because last_seen_version is a fact about a MEMBER and a per-device key would be the wrong subject — see that file\'s header');
+    assert(/_versionReportedThisLoad = true;/.test(src) && src.indexOf('_versionReportedThisLoad = true;') < src.indexOf("client.rpc('report_app_version'"),
+      '11-47: …and the once-per-load latch is set BEFORE the await, so two overlapping boots (a hydrate and a hold-gate resume) cannot both fire it');
+  }
+
+  // ── The app.js half: the card, the boot hook, and the banner rule.
+  {
+    const { readFileSync } = await import('node:fs');
+    const appSrc = readFileSync('js/app.js', 'utf8');
+    const html = (await import('./js/app.js')).renderPushSelfTestHTML;
+    assert(typeof html === 'function', '11-48: renderPushSelfTestHTML is exported as its own test seam');
+    assert(/data-comm-tab="data"[\s\S]{0,4000}renderPushSelfTestHTML\(\)/.test(appSrc),
+      '11-49: RG-10 — the sub-section renders INSIDE the Background jobs card, which already carries data-comm-tab="data". An untagged admin-section renders on all five tabs');
+    assert(/id="push-selftest-btn"[^>]*style="min-height:44px"/.test(appSrc)
+      && /id="push-reach-btn"[^>]*style="min-height:44px"/.test(appSrc)
+      && /id="push-breakdown-toggle"[^>]*style="min-height:44px"/.test(appSrc),
+      '11-50: CONVENTIONS #17 — all three controls carry an explicit 44px floor (.btn-sm\'s base is 34px, under it)');
+    assert(!/#[0-9a-fA-F]{6}/.test(appSrc.slice(appSrc.indexOf('const PUSH_TONE_COLOR'), appSrc.indexOf('const PUSH_TONE_COLOR') + 400)),
+      '11-51: no hardcoded color — the tone map is CSS custom properties only, so all seven themes are correct by construction');
+    assert(/⚠️.*var\(--loss\)|warn: 'var\(--loss\)'/.test(appSrc.slice(appSrc.indexOf('const PUSH_TONE_COLOR'), appSrc.indexOf('const PUSH_TONE_COLOR') + 400)),
+      '11-52: DI-206f — `warn` REUSES --loss rather than inventing a new token, which is what the DI asked the builder to confirm against styles.css');
+    const tailAt = appSrc.indexOf('async function runPostHydrateTail');
+    const reportAt = appSrc.indexOf('reportAppVersionOnce(APP_VERSION)');
+    assert(tailAt > -1 && reportAt > tailAt,
+      '11-53: the version report is hooked into runPostHydrateTail() — the one place that runs once per load AFTER a hydrate returned ACTIVE, so the league is resolved and the RPC has something true to say');
+    const hookBlock = appSrc.slice(reportAt - 1400, reportAt + 200);
+    assert(!/showBackendErrorBanner/.test(hookBlock),
+      '11-54: …and nothing on that path can raise the red banner. The banner means "your picks may not be saving" (AD-06); spending it on a diagnostic column would teach six people to ignore the one warning that matters');
+    assert(/\.catch\(\(\) => \{\}\)/.test(appSrc.slice(reportAt, reportAt + 120)),
+      '11-55: …and the promise is caught at the call site too, so an unhandled rejection cannot escape into the boot path');
+
+    // ── REVIEWER BLOCK R2 — the switch check, on both routes, in the handler itself.
+    const sendAt = appSrc.indexOf('async function handleSendTestPush()');
+    assert(sendAt > -1, '11-56: fixture check — handleSendTestPush() was located');
+    const sendBody = appSrc.slice(sendAt, appSrc.indexOf('\n}', appSrc.indexOf('refreshBackgroundJobsCard();', sendAt)));
+    assert(/if \(!isServerJobEnabled\('notifyFanout'\)\)/.test(sendBody),
+      '11-56a: R2 — the handler refuses BEFORE sending when notify-fanout is off, off the switch state the card already holds');
+    assert(sendBody.indexOf("isServerJobEnabled('notifyFanout')") < sendBody.indexOf('await sendTestPush()'),
+      '11-56b: …and that check is textually BEFORE the RPC call, so nothing is inserted — no private Locker Room message is written for a push that provably cannot follow it');
+    assert(/serverPushOffCopy\(\)/.test(sendBody),
+      '11-56c: …and it renders the pure copy function rather than a string written inline here, which no suite could reach');
+    assert(/serverPushOff: !isServerJobEnabled\('notifyFanout'\)/.test(sendBody),
+      '11-56d: …and the TIMEOUT route re-reads the switch rather than capturing it at send time, so a flip mid-poll is reported correctly');
+    // push-reach: the brief asked whether the same check is needed. It is not, and that is a fact
+    // about the function rather than an oversight — asserted so a later kill switch cannot be
+    // added there without this going red and forcing the same client-side handling.
+    const reachSrc = await readFile(new URL('./supabase/functions/push-reach/index.js', import.meta.url), 'utf8');
+    assert(!/isJobEnabled\s*\(/.test(reachSrc.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ')),
+      '11-57: push-reach has NO kill switch at all (commissioner-only, class U), so there is no equivalent "switched off" state for its button to pre-empt. If one is ever added, this goes red and the DI-206 button needs the same treatment DI-204 just got');
+
+    // ── [11c] ONE COHERENT CARD (combined release 2026-09-20, brief item (d)).
+    //
+    // Three warnings in SERVER_JOB_ON_WARNING send Drew to "the App version last seen list below".
+    // That list is DI-218's, and it ships in the SAME release from a DIFFERENT branch — so this is
+    // exactly the kind of cross-branch reference that is true on the day it is written and silently
+    // false after the next rename. Pinned here: the phrase in the warnings and the HEADING that
+    // renders are the same words, the list really is in the same card, and the two branches did not
+    // each contribute a heading.
+    const VERSION_HEADING = 'App version last seen';
+    const warnAt = appSrc.indexOf('const SERVER_JOB_ON_WARNING');
+    assert(warnAt > -1, '11c-1: fixture check — SERVER_JOB_ON_WARNING was located');
+    const warnBlock = appSrc.slice(warnAt, appSrc.indexOf('});', warnAt));
+    const referers = ['notifyFanout', 'reminders', 'scoresRefresh'];
+    for (const job of referers) {
+      const line = (warnBlock.match(new RegExp(`\\n  ${job}: '([^']*)'`)) || [, ''])[1];
+      assert(line.length > 0, `11c-2/${job}: fixture check — the warning string was read`);
+      assert(line.includes(`The ${VERSION_HEADING} list below`),
+        `11c-3/${job}: the warning points at "The ${VERSION_HEADING} list below" — the EXACT words the card renders, not a paraphrase of them`);
+      assert(/DI-218/.test(line),
+        `11c-4/${job}: …and names DI-218, so the reference is traceable when somebody greps for what shipped it`);
+    }
+    assert(appSrc.includes(`>${VERSION_HEADING}\${`) || appSrc.includes(`${VERSION_HEADING}\${versionRows.length`),
+      `11c-5: …and "${VERSION_HEADING}" is the literal heading the card renders, so the three warnings above name something a commissioner can actually find by eye`);
+    // Same card, and ONE heading. The push sub-section is appended INSIDE the Background jobs
+    // card's `.card`, after the per-job rows the warnings' own toggles live in — which is what
+    // makes the word "below" true at phone width, where everything is one column.
+    const cardAt = appSrc.indexOf('🛠 Background jobs');
+    const rowsAt = appSrc.indexOf('${rowsHtml}', cardAt);
+    const subAt = appSrc.indexOf('${renderPushSelfTestHTML()}', cardAt);
+    assert(cardAt > -1 && rowsAt > cardAt && subAt > rowsAt,
+      `11c-6: the push sub-section renders INSIDE the Background jobs card and BELOW the per-job rows (card=${cardAt}, rows=${rowsAt}, sub=${subAt}) — so "below" is literally true in the one-column phone layout, not just conceptually`);
+    assert((appSrc.match(/🛠 Background jobs/g) || []).length === 1,
+      '11c-7: …and there is exactly ONE "🛠 Background jobs" heading. Both merged branches added to this card; two headings would be the visible seam of the merge');
+    // Counted as RENDERED MARKUP (`>App version last seen`), not as raw occurrences: the phrase
+    // also appears in the three warning strings above and once more in the comment that explains
+    // why those warnings were reworded, and none of those is a heading. What must be unique is the
+    // heading itself — two would be the visible seam of the merge.
+    const renderedHeadings = (appSrc.match(new RegExp(`>${VERSION_HEADING}`, 'g')) || []).length;
+    assert(renderedHeadings === 1,
+      `11c-8: …and "${VERSION_HEADING}" is rendered as a heading EXACTLY ONCE (got ${renderedHeadings}). Both merged branches wrote into this card; a second copy of this heading would mean each had contributed its own version list`);
+  }
+
+  // ══ [11r] REVIEWER BLOCK R1 — THE **REAL** ROSTER LOOKUP, DRIVEN FOR ALL THREE LISTS. ═══════
+  //
+  // Everything above this point injected its OWN `nameOf` fixture into `breakdownLine`/
+  // `reachLine`/`versionLine`. That is the right way to unit-test those three pure functions, and
+  // it is exactly why 129 assertions passed over a card that rendered a raw member id on every
+  // single line: js/app.js's own `nameOf` read `x.id` and `.name`, and a player record has neither
+  // (js/storage.js:941 / js/supabase-projection.js:545's PLAYER_COLS both say
+  // `playerId` / `displayName`). Every lookup missed and fell through to `|| id`, so the card said
+  // "Tell p_1724_ab3x to open the app".
+  //
+  // SO THIS SECTION CALLS `renderPushSelfTestHTML()` ITSELF, with REAL-SHAPED player records in
+  // the real storage seam, and reads the produced HTML. It is the only assertion in this file that
+  // can see the defect, because it is the only one that does not supply the lookup.
+  {
+    const app = await import('./js/app.js');
+    const auth = await import('./js/auth.js');
+    // ROSTER FIRST, MODE SECOND — and that ORDER is itself load-bearing. `save()` raises
+    // `AuthModeMismatchError` for a write made while authMode is 'supabase' but the data layer is
+    // still the Sheets backend (js/storage.js:408), which is the seam doing its job; seeding
+    // before the flip is how a real device gets here too (it hydrates, then the mode is known).
+    //
+    // Through the storage SEAM (AD-02 / CONVENTIONS #8) — `savePlayer()`, never a localStorage
+    // poke. `getPlayers()` inside renderPushSelfTestHTML() then reads exactly what a real device
+    // would have.
+    const priorPlayers = storage.getPlayers();
+    storage.savePlayer({ playerId: 'p_1724_ab3x', displayName: 'Kihoon', active: true });
+    storage.savePlayer({ playerId: 'p_1724_cd9y', displayName: 'Brayden', active: true });
+    // `isSupabaseDataMode()` gates the whole sub-section; without this the function returns ''.
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon' });
+    app._setPushSelfTestForTest({
+      breakdownOpen: true,
+      breakdown: [{ memberId: 'p_1724_ab3x', pushed: true, reason: '' }],
+      reach: { ok: true, results: [{ memberId: 'p_1724_cd9y', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }], checked: 1 },
+      versions: [{ memberId: 'p_1724_ab3x', version: 'v0.22.5', seenAt: '2026-09-18T10:00:00Z' }],
+    });
+    const out = app.renderPushSelfTestHTML();
+    assert(typeof out === 'string' && out.length > 200,
+      `11r-1: fixture check — the sub-section rendered at all in supabase data mode (got ${typeof out}, ${String(out).length} chars)`);
+    assert(/App version last seen/.test(out),
+      '11r-2: fixture check — …and it is really the push sub-section, not some other branch');
+    // THE THREE LISTS, each proven by a name that only the real lookup can produce.
+    assert(/Kihoon/.test(out),
+      `11r-3: DI-205 breakdown + DI-218 version list — the REAL nameOf resolves p_1724_ab3x to "Kihoon". This is the assertion that fails against \`x.id\`/\`.name\`. Got:\n${out.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 400)}`);
+    assert(/Brayden/.test(out),
+      '11r-4: DI-206 reachability — …and p_1724_cd9y to "Brayden" on the push-reach list, which is fed by a different call site and could have been missed separately');
+    assert(!/p_1724_ab3x/.test(out) && !/p_1724_cd9y/.test(out),
+      `11r-5: …and NEITHER raw member id survives anywhere in the card. A name rendered beside its own id would still be the defect half-fixed. Got:\n${out.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 400)}`);
+    // The fallback is still there for an id that genuinely is not on the roster — that is the one
+    // case where showing the id is the useful answer, and it must not have been removed.
+    app._setPushSelfTestForTest({ versions: [{ memberId: 'p_not_on_roster', version: 'v0.22.5', seenAt: '2026-09-18T10:00:00Z' }] });
+    assert(/p_not_on_roster/.test(app.renderPushSelfTestHTML()),
+      '11r-6: an id that is genuinely NOT on the roster still renders as the id — the `|| id` fallback is intact, and firing for one unknown member is right where firing for everybody was the bug');
+    app._setPushSelfTestForTest({});
+    // Restore in the same order, for the same reason: mode back to sheets BEFORE any write.
+    auth.configureAuth({ authMode: 'pins', dataMode: 'sheets', supabaseUrl: '', supabaseAnonKey: '' });
+    for (const pl of priorPlayers) storage.savePlayer(pl);
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log(`\n${fail === 0 ? '✅' : '❌'} pushtest: ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

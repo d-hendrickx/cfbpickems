@@ -97,7 +97,25 @@ function assert(cond, label) {
 // ── 1. Module import smoke test ───────────────────────────────────────────────
 console.log('\n[1] Importing all modules…');
 const mods = {};
-for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'auth', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'supabase-projection', 'field-preserve', 'chat-ui', 'app']) {
+for (const m of ['data-model', 'storage', 'scoring', 'data-provider', 'notifications', 'notify-copy', 'push-onesignal', 'sw-register', 'backend', 'auth', 'chatTransport', 'chat', 'scribeLines', 'scribeAgent', 'scribeFeedback', 'extra-point', 'recap', 'history-2025', 'supabase-projection', 'field-preserve', 'chat-ui', 'reminder-rules', 'app',
+  // ═══ BEGIN STEP 6 PHASE 4 (trainer) ═══ — DI-T6.14(b)'s pure module, imported by
+  // `supabase/functions/trainer/index.js` (Deno) and by `trainer.twin.mjs` (Node); listed here
+  // too for the same module-import smoke coverage every other js/ file gets.
+  'scribe-trainer-rules',
+  // ═══ END STEP 6 PHASE 4 ═══
+  // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══ — the pure
+  // signal-collapse/combiner extraction `supabase/functions/scribe-autonomous` and
+  // `supabase/functions/scribe-classify` import from Deno; same dual-runtime shape as
+  // `reminder-rules`/`scribe-trainer-rules` above.
+  'scribe-scoring',
+  // ═══ END STEP 6 PHASE 5 ═══
+  'platform', 'brand',
+  // DI-204/205/206/218 (2026-09-20) — the push self-test family's client half.
+  // Imported by js/app.js's Background-jobs card; listed here for the same
+  // cross-module import smoke coverage every other js/ file gets (RG-03:
+  // `node --check` cannot see a broken import).
+  'push-selftest',
+]) {
   try {
     mods[m] = await import(`./js/${m}.js`);
     console.log('  ✅ js/' + m + '.js');
@@ -1942,8 +1960,15 @@ assert(!/class="app-logo"/.test(indexHtmlSrc) && !/app-logo-icon/.test(indexHtml
   'no app-logo/app-logo-icon/app-logo-text markup survives anywhere in index.html');
 // refreshHeader()'s no-week fallback is explicitly EXEMPT — DI: "leave it,
 // that edge case wants branding" — and doesn't use the emoji anyway.
-assert(/<strong>CFB Pickems<\/strong>/.test(appJsSrc),
-  "refreshHeader()'s no-week fallback still prints \"CFB Pickems\" — the one explicitly-kept branding instance, a fresh install with zero weeks");
+//
+// DI-213a (iOS Munera PASS 1b, 2026-09-20) — this literal became a call
+// through js/brand.js's getShellBrandName(), so the SOURCE pattern this test
+// can pin changed too. It is not weaker: brandtest.mjs's own mutation-proved
+// assertion is what proves the WEB RENDERED OUTPUT stays byte-identical
+// ("CFB Pickems") — this test now pins that the fallback still resolves
+// through the shell-brand seam rather than a second hardcoded literal.
+assert(/<strong>\$\{escHtml\(getShellBrandName\(\)\)\}<\/strong>/.test(appJsSrc),
+  "refreshHeader()'s no-week fallback still renders through getShellBrandName() (DI-213a) — the one explicitly-kept branding instance, a fresh install with zero weeks; brandtest.mjs proves the web output is unchanged");
 
 // CSS: the dead selectors — including their <=480px / <=360px overrides —
 // must not survive either.
@@ -4437,6 +4462,46 @@ console.log('\n[43] UN-123 — commissioner Data-tab feedback card: wrapper, wir
   // 43e — the export button is actually wired to its click handler.
   assert(appJsSrc.includes("getElementById('export-feedback-csv-btn')?.addEventListener('click', exportFeedbackCSV);"),
     'export-feedback-csv-btn is wired to exportFeedbackCSV inside bindCommEventListeners()');
+
+  // 43f-h — DI-T6.13 (UN-194, Phase 2) — the Background jobs card. This
+  // harness runs in the LEGACY (non-Supabase) storage mode throughout, and
+  // entering Supabase data mode to exercise the card's full row rendering
+  // and its toggle/refresh wiring is out of scope for this suite (no fixture
+  // for it exists anywhere in this file today) — that gap is disclosed, not
+  // silently assumed covered. What IS verified here, against the function
+  // this harness CAN call safely:
+  //   43f  outside Supabase mode the card renders nothing (there is no
+  //        serverJobs switch and no job_runs table under the legacy backend,
+  //        so a card that rendered anyway would be showing a switch that
+  //        controls nothing real);
+  //   43g  it is wired into renderCommPage() directly after Export Data,
+  //        same tab, exactly like the feedback card above;
+  //   43h  the toggle's ON-warning copy and the AD-06 loud-fail comment are
+  //        actually present in source, so a future edit that quietly drops
+  //        either is a source-position check, not a silent regression only a
+  //        browser click would ever catch.
+  assert(app43.renderBackgroundJobsAdminSectionHTML() === '',
+    '43f: renderBackgroundJobsAdminSectionHTML() returns the empty string outside Supabase data mode (this harness runs the legacy backend) — no switch, no job_runs table, nothing to show');
+
+  const exportDataIdx43f = appJsSrc.indexOf('<div class="admin-section-title">📤 Export Data</div>');
+  const bgJobsPushIdx43f = appJsSrc.indexOf('sections.push(renderBackgroundJobsAdminSectionHTML());');
+  const feedbackPushIdx43f = appJsSrc.indexOf('sections.push(renderFeedbackAdminSectionHTML());');
+  assert(exportDataIdx43f > -1 && bgJobsPushIdx43f > -1 && feedbackPushIdx43f > -1 &&
+    exportDataIdx43f < bgJobsPushIdx43f && bgJobsPushIdx43f < feedbackPushIdx43f,
+    '43g: the Background jobs section is pushed directly after Export Data and before Feedback, as placed');
+  assert(appJsSrc.includes("document.getElementById('background-jobs-refresh-btn')?.addEventListener('click', () => refreshBackgroundJobsCard());"),
+    '43g: the refresh button is wired inside bindCommEventListeners()');
+  assert(appJsSrc.includes("document.querySelectorAll('.server-job-toggle').forEach"),
+    '43g: the per-job toggles are wired via delegation over .server-job-toggle');
+
+  assert(/SERVER_JOB_ON_WARNING\[job\] && !confirm/.test(appJsSrc),
+    "43h: turning a job ON is gated behind SERVER_JOB_ON_WARNING's confirm() where a warning applies (DI-T6.13: turning OFF is always allowed, and this gate only fires on `next === true`)");
+  assert(/AD-06 loud-fail/.test(appJsSrc),
+    '43h: the handler documents which loud-fail path it relies on (the existing sync-failure banner), rather than silently assuming one exists');
+  assert(/This job may be dead\./.test(appJsSrc),
+    '43h: the staleness copy is the honest sentence DI-T6.13 specifies, not a softened one');
+  assert(/Not built yet/.test(appJsSrc) && /\$\{built \? '' : 'disabled'\}/.test(appJsSrc),
+    '43h: an unbuilt job renders a DISABLED toggle with a stated reason — never a live switch over a path that does not exist (§0.3 item 2)');
 }
 
 // ── 44. UN-123 — buildFeedbackCsvRows(): columns, no truncation, defaults ────
@@ -7541,6 +7606,15 @@ console.log('\n[64] [structural] every surface reading another player\'s submiss
     // The disclosure boundary lives one call downstream, and that call gates.
     doRefreshScores:
       'the winner/loser id lists it builds are handed straight to emitGameFinalEvent(), which gates on arePicksPublic() (RG-45) — this function itself renders and publishes nothing',
+    // Step 6 Phase 6, R2 (2026-09-20) — the SAME bucket as doRefreshScores, for
+    // the same reason and with the same one call downstream. It exists because
+    // the server-side score refresh performs the status transition this app used
+    // to detect for itself, so the two per-game chat posts need an emitter that
+    // reads STATE rather than a transition. It derives the identical winner/
+    // loser id lists from the identical accessor and hands them to the identical
+    // gated function; it renders nothing and returns only counts.
+    reconcileGameEvents:
+      'the winner/loser id lists it builds are handed straight to emitGameFinalEvent(), which gates on arePicksPublic() (RG-45) — this function itself renders and publishes nothing',
   };
 
   //    TRACKED — CONFIRMED TO DISCLOSE, deliberately NOT fixed in this pass.
@@ -7930,7 +8004,11 @@ console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + pri
   if (summaryMatch68) {
     assert(summaryMatch68[1] === '✅ ALL PASS', `trainertest.mjs itself reports ALL PASS (got: ${summaryMatch68[0]})`);
     assert(Number(summaryMatch68[3]) === 0, `trainertest.mjs reports zero failed assertions (got ${summaryMatch68[3]} failed, ${summaryMatch68[2]} passed)`);
-    assert(Number(summaryMatch68[2]) >= 10, `trainertest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch68[2]} — a near-zero count would mean the guard is vacuous)`);
+    // RATCHETED to the real count by the Step 6 Phase 4 gate closure (2026-09-20). A floor of 10
+    // against a suite of 290 would not notice 280 assertions going missing — the same reasoning
+    // the Step 6 twins' floors carry, applied to the suite that now also pins the PORTED Trainer
+    // input assembly byte-for-byte against Code.gs ([28]/[28b], reviewer BLOCK 1).
+    assert(Number(summaryMatch68[2]) >= 293, `trainertest.mjs actually ran its full set (got ${summaryMatch68[2]}, floor 293) — includes [28]'s byte-parity proof that js/scribe-trainer-rules.js's buildTrainerInputText matches scribeTrainerBuildInputText_ exactly. Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -8498,7 +8576,7 @@ console.log('\n[73b] authtest.mjs — spawned as a subprocess, exit code + print
   if (summaryMatch73b) {
     assert(summaryMatch73b[1] === '✅ ALL PASS', `authtest.mjs itself reports ALL PASS (got: ${summaryMatch73b[0]})`);
     assert(Number(summaryMatch73b[3]) === 0, `authtest.mjs reports zero failed assertions (got ${summaryMatch73b[3]} failed, ${summaryMatch73b[2]} passed)`);
-    assert(Number(summaryMatch73b[2]) >= 1400, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1400 — raised from 40, which a suite of 1417 could have lost 97% of and still passed)`);
+    assert(Number(summaryMatch73b[2]) >= 1501, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1501 — raised from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
   }
 }
 
@@ -8533,7 +8611,7 @@ console.log('\n[73e] adaptertest.mjs — spawned as a subprocess, exit code + pr
   assert(!!m73e, `adaptertest.mjs printed its own pass/fail/skip summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73e ? '' : '\n' + out.slice(-800)}`);
   if (m73e) {
     assert(Number(m73e[2]) === 0, `adaptertest.mjs reports zero failed assertions (got ${m73e[2]} failed, ${m73e[1]} passed)`);
-    assert(Number(m73e[1]) >= 643, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 643 — raised from 594 by the RG-180 gate findings (SEC-F1 write-path status, SEC-F2 mid-flight drop, the N2 fold probe and the N3 contact convergence), 2026-09-19) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
+    assert(Number(m73e[1]) >= 761, `adaptertest.mjs actually ran its full set (got ${m73e[1]}, floor 761 — raised from 745 by the RG-202 GATE (2026-09-20): [A-NARROW-DIVERGE] (security F1: same id is not same row) and [A-RETRY9] (F2: a committed-then-lost week-status RPC); before that from 676 by RG-202 (2026-09-20): [A-OBL] the finalize duplicate-obligation send, [A-LATCH] the refusal latch released when the key has nothing left to save, [A-RETRY1..8] the bounded automatic write retry, plus the [A-FLUSH4] amendments that now assert the WHOLE lifecycle of a 504/502/23505 instead of its first instant; before that from 675 by the COMBINED RELEASE MERGE (2026-09-20) ([A-LSV]'s corrected fixture now also asserts the MAPPED id/display_name, proving the input shape is the one PLAYER_COLS reads); before that from 643 by [A-LSV] (DI-218: the two new league_members columns are invisible to the diff/upsert path), 2026-09-20; before that from 594 by the RG-180 gate findings (SEC-F1 write-path status, SEC-F2 mid-flight drop, the N2 fold probe and the N3 contact convergence), 2026-09-19) — a FLOOR at the CURRENT count, not a token one: a floor of 300 against a suite of 499 would not notice two hundred assertions going missing. Raise it when the suite grows; the ratchet only tightens (2026-09-18)`);
     assert(Number(m73e[3]) === 0, `adaptertest.mjs has NO remaining Part-B skips (got ${m73e[3]}) — A9b, A14b and A17 were all closed by Part B, and a skip that reappears is a follow-up nobody is tracking`);
   }
 }
@@ -8550,7 +8628,7 @@ console.log('\n[73f] transporttest.mjs — spawned as a subprocess, exit code + 
   assert(!!m73f, `transporttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73f ? '' : '\n' + out.slice(-800)}`);
   if (m73f) {
     assert(Number(m73f[2]) === 0, `transporttest.mjs reports zero failed assertions (got ${m73f[2]} failed, ${m73f[1]} passed)`);
-    assert(Number(m73f[1]) >= 169, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 169 — raised from 40 when Step 5 landed; the ratchet only tightens)`);
+    assert(Number(m73f[1]) >= 175, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 175 — raised from 169 by the COMBINED RELEASE MERGE (2026-09-20) (§[10](d) S9/R6: the permanent seq hole a private test row leaves costs exactly ONE gap drain, not a retry loop); before that from 40 when Step 5 landed; the ratchet only tightens)`);
   }
 }
 
@@ -9080,7 +9158,7 @@ console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch76) {
     assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
     assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
-    assert(Number(summaryMatch76[2]) >= 471, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 471 — raised from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
+    assert(Number(summaryMatch76[2]) >= 474, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 474 — raised from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
   }
 }
 
@@ -9508,7 +9586,7 @@ console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch87) {
     assert(summaryMatch87[1] === '✅', `pushtest.mjs itself reports ALL PASS (got: ${summaryMatch87[0]})`);
     assert(Number(summaryMatch87[3]) === 0, `pushtest.mjs reports zero failed assertions (got ${summaryMatch87[3]} failed, ${summaryMatch87[2]} passed)`);
-    assert(Number(summaryMatch87[2]) >= 73, `pushtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch87[2]) >= 160, `pushtest.mjs actually ran its full set (floor 160 — raised from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins); before that from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section, 2026-09-20; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
   }
 }
 
@@ -9538,12 +9616,109 @@ console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printe
 // ratchet only tightens (the adaptertest precedent, 2026-09-18).
 // ══════════════════════════════════════════════════════════════════════════
 for (const [label, file, floor, why] of [
-  ['81b', 'supabase/tests/functions/notifyFanout.twin.mjs', 61,
-   'DI-T6.1 — the fan-out handler, end to end against a fake transport (raised from 59: security audit S2, 2026-09-19, added the wrong_type webhook-config-drift pinning pair 2-10/2-11)'],
+  ['81b', 'supabase/tests/functions/notifyFanout.twin.mjs', 111,
+   'DI-T6.1 — the fan-out handler, end to end against a fake transport (raised from 59: security audit S2, 2026-09-19, added the wrong_type webhook-config-drift pinning pair 2-10/2-11; raised to 111 by the combined release\'s SECURITY GATE F1 section [9F1] — a `visible_to` row that is not the self-test shape gets zero recipients and `direct:\'refused\'`)'],
   ['81c', 'supabase/tests/functions/keepalive.twin.mjs', 42,
    'DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it'],
-  ['81d', 'supabase/tests/functions.check.mjs', 157,
-   'DI-T6.14(d) — the static rules over the function sources (raised from 140: security audit S2/S4, 2026-09-19, added S6-R10 (webhook body.type check) and S6-R11 (no remote/unpinned import specifier))'],
+  ['81d', 'supabase/tests/functions.check.mjs', 582,
+   'DI-T6.14(d) — the static rules over the function sources (raised from 157 by Phase 2: `reminders`, S6-R5 (no picks/selected_team/guess), the widened S6-R3 send-secret allow-list, and the reminders payload allow-list to S6-R9; raised to 231 by the scribe-ask merge; raised to 237 by the Step 6 Phase 3 gate closure (2026-09-20), which adds S-F5 — no shipped function file selects \'*\' off `league_members` — as its own rule with two self-tests; raised to 268 by the coordinator\'s shared-foundation merge, which adds the trainer payload allow-list, widens the SEND-secret allow-list to include trainer/index.js, and registers trainer.twin.mjs; raised to 357 by the Phase 4/5 reconciliation pass, which adds scribe-classify/scribe-autonomous to the payload and SEND-secret allow-lists and folds Phase 5\'s handler discovery into the existing dynamic scan; raised to 416 by the PHASE 5 GATE CLOSURE (2026-09-20), which adds S6-R12 (the acting member is server-derived and recorded, security S-F2), S6-R13 (the evidence layer\'s blind-rule fence is applied to the DATA at one entry point, reviewer BLOCK B2), and the §STEP 6 / F5 runbook pinning block including the corrected per-dial spend figures, reviewer BLOCK B3); raised to 499 by the PHASES 3+4+5 ⊕ PHASE 6 MERGE (2026-09-20) — Phase 6 contributed S6-R9\'s ERROR clause (a per-handler error-expression allow-list) and Phases 2/3/4/5 contributed five more handlers, so the clause\'s five assertions now run against reminders/scribe-ask/trainer/scribe-classify/scribe-autonomous too. Their allow-lists were DECLARED at the merge, not the rule weakened — see ALLOWED_ERROR_EXPR\'s own merge note); raised to 582 by the COMBINED RELEASE MERGE (2026-09-20), which adds DI-206\'s `push-reach` to the payload allow-list and to the SEND-secret allow-list, and S6-R14 (every service-role messages SELECT carries .is(\'visible_to\', null), plus its no-chaining clause); raised again by the SECURITY GATE (S6-R9/error\'s third clause, which scans for the CONSTRUCTION of an error string rather than the call site)'],
+  // ── static.check.mjs JOINS THE SPAWNED LIST (2026-09-20, DI-204).
+  //
+  // It was not here, and nothing else in the repository ran it. That is the "a suite nothing
+  // spawns is a suite nobody runs" shape this file has already closed three times (xsstest,
+  // transporttest, persisttest) — and it matters more for this one than for any of them: it is
+  // the ONLY offline guard over the migrations, and migrations are the artefacts nobody can
+  // re-test after a paste. Every SEC F1 policy scan, every restore-drift comparison and every
+  // mutation-header completeness rule was running only when somebody remembered to type it.
+  //
+  // IT READS SQL AND JS, NEVER A DATABASE — no network, no credentials, no `.env`. The floor is
+  // at the current count, per the adaptertest precedent.
+  //
+  // RELABELLED '81p' AT THE COMBINED MERGE (2026-09-20). The push-self-test branch authored
+  // this as '81k', which is `scribeAutonomous.twin.mjs`'s label on the Phase 5 side; the label
+  // is only a console prefix, but a duplicate one makes a failing line ambiguous to read.
+  ['81p', 'supabase/tests/static.check.mjs', 1470,
+   'the offline half of the migration proof — SEC F1 over every SELECT policy in all eighteen migrations (0018 included, appended LAST because it REDEFINES messages_select and the replay is last-wins), the grant/revoke replay that proves visible_to and emitted_by are in no client column list, the 0018 restore-drift comparison (the one mutation pair in this folder whose restore is a POLICY BODY rather than a grant), REV F1\'s mutation-header completeness, and RG-41c/d over rls.test.mjs. Raised 1379 -> 1402 at the combined merge (0016/0017 join the replay) and -> 1436 by S5/T5.11\'s amendment for js/platform.js (which asserts platform.js imports nothing and that backend.js already imports it) plus the SECURITY GATE\'s 0018 SEC-1/SEC-2/SEC-3 write-side rules and SEC-F2\'s report_app_version rate floor; raised 1436 -> 1470 by the STEP 6 REHEARSAL GATE (2026-09-20), which adds the plpgsql name/column AMBIGUITY class rule over migrations 0013+ (SQLSTATE 42702 — the defect that made scribe_rate_bump() unusable on a real server while three verify queries read green), its own self-test, the corrected V0014-2/V0014-4/V0014-6 pins, the chat_append_system platform rate-window rules, and the "no member-gated RPC against league 2 inside a mustSucceed" class rule over rls.test.mjs'],
+  ['81e', 'supabase/tests/functions/reminders.twin.mjs', 48,
+   'DI-T6.2 — reminders, end to end against a fake transport: the auth/switch/secret orderings, the happy path (personalized reminders + batched locking-soon + the deterministic room post), idempotency, and the blind-rule structural scan. Raised 45 -> 48 by the STEP 6 REHEARSAL GATE (2026-09-20): 8-5/8-6/8-7 exercise the REAL room-post refusal (P0001 `system_rate`) rather than only a generic error, because that is the one that actually fired on cfbp-test'],
+  // Step 6 Phase 3 (scribeAsk, DI-T6.3) — the fourth handler, and the first
+  // class-U one: switch/auth/secret/dedup/happy-path/refusal/outage, driven
+  // against the REAL scribe-ask/index.js through the same fake transport.
+  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 266,
+   `DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round Anthropic exchange scanned for the secret), and (raised from 29 to 266 by the Phase 3 gate closure, 2026-09-20) B1's reachability assertion (safety+persona actually ride the request), B2's player-boundaries-by-construction section (asker-only, no tool call needed, scoped away from another player and from a low-confidence row), S-F1's length cap + generalized dangling-ack degrade, S-F2's fail-closed rate reads (including the legal-zero-budget case), S-F4's abort-on-timeout proof, and S-F5's named-columns proof`],
+  // Reviewer BLOCK B1 (2026-09-20) — the drift guard `scribe-persona.mjs`
+  // claimed but did not build: docs/SCRIBE.md compared byte-for-byte against
+  // the embedded snapshot, modulo exactly the documented Slack-legacy strip.
+  ['81g', 'supabase/tests/scribePersonaDrift.check.mjs', 9,
+   'DI-T6.12 G5 / reviewer BLOCK B1 — SCRIBE_PERSONA_TEXT equals a fresh read of docs/SCRIBE.md modulo exactly SCRIBE_PERSONA_STRIPPED_TEXT (data, not a regex), plus three self-tests proving the comparison can actually fail'],
+  // ═══ BEGIN STEP 6 PHASE 4 (trainer) ═══
+  ['81h', 'supabase/tests/functions/trainer.twin.mjs', 99,
+   'DI-T6.4 — the trainer handler, both entry points, end to end against a fake transport: the auth-class split (raised from 37 to 43 by the coordinator\'s shared-foundation merge, 2026-09-20 — class U now goes through the canonical requireCommissioner()/my_member_id() gate, and the budget section adds the fail-closed rate-read proof plus the shared scribe_rate_bump() write proof; raised to 92 by the Phase 4 GATE CLOSURE the same day), the manual floor, the shared budget:<YYYY-MM> check, the insufficient-data floor holding the cursor, RG-144\'s resolver through the REAL js/scribe-trainer-rules.js, per-kind auto-approval, fail-closed on a model error, G6 + RG-82 REACHABILITY (system[0]/[1] are the two ported constants BYTE FOR BYTE on the wire, not a substring), BLOCK 1\'s structural "prompt promises == input provides" check over the ACTUAL request (planted rewrite, weigh-in, 📌 source body and per-response aftermath all present), the blind rule with a planted pick on both a message meta and a member row, S-F1 (req.bodyUsed === false on the refused class-S path), S-F2 (a self-flagged 📌 source withholds auto-approval, interleaved with a legitimate third-party flag), S-F3 (a fact\'s subject must be its source\'s speaker), S-F4 (every stored string capped, with the fake enforcing messages.body\'s real 23514), S-F6 (a missing 0014 diagnosed as not_configured, a cursor regression surfaced), reviewer note 2 (job_runs.actor is \'scheduled\'/\'manual\'), and the cursor CAS reported as ok:true even when it returns false'],
+  // Reviewer BLOCK 2 (2026-09-20) — the drift guard `scribeTrainerPrompt.js` CLAIMED and nobody
+  // had written: Code.gs's two Trainer declarations, extracted BY ANCHOR and compared byte-for-byte
+  // against the two shipped constants. The reachability half is trainer.twin.mjs [9] above.
+  // DI-206 (push-reach) — the sixth handler and the second class-U one. Drives
+  // the REAL handler with a faked OneSignal fetch for every C3 case: 404,
+  // enabled/disabled mixes, non-push subscription types, timeout, malformed
+  // JSON, non-commissioner, rate-limited — plus the DI-206g privacy boundary
+  // asserted against the response AND the job_runs payload.
+  // RELABELLED '81n' AT THE COMBINED MERGE (2026-09-20) — authored as '81j', which is
+  // `scribeClassify.twin.mjs`'s label on the Phase 5 side. Console prefix only, but a
+  // duplicate makes a failing line ambiguous to read.
+  ['81n', 'supabase/tests/functions/pushReach.twin.mjs', 59,
+   'DI-206 — push-reach end to end: the class-U gate (and that nothing at all happens before it), the server-side 60s rate limit that writes no run row and reads no send secret, per-member failure isolation (a timeout is `lookup failed`, NEVER `no device`), the untrusted-response defences (50-subscription cap, strict boolean `enabled`, non-array subscriptions), the identity check that the external id queried is the same member id notify-fanout targets, and the four-field-only payload'],
+  ['81i', 'supabase/tests/scribeTrainerPromptDrift.check.mjs', 18,
+   'DI-T6.12 G6 / reviewer BLOCK 2 — TRAINER_SAFETY_TEXT and TRAINER_PROMPT_BASE_TEXT are byte-identical to backend/Code.gs\'s SCRIBE_TRAINER_SAFETY_ / SCRIBE_TRAINER_PROMPT_BASE, extracted by declaration anchor rather than by line number (which rots), with five self-tests proving the extractor and the comparison can both fail'],
+  // ═══ END STEP 6 PHASE 4 ═══
+  // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
+  ['81j', 'supabase/tests/functions/scribeClassify.twin.mjs', 70,
+   'DI-T6.5 — the classify handler: class-U auth ordering (through the canonical requireMember()/my_member_id() gate), the kill switch, the daily cap, N-2/F6\'s verdict-cache idempotency, and (raised from 27) the shared monthly budget via budgetExceeded()/bumpRate() — checked before the model call and fail-closed on a rate-read error, the same $25/spend_usd column scribe-ask/trainer share (security finding, coordinator\'s Phase 4/5 reconciliation pass); raised to 57 by the PHASE 5 GATE CLOSURE (2026-09-20) — reviewer BLOCK B2\'s "prompt promises == input provides" table asserted on the wire, including the EXCERPT the ported CLASSIFY_SYSTEM has always named and never received (same author, same room, strictly earlier, oldest first, and no empty header when there is no history), security S-F2 (every job_runs row names the acting member, off the JWT, surviving finishRun) and security S-F3 (metered from the API\'s own usage x the named haiku price constants, on EVERY attempt that reached Anthropic — refusal, unparseable answer and network failure all bump; a call refused at the door does not)'],
+  ['81k', 'supabase/tests/functions/scribeAutonomous.twin.mjs', 201,
+   'DI-T6.5 — the autonomous handler: the trigger allow-list, BLOCK-1\'s server-recomputed score, the consecutive-post guard, the per-post ticket + global cooldown (open question 1, closed), the shared monthly budget peek+post-hoc spend against the canonical $25 default, the ≤2-sentence structural cap, FINDING 3\'s verdict-consumption proof (open question 2, closed), and the BLIND-RULE test — raised from 58 to 176 by the PHASE 5 GATE CLOSURE (2026-09-20), which drives the handler against a REAL projected league fixture (league_members/weeks/games/picks/tiebreaker_guesses through js/supabase-projection.js and the real js/scoring.js) and adds: reviewer BLOCK B2 (the VERIFIED FACTS block on the wire with recomputed numbers, the restored `- signal:` line, NO internal scoring weight anywhere in the user content, the prompt-promise table, the verifier/EVIDENCE_CONTRACT/SIGNAL_POINTS key-set identity, and a drift guard extracting MILESTONE_MARKS/STREAK_MIN/the drink-debt regex out of js/scribeLines.js\'s source), reviewer BLOCK B1 (the subject player\'s hard-lines by construction, scoped and league-scoped, below the persona with no cache_control, and NO empty stub when there are none), security S-F1 (a forged backdoorBust, a wrong lone wolf and 64 chars of attacker subject all cost nothing), S-F2 (actorMemberId on both job_runs rows, never the body field), S-F3 (usage-derived spend, refusals and network failures metered, door-refusals not), S-F4 (the hourly try_add is the LAST gate, pinned by the spy log\'s ORDER), S-F5 (capMessageBody against the fake\'s real 23514, and a refused insert releasing both reservations), and the widened BLIND RULE (an open-week pick, tiebreaker guess, extra-point guess and submission-state row all planted, none on the wire, neither extra_point_guesses nor week_submission_status ever queried, and — added after a mutation of revealedView() left the wire assertions GREEN — section [12v], which asserts the fence WHERE IT LIVES, over the same fixture, so both of its halves bite)'],
+  // Coordinator's shared-foundation pass, 2026-09-20 — G5's drift guard is ONE snapshot
+  // (`_shared/scribe-persona.mjs`) shared by scribe-ask/trainer/scribe-classify/scribe-autonomous;
+  // `scribePersonaDrift.check.mjs` above (81g) already covers it. Phase 5 adds its OWN small
+  // export, `AUTONOMOUS_VOICE_BRIEF`, guarded separately (81l) because it is not part of the
+  // docs/SCRIBE.md snapshot — it is a Code.gs-only addendum specific to the autonomous path.
+  ['81l', 'supabase/tests/scribeAutonomousVoiceDrift.check.mjs', 13,
+   'DI-T6.12 G5, autonomous\'s own small addition — AUTONOMOUS_VOICE_BRIEF is byte-identical to its backend/Code.gs source, extracted by anchor, plus a reachability assertion that scribe-autonomous/index.js\'s real request body actually carries it'],
+  // ═══ END STEP 6 PHASE 5 ═══
+  // ═══ BEGIN STEP 6 PHASE 6 (scores-refresh) ═══════════════════════════════
+  // NOTE (Phases 3+4+5 ⊕ Phase 6 merge, 2026-09-20): Phase 6 authored this
+  // entry as '81e', which is `reminders.twin.mjs`'s label on the Phase 2 side.
+  // Relabelled '81m' here so the two coexist — the label is only a console
+  // prefix, but a duplicate one makes a failing line ambiguous to read.
+  ['81m', 'supabase/tests/functions/scoresRefresh.twin.mjs', 68,
+   'DI-T6.6 — the scores-refresh handler, driving the REAL js/data-provider.js + js/scoring.js pipeline against a fake transport and a canned ESPN fixture (raised from 43 to 56 at the validation/security gate, then to 68 at the re-gate: §[10] no-proxy/sentinel, §[11] no-op-write, final-never-regresses and patch validation)'],
+  // ── refreshtest.mjs — THE CLIENT HALF, AND IT HAD NEVER BEEN IN THE SWEEP.
+  //
+  // Found at the Phase 6 validation gate (2026-09-20). `refreshtest.mjs` owns
+  // the 60-second live-score loop — the tab-gate regression it was written for,
+  // the demo/manual guards, the timer lifecycle, and now DI-T6.6's client gate,
+  // R1's display-only poll and R2's catch-up emitter. Nothing ran it as part of
+  // the mandatory sweep, which is RG-177's hole exactly: a change that broke it
+  // would have shipped with a green `node loadtest.mjs`. Spawned rather than
+  // imported for [73]'s reason — it replaces globalThis.fetch, setInterval and
+  // localStorage.setItem wholesale, which would poison every suite after it in
+  // this process.
+  ['88', 'refreshtest.mjs', 54,
+   'UN-192 / DI-T6.6 — the live-score tick: the fetch-on-every-tab regression, the demo/manual guards, the timer lifecycle, the scoresRefresh client gate in BOTH states, R1\'s display-only poll (liveStatusById + scribeLiveGameCheck + zero writes) and R2\'s idempotent kickoff/final catch-up'],
+  // ═══ END STEP 6 PHASE 6 ═══════════════════════════════════════════════════
+  // ── notifytest.mjs JOINS THE SPAWNED LIST (Release v0.23.0, 2026-09-20).
+  //
+  // It was NOT here, and nothing else in the mandatory sweep ran it — which is exactly how the
+  // push-selftest.js STATIC_ASSETS omission ([25e]'s comment in service-worker.js tells the same
+  // story) got through a green `node loadtest.mjs`: [25e] is the guard that catches a shell cache
+  // one boot-critical module short, but a guard nothing spawns is a guard nobody runs (the
+  // xsstest/transporttest/persisttest/static.check shape, repeated a fourth time). notifytest.mjs
+  // also owns the chat-fold suite, the service-worker reload-loop convergence proof ([25]), and
+  // the notify-based unread assertions — none of which loadtest.mjs's own imports exercise.
+  // Spawned rather than imported for [73]'s reason: it replaces globalThis.Notification,
+  // ServiceWorkerRegistration and fetch wholesale, which would poison every suite after it in
+  // this process. Floor at the current count, per the adaptertest precedent — the ratchet only
+  // tightens.
+  ['93', 'notifytest.mjs', 561,
+   'RG-193-adjacent (release v0.23.0) — the push/notification suite, including [25e]\'s STATIC_ASSETS completeness scan over every module app.js statically imports, the service-worker reload-loop convergence proof, and DI-T6.2\'s reminder-rules.js/notifyServer.mjs parity twin ([30])'],
 ]) {
   console.log(`\n[${label}] ${file} — spawned as a subprocess, exit code + printed pass/fail line both checked…`);
   const { spawnSync } = await import('node:child_process');
@@ -10401,6 +10576,148 @@ console.log('\n[88] navtest.mjs — spawned as a subprocess, exit code + printed
     assert(Number(summaryMatch88[2]) >= 25, `navtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch88[2]} — a near-zero count would mean the guard is vacuous)`);
   }
 }
+
+// ── [89] platformtest.mjs / [90] brandtest.mjs / [91] nativeguardtest.mjs —
+//    spawned as subprocesses, same shape as [88] — iOS Munera thread, PASS 1b
+//    (2026-09-20). Own processes for the same class of reason authtest.mjs
+//    gets one: platformtest/nativeguardtest each mutate globalThis.window/
+//    globalThis.location across scenarios, which would leak a stubbed
+//    Capacitor bridge into every suite run after it if run inline. ─────────
+console.log('\n[89] platformtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['platformtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `platformtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch89 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch89, `platformtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch89 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch89) {
+    assert(summaryMatch89[1] === '✅ ALL PASS', `platformtest.mjs itself reports ALL PASS (got: ${summaryMatch89[0]})`);
+    assert(Number(summaryMatch89[3]) === 0, `platformtest.mjs reports zero failed assertions (got ${summaryMatch89[3]} failed, ${summaryMatch89[2]} passed)`);
+    assert(Number(summaryMatch89[2]) >= 15, `platformtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch89[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+console.log('\n[90] brandtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['brandtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `brandtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch90 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch90, `brandtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch90 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch90) {
+    assert(summaryMatch90[1] === '✅ ALL PASS', `brandtest.mjs itself reports ALL PASS (got: ${summaryMatch90[0]})`);
+    assert(Number(summaryMatch90[3]) === 0, `brandtest.mjs reports zero failed assertions (got ${summaryMatch90[3]} failed, ${summaryMatch90[2]} passed)`);
+    assert(Number(summaryMatch90[2]) >= 20, `brandtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch90[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+console.log('\n[91] nativeguardtest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['nativeguardtest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `nativeguardtest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch91 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch91, `nativeguardtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch91 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch91) {
+    assert(summaryMatch91[1] === '✅ ALL PASS', `nativeguardtest.mjs itself reports ALL PASS (got: ${summaryMatch91[0]})`);
+    assert(Number(summaryMatch91[3]) === 0, `nativeguardtest.mjs reports zero failed assertions (got ${summaryMatch91[3]} failed, ${summaryMatch91[2]} passed)`);
+    assert(Number(summaryMatch91[2]) >= 10, `nativeguardtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch91[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+
+console.log('\n[92] shellstatetest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['shellstatetest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `shellstatetest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const summaryMatch92 = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!summaryMatch92, `shellstatetest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the two assertions below vacuous)${summaryMatch92 ? '' : '\n' + out.slice(-800)}`);
+  if (summaryMatch92) {
+    assert(summaryMatch92[1] === '✅ ALL PASS', `shellstatetest.mjs itself reports ALL PASS (got: ${summaryMatch92[0]})`);
+    assert(Number(summaryMatch92[3]) === 0, `shellstatetest.mjs reports zero failed assertions (got ${summaryMatch92[3]} failed, ${summaryMatch92[2]} passed)`);
+    assert(Number(summaryMatch92[2]) >= 10, `shellstatetest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch92[2]} — a near-zero count would mean the guard is vacuous)`);
+  }
+}
+// ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
+console.log('\n[89] js/scribe-scoring.js — the extraction is byte-faithful to BOTH existing copies…');
+{
+  // DI-T6.14(b): "Each extraction is a move, asserted byte-for-byte against its source." This
+  // module has TWO sources — backend/Code.gs's SCRIBE_SIGNAL_POINTS_/scribeCollapseSignals_/
+  // scribeCombineSignalPoints_/scribeScoreOpportunity_ (:6176-6263), loaded here in a `vm` sandbox
+  // (the scoringtest.mjs [22] precedent), and js/scribeLines.js's independently-authored
+  // SIGNAL_POINTS/scoreOpportunity, already loaded as `mods['scribeLines']`. A change to any ONE of
+  // the three that is not mirrored in the other two goes red HERE, not in a runtime surprise six
+  // weeks later when the Trainer's calibration replay disagrees with what actually fired live.
+  const scribeScoring89 = mods['scribe-scoring'];
+  const vm89 = await import('node:vm');
+  const { readFile: readFile89 } = await import('node:fs/promises');
+  const { fileURLToPath: fileURLToPath89 } = await import('node:url');
+  const codeGs89 = await readFile89(fileURLToPath89(new URL('./backend/Code.gs', import.meta.url)), 'utf8');
+  const sandbox89 = {};
+  vm89.createContext(sandbox89);
+  vm89.runInContext(codeGs89, sandbox89, { filename: 'Code.gs' });
+  assert(typeof sandbox89.scribeScoreOpportunity_ === 'function', '89-1: fixture check: Code.gs\'s scorer loaded into the sandbox');
+  assert(JSON.stringify(sandbox89.SCRIBE_SIGNAL_POINTS_) === JSON.stringify(scribeScoring89.SIGNAL_POINTS),
+    `89-2: the SIGNAL_POINTS table is byte-identical to Code.gs's SCRIBE_SIGNAL_POINTS_ (got ${JSON.stringify(scribeScoring89.SIGNAL_POINTS)})`);
+  const scribeLines89 = mods['scribeLines'];
+  assert(JSON.stringify(scribeLines89.SIGNAL_POINTS) === JSON.stringify(scribeScoring89.SIGNAL_POINTS),
+    '89-3: …and identical to js/scribeLines.js\'s own copy — three sources, one table');
+
+  const fixtures89 = [
+    [], ['nope'], ['streak', 'loneWolfWin', 'unanimous'],
+    ['backdoorBust', 'chartLeadChange', 'streak'],
+    [{ signal: 'streak' }, { signal: 'streak' }, { signal: 'streak' }], // FINDING 1: collapse, don't sum
+    [{ signal: 'claim', points: 50 }], // an explicit override, the shape a classify verdict uses
+    [{ signal: 'claim', points: null }], // RG-07's null trap — must fall through to the table (0), not read as an explicit 0 either way here since claim's table value IS 0
+    Array.from({ length: 20 }, () => 'verbosity'), // twenty instances collapse to one
+  ];
+  for (const sig of fixtures89) {
+    const asObjects = sig.map((s) => (typeof s === 'string' ? { signal: s } : s));
+    const ours = scribeScoring89.scoreOpportunity(sig);
+    const codeGsScore = sandbox89.scribeScoreOpportunity_(asObjects);
+    const clientScore = scribeLines89.scoreOpportunity(sig, { level: 'quiet' }).score;
+    assert(ours === codeGsScore, `89-4: scribe-scoring.js agrees with Code.gs for ${JSON.stringify(sig)} (ours=${ours}, Code.gs=${codeGsScore})`);
+    assert(ours === clientScore, `89-5: …and with js/scribeLines.js for the same fixture (ours=${ours}, client=${clientScore})`);
+  }
+
+  // The classify verdict → points arithmetic, against Code.gs's own inline formula (:7830-7833).
+  const classifyFixtures89 = [
+    { claim: true, kind: 'guarantee', confidence: 0.9 },
+    { claim: true, kind: 'bold_claim', confidence: 0.6 },
+    { claim: true, kind: 'contradiction', confidence: 0.59 }, // just below the floor
+    { claim: false, kind: 'guarantee', confidence: 0.99 }, // claim:false always scores 0
+    { claim: true, kind: 'none', confidence: 1 },
+  ];
+  const CLASSIFY_POINTS89 = { bold_claim: 35, guarantee: 45, contradiction: 50, none: 0 };
+  for (const p of classifyFixtures89) {
+    const expected = (p.claim === true && p.confidence >= 0.6) ? (CLASSIFY_POINTS89[p.kind] || 0) : 0;
+    const got = scribeScoring89.classifyVerdictPoints(p);
+    assert(got === expected, `89-6: classifyVerdictPoints(${JSON.stringify(p)}) === ${expected} (got ${got})`);
+  }
+
+  // trustedAutonomousSignals — the N-6 allow-list drops an unknown signal name entirely, and a
+  // `claim` entry's points come from the SUPPLIED claimPoints argument, never from evidence.points.
+  const trusted89 = scribeScoring89.trustedAutonomousSignals({ points: ['streak', 'notARealSignal', 'claim'] }, 45);
+  assert(!trusted89.some((s) => s.signal === 'notARealSignal'), '89-7: an unrecognized signal name is dropped (N-6 allow-list)');
+  const claimEntry89 = trusted89.find((s) => s.signal === 'claim');
+  assert(!!claimEntry89 && claimEntry89.points === 45, `89-8: the claim entry\'s points come from the resolved claimPoints argument (got ${JSON.stringify(claimEntry89)})`);
+  const trustedNoClaim89 = scribeScoring89.trustedAutonomousSignals({ points: ['claim'] }, null);
+  assert(trustedNoClaim89.find((s) => s.signal === 'claim').points === 0,
+    '89-9: an unresolved claim (no classify verdict on record) scores 0 — the same as silence');
+}
+// ═══ END STEP 6 PHASE 5 ═══
 
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

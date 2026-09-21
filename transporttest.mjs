@@ -771,6 +771,45 @@ _realLog('\n[10] Realtime — the CONTIGUITY rule, the gap drain, and duplicates
   fake.S.channels[0].emit(r5);
   assert(delivered.length === beforeDup && known === 7,
     'S10: a duplicate row and one BELOW the cursor are both dropped — the fold would dedupe them anyway (AD-10), but the cursor must not be re-litigated');
+
+  // ── (d) DI-204 RESIDUAL R6 — THE PERMANENT SEQ HOLE A PRIVATE TEST ROW LEAVES.
+  //
+  // `send_test_push` (migration 0018) writes a real `messages` row visible to ONE member. For the
+  // other five, that seq number is simply never delivered and never will be — a permanent hole in
+  // an otherwise contiguous sequence. This section costs the claim in the runbook's residual R6:
+  // ONE extra gap drain per device, once, at the next PUBLIC message — not a retry loop.
+  //
+  // THE FAKE MODELS A NON-RECIPIENT CORRECTLY, and that is the load-bearing detail. `S.rows` is
+  // what the caller can SELECT, and the fake's `chat_head` is `max(seq)` over `S.rows` — which is
+  // exactly `public.chat_head`'s real semantics, because it is SECURITY INVOKER (0003:532) and so
+  // `messages_select` applies to its own aggregate. 0018 proves that property at paste time with a
+  // `do $defcheck$` block that raises if either chat_head or chat_since is ever made DEFINER.
+  // THAT is why this is one drain and not a loop: a non-recipient's head EXCLUDES the private row,
+  // so the drain it triggers reaches caughtUp instead of chasing a head it can never match.
+  const holeSelects = fake.S.selects.length;
+  const beforeHole = delivered.length;
+  fake.S.nextSeq = 9;                            // seq 8 is the private row: never in S.rows,
+  const r9 = row(9); fake.S.rows.push(r9);       // never emitted to a non-recipient.
+  fake.S.nextSeq = 10;
+  fake.S.channels[0].emit(r9);                   // known is 7; this is known+2, not known+1
+  assert(delivered.length === beforeHole,
+    'S9/R6: the next PUBLIC row after a private one is NOT contiguous (known+2), so it is correctly withheld rather than handed up — the hole must not be papered over by delivering across it');
+  await new Promise((r) => setTimeout(r, 40));
+  assert(known === 9, `S9/R6: …a drain filled it instead, and the cursor reached 9 (${known})`);
+  const holeDelivery = delivered.slice(beforeHole).flatMap((d) => d.events.map((e) => e.seq));
+  assert(JSON.stringify(holeDelivery) === JSON.stringify([9]),
+    `S9/R6: …delivering ONLY seq 9. Seq 8 is not invented, not skipped-with-a-placeholder, and never appears (${JSON.stringify(holeDelivery)})`);
+  assert(delivered.at(-1).meta.caughtUp === true,
+    'S9/R6: …and the drain lands CAUGHT-UP. This is the whole claim: chat_head is INVOKER, so a non-recipient\'s head is 9, not 10 — it does not spend the rest of the session behind a head it can never reach');
+  const drainSelects = fake.S.selects.length - holeSelects;
+  assert(drainSelects === 1,
+    `S9/R6: …at a cost of EXACTLY ONE extra page read (${drainSelects}). One drain, one page, then done — not a retry loop, which is what a DEFINER chat_head would have produced`);
+  // And the hole is spent: the NEXT public row is contiguous again and costs nothing.
+  const afterHole = fake.S.selects.length;
+  const r10 = row(10); fake.S.rows.push(r10); fake.S.nextSeq = 11;
+  fake.S.channels[0].emit(r10);
+  assert(known === 10 && fake.S.selects.length === afterHole,
+    `S9/R6: …and the cost is paid ONCE. The next public row is known+1 again and is delivered straight off Realtime with no read at all (known=${known}, extra reads=${fake.S.selects.length - afterHole})`);
   sub();
   resetToFlagOff();
 }
