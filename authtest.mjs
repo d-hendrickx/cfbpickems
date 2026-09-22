@@ -3692,7 +3692,23 @@ console.log('\n[31] A9 — expiry-clear and signOut() leave the SAME device-loca
   //     paint, writing brand-new values microseconds after the clear. The
   //     question this section asks is "did A's data survive?", so it is asked
   //     by VALUE below (SEED() writes `payload-<key>`), not by key presence.
-  const EXCLUDE = new Set([K31, OWNER31, 'cfbp_push_active', 'cfbp_whatsnew_posted', 'cfbp_chat_outbox2']);
+  //   • RG-201 (2026-09-21) — KEYS.THEME_HINT, for exactly the reason the two
+  //     above it are here and not as a new exemption. The hint may now only
+  //     record a PLAYER-DERIVED palette (js/app.js applyTheme: a session with a
+  //     playerId, and getTheme() === the key being painted). The SIGN-OUT path
+  //     ends with nobody signed in, so it writes nothing; the HANDOVER path
+  //     ends signed IN and the incoming player's own first paint records THEIR
+  //     palette microseconds after the clear. That asymmetry is the fix working,
+  //     and it is what puts the key in this diff.
+  //
+  //     ASSERTED BY VALUE below, exactly like the outbox: "A's data survived"
+  //     and "B wrote a fresh value" are indistinguishable from a key list, and
+  //     a leak must never be waved through by one.
+  const EXCLUDE = new Set([K31, OWNER31, 'cfbp_push_active', 'cfbp_whatsnew_posted', 'cfbp_chat_outbox2', 'cfbp_theme_hint']);
+  assert(snapExpiry.get('cfbp_theme_hint') !== 'payload-cfbp_theme_hint',
+    `RG-201 — the theme hint present after the handover is NOT A's seeded payload (${JSON.stringify(String(snapExpiry.get('cfbp_theme_hint')).slice(0, 40))}) — A's recorded palette must never survive into B's device`);
+  assert(!afterSignOut.has('cfbp_theme_hint') || snapSignOut.get('cfbp_theme_hint') !== 'payload-cfbp_theme_hint',
+    'RG-201 — …and the sign-out path leaves no palette recording of A\'s behind either');
   assert(snapExpiry.get('cfbp_chat_outbox2') !== `payload-cfbp_chat_outbox2`
       && (snapExpiry.get('cfbp_chat_outbox2') === undefined || /"author":"scribe"/.test(snapExpiry.get('cfbp_chat_outbox2') || '')),
     `SEC F-1/F-4 — the outbox key present after the handover holds the INCOMING session's own SCRIBE post, not A's payload (${JSON.stringify(String(snapExpiry.get('cfbp_chat_outbox2')).slice(0, 60))})`);
@@ -8833,7 +8849,19 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     const appSrcM = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
     assert(/if \(!_authHoldReason\) showAuthHoldGate\(heldReason\);/.test(appSrcM),
       "[44m] guard 1: the retry re-raises only when there is NO gate — `!== heldReason` re-raised over a CHANGED one, which is the case that must be left alone");
-    assert(/showAuthHoldGate\(currentAuthHoldReason\(\) \|\| _sbHoldRetryReason \|\| 'data-hold'\)/.test(appSrcM),
+    // RG-199 (2026-09-21) — the three-term expression is now bound to
+    // `fallbackReason` so the raise site can ALSO refuse the generic 'data-hold'
+    // when nobody is proven (a data hold asserts the player IS proven). The
+    // precedence order this guard exists for is unchanged and is still in one
+    // place; only the name it is computed into is new.
+    // …AND IT MUST REACH THE RAISE. Asserting only that the three-term
+    // expression EXISTS is weaker than the original, which also pinned that it
+    // was the argument to showAuthHoldGate(): an expression computed and then
+    // dropped would satisfy the first half. Both halves, explicitly.
+    assert(/const fallbackReason = currentAuthHoldReason\(\) \|\| _sbHoldRetryReason \|\| 'data-hold';/.test(appSrcM)
+        && /\n  showAuthHoldGate\(fallbackReason\);/.test(appSrcM),
+      '[44m] guard 2b: the precedence expression is bound to `fallbackReason` AND that value is what showAuthHoldGate() is called with — a reason computed but not raised is the same defect wearing a variable name');
+    assert(/currentAuthHoldReason\(\) \|\| _sbHoldRetryReason \|\| 'data-hold'/.test(appSrcM),
       '[44m] guard 2: afterSupabaseHydrate() raises, in precedence order, (1) a hold raised DURING the await, (2) the reason the in-flight retry is FOR, (3) the generic data hold — ONE place, because three call sites answering the same question is how the third one gets forgotten');
   }
 

@@ -479,5 +479,133 @@ console.log('\n[13] The UI reads every count through ONE door, and it carries th
   }
 }
 
+// ── [14] RG-196 THIRD RECURRENCE — IDENTITY THAT RESOLVES *AFTER* THE FIRST
+//        RENDER (2026-09-21) ───────────────────────────────────────────────────
+//
+// Drew, minutes after v0.23.3: "chat badge still shows a big number and then
+// goes away when you click it." Third time this badge has been fixed.
+//
+// THE HYPOTHESIS THIS SECTION EXISTS TO SETTLE, stated as the coordinator put
+// it: on a real boot the first count runs BEFORE the member id is known, so the
+// unstamped cursor is read under no identity; if adoption only ever happened on
+// a WRITE — i.e. on the markSeen() that the tap triggers — then the badge would
+// sit at "everything is unread" until the player tapped it, which is exactly
+// the reported behaviour.
+//
+// §[10] already proves adoption happens on a read when identity is resolved
+// FIRST. This is the other order, which is the order a boot actually has, and
+// it is the one nothing covered: unresolved read, THEN identity, and no tap
+// anywhere. If the count after identity is 84 instead of 4, the hypothesis is
+// confirmed and the bug is here. If it is 4, this mechanism is RULED OUT with
+// evidence and the remaining suspect is the owner digest itself.
+console.log('\n[14] The identity resolves AFTER the first render — no tap anywhere…');
+{
+  localStorage.clear();
+  // A pre-upgrade (unstamped) cursor, the shape Drew's dump actually showed:
+  // `cursorOwner: "(unstamped)"`, with a real position on it.
+  localStorage.setItem(K_LASTSEEN, JSON.stringify({ seq: 80, byTag: {} }));
+  signedOutIdentity();
+  freshRoom();
+
+  // ── FIRST RENDER: nobody is resolved yet. This is the read that used to be
+  //    able to damage the cursor (a zero substituted for an unknown).
+  const first = chat.unreadCountOrUnknown(null, 'all');
+  assert(first.known === false && first.count === 0,
+    `[14] the first render says "unknown", not a number (got ${JSON.stringify(first)}) — a viewer nobody can name produces no statement at all`);
+  assert(JSON.parse(localStorage.getItem(K_LASTSEEN)).seq === 80,
+    '[14] …and that unresolved read left the cursor ALONE: 80 is still on the device, not zeroed and not re-stamped to nobody');
+
+  // ── THE IDENTITY ARRIVES. No markSeen(), no tap, no navigation — just the
+  //    member id becoming known, which is what MEMBERSHIPS_REFRESHED does.
+  signedInAs('mDrew');
+  const after = chat.unreadCountOrUnknown('mDrew', 'all');
+  assert(after.known === true && after.count === 4,
+    `[14] THE BADGE IS RIGHT THE MOMENT IDENTITY RESOLVES, with no tap: 4 unread (seq 80 of 84), not 84 (got ${JSON.stringify(after)}). A number that is only correct after the player taps it is the "big number then it clears" defect.`);
+  assert(JSON.parse(localStorage.getItem(K_LASTSEEN)).owner === chat._lastSeenOwnerForTest(),
+    '[14] …and the adoption happened on that READ — not on a markSeen(), which is what a tap would have triggered');
+
+  // NON-VACUITY: the same boot with a cursor at 0 really does badge 84, so the
+  // assertion above is measuring the cursor and not a broken room.
+  localStorage.clear();
+  signedOutIdentity();
+  freshRoom();
+  signedInAs('mDrew');
+  assert(chat.unreadCountOrUnknown('mDrew', 'all').count === 84,
+    '[14] non-vacuity: with no cursor at all the same room badges all 84, so 4 above is the cursor being honoured');
+}
+
+// ── [15] THE OWNER DIGEST MUST BE STABLE ACROSS A REBOOT (badge lead) ────────
+//
+// §[14] ruled out "adoption only happens on a tap". The remaining code-derived
+// suspect for Drew's recurring badge is the STAMP itself: `_ownerDigest()`
+// hashes `getSession()?.playerId | getActiveLeagueId()`, and getLastSeen()
+// returns {seq:0} — i.e. EVERYTHING UNREAD — whenever a claimed stamp does not
+// equal the digest computed now. If the digest at the post-identity render
+// differed from the one written by the previous markSeen(), the badge would be
+// maximal every boot and clear on every tap, forever. That is Drew's symptom
+// exactly, and §[14] could not see it because it uses one stable identity.
+//
+// So this drives the SUPABASE shape, where playerId is SYNTHESIZED from the
+// memberships and the league id is a PERSISTED pointer — two inputs that
+// resolve from different places and are the plausible way the two digests
+// could disagree.
+console.log('\n[15] The cursor stamp survives a reboot — same member, same league, same digest…');
+{
+  localStorage.clear();
+  chat._resetForTest();
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+    supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon', authModeKnown: true });
+  auth._setMembershipsForTest([{ leagueId: 'L-IRB', memberId: 'm-drew', role: 'commissioner',
+    displayName: 'Drew', leagueName: 'IRB Pick ’Ems' }]);
+  auth.setActiveLeagueId('L-IRB');
+
+  assert(auth.getSupabaseSession()?.playerId === 'm-drew',
+    'fixture: the synthesized session resolves the member id, which is the digest\'s first input');
+  freshRoom();
+
+  // SESSION 1 — the player reads the room. This is the write that stamps.
+  chat.markSeen('all');
+  const stampWritten = JSON.parse(localStorage.getItem(K_LASTSEEN)).owner;
+  assert(stampWritten === chat._lastSeenOwnerForTest(),
+    'fixture: markSeen() stamped the cursor with this device\'s digest');
+  assert(chat.unreadCount('m-drew', 'all') === 0, 'fixture: caught up at the end of session 1');
+
+  // ── THE REBOOT. A new page: the chat engine starts empty and the identity is
+  //    re-derived from the two device-local facts that survive — the persisted
+  //    league pointer and the memberships the app re-resolves. The cursor key
+  //    is untouched (RG-196 exempts it from the sweep).
+  const cursorOnDisk = localStorage.getItem(K_LASTSEEN);
+  chat._resetForTest();
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+    supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon', authModeKnown: true });
+  auth._setMembershipsForTest([{ leagueId: 'L-IRB', memberId: 'm-drew', role: 'commissioner',
+    displayName: 'Drew', leagueName: 'IRB Pick ’Ems' }]);
+  // The league pointer is PERSISTED in production and survives a reboot; only
+  // the test reset clears it. Re-set so this models a real second open rather
+  // than a first-ever one.
+  auth.setActiveLeagueId('L-IRB');
+  assert(localStorage.getItem(K_LASTSEEN) === cursorOnDisk,
+    'fixture: the cursor really did survive the reboot byte-for-byte — otherwise this proves nothing');
+  freshRoom();
+
+  const stampNow = chat._lastSeenOwnerForTest();
+  assert(stampNow === stampWritten,
+    `[15] THE DIGEST IS THE SAME MEMBER+LEAGUE AFTER A REBOOT (wrote ${JSON.stringify(stampWritten)}, computes ${JSON.stringify(stampNow)}). If these ever disagree, getLastSeen() returns {seq:0}, EVERY message reads as unread, and a tap restamps it — a big number that clears on tap and comes back next boot.`);
+  assert(chat.unreadCount('m-drew', 'all') === 0,
+    `[15] …so the badge is still ZERO after the reboot, with no tap (got ${chat.unreadCount('m-drew', 'all')}). This is the assertion that would have caught a drifting stamp.`);
+
+  // NON-VACUITY: a genuinely DIFFERENT member+league really does change the
+  // digest, so the equality above is a fact about stability and not a constant.
+  auth._setMembershipsForTest([{ leagueId: 'L-OTHER', memberId: 'm-kihoon', role: 'member',
+    displayName: 'Kihoon', leagueName: 'Other' }]);
+  auth.setActiveLeagueId('L-OTHER');
+  assert(chat._lastSeenOwnerForTest() !== stampWritten,
+    '[15] non-vacuity: a different member+league digests differently, so [15] is measuring the inputs and not a fixed string');
+  assert(chat.unreadCount('m-kihoon', 'all') === 84,
+    `[15] …and in that genuinely-different scope the cursor correctly reads as zero for them (got ${chat.unreadCount('m-kihoon', 'all')}) — the owner check still does its job`);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

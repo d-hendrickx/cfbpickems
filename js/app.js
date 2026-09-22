@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.3';
+export const APP_VERSION = 'v0.23.4';
 export const APP_VERSION_DATE = '2026-09-21';
 
 /**
@@ -51,6 +51,15 @@ export const APP_VERSION_DATE = '2026-09-21';
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.4',
+    date: '2026-09-21',
+    added: [],
+    fixed: [
+      'If you were signed out, the app could get stuck on "Couldn\'t load your league" with no way to sign back in. It now shows Sign In instead.',
+      'Your colours no longer flash to the default partway through opening the app, and signing out no longer wipes the colour the app remembers for its first frame.',
+    ],
+  },
   {
     version: 'v0.23.3',
     date: '2026-09-21',
@@ -1399,6 +1408,54 @@ function onSupabaseDataStatus(status, detail = {}) {
   if (!(status === 'syncing' && Number(detail.pendingWrites) > 0)) hideSupabaseOfflineBanner();
   if (status === 'error') {
     if (detail.error) showBackendErrorBanner(String(detail.error));
+    // ══ RG-199 (2026-09-21) — THE FLAG'S TWIN, WHICH NOTHING READ ════════════
+    //
+    // The adapter classifies a PGRST301/401 on a read as 'session', holds, and
+    // emits `sessionSuspect: true` beside `membershipSuspect` below
+    // (supabase-backend.js's `_classifyHydrateFailure()` and the `emit('error')`
+    // at the end of that path). `membershipSuspect` has been consumed here since
+    // Part B. `sessionSuspect` was consumed NOWHERE — emitted on every rejected
+    // token and dropped on the floor.
+    //
+    // WHAT THAT COST, as the sequence that actually happened to Drew's laptop.
+    // With the flag unread, afterSupabaseHydrate()'s fallback found no hold
+    // reason set and stamped the generic one: 'data-hold', whose copy is
+    // "Couldn't load your league. Nothing has changed — retry in a moment." The
+    // league was fine. The TOKEN was dead. And 'data-hold' is the one label that
+    // removes every exit:
+    //   • fireSignInGateDeadline() returns early on `currentAuthHoldReason()`;
+    //   • the SIGNED_OUT paint is guarded on `!currentAuthHoldReason()`;
+    //   • Retry routes through AUTH_HOLD_RECOVERY's 'adapter-hydrate' arm, which
+    //     re-asks the server with the same dead token and never reaches
+    //     applyAuthModeDecision(), so it can never paint a gate.
+    // Steady state, through a hard reload, with no way back to Sign In — while
+    // the same account worked on a phone whose refresh token was still alive.
+    //
+    // SO THE FLAG IS READ, AND IT RAISES THE HOLD THAT HAS AN EXIT.
+    // 'session-expired' is not a new screen or a new mechanism: it is the hold
+    // refreshAuthUI() already raises on MEMBERSHIPS_FAILED{expired}, it carries
+    // DI-180d's Sign In affordance (A8: a post-identity failure is actionable),
+    // and raising it HERE — synchronously, inside the emit that happens during
+    // `await sb.hydrate()` — means afterSupabaseHydrate()'s existing
+    // `currentAuthHoldReason() || …` precedence preserves it instead of
+    // downgrading it. The fix feeds that chain the fact it was missing; it does
+    // not add a second gate-raising path.
+    //
+    // NO TOKEN IS DESTROYED HERE (DI-180p, and §5.2's rule that the adapter
+    // never clears a token). The verdict is still auth.js's: the refresh below
+    // is the same verify-before-destroy round `membershipSuspect` uses, and if
+    // the 401 was a false alarm — a slow clock, a rotated key — it comes back
+    // SESSION_REVERIFIED, which refreshAuthUI() already turns into "take the
+    // gate down and re-hydrate". A player is never stranded on a sign-in screen
+    // by a transient 401.
+    if (detail.sessionSuspect) {
+      try { showAuthHoldGate('session-expired'); }
+      catch (e) { console.error('[auth] the session-expired gate failed to paint after the server rejected the token', e); }
+      (async () => {
+        try { await refreshMembershipsAndSession(); }
+        catch (e) { console.warn('[auth] the verification after a rejected token failed', e); }
+      })();
+    }
     // §5.2 last paragraph — a REFUSED READ may mean a role changed under us.
     // Handed to auth.js's one membership path; never classified here.
     if (detail.membershipSuspect) {
@@ -1471,6 +1528,51 @@ async function ensureSupabaseDataHydrated(reason) {
   if (!isSupabaseDataMode()) return false;
   const leagueId = getActiveLeagueId();
   if (!leagueId) return false;
+  // ══ RG-199 (2026-09-21) — …AND NOBODY HAS PROVEN WHO THEY ARE YET ═════════
+  //
+  // THE SECOND HALF OF THE GUARD ABOVE, and it is the same kind of statement:
+  // "we are not ready to ask yet, and the event that makes us ready calls back".
+  //
+  // WHY THE LEAGUE GUARD WAS NOT ENOUGH. `getActiveLeagueId()` is a PERSISTED
+  // device-local read (auth.js's ACTIVE_LEAGUE_KEY), so on every returning
+  // device it answers before any identity has been established. That was
+  // harmless while boot() could not get here without a session — and RG-194
+  // changed exactly that: a device holding a persisted session the SDK has not
+  // resolved yet now proceeds past applyAuthModeDecision() with no gate and no
+  // membership refresh in flight, deliberately ("NOT YET" is not "signed out").
+  // boot() then walked straight into this function and asked the server for a
+  // league using a token nothing had verified.
+  //
+  // A hydrate in that window cannot succeed — RLS has no auth.uid() to work
+  // with — and its FAILURE is not free: afterSupabaseHydrate() raises a hold
+  // gate, and on a device whose refresh token is dead the gate it raised was
+  // 'data-hold', which latches out the sign-in gate that is the only real
+  // remedy (see the sessionSuspect branch in onSupabaseDataStatus()). So the
+  // cost of asking too early was a locked app, not a wasted request.
+  //
+  // THE PREDICATE IS isContentWithheld()'s CASE 2, VERBATIM — "no identity has
+  // EVER been proven on this page" — deliberately rather than
+  // `!hasValidSupabaseSession()` alone, which goes false routinely on a
+  // legitimately signed-in device (an iOS tab woken before TOKEN_REFRESHED, the
+  // whole of DI-180p's verify window) and would have deferred the hydrate for
+  // every one of them. And deliberately NOT isContentWithheld() itself, which
+  // includes case 3 ("the adapter is not serving") — true at every boot, so it
+  // would defer the hydrate forever.
+  //
+  // NOTHING IS STRANDED BY WAITING, and this is the whole argument for a
+  // deferral over a failure. Every way an identity can arrive already re-enters
+  // here: refreshAuthUI() re-hydrates on MEMBERSHIPS_REFRESHED / SIGNED_IN /
+  // SESSION_REVERIFIED, and _handleAuthStateChange() calls
+  // refreshMembershipsAndSession() on all four of the SDK's resolving events,
+  // so the first one to land produces the membership event that triggers this.
+  // If nothing ever answers, RG-194's six-second deadline paints the sign-in
+  // gate — which it can now actually do, because no hold is in its way.
+  if (noIdentityEverProven()) {
+    console.info(`[sb] the ${reason} hydrate is DEFERRED: no identity has been proven on this page yet.`
+      + ' Asking now could only be refused, and a refusal raises a hold gate. The membership/session event'
+      + ' that resolves this calls back into this function.');
+    return false;
+  }
   if (_sbHydrateInFlight) return _sbHydrateInFlight;
   const run = (async () => {
     try {
@@ -1580,7 +1682,52 @@ async function afterSupabaseHydrate(reason) {
   //   1. a hold raised DURING the await — later information wins;
   //   2. else the reason the retry in flight is FOR — its own, not downgraded;
   //   3. else the generic data hold.
-  showAuthHoldGate(currentAuthHoldReason() || _sbHoldRetryReason || 'data-hold');
+  // ══ RG-199 (2026-09-21) — A DATA HOLD REQUIRES A PROVEN IDENTITY ══════════
+  //
+  // THE INVARIANT, and it is what Drew's laptop dump proved was missing:
+  // 'data-hold' says "the player IS proven; what is missing is the league"
+  // (the comment above states exactly that). If nobody is proven, that sentence
+  // is FALSE and the gate is a lie with a dead end behind it.
+  //
+  // WHAT THE DUMP SHOWED. `cfbp_supabase_session` ABSENT — no access token, no
+  // refresh token, nothing — while `cfbp_supabase_active_league` persisted.
+  // (A9's exemption keeps the league pointer; signOut() clears it separately,
+  // so a session removed by anything OTHER than an explicit sign-out — a
+  // verify-before-destroy, an SDK drop — leaves the pointer behind. That is
+  // fine, and it is deliberately NOT changed here: the league id is harmless to
+  // keep. What is not fine is hydrating on its strength alone.)
+  //
+  // So applyAuthModeDecision() did the right thing — no persisted session means
+  // `showGoogleSignInGate()`, painted immediately — and then boot() hydrated on
+  // the strength of the persisted league id, the adapter could not serve with
+  // no auth at all, and THIS LINE painted 'data-hold' straight over the sign-in
+  // gate. showAuthHoldGate() only reuses an overlay that is already a hold
+  // (`existing && currentGateIsHold()`), so a Google gate is REPLACED, not kept.
+  // From there every exit is shut: the deadline and the SIGNED_OUT paint both
+  // return early on `currentAuthHoldReason()`, and Retry re-hydrates without
+  // credentials forever. A signed-out commissioner, locked out of the sign-in
+  // button, permanently, through a hard reload.
+  //
+  // The deferral added to ensureSupabaseDataHydrated() stops the boot reaching
+  // here at all. This is the SECOND layer, at the raise site, because the tick
+  // (§7.1) and Retry are also callers and the invariant belongs where the label
+  // is chosen — not only where one caller happens to be guarded.
+  //
+  // A MORE SPECIFIC HOLD IS STILL PRESERVED (security F2, unchanged): only the
+  // GENERIC data hold is refused here. 'session-expired' and 'config-unreadable'
+  // are about identity and configuration and are allowed to stand.
+  const fallbackReason = currentAuthHoldReason() || _sbHoldRetryReason || 'data-hold';
+  if (fallbackReason === 'data-hold' && noIdentityEverProven()) {
+    console.warn('[sb] the hydrate could not serve and NOBODY is proven on this page — this is not a data hold.'
+      + ' Painting the sign-in gate instead: "Couldn\'t load your league" would send a signed-out player looking'
+      + ' for a connection problem, and a hold gate outranks every path that could put the sign-in button back.');
+    if (currentAuthHoldReason()) { clearAuthHoldReason(); hideAuthHoldGate(); }
+    // Never replace somebody else's gate (security S-1) — if the sign-in gate
+    // applyAuthModeDecision() painted is still up, it is already correct.
+    if (!document.getElementById('site-gate-overlay')) showGoogleSignInGate();
+    return false;
+  }
+  showAuthHoldGate(fallbackReason);
   const err = sb.getStatus().lastError;
   if (err) showBackendErrorBanner(String(err));
   return false;
@@ -1623,7 +1770,30 @@ async function afterSupabaseHydrate(reason) {
 function _repaintForSupabaseData(reason) {
   // RG-179 — the player record has just landed; ask it again. Its own catch for
   // the same reason the repaint below has one.
-  try { applyTheme(getTheme()); renderThemeToggle(); renderTzToggle(); }
+  //
+  // ══ RG-200 (2026-09-21) — …EXCEPT WHEN IT HAS *NOT* LANDED YET ════════════
+  //
+  // This was `applyTheme(getTheme())`, and the premise in the line above — "the
+  // player record has just landed" — is not true on every path that reaches
+  // here. This function runs on the SNAPSHOT PRIME (before the hydrate has
+  // resolved), on an ACTIVE-STALE / OFFLINE-READONLY landing, and on every
+  // Realtime repaint. On any of those where the member row is not readable yet,
+  // `getTheme()` can only answer the league default — so the correct first
+  // frame got 'theme-neutral' stamped over it, and the NEXT repaint put the
+  // palette back. Drew: "it still loads through the blue neutral colors" /
+  // "flashes maroon then back to blue then back to maroon". Three paints.
+  //
+  // RG-198 already solved this exact problem for the first frame and gave it a
+  // name: `bootThemeKey()` prefers the PLAYER record whenever there is one and
+  // falls back to the device's hint — what THIS handset last actually painted —
+  // instead of to the league default. It taught index.html's inline bootstrap
+  // and boot()'s own applyTheme() about it and stopped there; this third reader
+  // was missed, which is why the flash survived the fix.
+  //
+  // The player record still wins the moment it is readable (bootThemeKey()'s
+  // first two lines), so this is strictly "do not repaint neutral over a
+  // palette we already know is right" — not a second source of truth.
+  try { applyTheme(bootThemeKey()); renderThemeToggle(); renderTzToggle(); }
   catch (e) { console.warn(`[sb] could not re-apply player preferences after ${reason}`, e); }
   try { navigateTo(state.currentTab || 'dashboard'); }
   catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
@@ -3351,6 +3521,31 @@ function setupChatEnabledWatch() {
  * the only safe answer to that is to withhold. Two arms, two directions, each
  * stated where it is taken.
  */
+/**
+ * ══ RG-199 (2026-09-21) — "HAS ANYBODY EVER BEEN PROVEN ON THIS PAGE?" ══════
+ *
+ * isContentWithheld()'s CASE 2, lifted into its own name because three separate
+ * decisions now turn on it and a fourth copy of the expression is how one of
+ * them drifts (CONVENTIONS #21):
+ *
+ *   • ensureSupabaseDataHydrated() — do not ASK the server yet;
+ *   • afterSupabaseHydrate()       — a failure here is not a DATA problem;
+ *   • runAuthHoldCheck()           — Retry must re-run the AUTH decision, not
+ *                                    re-ask the server with no credentials.
+ *
+ * NOT isContentWithheld() itself, which also asks whether the adapter is
+ * serving — true at every boot, so it would deadlock all three.
+ *
+ * Fails CLOSED (answers "nobody") when it cannot tell, which is the same
+ * direction isContentWithheld()'s own catch takes: the consequences of being
+ * wrong here are a deferred hydrate and a sign-in gate, both recoverable, where
+ * the consequence of failing open is the locked app RG-199 is about.
+ */
+function noIdentityEverProven() {
+  try { return !hasValidSupabaseSession() && !getAccountUserId(); }
+  catch { return true; }
+}
+
 export function isContentWithheld() {
   let supabaseMode = false;
   // ══ SECURITY A-1-R (2026-09-21) — THE PRE-CONFIG WINDOW FAILS CLOSED ══════
@@ -4021,6 +4216,13 @@ function bootThemeKey() {
   return THEMES.some(t => t.key === hint) ? hint : (fromPlayer || 'neutral');
 }
 export const _bootThemeKeyForTest = bootThemeKey;
+/* RG-201 — the theme applier owns the hint WRITE (one place, the moment the
+ * paint happens), so "a signed-out repaint must not record the default" can
+ * only be driven through it. Exported for boottest [31-C]; production has no
+ * caller other than the four in-module ones, which boottest [25] counts.
+ * (Deliberately not naming the function with a paren on any line of this
+ * comment: [25]'s call-site count strips `//` and ` *` lines but not `/**`.) */
+export const _applyThemeForTest = applyTheme;
 
 // Applies a theme by replacing the `theme-*` class on <body>. Idempotent.
 function applyTheme(themeKey) {
@@ -4039,7 +4241,41 @@ function applyTheme(themeKey) {
   // The write is also allowed to FAIL and be ignored — SEC F1's interlock
   // refuses writes while the adapter is not serving, and a device that cannot
   // record its palette must still paint it.
-  try { if (getThemeHint() !== key) setThemeHint(key); } catch { /* a hint is never worth a failed boot */ }
+  // ══ RG-201 (2026-09-21) — ONLY RECORD A *PLAYER-DERIVED* PALETTE ══════════
+  //
+  // THE DEFECT, straight off Drew's laptop dump: `cfbp_theme_hint` read
+  // "neutral". The hint exists to make the NEXT cold open's first frame right,
+  // and 'neutral' is the league DEFAULT — what getTheme() answers when nobody
+  // is signed in (storage.js: `_playerPref('theme') || 'neutral'`, and
+  // _playerPref() returns undefined with no session, UN-127). Recording it
+  // writes down the ABSENCE of a preference as though it were one.
+  //
+  // THE WRITE PATH: resyncPlayerPreferences() -> applyTheme(getTheme()). That
+  // is the app's ONE chokepoint on every session change, and it runs on every
+  // logout AND on the expiry reconcile. So the instant the laptop's session
+  // ended, the device's memory of its own palette was replaced by 'neutral' —
+  // and no amount of fixing the READER (RG-200) can rescue a hint that is
+  // already wrong. This is the other half of "it still loads through the blue".
+  //
+  // NOT GUARDED ON isContentWithheld(): that predicate is true at every boot
+  // (the adapter is IDLE), so it would block the legitimate re-record too, and
+  // it is Supabase-shaped where this defect is not — the same overwrite happens
+  // on a PIN-mode logout, with no adapter involved at all.
+  //
+  // THE HONEST PREDICATE is provenance: did a RESOLVED PLAYER RECORD supply
+  // this exact palette? Two terms, both necessary:
+  //   • a session with a playerId — nobody signed in can have a preference;
+  //   • getTheme() === key — the value being painted is the one the record
+  //     actually holds, not a first-frame stand-in. This is what stops the
+  //     boot paint (bootThemeKey()'s hint fallback, painted while the mirror is
+  //     still empty) from recording itself back as though the player had
+  //     chosen it.
+  // A signed-in player whose stored preference genuinely IS 'neutral' still
+  // records 'neutral', which is correct: that is a choice, not an absence.
+  try {
+    const sessionPlayerId = getSession()?.playerId;
+    if (sessionPlayerId && getTheme() === key && getThemeHint() !== key) setThemeHint(key);
+  } catch { /* a hint is never worth a failed boot */ }
   try {
     const meta = document.querySelector('meta[name="theme-color"]');
     // Round 1 gate, item H — RESTORED short-circuit. The PASS 1b edit called
@@ -18564,7 +18800,28 @@ export async function runAuthHoldCheck({ manual = false } = {}) {
   // re-asks whether this device knows WHO IT IS and WHAT MODE IT IS IN, neither
   // of which is in doubt while a data hold is up, and which does not hydrate the
   // league that actually is missing.
-  if (AUTH_HOLD_RECOVERY[_authHoldReason] === 'adapter-hydrate') {
+  // ══ RG-199 (2026-09-21) — …UNLESS THE IDENTITY IS THE THING THAT IS GONE ══
+  //
+  // The dispatch above routes both Step-4 holds to the adapter, on the stated
+  // premise that "whether this device knows WHO IT IS … is not in doubt while a
+  // data hold is up". Drew's laptop is the counter-example: the hold was up with
+  // NO session record on the device at all. On that premise the arm below
+  // re-asked the server, with no credentials, every 20 seconds and on every tap
+  // of Retry — and because it returns before reaching applyAuthModeDecision(),
+  // it was structurally incapable of painting the sign-in gate that was the
+  // only actual remedy. The one control on the screen could not work.
+  //
+  // So the premise is now CHECKED rather than assumed. When it holds, nothing
+  // changes — this is the same arm, taken for the same reasons, and
+  // 'session-expired' with a live session still re-hydrates rather than
+  // re-running the mode decision (security F2's fall-through fix is intact).
+  // When it does not hold, the recovery that matters is the AUTH decision, and
+  // falling through reaches it: applyAuthModeDecision() re-reads config.json,
+  // paints the gate the resolved state actually calls for, and reports
+  // `hold:null`, which takes the stale hold overlay down. hideAuthHoldGate()
+  // only removes a gate that is still a HOLD (S-1), so the sign-in gate that
+  // decision just painted survives it.
+  if (AUTH_HOLD_RECOVERY[_authHoldReason] === 'adapter-hydrate' && !noIdentityEverProven()) {
     const heldReason = _authHoldReason;
     _authHoldCheckInFlight = true;
     _sbHoldRetryReason = heldReason;

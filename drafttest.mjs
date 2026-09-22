@@ -388,7 +388,21 @@ console.log('\n[8] The Supabase-era triggers funnel into renderChatPage() [struc
 
   assert(/onRealtimeEvent:\s*\(\)\s*=>\s*\{\s*_repaintForSupabaseData\('realtime'\)/.test(appSrc),
     'the adapter\'s Realtime events repaint through _repaintForSupabaseData() [structural]');
-  assert(/function _repaintForSupabaseData\([\s\S]{0,400}?navigateTo\(state\.currentTab/.test(appSrc),
+  // RG-200 (2026-09-21) — SLICED, NOT PROXIMITY-MATCHED. This was
+  // `/function _repaintForSupabaseData\([\s\S]{0,400}?navigateTo\(state\.currentTab/`,
+  // and the 400-character window was measuring the length of the function's
+  // COMMENTS, not its behaviour: documenting RG-200's one-line change inside it
+  // pushed `navigateTo` past the bound and failed an assertion about routing
+  // that was still true. The bound is replaced by the function's actual extent —
+  // the same slice boottest [25]/[31] take — so the assertion now says exactly
+  // what it means ("navigateTo is called INSIDE this function") and cannot be
+  // broken by a comment again. Strictly stronger: the old regex would also have
+  // matched a `navigateTo` that had drifted into a neighbouring function within
+  // 400 characters; this one cannot.
+  const repaintBody8 = appSrc.slice(appSrc.indexOf('function _repaintForSupabaseData(reason) {'),
+    appSrc.indexOf('function _resetSupabaseDataForTest'));
+  assert(repaintBody8.length > 0, '_repaintForSupabaseData() body located [structural]');
+  assert(/navigateTo\(state\.currentTab/.test(repaintBody8),
     '_repaintForSupabaseData() repaints via navigateTo() [structural]');
   assert(/chat:\s*renderChatPage\s*\}\)\[tab\]/.test(appSrc),
     'navigateTo(\'chat\') dispatches to renderChatPage() — so every repaint above rebuilds the composer [structural]');

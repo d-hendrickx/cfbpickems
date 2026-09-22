@@ -4665,6 +4665,378 @@ console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'
   globalThis.document = saved26.document;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [31] RG-199 / RG-200 — THE POST-v0.23.3 DESKTOP LOCKOUT, AND THE THIRD PAINT
+//      (2026-09-21, minutes after v0.23.3 went live)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Drew, on the laptop: "One moment / Couldn't load your league. Nothing has
+// changed — retry in a moment." Steady state. Survives a hard reload. Retry does
+// nothing. The SAME account on the iPhone is fine. And on both: "it still loads
+// through the blue neutral colors" before the right palette arrives.
+//
+// ── (A) RG-199 — A REJECTED TOKEN WEARING A DATA PROBLEM'S COSTUME ──────────
+//
+// THE CHAIN, and note that every link is v0.23.3's:
+//
+//  1. RG-194 gave "not resolved yet" its own arm: `hasPersistedSupabaseSession()`
+//     -> armSignInGateDeadline() instead of showGoogleSignInGate() (app.js:1072).
+//     That predicate only asks whether a session record with a refresh_token
+//     STRING is on the device. It cannot ask whether the token still WORKS —
+//     only the server can, which is the comment's own caveat.
+//  2. So a device holding a DEAD refresh token (the laptop: signed out and in
+//     repeatedly that day, rotating the saved one into uselessness) paints no
+//     gate at all and — because the membership refresh below it is guarded on
+//     `hasValidSupabaseSession()` — kicks off no session work either.
+//  3. boot() walks straight into `await ensureSupabaseDataHydrated('boot')`.
+//     Its only entry guard is `if (!leagueId) return false`, and
+//     getActiveLeagueId() is a PERSISTED localStorage read (auth.js:1576) — so
+//     on every returning device the league IS known and the hydrate RUNS,
+//     against a token the server is going to reject.
+//  4. The adapter does its half correctly: PGRST301/401 classifies as 'session',
+//     it goes HELD, and it emits `error` with `sessionSuspect: true`
+//     (supabase-backend.js:1198, :1245, :1253).
+//  5. app.js drops that flag on the floor. onSupabaseDataStatus() consumes its
+//     TWIN, `membershipSuspect` (app.js:1404), and nothing anywhere reads
+//     `sessionSuspect`. So afterSupabaseHydrate()'s fallback finds no reason set
+//     and stamps the GENERIC one: showAuthHoldGate('data-hold') (app.js:1583).
+//  6. And 'data-hold' then latches out every remedy the player has:
+//        • fireSignInGateDeadline()  — `if (currentAuthHoldReason()) return;`
+//        • the SIGNED_OUT paint      — `&& !currentAuthHoldReason()`
+//        • Retry                     — AUTH_HOLD_RECOVERY['data-hold'] is
+//          'adapter-hydrate', which re-hydrates with the same dead token and
+//          never reaches applyAuthModeDecision(), i.e. never paints a gate.
+//     A dead end, on the one screen whose entire job is to offer a way out.
+//
+// 'session-expired' was always the right label — it is the hold that carries the
+// Sign In affordance (DI-180d/A8), and refreshAuthUI() already raises exactly
+// that pair on MEMBERSHIPS_FAILED{expired}. The bug is not that the gate exists;
+// it is that a rejected identity was reported as a missing league.
+//
+// ── (B) RG-200 — "maroon then blue then maroon" ─────────────────────────────
+//
+// RG-198 added the device palette hint and taught TWO readers about it:
+// index.html's inline bootstrap and bootThemeKey(). It did NOT teach the third.
+// _repaintForSupabaseData() — which runs on the snapshot prime, on every
+// hydrate landing and on every Realtime repaint — still calls
+// `applyTheme(getTheme())` (app.js:1626, the RG-179 line). getTheme() reads the
+// PLAYER record, and on any repaint that lands before the member row is
+// readable it can only answer the league default. So the correct first frame
+// gets neutral stamped over it, and the next repaint puts the palette back.
+// Three paints, in exactly the order Drew reported.
+console.log('\n[31] RG-199/RG-200 — a rejected token is not a missing league, and a repaint must not un-paint the hint…');
+{
+  restoreClock();
+  const { readFileSync: rf31 } = await import('node:fs');
+  const appSrc31 = rf31(new URL('./js/app.js', import.meta.url), 'utf8');
+  const appMod31 = await import('./js/app.js');
+  const auth31 = await import('./js/auth.js');
+  const sb31 = await import('./js/supabase-backend.js');
+  const storage31 = await import('./js/storage.js');
+  const saved31 = { document: globalThis.document, fetch: globalThis.fetch };
+
+  const reg31 = new Map();
+  const bodyClasses31 = new Set();
+  const mkEl31 = (id = '') => {
+    const el = {
+      _id: id, className: '', _html: '', style: {}, textContent: '', disabled: false,
+      get id() { return this._id; },
+      set id(v) { this._id = String(v); if (this._id) reg31.set(this._id, this); },
+      set innerHTML(v) { this._html = String(v); }, get innerHTML() { return this._html; },
+      setAttribute() {}, getAttribute() { return null; }, removeAttribute() {},
+      addEventListener() {}, removeEventListener() {}, focus() {},
+      appendChild(c) { if (c && c._id) reg31.set(c._id, c); return c; },
+      querySelector() { return null; }, querySelectorAll() { return []; },
+      remove() { if (this._id) reg31.delete(this._id); },
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    };
+    if (id) reg31.set(id, el);
+    return el;
+  };
+  globalThis.document = {
+    hidden: false,
+    addEventListener() {}, removeEventListener() {},
+    getElementById: id => reg31.get(id) || null,
+    createElement: () => mkEl31(''),
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    body: {
+      appendChild(el) { if (el && el._id) reg31.set(el._id, el); return el; }, dataset: {},
+      setAttribute() {}, removeAttribute() {},
+      classList: {
+        add: c => bodyClasses31.add(c), remove: c => bodyClasses31.delete(c),
+        toggle: (c, on) => (on ? bodyClasses31.add(c) : bodyClasses31.delete(c)),
+        contains: c => bodyClasses31.has(c),
+        [Symbol.iterator]: () => bodyClasses31[Symbol.iterator](),
+      },
+    },
+    head: { appendChild: el => el }, title: '',
+  };
+  globalThis.fetch = async () => { throw new Error('network disabled in boottest [31]'); };
+
+  const LEAGUE31 = 'lg-irb';
+  const ME31 = 'p-drew';
+
+  // ── (A) THE LOCKOUT ──────────────────────────────────────────────────────
+  //
+  // A PostgREST client that answers every read the way a server answers a
+  // rejected token. This is the ONLY thing different about Drew's laptop.
+  const CLIENT31 = {
+    from() {
+      const api = {
+        select() { return api; }, eq() { return api; },
+        then(res, rej) {
+          return Promise.resolve({ data: null, error: { code: 'PGRST301', message: 'JWT expired' } })
+            .then(res, rej);
+        },
+      };
+      return api;
+    },
+    rpc() { return Promise.resolve({ data: null, error: { code: 'PGRST301', message: 'JWT expired' } }); },
+  };
+
+  auth31._resetAuthForTest();
+  appMod31._resetSupabaseDataForTest();
+  appMod31._resetAuthHoldForTest();
+  sb31._resetForTest();
+  sb31.init({
+    register: auth31.registerSupabaseDataBackend,
+    getClient: () => CLIENT31,
+    getActiveLeagueId: auth31.getActiveLeagueId,
+    getIdentityEpoch: auth31.getIdentityEpoch,
+    getAccountUserId: auth31.getAccountUserId,
+    getDeviceDataOwnerTuple: auth31.getDeviceDataOwnerTuple,
+    getDeviceDataOwner: auth31.getDeviceDataOwner,
+    getLeagueName: () => 'IRB Pick ’Ems',
+    getLeagueNameById: () => 'IRB Pick ’Ems',
+    getSession: auth31.getSupabaseSession,
+    hasValidSupabaseSession: auth31.hasValidSupabaseSession,
+    isPrivilegeHeld: auth31.isPrivilegeHeld,
+    clearMirror: () => {}, setSiteUnlocked: () => {},
+    hasSheetMirror: () => false, isSiteUnlocked: () => true,
+  });
+  auth31.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+    supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon', authModeKnown: true });
+  // THE LAPTOP, EXACTLY: memberships cached from a previous session and the
+  // league pointer persisted (both device-local), but NOTHING has proven an
+  // identity on this page — the access token is gone and no auth event has
+  // landed yet. This is the state RG-194's new arm leaves boot() in.
+  auth31._setMembershipsForTest([{ leagueId: LEAGUE31, memberId: ME31, role: 'commissioner',
+    displayName: 'Drew', leagueName: 'IRB Pick ’Ems' }]);
+  auth31.setActiveLeagueId(LEAGUE31);
+  auth31._setAccountUserIdForTest('');
+  storage31.setBackendMode('supabase');
+
+  assert(auth31.hasValidSupabaseSession() === false && !auth31.getAccountUserId(),
+    '[31] fixture: no identity has been proven on this page — the access token is not fresh and no auth event has landed');
+  assert(auth31.getActiveLeagueId() === LEAGUE31,
+    '[31] fixture: …but the league pointer IS on the device, which is why the leagueId guard lets the hydrate through');
+
+  // (A1) THE GUARD. A hydrate under an identity nobody has proven can only
+  // fail, and its failure is the thing that latches the lockout. It must not be
+  // attempted — symmetrically with the `!leagueId` return one line above it,
+  // and for the same reason: the event that makes us ready calls back
+  // (refreshAuthUI's MEMBERSHIPS_REFRESHED/SIGNED_IN/SESSION_REVERIFIED arm).
+  {
+    let landed = null;
+    try { landed = await appMod31._ensureSupabaseDataHydratedForTest('boot'); }
+    catch (e) { landed = `threw: ${e && e.message}`; }
+    assert(landed === false,
+      `[31-A1] the boot hydrate does not report success while no identity is proven (got ${JSON.stringify(landed)})`);
+    // THE ASSERTION THAT MATTERS: it was never ATTEMPTED. `false` alone is what
+    // the defect already returns — after asking the server, being refused, and
+    // going HELD. IDLE is the difference between deferring and failing.
+    assert(sb31.getState() === 'IDLE',
+      `[31-A1] …because it was never ATTEMPTED (adapter state ${sb31.getState()}, expected IDLE). A hydrate under an unproven identity can only be refused, and being refused is what raises the gate`);
+    assert(appMod31.currentAuthHoldReason() !== 'data-hold',
+      `[31-A1] …so the player is NOT told their league is missing (hold reason ${JSON.stringify(appMod31.currentAuthHoldReason())}). 'data-hold' here is the lockout: fireSignInGateDeadline(), the SIGNED_OUT paint and Retry all refuse over a hold, so there is no way back to Sign In`);
+  }
+
+  // (A1b) DREW'S LAPTOP, EXACTLY AS THE DUMP FOUND IT. No session record at
+  // ALL — no access token, no refresh token — and a PERSISTED active league.
+  // applyAuthModeDecision() paints the Google gate immediately on that state
+  // (hasPersistedSupabaseSession() is false), and the defect was that boot()
+  // then hydrated on the league pointer's strength and painted 'data-hold'
+  // straight over it. showAuthHoldGate() only REUSES an overlay that is already
+  // a hold, so the sign-in gate is replaced rather than kept — after which the
+  // deadline, the SIGNED_OUT paint and Retry all refuse over the hold.
+  //
+  // Driven at the RAISE SITE, because the tick and Retry reach it too: even if
+  // something does hydrate, the label must not be 'data-hold' when nobody is
+  // proven.
+  {
+    appMod31._resetAuthHoldForTest();
+    sb31._resetForTest();
+    reg31.clear();
+    appMod31.showGoogleSignInGate();          // what the auth decision paints on this state
+    assert(!!reg31.get('site-gate-overlay'),
+      '[31-A1b] fixture: the sign-in gate is up, which is what a device with no session record gets');
+    // The hold the failed hydrate used to raise, through the real gate function.
+    appMod31.showAuthHoldGate('data-hold');
+    assert(appMod31.currentAuthHoldReason() === 'data-hold',
+      '[31-A1b] fixture: …and a data hold really does take it over (this is the replacement that locked the laptop)');
+    // THE INVARIANT: the hydrate landing must not be able to leave that in place.
+    let landed31b = null;
+    try { landed31b = await appMod31._ensureSupabaseDataHydratedForTest('tick'); }
+    catch (e) { landed31b = `threw: ${e && e.message}`; }
+    assert(landed31b === false, `[31-A1b] fixture: the hydrate did not serve (got ${JSON.stringify(landed31b)})`);
+    // NOTE WHAT THIS DOES *NOT* ASSERT, because the distinction is the finding.
+    // The deferral means the landing path is never reached, so nothing on this
+    // route CLEARS a hold that is already up. That is correct and sufficient in
+    // production — `_authHoldReason` is page-lifetime, so a reload starts clean,
+    // and the 20-second re-check now escapes it (A1c). The raise-site guard
+    // below is defence in depth for the one case the deferral cannot cover: the
+    // session being destroyed DURING an awaited hydrate that started legitimately.
+    // That race cannot be driven from this fixture, so it is asserted where it
+    // lives rather than pretended to be exercised.
+    const landingBody31 = appSrc31.slice(appSrc31.indexOf('async function afterSupabaseHydrate('),
+      appSrc31.indexOf('function _repaintForSupabaseData('));
+    assert(/fallbackReason === 'data-hold' && noIdentityEverProven\(\)/.test(landingBody31),
+      '[31-A1b] a data hold is REFUSED at the raise site when nobody is proven — the label claims "the player IS proven, the league is missing", which is false here and dead-ends the one control on the screen [structural]');
+    assert(/if \(!document\.getElementById\('site-gate-overlay'\)\) showGoogleSignInGate\(\);/.test(landingBody31),
+      '[31-A1b] …and what goes up instead is the sign-in gate — without replacing one somebody else already painted (S-1) [structural]');
+  }
+
+  // (A1c) RETRY MUST BE ABLE TO ESCAPE. AUTH_HOLD_RECOVERY routes a data hold
+  // to the adapter, which re-asks the server with whatever credentials exist
+  // and never reaches applyAuthModeDecision() — so with the identity gone, the
+  // Retry button was structurally incapable of painting the gate that fixes it.
+  {
+    const holdBody31 = appSrc31.slice(appSrc31.indexOf('export async function runAuthHoldCheck('),
+      appSrc31.indexOf('let ok = false;'));
+    assert(/AUTH_HOLD_RECOVERY\[_authHoldReason\] === 'adapter-hydrate' && !noIdentityEverProven\(\)/.test(holdBody31),
+      '[31-A1c] Retry only re-hydrates while an identity IS proven; with the identity gone it falls through to the AUTH decision, which is the only path that can paint a sign-in gate [structural]');
+  }
+
+  // (A2) THE LABEL. Whatever the ordering, if the adapter ever DOES come back
+  // having had its token rejected, the flag it emits must reach the gate. The
+  // adapter's own half is pinned by adaptertest; this is the app-side half that
+  // was missing, driven through the real status handler.
+  {
+    appMod31._resetAuthHoldForTest();
+    appMod31._onSupabaseDataStatusForTest('error', {
+      state: 'HELD', error: 'Couldn’t load your league. Nothing has changed — retry in a moment.',
+      sessionSuspect: true, membershipSuspect: false,
+      banner: 'Couldn’t load your league. Nothing has changed — retry in a moment.',
+    });
+    assert(appMod31.currentAuthHoldReason() === 'session-expired',
+      `[31-A2] a rejected TOKEN raises the hold that offers Sign In, not the generic data hold (got ${JSON.stringify(appMod31.currentAuthHoldReason())}) — 'session-expired' is the only one of the two the player can act on`);
+  }
+
+  // (A3) …and the precedence chain then PRESERVES it. afterSupabaseHydrate()'s
+  // fallback is `currentAuthHoldReason() || _sbHoldRetryReason || 'data-hold'`
+  // (reviewer F-B's three-term order). Feeding it the fact it was missing is
+  // the whole fix; this asserts the order it depends on is still there.
+  {
+    const afterBody31 = appSrc31.slice(appSrc31.indexOf('async function afterSupabaseHydrate('),
+      appSrc31.indexOf('function _repaintForSupabaseData('));
+    assert(/currentAuthHoldReason\(\) \|\| _sbHoldRetryReason \|\| 'data-hold'/.test(afterBody31),
+      '[31-A3] the fallback still asks for a more specific reason FIRST, so a session hold raised during the hydrate survives (reviewer F-B\'s three-term order) [structural]');
+    assert(/if \(detail\.sessionSuspect\)/.test(appSrc31),
+      '[31-A3] …and the adapter\'s sessionSuspect flag is actually consumed somewhere, not emitted into nothing [structural]');
+  }
+
+  // ── (B) THE THIRD PAINT ──────────────────────────────────────────────────
+  {
+    appMod31._resetAuthHoldForTest();
+    sb31._resetForTest();                 // back to IDLE: the mirror answers nothing
+    storage31.setBackendMode('supabase');
+    // The hint is what a PREVIOUS session recorded, when the adapter was
+    // serving. It is placed on the device directly rather than through
+    // setThemeHint() because SEC F1's write interlock refuses EVERY write —
+    // device-local keys included — while the adapter is not serving, which is
+    // precisely why applyTheme()'s own hint write is wrapped in a catch. The
+    // subject of this fixture is the READ path, so the recording is a given.
+    // KEYS.THEME_HINT is device-local, so this is the same byte the seam reads.
+    localStorage.setItem('cfbp_theme_hint', JSON.stringify('razorback')); // MAROON
+
+    assert(storage31.getThemeHint() === 'razorback',
+      '[31-B] fixture: the device remembers the palette it last painted (RG-198\'s hint, device-local so it is readable with no adapter)');
+    assert(storage31.getTheme() === 'neutral',
+      `[31-B] fixture: …while getTheme() — the PLAYER record — can only answer the league default here (${storage31.getTheme()}), because the member row is not readable until the adapter serves`);
+    assert(appMod31._bootThemeKeyForTest() === 'razorback',
+      `[31-B] fixture: bootThemeKey() is the reader that knows the difference (got ${appMod31._bootThemeKeyForTest()}) — the player record when there is one, the hint when there is not`);
+
+    // THE BUG, as a source fact: the repaint reaches for the accessor that
+    // cannot answer yet, so it repaints NEUTRAL over a correct first frame.
+    const repaintBody31 = appSrc31.slice(appSrc31.indexOf('function _repaintForSupabaseData(reason) {'),
+      appSrc31.indexOf('function _resetSupabaseDataForTest'));
+    assert(repaintBody31.length > 0, '[31-B] fixture: _repaintForSupabaseData() was located in the source [structural]');
+    assert(/applyTheme\(bootThemeKey\(\)\)/.test(repaintBody31),
+      '[31-B] THE BUG: the post-hydrate repaint applies bootThemeKey(), not the raw getTheme(). Every repaint that lands before the member row is readable — the snapshot prime, an ACTIVE-STALE landing, a Realtime tick — otherwise stamps \'theme-neutral\' over the hint\'s correct first frame, which is Drew\'s "maroon then blue then maroon" [structural]');
+    assert(!/applyTheme\(getTheme\(\)\); renderThemeToggle\(\)/.test(repaintBody31),
+      '[31-B] …and the RG-179 line that could only ever answer the league default is gone from that path [structural]');
+  }
+
+  // ── (C) RG-201 — THE HINT MUST ONLY RECORD A *PLAYER-DERIVED* PALETTE ────
+  //
+  // Drew's laptop dump read `cfbp_theme_hint: "neutral"`, and the hint's whole
+  // job is to make the NEXT cold open's first frame right. 'neutral' is the
+  // league default — the answer getTheme() gives when NOBODY IS SIGNED IN
+  // (js/storage.js: `_playerPref('theme') || 'neutral'`, and _playerPref()
+  // returns undefined with no session). So a recorded 'neutral' is not a
+  // preference; it is the absence of one, written down as though it were.
+  //
+  // THE WRITE PATH, which the first pass of this fix looked for and missed:
+  //   resyncPlayerPreferences()  ->  applyTheme(getTheme())
+  // resync is the app's ONE chokepoint on every session change and it runs on
+  // every logout AND on every session expiry (the reconcile's call). At that
+  // instant getTheme() answers 'neutral', applyTheme() records it, and the
+  // device's memory of its own palette is destroyed — so the next cold open
+  // paints neutral on its first frame no matter how correct the READER is.
+  // That is why RG-200 alone did not stop Drew booting blue.
+  //
+  // WHY THE FIRST ATTEMPT AT THIS TEST WAS VACUOUS, recorded because it is the
+  // more useful half: it drove applyTheme() with the adapter IDLE, where
+  // save() throws AuthModeMismatchError and applyTheme()'s own catch swallows
+  // it — the hint survived with or without a guard, and the mutation proof
+  // caught the false green. `isSupabaseWriteWithheld()` is
+  // `authMode === 'supabase' && !hasSupabaseDataBackend()`, so the write lands
+  // whenever the adapter IS serving, which is exactly the state a live session
+  // expires in. The mechanism is mode-independent, so it is driven here in the
+  // simplest mode that has no interlock at all — pins/local, where the write
+  // always lands and the defect is therefore unmistakable.
+  {
+    appMod31._resetAuthHoldForTest();
+    auth31._resetAuthForTest();
+    auth31.configureAuth({ authMode: 'pins', dataMode: 'sheets', authModeKnown: true });
+    storage31.setBackendMode('local');
+    localStorage.setItem('cfbp_players', JSON.stringify([
+      { playerId: 'p-drew', name: 'Drew', preferences: { theme: 'razorback' } },
+    ]));
+    localStorage.removeItem('cfbp_theme_hint');
+    storage31.setSession('p-drew', true, true);
+
+    // (i) SIGNED IN: the palette IS player-derived, so it is recorded. Without
+    //     this the assertion below could pass on a hint that was never written.
+    assert(storage31.getTheme() === 'razorback',
+      `[31-C] fixture: signed in, the player record supplies the palette (${storage31.getTheme()})`);
+    appMod31._applyThemeForTest(storage31.getTheme());
+    assert(storage31.getThemeHint() === 'razorback',
+      `[31-C] fixture: …and THAT is recorded as the device's hint (${JSON.stringify(storage31.getThemeHint())}) — the write still works, which is what makes the next step a real test`);
+
+    // (ii) THE SESSION ENDS — a logout, or the expiry reconcile. resync's exact
+    //      call, with the value getTheme() actually returns at that moment.
+    storage31.clearSession();
+    assert(storage31.getTheme() === 'neutral',
+      '[31-C] fixture: signed out, getTheme() is the league default BY DESIGN (UN-127) — it is not a palette anybody chose');
+    appMod31._applyThemeForTest(storage31.getTheme());
+
+    assert(storage31.getThemeHint() === 'razorback',
+      `[31-C] THE BUG: a session ending must NOT overwrite the device's palette memory with the signed-out default (hint is ${JSON.stringify(storage31.getThemeHint())}, expected "razorback"). Recording the absence of a preference as though it were one is what makes the NEXT cold open boot blue — the reader fix in (B) cannot help a hint that is already poisoned.`);
+    assert(bodyClasses31.has('theme-neutral'),
+      '[31-C] …and it still PAINTS neutral, correctly: signed out IS neutral. The guard is on the RECORDING, never on the pixel');
+
+    // (iii) STRUCTURAL — the call site this is about really is what resync does.
+    const resyncBody31 = appSrc31.slice(appSrc31.indexOf('function resyncPlayerPreferences('),
+      appSrc31.indexOf('export function renderThemeToggle'));
+    assert(resyncBody31.length > 0 && /applyTheme\(getTheme\(\)\)/.test(resyncBody31),
+      '[31-C] fixture: resyncPlayerPreferences() really does re-apply getTheme() — the value that is \'neutral\' for every signed-out caller [structural]');
+  }
+
+  globalThis.document = saved31.document;
+  globalThis.fetch = saved31.fetch;
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 restoreClock();
 // REVIEWER F8 (sixth gate) — write-then-exit-in-the-callback. `console.log()`
