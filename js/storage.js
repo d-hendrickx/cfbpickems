@@ -172,6 +172,32 @@ const KEYS = {
   // Absent/garbage reads as null — "nothing to restore," which is exactly
   // today's behaviour (navigateTo() already defaults to state.currentTab).
   SHELL_UI_STATE: 'cfbp_shell_ui_state',
+  // RG-198 (2026-09-21, Drew-approved: "Yes: the app paints your colours
+  // immediately on open") — the palette THIS HANDSET last painted. A plain
+  // theme key string.
+  //
+  // NOT A SECOND SOURCE OF TRUTH, and the distinction is the whole design: the
+  // theme lives on the PLAYER record (`player.preferences.theme`, CLAUDE.md
+  // bullet 4) and getTheme() still answers from there. This only remembers what
+  // was on screen last time, so the FIRST frame of a cold boot can be right.
+  // On a Supabase device the player record does not exist locally until the
+  // adapter is serving (the Sheets mirror prime is skipped by design, §1.5 item
+  // 1), so without this the first paint could only ever be 'neutral' — the
+  // "neutral page while loading then quickly flashes back to my saved color
+  // scheme" half of Drew's report.
+  //
+  // DEVICE-LOCAL for the same reason SESSION is: it is a fact about what THIS
+  // screen last showed. Shared, it would make one player's phone repaint
+  // another's. Under the `cfbp_` prefix ON PURPOSE — auth.js's F-1 handover and
+  // sign-out sweep then clears it with no new entry in that file's keep-list
+  // (the same argument `cfbp_supabase_mirror` makes above), which is what stops
+  // player B booting in player A's colours on a shared handset.
+  //
+  // DEFAULT-WHEN-MISSING (CONVENTIONS #10): absent, unknown or malformed reads
+  // as '' and every caller falls back to getTheme() — i.e. exactly today's
+  // behaviour. The value is spliced into a CSS class name, so callers validate
+  // it against the seven real theme keys rather than trusting the device.
+  THEME_HINT: 'cfbp_theme_hint',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -273,6 +299,9 @@ const DEVICE_LOCAL_KEYS = new Set([
   // SESSION is: a shared write would let one handset's scroll position bounce
   // every other device in the league.
   KEYS.SHELL_UI_STATE,
+  // RG-198 — see the KEYS comment above. Device-local for the same reason
+  // SESSION is: it records what THIS screen last painted, not league state.
+  KEYS.THEME_HINT,
 ]);
 
 /**
@@ -828,6 +857,24 @@ export function setTheme(themeKey) {
   // been removed (app.js renderThemeToggle), so in practice this path is not
   // reachable while signed out — this is defense in depth, not the only gate.
   _setPlayerPref('theme', themeKey);
+}
+
+/**
+ * RG-198 — the DEVICE's memory of the palette it last painted. See KEYS.
+ * THEME_HINT for why this exists and why it is not a second source of truth.
+ *
+ * Reads answer '' for absent, malformed or non-string values (CONVENTIONS #10):
+ * every caller falls back to getTheme(), which is today's behaviour exactly.
+ * Validation against the seven real theme keys is the CALLER's job — this seam
+ * owns storage, not the palette list, and app.js/index.html both splice the
+ * value into a CSS class name.
+ */
+export function getThemeHint() {
+  const v = load(KEYS.THEME_HINT);
+  return typeof v === 'string' ? v : '';
+}
+export function setThemeHint(key) {
+  save(KEYS.THEME_HINT, String(key || ''));
 }
 
 // ─── FETCH PROOF ──────────────────────────────────────────────────────────────

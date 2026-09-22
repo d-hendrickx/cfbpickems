@@ -56,3 +56,23 @@ export function isNativeOrigin() {
     && typeof location !== 'undefined'
     && location.protocol === 'capacitor:';
 }
+
+/**
+ * getAuthPath() — the ONE seam DI-208e's native sign-in and the existing web
+ * PKCE flow both key off (AD-69, amended by security condition 8). Returns
+ * `'web-pkce'` whenever the origin is NOT the native scheme (the ordinary
+ * `https:`/`http:` case, and every other case, including a spoofed
+ * `window.Capacitor` on a real web origin) — and `'native'` ONLY when
+ * `isNativeOrigin()` is true, i.e. `isNativeShell()` AND the native scheme
+ * BOTH hold. This is exactly `isNativeOrigin()`'s own ORIGIN-POSITIVE
+ * guarantee restated as the two named paths the auth call site branches on,
+ * so a spoofed `window.Capacitor` on `https:` can never downgrade a real
+ * user into the native (unauthenticated-by-that-path) flow, and — the
+ * direction that actually matters for this seam — can never be used to
+ * skip the native app's real sign-in either. Zero dependencies beyond
+ * `isNativeOrigin()`; zero top-level side effects, same discipline as the
+ * rest of this file.
+ */
+export function getAuthPath() {
+  return isNativeOrigin() ? 'native' : 'web-pkce';
+}

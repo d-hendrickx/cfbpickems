@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=23-2" />
+  <link rel="stylesheet" href="css/styles.css?v=23-3" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -76,9 +76,32 @@
 
      getTheme() is now: the SIGNED-IN player's preferences.theme, else 'neutral'.
      There is no device-level fallback any more. Anonymous is always neutral —
-     Drew's ruling, and a full removal, not an overridable default. -->
+     Drew's ruling, and a full removal, not an overridable default.
+
+     RG-198 (2026-09-21, Drew-approved) — AND THE THIRD TIME IT WENT STALE IS
+     THE REASON FOR THE FIRST BRANCH BELOW. Everything this block read —
+     `cfbp_session`, `cfbp_players`, `cfbp_sheet_mirror` — is dead on a Supabase
+     device: app.js REMOVES the PIN-era session record on every supabase boot,
+     and the adapter's first boot wipes the Sheets mirror. So this block could
+     only ever answer 'neutral' after the cutover, which is the "neutral page
+     while loading" Drew reported. `cfbp_theme_hint` (js/storage.js
+     KEYS.THEME_HINT, device-local) is what this handset last painted, and it is
+     read FIRST because it is the only one of the four that is still written.
+
+     THE VALUE IS UNTRUSTED. It is concatenated into a class name, so it is
+     checked against the seven real theme keys spelled out here — the one place
+     in this file that may not import js/data-model.js's THEMES. Anything else,
+     including a corrupt or absent value, is 'neutral'. KEEP THE LIST IN SYNC. -->
 <script>
   (function () {
+    var OK = ['aggie','sooner','trojan','irish','boilermaker','razorback','neutral'];
+    try {
+      var hint = JSON.parse(localStorage.getItem('cfbp_theme_hint') || 'null');
+      if (typeof hint === 'string' && OK.indexOf(hint) !== -1) {
+        document.body.classList.add('theme-' + hint);
+        return;
+      }
+    } catch (e) { /* fall through to the player-record read below */ }
     try {
       var sess = JSON.parse(localStorage.getItem('cfbp_session') || 'null');
       var pid  = sess && sess.playerId;
@@ -233,7 +256,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=23-2"></script>
+<script type="module" src="js/app.js?v=23-3"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -250,7 +273,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=23-2' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=23-3' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

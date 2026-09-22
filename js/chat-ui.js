@@ -73,7 +73,7 @@ import {
   initChat, startChatTransport, onChat, chatStatus, getMessages, getMessage, resolveTag,
   sendMessage, sendEvent, editMessage, deleteMessage, toggleReact, pinMessage,
   sendGameReact, retryFailed, isFailed, isPending,
-  unreadCount, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
+  unreadCountOrUnknown, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
   latestUnreadNotifying, readThroughSeq,
   backfill, chatDigest as _digest, setViewOpen,
   getRetentionDays, isChatEnabled,
@@ -81,6 +81,7 @@ import {
   isHiddenByRetention, isHiddenByEpoch,
   isChatImagePreviewEnabled,
   forceRefresh,
+  isPrivateSelfTest,
 } from './chat.js';
 import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
 import { recordFeedback, getFeedbackFor, isScribeFeedbackEnabled } from './scribeFeedback.js';
@@ -640,7 +641,98 @@ function redirectChatDisabled() {
   else document.querySelector('.nav-item[data-tab="dashboard"]')?.click();
 }
 
+/**
+ * ══ SECURITY A-1 (2026-09-21, RG-196) — "WHO IS ASKING?" IS THE FIRST QUESTION ══
+ *
+ * Every surface below speaks about a league's private room: a member's name, 64
+ * characters of what they wrote, how many messages are waiting. None of it may
+ * be produced for a viewer this device cannot name.
+ *
+ * WHAT WENT WRONG. On a Supabase boot the chat engine replays its device cache
+ * before the config read (BUG-G, deliberate), so these surfaces run while `me()`
+ * is still null — and `isUnreadFor(m, null, …)` compares `m.author !== null`,
+ * which is TRUE for every message ever written. A viewer who is NOBODY was, by
+ * construction, the viewer with the most unread mail. Until RG-194 a PIN overlay
+ * happened to cover that; without it, a signed-out phone showed a member's name
+ * and 64 characters of what they wrote.
+ *
+ * WHY THE PREDICATE IS INJECTED RATHER THAN `!me()`. "No player is logged in" is
+ * NOT the same question as "this device may not see this league", and PIN mode
+ * is the proof: there the site PIN is the credential, an anonymous viewer is a
+ * legitimate state, and the dashboard (teaser included) has always rendered for
+ * one. `!me()` would have quietly changed that too. The question that actually
+ * matters is app.js's `isContentWithheld()` — no identity proven on this page, a
+ * hold gate up, or an adapter that is not serving this league — and app.js owns
+ * it. It is handed DOWN at boot (app.js imports this module; the reverse edge
+ * would be a cycle) — which is also what keeps boottest [15]'s rule true: this
+ * file still names the auth-mode accessor nowhere, because the mode is not the
+ * question it asks. Unregistered the probe answers false, i.e. exactly today's
+ * behaviour, so every suite that loads chat-ui.js on its own is unaffected.
+ *
+ * THE DIRECTION OF "UNKNOWN" IS THE WHOLE FIX. The old code did not crash or
+ * throw — it silently substituted a cursor of zero for an unknown one, and zero
+ * reads as "this person has seen nothing", i.e. everything is news. An unknown
+ * viewer must produce NO statement at all, never a maximal one.
+ */
+let _contentWithheldProbe = null;
+export function registerContentWithheldProbe(fn) {
+  _contentWithheldProbe = typeof fn === 'function' ? fn : null;
+}
+function chatViewerUnresolved() {
+  try { return _contentWithheldProbe ? !!_contentWithheldProbe() : false; }
+  catch { return false; }   // a throwing host predicate must not take chat off every device
+}
+export const _chatViewerUnresolvedForTest = chatViewerUnresolved;
+
+/**
+ * ══ RG-196 RECONCILIATION (v0.23.3) — ONE DOOR BETWEEN THE CURSOR AND A PIXEL ══
+ *
+ * Two independent fixes landed on two branches for the same defect and met
+ * here. They are complementary, not redundant, and this function is the seam
+ * that makes them one contract instead of two habits:
+ *
+ *   • js/chat.js gained `unreadCountOrUnknown(selfId, tag) -> {known, count}`.
+ *     "Caught up" and "identity not resolved" are BOTH the number 0; the flag
+ *     is the entire difference between them.
+ *   • this file gained `chatViewerUnresolved()` — app.js's `isContentWithheld()`
+ *     handed down, i.e. "this device may not speak about this league yet",
+ *     which is a strictly wider question than "no player id".
+ *
+ * Neither guard alone covers the other's case, so EVERY count this module
+ * paints comes through here and arrives already carrying its own answerability.
+ * A caller that wants a number must first ask whether there is one.
+ *
+ * THE RAW `unreadCount()` IS DELIBERATELY NOT IMPORTED INTO THIS FILE. That is
+ * the enforcement, not a style choice: a future surface reaching for a bare
+ * number gets a ReferenceError at load rather than a plausible-looking zero,
+ * and unreadtest §[13] pins the absence so the import cannot quietly come back.
+ */
+function unreadForRender(self, tag = 'all') {
+  if (chatViewerUnresolved()) return { known: false, count: 0 };
+  return unreadCountOrUnknown(self, tag);
+}
+export const _unreadForRenderForTest = unreadForRender;
+
+/**
+ * The badge TEXT for one {known,count}, or '' when there is nothing to say.
+ *
+ * Defined once so the three badge surfaces cannot drift on either rule: the
+ * "99+" ceiling, and — the one that matters — that an UNANSWERABLE count and a
+ * count of zero produce the same empty string, by the same line of code. Also
+ * the single point where the count becomes a String, which is what keeps
+ * xsstest's classifier able to prove these sites cannot carry markup.
+ */
+function unreadBadgeText(u) {
+  return (u && u.known && u.count > 0) ? (u.count > 99 ? '99+' : String(Number(u.count))) : '';
+}
+
 export function updateChatBadges() {
+  // A-1: EMIT NOTHING — not "emit zero". The three surfaces below are shared
+  // with the operating system (the tab title and the installed-app icon badge
+  // both outlive this page), so writing a zero into them while the viewer is
+  // unknown would destroy a true count rather than withhold a false one. This
+  // is also the end of the "84 then 0" flash: there is no first, wrong number.
+  if (chatViewerUnresolved()) return;
   const self = me();
   // v0.17.3 (caught in review): this was the FIFTH surface item A missed. With
   // chat off league-wide it still wrote the document title "(7) IRB Pick 'Ems"
@@ -648,7 +740,14 @@ export function updateChatBadges() {
   // home-screen icon. A player taps in to clear a "7" and finds no Chat nav
   // entry, no bubbles, nothing to clear. n = 0 already drives the correct
   // clear on all three sub-surfaces below.
-  const n = (self && isChatEnabled()) ? unreadCount(self, 'all') : 0;
+  // RECONCILIATION: the number can only come from a {known:true} read. An
+  // unknown one yields 0, which drives the CLEAR below and never a digit —
+  // clearing is not "rendering a count", and a deliberate sign-out in PIN mode
+  // (a legitimate anonymous viewer, so `chatViewerUnresolved()` is false) must
+  // still take the old badge down rather than leave a stale number on the
+  // installed icon.
+  const u = unreadForRender(self, 'all');
+  const n = (u.known && isChatEnabled()) ? u.count : 0;
   // nav badge
   document.querySelectorAll('.nav-item[data-tab="chat"]').forEach(btn => {
     let b = btn.querySelector('.nav-unread');
@@ -692,8 +791,11 @@ function activeGameTags() {
 
 function pillsHTML() {
   const self = me();
-  const mainUnread = self ? unreadCount(self, 'all') : 0;
-  const dot = n => n > 0 ? `<span class="chat-unread-dot">${n > 99 ? '99+' : n}</span>` : '';
+  const mainUnread = unreadForRender(self, 'all');
+  // Takes the {known,count} shape, not a number: an unanswerable count paints
+  // no dot at all, which is the same markup "caught up" produces and a
+  // different reason for producing it.
+  const dot = u => { const t = unreadBadgeText(u); return t ? `<span class="chat-unread-dot">${t}</span>` : ''; };
   // v0.17.1: mention inbox removed per commissioner. @mentions still highlight
   // and still count as notifying events for unread purposes — there's just no
   // separate filter view for them. The "Locker Room" pill covers all messages.
@@ -704,12 +806,13 @@ function pillsHTML() {
     const found = gameById(tag);
     if (!found) return;
     const live = found.game.status === GAME_STATUS.LIVE;
-    const n = self ? unreadCount(self, tag) : 0;
+    const n = unreadForRender(self, tag);
     html += `<button class="chat-pill${U.filter === tag ? ' active' : ''}${live ? ' chat-pill-live' : ''}" data-chat-filter="${esc(tag)}">
       ${live ? '<span class="live-pulse"></span>' : ''}${esc(gameShort(found.game, found.week))} ${dot(n)}</button>`;
   });
   return `<div class="chat-pills-scroll">${html}</div>`;
 }
+export const _pillsHTMLForTest = pillsHTML;
 
 /**
  * Player-visible retention notice (UN-88). A player who scrolls back and hits
@@ -790,9 +893,13 @@ function searchResultsHTML(query) {
   // behavior across browsers). Preferred fix per the design input: plain
   // escaped text preview, since a search result is a FINDER (jump-to), not a
   // place to actually interact with links/images.
+  // The private self-test row is findable by search like any other row in the
+  // reader's own room, so it carries the SAME chip here — a result that omitted
+  // it would be the one place the marker is missing, which is exactly the
+  // inconsistency CONVENTIONS #21 is about.
   const rows = results.map(m => `
-    <button type="button" class="chat-search-result" data-search-jump="${esc(m.id)}">
-      <span class="chat-search-result-meta"><strong>${esc(nameOf(m.author))}</strong> · ${relTime(m.ts)}</span>
+    <button type="button" class="chat-search-result${isPrivateSelfTest(m) ? ' chat-msg-private' : ''}" data-search-jump="${esc(m.id)}">
+      <span class="chat-search-result-meta"><strong>${esc(nameOf(m.author))}</strong> · ${relTime(m.ts)}${privateRowChipHTML(m)}</span>
       <span class="chat-search-result-body">${esc(m.body).replace(/\n/g, ' ')}</span>
     </button>`).join('');
   return `<div class="chat-search-results">${rows}</div>${loadOlderHTML}`;
@@ -1476,6 +1583,28 @@ function wagerAckHTML(m, self) {
 }
 export const _wagerAckHTMLForTest = wagerAckHTML;
 
+/**
+ * Drew's residual 3, verbatim: "should have a special label or opacity
+ * indicating it is private."
+ *
+ * The push self-test row (js/chat.js's `isPrivateSelfTest()`) is the only row
+ * in the Locker Room that ONE person can see. It looks like ordinary traffic
+ * to the commissioner reading it, and the sentence it carries reads like an
+ * announcement — so without this it is perfectly reasonable to think the whole
+ * league just got a "this is a test push" message from nowhere.
+ *
+ * BOTH halves, deliberately: the CHIP is the fact, at full contrast, and the
+ * dim is the at-a-glance signal. The dim is on the bubble alone and is the
+ * .chat-quote-static value already shipped in this file's stylesheet (.85),
+ * chosen because it stays comfortably above 4.5:1 in all seven themes — a
+ * treatment that makes the explanation itself hard to read would be the wrong
+ * trade. Themed vars only; no colour of its own.
+ */
+function privateRowChipHTML(m) {
+  return isPrivateSelfTest(m) ? '<span class="chat-private-chip">🔒 Only you can see this</span>' : '';
+}
+export const _privateRowChipHTMLForTest = privateRowChipHTML;
+
 function messageHTML(m, self, showNewDivider) {
   if (m.type === 'system') {
     const reveal = m.meta?.kind === 'reveal';
@@ -1498,13 +1627,15 @@ function messageHTML(m, self, showNewDivider) {
   const pending = isPending(m.id);
   const canEdit = mine && !m.deleted && Date.now() - (m.ts || 0) < EDIT_WINDOW_MS;
   const accent = accentOf(m.author);
+  const privateChip = privateRowChipHTML(m);
 
   return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
-  <div class="chat-msg${mine ? ' chat-mine' : ''}${scribe ? ' chat-scribe' : ''}${pending ? ' is-pending' : ''}${failed ? ' is-failed' : ''}" data-mid="${esc(m.id)}">
+  <div class="chat-msg${mine ? ' chat-mine' : ''}${scribe ? ' chat-scribe' : ''}${privateChip ? ' chat-msg-private' : ''}${pending ? ' is-pending' : ''}${failed ? ' is-failed' : ''}" data-mid="${esc(m.id)}">
     <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${esc(accent)};color:#fff"` : ''}>${esc(initialsOf(m.author))}</div>
     <div class="chat-bubble-col">
       <div class="chat-meta">
         <span class="chat-author">${esc(nameOf(m.author))}</span>
+        ${privateChip}
         ${pickChip(m.author, m.gameTag)}
         ${tagChipHTML(m)}
         <span class="chat-time">${relTime(m.ts)}</span>
@@ -2984,9 +3115,11 @@ export function gameChatBubbleHTML(gameId) {
   if (!isChatEnabled()) return '';
   const self = me();
   const n = getMessages({ tag: gameId, types: ['message'], respectRetention: true }).filter(m => !m.deleted).length;
-  const unread = self ? unreadCount(self, gameId) : 0;
+  const u = unreadForRender(self, gameId);
+  const unread = u.known ? Number(u.count) : 0;
   const state = unread > 0 ? 'unread' : (n > 0 ? 'read' : 'empty');
-  const countHTML = unread > 0 ? ` <span class="chat-bubble-count">${unread > 99 ? '99+' : unread}</span>` : '';
+  const badge = unreadBadgeText(u);
+  const countHTML = badge ? ` <span class="chat-bubble-count">${badge}</span>` : '';
   let text;
   if (unread > 0) {
     const names = self ? unreadAuthors(self, gameId).map(nameOf) : [];
@@ -3271,6 +3404,10 @@ export function _ackNotif(seq) { setTeaserDismissedSeq(seq); }
  *  - new activity since that acknowledgement: rendered.
  */
 export function dashboardChatTeaserHTML() {
+  // SECURITY A-1 (RG-196) — the card carries a member's NAME and 64 characters
+  // of what they wrote. See chatViewerUnresolved() for why an unknown viewer
+  // used to be the one who saw the most.
+  if (chatViewerUnresolved()) return '';
   if (!isChatEnabled()) return '';
   const self = me();
   // The newest notifying message that is STILL UNREAD for this viewer, above
@@ -3280,14 +3417,14 @@ export function dashboardChatTeaserHTML() {
   const latest = latestUnreadNotifying(self, teaserDismissedSeq());
   if (!latest) return '';
   const latestSeq = typeof latest.seq === 'number' ? latest.seq : 0;
-  const n = self ? unreadCount(self, 'all') : 0;
+  const badge = unreadBadgeText(unreadForRender(self, 'all'));
   const preview = `<strong>${esc(nameOf(latest.author))}</strong>: ${esc(latest.body.slice(0, 64))}`;
   return `
   <div class="card mb-md dash-chat-teaser" id="dash-chat-teaser" data-teaser-seq="${esc(latestSeq)}">
     <div class="dash-chat-left" data-open-chat>
       <span class="dash-chat-icon">💬</span>
       <div class="dash-chat-body">
-        <div class="dash-chat-title">Chat ${n ? `<span class="chat-unread-dot">${n > 99 ? '99+' : n}</span>` : ''}</div>
+        <div class="dash-chat-title">Chat ${badge ? `<span class="chat-unread-dot">${badge}</span>` : ''}</div>
         <div class="dash-chat-preview">${preview}</div>
       </div>
     </div>

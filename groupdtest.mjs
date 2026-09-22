@@ -1029,6 +1029,232 @@ console.log('\n[14] FEAT-5 — 🤝 wager memory: action, modal, ack controls, �
   _setWagerCacheForTest([]);
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// 15. UN-235 / DI-252 — SCRIBE autonomous PACING (hourly cap + cooldown)
+//
+// Drew, 2026-09-21: "Let's make the default cap be 4 message per hour, but the
+// commissioner can make the cap unlimited, can the cooldown period be less?"
+// and "I want to be able to set the cooldown."
+//
+// THE LOAD-BEARING ASSERTION IN THIS SECTION IS [15e], THE MERGE RULE.
+// `saveSetting('scribe', …)` replaces `value.scribe` AS A WHOLE UNIT on the
+// server (supabase-backend's `_kvFieldPatch` → `patch_kv` merge is shallow at
+// the declared field), so a whole-bag replace would silently destroy
+// `scribe.classifyDailyCap` and `scribe.monthlyBudgetUsd` — neither of which
+// has any client writer to put them back. Mutation-proven: replacing the spread
+// in setScribePacing() with a bare `{autonomousHourlyLimit, autonomousCooldownMinutes}`
+// turns [15e] red.
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[15] DI-252 — SCRIBE pacing: the hourly cap and the cooldown are commissioner-set…');
+{
+  const {
+    renderScribeParticipationCardHTML: renderPacingCard,
+    resolveScribeHourlyLimit, resolveScribeCooldownMinutes, getScribePacing,
+    setScribePacing, scribePacingHelperText, scribePacingUnlimitedWarning,
+    isServerScribeAutonomousOn, SCRIBE_PACING_SERVER_OFF_NOTE,
+  } = app;
+
+  // ── [15a] THE PARSING CONTRACT IS THE SERVER'S, VALUE FOR VALUE ──────────
+  // Asserted against the Edge Function's own source, not against a second
+  // hand-typed table: a client that disagrees with `resolveAutonomousHourlyCap`
+  // about what "4" or "0" or "\"4\"" means shows the commissioner a number the
+  // server is not obeying, which is the one failure a settings screen owns.
+  const fnSrc = await readFile(new URL('./supabase/functions/scribe-autonomous/index.js', import.meta.url), 'utf8');
+  assert(/const DEFAULT_HOURLY_CAP = 4;/.test(fnSrc) && /const DEFAULT_GLOBAL_COOLDOWN_MINUTES = 10;/.test(fnSrc),
+    '15a fixture: the server still defaults to 4/hour and a 10-minute gap (if this moves, the client defaults below move with it)');
+  for (const [raw, want, why] of [
+    [undefined, 4, 'absent'], [null, 4, 'null'], [NaN, 4, 'NaN'], [4.5, 4, 'a float'],
+    [-3, 4, 'a negative'], ['4', 4, 'a STRING, even a numeric-looking one — a runbook typo must fail toward the safe cap'],
+    [99, 4, 'above 60'], [0, 0, 'the exact integer 0 — the ONE unmistakable "unlimited"'],
+    [1, 1, 'the floor'], [12, 12, 'the menu ceiling'], [60, 60, 'the server ceiling'],
+  ]) {
+    assert(resolveScribeHourlyLimit(raw) === want,
+      `15a: hourly limit — ${why} resolves to ${want} (got ${resolveScribeHourlyLimit(raw)})`);
+  }
+  for (const [raw, want, why] of [
+    [undefined, 10, 'absent'], [null, 10, 'null'], ['10', 10, 'a string'], [2.5, 10, 'a float'],
+    [0, 10, 'ZERO — no "unlimited" reading here; a cooldown of zero is no cooldown at all, which is not what "can the cooldown be less?" asked'],
+    [-1, 10, 'a negative'], [99, 10, 'above 60'], [1, 1, 'the floor'], [2, 2, 'Drew\'s own verification value'], [60, 60, 'the ceiling'],
+  ]) {
+    assert(resolveScribeCooldownMinutes(raw) === want,
+      `15a: cooldown — ${why} resolves to ${want} (got ${resolveScribeCooldownMinutes(raw)})`);
+  }
+
+  // ── [15b] THE RENDER REFLECTS WHAT IS STORED, INCLUDING NOTHING ──────────
+  setScribeAutonomousEnabled(true);
+  storage.saveSetting('scribe', undefined);
+  const unset = renderPacingCard();
+  assert(/data-comm-tab="settings"/.test(unset) && !/data-comm-tab="(week|games|players|data)"/.test(unset),
+    '15b: RG-10 — the pacing controls inherit the dial card\'s own settings-tab wrapper and render under no other commissioner tab');
+  assert(unset.includes('Unprompted posts per hour') && unset.includes('Minimum gap between unprompted posts'),
+    '15b: both approved labels render verbatim');
+  assert(/id="scribe-hourly-limit-select"[\s\S]*?<option value="4" selected>4<\/option>/.test(unset),
+    '15b: with NOTHING stored the hourly select pre-selects 4 — the factory default, shown as a real choice rather than a blank');
+  assert(/id="scribe-cooldown-select"[\s\S]*?<option value="10" selected>10 min<\/option>/.test(unset),
+    '15b: …and the cooldown select pre-selects 10 min');
+  assert(/<option value="0" >Unlimited<\/option>/.test(unset),
+    '15b: "Unlimited" is a named OPTION, not a typed zero — the commissioner never reads the digit (DI-252 §2b.3)');
+  assert((unset.match(/id="scribe-hourly-limit-select"[\s\S]*?<\/select>/)[0].match(/<option/g) || []).length === 13,
+    '15b: twelve numbered choices plus Unlimited');
+
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 'garbage', autonomousCooldownMinutes: 0 });
+  const garbage = renderPacingCard();
+  assert(/<option value="4" selected>4<\/option>/.test(garbage) && /<option value="10" selected>10 min<\/option>/.test(garbage),
+    '15b: STORED GARBAGE renders as the defaults it resolves to, never as a blank select or as the garbage itself');
+
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 20, autonomousCooldownMinutes: 7 });
+  const offMenu = renderPacingCard();
+  assert(/<option value="20" selected>20<\/option>/.test(offMenu) && /<option value="7" selected>7 min<\/option>/.test(offMenu),
+    '15b: a legitimate value the MENU does not carry (the server accepts 1–60, and the runbook\'s SQL can set one) is inserted and selected — the card must never show a different number from the one the server is obeying');
+
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 0, autonomousCooldownMinutes: 2 });
+  const unlim = renderPacingCard();
+  assert(/<option value="0" selected>Unlimited<\/option>/.test(unlim), '15b: a stored 0 renders as Unlimited selected');
+  assert(!/<option value="(1|2|3|4|5|6|7|8|9|10|11|12)" selected>/.test(unlim.match(/id="scribe-hourly-limit-select"[\s\S]*?<\/select>/)[0]),
+    '15b: …and no numbered option is selected at the same time');
+  assert(unlim.includes('Unlimited at a 2-minute gap could post up to 30 times an hour'),
+    '15b: the Unlimited warning renders only while Unlimited is chosen, computed from the LIVE gap');
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10 });
+  assert(!renderPacingCard().includes('Unlimited at a'),
+    '15b: …and it is ABSENT at a bounded cap (a standing warning is a warning nobody reads)');
+
+  // ── [15c] THE DIAL'S OWN COPY STOPPED LYING ─────────────────────────────
+  // DI-252 §2b.1: that sentence hard-coded "The 10-minute cooldown applies at
+  // every level" while this change makes the number configurable.
+  storage.saveSetting('scribe', { autonomousCooldownMinutes: 3 });
+  assert(renderPacingCard().includes('The 3-minute cooldown applies at every level.'),
+    '15c: the dial\'s cooldown sentence reads the LIVE value');
+  assert(!renderPacingCard().includes('The 10-minute cooldown applies'),
+    '15c: …and the hard-coded "10-minute" claim is gone');
+  storage.saveSetting('scribe', { autonomousCooldownMinutes: 10 });
+  assert(renderPacingCard().includes('The 10-minute cooldown applies at every level.'),
+    '15c: …which still reads 10 when 10 is what is stored — the number moved, the sentence did not');
+
+  // ── [15d] THE HELPER MATH ────────────────────────────────────────────────
+  // Coordinator ruling (2): the $0.03/post CEILING, never the floor or a
+  // midpoint. Under-stating what SCRIBE costs is the one direction this line
+  // must not err in.
+  assert(scribePacingHelperText({ hourlyLimit: 4, cooldownMinutes: 10 })
+      === 'At most 4 posts an hour, at least 10 minutes apart — about 12¢ an hour at the very most.',
+    `15d: the DI's own worked example, verbatim (got ${JSON.stringify(scribePacingHelperText({ hourlyLimit: 4, cooldownMinutes: 10 }))})`);
+  assert(scribePacingHelperText({ hourlyLimit: 1, cooldownMinutes: 1 })
+      === 'At most 1 post an hour, at least 1 minute apart — about 3¢ an hour at the very most.',
+    `15d: singular "post" and "minute" at 1 and 1 (got ${JSON.stringify(scribePacingHelperText({ hourlyLimit: 1, cooldownMinutes: 1 }))})`);
+  assert(scribePacingHelperText({}) === scribePacingHelperText({ hourlyLimit: 4, cooldownMinutes: 10 }),
+    '15d: an unset pair reads as the defaults it will actually run under');
+  assert(scribePacingHelperText({ hourlyLimit: 0, cooldownMinutes: 10 })
+      === 'As many posts as the 10-minute gap allows — about 18¢ an hour at the very most.',
+    `15d: Unlimited substitutes 60/gap for the cap — six posts, 18¢ (got ${JSON.stringify(scribePacingHelperText({ hourlyLimit: 0, cooldownMinutes: 10 }))})`);
+  assert(scribePacingHelperText({ hourlyLimit: 0, cooldownMinutes: 1 })
+      === 'As many posts as the 1-minute gap allows — about $1.80 an hour at the very most.',
+    `15d: past a dollar the phrase becomes dollars, not "180¢" (got ${JSON.stringify(scribePacingHelperText({ hourlyLimit: 0, cooldownMinutes: 1 }))})`);
+  assert(scribePacingUnlimitedWarning({ cooldownMinutes: 60 })
+      === "Unlimited at a 60-minute gap could post up to 1 time an hour — about 3¢/hour at the high end. Your $25/month budget still stops SCRIBE if it's reached.",
+    `15d: the warning is singular at one-an-hour and always names the $25/month ceiling (got ${JSON.stringify(scribePacingUnlimitedWarning({ cooldownMinutes: 60 }))})`);
+  assert(/\$25\/month/.test(scribePacingUnlimitedWarning({ cooldownMinutes: 10 })),
+    '15d: …the ceiling Drew called "stays regardless" is named on every Unlimited warning');
+
+  // ── [15e] THE MERGE RULE — SIBLINGS SURVIVE A SAVE ──────────────────────
+  storage.saveSetting('scribe', {
+    classifyDailyCap: 40, monthlyBudgetUsd: 25,
+    autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10,
+  });
+  storage.saveSetting('serverJobs', { scribeAutonomous: false, notifyFanout: true });
+  storage.saveSetting('serverJobsFlippedAt', { notifyFanout: '2026-09-20T00:00:00.000Z' });
+
+  const res = setScribePacing({ hourlyLimit: 0, cooldownMinutes: 2 });
+  assert(res.ok === true && res.hourlyLimit === 0 && res.cooldownMinutes === 2,
+    '15e: choosing Unlimited + a 2-minute gap reports back exactly what it stored');
+  const bag = storage.getSettings().scribe;
+  assert(bag.autonomousHourlyLimit === 0,
+    `15e: Unlimited is written as the INTEGER 0 — not null, not absent, not the string "0" (got ${JSON.stringify(bag.autonomousHourlyLimit)}), because 0 is the only value resolveAutonomousHourlyCap() reads as unlimited`);
+  assert(bag.autonomousCooldownMinutes === 2, '15e: …and the cooldown alongside it');
+  assert(bag.classifyDailyCap === 40,
+    `15e: MERGE RULE — scribe.classifyDailyCap survives the save (got ${JSON.stringify(bag.classifyDailyCap)}). scribe-classify is its only reader and NOTHING on the client would ever write it back; a whole-bag replace here loses it silently and permanently.`);
+  assert(bag.monthlyBudgetUsd === 25, '15e: …and scribe.monthlyBudgetUsd, the ceiling the Unlimited warning promises still applies');
+  assert(storage.getSettings().serverJobs.scribeAutonomous === false
+      && storage.getSettings().serverJobs.notifyFanout === true,
+    '15e: …and the separate top-level serverJobs map is untouched (a saveSettings() whole-blob write is what would have taken it)');
+  assert(storage.getSettings().serverJobsFlippedAt.notifyFanout === '2026-09-20T00:00:00.000Z',
+    '15e: …and serverJobsFlippedAt with it');
+  assert(storage.getSettings().autonomousHourlyLimit === undefined,
+    '15e: NOTHING is written at the TOP level — the server reads these two keys from inside `scribe`, so a top-level write is a value nothing will ever read');
+  assert(getScribePacing().hourlyLimit === 0 && getScribePacing().cooldownMinutes === 2,
+    '15e: getScribePacing() reads back what was just saved — one definition, card and copy alike');
+  {
+    const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const fn = src.slice(src.indexOf('export function setScribePacing'), src.indexOf('function scribeChoiceOptions'));
+    assert(/\.\.\.\(getSettings\(\)\.scribe \|\| \{\}\)/.test(fn),
+      '[15e structural] the write read-modify-writes the NESTED bag — the serverJobs precedent (js/app.js:11128), not a fresh object');
+    assert(!/saveSettings\(/.test(fn), '[15e structural] never saveSettings() — a whole-blob replace declares no field and can send a stale mirror over a fresh remote (RG-24/49/55)');
+    assert(!/localStorage/.test(fn), '[15e structural] and never localStorage directly (AD-02)');
+  }
+
+  // ── [15f] THE HONEST SERVER-OFF NOTE ────────────────────────────────────
+  assert(isServerScribeAutonomousOn() === false,
+    '15f fixture: settings.serverJobs.scribeAutonomous is false — today\'s real state');
+  assert(renderPacingCard().includes(SCRIBE_PACING_SERVER_OFF_NOTE),
+    '15f: with the server job OFF the card SAYS SO, in place, without hover (coordinator ruling (1): show the controls with the honest note — hiding them would defeat Drew asking to be able to set them)');
+  storage.saveSetting('serverJobs', { scribeAutonomous: true });
+  assert(isServerScribeAutonomousOn() === true && !renderPacingCard().includes(SCRIBE_PACING_SERVER_OFF_NOTE),
+    '15f: …and the note disappears the moment the job is switched on');
+  storage.saveSetting('serverJobs', { scribeAutonomous: false });
+
+  // ── [15g] OFF-STATE + ESCAPING + TAP TARGETS ────────────────────────────
+  setScribeAutonomousEnabled(false);
+  const dimmed = renderPacingCard();
+  assert(/class="scribe-pacing notif-prefs-row-dim"/.test(dimmed),
+    '15g: with the dial OFF the pacing group takes the dial\'s own dim treatment — these numbers mean nothing until SCRIBE can post at all');
+  setScribeAutonomousEnabled(true);
+  assert(/class="scribe-pacing"/.test(renderPacingCard()), '15g: …and is live again when it is on');
+  const live = renderPacingCard();
+  assert(!/<script|onerror=|javascript:/i.test(live), '15g: no script sink in the rendered card');
+  assert(/<button class="btn btn-secondary btn-sm" id="scribe-pacing-save-btn">Save<\/button>/.test(live),
+    '15g: the Save button reuses the existing .btn.btn-secondary.btn-sm, matching the refresh-interval Save beside it');
+  {
+    const css = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+    assert(/\.scribe-pacing \.btn-sm\{min-height:44px\}/.test(css),
+      '15g: CONVENTIONS #17 — .btn-sm ships at 34px, so the pacing Save is lifted to 44 in place (the .gr-row-action precedent)');
+    const block = css.slice(css.indexOf('.scribe-pacing{'), css.indexOf('.scribe-pacing p:empty'));
+    assert(!/#[0-9a-fA-F]{3,8}\b/.test(block),
+      `15g: no hex literal in the new CSS — every colour is a theme var, so all seven themes get it for free (got ${JSON.stringify(block)})`);
+  }
+  // Emoji only (CONVENTIONS #16) — the two glyphs this feature introduces.
+  assert(!/<svg/i.test(live.slice(live.indexOf('scribe-pacing'))), '15g: no inline SVG — the bottom-nav exception is not widened');
+
+  // ── [15h] THE HANDLER AND THE RENDER NAME THE SAME ELEMENTS ─────────────
+  // The click handler lives inside renderCommPage()'s wiring block and cannot
+  // be reached without a live DOM (the RG-27 shape). What CAN drift silently is
+  // the pair of ids: a renamed select would leave the Save button reading
+  // `undefined` from `getElementById(...)?.value`, which parseInt turns into
+  // NaN, which resolves to the DEFAULTS — a Save that quietly reset both
+  // settings and toasted success. So the ids are pinned on both sides.
+  {
+    const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const wiring = src.slice(src.indexOf("const readPacingSelects = () =>"), src.indexOf("document.getElementById('ep-detect-btn')"));
+    for (const id of ['scribe-hourly-limit-select', 'scribe-cooldown-select', 'scribe-pacing-helper', 'scribe-pacing-warning', 'scribe-pacing-save-btn']) {
+      assert(wiring.includes(`'${id}'`) && live.includes(`id="${id}"`),
+        `15h: #${id} is named by BOTH the handler and the rendered card — a rename on one side alone would make Save silently store the defaults and toast success`);
+    }
+    assert(/setScribePacing\(readPacingSelects\(\)\)/.test(wiring),
+      '15h: the Save button drives the REAL setScribePacing() — the same function [15e] mutation-proved, not a second copy of the merge');
+    // DI-252's copy, with punctuation moved off the `— SCRIBE` shape loadtest
+    // §[65] forbids app-wide (a retired v2.1 voice tic). Every word survives.
+    assert(/catch \(err\)[\s\S]{0,700}Pacing settings did not save\. SCRIBE is still using the old limits — try again\.'/.test(wiring),
+      '15h: AD-06 loud-fail — a throw from the seam produces an error toast naming what SCRIBE is STILL obeying, never a success toast on a write that failed');
+    const successAt = wiring.indexOf("'⏱ Pacing settings saved'");
+    const saveAt = wiring.indexOf('setScribePacing(readPacingSelects())');
+    assert(successAt > saveAt && successAt < wiring.indexOf('} catch'),
+      '15h: …and the success toast sits INSIDE the try, after the write — not before it and not in a finally');
+    assert(/refreshPacingCopy\)/.test(wiring) && (wiring.match(/addEventListener\('change', refreshPacingCopy\)/g) || []).length === 2,
+      '15h: BOTH selects refresh the helper/warning copy live, so the sentence describes what is on screen rather than what was last saved');
+  }
+
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10 });
+  storage.saveSetting('serverJobs', undefined);
+  storage.saveSetting('serverJobsFlippedAt', undefined);
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.

@@ -2579,6 +2579,9 @@ console.log('\n[26] SEC F3 — sign-out leaves no auth artefact on the device…
   // "KEEP entries survive" loop below is measuring them and not skipping them.
   localStorage.setItem('cfbp_scribe_ledger', '{"abc123":1758000000000}');
   localStorage.setItem('cfbp_scribe_lastpost', '{"":1758000000000}');
+  // RG-196 (2026-09-21) — the owner-stamped chat read cursor, seeded for the
+  // same reason: it is a KEEP entry now, so the loop below must measure it.
+  localStorage.setItem('cfbp_chat_lastseen2', '{"seq":84,"byTag":{},"owner":"1f2k960"}');
   localStorage.setItem('someone_elses_app_key', 'not-ours');
   await auth.signOut();
   for (const k of ['cfbp_players', 'cfbp_picks', 'cfbp_comments', 'cfbp_supabase_active_league_notes']) {
@@ -2602,9 +2605,18 @@ console.log('\n[26] SEC F3 — sign-out leaves no auth artefact on the device…
     // and LOOSENS a rate limiter, which is the wrong direction for a handover.
     'cfbp_scribe_ledger',
     'cfbp_scribe_lastpost',
+    // RG-196 (2026-09-21): the chat READ CURSOR. `{seq, byTag, owner: digest}`
+    // — integers and an opaque token, no content and no identity in the clear.
+    // Deleting it was the only way an unkeyed cursor could be kept from the
+    // next account, and it destroyed the DEPARTING player's read position as
+    // well (Drew's "84 unread messages even tho I've already seen them").
+    // js/chat.js now stamps it with whose it is, so a cursor that is not yours
+    // reads as ZERO — the same property, on every path, including the ones a
+    // key-name sweep cannot reach. Behaviour guarded by unreadtest.mjs.
+    'cfbp_chat_lastseen2',
   ];
   assert(JSON.stringify([...auth._CLEAR_KEEP_KEYS_FOR_TEST].sort()) === JSON.stringify([...EXPECTED_KEEP].sort()),
-    `SEC F-1 / reviewer F-2 — the KEEP-list is exactly the seven justified entries and nothing else (got ${JSON.stringify(auth._CLEAR_KEEP_KEYS_FOR_TEST)}). An eighth entry added without a justification beside it, or one of these quietly dropped, is the whole failure mode an include-list had.`);
+    `SEC F-1 / reviewer F-2 — the KEEP-list is exactly the eight justified entries and nothing else (got ${JSON.stringify(auth._CLEAR_KEEP_KEYS_FOR_TEST)}). A ninth entry added without a justification beside it, or one of these quietly dropped, is the whole failure mode an include-list had.`);
   for (const k of EXPECTED_KEEP) {
     if (k === auth._DEVICE_DATA_OWNER_KEY_FOR_TEST || k === auth._ACTIVE_LEAGUE_KEY_FOR_TEST) continue;   // both removed by signOut() on its own lines
     assert(localStorage.getItem(k) !== null,
@@ -3199,7 +3211,11 @@ console.log('\n[29] DI-180o(b) — an EXPIRY suspends the slate; it does not dis
     const dev = await expireMidSlate();
     // A9's timing: the previous player's device-local data is still here while
     // the same player might come back…
-    localStorage.setItem('cfbp_chat_lastseen2', '{"x":1}');
+    // RG-196 (2026-09-21) — the CACHED ROOM, not the read cursor. The cursor is
+    // no longer swept (it is owner-stamped and reads as zero for anybody else —
+    // js/auth.js `_CLEAR_KEEP_KEYS`, proven in unreadtest.mjs), so the key that
+    // carries this claim here is the one holding actual message CONTENT.
+    localStorage.setItem('cfbp_chat_events_cache', '{"epoch":0,"head":4,"events":[{"id":"e1","body":"Drew: taking the points"}]}');
     assert(!!app._suspendedSlateForTest(), 'fixture: a slate is suspended before the handover');
     dev.setRows([ROW_KEVIN]);
     dev.setUser({ id: 'u-kevin', email: 'kevin@example.com' });
@@ -3212,8 +3228,8 @@ console.log('\n[29] DI-180o(b) — an EXPIRY suspends the slate; it does not dis
       'expiry -> DIFFERENT-account sign-in WIPES the suspended slate (RG-51 preserved: player A\'s slate can never pre-fill player B\'s)');
     assert(Object.keys(app.state.draftPicks).length === 0 && app.state.draftTiebreaker === null && app.state.draftExtraPoint === null,
       '…and nothing from it is in state either');
-    assert(localStorage.getItem('cfbp_chat_lastseen2') === null,
-      'A9 — …and THIS is the moment the previous player\'s device-local data is cleared on the expiry path (chat cache, cursors, notify log, outbox, mirror)');
+    assert(localStorage.getItem('cfbp_chat_events_cache') === null,
+      'A9 — …and THIS is the moment the previous player\'s device-local data is cleared on the expiry path (chat cache, notify log, outbox, mirror)');
   }
   // …and the wipe happens BEFORE the first render, which is an ORDERING claim
   // about refreshAuthUI() and is therefore read off the source: the chokepoint
@@ -3583,8 +3599,15 @@ console.log('\n[31] A9 — expiry-clear and signOut() leave the SAME device-loca
   //
   // Asserted as a SET DIFFERENCE, not as two lists that happen to agree today.
   const K31 = auth._AUTH_STORAGE_KEY_FOR_TEST;
+  // RG-196 (2026-09-21) — seeded explicitly because the read cursor is no
+  // longer in `_SIGNOUT_LOCAL_KEYS`. Stamped for a member who signs in on
+  // NEITHER path, so "it survived" and "it is inert to whoever is here now"
+  // are both real questions at the bottom of this section.
+  const LASTSEEN31 = 'cfbp_chat_lastseen2';
+  const LASTSEEN_PAYLOAD31 = JSON.stringify({ seq: 99, byTag: { g1: 99 }, owner: 'somebody-else' });
   const SEED = () => {
     for (const k of auth._SIGNOUT_LOCAL_KEYS_FOR_TEST) localStorage.setItem(k, `payload-${k}`);
+    localStorage.setItem(LASTSEEN31, LASTSEEN_PAYLOAD31);
     localStorage.setItem(`${K31}-code-verifier`, 'v');
     localStorage.setItem('cfbp_sheet_mirror', '{"at":"x","data":{"cfbp_picks":[]}}');   // js/backend.js:39 MIRROR_KEY
     localStorage.setItem('cfbp_players', '[]');
@@ -3624,8 +3647,10 @@ console.log('\n[31] A9 — expiry-clear and signOut() leave the SAME device-loca
   for (let i = 0; i < 8; i++) await new Promise(r => setTimeout(r, 0));
   // A9's TIMING, asserted before the handover: the returning player's own room
   // is still here, because it might still be their device.
-  assert(localStorage.getItem('cfbp_chat_lastseen2') !== null,
-    'A9 timing — at the MOMENT OF EXPIRY the chat cache/cursors/outbox are still on the device: the same player signing straight back in must find their room where they left it');
+  // RG-196 — asked of the CACHED ROOM (a key SEED() still seeds, because it is
+  // still swept). The read cursor left this list when it became owner-stamped.
+  assert(localStorage.getItem('cfbp_chat_events_cache') !== null,
+    'A9 timing — at the MOMENT OF EXPIRY the chat cache/outbox are still on the device: the same player signing straight back in must find their room where they left it');
   failing31 = false;
   rows31 = [ROW31B];
   storeValidSession();
@@ -3694,6 +3719,19 @@ console.log('\n[31] A9 — expiry-clear and signOut() leave the SAME device-loca
   }
   assert(!afterExpiryHandover.has('cfbp_sheet_mirror') && !afterSignOut.has('cfbp_sheet_mirror'),
     'A9 — …and the local mirror backup on both paths, through backend.js\'s own exported clearMirror()');
+  // ── RG-196 (2026-09-21) — THE ONE KEY THAT NOW SURVIVES BOTH PATHS ────────
+  // The chat read cursor left `_SIGNOUT_LOCAL_KEYS` (so the two loops above no
+  // longer cover it) because deleting it also destroyed the DEPARTING player's
+  // own read position — Drew's "84 unread messages even tho I've already seen
+  // them". It is owner-stamped instead, which is a stronger guard on the
+  // handover path than deletion was: it holds even where a key-name sweep
+  // cannot reach (a handover the app never noticed, a store that refuses
+  // removals). Asserted here, in the section that owns the two-path contract,
+  // so the exemption cannot quietly widen.
+  assert(snapSignOut.get(LASTSEEN31) === LASTSEEN_PAYLOAD31 && snapExpiry.get(LASTSEEN31) === LASTSEEN_PAYLOAD31,
+    `RG-196 — the read cursor survives BOTH paths byte-for-byte (sign-out ${JSON.stringify(snapSignOut.get(LASTSEEN31))}, handover ${JSON.stringify(snapExpiry.get(LASTSEEN31))}) — the ONE key the sweep now exempts, by name, in _CLEAR_KEEP_KEYS`);
+  assert(chat.getLastSeen().seq === 0,
+    `…and it is INERT to the member now at this device: a stamp that is not theirs reads as a ZERO cursor (got ${chat.getLastSeen().seq}), which is the property deletion used to buy. unreadtest.mjs drives the same rule through the real unread count.`);
 
   // ONE ROUTINE, read structurally: both callers must call it, and neither may
   // carry a second hand-written list.
@@ -6137,8 +6175,16 @@ console.log('\n[42] DI-180q — whose data is on this phone? (Drew\'s ruling, op
   /** Everything a previous player leaves on a handset, including the UNSENT
    *  outbox and the local mirror. Seeded so every "it was cleared" below is
    *  about something that demonstrably existed. */
+  //
+  //  RG-196 (2026-09-21) — `cfbp_chat_lastseen2` USED TO BE THE FIRST ENTRY
+  //  HERE. It is no longer a SWEPT key: js/chat.js stamps the read cursor with
+  //  an opaque digest of whose it is, so B reads ZERO off A's cursor instead of
+  //  the sweep having to delete it — which also destroyed A's OWN read position
+  //  and is the defect Drew reported. The claim this block makes about it is
+  //  therefore a different claim ("it is inert to B", asserted in unreadtest.mjs
+  //  §[1]/§[3]/§[6] against the real signOut() and the real cursor), and leaving
+  //  it in A_DATA would assert the OLD contract while the new one holds.
   const A_DATA = {
-    cfbp_chat_lastseen2: '412',
     cfbp_chat_outbox2: JSON.stringify([{ id: 'o1', body: 'kevin you are cooked', author: 'mA' }]),
     cfbp_chat_epoch_applied: '7',
     cfbp_chat_events_cache: JSON.stringify([{ id: 'e1', author: 'mA', body: 'Drew: taking the points' }]),
@@ -9560,6 +9606,171 @@ console.log('\n[49] Step 6 Phase 4 (trainer) — the LOW-FREQUENCY staleness rul
   app._resetAuthHoldForTest();
   auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
   storage.setBackendMode('local');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[50] RG-195 — the Picks page\'s "Log Out" button is PIN-era, and in supabase mode it does nothing…');
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// DREW, verbatim, 2026-09-21: "Log out button in picks [no] longer works, can
+// remove altogether bc you can signout from the header."
+//
+// HE IS RIGHT ABOUT BOTH HALVES. The handler is
+// `clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage();`
+// — a PIN-era session clear. In authMode:'supabase' getSession() no longer READS
+// `cfbp_session` at all (it is synthesized from the membership cache in
+// js/auth.js), so clearSession() changes nothing the next getSession() can
+// observe: the page re-renders with the same player still signed in. It is the
+// same mode confusion the SEC-concern-1 recursion guard forty lines above it
+// documents — that guard exists because the identical call, on the identical
+// page, is inert in this mode.
+//
+// THE FIX IS AT THE RENDER, NOT AT THE HANDLER. Three call sites painted that
+// button (the locked-week state, the pick form, the submitted view) and each
+// made the same mode judgement inline, which is three places for the next person
+// to disagree with themselves. They now share ONE function, and that function is
+// what this section drives — in both modes, because "removed" must not mean
+// "removed for the PIN players too": CLAUDE.md's locked decision keeps the PIN
+// model in the code, and in that mode this button is the ONLY way to switch
+// player.
+{
+  const appSrc50 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  assert(typeof app._picksLogoutButtonHTMLForTest === 'function',
+    '[50] fixture: the ONE render decision is exported, so this section drives the real function rather than a lookalike');
+  const btnHTML = (...a) => (typeof app._picksLogoutButtonHTMLForTest === 'function'
+    ? app._picksLogoutButtonHTMLForTest(...a) : '<not exported>');
+
+  // ── (a) SUPABASE MODE — nothing at all, in all three states ──────────────
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  assert(auth.getAuthMode() === 'supabase', '[50] fixture: the device is in supabase auth mode');
+  assert(btnHTML('Log Out') === '',
+    `[50] the pick form renders NO logout button in supabase mode (got ${JSON.stringify(btnHTML('Log Out'))}) — a control that cannot do what it says is worse than no control`);
+  assert(btnHTML('Log Out / Switch Player', 'mt-md') === '',
+    '[50] …and neither does the locked-week state, spacer class and all: the mt-md rides on the BUTTON, so there is no orphaned spacer left behind');
+
+  // ── (b) PIN MODE — byte-for-byte what it has always rendered ─────────────
+  auth.configureAuth({ authMode: 'pins' });
+  assert(auth.getAuthMode() === 'pins', '[50] fixture: the device is in PIN mode');
+  assert(btnHTML('Log Out') === '<button class="btn btn-ghost btn-sm" id="logout-btn">Log Out</button>',
+    `[50] PIN mode is untouched — the pick form's button is byte-identical to the markup it has shipped with (got ${JSON.stringify(btnHTML('Log Out'))}). In that mode this is the only way to switch player, and the PIN model stays in the code (CLAUDE.md, locked)`);
+  assert(btnHTML('Log Out / Switch Player', 'mt-md') === '<button class="btn btn-ghost btn-sm mt-md" id="logout-btn">Log Out / Switch Player</button>',
+    `[50] …and so is the locked-week variant, including its mt-md (got ${JSON.stringify(btnHTML('Log Out / Switch Player', 'mt-md'))})`);
+
+  // ── (c) ONE DECISION, NOT FOUR ───────────────────────────────────────────
+  // The id may appear exactly once in the file: inside the helper. A fourth
+  // hand-written copy is how three call sites disagreed in the first place.
+  const idLiterals50 = (appSrc50.match(/id="logout-btn"/g) || []).length;
+  assert(idLiterals50 === 1,
+    `[50] \`id="logout-btn"\` is written exactly ONCE in js/app.js — inside the one function that decides (found ${idLiterals50}) [structural]`);
+  const callSites50 = (appSrc50.match(/picksLogoutButtonHTML\(/g) || []).length;
+  assert(callSites50 === 4,
+    `[50] …and it is reached from the three Picks-page renders (plus its own declaration): 4 occurrences, found ${callSites50} [structural]`);
+
+  // ── (d) NO EMPTY WRAPPER, AND NO EMPTY ROW ───────────────────────────────
+  // Removing the button may not leave a 44px hole. Two shapes are checked: a
+  // <div> whose only child was the button, and the two `flex-between` header
+  // rows it shared with the player's name (which stay non-empty, so they hold
+  // their own height and simply left-align).
+  assert(!/<div[^>]*>\s*\$\{picksLogoutButtonHTML\([^}]*\}\s*<\/div>/.test(appSrc50),
+    '[50] no call site is the sole child of a wrapper div — nothing can collapse to an empty box [structural]');
+  // The 400 characters of template ABOVE each interpolation — a nested </div>
+  // makes "the row element" unmatchable with a regex, and the question here is
+  // only "what else is in this row with it".
+  const callCtx50 = [...appSrc50.matchAll(/\$\{picksLogoutButtonHTML\(/g)]
+    .map(m => appSrc50.slice(Math.max(0, m.index - 400), m.index));
+  assert(callCtx50.length === 3,
+    `[50] fixture: three template call sites were located (found ${callCtx50.length}) [structural]`);
+  const rows50 = callCtx50.filter(ctx => /<div class="flex-between mb-md">/.test(ctx));
+  assert(rows50.length === 2,
+    `[50] fixture: two of the three call sites live in a flex-between header row (found ${rows50.length}) [structural]`);
+  assert(rows50.every(r => /escHtml\(displayName\)/.test(r)),
+    '[50] …and both rows still render the player\'s name, so the row keeps its height and its content when the button goes [structural]');
+  assert(callCtx50.filter(ctx => !/<div class="flex-between mb-md">/.test(ctx))
+    .every(ctx => /week-status-card|week-status-body/.test(ctx)),
+    '[50] …and the third is a top-level element after the locked-week card, wrapped in nothing at all [structural]');
+
+  // ── (e) WHAT MUST NOT MOVE ───────────────────────────────────────────────
+  // "Player picks are editable while the slate is open" is a locked decision,
+  // and the Edit button sits in the same submitted view this section edits.
+  assert(/id="edit-picks-btn">✏️ Edit My Picks<\/button>/.test(appSrc50),
+    '[50] the submitted view\'s "Edit My Picks" button is untouched (locked decision: submitting does not lock) [structural]');
+  assert((appSrc50.match(/document\.getElementById\('logout-btn'\)\?\.addEventListener/g) || []).length === 3,
+    '[50] …and all three PIN-mode handler bindings are still wired, unchanged — the fix is a render decision, not a deleted code path (they bind nothing when the button is absent, which is what `?.` is for) [structural]');
+  assert((appSrc50.match(/clearSession\(\); clearPickDraft\(\); resyncPlayerPreferences\(\); renderPicksPage\(\);/g) || []).length >= 3,
+    '[50] …including the draft reset persisttest\'s "every session change in the picks flow clears the draft" rule scans for [structural]');
+
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[51] SECURITY A-3 — "Logout Commissioner" is dead in supabase mode, and says the opposite…');
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// THE SAME DEFECT AS [50], ONE TAB OVER, and worse in one respect. The Data
+// tab's #logout-comm-btn handler is
+// `const s = getSession(); setSession(s.playerId, false, s.playerVerified);`
+// — drop the admin flag on the PIN-era record. In supabase mode js/storage.js's
+// setSession() REFUSES the write outright (it warns and returns, so a rollback
+// to pins cannot read a stale commissioner back), and getSession() is
+// synthesized from the membership role anyway. So the tap writes nothing, drops
+// nothing, and the commissioner panel stays exactly as it was.
+//
+// WHY THAT IS WORSE THAN THE PICKS BUTTON. A button labelled "🚪 Logout
+// Commissioner" that appears to succeed tells the person holding the handset
+// that elevated privilege has been PUT DOWN. It has not. Handing someone a
+// phone after tapping it leaves them with the full commissioner surface.
+//
+// Removed in supabase mode (coordinator ruling, consistent with Drew's
+// instruction to remove the equally dead Picks logout; he can veto). PIN mode —
+// where the handler works and is the only way to step down — is byte-identical.
+{
+  const appSrc51 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  assert(typeof app._commLogoutButtonHTMLForTest === 'function',
+    '[51] fixture: the one render decision is exported, so this drives the real function');
+  const commBtn = () => (typeof app._commLogoutButtonHTMLForTest === 'function'
+    ? app._commLogoutButtonHTMLForTest() : '<not exported>');
+
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  assert(commBtn() === '',
+    `[51] supabase mode renders NO "Logout Commissioner" button (got ${JSON.stringify(commBtn())}) — js/storage.js's setSession() refuses the write it depends on, so the control could only ever lie about having dropped privilege`);
+
+  auth.configureAuth({ authMode: 'pins' });
+  assert(commBtn() === '<button class="btn btn-ghost btn-sm" id="logout-comm-btn">🚪 Logout Commissioner</button>',
+    `[51] PIN mode is byte-identical to the markup it has always shipped (got ${JSON.stringify(commBtn())}) — in that mode the handler works and is the only way to step down`);
+
+  const idLiterals51 = (appSrc51.match(/id="logout-comm-btn"/g) || []).length;
+  assert(idLiterals51 === 1,
+    `[51] \`id="logout-comm-btn"\` is written exactly once in js/app.js — inside the one function that decides (found ${idLiterals51}) [structural]`);
+  // NO EMPTY WRAPPER. The button shares a `flex gap-sm flex-wrap` row with Full
+  // Factory Reset, which has itself been hidden in dataMode:'supabase' since
+  // Step 4 — so on the LIVE league both children are gone and the row would
+  // render as an empty flex container under a divider. That is the "44px hole"
+  // in its other form, and it is checked by driving the row, not by reading it.
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  assert(app._dataActionsRowHTMLForTest() === '',
+    `[51] on the live league (both flags supabase) the whole action ROW is gone, not an empty <div> under the divider (got ${JSON.stringify(app._dataActionsRowHTMLForTest())})`);
+  auth.configureAuth({ authMode: 'pins' });
+  const pinsRow51 = app._dataActionsRowHTMLForTest();
+  assert(/flex gap-sm flex-wrap/.test(pinsRow51) && /id="reset-demo-btn"/.test(pinsRow51) && /id="logout-comm-btn"/.test(pinsRow51),
+    `[51] …and in PIN mode the row is exactly what it always was, both buttons in it (got ${JSON.stringify(pinsRow51)})`);
+  // Spliced with `+` rather than `${}` on purpose — see the function's own
+  // comment: a call interpolated into a markup template would be a new site on
+  // xsstest's [9c-2] backlog, and this one emits only its own literal markup.
+  assert(/\+ dataActionsRowHTML\(\) \+/.test(appSrc51),
+    '[51] …and the Data Management card reaches it through that one function [structural]');
+  assert((appSrc51.match(/document\.getElementById\('logout-comm-btn'\)\?\.addEventListener/g) || []).length === 1,
+    '[51] the PIN-mode handler is still wired, unchanged — this is a render decision, not a deleted code path [structural]');
+
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
 }
 
 // ── REVIEWER F8 (sixth gate, 2026-09-17) — THE SUMMARY LINE MUST SURVIVE THE

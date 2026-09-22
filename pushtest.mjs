@@ -1050,8 +1050,22 @@ console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
       '11-28: …and with real eligibility data the hedge disappears');
     assert(/no device registered/.test(l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null).text),
       '11-29: zero devices — the one fact this check proves decisively');
-    assert(/accept the notification prompt/.test(l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null).action),
-      '11-30: …with the per-state ACTION line DI-206e requires: what to actually tell that player');
+    // 2026-09-21 — the pin moved with the copy. The old line told the
+    // commissioner to have the player "accept the notification prompt (or
+    // re-add it to the home screen)", which describes a FIRST INSTALL. A player
+    // whose subscription lapsed sees no prompt at all and would re-add the app
+    // for nothing; the 🔔 screen's Reconnect button is the actual repair.
+    {
+      const zero11 = l({ memberId: 'p2', deviceCount: 0, kinds: [], lookupOk: true }, null);
+      assert(zero11.action === 'Tell Brayden to open the app, tap the 🔔 bell, and tap Reconnect if it shows.',
+        `11-30: …with the per-state ACTION line DI-206e requires: what to actually tell that player. Got ${JSON.stringify(zero11.action)}`);
+      assert(/tap the 🔔 bell, and tap Reconnect if it shows\.$/.test(zero11.action),
+        '11-30a: …naming the 🔔 bell and Reconnect — the control that exists, not a first-install prompt a lapsed subscriber will never see');
+      assert(!/notification prompt|home screen/i.test(zero11.action),
+        '11-30b: …and no longer sends them to re-add the app to the home screen for nothing');
+      assert(zero11.text === "Brayden — no device registered. They won't get any push until they do.",
+        `11-30c: the headline stays short and honest — the fact, then the consequence, and nothing it cannot prove. Got ${JSON.stringify(zero11.text)}`);
+    }
     const failed = l({ memberId: 'p1', deviceCount: null, kinds: [], lookupOk: false }, null);
     assert(/couldn't check/.test(failed.text) && !/no device/.test(failed.text),
       '11-31: C1 — a FAILED LOOKUP renders as "couldn\'t check" and NEVER as "no device". Telling Drew that Kevin has no phone when OneSignal simply did not answer sends him to Kevin with the wrong instruction');
@@ -2027,6 +2041,141 @@ console.log('\n[13] RG-193 — the copy for "OneSignal has no device for this ac
   const appSrc13 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
   assert(/jobCountsSummary\(/.test(appSrc13),
     '13-14: …and app.js actually renders through it — a pure copy function nothing calls is a sentence nobody reads');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [14] DREW'S RESIDUAL 3 — THE PRIVATE ROW SAYS SO, AND BADGES NOBODY
+//
+// Verbatim: "should have a special label or opacity indicating it is private."
+//
+// The self-test row is the only row in the Locker Room that ONE person can
+// see. Reading it, it is indistinguishable from an announcement the whole
+// league just received. `visible_to` — the column that actually makes it
+// private — is not selectable by the client at all (not in SB_MESSAGE_COLS,
+// not granted to `authenticated`), so the recognisable shape is the RPC's own
+// construction: `sys_test_` id + author 'system' + meta.test === true.
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[14] Drew residual 3 — the private self-test row is labelled, subdued, and badges nobody…');
+{
+  const chat14 = await import('./js/chat.js');
+  const chatUi14 = await import('./js/chat-ui.js');
+
+  const TEST_ROW = (o = {}) => ({
+    id: 'sys_test_ab12cd34ef567890ab12cd34ef567890', seq: 41, ts: 1_700_000_000_000, type: 'message',
+    author: 'system', authorKind: 'system', notify: true, gameTag: '',
+    body: 'This is a test push. If your phone buzzed and this message is in your Locker Room, delivery works end to end.',
+    meta: { test: true }, ...o,
+  });
+  const REAL_ROW = (o = {}) => ({
+    id: 'm42', seq: 42, ts: 1_700_000_001_000, type: 'message',
+    author: 'p_kihoon', notify: true, gameTag: '', body: 'aggies -7, easy money', ...o,
+  });
+
+  // ── 14a. THE PREDICATE NEEDS ALL THREE TERMS ────────────────────────────
+  assert(chat14.isPrivateSelfTest(TEST_ROW()) === true,
+    '14-1: the real shape send_test_push() writes is recognised (sys_test_ id + author "system" + meta.test === true)');
+  assert(chat14.isPrivateSelfTest(REAL_ROW()) === false,
+    '14-2: an ordinary member message is NOT — the marker must not leak onto real traffic');
+  for (const [label, row] of [
+    ['a member-written row wearing the id', TEST_ROW({ author: 'p_kihoon' })],
+    ['the id without meta.test',            TEST_ROW({ meta: {} })],
+    ['meta.test without the id',            TEST_ROW({ id: 'm99' })],
+    ['meta.test as the STRING "true"',      TEST_ROW({ meta: { test: 'true' } })],
+    // SECURITY F-2's client belt: only the EXACT shape send_test_push() mints.
+    ['a SHORT sys_test_ id',                TEST_ROW({ id: 'sys_test_ab12cd34' })],
+    ['a sys_test_ id with non-hex',         TEST_ROW({ id: 'sys_test_zz12cd34ef567890ab12cd34ef567890' })],
+    ['a sys_test_ id with a suffix',        TEST_ROW({ id: 'sys_test_ab12cd34ef567890ab12cd34ef567890x' })],
+    ['a SCRIBE post',                       REAL_ROW({ author: 'scribe' })],
+    ['a lifecycle system row',              { id: 'sys_lc_1', type: 'system', author: 'system', meta: { kind: 'lifecycle' } }],
+    ['a reveal event',                      { id: 'sys_reveal_w1', type: 'system', author: 'system', meta: { kind: 'reveal' } }],
+    ['null',                                null],
+  ]) {
+    assert(chat14.isPrivateSelfTest(row) === false,
+      `14-3: ${label} is not a private self-test row — all three terms are required, the same way fanoutPlan()'s isSelfTestShape requires all three`);
+  }
+
+  // ── 14b. THE LABEL AND THE SUBDUED TREATMENT, IN RENDERED OUTPUT ────────
+  const privHTML = chatUi14._messageHTMLForTest(TEST_ROW(), 'p_drew', false);
+  const realHTML = chatUi14._messageHTMLForTest(REAL_ROW(), 'p_drew', false);
+  assert(privHTML.includes('🔒 Only you can see this'),
+    '14-4: the row carries the label, verbatim — Drew asked for "a special label or opacity"; this is the label half');
+  assert(/class="chat-private-chip"/.test(privHTML), '14-5: …as a chip, not loose text in the body');
+  assert(/class="chat-msg[^"]*chat-msg-private/.test(privHTML),
+    '14-6: …and the row takes the subdued class — the opacity half of the same instruction');
+  assert(!realHTML.includes('Only you can see this') && !/chat-msg-private/.test(realHTML),
+    '14-7: NEITHER appears on an ordinary message. A marker that shows up on real traffic is worse than no marker.');
+  assert(privHTML.includes(TEST_ROW().body.slice(0, 20)),
+    '14-8: fixture — the row still renders its body (without this, 14-4..14-6 could pass on an empty string)');
+
+  // ── 14c. SEARCH RESULTS — the other surface this row can reach ──────────
+  chat14._resetForTest();
+  chat14.ingest([TEST_ROW(), REAL_ROW()]);
+  const hits = chatUi14._searchResultsHTMLForTest('test push');
+  assert(/chat-search-result/.test(hits), '14-9: fixture — the private row IS findable by search in its own reader\'s room');
+  assert(hits.includes('🔒 Only you can see this') && /chat-search-result[^"]*chat-msg-private/.test(hits),
+    '14-10: …and it carries the SAME chip and treatment there (CONVENTIONS #21 — one marker, every surface, or the one that lacks it is the lie)');
+  const otherHits = chatUi14._searchResultsHTMLForTest('easy money');
+  assert(/chat-search-result/.test(otherHits) && !otherHits.includes('Only you can see this'),
+    '14-11: …and an ordinary search result does not');
+
+  // ── 14d. IT BADGES NOBODY ───────────────────────────────────────────────
+  // The guard is inside isUnreadFor(), the choke point behind unreadCount,
+  // unreadAuthors, mentionUnreadCount AND latestUnreadNotifying — so this one
+  // rule covers the nav badge, the tab title, the installed-app icon, the
+  // filter pills, the game bubbles and the dashboard teaser at once.
+  chat14._resetForTest();
+  chat14.ingest([TEST_ROW()]);
+  assert(chat14.unreadCount('p_drew', 'all') === 0,
+    '14-12: the commissioner\'s own test row is NOT unread mail. It is addressed to the person who pressed the button and says nothing about the league; a badge promising unread that turns out to be your own diagnostic teaches you to ignore badges.');
+  assert(chat14.unreadCountOrUnknown('p_drew', 'all').known === true
+      && chat14.unreadCountOrUnknown('p_drew', 'all').count === 0,
+    '14-13: …and it reads as {known:true, count:0} — genuinely "caught up", not "unanswerable"');
+  assert(chat14.unreadAuthors('p_drew', 'all').length === 0,
+    '14-14: …with nobody to attribute it to');
+  assert(chat14.latestUnreadNotifying('p_drew', 0) === null,
+    '14-15: …and the dashboard teaser is never offered it as the newest thing worth announcing (Drew: prefer NOT featuring a test row at all)');
+  assert(chatUi14.dashboardChatTeaserHTML() === '',
+    '14-16: …proven at the teaser itself, not only at the function beneath it');
+
+  chat14.ingest([REAL_ROW()]);
+  assert(chat14.unreadCount('p_drew', 'all') === 1,
+    '14-17: NON-VACUITY — a genuine message in the same room still counts as exactly 1 unread. The rule excludes one row shape, not the badge.');
+  assert(chat14.latestUnreadNotifying('p_drew', 0)?.id === 'm42',
+    '14-18: …and the teaser announces THAT one, falling through the test row rather than going silent');
+
+  // ── 14f. SECURITY F-2 — THE MARKER SHIPS WITH MIGRATION 0019 ────────────
+  //
+  // The chip and the unread exclusion are only safe once `chat_append_system`
+  // refuses the reserved namespace. Until then any member can mint a row that
+  // wears the marker room-wide. This does not test the database — it pins the
+  // OBLIGATION, so the client change cannot ship on its own and the go-live
+  // order cannot quietly drop the migration.
+  {
+    const mig = await readFile(new URL('./supabase/migrations/0019_sys_test_reserved.sql', import.meta.url), 'utf8');
+    assert(/raise exception 'reserved_id'/.test(mig) && /raise exception 'reserved_meta'/.test(mig),
+      '14-22: migration 0019 exists and reserves BOTH halves of the shape this marker keys on (reserved_id / reserved_meta)');
+    const chatSrc14 = await readFile(new URL('./js/chat.js', import.meta.url), 'utf8');
+    assert(/const SELF_TEST_ID_RE = \/\^sys_test_\[0-9a-f\]\{32\}\$\//.test(chatSrc14),
+      "14-23: the client belt narrows the id to the EXACT shape send_test_push() mints — `sys_test_` + 32 hex. It does not stop forgery on its own (a member can type 32 hex characters); 0019 is the fix, and the predicate now states exactly what it recognises.");
+    assert(/Migration 0019 is the fix|migration 0019/i.test(chatSrc14) && /0019/.test(chatSrc14),
+      '14-24: …and js/chat.js SAYS SO in place, so the next reader does not mistake the belt for the fix');
+    const rb14 = await readFile(new URL('../docs/SUPABASE_LIVE_RUNBOOK.md', import.meta.url), 'utf8');
+    assert(/APPLY THIS BEFORE DEPLOYING THE v0\.23\.3 SITE/.test(rb14),
+      '14-25: and the runbook states the order — 0019 is applied BEFORE the v0.23.3 site is deployed');
+  }
+
+  // ── 14e. THE CSS IS THEMED, NOT HARDCODED ───────────────────────────────
+  {
+    const css14 = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+    const block = css14.slice(css14.indexOf('.chat-private-chip{'), css14.indexOf('.chat-quote-static{'));
+    assert(block.length > 0 && !/#[0-9a-fA-F]{3,8}\b/.test(block),
+      `14-19: no hex literal in the marker's CSS — every colour is a theme var, so all seven themes get it (got ${JSON.stringify(block)})`);
+    assert(/\.chat-msg-private \.chat-bubble\{opacity:\.85/.test(block),
+      '14-20: the dim is on the BUBBLE at .85 — the same value .chat-quote-static already ships, which stays above 4.5:1 in every theme');
+    assert(!/\.chat-private-chip\{[^}]*opacity:/.test(block),
+      '14-21: …and the CHIP is not dimmed: the sentence explaining why a row looks faded must not itself be faded');
+  }
+  chat14._resetForTest();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

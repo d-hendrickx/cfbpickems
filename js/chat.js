@@ -1619,11 +1619,153 @@ export async function backfill(limit = 100) {
 // lastSeenSeq; unread tracking never depended on presence and still works.
 
 // ── Unread (notifying events only — ambient never badges) ─────────────────────
-export function getLastSeen() {
-  try { return { seq: 0, byTag: {}, ...(JSON.parse(localStorage.getItem(K_LASTSEEN) || '{}')) }; }
-  catch { return { seq: 0, byTag: {} }; }
+
+/**
+ * ══ RG-196 (2026-09-21) — THE CURSOR IS STAMPED WITH WHOSE IT IS, SO IT NO
+ *    LONGER HAS TO BE DELETED ═══════════════════════════════════════════════════
+ *
+ * DREW: "when I log in there was a badge over chat of 84 unread messages even
+ * tho I've already seen them, the badge goes away when you click chat."
+ *
+ * THE MECHANISM. K_LASTSEEN was ONE key belonging to nobody. So the only way
+ * A9/DI-180q's device sweep could stop player B inheriting player A's read
+ * positions was to REMOVE it — and js/auth.js's sign-out clear swept it by the
+ * same rule, which meant an explicit Sign Out also destroyed the departing
+ * player's OWN cursor. The same member signing straight back in on the same
+ * phone started at seq 0 with the whole retained window counting as unread
+ * again (84 of them, the day this was reported). Nothing restored it, because
+ * nothing else on the device or the server holds a read position.
+ *
+ * THE FIX IS AN OWNERSHIP STAMP, NOT A SECOND KEY. The payload carries
+ * `owner`: an opaque digest of (member id | active league id). A cursor whose
+ * stamp is not mine reads as ZERO — which is exactly the property the sweep was
+ * buying with deletion, now a property of the DATA instead of of a list of key
+ * names. js/auth.js's `_CLEAR_KEEP_KEYS` therefore exempts this one key (and
+ * only this one), with the reasoning recorded beside it; unreadtest.mjs §[6]
+ * asserts the exemption is one key wide.
+ *
+ * WHAT IT IS NOT. It is not a secret and it is not a security boundary: it
+ * decides a COUNT, and the content it counts is already on this device in
+ * `cfbp_chat_events_cache` (which is still swept). It is digested rather than
+ * stored plainly so that what an explicit Sign Out leaves behind is numbers and
+ * an opaque token — the same category as `cfbp_scribe_ledger`'s `{hash: ms}`,
+ * which the keep-list already keeps for the same reason.
+ *
+ * THE LEAGUE TERM IS LOAD-BEARING (js/auth.js:370-375): the cursors are
+ * league-scoped, so one account switching between two leagues must not inherit
+ * the other league's read position.
+ *
+ * ACCEPTED LIMIT, stated so it is a decision: there is still ONE cursor on the
+ * device, so two members alternating on one handset overwrite each other's
+ * position and each re-reads their own backlog once. The guarantee is "nobody
+ * ever sees somebody else's read position", not "two people can interleave on
+ * one phone". A per-member cursor map would accumulate a list of who has used
+ * this handset, which is worse than the cost it removes.
+ *
+ * CROSS-DEVICE is deliberately NOT solved here. A cursor that follows the
+ * player belongs on the player record (`player.preferences.*`, CLAUDE.md bullet
+ * 4) and needs an accessor pair in js/storage.js — an ask-first file. Raised
+ * for Drew separately; this fixes the reported defect at the layer it occurs.
+ */
+function _ownerDigest() {
+  let who = '';
+  try { who = String(getSession()?.playerId || ''); } catch { who = ''; }
+  if (!who) return '';                     // identity not resolved (boot window) or anonymous
+  let league = '';
+  try { league = String(getActiveLeagueId() || ''); } catch { league = ''; }
+  // djb2. Not a cryptographic hash and not trying to be: the job is "is this
+  // the same member as last time", where a collision costs a wrong unread
+  // COUNT on one handset and nothing else. 'null' for an unresolved league is
+  // the convention js/auth.js's owner tuple already uses, so "no league yet"
+  // and "league null" cannot collide.
+  const s = `${who}|${league || 'null'}`;
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
 }
-function putLastSeen(v) { try { localStorage.setItem(K_LASTSEEN, JSON.stringify(v)); } catch {} }
+/** unreadtest.mjs §[4] — the stamp for the identity at this device right now.
+ *  Exported so "a different member digests differently" and "the league is part
+ *  of it" are asserted against the production expression, not a copy of it.
+ *  Production never calls this. */
+export function _lastSeenOwnerForTest() { return _ownerDigest(); }
+
+/**
+ * REVIEWER F6 (RG-196 gate) — the stamp for a cursor written while NOBODY is
+ * resolved. Not a member and never equal to a digest (digests are base36 and
+ * non-empty), so it matches nobody and is adopted by nobody — while still
+ * being a STAMP, which is what keeps "no write path leaves an adoptable
+ * cursor" a property of the code rather than of the paths we remembered.
+ *
+ * The writers that reach it are `_applyEpochLocally()` (the epoch self-heal
+ * must PERSIST — its whole job is to stop a stale HIGH cursor under-counting
+ * real messages after a Clear Chat History, and deferring it would leave the
+ * stale value on disk across a reload, which is the bug it exists to prevent)
+ * and any `markSeen()` inside the boot window.
+ *
+ * IT IS NOT A THIRD PARTY, IT IS "NOT YET CLAIMED". Read rules treat it exactly
+ * like the pre-upgrade unstamped payload below: this device may keep using it
+ * while nobody is resolved (otherwise a player who reads the room during the
+ * boot window would watch their own badge come straight back), and the FIRST
+ * resolved read ADOPTS it once and stamps it — after which ownership is strict.
+ * That collapses "written by nobody" and "written before the format had owners"
+ * into ONE rule with one residual, rather than two rules with two.
+ */
+const UNOWNED = '!';
+/** Owned by a MEMBER? (`UNOWNED` and a missing field are both "not claimed".) */
+function isClaimed(owner) { return !!owner && owner !== UNOWNED; }
+
+export function getLastSeen() {
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(K_LASTSEEN) || '{}'); }
+  catch { return { seq: 0, byTag: {} }; }
+  // CONVENTIONS #7 — anything read from storage might be malformed; a cursor
+  // that is not an object (an old `'412'`, a truncated write) is no cursor.
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { seq: 0, byTag: {} };
+  const me = _ownerDigest();
+  // SOMEBODY ELSE'S CURSOR IS NOT MINE.
+  if (isClaimed(raw.owner) && me && raw.owner !== me) return { seq: 0, byTag: {} };
+  // ── SECURITY B-1 (RG-196 gate) — THE UNCLAIMED WINDOW IS ONE *READ* WIDE ──
+  //
+  // THE FINDING: with the key now exempt from the device sweep, a PRE-UPGRADE
+  // (unstamped) cursor survives a handover too, and "unstamped is adoptable"
+  // would hand it to whoever signs in next, indefinitely.
+  //
+  // WHAT THIS DEVICE CAN AND CANNOT KNOW: it cannot know who wrote an unstamped
+  // cursor — that generation of the format recorded nothing. So the choice is
+  // between throwing every player's read position away on upgrade day (the
+  // thing this whole fix exists to stop) and adopting it ONCE. It adopts once:
+  // the FIRST read under a resolved identity stamps it to that member, and
+  // ownership is strict from then on.
+  //
+  // RESIDUAL, accepted and LOW: on a SHARED handset, if the first resolved read
+  // after the upgrade happens under the wrong member, that member inherits one
+  // generation of COUNTS — a number, never a message. The room itself
+  // (`cfbp_chat_events_cache`) is still swept on both paths, so nothing
+  // readable crosses. Every generation after the first is strictly owned.
+  if (!isClaimed(raw.owner) && me) {
+    // Through putLastSeen(), the ONE writer — so the adoption is stamped by the
+    // same expression every other write is (§[9] of unreadtest.mjs asserts
+    // there is exactly one reader and one writer of this key, which is what
+    // stops an owner check being skipped by a second copy).
+    putLastSeen({ seq: raw.seq, byTag: raw.byTag });
+    return { seq: 0, byTag: {}, ...raw, owner: me };
+  }
+  // UNCLAIMED and nobody resolved: this device's own working cursor. Read it —
+  // a player who reads the room during the boot window must not watch their
+  // badge come straight back. Nothing is adopted (no write happens), and the
+  // first resolved read above closes the window.
+  return { seq: 0, byTag: {}, ...raw };
+}
+function putLastSeen(v) {
+  // EVERY WRITE IS STAMPED (REVIEWER F6). In order of preference: the member at
+  // this device; else the stamp already on the object — markSeen() round-trips
+  // what getLastSeen() gave it, so a mark written inside the boot window keeps
+  // the cursor its owner's instead of quietly un-stamping it; else UNOWNED,
+  // which belongs to nobody and is adopted by nobody.
+  const owner = _ownerDigest() || (v && v.owner) || UNOWNED;
+  const next = { seq: Number(v?.seq) || 0, byTag: (v && v.byTag) || {}, owner };
+  try { localStorage.setItem(K_LASTSEEN, JSON.stringify(next)); } catch {}
+}
 
 /**
  * Advance the read position. MONOTONIC — a cursor never moves backward.
@@ -1676,6 +1818,111 @@ export function readThroughSeq(tag = 'all') {
   return Number(readCursorFor(getLastSeen(), tag)) || 0;
 }
 
+/**
+ * ══ RG-196 (2026-09-21) — "I DO NOT KNOW WHO YOU ARE" IS NOT "YOU HAVE READ
+ *    NOTHING" ══════════════════════════════════════════════════════════════════
+ *
+ * `isUnreadFor()` below excludes the viewer's own posts with `m.author !==
+ * selfId`. With `selfId` null — the ordinary state of every boot for the width
+ * of one membership read — that test passes for EVERY message, so an unresolved
+ * identity produced the maximum possible unread count rather than an honest
+ * "not yet known". That is the same number the reported badge showed, arrived
+ * at by a second route, and it is why this is fixed here as well as at the
+ * paint (js/chat-ui.js's badge suppression is the other half, on its own
+ * branch — the two guards are deliberately independent: neither relies on the
+ * other having fired).
+ *
+ * THE EXPORTED CONTRACT, for anything that renders a number:
+ *   unreadCount(selfId, tag)          -> number. 0 when selfId is falsy.
+ *   unreadCountOrUnknown(selfId, tag) -> { known: boolean, count: number }.
+ *                                        { known:false, count:0 } when selfId
+ *                                        is falsy; { known:true, count:N }
+ *                                        otherwise. "Caught up" and "unknown"
+ *                                        are both 0 — the FLAG is what tells
+ *                                        them apart, and a caller that wants to
+ *                                        render nothing at all while identity
+ *                                        is in flight reads the flag.
+ *   unreadAuthors(selfId, tag)        -> [] when selfId is falsy.
+ *   mentionUnreadCount(selfId)        -> 0 when selfId is falsy.
+ *
+ * THE GUARD IS AT THOSE FOUR ENTRY POINTS, NOT INSIDE isUnreadFor(). Deliberate
+ * and scoped: `latestUnreadNotifying()` shares that predicate but feeds the
+ * dashboard TEASER, whose identity gate is being built on the chat-ui.js side
+ * in the same release (the boot-flash work). Pushing this into the shared
+ * predicate would silently change the teaser's behaviour from this branch,
+ * which is precisely the kind of cross-branch surprise the split exists to
+ * avoid. Counts are this branch's; painting is that one's.
+ */
+function identityKnown(selfId) { return !!selfId; }
+
+/**
+ * ══ THE PRIVATE SELF-TEST ROW (Drew's residual 3, 2026-09-21) ══════════════
+ *
+ * `send_test_push()` (migration 0018) writes ONE row addressed to a single
+ * member: `type:'message'`, `author:'system'`, `author_kind:'system'`, an id of
+ * `sys_test_<uuid>`, `meta:{test:true}`, and `visible_to = <that member>`. RLS
+ * is what keeps it private; nobody else's device ever sees it.
+ *
+ * WHY THE TEST IS NOT `visible_to`. That column is not in `SB_MESSAGE_COLS`
+ * (js/chatTransport.js:432) and is not granted to `authenticated` — the client
+ * literally cannot select it. So the recognisable shape is the one the RPC
+ * builds by construction, and all THREE terms are required for the same reason
+ * `fanoutPlan()`'s `isSelfTestShape` requires all three: `messages_insert`
+ * independently forces a member-written row to `author_kind='player'` with the
+ * member's own id, so no player can forge any one of them, let alone the set.
+ *
+ * WHAT IT CHANGES HERE: the row does not count as unread, for anybody. It is
+ * addressed to the person who pressed the button, it is from no one, and it
+ * says nothing about the league — a badge promising unread mail that turns out
+ * to be your own diagnostic is a badge that teaches you to ignore badges. The
+ * guard lives inside isUnreadFor(), which is the single choke point behind
+ * unreadCount / unreadAuthors / mentionUnreadCount AND latestUnreadNotifying,
+ * so the dashboard teaser will not feature a test row either — one rule, five
+ * surfaces, no second copy to forget.
+ *
+ * WHAT IT DELIBERATELY DOES NOT CHANGE: `latestNotifying()` (the in-app toast).
+ * The whole purpose of the test push is to watch it arrive, and the toast is
+ * the in-app half of that confirmation.
+ */
+/**
+ * ══ SECURITY F-2 (2026-09-21) — THE CLIENT BELT, AND WHAT IT IS NOT ═══════
+ *
+ * THE FORGERY. `chat_append_system()` is granted to `authenticated` and its id
+ * allow-list admits `^sys_`. So before migration 0019, any MEMBER could post a
+ * ROOM-WIDE row wearing this exact shape — and every reader's client would then
+ * label it "only you can see this", keep it out of their unread badge, and skip
+ * it in the teaser. A message everybody gets, nobody is told about, and each
+ * person believes is private to them.
+ *
+ * THIS BELT DOES NOT FIX THAT, AND SAYING SO IS THE POINT. Narrowing the id to
+ * the 32-hex shape `send_test_push()` actually mints raises the cost of a
+ * forgery from "type anything" to "type 32 hex characters", which is not a
+ * defence. **Migration 0019 is the fix**: it reserves the `sys_test_` prefix
+ * and the `meta.test` key inside the function, with named exceptions, on both
+ * the member and platform branches. The chip ships together with 0019 applied —
+ * the runbook's §0019 states the order and the go-live notes repeat it.
+ *
+ * A CLIENT CHECK CANNOT DO BETTER, which is why the fix is in the database.
+ * `messages.visible_to` — the column that makes the row private — is not in
+ * `SB_MESSAGE_COLS` (js/chatTransport.js) and is granted to no client role, so
+ * the browser cannot read it. `emitted_by` ("who called the function") is
+ * ungranted for the same reason. There is no question the client can ask whose
+ * answer separates a forged row from a real one.
+ *
+ * WHAT THE NARROWING IS WORTH, honestly: it makes the marker refuse every id
+ * that is not the one shape the RPC produces, so a legacy or hand-written
+ * `sys_test_something` row — of which there are none today — can never wear it
+ * by accident, and the predicate now states exactly what it recognises.
+ */
+const SELF_TEST_ID_RE = /^sys_test_[0-9a-f]{32}$/;   // 0018's `'sys_test_' || replace(gen_random_uuid()::text,'-','')`
+
+export function isPrivateSelfTest(m) {
+  return !!m
+    && SELF_TEST_ID_RE.test(String(m.id || ''))
+    && String(m.author || '') === 'system'
+    && !!(m.meta && typeof m.meta === 'object' && m.meta.test === true);
+}
+
 function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   // A message hidden by retention can never count toward unread — a player
   // who can't scroll to it should never see a badge promising it's there.
@@ -1684,11 +1931,14 @@ function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   // unreadAuthors / mentionUnreadCount, which in turn feed the title badge,
   // the PWA badge, per-game bubbles, and filter pills. Fixed once here.
   if (isHiddenByEpoch(m)) return false;
+  // The commissioner's own private push self-test. See isPrivateSelfTest().
+  if (isPrivateSelfTest(m)) return false;
   return m.type === 'message' && !m.deleted && m.notify &&
          typeof m.seq === 'number' && m.seq > afterSeq && m.author !== selfId;
 }
 
 export function unreadCount(selfId, tag = 'all') {
+  if (!identityKnown(selfId)) return 0;      // RG-196 — unknown identity, not "everything is unread"
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();          // resolved once, not per message
@@ -1701,12 +1951,25 @@ export function unreadCount(selfId, tag = 'all') {
 }
 
 /**
+ * RG-196 — the same fold, with the ANSWERABILITY of the question attached.
+ * `{known:false, count:0}` means "identity has not landed yet"; `{known:true,
+ * count:0}` means "caught up". A caller that shows a badge should paint
+ * nothing at all on the first shape and nothing-because-zero on the second —
+ * the numbers are identical and the flag is the whole difference.
+ */
+export function unreadCountOrUnknown(selfId, tag = 'all') {
+  if (!identityKnown(selfId)) return { known: false, count: 0 };
+  return { known: true, count: unreadCount(selfId, tag) };
+}
+
+/**
  * Distinct author ids behind a tag's UNREAD count, in first-seen order —
  * same predicate as unreadCount(), just collecting authors instead of a
  * tally. Feeds the game-card bubble's attribution (item B): "who is this
  * unread FROM" rather than just "how many".
  */
 export function unreadAuthors(selfId, tag = 'all') {
+  if (!identityKnown(selfId)) return [];     // RG-196 — nobody to attribute an unknown count to
   const ls = getLastSeen();
   const after = readCursorFor(ls, tag);
   const cutoff = retentionCutoff();
@@ -1721,6 +1984,7 @@ export function unreadAuthors(selfId, tag = 'all') {
 }
 
 export function mentionUnreadCount(selfId) {
+  if (!identityKnown(selfId)) return 0;      // RG-196 — no identity, no mention inbox
   const ls = getLastSeen();
   return getMessages({ tag: 'all', mentionsOf: selfId }).filter(m => isUnreadFor(m, selfId, ls.seq)).length;
 }
@@ -1738,6 +2002,16 @@ export function mentionUnreadCount(selfId) {
  * your own text back at you.
  */
 export function latestNotifying(selfId) {
+  // ══ SECURITY A-1-R (2026-09-21) — THE TOAST PATH HAD NO IDENTITY GUARD ════
+  //
+  // `m.author === selfId` is this fold's own-post filter, and with `selfId`
+  // null it excludes nobody — so an unresolved viewer got the newest message
+  // in the room, which chat-ui.js's handleChatEvent() then shows as a toast
+  // with the author's name and 64 characters of body. The cached replay is
+  // suppressed for `fromCache`, but the LIVE drain is not, and it can land
+  // inside the same pre-identity window. Same direction as unreadCount()'s
+  // guard: an unknown viewer produces NO statement, never a maximal one.
+  if (!identityKnown(selfId)) return null;
   let best = null;
   S.items.forEach(m => {
     if (m.type !== 'message' || m.deleted || !m.notify) return;
@@ -1780,6 +2054,14 @@ export function latestNotifying(selfId) {
  * next one", not "suppress the card".
  */
 export function latestUnreadNotifying(selfId, floorSeq = 0) {
+  // SECURITY A-1-R (2026-09-21) — the ONE unread surface that had no identity
+  // guard. RG-196's note above says the guard sits "at those four entry
+  // points"; this was the fifth, and it feeds the dashboard TEASER, which
+  // carries a member's name and 64 characters of what they wrote. `isUnreadFor`
+  // excludes the viewer's own posts with `m.author !== selfId`, which for a
+  // null selfId is true of every message ever written — so the viewer who was
+  // NOBODY was handed the newest one.
+  if (!identityKnown(selfId)) return null;
   const ls = getLastSeen();
   const cutoff = retentionCutoff();
   const floor = Number(floorSeq) || 0;

@@ -653,13 +653,46 @@ console.log('\n[7] ENGINE-MEASURED (Chromium over the DevTools protocol, 393×85
   }
   const insetHref = 'file://' + insetFile;
 
+  // UN-212 verification finding §7j — same textual-substitution technique,
+  // for env(safe-area-inset-TOP) instead of -bottom. No @supports condition
+  // wraps this one (.app-header's own padding-top:env(safe-area-inset-top,
+  // 0px) is a bare declaration, unlike the bottom-inset @supports block
+  // above), so no GUARD/protect step is needed here.
+  const TOPINSET = 59; // Dynamic-Island-class inset (iPhone 15/16/18 Pro family)
+  const topInsetFile = join(tmp, 'styles-top-inset.css');
+  {
+    const before = cssSrc;
+    const sheet = cssSrc.replace(/env\(\s*safe-area-inset-top\s*(?:,[^)]*)?\)/g, TOPINSET + 'px');
+    assert(sheet !== before,
+      `fixture check: at least one env(safe-area-inset-top) was substituted with ${TOPINSET}px — otherwise this variant would be identical to the browser case and prove nothing (RG-27)`);
+    writeFileSync(topInsetFile, sheet);
+  }
+  const topInsetHref = 'file://' + topInsetFile;
+  // The MUTATED sibling — same top-inset substitution, but with the
+  // "body.native-shell" prefix stripped from ONLY the new backdrop-strip
+  // rule (leaving a bare "::before{...}" that would paint on every body,
+  // web included). Used for §7j's mutation-proof (scope removed ⇒ RED).
+  const topInsetMutatedFile = join(tmp, 'styles-top-inset-mutated.css');
+  {
+    const insetSheet = readFileSync(topInsetFile, 'utf8');
+    const stripRuleMatch = /body\.native-shell::before\{([^}]*)\}/.exec(insetSheet);
+    assert(!!stripRuleMatch, 'fixture check: the top-inset sheet still contains the body.native-shell::before rule to mutate');
+    const mutated = stripRuleMatch
+      ? insetSheet.replace('body.native-shell::before{' + stripRuleMatch[1] + '}', '::before{' + stripRuleMatch[1] + '}')
+      : insetSheet;
+    assert(mutated !== insetSheet, 'fixture check: the mutation actually changed the top-inset sheet text');
+    writeFileSync(topInsetMutatedFile, mutated);
+  }
+  const topInsetMutatedHref = 'file://' + topInsetMutatedFile;
+
   const fixtures = {};
-  function fixture(name, { tab = 'picks', sectionId = 'page-picks', inner, css = cssHref }) {
+  function fixture(name, { tab = 'picks', sectionId = 'page-picks', inner, css = cssHref, bodyClass = '' }) {
     const file = join(tmp, name + '.html');
+    const classAttr = bodyClass ? ` class="${bodyClass}"` : '';
     writeFileSync(file, `<!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <link rel="stylesheet" href="${css}"></head>
-<body data-tab="${tab}"><div class="page-wrapper">
+<body${classAttr} data-tab="${tab}"><div class="page-wrapper">
 <header class="app-header"><div class="app-header-inner"><div class="header-meta" id="header-meta"><strong>Week 3</strong></div></div></header>
 <main class="main-content"><section class="page-section active" id="${sectionId}">${inner}</section></main>
 ${navHtml}</div></body></html>`);
@@ -679,6 +712,20 @@ ${navHtml}</div></body></html>`);
   for (const n of SLATES) fixture('open' + n, { inner: `<div id="games-list">${gameCards(n)}</div>${tiebreaker}${submitBar(n)}` });
   // the same pages, laid out as the INSTALLED APP sees them (inset substituted)
   for (const n of [1, 3, 14]) fixture('inset' + n, { css: insetHref, inner: `<div id="games-list">${gameCards(n)}</div>${tiebreaker}${submitBar(n)}` });
+  // UN-212 §7j — the native-shell status-bar backdrop strip, at a real
+  // top-inset. Three variants of the SAME 14-game slate (deliberately the
+  // tall/scrollable one — §7a already proved it scrolls 1222px — so §7j's
+  // own "content really did slide up underneath" fixture check is not
+  // vacuous against a page short enough to never scroll at all): native
+  // (class present, strip should render), web (class absent, strip must
+  // not), and web-against-the-MUTATED-sheet (class absent, scope stripped —
+  // proves the guard is load-bearing rather than assumed).
+  fixture('topInsetNative', { css: topInsetHref, bodyClass: 'native-shell',
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  fixture('topInsetWeb', { css: topInsetHref,
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
+  fixture('topInsetWebMutated', { css: topInsetMutatedHref,
+    inner: `<div id="games-list">${gameCards(14)}</div>${tiebreaker}${submitBar(14)}` });
   // the deliberately-too-wide child: the thing overflow-x:hidden was there for
   fixture('wide', { inner: `<div id="games-list">${gameCards(6)}</div>
     <div id="too-wide" style="width:1200px;height:40px;background:#eee">an element 1200px wide, wider than every phone</div>
@@ -909,6 +956,61 @@ ${navHtml}</div></body></html>`);
         `the comm tab bar scrolls with the panel as it does today (top ${m.samples.top.tabbar.top} → ${m.samples.mid.tabbar.top})`);
       assert(m.computed['.batch-grid-scroll'].scrollsX === true && m.userCanScrollSideways === false,
         'the commissioner panel\'s wide batch grid keeps its internal sideways scroll while the page itself still has none');
+    }
+
+    // ── 7j. UN-212 — the native-shell status-bar backdrop strip, ENGINE-MEASURED
+    //       at a real 59px top inset (Dynamic-Island-class), plus the
+    //       mutation-proof that the body.native-shell scope is load-bearing. ──
+    {
+      const PSEUDO_EXPR = `(() => {
+        const cs = getComputedStyle(document.body, '::before');
+        const header = document.querySelector('.app-header');
+        const headerCs = header ? getComputedStyle(header) : null;
+        const card = document.querySelector('.game-card');
+        window.scrollTo({ top: 200, left: 0, behavior: 'instant' });
+        const cardTopScrolled = card ? card.getBoundingClientRect().top : null;
+        window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+        return {
+          content: cs.content, height: cs.height, position: cs.position,
+          top: cs.top, left: cs.left, right: cs.right, zIndex: cs.zIndex,
+          pointerEvents: cs.pointerEvents, bg: cs.backgroundColor,
+          headerBg: headerCs ? headerCs.backgroundColor : null,
+          cardTopScrolled,
+        };
+      })()`;
+      const measurePseudo = async file => {
+        await viewport(393, 852);
+        const loaded = page.once('Page.loadEventFired');
+        await page.send('Page.navigate', { url: 'file://' + file });
+        await loaded;
+        const r = await page.send('Runtime.evaluate', { expression: PSEUDO_EXPR, returnByValue: true, awaitPromise: true });
+        if (r.exceptionDetails) throw new Error('measurePseudo threw: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails));
+        return r.result.value;
+      };
+
+      // ── native: the strip renders, 59px tall, painted with the header's own
+      //    resolved background color (the SAME --maroon token, not a coincidence).
+      const native = await measurePseudo(fixtures.topInsetNative);
+      assert(native.content !== 'none',
+        `[7j-a] native-shell: the ::before is actually generated (content computed to ${JSON.stringify(native.content)}, not "none")`);
+      assert(native.height === `${TOPINSET}px`,
+        `[7j-b] native-shell: the strip is exactly the substituted inset tall (got ${native.height}, expected ${TOPINSET}px)`);
+      assert(native.position === 'fixed' && native.top === '0px' && native.zIndex === '150' && native.pointerEvents === 'none',
+        `[7j-c] native-shell: position:fixed, top:0, z-index:150, pointer-events:none (got position=${native.position} top=${native.top} zIndex=${native.zIndex} pointerEvents=${native.pointerEvents})`);
+      assert(!!native.bg && native.bg === native.headerBg,
+        `[7j-d] native-shell: the strip's resolved background-color EQUALS .app-header's own resolved background-color (strip=${native.bg}, header=${native.headerBg}) — the same --maroon token, measured, not just textually identical`);
+      assert(native.cardTopScrolled !== null && native.cardTopScrolled < TOPINSET,
+        `[7j-e] fixture check: scrolled, the first game card's own top (${native.cardTopScrolled}px) rises above the ${TOPINSET}px inset band — this is the exact "content slides up underneath" case the strip exists to sit above (proves the scenario is real, not that the strip fixes the card's own position, which it never moves)`);
+
+      // ── web (unmutated, real scoped rule): the strip must NOT exist at all ──
+      const web = await measurePseudo(fixtures.topInsetWeb);
+      assert(web.content === 'none',
+        `[7j-f] web (no native-shell class), REAL scoped rule: no ::before is generated at all (content computed to ${JSON.stringify(web.content)}) — the scope holds, measured in a real engine, not just read from source`);
+
+      // ── mutation-proof: web against the MUTATED sheet (scope stripped) ⇒ RED
+      const webMutated = await measurePseudo(fixtures.topInsetWebMutated);
+      assert(webMutated.content !== 'none',
+        `[7j-g] MUTATION-PROOF: web (no native-shell class) against the MUTATED stylesheet (body.native-shell prefix stripped from the strip rule) DOES now generate the ::before (content computed to ${JSON.stringify(webMutated.content)}) — i.e. [7j-f]'s "no strip on web" assertion goes RED under this mutation, proving [7j-f] is not vacuously true against the real file`);
     }
   } catch (e) {
     assert(false, `the engine section ran to completion (threw: ${e && e.message})`);

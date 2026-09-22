@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.2';
+export const APP_VERSION = 'v0.23.3';
 export const APP_VERSION_DATE = '2026-09-21';
 
 /**
@@ -51,6 +51,20 @@ export const APP_VERSION_DATE = '2026-09-21';
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.3',
+    date: '2026-09-21',
+    added: [
+      'The commissioner can now set how often SCRIBE chimes in on its own — posts per hour (including unlimited) and the minimum gap between them — with a live note on what it costs. Comm → Settings.',
+    ],
+    fixed: [
+      'Opening the app is one smooth step again — your colours are there on the first frame, with no login screen flashing past first.',
+      'The chat badge no longer flashes a wrong unread count while the app is still working out who you are, and your read position now survives signing out and back in.',
+      "The dead Log Out button on the Picks page is gone — sign out from the header.",
+      'Push test messages in your Locker Room are marked "Only you can see this" and no longer count toward anyone\'s unread badge.',
+      'Clearer advice when someone\'s phone is not registered for notifications: open the app, tap the 🔔 bell, tap Reconnect.',
+    ],
+  },
   {
     version: 'v0.23.2',
     date: '2026-09-21',
@@ -401,6 +415,11 @@ import {
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
   getTheme, setTheme,
+  // RG-198 (2026-09-21, Drew-approved) — the DEVICE's memory of the palette it
+  // last painted, so a cold boot's first frame is the player's colours instead
+  // of the league default. The player record stays authoritative; see
+  // applyTheme() and KEYS.THEME_HINT.
+  getThemeHint, setThemeHint,
   isSiteUnlocked, setSiteUnlocked, verifySitePin,
   getEffectiveSitePin, setSitePin,
   resetCurrentWeekData,
@@ -462,6 +481,11 @@ import {
 import {
   configureAuth, getAuthMode,
   hasValidSupabaseSession, isSessionExpired, clearSessionExpired,
+  // RG-194 (2026-09-21) — the THIRD session state: a token is persisted here
+  // and the SDK has yet to resolve it. See the gate decision in
+  // applyAuthModeDecision() for why "the access token expired" was the wrong
+  // question to paint a login screen from.
+  hasPersistedSupabaseSession,
   signInWithGoogle, signOut, getAccountEmail,
   getActiveLeagueId, setActiveLeagueId, getActiveLeagueName,
   hasResolvedMemberships, getCachedMemberships, refreshMembershipsAndSession,
@@ -474,6 +498,10 @@ import {
   // of the identity tuple the session-change chokepoint latches on (reviewer
   // F-1/F-2); the last-known-authMode pair is SEC F1-R1's fail-closed store.
   getAccountUserId, getLastKnownAuthMode, setLastKnownAuthMode,
+  // SECURITY A-1-R (2026-09-21): "has anything authoritative said what mode
+  // this page is in yet?" — a different question from getAuthMode(), which
+  // answers its DEFAULT 'pins' for the whole pre-config window.
+  hasConfigBeenRead,
   // Fourth-gate amendment (2026-09-17): A9's ONE device-local clearing routine
   // (called by the identity chokepoint the moment a different account is proven
   // at a device whose previous session expired).
@@ -545,6 +573,11 @@ import {
   // ESPN catalog cached in this module) and hands it down, because chat-ui.js
   // importing app.js would close a cycle. One implementation, two call sites.
   registerAlmaMaterOptionsProvider,
+  // SECURITY A-1 (RG-196, 2026-09-21) — handed down for the same layering
+  // reason: this module owns isContentWithheld(), chat-ui.js owns the surfaces
+  // that must stay silent while it is true, and the import edge only goes one
+  // way. Installed at the top of boot(), above the early chat start.
+  registerContentWithheldProbe,
   // SECURITY F-3 / DI-T7.6 (audit #10) — and the self-edit writer, same
   // direction, same reason. See patchPlayer()'s own header.
   registerPlayerPatchWriter,
@@ -639,6 +672,12 @@ import {
 // wordmark. Both modules are zero-dependency, zero-top-level-side-effect
 // (their own headers) — importing them costs a web boot nothing.
 import { isNativeShell } from './platform.js';
+// DI-208e (2026-09-21) — a SEPARATE import statement, deliberately not
+// merged into the one above: brandtest.mjs [11a] pins the exact text of
+// `import { isNativeShell } from './platform.js';` as its AD-68 structural
+// proof, and this keeps that proof byte-unchanged rather than editing a
+// file outside this pass's write scope for a cosmetic merge.
+import { getAuthPath } from './platform.js';
 import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js';
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
@@ -1003,7 +1042,36 @@ async function applyAuthModeDecision() {
       // sign-in/out/refresh/membership-refresh; app.js re-derives every
       // affected render from it rather than each caller re-wiring its own.
       wireAuthUIEvents();
-      if (!hasValidSupabaseSession()) showGoogleSignInGate();
+      // ── RG-194 — "NOT RESOLVED YET" IS NOT "SIGNED OUT" ───────────────────
+      // This line used to be `if (!hasValidSupabaseSession()) showGoogleSignInGate();`
+      // and that predicate asks whether the ACCESS token is still fresh. A
+      // Supabase access token lives about an hour; a home-screen PWA is opened
+      // the next morning. So on essentially every cold open of a SIGNED-IN
+      // player the answer was false, the sign-in gate went up, the SDK
+      // refreshed the token a few hundred milliseconds later and
+      // refreshAuthUI()'s signed-in branch took the gate straight back down —
+      // the second of Drew's three paints, and a login screen shown to somebody
+      // who never signed out.
+      //
+      // The device knows better than that, synchronously: a session record with
+      // a refresh token is ON it. That is a third state — NOT YET — and the
+      // honest response to it is to hold the neutral boot state rather than
+      // assert an answer we do not have. Every real answer already has a paint:
+      //   • the refresh succeeds  -> INITIAL_SESSION/TOKEN_REFRESHED, no gate,
+      //                              the hydrate runs, the app appears;
+      //   • the refresh fails     -> a null-session event, and refreshAuthUI()'s
+      //                              existing signed-out branch paints the gate;
+      //   • nothing ever answers  -> the bounded deadline below paints it.
+      //
+      // NOTHING IS UNLOCKED BY WAITING. No identity means the adapter cannot
+      // hydrate, so isContentWithheld() stays true, `primedKeys` was 0 and no
+      // navigateTo() has run — what is on screen is the empty shell skeleton,
+      // which is what the gate was covering anyway. The window is bounded on
+      // both sides, and it fails CLOSED at the end of it.
+      if (!hasValidSupabaseSession()) {
+        if (hasPersistedSupabaseSession()) armSignInGateDeadline();
+        else showGoogleSignInGate();
+      }
       // hasValidSupabaseSession() is a LOCAL, synchronous check (no network) —
       // it does not by itself populate memberships. Kick that off now so the
       // active league / isAdmin resolve as soon as possible after a warm
@@ -1033,6 +1101,10 @@ async function applyAuthModeDecision() {
           }
         })();
       }
+      // SECURITY A-1 — the mode and the session question are both answered now.
+      // A bare call: releaseBootIdentityCover() re-derives every term itself and
+      // refuses while a hold is up.
+      releaseBootIdentityCover();
     } catch (e) {
       const reassert = priorHold || 'config-unreadable';
       console.error(`[auth] the resolved gate failed to paint after the hold state had already been cleared — re-asserting the '${reassert}' hold rather than leaving an overlay with no state and no re-check timer behind it`, e);
@@ -1426,6 +1498,13 @@ async function afterSupabaseHydrate(reason) {
   const state = sb.getState();
   if (state === 'ACTIVE') {
     setBackendMode('supabase');
+    // SECURITY A-1 — the adapter is SERVING this league's rows, which RLS only
+    // returns to a member of it: the strongest form of "this device knows who
+    // it is". Belt to the braces of the three auth-side release sites, so the
+    // page below is painted operable rather than painted-and-inert. (Up here
+    // rather than beside the repaint because refreshtest 5i-3 measures the
+    // distance from sb.subscribeRealtime() to reconcileGameEvents().)
+    releaseBootIdentityCover();
     // RG-177 — THE FOURTH MOMENT. This is where the adapter starts SERVING,
     // which is the instant SEC F1's write interlock stops refusing. Any
     // device-local push-active write it refused earlier in the boot is owed and
@@ -1611,6 +1690,19 @@ async function boot() {
                                          // client-half switch read, injected rather than imported so
                                          // chatTransport.js keeps importing EXACTLY js/backend.js (S5/T5.11).
   });
+  // ── SECURITY A-1 (RG-196) — THE WITHHELD PREDICATE, INSTALLED BEFORE CHAT ──
+  // Beside the two installs above and for the same reason: `initChatUI({phase:
+  // 'early'})` below runs before the config read and replays the device's chat
+  // cache, so a predicate registered any later would be registered after the
+  // exact paint it exists to prevent. chat-ui.js cannot import this module (the
+  // edge would be a cycle — app.js imports chat-ui.js), so the judgement is
+  // handed DOWN, the same shape registerAlmaMaterOptionsProvider() and
+  // registerPlayerPatchWriter() already use. Its own try/catch, unlike the two
+  // installs above: chat-ui.js's own me() check closes the leak on its own, so a
+  // failure here must degrade rather than take the boot down.
+  try { registerContentWithheldProbe(isContentWithheld); }
+  catch (e) { console.warn('[chat] the content-withheld probe could not be registered', e); }
+
   // Then the adapter itself: registration only — no client, no storage read, no
   // timer, no hydrate. In the flag-off world every line of it stays dormant,
   // because nothing below calls hydrate unless isSupabaseDataMode() is true.
@@ -1659,7 +1751,16 @@ async function boot() {
     updateSyncBadge('syncing');
   }
 
-  setupNav(); setupHeaderIdentity(); setupHeaderFeedbackButton(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(getTheme()); setupAutoRefresh();
+  // ── RG-198 — THE FIRST PAINT IS THIS DEVICE'S LAST-PAINTED PALETTE ────────
+  // `getTheme()` reads the PLAYER record, which on a Supabase device does not
+  // exist locally yet (the mirror prime one screen up is skipped by design), so
+  // it can only answer 'neutral' here — boottest [25] proves exactly that, and
+  // the neutral-then-yours flash is what Drew reported. The device-local hint
+  // is a synchronous read through the seam, before any await, so the first
+  // frame is already right; the player record re-applies after the hydrate and
+  // agrees, which is why there is no second paint. bootThemeKey() validates the
+  // value against the seven real keys — it is spliced into a class name.
+  setupNav(); setupHeaderIdentity(); setupHeaderFeedbackButton(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(bootThemeKey()); setupAutoRefresh();
   // Item A — independent of the score auto-refresh interval (which the
   // commissioner can set to "Off"), so the mid-session chat-off watch always
   // runs regardless of that other setting.
@@ -1703,6 +1804,18 @@ async function boot() {
   // Its own try/catch, deliberately NOT inside the hydrate try below: a chat
   // failure must never be reported as — or mask — a hydrate failure (AD-06,
   // the red banner stays exactly as loud as it was).
+  // ══ SECURITY A-1-R (2026-09-21) — THE COVER GOES ON BEFORE THE REPLAY ═════
+  //
+  // It used to be armed ~140 lines below, beside revealApp(). That is after
+  // the line immediately underneath this one, and the line underneath is what
+  // replays `cfbp_chat_events_cache` and inserts #dash-chat-teaser. A cover
+  // armed after the leak is a cover armed after the leak.
+  //
+  // Moved rather than duplicated: an idempotent second call would make this
+  // one unfalsifiable — removing it would change nothing, and a defence layer
+  // nothing can prove the absence of is not a layer. boottest [30] (D2) pins
+  // the order against the source for the same reason.
+  if (supabaseDevice) armBootIdentityCover();
   try { initChatUI({ phase: 'early' }); } catch (e) { console.warn('[chat] early start failed', e); }
   // Item 10 — wired in the EARLY phase as well as the late one (below). The
   // listener is latched, so the second call is a no-op; what it buys is a
@@ -1734,7 +1847,53 @@ async function boot() {
   // same window the PIN gate has always had, and it is the price of paint-
   // first; DI-180h's "no league-scoped data before sign-in" is satisfied by
   // the gate, not by withholding the paint.
-  if (!isSiteUnlocked()) showSitePinGate();
+  //
+  // ── RG-194 (2026-09-21) — …BUT THE PIN GATE IS NOT A CUT-OVER DEVICE'S GATE ─
+  // Drew: "When I open the closed app it flashes the IRB pickems login screen."
+  // `isSiteUnlocked()` reads the PIN-era `cfbp_site_unlocked` flag, and the
+  // adapter's first Supabase boot DELIBERATELY removes it (§6.1,
+  // supabase-backend.js _runFirstBootWipe) while nothing in this mode ever
+  // writes it back — so on every cold open of a cut-over device this line
+  // painted a full-viewport PIN gate that applyAuthModeDecision() then deleted
+  // (`!currentGateIsHold()` … `.remove()`) the instant config.json landed. The
+  // flash is exactly the width of that fetch, and the one thing the gate could
+  // never do is let anybody in: in supabase mode the site PIN is not the front
+  // door.
+  //
+  // `supabaseDevice` is the SAME synchronous, device-local last-known-mode read
+  // the mirror-prime decision above already makes — one fact, read once, used
+  // twice, so the two cannot disagree about what kind of device this is.
+  //
+  // WHAT REPLACES IT ON THIS DEVICE: the neutral skeleton, plus a COVER.
+  //
+  // ── SECURITY A-1 (2026-09-21) — THE COMMENT THAT USED TO BE HERE WAS WRONG ──
+  // It read: "The paint below is the shell's own skeleton … a neutral HOLD state
+  // with no league data in it." That was false, and the security gate caught it.
+  // `primedKeys` is indeed 0, but boot() starts chat ABOVE this line
+  // (`initChatUI({phase:'early'})`, BUG-G) and that replays the device's chat
+  // cache; `#page-dashboard` is statically `.active` in index.html, so
+  // chat-ui.js's handleChatEvent('events') inserts #dash-chat-teaser — a
+  // member's name and 64 characters of what they wrote — into a page nobody has
+  // signed into. The PIN overlay removed above had been covering that.
+  //
+  // So the overlay is replaced by the app's own existing lock: the content is
+  // made INERT (and aria-hidden) from HERE — before revealApp(), which is where
+  // it has to be, since the flash is the width of the config fetch — until this
+  // device positively establishes who it is. Same function the hold gate's
+  // teardown uses, no new screen, no layout change, and revealApp() itself does
+  // not move (the native shell's splash timing is untouched).
+  //
+  // Belt AND braces: the chat surfaces themselves now refuse an unresolved
+  // viewer (chat-ui.js's chatViewerUnresolved()), which is the fix at the
+  // source. This is the cover over everything else that has not been audited
+  // message by message.
+  //
+  // THE ROLLBACK THIS OWES BACK is paid immediately after the decision — see
+  // the call site below the hold branch.
+  if (!supabaseDevice && !isSiteUnlocked()) showSitePinGate();
+  // (armBootIdentityCover() has already run, far above — see SECURITY A-1-R
+  //  beside initChatUI({phase:'early'}). It CANNOT be here: the replay this
+  //  cover exists for happens before this line.)
   revealApp();   // paint happens NOW — hydration overlaps sign-in/PIN entry
   // DI-213k (PASS 1b) — the native-only header wordmark. Cheap and idempotent
   // on web (isNativeShell() false → immediate return); one-time on native.
@@ -1768,6 +1927,51 @@ async function boot() {
     _bootStoppedAtHold = true;
     return;
   }
+
+  // ── RG-194 — THE PIN GATE THE DEFERRAL ABOVE OWES BACK ────────────────────
+  // Deferring the PIN gate on a cut-over device must not mean FORGETTING it.
+  // This is the rollback case: `cfbp_auth_mode_last_known` still says
+  // 'supabase', but config.json — which is the authority the moment it is
+  // readable — has been rolled back to 'pins', and this device has never
+  // satisfied the site PIN. Same three terms as the deferred call and the same
+  // terms runAuthHoldCheck() already uses on ITS recovery path (the
+  // `decision.authMode !== 'supabase' && !isSiteUnlocked()` line), plus "no
+  // overlay is already up" so a gate somebody else painted is never replaced.
+  //
+  // Unreachable on every device that did NOT defer: a pins device already
+  // painted its gate above and `supabaseDevice` is false here.
+  if (supabaseDevice && decision.authMode !== 'supabase' && !isSiteUnlocked()
+      && !document.getElementById('site-gate-overlay')) {
+    showSitePinGate();
+  }
+
+  // ══ REVIEWER F1 (2026-09-21) — THE FAIL-SAFE, AND THE RULE IT ENFORCES ═════
+  //
+  // THE RULE: when the boot stops, EITHER the cover is off, OR there is a gate
+  // on screen the player can act on. Never a covered app with nothing on top of
+  // it — which, now that the cover also hides (A-1-R(4)), is an invisible dead
+  // app rather than merely an unresponsive one.
+  //
+  // Every terminal outcome, and what satisfies the rule at each:
+  //
+  //   outcome                         | what ends it
+  //   --------------------------------|--------------------------------------
+  //   rollback to pins                | THIS call — the mode resolved to a kind
+  //                                   |   of device that never owed a cover
+  //   session already established     | armBootIdentityCover() never armed
+  //   session resolves during boot    | applyAuthModeDecision()'s release
+  //   session resolves late           | refreshAuthUI()'s release
+  //   session never resolves          | sign-in gate (deadline) ON TOP
+  //   config unreadable               | hold gate ON TOP (owns inert itself)
+  //   SDK load failure                | hold gate ON TOP
+  //   interlock refused               | hold gate ON TOP
+  //   adapter starts serving          | _repaintForSupabaseData()'s release
+  //
+  // A bare call, like the other four: the judgement lives in the transition, so
+  // this cannot drift from them. It is a no-op on every path except the first —
+  // and the first is the emergency rollback lever, which is precisely the path
+  // nobody exercises until they need it to work.
+  releaseBootIdentityCover();
 
   // ── Background connect + hydrate ──────────────────────────────────────────
   try {
@@ -3149,7 +3353,26 @@ function setupChatEnabledWatch() {
  */
 export function isContentWithheld() {
   let supabaseMode = false;
-  try { supabaseMode = getAuthMode() === 'supabase'; } catch { supabaseMode = false; }
+  // ══ SECURITY A-1-R (2026-09-21) — THE PRE-CONFIG WINDOW FAILS CLOSED ══════
+  //
+  // The second term is not a convenience; it is the whole finding. boot() runs
+  // the early chat phase BEFORE it awaits the config read (BUG-G, deliberate),
+  // and until that read lands `getAuthMode()` answers js/auth.js's DEFAULT of
+  // 'pins' — so on a Supabase device this predicate took its flag-off arm and
+  // answered FALSE for the width of a network fetch. Everything keys on it:
+  // the dashboard teaser painted a member's name and 64 characters of what
+  // they wrote, the tab title took an unread count, and navigator.setAppBadge()
+  // wrote a number onto the installed app's icon, where it PERSISTS.
+  //
+  // `getLastKnownAuthMode()` is the same synchronous device-local read boot()
+  // already makes twice (the mirror-prime decision and the cover) — one fact,
+  // read once more, so the three cannot disagree about what kind of device
+  // this is. A device that has never been on Supabase is untouched: the pins
+  // boot has its own gate and a synchronous session, and it owes nothing here.
+  try {
+    supabaseMode = getAuthMode() === 'supabase'
+      || (!hasConfigBeenRead() && getLastKnownAuthMode() === 'supabase');
+  } catch { supabaseMode = false; }
   if (!supabaseMode) {
     // Flag-off (and 'prelink'). A hold gate is still a hold gate if one is
     // somehow up; everything else fails OPEN (security E3).
@@ -3777,12 +4000,46 @@ function tz() { return getTimezone(); }
 function fmtTime(iso, game=null) { return formatGameTime(iso, tz(), game); }
 
 // ─── THEME ────────────────────────────────────────────────────────────────────
+/**
+ * RG-198 — the palette for the FIRST paint of a cold boot.
+ *
+ * The player record wins whenever it exists (a returning player on a Sheets
+ * device, or any later call once the adapter is serving); the device hint is
+ * consulted only when it does not, which on a Supabase boot is every cold open
+ * until the hydrate lands.
+ *
+ * VALIDATED AGAINST THE SEVEN REAL KEYS, not trusted: the value comes off the
+ * device and is concatenated into a CSS class name. `THEMES` is the one list
+ * (js/data-model.js) — never a second copy here — so a theme added there is
+ * accepted here with no edit, and anything else is the league default.
+ */
+function bootThemeKey() {
+  const fromPlayer = getTheme();
+  if (fromPlayer && fromPlayer !== 'neutral') return fromPlayer;
+  let hint = '';
+  try { hint = getThemeHint(); } catch { hint = ''; }
+  return THEMES.some(t => t.key === hint) ? hint : (fromPlayer || 'neutral');
+}
+export const _bootThemeKeyForTest = bootThemeKey;
+
 // Applies a theme by replacing the `theme-*` class on <body>. Idempotent.
 function applyTheme(themeKey) {
   const key = themeKey || getTheme() || 'neutral';
   const body = document.body;
   [...body.classList].forEach(c => { if (c.startsWith('theme-')) body.classList.remove(c); });
   body.classList.add('theme-' + key);
+  // ── RG-198 — REMEMBER WHAT THIS HANDSET JUST PAINTED ─────────────────────
+  // Here rather than at the four call sites, because this function IS "the
+  // palette changed" — boot, the post-hydrate re-apply, the dropdown and the
+  // preference resync all land here, and a hint written anywhere else would
+  // drift from what is actually on screen.
+  //
+  // ONLY WHEN IT CHANGES: this runs on every Realtime repaint (RG-179/RG-180),
+  // and an unconditional write would queue a storage write per incoming pick.
+  // The write is also allowed to FAIL and be ignored — SEC F1's interlock
+  // refuses writes while the adapter is not serving, and a device that cannot
+  // record its palette must still paint it.
+  try { if (getThemeHint() !== key) setThemeHint(key); } catch { /* a hint is never worth a failed boot */ }
   try {
     const meta = document.querySelector('meta[name="theme-color"]');
     // Round 1 gate, item H — RESTORED short-circuit. The PASS 1b edit called
@@ -5691,6 +5948,52 @@ function fillPicksHeadSlot(c, recapHtml) {
   else c.insertAdjacentHTML('beforeend', head);
 }
 
+/**
+ * ══ RG-195 (2026-09-21) — THE PICKS PAGE'S "LOG OUT" BUTTON ═════════════════
+ *
+ * Drew: "Log out button in picks [no] longer works, can remove altogether bc
+ * you can signout from the header."
+ *
+ * WHY IT STOPPED WORKING. Its handler is `clearSession(); clearPickDraft();
+ * resyncPlayerPreferences(); renderPicksPage();` — a PIN-era session clear. In
+ * authMode:'supabase' getSession() does not READ `cfbp_session` any more (the
+ * session is synthesized from the membership cache in js/auth.js), so
+ * clearSession() changes nothing the next getSession() can observe: the page
+ * re-renders with the same player still signed in and the tap looks swallowed.
+ * It is the same mode confusion the SEC-concern-1 recursion guard in
+ * renderPicksPage() documents — that guard exists precisely because this call is
+ * inert in this mode.
+ *
+ * WHY THE FIX IS HERE AND NOT IN THE HANDLER. Signing out of a Google session is
+ * auth.js's signOut(), and it already has a home: the header account sheet's
+ * #account-signout-btn, which clears the token, the active league and the device
+ * data owner. A second sign-out affordance on the Picks page would be a second
+ * copy of that policy; Drew asked for the button to go, not to be rewired.
+ *
+ * WHY IT IS A MODE BRANCH AND NOT A DELETION. CLAUDE.md keeps the PIN model in
+ * the code for authMode ≠ 'supabase', and in THAT mode this button works and is
+ * the only way to switch player. So the markup below is byte-identical to what
+ * each of the three call sites used to inline, and the ONLY change is that
+ * supabase mode renders nothing.
+ *
+ * ONE FUNCTION, THREE CALL SITES. The three Picks-page states (locked week, pick
+ * form, submitted view) each made this judgement inline, which is three places
+ * for the next person to disagree with themselves. `extraClass` exists so the
+ * locked-week variant's `mt-md` spacer rides on the BUTTON: when the button is
+ * absent the spacer is absent with it, and nothing is left holding a gap open.
+ */
+function picksLogoutButtonHTML(label, extraClass = '') {
+  if (getAuthMode() === 'supabase') return '';
+  // escHtml() on a label that is a literal at all three call sites: byte-
+  // identical output today (none of the three contains an escapable character),
+  // and it keeps this new interpolation inside xsstest's WRAPPED class rather
+  // than adding a second site to its unescaped backlog. CONVENTIONS #12 as the
+  // default, not as a reaction to a finding.
+  return `<button class="btn btn-ghost btn-sm${extraClass ? ` ${extraClass}` : ''}" id="logout-btn">${escHtml(label)}</button>`;
+}
+/** Test hook — authtest [50] drives the real decision in both modes. */
+export const _picksLogoutButtonHTMLForTest = picksLogoutButtonHTML;
+
 function renderPicksPage() {
   // v0.16.0 dispatcher — supports viewing previous locked/closed weeks
   // (read-only) and fills the head slot (What's New + recap) for every branch
@@ -5961,7 +6264,7 @@ function renderPicksPageCurrent() {
           ${ep.length ? `<div class="text-muted text-xs mt-sm">${ep.length}/${games.length} picks saved.</div>` : ''}
         </div>
       </div>
-      <button class="btn btn-ghost btn-sm mt-md" id="logout-btn">Log Out / Switch Player</button>`;
+      ${picksLogoutButtonHTML('Log Out / Switch Player', 'mt-md')}`;
     document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
     return;
   }
@@ -5985,7 +6288,7 @@ function renderPicksPageCurrent() {
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
       <span class="text-muted text-sm"> — ${state.editingPicks?'update your picks':'make your picks'}</span></div>
-      <button class="btn btn-ghost btn-sm" id="logout-btn">Log Out</button>
+      ${picksLogoutButtonHTML('Log Out')}
     </div>
     ${state.editingPicks?'<div class="edit-mode-banner">✏️ You\'re updating picks you already submitted. Changes save when you click Submit again.</div>':''}
     ${getSettings().randomizePicksEnabled?`<div class="flex-between mb-sm randomize-row">
@@ -6204,7 +6507,7 @@ function renderSubmittedView(c, week, games, session, displayName) {
     <div class="flex-between mb-md">
       <div><span class="text-maroon font-display" style="font-size:1.05rem">${escHtml(displayName)}</span>
       <span class="text-muted text-sm"> — picks submitted ✓</span></div>
-      <button class="btn btn-ghost btn-sm" id="logout-btn">Log Out</button>
+      ${picksLogoutButtonHTML('Log Out')}
     </div>
     ${tbGuess!==null?`<div class="tiebreaker-card tiebreaker-submitted">
       <span class="tiebreaker-label">🎯 Your Tiebreaker Guess</span>
@@ -8874,6 +9177,65 @@ export function renderAlmaMaterSettingsCard() {
 
 // ─── COMMISSIONER PAGE ────────────────────────────────────────────────────────
 
+/**
+ * ══ SECURITY A-3 (2026-09-21, RG-197) — "🚪 LOGOUT COMMISSIONER" ═════════════
+ *
+ * The Data tab's twin of the Picks page's dead Log Out button, and worse in one
+ * respect. Its handler is `setSession(s.playerId, false, s.playerVerified)` —
+ * drop the admin flag on the PIN-era record. In authMode:'supabase',
+ * js/storage.js's setSession() REFUSES that write outright (it warns and
+ * returns, deliberately: a PIN-era record written there would be read back as a
+ * live commissioner session by a rollback to 'pins'), and getSession() is
+ * synthesized from the membership ROLE in any case. So the tap writes nothing
+ * and drops nothing.
+ *
+ * WHY IT IS WORSE THAN THE PICKS BUTTON. A control labelled "Logout
+ * Commissioner" that appears to succeed says that elevated privilege has been
+ * PUT DOWN. It has not: the full commissioner surface is still there, on a
+ * handset its owner may have just passed to somebody else. A dead control that
+ * lies about a privilege boundary is a security defect, not an annoyance.
+ *
+ * PIN mode is byte-identical — there the handler works and is the only way to
+ * step down (CLAUDE.md keeps the PIN model, locked).
+ */
+function commLogoutButtonHTML() {
+  if (getAuthMode() === 'supabase') return '';
+  return `<button class="btn btn-ghost btn-sm" id="logout-comm-btn">🚪 Logout Commissioner</button>`;
+}
+export const _commLogoutButtonHTMLForTest = commLogoutButtonHTML;
+
+/**
+ * …and the ROW they live in. Both of its buttons are conditional now — Full
+ * Factory Reset has been hidden in `dataMode:'supabase'` since Step 4 — so on
+ * the live league the row would render as an empty `flex` container sitting
+ * under a divider. An empty wrapper is the "44px hole" failure in its other
+ * form, so the row is emitted only when it has something in it.
+ */
+/**
+ * SPLICED INTO THE DATA TAB WITH `+`, NOT `${}`, and that is deliberate on both
+ * sides: a call interpolated into a markup template is a new site on xsstest's
+ * [9c-2] backlog, and this function emits nothing but its own literal markup —
+ * there is no user data in it to escape and nothing a reviewer would gain from
+ * a permanent exemption entry. Concatenation keeps the ratchet at zero.
+ */
+function dataActionsRowHTML() {
+  // The Factory Reset ternary is INLINE and verbatim on purpose: adaptertest's
+  // [A-RESET] pins this exact shape (`${isSupabaseDataMode() ? '' : `<button…
+  // id="reset-demo-btn"`) as the proof that the control is ABSENT rather than
+  // disabled on the live league. Extracting it into a helper of its own would
+  // silently retire somebody else's security guard, so it moved unchanged.
+  const buttons = `${isSupabaseDataMode() ? '' : `<button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>`}${commLogoutButtonHTML()}`;
+  if (!buttons) return '';
+  // CONCATENATED, not interpolated, and deliberately: `${buttons}` would be a
+  // new bare-identifier interpolation inside a markup template, which is the
+  // one thing xsstest's [9c-2] backlog ratchet refuses to grow. Both halves of
+  // `buttons` are literal markup from the two branches above — there is nothing
+  // to escape here, and adding a site to that backlog to say so would be the
+  // wrong trade.
+  return '<div class="flex gap-sm flex-wrap">' + buttons + '</div>';
+}
+export const _dataActionsRowHTMLForTest = dataActionsRowHTML;
+
 /** EXPORTED for Step 3b. DI-182j requires the permission-denied state and the
  *  claim-code visibility rule to be asserted against RENDERED OUTPUT rather than
  *  a code-path grep (RG-27's lesson, which the base DI cites by name), and this
@@ -9750,10 +10112,7 @@ export function renderCommPage() {
           <div class="divider"></div>
           <div class="form-group">
             ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">Full Factory Reset is not available on the live league — it would write demo data over everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>`}
-            <div class="flex gap-sm flex-wrap">
-              ${isSupabaseDataMode() ? '' : `<button class="btn btn-danger btn-sm" id="reset-demo-btn">⚠️ Full Factory Reset</button>`}
-              <button class="btn btn-ghost btn-sm" id="logout-comm-btn">🚪 Logout Commissioner</button>
-            </div>
+            ` + dataActionsRowHTML() + `
           </div>
         </div>
       </div>`);
@@ -14064,6 +14423,170 @@ export function setScribeAutonomousEnabled(on) {
   return { ok: true, enabled: !!on };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// UN-235 / DI-252 — SCRIBE autonomous PACING (hourly cap + cooldown)
+// Drew, 2026-09-21: "Let's make the default cap be 4 message per hour, but the
+// commissioner can make the cap unlimited, can the cooldown period be less?"
+// followed by "I want to be able to set the cooldown."
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** DI-252 §2b.9 — the server's own defaults, mirrored so the card and the Edge
+ *  Function can never disagree about what an unset value means. */
+const SCRIBE_HOURLY_DEFAULT = 4;
+const SCRIBE_COOLDOWN_DEFAULT = 10;
+/** Coordinator ruling (2): the CEILING of the $0.02–0.03 range. Never under-state
+ *  what a post costs — the number exists to make Unlimited feel expensive. */
+const SCRIBE_COST_PER_POST_USD = 0.03;
+/** The two select menus. `0` in the hourly list is the Unlimited OPTION — the
+ *  commissioner never types or reads the digit (DI-252 §2b.3). */
+const SCRIBE_HOURLY_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+const SCRIBE_COOLDOWN_CHOICES = [1, 2, 3, 5, 10, 15, 30, 60];
+
+/**
+ * BYTE-FOR-BYTE THE SERVER'S RULE, with ONE deliberate difference in the
+ * return value and none in the decisions.
+ *
+ * `supabase/functions/scribe-autonomous/index.js`'s `resolveAutonomousHourlyCap()`
+ * returns `null` for unlimited, because its caller must SKIP the rate RPC
+ * entirely on that branch. This returns the integer `0` instead — the value
+ * actually stored, and the one the `<option>` has to match to pre-select. The
+ * PARSING is identical and must stay identical: absent / null / NaN / a float /
+ * a negative / a string (even `"4"`) / anything above 60 all fail TOWARD the
+ * safe default of 4, and the exact integer `0` is the one unmistakable
+ * "unlimited". A typo must never resolve to unbounded spend.
+ */
+export function resolveScribeHourlyLimit(raw) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) return SCRIBE_HOURLY_DEFAULT;
+  if (raw === 0) return 0;                                   // the ONE explicit "unlimited"
+  if (raw < 1 || raw > 60) return SCRIBE_HOURLY_DEFAULT;
+  return raw;
+}
+
+/** The cooldown's twin of the above — `resolveAutonomousCooldownMinutes()`.
+ *  NOTE THE ASYMMETRY, and that it is the server's, not an oversight here:
+ *  there is no "unlimited" reading for a cooldown, so `0` is simply garbage and
+ *  falls back to 10. A cooldown of zero is not a smaller cooldown, it is no
+ *  cooldown at all, which is not what "can the cooldown period be less?" asked. */
+export function resolveScribeCooldownMinutes(raw) {
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) return SCRIBE_COOLDOWN_DEFAULT;
+  if (raw < 1 || raw > 60) return SCRIBE_COOLDOWN_DEFAULT;
+  return raw;
+}
+
+/** Both live values, resolved from the nested `settings.scribe` bag the server
+ *  reads. The ONE reader — the card, the helper copy and the dial's own
+ *  cooldown sentence all come through here rather than re-deriving it. */
+export function getScribePacing() {
+  const bag = getSettings().scribe;
+  const scribe = (bag && typeof bag === 'object') ? bag : {};
+  return {
+    hourlyLimit: resolveScribeHourlyLimit(scribe.autonomousHourlyLimit),
+    cooldownMinutes: resolveScribeCooldownMinutes(scribe.autonomousCooldownMinutes),
+  };
+}
+
+/**
+ * Money, the way a commissioner reads it. Under a dollar is cents (12¢), a
+ * dollar and over is dollars ($1.80). Rounded to the nearest cent so no line
+ * ever prints floating-point noise at him.
+ */
+function scribeCostPhrase(posts) {
+  const usd = Math.round(Number(posts) * SCRIBE_COST_PER_POST_USD * 100) / 100;
+  if (usd < 1) return `${Math.round(usd * 100)}¢`;
+  return `$${usd.toFixed(2)}`;
+}
+
+/** How many posts an hour a given gap physically permits. Floored: a 7-minute
+ *  gap allows 8 posts in the hour, not 8.57 of one. */
+function scribePostsPerHourAtGap(gap) {
+  return Math.max(1, Math.floor(60 / Math.max(1, Number(gap) || 1)));
+}
+
+/**
+ * DI-252 §2b.5 — the always-visible helper line, computed from BOTH selects
+ * live (before any save), so the commissioner reads the consequence of the
+ * combination he is looking at rather than the one he last stored.
+ */
+export function scribePacingHelperText({ hourlyLimit, cooldownMinutes }) {
+  const gap = resolveScribeCooldownMinutes(cooldownMinutes);
+  const cap = resolveScribeHourlyLimit(hourlyLimit);
+  const mins = gap === 1 ? '1 minute' : `${gap} minutes`;
+  if (cap === 0) {
+    const perHour = scribePostsPerHourAtGap(gap);
+    return `As many posts as the ${gap}-minute gap allows — about ${scribeCostPhrase(perHour)} an hour at the very most.`;
+  }
+  return `At most ${cap} post${cap === 1 ? '' : 's'} an hour, at least ${mins} apart — about ${scribeCostPhrase(cap)} an hour at the very most.`;
+}
+
+/** DI-252 §2b.4 — shown ONLY while Unlimited is selected. The $25/month ceiling
+ *  is named because it is the one thing that still stops SCRIBE, and Drew's own
+ *  framing is that it "stays regardless". */
+export function scribePacingUnlimitedWarning({ cooldownMinutes }) {
+  const gap = resolveScribeCooldownMinutes(cooldownMinutes);
+  const perHour = scribePostsPerHourAtGap(gap);
+  return `Unlimited at a ${gap}-minute gap could post up to ${perHour} time${perHour === 1 ? '' : 's'} an hour — about ${scribeCostPhrase(perHour)}/hour at the high end. Your $25/month budget still stops SCRIBE if it's reached.`;
+}
+
+/** DI-252 §2b.4 — the honest state, not a tooltip. Apps Script still runs
+ *  SCRIBE's unprompted posts until Step 6 flips `serverJobs.scribeAutonomous`. */
+export function isServerScribeAutonomousOn() {
+  const jobs = getSettings().serverJobs;
+  return !!(jobs && typeof jobs === 'object' && jobs.scribeAutonomous === true);
+}
+export const SCRIBE_PACING_SERVER_OFF_NOTE =
+  "These settings take effect once the server SCRIBE is switched on — Apps Script is still running SCRIBE's unprompted posts today, with its own fixed limits.";
+
+/**
+ * DI-252 §2b.8 — THE LOAD-BEARING PART, and the only reason this is a function
+ * rather than two lines in a click handler.
+ *
+ * `saveSetting(k, v)` (js/storage.js:634) is a SHALLOW read-modify-write on the
+ * top-level `cfbp_settings` field `k`, and `js/supabase-backend.js`'s
+ * `_kvFieldPatch` turns that into a `patch_kv` merge that replaces
+ * `value.scribe` AS A WHOLE UNIT. It does not deep-merge inside it. So the
+ * nested bag must be read, spread, and written back HERE — the same shape
+ * `serverJobs` already uses at js/app.js:11128 ("a SIBLING map, not a new field
+ * on `bag`").
+ *
+ * WHAT THE SPREAD PROTECTS, by name: `scribe.classifyDailyCap` (read by
+ * supabase/functions/scribe-classify) and `scribe.monthlyBudgetUsd`. Neither
+ * has a client writer, so nothing would ever rewrite them if this clobbered
+ * them — the loss would be silent and permanent until somebody re-ran the
+ * runbook. groupdtest §[12] mutation-proves the spread.
+ *
+ * NEVER `saveSettings()` (whole-blob replace, declares no field, can send a
+ * stale mirror over a fresh remote — RG-24/RG-49/RG-55), and never a TOP-LEVEL
+ * `saveSetting('autonomousHourlyLimit', …)`: the server reads these two keys
+ * from inside `scribe`, so a top-level write is a value nothing will ever read.
+ *
+ * DOES NOT CATCH. A synchronous throw from the seam is the caller's to surface
+ * loudly (AD-06) — a success toast on a write that threw is the exact softened
+ * failure that rule exists to forbid.
+ */
+export function setScribePacing({ hourlyLimit, cooldownMinutes }) {
+  const cap = resolveScribeHourlyLimit(hourlyLimit);
+  const gap = resolveScribeCooldownMinutes(cooldownMinutes);
+  const scribeBag = {
+    ...(getSettings().scribe || {}),
+    autonomousHourlyLimit: cap,
+    autonomousCooldownMinutes: gap,
+  };
+  saveSetting('scribe', scribeBag);
+  return { ok: true, hourlyLimit: cap, cooldownMinutes: gap };
+}
+
+/** The two `<option>` lists. A stored value the menu does not carry (the server
+ *  accepts any integer 1–60, and the runbook's SQL can set one) is INSERTED
+ *  rather than silently dropped — otherwise the card would show a different
+ *  number from the one the server is actually obeying, which is the one thing
+ *  a settings screen may never do. */
+function scribeChoiceOptions(choices, current, { suffix = '' } = {}) {
+  const all = [...new Set([...choices, ...(current > 0 ? [current] : [])])].sort((a, b) => a - b);
+  // numHtml(), not a bare `${v}` — the house coercion for a number in markup
+  // (escHtml(0) is '', which is why the two are different functions).
+  return all.map(v => `<option value="${numHtml(v)}" ${v === current ? 'selected' : ''}>${numHtml(v)}${escHtml(suffix)}</option>`).join('');
+}
+
 /**
  * DI-D1 — the frequency dial, Comm → Settings.
  *
@@ -14103,6 +14626,13 @@ export function renderScribeParticipationCardHTML() {
           <span class="scribe-freq-label">${escHtml(o.label)}</span>
           <span class="scribe-freq-desc">${escHtml(o.description)}</span>
         </button>`).join('');
+  // ── DI-252 — the two pacing selects, inside the SAME card as the dial. ──
+  // One control group ("how much does SCRIBE talk"), not a second card: the
+  // numbers are meaningless until the dial is on, which is also why they carry
+  // the dial's own `notif-prefs-row-dim` off-state.
+  const pacing = getScribePacing();
+  const unlimited = pacing.hourlyLimit === 0;
+  const serverOn = isServerScribeAutonomousOn();
   return `
     <div class="admin-section" data-comm-tab="settings">
       <div class="admin-section-title">🎚 SCRIBE Participation</div>
@@ -14114,8 +14644,27 @@ export function renderScribeParticipationCardHTML() {
         </label>
         <div class="scribe-freq-dial${on ? '' : ' notif-prefs-row-dim'}" role="radiogroup" aria-label="SCRIBE participation level">${options}</div>
         <p class="text-muted text-xs">${on
-          ? `Currently <strong>${escHtml((FREQUENCY_COPY.find(o => o.level === level) || {}).label || level)}</strong> — a candidate moment has to score ${FREQUENCY_LEVELS[level]} or better before SCRIBE writes anything. The 10-minute cooldown applies at every level.`
+          ? `Currently <strong>${escHtml((FREQUENCY_COPY.find(o => o.level === level) || {}).label || level)}</strong> — a candidate moment has to score ${FREQUENCY_LEVELS[level]} or better before SCRIBE writes anything. The ${numHtml(pacing.cooldownMinutes)}-minute cooldown applies at every level.`
           : 'Off. SCRIBE posts nothing unprompted — pick a level after turning it back on.'}</p>
+        <div class="scribe-pacing${on ? '' : ' notif-prefs-row-dim'}" id="scribe-pacing-group">
+          ${serverOn ? '' : `<p class="text-muted text-xs mb-sm" id="scribe-pacing-server-note">⏸ ${escHtml(SCRIBE_PACING_SERVER_OFF_NOTE)}</p>`}
+          <div class="form-group">
+            <label class="form-label" for="scribe-hourly-limit-select">Unprompted posts per hour</label>
+            <select class="form-select" id="scribe-hourly-limit-select">
+              ${scribeChoiceOptions(SCRIBE_HOURLY_CHOICES, unlimited ? 0 : pacing.hourlyLimit)}
+              <option value="0" ${unlimited ? 'selected' : ''}>Unlimited</option>
+            </select>
+          </div>
+          <p class="text-muted text-xs" id="scribe-pacing-warning">${unlimited ? `⚠️ ${escHtml(scribePacingUnlimitedWarning(pacing))}` : ''}</p>
+          <div class="form-group">
+            <label class="form-label" for="scribe-cooldown-select">Minimum gap between unprompted posts</label>
+            <select class="form-select" id="scribe-cooldown-select">
+              ${scribeChoiceOptions(SCRIBE_COOLDOWN_CHOICES, pacing.cooldownMinutes, { suffix: ' min' })}
+            </select>
+          </div>
+          <p class="text-muted text-xs" id="scribe-pacing-helper">${escHtml(scribePacingHelperText(pacing))}</p>
+          <button class="btn btn-secondary btn-sm" id="scribe-pacing-save-btn">Save</button>
+        </div>
       </div>
     </div>`;
 }
@@ -15190,6 +15739,51 @@ function renderCommExtrasV16(week, games) {
       showToast(`🎚 SCRIBE participation: ${copy ? copy.label : level}`, 'success');
       renderCommPage();
     });
+  });
+  // ── DI-252 — the two pacing selects (UN-235, 2026-09-21) ──
+  // The helper and warning lines are LIVE: they describe the combination
+  // currently on screen, not the one last saved. Otherwise the commissioner
+  // picks Unlimited, reads a sentence about 4-an-hour, and has to save before
+  // the app will tell him what he just chose.
+  const readPacingSelects = () => ({
+    hourlyLimit: parseInt(document.getElementById('scribe-hourly-limit-select')?.value ?? '', 10),
+    cooldownMinutes: parseInt(document.getElementById('scribe-cooldown-select')?.value ?? '', 10),
+  });
+  const refreshPacingCopy = () => {
+    const picked = readPacingSelects();
+    // `0` is Unlimited here, and parseInt('0') is 0 — but resolveScribeHourlyLimit
+    // is what decides, so a torn-out <option> cannot produce a sentence the
+    // server would not honour.
+    const helper = document.getElementById('scribe-pacing-helper');
+    if (helper) helper.textContent = scribePacingHelperText(picked);
+    const warn = document.getElementById('scribe-pacing-warning');
+    if (warn) warn.textContent = resolveScribeHourlyLimit(picked.hourlyLimit) === 0
+      ? `⚠️ ${scribePacingUnlimitedWarning(picked)}` : '';
+  };
+  document.getElementById('scribe-hourly-limit-select')?.addEventListener('change', refreshPacingCopy);
+  document.getElementById('scribe-cooldown-select')?.addEventListener('change', refreshPacingCopy);
+  document.getElementById('scribe-pacing-save-btn')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    const original = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Saving…';
+    try {
+      // AD-06 loud-fail: no success toast on a write that threw, and the old
+      // limits are named in the failure copy because that is what SCRIBE is
+      // still obeying — "did not save" alone would leave him guessing.
+      setScribePacing(readPacingSelects());
+      showToast('⏱ Pacing settings saved', 'success');
+    } catch (err) {
+      console.warn('[scribe-pacing] save failed', err);
+      // DI-252's copy read "did not save — SCRIBE is still using the old
+      // limits. Try again." Punctuation only is changed, and for a reason worth
+      // recording: loadtest §[65]'s app-wide scan forbids `— SCRIBE` anywhere
+      // in every shipped js module, because an em-dash before the name is one of SCRIBE's
+      // retired v2.1 voice tics. Every word of the approved sentence survives.
+      showToast('⚠️ Pacing settings did not save. SCRIBE is still using the old limits — try again.', 'error');
+      btn.disabled = false; btn.textContent = original;
+      return;
+    }
+    renderCommPage();
   });
   document.getElementById('ep-detect-btn')?.addEventListener('click', async () => {
     const st = document.getElementById('ep-detect-status');
@@ -18252,6 +18846,13 @@ async function releaseWithholdIfResolved(reason) {
  *  one-shot resume latch, all of which have to be droppable between sections. */
 export function _resetAuthHoldForTest() {
   if (_authHoldTimer !== null) { clearTimeout(_authHoldTimer); _authHoldTimer = null; }
+  // RG-194 — the sign-in gate's deadline is boot-time auth-UI state of exactly
+  // the same kind: a suite driving several boots in one process must not have
+  // scenario 3's page gated by scenario 1's pending timer.
+  if (_signInGateDeadlineTimer !== null) { clearTimeout(_signInGateDeadlineTimer); _signInGateDeadlineTimer = null; }
+  // SECURITY A-1 — the boot cover is per-PAGE state like everything else here;
+  // a latch surviving into the next scenario would make its arm() a no-op.
+  _resetBootIdentityCoverForTest();
   _authHoldReason = '';
   _authHoldCheckInFlight = false;
   _authHoldVisibilityWired = false;
@@ -18273,6 +18874,159 @@ export function _resetAuthHoldForTest() {
   _setAppContentInert(false);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// SECURITY A-1 / RG-196 — THE BOOT IDENTITY COVER (2026-09-21)
+// ══════════════════════════════════════════════════════════════════════════
+/**
+ * The window this closes: on a Supabase device boot() paints the shell before
+ * config.json has been read, and the chat engine has ALREADY replayed its
+ * device cache by then (BUG-G). Until [27] a PIN overlay happened to cover
+ * that; removing the overlay was right, and it uncovered the dashboard chat
+ * teaser for a viewer with no credential. So the page is covered by the app's
+ * own lock instead of by an overlay that did not belong to this mode.
+ *
+ * `_setAppContentInert(true)` is the EXISTING mechanism (the hold gate's
+ * teardown uses it): `.main-content` and `.bottom-nav` leave the focus order,
+ * hit-testing and the accessibility tree. No new screen, no branded splash, no
+ * layout change, and nothing about the native shell's own splash moves.
+ *
+ * SCOPED TWICE, because a cover is a liability if it can outlive its reason:
+ *   • only on a device whose last known mode is 'supabase' (the pins boot is
+ *     byte-identical — it has its own gate and a synchronous session);
+ *   • only when the session is not ALREADY established. A device with a live
+ *     token knows who it is before it paints and pays nothing.
+ */
+let _bootIdentityCover = false;
+function armBootIdentityCover() {
+  if (_bootIdentityCover) return;
+  try { if (hasValidSupabaseSession()) return; } catch { /* treat as unknown */ }
+  _bootIdentityCover = true;
+  _setAppContentInert(true);
+}
+
+/**
+ * THE RELEASE, and why it re-derives instead of trusting a caller.
+ *
+ * The failure mode of a cover like this is the one reviewer F1 found at the
+ * sixth gate from the other direction: a page left inert forever — painted, and
+ * dead to every tap, looking completely normal. So the release is a TRANSITION
+ * (one function, one predicate) rather than an obligation on a list of call
+ * sites, and it is called from every moment the answer can arrive:
+ *   • the end of applyAuthModeDecision() — the config read resolved the mode
+ *     and the session question with it;
+ *   • refreshAuthUI() — any auth/membership event, which is how a refreshed
+ *     token or a completed sign-in lands;
+ *   • the sign-in gate's deadline — where a late-resolving session is noticed;
+ *   • _repaintForSupabaseData() — the adapter is serving, so the league is
+ *     demonstrably this device's to see.
+ * Each one is a bare call; the judgement lives here.
+ *
+ * It refuses while a HOLD is up, because a hold owns the inert state itself and
+ * has its own release (hideAuthHoldGate -> releaseWithholdIfResolved). Two
+ * owners for one attribute is how a lock gets lifted by the wrong hand.
+ */
+function releaseBootIdentityCover() {
+  if (!_bootIdentityCover) return false;
+  try {
+    if (currentAuthHoldReason()) return false;
+    // ══ REVIEWER F1 (2026-09-21) — THE MODE RESOLVED, AND IT IS NOT SUPABASE ══
+    //
+    // THE BUG THIS ARM IS. The cover is armed on any device whose LAST KNOWN
+    // mode is 'supabase'. Every one of the four call sites that releases it,
+    // however, sits behind `getAuthMode() === 'supabase'` — two return early on
+    // it, one is nested inside an `if`, one only runs in the Supabase hydrate.
+    // So on the ROLLBACK path — `cfbp_auth_mode_last_known` still says
+    // 'supabase', config.json has been rolled back to 'pins' — nothing ever
+    // called the release. boot() painted the PIN gate over a `.main-content`
+    // that was still inert, and showSitePinGate()'s submit removes the overlay
+    // and navigates without touching it. Six painted, dead phones, on the one
+    // lever that exists to rescue a bad Supabase deploy. With A-1-R(4)'s
+    // `visibility:hidden` belt in place they would be INVISIBLE dead phones.
+    //
+    // WHY IT IS UNCONDITIONAL. A 'pins' device never owed a cover in the first
+    // place: it has its own gate and a synchronous session, and armBootIdentity-
+    // Cover() would not have fired had the mode been known at that moment. The
+    // cover is a stand-in for an answer that had not arrived; the answer has now
+    // arrived and it says this is not that kind of device.
+    //
+    // `hasConfigBeenRead()` is what makes "resolved" mean resolved: without it
+    // this would read js/auth.js's DEFAULT 'pins' during the pre-config window
+    // and lift the cover in exactly the window A-1-R put it up for. The hold
+    // check above still runs first — a hold owns the inert state and has its own
+    // release, and two owners for one attribute is how a lock gets lifted by the
+    // wrong hand.
+    if (hasConfigBeenRead() && getAuthMode() !== 'supabase') {
+      _bootIdentityCover = false;
+      _setAppContentInert(false);
+      return true;
+    }
+    // "Positively established" — the same pair isContentWithheld()'s case 2
+    // asks: a live token on this device, or an account id actually proven on
+    // this page. Neither is a guess.
+    if (!hasValidSupabaseSession() && !getAccountUserId()) return false;
+  } catch { return false; }
+  _bootIdentityCover = false;
+  _setAppContentInert(false);
+  return true;
+}
+/** Test hook — per-page state, dropped with the rest of it. */
+function _resetBootIdentityCoverForTest() { _bootIdentityCover = false; }
+
+// ══════════════════════════════════════════════════════════════════════════
+// RG-194 — THE SIGN-IN GATE'S DEADLINE (2026-09-21)
+// ══════════════════════════════════════════════════════════════════════════
+/**
+ * The bound on "not resolved yet". applyAuthModeDecision() holds the gate while
+ * the device has a persisted session the SDK still has to resolve; this is what
+ * makes that wait finite. Six seconds is longer than a token refresh on a bad
+ * cellular connection and far shorter than a player will sit looking at a
+ * skeleton, and it is a CONSTANT rather than a tuned value — the interesting
+ * property is that the wait ends, not what it ends at.
+ */
+const SIGN_IN_GATE_DEADLINE_MS = 6000;
+let _signInGateDeadlineTimer = null;
+
+/** Arm it once. Re-arming on a second decision (the 20s hold re-check calls the
+ *  same function) would push the deadline out indefinitely, which is the one
+ *  thing a deadline may not do. */
+function armSignInGateDeadline() {
+  if (_signInGateDeadlineTimer !== null) return;
+  if (typeof setTimeout !== 'function') { showGoogleSignInGate(); return; }
+  _signInGateDeadlineTimer = setTimeout(fireSignInGateDeadline, SIGN_IN_GATE_DEADLINE_MS);
+}
+
+/**
+ * FAIL-CLOSED, and it re-derives every term at the moment it fires rather than
+ * trusting what was true when it was armed — which is why nothing has to cancel
+ * it. Each early return is a state in which a gate would be WRONG:
+ *   • the mode is no longer supabase        — not this gate's world at all;
+ *   • the session resolved                  — the player is signed in;
+ *   • a hold gate is up                     — A7: a session-shaped paint never
+ *                                             replaces a fail-closed lock;
+ *   • an overlay is already on screen       — never replace somebody else's
+ *                                             gate (security S-1), and never
+ *                                             wipe the inline copy the player
+ *                                             may be reading on it.
+ */
+function fireSignInGateDeadline() {
+  _signInGateDeadlineTimer = null;
+  try {
+    if (getAuthMode() !== 'supabase') return;
+    // SECURITY A-1 — a session that resolved late still resolved: lift the
+    // cover on the way past rather than leaving the page inert behind no gate.
+    if (hasValidSupabaseSession()) { releaseBootIdentityCover(); return; }
+    if (currentAuthHoldReason()) return;
+    if (document.getElementById('site-gate-overlay')) return;
+    console.warn('[auth] a session is persisted on this device but nothing resolved it in time — gating the page rather than leaving an unresolved identity in front of the app');
+    showGoogleSignInGate();
+  } catch (e) {
+    console.error('[auth] the sign-in gate deadline failed to paint', e);
+  }
+}
+/** Test hook — the suites drive the deadline directly instead of waiting six
+ *  real seconds; the timer plumbing above is pinned structurally. */
+export const _fireSignInGateDeadlineForTest = fireSignInGateDeadline;
+
 /**
  * DI-180a/b/d — "Continue with Google" replaces showSitePinGate() one-for-
  * one in authMode:'supabase'. Reuses #site-gate-overlay/.site-gate/
@@ -18291,6 +19045,13 @@ export function _resetAuthHoldForTest() {
  * absence (js/platform.js's own header comment) so this branch is
  * unreachable and the markup below is byte-identical to before DI-216
  * (brandtest.mjs [9], DI-216j/A3).
+ *
+ * DI-208e (2026-09-21) — the button's `click` handler branches on
+ * `getAuthPath()` (js/platform.js) to call the new, exclusive
+ * `js/auth-native.js`'s `signInWithGoogleNative()` on native instead of the
+ * existing `signInWithGoogle()`. Per DI-216l, this changes NOTHING about the
+ * button's markup, `id`, or the DOM this function renders — only the click
+ * handler's body, below.
  */
 export function showGoogleSignInGate() {
   const s = getSettings();
@@ -18341,10 +19102,25 @@ export function showGoogleSignInGate() {
     if (msgEl) msgEl.style.display = 'none';
     if (label) label.textContent = 'Connecting to Google…';
     try {
-      await signInWithGoogle();
+      // DI-208e — the ONE branch point. getAuthPath() is ORIGIN-POSITIVE
+      // (security condition 8): 'native' only when isNativeOrigin() holds,
+      // never from isNativeShell() alone. The dynamic import is reached ONLY
+      // inside this branch, so a plain web boot never requests
+      // auth-native.js — it isn't in service-worker.js's STATIC_ASSETS and
+      // must never be (authnativetest.mjs proves the import is never
+      // evaluated on web). The web call below is BYTE-UNCHANGED.
+      if (getAuthPath() === 'native') {
+        const { signInWithGoogleNative } = await import('./auth-native.js');
+        await signInWithGoogleNative();
+      } else {
+        await signInWithGoogle();
+      }
       // Success continues via the PKCE redirect round-trip — the SDK's
       // onAuthStateChange('SIGNED_IN', …) fires on return, which
       // refreshAuthUI() uses to remove this overlay (no reload either way).
+      // The native path lands the SAME event through the SAME client
+      // (auth-native.js's exchangeCodeForSession() call), so this comment
+      // and refreshAuthUI()'s wiring hold for both paths unchanged.
     } catch (err) {
       btn.disabled = false;
       if (label) label.textContent = 'Continue with Google';
@@ -18778,6 +19554,13 @@ export function _lastIdentityKeyForTest() { return _lastIdentityKey; }
  */
 export function refreshAuthUI(event, payload) {
   if (getAuthMode() !== 'supabase') return;
+
+  // SECURITY A-1 — every auth/membership event is a moment the "who is this
+  // device?" question can have been answered: a refreshed token, a completed
+  // sign-in, a membership read landing. The judgement (and the refusal while a
+  // hold owns the inert state) lives inside the transition, so this is a bare
+  // call and cannot drift from the other three.
+  releaseBootIdentityCover();
 
   // ── The auth-unavailable channel (SEC F2) ─────────────────────────────────
   // SEC F4 — TWO failures, two banners. A PostgREST 401 / PGRST301 on the

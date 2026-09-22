@@ -1368,8 +1368,25 @@ let sharedBootHandler = null;
       };
     };
 
+    // [27] — THE ORDER OF THE PAINTS, not just the state at the end. A gate that
+    // is appended and then removed a moment later leaves NO trace in `reg`,
+    // which is exactly the defect RG-194 is about ("it flashes the login
+    // screen"). Every append is logged with the markup it carried at that
+    // instant (all three gate renderers set innerHTML BEFORE appendChild), so a
+    // scenario can ask WHICH gate appeared and WHEN relative to the config read.
+    const appendLog = [];
+    // [29] — see the body stub below.
+    const bodyClasses = new Set();
+    const themeOrder = [];
+    const bodyClassList = {
+      add: c => { bodyClasses.add(c); if (String(c).startsWith('theme-')) themeOrder.push(c); },
+      remove: c => bodyClasses.delete(c),
+      toggle: (c, on) => (on ? bodyClasses.add(c) : bodyClasses.delete(c)),
+      contains: c => bodyClasses.has(c),
+      [Symbol.iterator]: () => bodyClasses[Symbol.iterator](),
+    };
     const appendAnywhere = el => {
-      if (el?.id) reg.set(el.id, el);
+      if (el?.id) { appendLog.push({ id: el.id, html: String(el.innerHTML || '') }); reg.set(el.id, el); }
       if (String(el?.src || '').includes('supabase')) {
         // A faithful stand-in for the browser: the tag lands, the file arrives,
         // window.supabase appears, and the element's own 'load' fires.
@@ -1384,9 +1401,24 @@ let sharedBootHandler = null;
       addEventListener() {}, removeEventListener() {},
       getElementById: id => reg.get(id) || null,
       createElement(tag) { const el = new BEl(tag); if (String(tag).toLowerCase() === 'script') scripts.push(el); return el; },
-      querySelector(sel) { return (currentByClass.get(sel) || [])[0] || null; },
+      // [28] — `#id.class` is answered FAITHFULLY (element + live class check)
+      // rather than from the static selector map. js/chat-ui.js's
+      // dashboardPageActive() asks exactly that (`#page-dashboard.active`), and
+      // a stub that answered null could not see the teaser insertion this suite
+      // is about; one that answered unconditionally would keep answering after
+      // A6's teardown has removed `.active`.
+      querySelector(sel) {
+        const m = /^#([\w-]+)\.([\w-]+)$/.exec(String(sel));
+        if (m) { const el = reg.get(m[1]); return el && el.classList?.contains(m[2]) ? el : null; }
+        return (currentByClass.get(sel) || [])[0] || null;
+      },
       querySelectorAll(sel) { return currentByClass.get(sel) || []; },
-      body: { appendChild: appendAnywhere, classList: { add(){}, remove(){}, toggle(){}, contains(){ return false; }, [Symbol.iterator]: () => [][Symbol.iterator]() }, dataset: {} },
+      // [29] — A REAL CLASS SET ON <body>, and a LOG of every theme-* applied in
+      // order. applyTheme() spreads body.classList to find the class it is
+      // replacing, so an inert stub made the whole palette question
+      // unobservable — and the question RG-198 asks is specifically WHICH
+      // palette is painted FIRST, before any await.
+      body: { appendChild: appendAnywhere, classList: bodyClassList, dataset: {} },
       head: { appendChild: appendAnywhere },
       title: '',
     };
@@ -1402,7 +1434,7 @@ let sharedBootHandler = null;
       // removed the hydrate and stayed green on that assertion). One line here
       // makes the two distinguishable everywhere.
       if (opts?.body) { try { const a = JSON.parse(opts.body)?.action; if (a) backendActions.push(String(a)); } catch {} }
-      if (u.includes('config.json')) { readsAtConfigFetch = sessionKeyReads.length; return config(); }
+      if (u.includes('config.json')) { readsAtConfigFetch = sessionKeyReads.length; appendLog.push({ id: '#config-fetch', html: '' }); return config(); }
       throw new Error('network disabled in boottest');
     };
 
@@ -1466,7 +1498,8 @@ let sharedBootHandler = null;
     for (let i = 0; i < 60; i++) await new Promise(r => setTimeout(r, 0));
 
     return {
-      reg, scripts, fetches, backendActions, store, sdkInstalled, sessionKeyReads, paintedPages, chrome, installSdk,
+      reg, scripts, fetches, backendActions, store, sdkInstalled, sessionKeyReads, paintedPages, chrome, installSdk, appendLog,
+      bodyClasses, themeOrder,
       sessionReadsAfterModeDecision: readsAtConfigFetch === null ? sessionKeyReads.length : sessionKeyReads.length - readsAtConfigFetch,
       supaScripts: scripts.filter(el => String(el.src || '').includes('supabase')),
       hydrateCalls: fetches.filter(u => u.includes(BACKEND_URL)),
@@ -2841,6 +2874,830 @@ let sharedBootHandler = null;
       '[15] — js/chat-ui.js consults getAuthMode() NOWHERE, which is why the rows are live in every mode. Stated as a property of the file so the deploy note and the code cannot drift.');
   }
   }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[27] RG-194 — a returning SIGNED-IN player is never shown the sign-in screen on a cold open…');
+  // ═════════════════════════════════════════════════════════════════════════
+  //
+  // DREW, 2026-09-21, iPhone home-screen PWA, signed in with Google, Supabase
+  // mode: "When I open the closed app it flashes the IRB pickems login screen,
+  // then the neutral page while loading then quickly flashes back to my saved
+  // color scheme, this is a very jarring sequence as it happens so fast."
+  //
+  // THIS SECTION OWNS THE FIRST OF THOSE THREE PAINTS — the login screen. Two
+  // independent mechanisms produce it, and BOTH are the same mistake: a gate
+  // painted from a synchronous read that answers "signed out" when the honest
+  // answer is "not resolved yet".
+  //
+  //   (1) boot()'s `if (!isSiteUnlocked()) showSitePinGate()` runs ABOVE the
+  //       config read, in every mode. `cfbp_site_unlocked` is the PIN-era flag,
+  //       and the adapter's first-boot wipe (supabase-backend.js
+  //       _runFirstBootWipe) deliberately removes it and nothing in supabase
+  //       mode ever sets it again — so on EVERY cold open of a cut-over device
+  //       that line paints the PIN gate, and applyAuthModeDecision() removes it
+  //       again the moment config.json lands. The whole flash is the width of
+  //       that fetch.
+  //
+  //   (2) the gate decision itself asked hasValidSupabaseSession(), which is
+  //       false whenever the ACCESS token has expired — about an hour after the
+  //       last use, i.e. on essentially every cold open of a home-screen PWA —
+  //       even though the refresh token beside it is good. So the Google gate
+  //       went up, the SDK refreshed in the background, and refreshAuthUI()
+  //       took it straight back down.
+  //
+  // THE RULE THIS SECTION PINS: a sign-in gate (PIN or Google) may be painted
+  // only once the auth layer has POSITIVELY determined there is no session. The
+  // fail-closed HOLD gates are untouched and are explicitly allowed here — a
+  // hold is a lock, not a login screen, and SEC F1-R1's config-unreadable path
+  // must keep working exactly as [13]/[20] pin it.
+  //
+  // Ordering, not end state: a gate that is appended and removed 300ms later
+  // leaves no trace in `reg`, which is why runBoot() now logs every append with
+  // the markup it carried (see `appendLog`).
+  {
+    const SUPA_CFG27 = { authMode: 'supabase', dataMode: 'supabase',
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
+    const supaConfig27 = okConfig(SUPA_CFG27);
+    const USER27 = { id: 'u-drew', email: 'drew@example.com' };
+    const freshSession27 = () => JSON.stringify({ access_token: 'tok-fresh', refresh_token: 'r-drew',
+      expires_at: Math.floor(Date.now() / 1000) + 3600, user: USER27 });
+    // The overnight PWA: the access token died hours ago, the refresh token did
+    // not. This is the state Drew's phone is in every single morning.
+    const staleSession27 = () => JSON.stringify({ access_token: 'tok-stale', refresh_token: 'r-drew',
+      expires_at: Math.floor(Date.now() / 1000) - 7200, user: USER27 });
+    // DREW'S DEVICE, exactly: cut over to Supabase, and with NO
+    // `cfbp_site_unlocked` — the adapter's first-boot wipe took it and supabase
+    // mode never writes it back.
+    const DEVICE27 = { cfbp_auth_mode_last_known: 'supabase', cfbp_backend_config: BACKEND_CFG };
+
+    const gateKind = (e) => {
+      if (e.id !== 'site-gate-overlay') return null;
+      if (/data-gate-state="hold"/.test(e.html)) return 'hold';
+      if (/id="site-pin-input"/.test(e.html)) return 'pin';
+      if (/Continue with Google/.test(e.html)) return 'google';
+      return 'unknown';
+    };
+    const gateSeq = r => r.appendLog.map(gateKind).filter(Boolean);
+    const signInGates = r => gateSeq(r).filter(k => k === 'pin' || k === 'google');
+    const quiet = async (fn) => {
+      const e = console.error, w = console.warn, i = console.info;
+      console.error = () => {}; console.warn = () => {}; console.info = () => {};
+      try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; }
+    };
+    const settle27 = async (n = 40) => { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 0)); };
+
+    // ── (a) THE REPORT — a live access token, and still a login screen ───────
+    {
+      const r = await quiet(() => runBoot({
+        config: supaConfig27,
+        seed: { ...DEVICE27, cfbp_supabase_session: freshSession27() },
+      }));
+      assert(storageMod.isSiteUnlocked() === false,
+        '[27] fixture: this device has NO site-unlock flag — the Supabase first-boot wipe removed it and nothing in this mode writes it back. Without this the whole section is about a device that does not exist');
+      assert(signInGates(r).length === 0,
+        `[27] RG-194 — a player whose session is live on this device is shown NO sign-in screen at any point in the boot (gates painted, in order: ${JSON.stringify(gateSeq(r))}). The PIN gate above the config read is paint 1 of Drew's three`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (b) THE MORNING OPEN — expired access token, good refresh token ──────
+    {
+      const r = await quiet(() => runBoot({
+        config: supaConfig27,
+        seed: { ...DEVICE27, cfbp_supabase_session: staleSession27() },
+      }));
+      assert(authMod.hasValidSupabaseSession() === false && authMod.hasPersistedSupabaseSession() === true,
+        '[27] fixture: the device holds a session whose ACCESS token is expired and whose REFRESH token is good — "not resolved yet", which is neither of the two answers the old decision could give');
+      assert(signInGates(r).length === 0,
+        `[27] RG-194 — …and it is still not a login screen: the app holds its neutral boot state until the auth layer answers, instead of asserting a signed-out answer it does not have (gates: ${JSON.stringify(gateSeq(r))})`);
+      // …and when the SDK's refresh lands, nothing new paints either.
+      r.store.set('cfbp_supabase_session', freshSession27());
+      await quiet(async () => {
+        authMod._fireAuthEventForTest('INITIAL_SESSION', { access_token: 'tok-fresh', user: USER27 });
+        await settle27(20);
+      });
+      assert(signInGates(r).length === 0,
+        `[27] …and none appears when the refreshed session arrives either — the player goes straight from the neutral hold to their app (gates: ${JSON.stringify(gateSeq(r))})`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (c) NON-VACUITY — a device with no session DOES get the gate ─────────
+    // The blind rule and DI-180h depend on this half: deferring the paint must
+    // never become "no gate at all". And the gate it gets is the GOOGLE one —
+    // the PIN gate is not this mode's front door and never was.
+    {
+      const r = await quiet(() => runBoot({ config: supaConfig27, seed: { ...DEVICE27 } }));
+      assert(signInGates(r).includes('google'),
+        `[27] a supabase device with NO persisted session is gated immediately — the deferral is scoped to "a token is on the device", not to "supabase mode" (gates: ${JSON.stringify(gateSeq(r))})`);
+      assert(!signInGates(r).includes('pin'),
+        `[27] …and it is the Google gate, only: a cut-over device never paints the PIN gate, not even for an instant (gates: ${JSON.stringify(gateSeq(r))})`);
+      const ov = r.reg.get('site-gate-overlay');
+      assert(!!ov && /Continue with Google/.test(ov.innerHTML || ''),
+        '[27] …and that gate is still up when the boot settles');
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (d) THE REFRESH THAT FAILS — the gate arrives, just later ────────────
+    // A revoked/expired refresh token is answered by the SDK with a null-session
+    // event, and refreshAuthUI()'s existing signed-out branch paints the gate.
+    // The deferral changes WHEN, never WHETHER.
+    {
+      const r = await quiet(() => runBoot({
+        config: supaConfig27,
+        seed: { ...DEVICE27, cfbp_supabase_session: staleSession27() },
+      }));
+      assert(signInGates(r).length === 0, '[27] fixture: nothing is gated while the answer is outstanding');
+      await quiet(async () => {
+        r.store.delete('cfbp_supabase_session');
+        authMod._fireAuthEventForTest('INITIAL_SESSION', null);
+        await settle27(20);
+      });
+      const ov = r.reg.get('site-gate-overlay');
+      assert(!!ov && /Continue with Google/.test(ov.innerHTML || ''),
+        `[27] a session that cannot be refreshed lands on the Google gate the moment the auth layer says so (gates: ${JSON.stringify(gateSeq(r))}) — the deferral moves the paint, it never removes it`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (e) FAIL-CLOSED — the auth layer that never answers ──────────────────
+    // Offline, SDK blocked, a client that never fires: the page may not sit
+    // ungated forever on an unresolved identity. The deadline is armed by the
+    // deferral and is driven here through the REAL handler.
+    {
+      const r = await quiet(() => runBoot({
+        config: supaConfig27,
+        seed: { ...DEVICE27, cfbp_supabase_session: staleSession27() },
+      }));
+      assert(signInGates(r).length === 0, '[27] fixture: the gate is deferred');
+      assert(typeof appMod._fireSignInGateDeadlineForTest === 'function',
+        '[27] fixture: app.js exports the deadline handler, so this drives the REAL fail-closed path rather than a lookalike');
+      await quiet(async () => { appMod._fireSignInGateDeadlineForTest?.(); await settle27(10); });
+      const ov = r.reg.get('site-gate-overlay');
+      assert(!!ov && /Continue with Google/.test(ov.innerHTML || ''),
+        '[27] …and if nothing ever answers, the deadline gates the page anyway — an unresolved identity fails CLOSED');
+      const appSrc27 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      assert(/const SIGN_IN_GATE_DEADLINE_MS = \d+;/.test(appSrc27),
+        '[27] …and that deadline is a bounded constant, not an open-ended wait [structural]');
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (f) THE PINS WORLD IS BYTE-IDENTICAL, INCLUDING THE PAINT ORDER ──────
+    // AD-08/reviewer B2: a device that is not on supabase still paints its gate
+    // BEFORE the config.json round trip. The fix may not buy paint 1 back by
+    // making every other device wait on the network.
+    {
+      const r = await quiet(() => runBoot({ config: okConfig({}), seed: { cfbp_backend_config: BACKEND_CFG } }));
+      const pinAt = r.appendLog.findIndex(e => gateKind(e) === 'pin');
+      const cfgAt = r.appendLog.findIndex(e => e.id === '#config-fetch');
+      assert(pinAt > -1 && cfgAt > -1 && pinAt < cfgAt,
+        `[27] a device that is NOT on supabase still paints the PIN gate before the config read (pin at ${pinAt}, config fetch at ${cfgAt}) — AD-08's paint-first boot is untouched`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (g) ROLLBACK — the PIN gate the deferral owes back ───────────────────
+    // A device whose last known mode was supabase, booting a build that has
+    // rolled back to pins. Deferring the PIN gate must not mean forgetting it:
+    // config.json is the authority, and it says this device is locked.
+    {
+      const r = await quiet(() => runBoot({
+        config: okConfig({}),
+        seed: { cfbp_auth_mode_last_known: 'supabase', cfbp_backend_config: BACKEND_CFG },
+      }));
+      assert(authMod.getAuthMode() === 'pins', '[27] fixture: config.json rolled this device back to pins');
+      const ov = r.reg.get('site-gate-overlay');
+      assert(!!ov && /id="site-pin-input"/.test(ov.innerHTML || ''),
+        `[27] …and the PIN gate IS up when the decision lands (gates: ${JSON.stringify(gateSeq(r))}) — a locked device is still locked, just gated by the answer instead of by the guess`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ── (h) SEC F1-R1 IS UNTOUCHED — config unreadable still HOLDS ───────────
+    {
+      const r = await quiet(() => runBoot({
+        config: () => { throw new TypeError('Failed to fetch'); },
+        paintPages: true,
+        seed: { ...DEVICE27, cfbp_supabase_session: freshSession27() },
+      }));
+      assert(appMod.currentAuthHoldReason() === 'config-unreadable',
+        '[27] SEC F1-R1: a config read that fails on a cut-over device still HOLDS signed out');
+      const ov = r.reg.get('site-gate-overlay');
+      assert(!!ov && /data-hold-reason="config-unreadable"/.test(ov.innerHTML || ''),
+        '[27] …behind the hold gate, exactly as [13] and [20] pin it');
+      assert(signInGates(r).length === 0,
+        `[27] …and NO sign-in gate flashed under it on the way there (gates: ${JSON.stringify(gateSeq(r))}) — a hold is a lock, a login screen is a lie about who this device is`);
+      appMod._resetAuthHoldForTest();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log('\n[28] SECURITY A-1 — a cached chat room is NOT readable before this device knows who it is…');
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // THE FINDING (security gate, HIGH, on [27]'s own branch). [27] stopped the
+    // app painting a login screen at a signed-in player. What it did not notice
+    // is WHAT THE GATE HAD BEEN COVERING. boot() starts chat BEFORE the config
+    // read — `initChatUI({phase:'early'})`, BUG-G, deliberately — and that
+    // replays `cfbp_chat_events_cache`. `#page-dashboard` is statically
+    // `.active` in index.html, so js/chat-ui.js's handleChatEvent('events')
+    // finds dashboardPageActive() true and inserts #dash-chat-teaser:
+    // `<strong>author</strong>: body.slice(0,64)`.
+    //
+    // And it renders for a viewer with NO IDENTITY, because
+    // `isUnreadFor(m, null, …)` (js/chat.js) compares `m.author !== selfId`
+    // against null — every message is unread to nobody. On main the PIN overlay
+    // happened to cover that window; [27] removed the overlay, which is correct,
+    // and thereby uncovered a league member's name and 64 characters of what
+    // they wrote, to anyone holding the handset, with no credential, for the
+    // width of the config fetch (or up to the sign-in gate's 6s deadline).
+    // DI-180h: no league-scoped data before sign-in.
+    //
+    // TWO HALVES, MUTATION-PROVEN INDEPENDENTLY:
+    //   (i)  the app content is INERT from before revealApp() until this device
+    //        positively knows who it is;
+    //   (ii) the chat surfaces themselves refuse to speak to an unresolved
+    //        viewer — the fix at the source, which also ends the "84 then 0"
+    //        badge flash (an unknown cursor must read as "unknown, say nothing",
+    //        never as "zero seen, so everything is unread").
+    {
+      const chatUi28 = await import('./js/chat-ui.js');
+      const chatMod28 = await import('./js/chat.js');
+      // One notifying message from a real-looking member — the exact shape the
+      // device cache holds after a normal session.
+      const CACHE28 = () => JSON.stringify({ epoch: 0, head: 7, events: [{
+        id: 'm7', seq: 7, ts: Date.now() - 60000, type: 'message', author: 'm-kihoon',
+        body: 'taking the Aggies -7 and the over, easy money', notify: true,
+      }] });
+      const VALID28 = () => JSON.stringify({ access_token: 'tok', refresh_token: 'r',
+        expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u-drew', email: 'd@x.test' } });
+      const EXPIRED28 = () => JSON.stringify({ access_token: 'tok', refresh_token: 'r',
+        expires_at: Math.floor(Date.now() / 1000) - 7200, user: { id: 'u-drew', email: 'd@x.test' } });
+      const SUPA28 = { authMode: 'supabase', dataMode: 'supabase',
+        supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
+      // `navigator` was installed with defineProperty above and is read-only on
+      // this object, so a scenario swaps it the same way rather than assigning.
+      const setNavigator28 = (value) => {
+        try { globalThis.navigator = value; }
+        catch { Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true }); }
+        return globalThis.navigator;
+      };
+      const quiet28 = async (fn) => {
+        const e = console.error, w = console.warn, i = console.info, l = console.log;
+        console.error = () => {}; console.warn = () => {}; console.info = () => {}; console.log = () => {};
+        try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; console.log = l; }
+      };
+
+      // ── (A) THREE UNRESOLVED STATES, ONE ANSWER: NOTHING ────────────────
+      //
+      // HOW THE ROOM IS DELIVERED, and why it is not the cache read. chat.js
+      // primes `cfbp_chat_events_cache` ONCE PER PAGE, and this suite is one
+      // process — earlier sections already consumed that latch, so a seeded
+      // cache here would deliver nothing and every assertion below would pass
+      // for the wrong reason (it did, on the first run of this section; the
+      // fixture check caught it). The cache IS seeded, because that is the state
+      // the device is in, and the replay is then driven through `ingest()` —
+      // the very call readAndPrimeEventsCache() makes with the parsed events
+      // (js/chat.js, `ingest(parsed.events, parsed.head, {fromCache: true})`),
+      // into that boot's own DOM. Same function, same notification, same
+      // handleChatEvent('events') path that inserts the teaser.
+      const EV28 = () => ({ id: 'm7', seq: 7, ts: Date.now() - 60000, type: 'message',
+        author: 'm-kihoon', body: 'taking the Aggies -7 and the over, easy money', notify: true });
+      const STATES28 = [
+        ['no session at all',           null],
+        ['a GARBAGE persisted session', '{not json'],
+        ['an EXPIRED session',          EXPIRED28()],
+      ];
+      for (const [label, session] of STATES28) {
+        const badgeCalls = [];
+        const realNav = globalThis.navigator;
+        setNavigator28({ setAppBadge: n => { badgeCalls.push(`set:${n}`); return Promise.resolve(); },
+                         clearAppBadge: () => { badgeCalls.push('clear'); return Promise.resolve(); } });
+        let r = null;
+        try {
+          r = await quiet28(() => runBoot({
+            config: okConfig(SUPA28),
+            paintPages: true,
+            seed: {
+              cfbp_auth_mode_last_known: 'supabase',
+              cfbp_backend_config: BACKEND_CFG,
+              cfbp_chat_events_cache: CACHE28(),
+              ...(session ? { cfbp_supabase_session: session } : {}),
+            },
+          }));
+          // ── (i) THE COVER, read BEFORE anything else touches the page ────
+          assert(r.chrome.main.getAttribute('inert') === '' && r.chrome.main.getAttribute('aria-hidden') === 'true',
+            `[28] ${label}: A-1(i) — .main-content is inert + aria-hidden while the answer is outstanding, from before revealApp()`);
+          assert(r.chrome.nav.getAttribute('inert') === '',
+            `[28] ${label}: …and so is .bottom-nav`);
+
+          // THE ROOM ARRIVES, for real.
+          globalThis.document.title = "IRB Pick 'Ems";
+          badgeCalls.length = 0;
+          await quiet28(async () => { chatMod28.ingest([EV28()]); });
+          assert(chatMod28.getMessages({ tag: 'all' }).some(m => m.id === 'm7'),
+            `[28] ${label}: fixture — the cached message really IS in the chat engine after the delivery (without this every assertion below is vacuous)`);
+          assert(chatMod28.isChatEnabled() === true,
+            `[28] ${label}: fixture — chat is ENABLED, so nothing below is silent merely because the room is switched off`);
+          assert(storageMod.getSession()?.playerId == null,
+            `[28] ${label}: fixture — and this device still has NO resolved identity (${JSON.stringify(storageMod.getSession())})`);
+        } finally { setNavigator28(realNav); }
+
+        const dash = r.reg.get('page-dashboard');
+        assert(!!dash && dash.classList.contains('active'),
+          `[28] ${label}: fixture — #page-dashboard exists and is ACTIVE, exactly as index.html ships it (the teaser inserts into it, and js/chat-ui.js's dashboardPageActive() asks for exactly this selector)`);
+        const dashHTML = String(dash?.innerHTML || '');
+        assert(!/dash-chat-teaser/.test(dashHTML),
+          `[28] ${label}: NO chat teaser is in the DOM — no member's name, no message text, before this device knows who it is (got ${JSON.stringify(dashHTML.slice(0, 160))})`);
+        assert(!/Aggies -7/.test(dashHTML) && !/m-kihoon/.test(dashHTML),
+          `[28] ${label}: …and none of the cached message's words reached the page by any other route`);
+        assert(!/^\(\d/.test(String(globalThis.document.title || '')),
+          `[28] ${label}: …and the tab title carries no unread count (got ${JSON.stringify(globalThis.document.title)})`);
+        assert(badgeCalls.length === 0,
+          `[28] ${label}: …and the PWA icon badge was neither SET nor CLEARED — an unresolved identity means "unknown, say nothing", not "zero seen, so everything is unread" (calls: ${JSON.stringify(badgeCalls)})`);
+        appMod._resetAuthHoldForTest();
+      }
+
+      // ── (B) NON-VACUITY + NO LOCKOUT — the identity RESOLVES ─────────────
+      // The fourth state A-2 names: a VALID session, on a boot that goes all the
+      // way through (this harness's SDK resolves a membership during it). Same
+      // page, same room, same three surfaces — and every one of them speaks.
+      // That is what makes the three silences above a GUARD rather than a dead
+      // function, and the released cover is what makes it a WAIT rather than the
+      // "painted, and dead to touch" lockout reviewer F1 found at the sixth gate.
+      {
+        const badgeCalls = [];
+        const realNav = globalThis.navigator;
+        setNavigator28({ setAppBadge: n => { badgeCalls.push(`set:${n}`); return Promise.resolve(); },
+                         clearAppBadge: () => { badgeCalls.push('clear'); return Promise.resolve(); } });
+        let r = null;
+        try {
+          r = await quiet28(() => runBoot({
+            config: okConfig(SUPA28),
+            paintPages: true,
+            seed: {
+              cfbp_auth_mode_last_known: 'supabase',
+              cfbp_backend_config: BACKEND_CFG,
+              cfbp_chat_events_cache: CACHE28(),
+              cfbp_supabase_session: VALID28(),
+            },
+          }));
+          const resolved = storageMod.getSession();
+          assert(!!resolved?.playerId && resolved?.playerVerified === true,
+            `[28] B fixture: this boot ended with a RESOLVED identity (${JSON.stringify(resolved)}) — without that the three assertions below would be measuring the wrong device`);
+          assert(r.chrome.main.getAttribute('inert') === null && r.chrome.main.getAttribute('aria-hidden') === null
+                 && r.chrome.nav.getAttribute('inert') === null,
+            '[28] B — the page is OPERABLE: the cover is a wait for the answer, never a lockout');
+          globalThis.document.title = "IRB Pick 'Ems";
+          badgeCalls.length = 0;
+          await quiet28(async () => { chatMod28.ingest([EV28()]); });
+          const dash = r.reg.get('page-dashboard');
+          assert(/dash-chat-teaser/.test(String(dash?.innerHTML || '')) && /Aggies -7/.test(String(dash?.innerHTML || '')),
+            `[28] B — and the SAME room renders in full for the resolved member: the guard is "who is asking", not "hide the teaser" (got ${JSON.stringify(String(dash?.innerHTML || '').slice(0, 120))})`);
+          assert(/^\(\d/.test(String(globalThis.document.title || '')),
+            `[28] B — …the tab title carries the count again (got ${JSON.stringify(globalThis.document.title)})`);
+          assert(badgeCalls.some(c => c.startsWith('set:')),
+            `[28] B — …and the PWA badge is SET again (calls: ${JSON.stringify(badgeCalls)})`);
+        } finally {
+          setNavigator28(realNav);
+          globalThis.document.title = "IRB Pick 'Ems";
+          appMod._resetAuthHoldForTest();
+          // B is the only scenario in this file that drives the adapter all the
+          // way to SERVING, on a fake client that answers every table with the
+          // same membership row. Left in place, storage.js keeps routing to that
+          // mirror — so the PINS boot below would read a "week" with no status
+          // and throw inside refreshHeader(). Torn down here rather than in (C),
+          // beside the scenario that created it.
+          await quiet28(async () => {
+            const sb28 = await import('./js/supabase-backend.js');
+            sb28._resetForTest();
+            appMod._resetSupabaseDataForTest();
+            storageMod.setBackendMode('local');
+            authMod._resetAuthForTest();
+          });
+        }
+      }
+
+      // ── (C) THE PINS WORLD NEVER GETS A COVER ───────────────────────────
+      {
+        const r = await quiet28(() => runBoot({
+          config: okConfig({}), paintPages: true,
+          seed: { cfbp_site_unlocked: '1', cfbp_backend_config: BACKEND_CFG, cfbp_chat_events_cache: CACHE28() },
+        }));
+        assert(r.chrome.main.getAttribute('inert') === null,
+          '[28] C — a pins device is never made inert by any of this: the cover is scoped to the mode whose identity resolves asynchronously');
+        appMod._resetAuthHoldForTest();
+      }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    console.log('\n[29] RG-198 — the app paints YOUR colours on the first frame, not neutral then yours…');
+    // ═══════════════════════════════════════════════════════════════════════
+    //
+    // DREW (paints 2 and 3 of the RG-194 report): "then the neutral page while
+    // loading then quickly flashes back to my saved color scheme."
+    //
+    // WHY IT WAS ALWAYS NEUTRAL FIRST. The theme lives on the PLAYER record
+    // (`player.preferences.theme`, CLAUDE.md bullet 4), and on a Supabase device
+    // that record does not exist locally until the adapter is serving: the
+    // Sheets mirror prime is deliberately skipped (§1.5 item 1), so boot()'s one
+    // `applyTheme(getTheme())` reads an empty store and can only answer
+    // 'neutral' — boottest [25] proves exactly that. The real palette arrives
+    // with _repaintForSupabaseData(), i.e. after the config fetch, the SDK load,
+    // the membership read and the snapshot prime. Two paints, every open.
+    //
+    // THE FIX IS A DEVICE-LOCAL HINT, not a second source of truth. The player
+    // record stays authoritative; `cfbp_theme_hint` only remembers what this
+    // HANDSET last painted, so the first frame can be right. Drew approved the
+    // storage.js addition on 2026-09-21 ("Yes: the app paints your colours
+    // immediately on open"): a KEYS entry, a DEVICE_LOCAL_KEYS entry, and the
+    // accessor pair — nothing else.
+    //
+    // Under the `cfbp_` prefix ON PURPOSE: auth.js's F-1 handover/sign-out sweep
+    // then clears it with no new list entry (the same argument
+    // `cfbp_supabase_mirror` makes), so player B can never boot in player A's
+    // colours. (D) proves that rather than assuming it.
+    {
+      const SUPA29 = { authMode: 'supabase', dataMode: 'supabase',
+        supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
+      const quiet29 = async (fn) => {
+        const e = console.error, w = console.warn, i = console.info, l = console.log;
+        console.error = () => {}; console.warn = () => {}; console.info = () => {}; console.log = () => {};
+        try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; console.log = l; }
+      };
+      const bootWithHint = (hint) => quiet29(() => runBoot({
+        config: okConfig(SUPA29),
+        seed: {
+          cfbp_auth_mode_last_known: 'supabase',
+          cfbp_backend_config: BACKEND_CFG,
+          ...(hint === undefined ? {} : { cfbp_theme_hint: JSON.stringify(hint) }),
+        },
+      }));
+
+      // ── (A) THE FIRST FRAME IS THE PLAYER'S PALETTE ─────────────────────
+      {
+        const r = await bootWithHint('boilermaker');
+        assert(r.themeOrder[0] === 'theme-boilermaker',
+          `[29] the FIRST theme this boot applies is the device's last-painted palette, not the league default (order: ${JSON.stringify(r.themeOrder)})`);
+        const cfgAt = r.appendLog.findIndex(e => e.id === '#config-fetch');
+        assert(cfgAt > -1,
+          '[29] fixture: this boot really did read config.json (so "before the network" below is a claim about something)');
+        assert(r.themeOrder.length > 0 && !r.themeOrder.includes('theme-neutral'),
+          `[29] …and 'neutral' is never painted on the way there: there is no first, wrong palette to flash away from (order: ${JSON.stringify(r.themeOrder)})`);
+        appMod._resetAuthHoldForTest();
+      }
+
+      // ── (B) NO HINT — today's behaviour, byte for byte ──────────────────
+      {
+        const r = await bootWithHint(undefined);
+        assert(r.themeOrder[0] === 'theme-neutral',
+          `[29] a device that has never painted a palette still starts neutral — the hint is an optimisation, not a new default (order: ${JSON.stringify(r.themeOrder)})`);
+        appMod._resetAuthHoldForTest();
+      }
+
+      // ── (C) GARBAGE IS NOT A THEME, AND IS NEVER A CLASS NAME ───────────
+      // The value is read from the device and spliced into a class name; the
+      // only safe rule is an allow-list of the seven real keys.
+      for (const junk of ['bogus', '"><script>alert(1)</script>', 'theme-aggie', '', 42]) {
+        const r = await bootWithHint(junk);
+        assert(r.themeOrder[0] === 'theme-neutral',
+          `[29] an unknown/garbage hint (${JSON.stringify(junk)}) falls back to the league default (order: ${JSON.stringify(r.themeOrder)})`);
+        assert(![...r.bodyClasses].some(c => /[<>"'\s]/.test(String(c))),
+          `[29] …and nothing off the device is ever spliced into a class name (classes: ${JSON.stringify([...r.bodyClasses])})`);
+        appMod._resetAuthHoldForTest();
+      }
+
+      // ── (D) PLAYER B NEVER BOOTS IN PLAYER A's COLOURS ──────────────────
+      // Not asserted by reading the sweep's keep-list — driven through the real
+      // routine, which is what a handover actually calls.
+      {
+        const store29 = new Map([['cfbp_theme_hint', JSON.stringify('boilermaker')],
+                                 ['cfbp_site_unlocked', '1']]);
+        const saved = globalThis.localStorage;
+        globalThis.localStorage = {
+          getItem: k => (store29.has(k) ? store29.get(k) : null),
+          setItem: (k, v) => store29.set(k, String(v)),
+          removeItem: k => store29.delete(k),
+          clear: () => store29.clear(),
+          get length() { return store29.size; },
+          key: i => [...store29.keys()][i] ?? null,
+        };
+        try {
+          await quiet29(async () => { authMod.clearDeviceLocalSessionData('handover'); });
+          assert(store29.get('cfbp_theme_hint') === undefined,
+            `[29] a handover clears the palette hint with every other cfbp_ key — player B never boots in player A's colours (left: ${JSON.stringify([...store29.keys()])})`);
+          assert(store29.get('cfbp_site_unlocked') === '1',
+            '[29] fixture: …and the sweep is the REAL one, which keeps the site-unlock flag by name (so the assertion above is about the sweep, not about an empty store)');
+        } finally { globalThis.localStorage = saved; }
+      }
+
+      // ── (E) index.html's INLINE BOOTSTRAP READS THE SAME KEY ────────────
+      // The <script> in index.html cannot import, so it re-implements the read.
+      // That block has now gone out of sync with storage.js TWICE (its own
+      // comment says so). It is EXECUTED here, against the same values, rather
+      // than pattern-matched.
+      {
+        const { readFileSync } = await import('node:fs');
+        const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
+        const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m => m[1]);
+        const themeBlock = blocks.find(b => b.includes('cfbp_theme_hint'));
+        assert(!!themeBlock,
+          '[29] index.html\'s inline theme bootstrap reads cfbp_theme_hint — the first paint of all happens before any module loads');
+        const runInline = (raw) => {
+          const classes = [];
+          const store = new Map();
+          if (raw !== undefined) store.set('cfbp_theme_hint', raw);
+          const sandboxLs = { getItem: k => (store.has(k) ? store.get(k) : null), setItem: () => {}, removeItem: () => {} };
+          const sandboxDoc = { body: { classList: { add: c => classes.push(c) } } };
+          // eslint-disable-next-line no-new-func
+          new Function('localStorage', 'document', themeBlock || '')(sandboxLs, sandboxDoc);
+          return classes;
+        };
+        assert(JSON.stringify(runInline(JSON.stringify('boilermaker'))) === JSON.stringify(['theme-boilermaker']),
+          `[29] …and it paints that palette (got ${JSON.stringify(runInline(JSON.stringify('boilermaker')))})`);
+        assert(JSON.stringify(runInline(JSON.stringify('bogus'))) === JSON.stringify(['theme-neutral']),
+          '[29] …validates against the seven real keys, so an unknown value is the default');
+        assert(JSON.stringify(runInline('not json at all')) === JSON.stringify(['theme-neutral']),
+          '[29] …survives a corrupt value');
+        assert(JSON.stringify(runInline(undefined)) === JSON.stringify(['theme-neutral']),
+          '[29] …and an absent value is exactly today\'s behaviour');
+      }
+
+      // ── TEARDOWN ────────────────────────────────────────────────────────
+      // This section's last boot leaves auth in 'supabase' mode, and §24 below
+      // writes a SETTING — which SEC F1's interlock refuses in that mode while
+      // no adapter is serving. Put the world back the way the sections after
+      // this one expect to find it (the same teardown [25] ends with).
+      await quiet29(async () => {
+        const sb29 = await import('./js/supabase-backend.js');
+        sb29._resetForTest();
+        appMod._resetSupabaseDataForTest();
+        appMod._resetAuthHoldForTest();
+        authMod._resetAuthForTest();
+        authMod.configureAuth({});
+        storageMod.setBackendMode('local');
+      });
+    }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // [30] SECURITY A-1-R + REVIEWER F1 — THE COVER, MEASURED DURING THE BOOT
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // WHY §[28] DID NOT CATCH THIS. It drives `ingest()` AFTER `runBoot()` has
+  // returned — i.e. after config.json has resolved and `configureAuth()` has
+  // run. The window the finding is about is entirely BEFORE that:
+  //
+  //   boot()  →  initChatUI({phase:'early'})   ← replays cfbp_chat_events_cache,
+  //                                              inserts #dash-chat-teaser,
+  //                                              writes document.title "(n)",
+  //                                              calls navigator.setAppBadge(n)
+  //          →  armBootIdentityCover()          ← used to be HERE, too late
+  //          →  revealApp()
+  //          →  await applyAuthModeDecision()   ← configureAuth() finally runs
+  //
+  // and during it `_cfg.authMode` is still js/auth.js's default `'pins'`, so
+  // `isContentWithheld()` took the non-supabase arm and answered FALSE. Every
+  // downstream guard is keyed on that one predicate, so all of them said yes.
+  //
+  // SO THIS SECTION PARKS THE CONFIG FETCH. `config()` returns a promise that
+  // does not settle until the assertions have run, which freezes the boot
+  // exactly inside the window and lets the state be read rather than inferred.
+  // The badge spy, the title and the teaser host are all observed from before
+  // `sharedBootHandler()` is called.
+  //
+  // `inert` IS NOT ENOUGH ON ITS OWN and that is the other half of the finding:
+  // it removes an element from hit-testing and the a11y tree, it does not stop
+  // paint. The CSS belt (`.main-content[inert]{visibility:hidden}`) is asserted
+  // in the stylesheet, since a DOM stub cannot compute style.
+  console.log('\n[30] A-1-R — nothing leaks in the window BEFORE config.json lands…');
+  {
+    const chatMod30 = await import('./js/chat.js');
+    const CACHE30 = () => JSON.stringify({ epoch: 0, head: 9, events: [{
+      id: 'm9', seq: 9, ts: Date.now() - 60000, type: 'message', author: 'm-kihoon',
+      body: 'taking the Aggies -7 and the over, easy money', notify: true, gameTag: '',
+    }] });
+    const SUPA30 = { authMode: 'supabase', dataMode: 'supabase',
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
+    const PINS30 = { authMode: 'pins' };
+    const sess30 = (offsetSec) => JSON.stringify({ access_token: 'tok', refresh_token: 'r',
+      expires_at: Math.floor(Date.now() / 1000) + offsetSec, user: { id: 'u-drew', email: 'd@x.test' } });
+    const setNav30 = (value) => {
+      try { globalThis.navigator = value; }
+      catch { Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true }); }
+    };
+    const quiet30 = async (fn) => {
+      const e = console.error, w = console.warn, i = console.info, l = console.log;
+      console.error = () => {}; console.warn = () => {}; console.info = () => {}; console.log = () => {};
+      try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; console.log = l; }
+    };
+
+    /**
+     * One boot, PARKED at the config fetch. Returns everything observable in
+     * that window plus a `release(cfgExtra)` that lets the boot finish, so the
+     * same scenario can then assert about the terminal outcome (F1).
+     */
+    async function bootParked({ seed, cfgExtra }) {
+      const badgeCalls = [];
+      const realNav = globalThis.navigator;
+      setNav30({ setAppBadge: n => { badgeCalls.push(`set:${n}`); return Promise.resolve(); },
+                 clearAppBadge: () => { badgeCalls.push('clear'); return Promise.resolve(); } });
+      let releaseFn = null;
+      const parked = new Promise(r => { releaseFn = r; });
+      // The chat engine's once-per-page cache-prime latch is module state; the
+      // early phase must actually replay, or every assertion below is vacuous.
+      chatMod30._resetForTest();
+      // Put the world back to a cold device before each boot. A previous
+      // scenario's RELEASED boot leaves the adapter mid-state and the storage
+      // mirror on 'supabase', and boot()'s own refreshHeader() then reads a
+      // half-hydrated week out of it — a fixture failure that looks like a
+      // finding. Same teardown every other section in this file ends with.
+      await quiet30(async () => {
+        const sb = await import('./js/supabase-backend.js');
+        sb._resetForTest();
+        appMod._resetSupabaseDataForTest();
+        appMod._resetAuthHoldForTest();
+        storageMod.setBackendMode('local');
+      });
+      const bootPromise = quiet30(() => runBoot({
+        config: () => parked.then(() => ({ ok: true,
+          json: async () => ({ backendUrl: BACKEND_URL, backendToken: BACKEND_TOKEN, ...cfgExtra }) })),
+        paintPages: true,
+        seed: { cfbp_backend_config: BACKEND_CFG, cfbp_chat_events_cache: CACHE30(), ...seed },
+      }));
+      // runBoot drains 60 macrotask ticks and returns with boot() still parked
+      // on `await applyAuthModeDecision()` — which is the window.
+      const r = await bootPromise;
+      return {
+        r, badgeCalls,
+        title: () => String(globalThis.document.title || ''),
+        dashHTML: () => String(r.reg.get('page-dashboard')?.innerHTML || ''),
+        release: async () => { releaseFn(); await quiet30(async () => { for (let i = 0; i < 80; i++) await new Promise(res => setTimeout(res, 0)); }); },
+        restoreNav: () => setNav30(realNav),
+      };
+    }
+
+    // ── (A) THE FOUR SESSION SHAPES, IN THE PRE-CONFIG WINDOW ─────────────
+    const SESSIONS30 = [
+      ['no session at all',      null,          true],
+      ['a GARBAGE session',      '{not json',   true],
+      ['an EXPIRED session',     sess30(-7200), true],
+      // A VALID unexpired token in THIS device's own storage is the credential
+      // (the same pair armBootIdentityCover()/releaseBootIdentityCover() ask).
+      // Asserted rather than skipped so the decision is pinned and visible.
+      ['a VALID unresolved session', sess30(3600), false],
+    ];
+    for (const [label, session, mustWithhold] of SESSIONS30) {
+      const b = await bootParked({
+        seed: { cfbp_auth_mode_last_known: 'supabase', ...(session ? { cfbp_supabase_session: session } : {}) },
+        cfgExtra: SUPA30,
+      });
+      try {
+        assert(b.r.fetches.some(u => String(u).includes('config.json')),
+          `[30] ${label}: fixture — the boot really did reach the config fetch and park there`);
+        assert(chatMod30.getMessages({ tag: 'all' }).some(m => m.id === 'm9'),
+          `[30] ${label}: fixture — the EARLY phase really replayed the device cache (without this every assertion below is vacuous)`);
+        if (mustWithhold) {
+          assert(appMod.isContentWithheld() === true,
+            `[30] ${label}: A-1-R(1) — isContentWithheld() is TRUE before the config read lands, on a last-known-supabase device. It used to take the 'pins' arm here and answer false.`);
+          assert(b.r.chrome.main.getAttribute('inert') === '' && b.r.chrome.main.getAttribute('aria-hidden') === 'true',
+            `[30] ${label}: the cover IS on during the window (inert + aria-hidden on .main-content)`);
+          assert(!/dash-chat-teaser/.test(b.dashHTML()) && !/Aggies -7/.test(b.dashHTML()),
+            `[30] ${label}: no teaser, no member name, no 64 characters of what they wrote (got ${JSON.stringify(b.dashHTML().slice(0, 120))})`);
+          // THE TITLE IS ASSERTED UNCHANGED, not count-free. `paintPages`
+          // seeds "(3)" — a PREVIOUS session's true badge — and A-1's rule has
+          // two directions: an unknown viewer must not WRITE a number, and must
+          // not DESTROY a true one either (writing 0 would). The replayed cache
+          // holds one unread, so the leak would be "(1)"; a regression that
+          // blanked it to "IRB Pick 'Ems" is the other half and also fails here.
+          assert(b.title() === "(3) IRB Pick 'Ems",
+            `[30] ${label}: the tab title is EXACTLY as the previous session left it — no count derived from the replayed cache was written over it, and the real one was not destroyed (got ${JSON.stringify(b.title())})`);
+          assert(b.badgeCalls.length === 0,
+            `[30] ${label}: navigator.setAppBadge() is never called — that badge PERSISTS on the installed icon (got ${JSON.stringify(b.badgeCalls)})`);
+          assert(chatMod30.latestUnreadNotifying(null, 0) === null,
+            `[30] ${label}: A-1-R(3) — latestUnreadNotifying() answers null for an unresolved identity, the one unread surface that had no identityKnown() guard`);
+          assert(chatMod30.latestNotifying(null) === null,
+            `[30] ${label}: A-1-R(3) — …and latestNotifying() too, so no cached-message toast can fire pre-identity`);
+        } else {
+          assert(appMod.isContentWithheld() === false,
+            `[30] ${label}: STATED DECISION — an unexpired token in this device's own storage IS the credential, so content is not withheld. Pinned so the decision is visible rather than assumed.`);
+        }
+      } finally { await b.release(); b.restoreNav(); }
+    }
+
+    // ── (B) A PIN-MODE DEVICE IS BYTE-IDENTICAL ──────────────────────────
+    {
+      const b = await bootParked({ seed: {}, cfgExtra: PINS30 });
+      try {
+        assert(appMod.isContentWithheld() === false,
+          '[30] PIN-mode device (last-known mode is not supabase): content is NOT withheld in the pre-config window — the fail-closed arm is scoped to the devices that owe a cover, and the pins boot is unchanged');
+        assert(b.r.chrome.main.getAttribute('inert') === null,
+          '[30] …and no cover is armed on it at all');
+      } finally { await b.release(); b.restoreNav(); }
+    }
+
+    // ── (C) REVIEWER F1 — EVERY TERMINAL OUTCOME ─────────────────────────
+    //
+    // THE RULE, stated once: when the boot stops, EITHER the cover is off, OR
+    // there is a gate on screen the player can act on. Never a covered app with
+    // nothing on top of it — which with the CSS belt in place is an INVISIBLE
+    // dead app, not merely an unresponsive one.
+    //
+    //   outcome                         | expected
+    //   --------------------------------|---------------------------------
+    //   rollback to pins (case D)       | cover OFF (pins never owed one)
+    //   supabase, no session            | cover ON + sign-in gate on screen
+    //   config unreadable               | cover ON + hold gate on screen
+    //   SDK load failure                | cover ON + a gate on screen
+    const GATE_IDS30 = ['site-gate-overlay', 'auth-hold-gate'];
+    const gateOnScreen = (reg) => GATE_IDS30.some(id => {
+      const el = reg.get(id);
+      return !!el && el._removed !== true;
+    });
+
+    // (D) THE REVIEWER'S OWN REPRODUCTION — last-known supabase, config says pins.
+    {
+      const b = await bootParked({ seed: { cfbp_auth_mode_last_known: 'supabase' }, cfgExtra: PINS30 });
+      await b.release();
+      try {
+        assert(b.r.chrome.main.getAttribute('inert') === null
+            && b.r.chrome.nav.getAttribute('inert') === null,
+          `[30] F1 CASE D — on the ROLLBACK lever (last-known supabase, config.json rolled back to pins) the cover is RELEASED. Every release site used to be gated on mode === 'supabase', so this device painted a PIN gate over a permanently inert app: six dead phones on the one control that exists to save them. (main inert=${JSON.stringify(b.r.chrome.main.getAttribute('inert'))})`);
+        assert(b.r.chrome.main.getAttribute('aria-hidden') === null,
+          '[30] F1 CASE D — …and aria-hidden with it, so the app is back in the accessibility tree');
+        assert(gateOnScreen(b.r.reg),
+          '[30] F1 CASE D — fixture: the PIN gate this device owes IS on screen (the release must not be achieved by skipping the gate)');
+      } finally { b.restoreNav(); }
+    }
+
+    // The other three terminal outcomes.
+    const TERMINALS30 = [
+      ['supabase, no session',  { cfbp_auth_mode_last_known: 'supabase' }, SUPA30],
+      ['supabase, expired session', { cfbp_auth_mode_last_known: 'supabase', cfbp_supabase_session: sess30(-7200) }, SUPA30],
+    ];
+    for (const [label, seed, cfg] of TERMINALS30) {
+      const b = await bootParked({ seed, cfgExtra: cfg });
+      await b.release();
+      try {
+        // The sign-in gate's own deadline is what ends the "persisted session
+        // the SDK has not resolved" wait, and it is a real 6-second timer. Fire
+        // it here rather than sleeping: boottest [27] uses the same seam, and
+        // what this section is asserting is the TERMINAL state, not the clock.
+        await quiet30(async () => { appMod._fireSignInGateDeadlineForTest?.(); for (let i = 0; i < 20; i++) await new Promise(res => setTimeout(res, 0)); });
+        const covered = b.r.chrome.main.getAttribute('inert') === '';
+        assert(!covered || gateOnScreen(b.r.reg),
+          `[30] F1 FAIL-SAFE — ${label}: the boot ended either with the cover off or with a gate on screen, never a covered app with nothing on top (covered=${covered}, gate=${gateOnScreen(b.r.reg)})`);
+        assert(covered || b.r.chrome.main.getAttribute('aria-hidden') === null,
+          `[30] F1 FAIL-SAFE — ${label}: …and a released cover releases BOTH attributes, so a lifted app is also back in the accessibility tree`);
+      } finally { b.restoreNav(); }
+    }
+
+    // ── (D2) A-1-R(2) — THE ORDER OF THE STATEMENTS, READ OFF THE SOURCE ──
+    //
+    // The §[22] precedent: an ORDERING claim about boot() is asserted against
+    // the file, because what cannot be faked is the order of the statements in
+    // it. The runtime assertions above cannot separate this layer from layer
+    // (1) — with (1) in place nothing leaks whatever the order is, which is the
+    // whole point of defence in depth and also the reason each layer needs an
+    // assertion that only IT can satisfy.
+    {
+      const { readFileSync } = await import('node:fs');
+      const src30 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const code30 = src30
+        .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+        .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+      assert(code30.length === src30.length,
+        '[30] fixture: the comment blanker preserves length, so the indices below point at real code');
+      const bootAt30 = code30.indexOf('async function boot() {');
+      const armAt = code30.indexOf('armBootIdentityCover();', bootAt30);
+      const earlyChatAt = code30.indexOf("initChatUI({ phase: 'early' })", bootAt30);
+      const revealAt = code30.indexOf('revealApp();', bootAt30);
+      assert(bootAt30 > 0 && armAt > 0 && earlyChatAt > 0 && revealAt > 0,
+        `[30] fixture: boot(), armBootIdentityCover(), the early chat phase and revealApp() were all located (${bootAt30}/${armAt}/${earlyChatAt}/${revealAt})`);
+      assert(armAt < earlyChatAt,
+        '[30] A-1-R(2) — armBootIdentityCover() is called BEFORE initChatUI({phase:\'early\'}), not after it. The early phase is what replays the device cache and inserts the teaser; a cover armed afterwards is a cover armed after the leak.');
+      assert(armAt < revealAt,
+        '[30] A-1-R(2) — …and still before revealApp(), so the cover is never applied to an already-visible page');
+    }
+
+    // ── (E) THE CSS BELT — a DOM stub cannot compute style, so assert the rule
+    {
+      const { readFileSync } = await import('node:fs');
+      const css30 = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+      assert(/\.main-content\[inert\][^{]*,[^{]*\.bottom-nav\[inert\]\s*\{[^}]*visibility:\s*hidden/.test(css30.replace(/\s*\n\s*/g, ' ')),
+        '[30] A-1-R(4) — the CSS belt exists: `inert` blocks interaction, NOT paint, so the covered content is also made invisible. visibility (not display) keeps layout, so nothing shifts under it.');
+      const belt = css30.slice(css30.indexOf('.main-content[inert]'), css30.indexOf('.main-content[inert]') + 240);
+      assert(!/native-shell/.test(belt),
+        '[30] A-1-R(4) — …and the belt does not branch on body.native-shell: a security cover that skipped the installed app would be a hole, and visibility:hidden touches none of the native shell\'s own splash/safe-area rules');
+    }
+
+    // ── TEARDOWN ────────────────────────────────────────────────────────
+    await quiet30(async () => {
+      const sb30 = await import('./js/supabase-backend.js');
+      sb30._resetForTest();
+      chatMod30._resetForTest();
+      appMod._resetSupabaseDataForTest();
+      appMod._resetAuthHoldForTest();
+      authMod._resetAuthForTest();
+      authMod.configureAuth({});
+      storageMod.setBackendMode('local');
+    });
+  }
+
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3551,8 +4408,15 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
     const bootBody25 = appSrc25.slice(appSrc25.indexOf('async function boot() {'), appSrc25.indexOf('async function runPostHydrateTail'));
     assert(/const primedKeys = supabaseDevice \? 0 : primeFromMirror\(\);/.test(bootBody25),
       '[25] …and that is by design: a Supabase device deliberately primes NO Sheets snapshot before that line (§1.5 item 1) [structural]');
-    assert(/applyTheme\(getTheme\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
+    // RG-198 (2026-09-21) — this read `applyTheme(getTheme())` until the device
+    // hint landed. The POSITION is what this fixture is about and it has not
+    // moved; the SOURCE has, because getTheme() at this point can only ever
+    // answer 'neutral' on a Supabase device — which is the assertion two lines
+    // above, and now also the reason bootThemeKey() exists.
+    assert(/applyTheme\(bootThemeKey\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
       '[25] fixture: boot() really does apply the theme at that point [structural]');
+    assert(/const fromPlayer = getTheme\(\);/.test(appSrc25),
+      '[25] …and bootThemeKey() still prefers the PLAYER record: the hint is a first-frame stand-in, never a second source of truth [structural]');
   }
 
   // ── (b) THE BOOT-TIME PAINT — what the player is actually left looking at ──
@@ -3585,6 +4449,13 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
     assert(storage25.getTheme() === 'boilermaker' && storage25.getTimezone() === 'ET',
       `[25] …and the seam answers them (${storage25.getTheme()}/${storage25.getTimezone()}): every ingredient of the right paint is on the device`);
 
+    // RG-198 — AND THE DEVICE REMEMBERS IT, so the NEXT cold open paints this
+    // palette on its first frame instead of neutral-then-this. Written by
+    // applyTheme() itself (one place, the moment the paint actually happens),
+    // which is why this lands on the adapter-serving repaint with no new call
+    // site anywhere.
+    assert(storage25.getThemeHint() === 'boilermaker',
+      `[25] the device records the palette it just painted (hint: ${JSON.stringify(storage25.getThemeHint())}) — that recording is what makes the NEXT open's first frame right`);
     assert(bodyClasses25.has('theme-boilermaker') && !bodyClasses25.has('theme-neutral'),
       `[25] THE BUG: once the player record is serving, the page wears the player's OWN theme (body has ${JSON.stringify([...bodyClasses25])}). Leaving 'theme-neutral' on is what Drew sees on every open, and it is indistinguishable from the preference never having been saved`);
     assert(/value="boilermaker" selected/.test(themeToggle25.innerHTML),

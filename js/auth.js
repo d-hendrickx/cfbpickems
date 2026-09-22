@@ -287,6 +287,10 @@ export function configureAuth({ authMode, dataMode, supabaseUrl, supabaseAnonKey
     supabaseUrl: String(supabaseUrl || '').trim(),
     supabaseAnonKey: String(supabaseAnonKey || '').trim(),
   };
+  // SECURITY A-1-R — see hasConfigBeenRead(). Set ONLY when the read actually
+  // succeeded: `authModeKnown !== true` is the failed-read path, and a failed
+  // read is not an authoritative answer about what this device is.
+  if (authModeKnown === true) _configReadLanded = true;
   // js/backend.js's relay allow-list (§2.7) reads its OWN copy, set here from
   // the one config read that actually happened rather than from the persisted
   // `cfbp_backend_config` blob — which survives a rollback and would otherwise
@@ -295,6 +299,31 @@ export function configureAuth({ authMode, dataMode, supabaseUrl, supabaseAnonKey
   catch (e) { console.warn('[auth] could not propagate dataMode to the Sheets relay guard', e); }
 }
 export function getAuthMode() { return _cfg.authMode; }
+
+/**
+ * ══ SECURITY A-1-R (2026-09-21) — "WHAT MODE IS THIS?" HAS A THIRD ANSWER ══
+ *
+ * `getAuthMode()` has always had two callers' worth of meaning: the mode
+ * config.json declared, or — before the fetch lands — `_cfg`'s DEFAULT of
+ * `'pins'`. Those are not the same fact, and nothing could tell them apart.
+ *
+ * WHAT THAT COST. boot() runs `initChatUI({phase:'early'})` BEFORE it awaits
+ * `applyAuthModeDecision()`, deliberately (BUG-G: the cached room must paint
+ * without waiting on a network read). During that window `getAuthMode()`
+ * answered `'pins'` on a Supabase device, so `isContentWithheld()` took its
+ * flag-off arm and answered FALSE — and every chat surface keys on that one
+ * predicate. The dashboard teaser painted a member's name and 64 characters of
+ * what they wrote, and `updateChatBadges()` wrote the tab title and called
+ * `navigator.setAppBadge()`, which PERSISTS on the installed app's icon.
+ *
+ * So the question a fail-closed predicate actually needs to ask is not "what
+ * mode is it" but "has anything authoritative said yet?" — and that is a fact
+ * about this PAGE, not about the device. `authModeKnown !== true` means the
+ * read itself failed, which is also "nothing authoritative has landed": a
+ * failed read must not be allowed to satisfy the gate it exists to raise.
+ */
+let _configReadLanded = false;
+export function hasConfigBeenRead() { return _configReadLanded; }
 export function getDataMode() { return _cfg.dataMode; }
 /**
  * THE PREDICATE js/chatTransport.js IS HANDED AT BOOT (DI-T4.12, §7.3), and the
@@ -951,6 +980,40 @@ export function hasValidSupabaseSession() {
     if (!session || !session.access_token) return false;
     const expiresAt = Number(session.expires_at) || 0;
     return expiresAt * 1000 > Date.now();
+  } catch { return false; }
+}
+
+/**
+ * ══ RG-194 (2026-09-21) — "IS A SESSION PERSISTED HERE?" IS NOT THE SAME
+ *    QUESTION AS "IS THE ACCESS TOKEN STILL FRESH?" ═════════════════════════
+ *
+ * hasValidSupabaseSession() above answers the SECOND one, and it is the right
+ * question for "may this device read the league" — an expired access token
+ * cannot pass RLS. It is the WRONG question for "should the sign-in screen be
+ * on the phone", and that is what Drew reported: a Supabase access token lives
+ * about an hour, a home-screen PWA is typically reopened long after that, so
+ * every cold open of a SIGNED-IN player answered `false` and painted the
+ * "Continue with Google" gate — which the SDK's own refresh then took back down
+ * a few hundred milliseconds later.
+ *
+ * This is the third state that was missing: a session record IS on the device
+ * and it carries a refresh token, so the SDK has something to resolve and the
+ * honest answer to "who is this?" is NOT YET, never NOBODY. app.js uses it to
+ * hold the neutral boot state until the auth layer answers, instead of asserting
+ * a signed-out answer it does not have.
+ *
+ * Deliberately the SAME SHAPE as hasValidSupabaseSession(): LOCAL, synchronous
+ * (CONVENTIONS #9), never a network call, and it never throws. It says nothing
+ * about whether the refresh token still WORKS — only the server can answer that,
+ * and when it answers "no" the SDK fires SIGNED_OUT and app.js's existing
+ * refreshAuthUI() puts the gate up on that event.
+ */
+export function hasPersistedSupabaseSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return false;
+    const session = JSON.parse(raw);
+    return !!session && typeof session.refresh_token === 'string' && session.refresh_token.length > 0;
   } catch { return false; }
 }
 
@@ -2579,7 +2642,14 @@ const _SIGNOUT_LOCAL_KEYS = [
   // session on a device whose site PIN is already satisfied. Sign-out is the
   // one moment we can be certain nobody wants it kept.
   'cfbp_session',               // js/storage.js KEYS.SESSION
-  'cfbp_chat_lastseen2',        // js/chat.js:49  K_LASTSEEN
+  // RG-196 (2026-09-21) — `cfbp_chat_lastseen2` (js/chat.js K_LASTSEEN) USED TO
+  // BE HERE and is now in _CLEAR_KEEP_KEYS instead, with the full reasoning at
+  // its entry there. One line of it, because a reader of this list must not
+  // have to find that out by its absence: the cursor is now OWNER-STAMPED, so a
+  // cursor that is not yours reads as zero without having to be deleted —
+  // deleting it also destroyed the departing player's own read position, which
+  // is the defect Drew reported ("a badge over chat of 84 unread messages even
+  // tho I've already seen them").
   'cfbp_chat_outbox2',          // js/chat.js:50  K_OUTBOX — see note below
   'cfbp_chat_epoch_applied',    // js/chat.js:51  K_EPOCH_APPLIED
   'cfbp_chat_events_cache',     // js/chat.js:61  K_EVENTS_CACHE
@@ -2744,6 +2814,36 @@ const _CLEAR_KEEP_KEYS = Object.freeze([
   //    is the opposite of what a sweep is for.
   'cfbp_scribe_ledger',            // js/scribeLines.js:65 LEDGER_KEY   — { lineHash: lastUsedMs }, the repetition damper
   'cfbp_scribe_lastpost',          // js/scribeLines.js:66 LAST_POST_KEY — { rateKey: lastMs }, the per-room rate limiter
+  // ── RG-196 (2026-09-21) — THE CHAT READ CURSOR. Moved here from
+  //    _SIGNOUT_LOCAL_KEYS; this is an AMENDMENT to A9/DI-180q's sweep, not an
+  //    oversight in it, and it is narrow by exactly one key.
+  //
+  //    WHY IT WAS SWEPT. It was one key belonging to NOBODY — `{seq, byTag}` —
+  //    so deletion was the only available way to stop player B inheriting
+  //    player A's read positions. The cost was invisible until Drew hit it:
+  //    an explicit Sign Out destroyed the DEPARTING player's own cursor too, so
+  //    the same member signing back in on the same phone re-counted the entire
+  //    retained window as unread (84 messages, 2026-09-21). Nothing restores
+  //    it — no other device-local key and no server row holds a read position.
+  //
+  //    WHY IT NO LONGER NEEDS TO BE. js/chat.js now stamps the payload with
+  //    `owner`: an opaque digest of (member id | active league id). A cursor
+  //    whose stamp does not match the identity at this device reads as ZERO.
+  //    The property the sweep was buying — "the next account inherits no read
+  //    position" — is now a property of the DATA, and it holds on every path,
+  //    including the ones a key-name sweep never reaches (a handover the app
+  //    never noticed, a device that refuses removals, a same-page account
+  //    switch). Deletion was the weaker guard.
+  //
+  //    WHAT IT LEAVES ON A SIGNED-OUT HANDSET: two integers-per-tag and an
+  //    opaque token. No message text, no id, no email, no display name — the
+  //    room ITSELF (`cfbp_chat_events_cache`) is still swept, three lines up.
+  //    Same category as the two SCRIBE ledgers above, which are kept for the
+  //    same reason: they identify nobody.
+  //
+  //    GUARDED BY unreadtest.mjs §[6] (everything else a Sign Out clears is
+  //    still cleared) and §[7] (this list and _SIGNOUT_LOCAL_KEYS agree).
+  'cfbp_chat_lastseen2',           // js/chat.js K_LASTSEEN — { seq, byTag, owner: digest }
 ]);
 // SECURITY F-5 (eighth gate) — FROZEN. These three lists are exported for the
 // suites (`_CLEAR_KEEP_KEYS_FOR_TEST` etc.), and an exported mutable array is an
@@ -3372,6 +3472,7 @@ export function _resetAuthForTest() {
   _identityBatchDepth = 0;
   _identityBatchPending = false;
   _cfg = { authMode: 'pins', supabaseUrl: '', supabaseAnonKey: '' };
+  _configReadLanded = false;              // SECURITY A-1-R — per-PAGE, so per-scenario
   try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {}
   try { localStorage.removeItem(LAST_AUTH_MODE_KEY); } catch {}
   // DI-180q — per-DEVICE state, and a suite's sections are different devices.

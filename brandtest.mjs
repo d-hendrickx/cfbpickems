@@ -587,6 +587,116 @@ console.log('\n[15] Reviewer R2 — landscape safety: height media query (native
     '[15f] the base (portrait / >500px height) padding-top rule is UNCHANGED — max(24px, calc(50vh - 44.68px)) — so portrait rendering is pixel-identical to before this pass');
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// [16] UN-212 verification finding (2026-09-21) — status-bar backdrop strip.
+// Source-level CSS-scope assertions, same technique as [15] above: regex the
+// real stylesheet, never a browser, for existence/scoping/ordering. The
+// engine-measured half (actual rendered geometry at a real inset, and the
+// mutation-proof that the guard is load-bearing) lives in navtest.mjs §7j —
+// this file covers what a browser cannot make cheap: exact source shape.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[16] UN-212 — the native-only status-bar backdrop strip, source-level…');
+{
+  const cssSrc = await readFile(path.join(root, 'css', 'styles.css'), 'utf8');
+  const stripRule = /body\.native-shell::before\{([^}]*)\}/.exec(cssSrc);
+  assert(!!stripRule, '[16-pre] body.native-shell::before{...} exists in styles.css (fixture check for 16a-h below)');
+  const decl = stripRule ? stripRule[1] : '';
+
+  assert(/content:""/.test(decl),
+    '[16a] generates a real box (content:"") — required for a ::before to render at all');
+  assert(/position:fixed/.test(decl),
+    '[16b] position:fixed — independent of scroll, never shifts with page content');
+  assert(/top:0/.test(decl) && /left:0/.test(decl) && /right:0/.test(decl),
+    '[16c] pinned to the full width of the viewport top edge (top:0;left:0;right:0)');
+  assert(/height:env\(safe-area-inset-top,\s*0px\)/.test(decl),
+    '[16d] height is env(safe-area-inset-top,0px) — zero on a Safari tab and in landscape, exactly the inset elsewhere (never a hardcoded px)');
+  assert(/background:var\(--maroon\)/.test(decl),
+    '[16e] paints with var(--maroon) — the SAME custom property .app-header itself paints with (styles.css:147) and the same value syncNativeStatusBar() reads off the body (js/app.js) — never a literal hex, so all seven themes resolve automatically');
+  assert(!/#[0-9a-fA-F]{3,8}/.test(decl),
+    '[16f] no literal hex color anywhere in the rule — the token is the only color source');
+  assert(/pointer-events:none/.test(decl),
+    '[16g] pointer-events:none — never intercepts a tap meant for page content beneath it');
+  const zMatch = /z-index:(\d+)/.exec(decl);
+  assert(!!zMatch && zMatch[1] === '150',
+    `[16h] z-index:150 (got ${zMatch ? zMatch[1] : 'no z-index declared'})`);
+
+  // [16i] Scoping proof — the selector text itself requires "body.native-shell",
+  // not a bare "::before" or any other prefix. This is the literal guard that
+  // keeps the rule off the web (body.native-shell is a class js/app.js only
+  // ever adds when isNativeShell() is true — established and re-asserted by
+  // platformtest.mjs/nativeguardtest.mjs elsewhere; not re-proved here).
+  assert(/body\.native-shell::before\{/.test(cssSrc),
+    '[16i] the exact selector "body.native-shell::before" appears verbatim — nothing broader (e.g. a bare "body::before" that would also paint on web)');
+  const bareBodyBefore = (cssSrc.match(/(?:^|[^.\w])body::before\{/gm) || []).length;
+  assert(bareBodyBefore === 0,
+    '[16j] no UNSCOPED "body::before" rule exists anywhere in the file — the ONLY body::before in styles.css is the native-shell-scoped one');
+
+  // [16k] Only one such rule — not accidentally duplicated with a competing
+  // declaration elsewhere that a later cascade rule could silently override.
+  const stripRuleCount = (cssSrc.match(/body\.native-shell::before\{/g) || []).length;
+  assert(stripRuleCount === 1,
+    `[16k] exactly one body.native-shell::before rule exists (got ${stripRuleCount})`);
+
+  // [16l] Z-INDEX ORDERING, read from the real file, not restated by hand —
+  // "above scrolling content and the sticky submit bar, below every modal/
+  // overlay/toast/gate" is the DI's literal acceptance test.
+  const zOf = (selRegex, label) => {
+    const m = selRegex.exec(cssSrc);
+    assert(!!m, `[16l-fixture] found a z-index for ${label} to compare against (regex: ${selRegex})`);
+    return m ? Number(m[1]) : null;
+  };
+  const zHeaderNav = zOf(/\.app-header\{[^}]*z-index:(\d+)/, '.app-header');
+  const zBottomNav = zOf(/\.bottom-nav\{[^}]*z-index:(\d+)/, '.bottom-nav');
+  const zSubmitBar = zOf(/\.submit-bar\{[^}]*z-index:(\d+)/, '.submit-bar');
+  const zModal = zOf(/\.modal-overlay\{[^}]*z-index:(\d+)/, '.modal-overlay');
+  const zBackendBanner = zOf(/\.backend-error-banner\{[^}]*z-index:(\d+)/, '.backend-error-banner');
+  const zToast = zOf(/#toast-container\{[^}]*z-index:(\d+)/, '#toast-container');
+  const zChatToast = zOf(/\.chat-toast\{[^}]*z-index:(\d+)/, '.chat-toast');
+  const zChatSheet = zOf(/#chat-sheet-wrap\{[^}]*z-index:(\d+)/, '#chat-sheet-wrap');
+  const zGateOverlay = zOf(/#site-gate-overlay\{[^}]*z-index:(\d+)/, '#site-gate-overlay');
+  const zGate = zOf(/^\.site-gate\{[^}]*z-index:(\d+)/m, '.site-gate');
+  const zLeagueSwitch = zOf(/#league-switch-overlay\{[^}]*z-index:(\d+)/, '#league-switch-overlay');
+  const zAuthStack = zOf(/#auth-banner-stack\{[^}]*z-index:(\d+)/, '#auth-banner-stack');
+  const STRIP_Z = 150;
+  for (const [z, label] of [[zHeaderNav, '.app-header'], [zBottomNav, '.bottom-nav'], [zSubmitBar, '.submit-bar']]) {
+    if (z != null) assert(STRIP_Z > z, `[16l] strip (${STRIP_Z}) sits ABOVE ${label} (${z})`);
+  }
+  for (const [z, label] of [[zModal, '.modal-overlay'], [zBackendBanner, '.backend-error-banner'],
+      [zToast, '#toast-container'], [zChatToast, '.chat-toast'], [zChatSheet, '#chat-sheet-wrap'],
+      [zGateOverlay, '#site-gate-overlay'], [zGate, '.site-gate'], [zLeagueSwitch, '#league-switch-overlay'],
+      [zAuthStack, '#auth-banner-stack']]) {
+    if (z != null) assert(STRIP_Z < z, `[16l] strip (${STRIP_Z}) sits BELOW ${label} (${z})`);
+  }
+
+  // [16m] Every gate/overlay the strip must read as "absent or Ink" behind is
+  // fully opaque and full-bleed (position:fixed;inset:0, a solid background —
+  // never transparent) — the structural reason the ordering above is
+  // sufficient on its own, without a second state-gate on the strip itself.
+  const gateOverlayRule = /#site-gate-overlay\{([^}]*)\}/.exec(cssSrc);
+  assert(!!gateOverlayRule && /inset:0/.test(gateOverlayRule[1]) && /background:var\(--bg\)/.test(gateOverlayRule[1]),
+    '[16m] #site-gate-overlay is position:fixed;inset:0 with a solid (non-transparent) background — fully covers the strip underneath it');
+  const baseSiteGateRule = /^\.site-gate\{([^}]*)\}/m.exec(cssSrc);
+  assert(!!baseSiteGateRule && /inset:0/.test(baseSiteGateRule[1]) && /background:#000/.test(baseSiteGateRule[1]),
+    '[16n] the base .site-gate (PIN/hold variants) is also position:fixed;inset:0, solid #000 — opaque over the strip');
+  const nativeGoogleGateRule = /body\.native-shell \.site-gate\[data-gate-state="google"\]\{([^}]*)\}/.exec(cssSrc);
+  assert(!!nativeGoogleGateRule && /background:#14110E/.test(nativeGoogleGateRule[1]),
+    '[16o] the native Munera sign-in gate variant paints Ink (#14110E), solid — the one gate state that can appear in the native shell, and it reads as Ink, not maroon, per the requirement');
+
+  // [16p] Mutation-proof (scope removed ⇒ RED) — source-level. A mutated copy
+  // of just this rule, with the "body.native-shell" prefix stripped (leaving
+  // a bare "::before{...}" that would paint on EVERY body, web included), no
+  // longer matches [16i]'s scoping regex — proving that regex is load-bearing
+  // and not vacuously true. This mutates an in-memory STRING only (never a
+  // file on disk, nothing to restore) per CLAUDE.md's scratch-copy discipline.
+  if (stripRule) {
+    const mutated = cssSrc.replace('body.native-shell::before{' + stripRule[1] + '}', '::before{' + stripRule[1] + '}');
+    assert(mutated !== cssSrc, '[16p-fixture] the mutation actually changed the text (otherwise the RED check below is vacuous)');
+    const scopedStillPresent = /body\.native-shell::before\{/.test(mutated);
+    assert(scopedStillPresent === false,
+      '[16p] MUTATION-PROOF: with "body.native-shell" stripped from the rule, [16i]\'s scoping assertion goes RED (no longer finds the scoped selector) — the real (unmutated) file passing [16i] is not a vacuous pass');
+  }
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 process.stdout.write(`\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`,
   () => process.exit(fail === 0 ? 0 : 1));

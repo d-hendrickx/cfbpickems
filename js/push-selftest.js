@@ -444,8 +444,15 @@ export function reachLine(result, eligibility, nameOf) {
   if (count === 0) {
     return {
       icon: '⚠️', tone: 'bad',
-      text: `${name} — no device registered. They won't get any push until they open the app and allow notifications.`,
-      action: `Tell ${name} to open the app on their phone and accept the notification prompt (or re-add it to the home screen if they never got one).`,
+      // 2026-09-21 — BOTH SENTENCES REWRITTEN, because the old advice did not
+      // match the app the commissioner would be describing. "Accept the
+      // notification prompt" only ever appears on a FIRST install; a player who
+      // already dismissed it, or whose subscription lapsed, sees no prompt at
+      // all and is left re-adding the app to the home screen for nothing. The
+      // 🔔 screen's Reconnect button is the actual repair, and it is one line
+      // short enough to read down a phone call.
+      text: `${name} — no device registered. They won't get any push until they do.`,
+      action: `Tell ${name} to open the app, tap the 🔔 bell, and tap Reconnect if it shows.`,
     };
   }
   const kinds = Array.isArray(result.kinds) && result.kinds.length ? result.kinds : [];

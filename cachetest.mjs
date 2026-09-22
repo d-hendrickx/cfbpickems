@@ -137,6 +137,15 @@ const K_EVENTS_CACHE = 'cfbp_chat_events_cache';   // DI-169b's literal key — 
 const NAMES = ['Drew', 'Brayden', 'Kevin', 'Koby', 'Jacob', 'Kihoon'];
 const players = NAMES.map((n, i) => ({ ...dataModel.createPlayer(n, '', '0000', '', n[0]), playerId: `p${i + 1}`, active: true }));
 storage.getPlayers && storage.savePlayer && players.forEach(p => storage.savePlayer(p));
+// SECURITY A-1-R (2026-09-21) — THE TOAST NOW REQUIRES A RESOLVED VIEWER.
+// `latestNotifying()` gained the identityKnown() guard the other unread entry
+// points already had: with a null selfId its own-post filter (`m.author ===
+// selfId`) excluded nobody, so a device that did not yet know who it was got
+// the newest message in the room handed to it and toasted a member's name and
+// 64 characters of what they wrote. This suite is about the CACHE replay, not
+// about identity, so it signs the reader in — as p1, so p2's messages (every
+// fixture event above) are still somebody else's and still notify.
+storage.setSession('p1', false, true);
 
 const mkEv = (seq, overrides = {}) => ({
   id: `e${seq}`, seq, ts: 1_700_000_000_000 + seq, type: 'message',
