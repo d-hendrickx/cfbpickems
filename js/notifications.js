@@ -167,7 +167,11 @@ import {
   getPlayers, getPlayer, getWeek, getNotifications, setNotifications,
   getNotifyPushMasterFor, getNotifyCategoryPrefsFor, getSettings,
 } from './storage.js';
-import { notifyPushRelay, notifyLogFetch } from './backend.js';
+// ── NOTHING IS IMPORTED FROM js/backend.js ANY MORE (2026-09-23) ────────────
+// `notifyPushRelay` (the client -> Apps Script -> OneSignal hop that held the
+// REST key server-side) and `notifyLogFetch` (the read of CFBP_NOTIFY_LOG) are
+// both deleted with the transport. See `deliverPush()` and the F2 section
+// below for what replaced each.
 import { buildCopy, assertMetaIsBlindSafe } from './notify-copy.js';
 
 // ── §2 event vocabulary (extends NOTIFY_EVENTS above — distinct string
@@ -328,31 +332,52 @@ export function resolveIntent({ playerId, category }) {
   return { inApp: true, push: categoryOn && !!master };
 }
 
-// ── §4 — PushAdapter interface + the OneSignal relay adapter. `send()` never
-//    talks to OneSignal directly from the browser — it calls OUR OWN backend
-//    relay (notifyPushRelay, js/backend.js), which is what actually holds the
-//    REST key server-side (Code.gs). Swapping providers later means writing a
-//    new adapter behind this same two-method interface; nothing above this
-//    layer changes. ──
+// ══════════════════════════════════════════════════════════════════════════
+// §4 — THE PushAdapter SEAM, AND WHY IT NOW HAS NO ADAPTER IN IT
+//
+// `OneSignalRelayAdapter` lived here from 2026-09-10 until the Sheets
+// retirement. Its `send()` called `notifyPushRelay` (js/backend.js), which
+// posted to Apps Script, which held the OneSignal REST key and made the one
+// batched UrlFetchApp call server-side. That was the whole reason the relay
+// existed: a REST key cannot ship to a browser, so the browser asked a server
+// it had a token for.
+//
+// EVERY PUSH NOW COMES FROM `notify-fanout` (DI-T6.1). A row lands in
+// `public.messages`, a database webhook fires the Edge Function, and the
+// function reads each recipient's master × category preference server-side and
+// makes one OneSignal call for the league. The REST key is a Supabase function
+// secret and is not in `config.json`, not in the repo and not on any device.
+//
+// WHAT HAPPENED TO THE CALLERS, audited rather than assumed (2026-09-23).
+// `deliverPush()` has exactly ONE call site: `_fireOne()` below. `_fireOne()`
+// has nine, and eight of them are the per-event orchestrators —
+// notifyPicksOpened / notifyPicksReminder / notifyPicksLockingSoon /
+// notifyPicksLocked / notifyResultsFinalized / notifyObligationCreated /
+// notifyObligationSettled / notifyCommissionerAnnouncement. **None of those
+// eight has had a production caller since N1 / DI-N1 (UN-204, 2026-09-12)**,
+// which REPLACED every one of their call sites in js/app.js with a Locker Room
+// chat post (`emitLifecyclePost()`); js/app.js says so at each site, and the
+// import list at js/app.js's §"Groups A/B" says so too. They survive because
+// notifytest.mjs diffs their copy pools against Code.gs's manual port, which is
+// still worth having.
+//
+// The ninth caller is the chat relay in `_scanNewChatMessages()`, and it
+// already returns before reaching `_fireOne()` whenever
+// `isServerJobEnabled('notifyFanout')` is true — DI-T6.1's double-push
+// interlock. With the switch permanently on and the Sheet gone, that return is
+// unconditional in practice.
+//
+// SO THE SEAM STAYS AND THE ADAPTER GOES. Keeping the two-method interface
+// costs three lines and is what "swapping providers means writing a new
+// adapter" meant; registering a no-op adapter, or leaving a relay that can only
+// throw, would both read as a working push path from every call site above it.
+// With NO adapter registered, `deliverPush()` marks the record 'skipped' and
+// resolves — which is the honest state, and is the state every device is in.
+// ══════════════════════════════════════════════════════════════════════════
 let _pushAdapter = null;
 export function registerPushAdapter(adapter) { _pushAdapter = adapter; }
 export function hasPushAdapter() { return !!_pushAdapter; }
 export function _clearPushAdapterForTest() { _pushAdapter = null; }
-
-export class OneSignalRelayAdapter {
-  isConfigured() { return true; } // real gating (REST key presence, per-recipient subscription) is server-side / per-device; unknowable from here ahead of the call.
-  async send(record) {
-    const res = await notifyPushRelay({
-      dedupKey: record.dedupKey,
-      playerIds: [record.playerId],
-      title: record.title,
-      body: record.body,
-      destination: record.destination,
-      event: record.event,
-    });
-    return { ok: !!res?.ok, id: res?.id, error: res?.error };
-  }
-}
 
 /** Provider isolation (§8): `deliverPush` failing or being absent must NEVER
  *  block `createInAppNotification`. Always resolves — never throws. */
@@ -457,13 +482,11 @@ export function createInAppNotification(record) {
 // below, exactly as it already was for server-origin rows.
 const K_NOTIFY_LOG_CACHE = 'cfbp_notify_log_cache';   // { byPlayer: { [playerId]: { cursorSeq, records:[...] } } }
 const K_NOTIF_READSTATE  = 'cfbp_notif_readstate';    // { [notificationId]: ISOString } — AD-12 device-local read position, ALL origins
-const NOTIFY_LOG_POLL_MS = 60000;   // "≤ once per 60s" — F2's stated cadence
 
 function _readLogCache() {
   try { return JSON.parse(localStorage.getItem(K_NOTIFY_LOG_CACHE) || '{}') || {}; }
   catch { return {}; }
 }
-function _writeLogCache(v) { try { localStorage.setItem(K_NOTIFY_LOG_CACHE, JSON.stringify(v)); } catch {} }
 function _readNotifReadState() {
   try { return JSON.parse(localStorage.getItem(K_NOTIF_READSTATE) || '{}') || {}; }
   catch { return {}; }
@@ -475,49 +498,35 @@ function _markNotifReadDeviceLocal(id) {
   _writeNotifReadState(state);
 }
 
-let _lastLogPollAt = 0;
 
 /**
- * Poll + fold CFBP_NOTIFY_LOG for `playerId`. Throttled to at most once per
- * NOTIFY_LOG_POLL_MS and skipped when the tab is hidden (F2) — safe to call
- * from every hydrate/auto-refresh tick; `force:true` bypasses both guards
- * (boot, and tests). Never throws — a poll miss just retries next tick,
- * matching the existing loud-fail-is-the-sync-banner's-job posture (a missed
- * notifyLog poll is not itself a sync failure).
+ * `pollNotifyLog()` IS DELETED (2026-09-23), AND IT HAD ALREADY STOPPED
+ * RUNNING A YEAR OF SESSIONS AGO.
  *
- * F7 remediation (2026-09-10) — `_lastLogPollAt` now advances ONLY after a
- * fetch actually SUCCEEDS. It used to be set before the network call, so a
- * failed boot poll (backend not yet configured, cold start, offline) burned
- * the entire 60s window and the NEXT genuinely-due poll — up to a minute
- * after boot — would also see itself as "too soon" and skip, compounding a
- * single miss into a much longer blackout than NOTIFY_LOG_POLL_MS implies.
+ * It fetched CFBP_NOTIFY_LOG — the Apps Script `scanReminders` trigger's own
+ * append-only record of PICKS_REMINDER / PICKS_LOCKING_SOON, the two events
+ * that fire entirely server-side — through `notifyLogFetch` and folded it into
+ * the device-local cache below. N1 / DI-N5 (UN-204, 2026-09-12) removed BOTH of
+ * its call sites: the boot wiring and the 60-second refresh tick (js/app.js
+ * says so at each). Nothing has called it since; only two assertions in
+ * notifytest.mjs did.
  *
- * Item 3 remediation (2026-09-10) — the folded cache is pruned by the SAME
- * retention rule (pruneNotificationList — 30 days / 200-per-player) on every
- * successful write, not just at read time in getNotificationsForPlayer()
- * below. Read-time pruning alone would still let the device-local
- * localStorage cache itself grow unbounded across a season; pruning here
- * keeps the thing actually persisted small too.
+ * WHAT SERVES THE NEED NOW, and it needs no fold at all: the `reminders` Edge
+ * Function writes those rows straight into `public.notifications`, which is in
+ * the adapter's READ_TABLES — so they arrive on every device through the
+ * ordinary hydrate, as `cfbp_notifications`, and `getNotificationsForPlayer()`
+ * below reads them with the client-authored rows in one list. The whole reason
+ * for a separate cache was RG-49's rule that the server must never write the
+ * shared KV key; a typed table with row-level reads has no such problem.
+ *
+ * THE READER BELOW SURVIVES ON PURPOSE. A device can still be carrying rows in
+ * `cfbp_notify_log_cache` from before the cutover, and dropping the read would
+ * make them vanish from the Center on deploy day. It is a DRAIN: nothing fills
+ * it again, the merge in `getNotificationsForPlayer()` de-dupes it against the
+ * `notifications` rows by `dedupKey` (both sides use the identical
+ * `makeDedupKey()` format), and read-time retention hides anything past the
+ * window. It empties itself and then does nothing.
  */
-export async function pollNotifyLog(playerId, { force = false } = {}) {
-  if (!playerId) return;
-  if (!force && typeof document !== 'undefined' && document.hidden) return;
-  const now = Date.now();
-  if (!force && now - _lastLogPollAt < NOTIFY_LOG_POLL_MS) return;
-  const cache = _readLogCache();
-  const entry = (cache.byPlayer && cache.byPlayer[playerId]) || { cursorSeq: 0, records: [] };
-  let fetched;
-  try { fetched = await notifyLogFetch(playerId, entry.cursorSeq); }
-  catch { return; }   // failed fetch — do NOT burn the throttle window; the next call may retry immediately
-  _lastLogPollAt = now;   // only advance the throttle on a SUCCESSFUL fetch
-  if (!fetched.records.length && fetched.head === entry.cursorSeq) return;
-  cache.byPlayer = cache.byPlayer || {};
-  cache.byPlayer[playerId] = {
-    cursorSeq: fetched.head,
-    records: pruneNotificationList([...entry.records, ...fetched.records]),
-  };
-  _writeLogCache(cache);
-}
 
 /** Server-log rows for `playerId`, shaped to match cfbp_notifications rows
  *  (readAt resolved from the device-local read-state store — never the
@@ -536,7 +545,6 @@ export function getServerNotifyLogForPlayer(playerId) {
 export function _resetNotifyLogCacheForTest() {
   try { localStorage.removeItem(K_NOTIFY_LOG_CACHE); } catch {}
   try { localStorage.removeItem(K_NOTIF_READSTATE); } catch {}
-  _lastLogPollAt = 0;
 }
 
 /**
@@ -706,6 +714,44 @@ function _fireOne({ event, actor, playerId, weekId = null, threshold = '', meta 
 // guards `week.dataSourceMode !== 'demo'` at the call site AND here, belt and
 // suspenders, matching this codebase's existing demo-week discipline
 // (finalizeWeek/reconcileWeeklyObligation, js/app.js).
+//
+// ── ALL EIGHT OF THESE ARE DEAD CODE. READ THIS BEFORE USING ONE. ───────────
+// Recorded 2026-09-23 during the Sheets retirement, at the reviewer's request
+// (final-gate note N3). Deliberately NOT deleted in that pass: the retirement
+// commit already removed more code than any change in this project's history,
+// and folding an unrelated 150-line deletion into it would have made the one
+// commit nobody can afford to misread longer and harder to review. This note
+// is the ledger entry standing in for the deletion until it gets its own.
+//
+// WHAT HAPPENED. N1 / DI-N1 (UN-204, 2026-09-12) moved league-wide lifecycle
+// notices from per-recipient push fan-out to a single SCRIBE post in the
+// Locker Room. Each of these functions was REPLACED, not duplicated — the old
+// call site was removed in the same edit. As of today every one of the eight
+// has ZERO callers anywhere outside this file; the only occurrences of their
+// names in `js/app.js` are the comments at :11008, :16219-16220 and :16534
+// recording what replaced them.
+//
+//   notifyPicksOpened               replaced by the DRAFT->OPEN SCRIBE post   (app.js:16219)
+//   notifyPicksLocked               replaced by the same post's lock phase    (app.js:16220)
+//   notifyResultsFinalized          replaced by one league-wide post          (app.js:16534)
+//   notifyCommissionerAnnouncement  replaced by a commissioner chat post      (app.js:11008)
+//   notifyPicksReminder             `reminders`' territory, server-side since Step 6 / F2
+//   notifyPicksLockingSoon          same — and see the note at the chat fan-out gate
+//   notifyObligationCreated         never re-wired after N1
+//   notifyObligationSettled         never re-wired after N1
+//
+// WHY THEY STILL RUN CLEAN. `_fireOne()` and `deliverPush()` below are intact
+// and Supabase-native; nothing about the Apps Script retirement broke them.
+// That is exactly the hazard — these are eight working, tested, exported
+// functions that simply nothing calls, which is the shape that gets
+// "reconnected" by somebody who assumes the absence of a call site is the bug.
+// IT IS NOT. Firing one of these today would put a push notification next to
+// the SCRIBE post that replaced it and every player would get the notice
+// twice. If you want one of them back, that is a design change to DI-N1.
+//
+// `notifytest.mjs` still exercises them, and that coverage is worth keeping
+// while they exist: it is what will tell you they still work on the day
+// somebody decides they should.
 
 function _activePlayers(players) { return (players || getPlayers()).filter(p => p.active); }
 
@@ -919,6 +965,19 @@ const CHAT_RELAY_BURST_CAP = 100;
 const _chatRelayBurstTrips = [];
 
 export function _chatWatermarkForTest() { return _chatWatermarkSeq; }
+/**
+ * TEST SEAM (2026-09-23) — has `wireChatNotifications()` run on this page?
+ *
+ * `boottest.mjs` proves that a device recovering from a hold gate runs THE SAME
+ * post-hydrate tail boot() runs, and it needs one observable effect of that
+ * tail to prove it. Until today that observable was `hasPushAdapter()`, because
+ * the tail registered `OneSignalRelayAdapter`. No adapter is registered any
+ * more (the server fans out — see §4's header), so the tail needs a different
+ * fingerprint, and this latch is the honest one: it is set by the tail, it is
+ * page-lifetime, and `_resetChatWatermarkForTest()` already drops it so a suite
+ * can drive several boots in one process.
+ */
+export function _chatNotificationsWiredForTest() { return _chatWired; }
 export function _chatRelayBurstTripsForTest() { return _chatRelayBurstTrips.map(t => ({ ...t })); }
 export function _resetChatRelayBurstTripsForTest() { _chatRelayBurstTrips.length = 0; }
 

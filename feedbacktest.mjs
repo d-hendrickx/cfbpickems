@@ -602,7 +602,7 @@ console.log('\n[12] Correction #6 — getAllFeedbackSince() reads the TRANSPORT,
 
 _resetForTest();   // the local fold is now COMPLETELY EMPTY — no feedback events ingested at all
 
-backend.setBackendConfig('https://fake.example/exec', 'tok_123');
+backend.setDataMode('supabase');
 
 // A large remote log — 2500 feedback events + 5 interspersed plain messages
 // — served ONLY via the fetch stub below — the local fold (S.items, above)
@@ -630,26 +630,30 @@ for (let i = 1; i <= 2505; i++) {
 REMOTE_LOG[REMOTE_LOG.length - 1] = { id: 'rf_last', seq: 2505, ts: 999999, type: 'feedback', targetId: 'remote_s1', author: 'p1', meta: { category: 'rewrite', value: 'a much better line' } };
 const REMOTE_HEAD = REMOTE_LOG.length;
 const EXPECTED_FEEDBACK_COUNT = REMOTE_LOG.filter(e => e.type === 'feedback').length;
-let fetchCallCount = 0;
-const realFetch = globalThis.fetch;
-globalThis.fetch = async (url) => {
-  fetchCallCount++;
-  const u = new URL(url);
-  const action = u.searchParams.get('action');
-  if (action !== 'chatSince') throw new Error('feedbacktest fetch stub only serves chatSince, got: ' + action);
-  const seq = Number(u.searchParams.get('seq') || 0);
-  const requested = Number(u.searchParams.get('limit') || 500);
-  const limit = Math.max(1, Math.min(requested, 1000));   // Code.gs's own exact clamp, backend/Code.gs:715
-  const events = REMOTE_LOG.filter(e => e.seq > seq).slice(0, limit);
-  return { ok: true, json: async () => ({ ok: true, events, head: REMOTE_HEAD }) };
-};
+// PORTED 2026-09-23. This stub used to parse an Apps Script URL, because
+// `js/chatTransport.js` had its own `get()`/`post()`. Those are deleted; a
+// serveable transport is now a Supabase chat context. The CLAMP IS UNCHANGED —
+// it is still a faithful rehearsal of a real server-side page cap, and the
+// server that caps it now is PostgREST's `.limit()` rather than Code.gs's
+// `Math.max(1, Math.min(limit||500, 1000))`.
+const { installFakeChat } = await import('./testchatfake.mjs');
+const projectionFB = await import('./js/supabase-projection.js');
+const transportFB = await import('./js/chatTransport.js');
+const fakeFB = installFakeChat(transportFB, projectionFB, {
+  head: () => REMOTE_HEAD,
+  since: (seq, requested) => {
+    const limit = Math.max(1, Math.min(Number(requested) || 500, 1000));
+    return { events: REMOTE_LOG.filter(e => e.seq > seq).slice(0, limit) };
+  },
+});
 
 let allFeedback;
 try {
   allFeedback = await getAllFeedbackSince(0);
 } finally {
-  globalThis.fetch = realFetch;
+  fakeFB.uninstall();
 }
+const fetchCallCount = fakeFB.calls.filter(c => c.action === 'chatSince').length;
 
 assert(fetchCallCount >= 3, `fixture check: 2505 remote events past a 1000-event server cap forced multiple round trips (got ${fetchCallCount} calls) — proves this is really paginating, not one lucky call`);
 assert(allFeedback.length === EXPECTED_FEEDBACK_COUNT,
@@ -662,7 +666,7 @@ assert(getFeedbackFor('remote_s1').p1 === undefined,
 assert(allFeedback.find(e => e.id === 'rf_last')?.meta.value === 'a much better line',
   'fixture check: the LAST page\'s rewrite text is returned exactly, not mangled by the pagination loop');
 
-backend.clearBackendConfig();
+backend.setDataMode('sheets');
 
 // ═════════════════════════════════════════════════════════════════════════
 // 13. Part 0b correction #7 (binding) — "Weigh in" accepts a rewrite

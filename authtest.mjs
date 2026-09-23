@@ -273,6 +273,16 @@ const chat = await import('./js/chat.js');
 // its `_prefsPanelHTMLForTest` seam is how DI-182j's "assert on rendered output"
 // rule (RG-27) is satisfied for them rather than grepping the source.
 const chatUi = await import('./js/chat-ui.js');
+// DI-254 (2026-09-23) — OneSignal.login() now carries a server-minted identity
+// token, and a mint that fails is a deliberate NO LOGIN (js/push-onesignal.js's
+// own header). Section [17]'s subject is the ORDER of the logout/login pair on a
+// sign-in, so the mint is stood in here and answers immediately; the failing
+// mint is driven in pushtest.mjs §[12t]. No new module edge — app.js already
+// pulled push-onesignal.js into this graph.
+const pushOs = await import('./js/push-onesignal.js');
+pushOs._setIdentityMinterForTest(async () => ({
+  ok: true, token: 'header.claims.signature', expiresAtMs: Date.now() + 86400000,
+}));
 
 // ── Fake Supabase client factory ─────────────────────────────────────────────
 let lastCreateArgs = null;
@@ -8245,7 +8255,22 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         // 2026-09-19 (found while root-causing RG-179): the hide/close handler calls `sb.flush()` so a
         // debounced write made just before the PWA is backgrounded is sent, not lost. Lifecycle only —
         // it moves no data through app.js; flush() itself holds (never drops) when not serving.
-        'flush'],
+        'flush',
+        // ── UN-237/238 (DI-260, 2026-09-23) — SCRIBE MEMORY. FOUR MEMBERS, AND THEY ARE NOT A
+        //    BREACH OF §0.3 ITEM 1, which is a rule about LEAGUE DATA going through the seam.
+        //    `scribe_memory` is deliberately NOT a seam key and never has been: its rows must be
+        //    PHYSICALLY deletable (DI-D2 — "Delete anything you told it"), and a seam write is a
+        //    whole-key replace whose stale-mirror union (RG-49) would resurrect a deleted row.
+        //    So memory has always lived outside load()/save(), in a module-level cache in app.js
+        //    with an explicit refresh; before this release the transport was js/backend.js's four
+        //    Apps Script relays, which the post-cutover allow-list refused (the UN-237 bug).
+        //    Enumerating them here is the point of this list: this is the decision, made once,
+        //    where somebody has to look at it.
+        //
+        //    THE RULE ABOVE STILL BINDS COMPLETELY — `sb.get(` / `sb.set(` are still storage-only,
+        //    and assertion (1) is what proves it. These four reach `scribe_memory`, a table the
+        //    adapter's own ROUTES/READ_TABLES do not contain.
+        'scribeMemoryList', 'scribeMemoryUpsert', 'scribeMemoryDelete', 'scribeMemoryApply'],
       'auth.js': ['beginSwitch', 'switchLeague', 'dropMirror', 'hasDeviceSnapshot'],
       'storage.js': ['isReady', 'getState', 'get', 'set'],
     };
@@ -9795,6 +9820,140 @@ console.log('\n[51] SECURITY A-3 — "Logout Commissioner" is dead in supabase m
     '[51] …and the Data Management card reaches it through that one function [structural]');
   assert((appSrc51.match(/document\.getElementById\('logout-comm-btn'\)\?\.addEventListener/g) || []).length === 1,
     '[51] the PIN-mode handler is still wired, unchanged — this is a render decision, not a deleted code path [structural]');
+
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+}
+
+// [52] THE COMMISSIONER PASSWORD RE-PROMPTS ARE RETIRED IN SUPABASE MODE
+//      (Drew, 2026-09-23; coordinator re-gate MUST-FIX)
+//
+// Drew, in the app, after the Sheets retirement: "we got rid of the admin
+// console password but run trainer still requires a password... make a note
+// this will be moved to the admin console."
+//
+// WHAT WAS ACTUALLY WRONG, and it is worse than an inconsistency. The panel's
+// own login was retired at Step 3b (js/app.js renderCommPage() branches on
+// `getAuthMode() === 'supabase'` and `isAdmin` comes from `league_members.role`).
+// The IN-PANEL re-prompts were not. They compare `btoa(pw)` against
+// `getSettings().adminPasswordHash` -- and the cutover importer STRIPPED that
+// field on the way in (js/supabase-projection.js CREDENTIAL_FIELDS, "S1 - never
+// let a secret enter Supabase"). So the settings merge falls through to
+// js/data-model.js's DEFAULT_SETTINGS, whose value is `btoa('admin123')`.
+//
+// The live league has therefore been guarding "spend real money at Anthropic"
+// with a password that is written in plain sight in a file anybody can read in
+// the public repo. That is not a weakening being introduced here; it is one
+// being REMOVED. The verified commissioner role, checked server-side, is
+// strictly stronger than a public default.
+//
+// THE POSITIVE CONTROL IS THE POINT OF THIS SECTION. Asserting only "supabase
+// mode does not prompt" is satisfied by a build that removed the prompt from
+// BOTH modes, which would silently retire the PIN-era gate that is still the
+// only thing standing in front of a factory reset on a PIN device. Every
+// assertion below is therefore run TWICE, once per mode.
+{
+  const appSrc52 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  // ── (a) THE ONE DECISION, DRIVEN. Same shape as [51]: a named function that
+  //    answers "which gate", exported so the real one is exercised rather than
+  //    a regex standing in for it.
+  assert(typeof app._commReauthModeForTest === 'function',
+    '[52] fixture: the re-prompt decision is a named exported function, so this drives the real one rather than grepping for a branch');
+
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  assert(app._commReauthModeForTest() === 'role',
+    `[52] supabase mode re-authenticates by ROLE, never by password (got ${JSON.stringify(app._commReauthModeForTest())}) — isAdmin comes from league_members.role and every destructive action is gated again server-side by is_commissioner`);
+
+  auth.configureAuth({ authMode: 'pins' });
+  assert(app._commReauthModeForTest() === 'password',
+    `[52] PIN mode still re-authenticates by PASSWORD, byte-identical (got ${JSON.stringify(app._commReauthModeForTest())}) — there is no verified role on a PIN device, so the prompt is the only gate there is and removing it there would be the real weakening`);
+
+  // ── (b) THE CHANGE-PASSWORD FORM IS GONE IN SUPABASE MODE. Not disabled, not
+  //    hidden with CSS — absent from the markup, the [51] precedent. A form
+  //    that writes a credential nothing reads is worse than useless: it tells
+  //    the commissioner he has changed something.
+  assert(typeof app._commPasswordCardHTMLForTest === 'function',
+    '[52] fixture: the Commissioner Password card is its own render decision, exported');
+
+  auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+    supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  const card52sb = app._commPasswordCardHTMLForTest();
+  assert(card52sb === '',
+    `[52] supabase mode renders NO Commissioner Password card (got ${JSON.stringify(card52sb.slice(0, 120))}) — there is nothing to change: no path reads the hash, and saving one would write a credential into a settings blob every device hydrates`);
+
+  auth.configureAuth({ authMode: 'pins' });
+  const card52pin = app._commPasswordCardHTMLForTest();
+  assert(/id="sec-pw-current"/.test(card52pin) && /id="sec-pw-new"/.test(card52pin)
+      && /id="sec-pw-confirm"/.test(card52pin) && /id="sec-change-pw-btn"/.test(card52pin),
+    `[52] PIN mode renders the card exactly as it always has, all three fields and the button (got ${JSON.stringify(card52pin.slice(0, 200))})`);
+
+  // ── (c) STRUCTURAL: EVERY comparison against the stored hash is inside the
+  //    password branch. This is the rule that would catch a fifth re-prompt
+  //    being added later without the gate — the defect class, not this instance.
+  {
+    const cmpLines = appSrc52.split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => /getSettings\(\)\.adminPasswordHash/.test(line)
+                         && !/^\s*(\/\/|\*)/.test(line));
+    assert(cmpLines.length > 0,
+      '[52] fixture: there is at least one hash comparison left to check — if this ever hits zero the rule below is vacuous and the PIN-mode gate has been deleted');
+    const lines52 = appSrc52.split('\n');
+    const unguarded = cmpLines.filter(({ n }) => {
+      // The guard may sit several lines above (a prompt and a null-check come
+      // between it and the comparison), so look back a bounded window rather
+      // than at the previous line only. BOTH SPELLINGS COUNT and deliberately:
+      // two of the four sites are written as an early `=== 'role'` return,
+      // which is the same gate read from the other end. Insisting on the
+      // positive form would push somebody to restructure working code to
+      // satisfy a test, which is how a rule stops being about the defect.
+      const window = lines52.slice(Math.max(0, n - 26), n).join('\n');
+      return !/commReauthMode\(\) === '(password|role)'/.test(window);
+    });
+    assert(unguarded.length === 0,
+      `[52] EVERY \`getSettings().adminPasswordHash\` comparison sits behind a \`commReauthMode()\` gate — unguarded at line(s) ${JSON.stringify(unguarded.map((u) => u.n))} [structural]`);
+
+    // …and the gate is only ever compared against those two literals. Without
+    // this, the rule above is satisfied by `commReauthMode() === 'anything'`,
+    // or by a truthiness test — and `commReauthMode()` always returns a
+    // non-empty string, so a truthiness test is an OPEN gate that reads like a
+    // closed one. That is the RG-27 shape, in the one place it would be worst.
+    const gateUses = (appSrc52.match(/commReauthMode\(\)\s*[!=]==?[^\n]*/g) || []);
+    const badGate = gateUses.filter((u) => !/^commReauthMode\(\) === '(password|role)'/.test(u));
+    assert(gateUses.length >= 4 && badGate.length === 0,
+      `[52] every \`commReauthMode()\` comparison is against 'password' or 'role' and nothing else (${gateUses.length} uses, offenders ${JSON.stringify(badGate)}) [structural]`);
+  }
+
+  // ── (d) THE PUBLIC DEFAULT IS NOT REACHABLE AS AN ACCEPTED CREDENTIAL.
+  //    `btoa('admin123')` STAYS in data-model.js — it is PIN mode's documented
+  //    starting password and deleting it would break a fresh PIN install. What
+  //    must be true is that supabase mode can never compare anything against
+  //    it, which (c) establishes structurally and this pins at the source.
+  {
+    const dmSrc52 = readFileSync(new URL('./js/data-model.js', import.meta.url), 'utf8');
+    assert(/adminPasswordHash: btoa\('admin123'\)/.test(dmSrc52),
+      '[52] the `btoa(\'admin123\')` DEFAULT still exists in data-model.js — it is PIN mode\'s documented first password, and removing it would leave a fresh PIN install with no way in [positive control]');
+    assert(!/adminPasswordHash/.test(appSrc52.split('\n')
+      .filter((l) => /commReauthMode\(\) === 'role'/.test(l)).join('\n')),
+      '[52] …and no `role` branch in js/app.js so much as names the hash [structural]');
+  }
+
+  // ── (e) THE HASH IS NEVER SENT ANYWHERE. `syncApprovedScribeFacts()` used to
+  //    read it out of settings and pass it to the transport, which is how a
+  //    credential ends up in a request body nobody remembers adding. The
+  //    Supabase RPC derives the caller from the JWT and ignores any argument.
+  {
+    const syncFn = appSrc52.slice(
+      appSrc52.indexOf('export async function syncApprovedScribeFacts'),
+      appSrc52.indexOf('export async function syncApprovedScribeFacts') + 900);
+    assert(syncFn.length > 100, '[52] fixture: syncApprovedScribeFacts() was found in the source');
+    assert(!/adminPasswordHash/.test(syncFn),
+      '[52] syncApprovedScribeFacts() sends NO adminPasswordHash — scribe_memory_apply() takes one argument and it is the league, and a credential in a request body is a credential in a log [structural]');
+    assert(/scribeMemoryTransport\.sync\(\)/.test(syncFn),
+      '[52] …it calls `scribeMemoryTransport.sync()` with no arguments at all [structural]');
+  }
 
   auth._resetAuthForTest();
   auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,

@@ -91,7 +91,7 @@ const transport = await import('./js/chatTransport.js');
 const storage = await import('./js/storage.js');
 const chat = await import('./js/chat.js');
 
-backend.setBackendConfig('https://script.google.test/exec', 'T0KEN');
+backend.setDataMode('supabase');
 // Section [1] measures the NEVER-INSTALLED world deliberately — that is the flag-off state every
 // device is in today, and the one this file's byte-identity claim is about. `() => false` is the
 // INSTALLED-and-answering-no state, which sections [3] and [5] cover separately.
@@ -112,38 +112,72 @@ function echoingFetch() {
 }
 echoingFetch();
 
-// ══════════════════════════════════════════════════════════════════════════
-_realLog('\n[1] predicate NEVER INSTALLED (today\u2019s world) — every request is byte-identical…');
-{
-  FETCHES.length = 0;
-  await transport.fetchHead();
-  await transport.fetchSince(12, 300);
-  await transport.fetchBefore(9, 100);
-  await transport.fetchMetrics(7);
-  await transport.appendEvents([{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }]);
-  assert(FETCHES.length === 5, `all five calls went to the network (${FETCHES.length})`);
+/**
+ * A MINIMAL serveable chat context, for the two sections that run BEFORE this
+ * file's full `makeFakeSupabase()` is declared (sections [3] and [5], which
+ * need a positive control and nothing more). It answers one `chat_head` and
+ * records that it was asked; `makeFakeSupabase()` further down is the real
+ * model and is what every Supabase-behaviour section uses.
+ */
+function installMinimalServeableChat(headValue = 1) {
+  const seen = { head: 0 };
+  transport.installSupabaseChat({
+    getClient: () => ({
+      async rpc(fn) { if (fn === 'chat_head') { seen.head++; return { data: headValue, error: null }; } return { data: null, error: { message: 'x' } }; },
+      from() { const b = { select: () => b, eq: () => b, gt: () => b, lt: () => b, order: () => b, limit: () => b, then: (r) => r({ data: [], error: null }) }; return b; },
+      channel() { const c = { on: () => c, subscribe: () => c }; return c; },
+      removeChannel() { return true; },
+    }),
+    getLeagueId: () => 'lg_minimal',
+    rowToMessage: (r) => r,
+    isReady: () => true,
+    getIdentityEpoch: () => 1,
+  });
+  transport.setSupabaseDataModePredicate(() => true);
+  return seen;
+}
 
-  // The exact wire shape, pinned. This is the byte-identity claim: the URLs and
-  // the POST body are what v0.17.0 produced, and the interlock added a
-  // predicate call, not a parameter.
-  assert(FETCHES[0].url === 'https://script.google.test/exec?action=chatHead&token=T0KEN',
-    'chatHead: GET with action+token in the query, and nothing else');
-  assert(FETCHES[0].method === 'GET' && FETCHES[0].headers === null,
-    'and no headers (a simple request — no CORS preflight, which Apps Script does not handle)');
-  assert(FETCHES[1].url === 'https://script.google.test/exec?action=chatSince&token=T0KEN&seq=12&limit=300',
-    'chatSince: seq and limit appended in that order');
-  assert(FETCHES[2].url === 'https://script.google.test/exec?action=chatBefore&token=T0KEN&seq=9&limit=100',
-    'chatBefore: the same shape');
-  assert(FETCHES[3].url === 'https://script.google.test/exec?action=chatMetrics&token=T0KEN&days=7',
-    'chatMetrics: days');
-  assert(FETCHES[4].method === 'POST' && FETCHES[4].url === 'https://script.google.test/exec',
-    'chatAppend: POST to the bare URL');
-  assert(FETCHES[4].headers && FETCHES[4].headers['Content-Type'] === 'text/plain;charset=utf-8',
-    'with the text/plain content type the picks sync has used since v0.15');
-  assert(FETCHES[4].body === JSON.stringify({
-    action: 'chatAppend', token: 'T0KEN',
-    events: [{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }],
-  }), 'and a body of exactly {action, token, events} in that key order');
+// ══════════════════════════════════════════════════════════════════════════
+_realLog('\n[1] predicate NEVER INSTALLED — the state is now a REFUSAL, not the Apps Script path…');
+{
+  // ── WHAT THIS SECTION USED TO BE, AND WHY IT COULD NOT SURVIVE ────────────
+  // It pinned the WIRE SHAPE of the five Apps Script requests byte for byte —
+  // `?action=chatHead&token=T0KEN`, the `seq`/`limit` order, the POST to the
+  // bare URL with `text/plain;charset=utf-8` and a body of exactly
+  // `{action, token, events}` in that key order. That was the "flag-off is
+  // byte-identical to v0.17.0" claim Step 4 owed, and it was worth pinning
+  // precisely because the interlock was new code in front of a live transport.
+  //
+  // `js/chatTransport.js`'s `get()`/`post()` were deleted on 2026-09-23 with
+  // the rest of the Apps Script transport. There is no wire shape left to pin,
+  // and the FOURTH state of DI-T5.1's table — "predicate never installed" —
+  // no longer means "use the Sheet". It means this device has no shared chat
+  // backend, which this module has always had a name for: interlocked.
+  //
+  // So the section asserts the NEW fact, and it is the one that matters on a
+  // device in that state: the refusal is typed, it names the action, it is
+  // flagged as DESIGNED rather than an outage (so chat.js holds the outbox and
+  // the sync badge does not go red), and NOTHING reaches the network.
+  FETCHES.length = 0;
+  const neverInstalled = [
+    ['fetchHead', () => transport.fetchHead(), 'chatHead'],
+    ['fetchSince', () => transport.fetchSince(12, 300), 'chatSince'],
+    ['fetchBefore', () => transport.fetchBefore(9, 100), 'chatBefore'],
+    ['fetchMetrics', () => transport.fetchMetrics(7), 'chatMetrics'],
+    ['appendEvents', () => transport.appendEvents([{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }]), 'chatAppend'],
+  ];
+  for (const [name, call, action] of neverInstalled) {
+    const e = await call().then(() => null, (err) => err);
+    assert(e instanceof transport.ChatTransportUnavailableError,
+      `${name}() on a device with NO chat context refuses with the typed error — the fourth state of DI-T5.1's table is 'interlocked' now, not 'sheets'`);
+    assert(e && e.action === action, `${name}(): the refusal names the action it refused (${action})`);
+    assert(e && e.interlocked === true,
+      `${name}(): flagged as a DESIGNED refusal, not an outage — chat.js holds the outbox and the sync badge stays green`);
+  }
+  assert(FETCHES.length === 0,
+    `and ZERO requests reached the network across all five (${FETCHES.length}) — there is no URL left for one to reach`);
+  assert(transport.chatTransportMode() === 'interlocked',
+    `chatTransportMode() answers 'interlocked' with no predicate installed — the string 'sheets' never comes out of it again (got ${transport.chatTransportMode()})`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -194,13 +228,22 @@ _realLog('\n[3] subscribe() delivers nothing while interlocked, and resumes afte
   assert(delivered.length === 0, 'and delivers nothing (onEvents is never called)');
   assert(statuses.length === 0, 'and reports no error status — this is not an outage');
 
-  // It RESUMES with no re-subscribe when the mode flips back, because the
+  // It RESUMES with no re-subscribe when a SERVEABLE mode arrives, because the
   // decision is made per tick and not at subscribe time.
-  transport.setSupabaseDataModePredicate(() => false);
+  //
+  // PORTED 2026-09-23: this used to flip the predicate to `false` and assert
+  // the tick reached the Apps Script network. `false` now means "no shared
+  // backend", so the serveable mode is `true` + an installed chat context.
+  // The property under test is unchanged — the subscription notices on its own
+  // next tick — and the observable is now the fake client rather than a URL.
+  const seen3 = installMinimalServeableChat(3);
   const forced = await unsub.forceTick();
-  assert(forced === true, 'forceTick() after the predicate flips back reaches the network');
-  assert(FETCHES.length > 0, 'and a fetch is issued without re-subscribing');
+  assert(forced === true, 'forceTick() after a serveable mode arrives reaches the backend without a re-subscribe');
+  assert(seen3.head > 0,
+    'and the round trip really happened — proven on the client recorder, not inferred from the return value');
   unsub();
+  transport._resetSupabaseChatForTest();
+  transport._resetSupabaseDataModePredicateForTest();
   const afterUnsub = FETCHES.length;
   const forcedAfter = await unsub.forceTick();
   assert(forcedAfter === false && FETCHES.length === afterUnsub,
@@ -218,7 +261,7 @@ _realLog('\n[4] the OUTBOX HOLDS: a refused append is retained, never failed…'
   storage.setBackendMode('local');
   storage.initStorage();
   storage.setSession('p1', false, true);
-  backend.setBackendConfig('https://script.google.test/exec', 'T0KEN');
+  backend.setDataMode('supabase');
   chat.clearOutbox();
   transport.setSupabaseDataModePredicate(() => true);
   FETCHES.length = 0;
@@ -311,29 +354,48 @@ _realLog('\n[5] INSTALLED + throwing predicate FAILS CLOSED; NEVER-INSTALLED sta
       assert(warnings2.some((w) => /string/.test(w)) && warnings2.some((w) => /object/.test(w)),
         'and the warning names the TYPE it got back');
 
-      // THE CONTROL. A predicate that returns a real `false` must still let the request out —
-      // otherwise "fails closed on a non-boolean" would be indistinguishable from "always closed",
-      // and every assertion above would pass against a transport that had simply stopped working.
+      // ── THE CONTROL, AND IT HAD TO BE REBUILT (2026-09-23) ──────────────────────────────
+      //
+      // It used to be: "a predicate returning a real `false` still lets the request out",
+      // because `false` meant "this league is on the Sheet" and the Sheet was reachable. That
+      // control existed for a precise reason — without it, "fails closed on a non-boolean" is
+      // indistinguishable from "always closed", and every assertion above would pass against a
+      // transport that had simply stopped working.
+      //
+      // `false` now means "no shared backend", so BOTH arms refuse and the old control can no
+      // longer tell them apart. The distinguishing observables are (i) the WARNING, which only
+      // the non-boolean path emits, and (ii) a predicate of `true` WITH a chat context, which is
+      // the only serveable state and therefore the only positive control there is. Both are
+      // asserted, because either alone is weaker than what this replaces.
       transport.setSupabaseDataModePredicate(() => false);
+      const warnsBeforeFalse = warnings2.length;
+      const refusedOnFalse = await transport.fetchHead().then(() => null, (err) => err);
+      assert(refusedOnFalse instanceof transport.ChatTransportUnavailableError,
+        'CONTROL (i): a real `false` ALSO refuses now — there is no Apps Script path behind it');
+      assert(warnings2.length === warnsBeforeFalse,
+        'CONTROL (i): …and it does so SILENTLY. Only the non-boolean path warns, which is what still separates "fails closed on a bad answer" from "always closed"');
+
+      // CONTROL (ii) — the positive one. A serveable state really does serve, so nothing above
+      // is passing against a transport that stopped working.
+      installMinimalServeableChat(1);
+      const served = await transport.fetchHead().then((r) => r, (err) => err);
+      assert(served && served.head === 1,
+        `CONTROL (ii): predicate true + chat context installed SERVES the request (got ${JSON.stringify(served)}) — the positive control the boolean path needs`);
+      transport._resetSupabaseChatForTest();
+      transport._resetSupabaseDataModePredicateForTest();
       FETCHES.length = 0;
-      const open2 = await transport.fetchHead().then(() => 'ok', (err) => err);
-      assert(open2 === 'ok' && FETCHES.length === 1,
-        'CONTROL: a predicate returning a real `false` still lets the request out');
-      // And a real `true` still closes it, so the boolean path is unchanged in both directions.
-      transport.setSupabaseDataModePredicate(() => true);
-      FETCHES.length = 0;
-      const closed2 = await transport.fetchHead().then(() => null, (err) => err);
-      assert(closed2 instanceof transport.ChatTransportUnavailableError && FETCHES.length === 0,
-        'and a real `true` still closes it');
     } finally { console.warn = realWarn; }
   }
 
-  // NEVER INSTALLED — the flag-off world every device is in today — is unchanged.
+  // NEVER INSTALLED — since 2026-09-23 this is a device with no shared chat backend, not the
+  // flag-off Apps Script world. It refuses, and it refuses WITHOUT a warning: "nobody told me"
+  // is not the same failure as "somebody told me something I cannot read".
   transport._resetSupabaseDataModePredicateForTest();
   FETCHES.length = 0;
-  const open = await transport.fetchHead().then(() => 'ok', (e) => e);
-  assert(open === 'ok', 'NEVER INSTALLED: chat is available, byte-identical to v0.17.0');
-  assert(FETCHES.length === 1, 'and the request goes out');
+  const open = await transport.fetchHead().then(() => null, (e) => e);
+  assert(open instanceof transport.ChatTransportUnavailableError,
+    'NEVER INSTALLED: chat refuses with the typed error — the fourth state of the mode table is \'interlocked\' now');
+  assert(FETCHES.length === 0, 'and no request goes out — there is no URL for one to reach');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
@@ -971,10 +1033,16 @@ _realLog('\n[14] installSupabaseChat() fails LOUD, and the mode table (DI-T5.1)�
       `installSupabaseChat({ ${slot}: undefined }) THROWS a TypeError naming the slot — a silent partial install would leave chat interlocked for the whole session with no error and no log line`);
   }
   resetToFlagOff();
-  assert(transport.chatTransportMode() === 'sheets',
-    'DI-T5.1: never installed => \'sheets\'. Today\'s world, and the one this file\'s byte-identity claim is about');
+  // THE TABLE, AS AMENDED 2026-09-23. Two of its four rows used to answer
+  // 'sheets' and meant "use the Apps Script chat log". That log is retired, so
+  // both answer 'interlocked' — the state this module already had for "refuse
+  // before any request, loudly, with a typed error". The table still has four
+  // distinct INPUTS and the function is still the one place they are evaluated;
+  // what changed is that two of them now share an outcome.
+  assert(transport.chatTransportMode() === 'interlocked',
+    'DI-T5.1: never installed => \'interlocked\'. A device with no shared chat backend, which is what a local-only build is');
   transport.setSupabaseDataModePredicate(() => false);
-  assert(transport.chatTransportMode() === 'sheets', 'DI-T5.1: installed and answering false => \'sheets\', unchanged');
+  assert(transport.chatTransportMode() === 'interlocked', 'DI-T5.1: installed and answering false => \'interlocked\' too');
   transport.setSupabaseDataModePredicate(() => true);
   assert(transport.chatTransportMode() === 'interlocked', 'DI-T5.1: installed + true, no chat context => \'interlocked\'');
   const fake = makeFakeSupabase();
@@ -991,13 +1059,13 @@ _realLog('\n[14] installSupabaseChat() fails LOUD, and the mode table (DI-T5.1)�
   // Its absence let a mutation through — the mode is asked of `_sbChat` first, every existing
   // assertion still passed, and a flag-off device would have gone to Supabase.
   transport._resetSupabaseDataModePredicateForTest();
-  assert(transport.chatTransportMode() === 'sheets',
-    'DI-T5.11: chat context installed + predicate NEVER installed => \'sheets\'. The predicate is what says whether THIS LEAGUE\'s data has moved; the context only says this build could serve it if it had');
+  assert(transport.chatTransportMode() === 'interlocked',
+    'DI-T5.11: chat context installed + predicate NEVER installed => \'interlocked\', NOT \'supabase\'. The predicate is what says whether THIS LEAGUE\'s data has moved; the context only says this build COULD serve it. A mode written as `_sbChat ? \'supabase\' : …` answers the wrong question and every other assertion in this file still passes');
   FETCHES.length = 0;
-  backend.setBackendConfig('https://script.google.test/exec', 'T0KEN');
-  const open5 = await transport.fetchHead().then(() => 'ok', (e) => e);
-  assert(open5 === 'ok' && FETCHES.length === 1 && /script\.google\.test/.test(FETCHES[0].url),
-    'DI-T5.11: …and the request really goes to the Apps Script URL — proven on the recorder, not inferred from the mode string');
+  backend.setDataMode('supabase');
+  const open5 = await transport.fetchHead().then(() => null, (e) => e);
+  assert(open5 instanceof transport.ChatTransportUnavailableError && FETCHES.length === 0,
+    'DI-T5.11: …and the request is REFUSED rather than served from the installed context — proven by driving it, not inferred from the mode string');
   resetToFlagOff();
 }
 
@@ -1052,29 +1120,38 @@ _realLog('\n[15] DI-T5.14 — the imported history folds IDENTICALLY through bot
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-_realLog('\n[16] DI-T5.11 — flag-off is unchanged, measured AFTER everything above…');
+_realLog('\n[16] DI-T5.11 — the NON-SUPABASE path is unchanged, measured AFTER everything above…');
 {
   // The never-installed path, re-measured at the END of the file. Sections [1]-[5] proved it
   // before the Supabase mode existed in this process; this proves the Supabase mode cannot leave
   // anything behind that changes it — a module-level cooldown, a remembered id, a live channel.
+  //
+  // WHAT "UNCHANGED" MEANS SINCE 2026-09-23. It used to mean "all five requests still go to the
+  // Apps Script network, with byte-identical URLs and a byte-identical POST body" — the flag-off
+  // guarantee Step 4 and Step 5 each owed, because the Sheet was a live backend and the interlock
+  // was new code in front of it. That transport is deleted, so the guarantee this section carries
+  // forward is the one that still has content: the Supabase sections above leave NOTHING behind
+  // that could make a non-Supabase device behave differently from a cold one. All five refuse,
+  // all five refuse with the typed designed-refusal error, and none of them touches the network.
   resetToFlagOff();
-  backend.setBackendConfig('https://script.google.test/exec', 'T0KEN');
+  backend.setDataMode('supabase');
   FETCHES.length = 0;
-  await transport.fetchHead();
-  await transport.fetchSince(12, 300);
-  await transport.fetchBefore(9, 100);
-  await transport.fetchMetrics(7);
-  await transport.appendEvents([{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }]);
-  assert(FETCHES.length === 5, `DI-T5.11: all five requests still go to the Apps Script network (${FETCHES.length})`);
-  assert(FETCHES[0].url === 'https://script.google.test/exec?action=chatHead&token=T0KEN',
-    'DI-T5.11: chatHead\'s URL is byte-identical to v0.17.0');
-  assert(FETCHES[4].body === JSON.stringify({
-    action: 'chatAppend', token: 'T0KEN',
-    events: [{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }],
-  }), 'DI-T5.11: and chatAppend\'s POST body is byte-identical — the event goes out RAW, with no `_n` packing, because that packing is the Supabase wire shape and belongs only to it');
-  const m = await transport.fetchMetrics(7);
-  assert(m.unsupported === undefined,
-    'DI-T5.11: fetchMetrics() carries no `unsupported` flag on the Sheets path, so app.js\'s existing card is untouched at flag-off');
+  const five = [
+    ['fetchHead', () => transport.fetchHead()],
+    ['fetchSince', () => transport.fetchSince(12, 300)],
+    ['fetchBefore', () => transport.fetchBefore(9, 100)],
+    ['fetchMetrics', () => transport.fetchMetrics(7)],
+    ['appendEvents', () => transport.appendEvents([{ id: 'e1', type: 'message', author: 'p1', body: 'hi' }])],
+  ];
+  for (const [name, call] of five) {
+    const e = await call().then(() => null, (err) => err);
+    assert(e instanceof transport.ChatTransportUnavailableError,
+      `DI-T5.11: ${name}() still refuses with the typed error after every Supabase section in this file has run — no cooldown, remembered id or live channel from them leaks into this path`);
+  }
+  assert(FETCHES.length === 0,
+    `DI-T5.11: and ZERO requests reached the network (${FETCHES.length})`);
+  assert(transport.chatTransportMode() === 'interlocked',
+    `DI-T5.11: the mode is still 'interlocked' at the end of the run (got ${transport.chatTransportMode()})`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

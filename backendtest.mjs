@@ -115,145 +115,70 @@ const snapshot = () => ({
 const GETALL_OK = () => ({ ok: true, data: snapshot(), chatHead: 227 });
 const MIRROR_KEY = 'cfbp_sheet_mirror';
 
-const be = await import('./js/backend.js');
-const tx = await import('./js/chatTransport.js');
-be.setBackendConfig('https://script.google.com/macros/s/FAKE/exec', 'tok');
-
-async function rejects(p) {
-  try { await p; return null; } catch (e) { return e; }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[1] A misrouted getAll is retried, and the retry lands');
+// ══════════════════════════════════════════════════════════════════════════════
+// [1]–[9] ARE RETIRED WITH THE CLIENT TRANSPORT THEY DROVE (2026-09-23)
+//
+// WHAT THEY PROVED — BUG-A and BUG-E, both found live on 2026-09-11.
+//
+//   BUG-A, THE MISROUTE. `backend/Code.gs`'s `handle()` opened with
+//   `var action = req.action || 'ping'`, so a request arriving with no action
+//   was answered with the PING payload — HTTP 200, `{ok:true, service:
+//   'cfbp-backend'}` — whatever the client had actually asked for. Two paths
+//   delivered an action-less request, both reproduced against the live /exec
+//   URL: an empty `postData.contents` (correlating with Apps Script cold start),
+//   and a POST that Apps Script 302-redirected arriving at doGet as a GET with
+//   no body. `call()` only asked `if (!data.ok) throw`, and a ping payload IS
+//   ok — so `set`/`setMany`/`chatAppend`/`notifyPush` reported a write that
+//   NEVER REACHED THE SERVER as synced. That last one is the dangerous one, and
+//   it is the one nobody could report, because it is invisible.
+//
+//   BUG-E, ITS TWIN. A 404 on a request that had already completed
+//   server-side: Apps Script answers a POST with a 302 to a
+//   googleusercontent.com URL, and that second leg is a different host on a
+//   different edge that can 404, 500 or 503 on its own with the real work done.
+//
+//   Sections [1]–[9] drove the REAL `call()` against a stubbed fetch: the retry
+//   and its landing, the persistent-misroute error text, that hydrate() never
+//   clears the mirror on a misroute (the RG-12 axis), that `ping` survives, that
+//   the two SPEND actions (`runTrainer`, `scribeAsk`) get exactly one attempt,
+//   that idempotent writes DO retry, the `_action` echo, and that the guard
+//   stays NARROW so a genuine server error still fails fast with its own message.
+//   [13] proved the token rode on every read, and [14] proved the post-cutover
+//   allow-list refused thirteen relays before any fetch.
+//
+// WHY THEY ARE GONE. `call()`, `requestWithMisrouteGuard`, the retry ladder,
+// the transient-HTTP set and the allow-list are all deleted with the Apps
+// Script transport. There is no 302, no googleusercontent leg and no shared
+// token, so there is nothing left to misroute or to refuse. The one fetch left
+// in js/backend.js reads `config.json` — a same-origin static file beside
+// index.html.
+//
+// WHAT STILL RUNS BELOW, and why: [10]–[12] are the SERVER TWIN. They execute
+// `backend/Code.gs` in a vm and assert the server-side half — that an
+// action-less request is never answered with ping, the one-click authorization
+// trigger, and that reads require the token. `backend/Code.gs` is still in the
+// repo and the Sheet is kept READ-ONLY for the season as the archive
+// (SUPABASE_LIVE_RUNBOOK §RETIREMENT step 5), so those assertions are about a
+// file that exists. They are the last thing in this suite that is.
+// ══════════════════════════════════════════════════════════════════════════════
+console.log('\n[1]–[9], [13], [14] RETIRED — the Apps Script client transport they drove is deleted (see the note above)…');
 {
-  arm(PING(), GETALL_OK());
-  const err = await rejects(be.hydrate().then(n => { assert(n > 0, `hydrate() resolved with ${n} keys instead of throwing`); }));
-  assert(!err, `hydrate() survives one misroute (got: ${err && err.message})`);
-  assert(calls.length === 2, `exactly two requests: the misrouted one and the retry (got ${calls.length})`);
-  assert(calls.every(c => c.body && c.body.action === 'getAll'), 'both requests asked for getAll');
-  const players = be.cacheGet('cfbp_players');
-  assert(Array.isArray(players) && players.length === 6, `the real snapshot landed in the mirror (6 players, got ${players && players.length})`);
+  const fs0 = await import('node:fs');
+  const { fileURLToPath: f0 } = await import('node:url');
+  const beSrc0 = fs0.readFileSync(f0(new URL('./js/backend.js', import.meta.url)), 'utf8');
+  const beCode0 = beSrc0.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/async function call\s*\(/.test(beCode0),
+    'js/backend.js has no call() — the one function that knew the URL, the token, the misroute guard and the money-safety list');
+  assert(!/requestWithMisrouteGuard|isMisroutedResponse|MISROUTE_RETRY_DELAYS|TRANSIENT_HTTP|NO_RETRY_ACTIONS/.test(beCode0),
+    '…and none of BUG-A/BUG-E\'s machinery survives it: no misroute guard, no retry ladder, no transient-HTTP set, no NO_RETRY_ACTIONS');
+  assert(!/script\.google\.com/.test(beCode0) && !/backendToken/.test(beCode0),
+    '…and no Apps Script URL and no token read anywhere in executable code');
+  const txSrc0 = fs0.readFileSync(f0(new URL('./js/chatTransport.js', import.meta.url)), 'utf8');
+  const txCode0 = txSrc0.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/script\.google\.com/.test(txCode0) && !/searchParams\.set\('token'/.test(txCode0),
+    'js/chatTransport.js\'s own get()/post() are deleted too — the second module that knew the URL and carried the token');
 }
 
-console.log('\n[2] A PERSISTENT misroute throws a CLEAR error — not a false success, and not "Sync refused"');
-{
-  arm(PING(), PING(), PING());
-  const err = await rejects(be.hydrate());
-  assert(!!err, 'hydrate() rejects rather than resolving {ok:true}');
-  assert(!!err && /misrout/i.test(err.message), `the error names the real problem — misrouting (got: ${err && err.message})`);
-  assert(!!err && !/Sync refused/i.test(err.message),
-    'and does NOT surface as "Sync refused", which sent Drew hunting a data-loss bug that was not happening');
-  assert(calls.length === 3, `three attempts, then it gives up (got ${calls.length})`);
-}
-
-console.log('\n[3] hydrate() never clears the mirror on a misrouted reply (RG-12 axis)');
-{
-  const before = localStorage.getItem(MIRROR_KEY);
-  arm(PING(), PING(), PING());
-  await rejects(be.hydrate());
-  const players = be.cacheGet('cfbp_players');
-  assert(Array.isArray(players) && players.length === 6, `the in-memory mirror still holds all 6 players (got ${players && players.length})`);
-  assert(be.cacheGet('cfbp_picks')?.length === 1, 'and still holds the picks');
-  assert(localStorage.getItem(MIRROR_KEY) === before, 'the persisted snapshot mirror is untouched');
-}
-
-console.log('\n[4] A real ping still works — the health check must not be collateral damage');
-{
-  arm(PING());
-  const r = await be.pingBackend();
-  assert(r.ok === true, 'pingBackend() reports ok');
-  assert(r.service === 'cfbp-backend', 'and carries the service marker, which is legitimate FOR ping');
-  assert(calls.length === 1, `one request, no retry (got ${calls.length})`);
-}
-
-console.log('\n[5] SPEND actions are never blindly retried — runTrainer / scribeAsk');
-{
-  arm(PING(), PING(), PING());
-  const err = await rejects(be.runTrainerRemote({ adminPasswordHash: 'x' }));
-  assert(!!err && /misrout/i.test(err.message), `runTrainer throws the misroute error (got: ${err && err.message})`);
-  assert(calls.length === 1,
-    `and sends EXACTLY ONE request — a retry could double-charge Anthropic if the first one did run (got ${calls.length})`);
-
-  arm(PING(), PING(), PING());
-  const err2 = await rejects(be.scribeAskRemote({ triggerMessageId: 'm1', playerId: 'p0' }));
-  assert(!!err2 && /misrout/i.test(err2.message), `scribeAsk throws the misroute error (got: ${err2 && err2.message})`);
-  assert(calls.length === 1, `and sends exactly one request (got ${calls.length})`);
-}
-
-console.log('\n[6] IDEMPOTENT writes DO retry — a dropped write must not be reported as synced');
-{
-  // chatAppend is id-deduped server-side (Code.gs chatAppend → knownIds/
-  // idSeqFullScan); setMany is last-write-wins on the same payload; notifyPush
-  // is dedupKey-deduped. All three are safe to send twice — and a misroute
-  // means the server never ran the action at all, because both misroute paths
-  // (empty body, dropped-body redirect) lose the request before dispatch.
-  arm(PING(), { ok: true, assigned: [{ id: 'e1', seq: 228 }], head: 228 });
-  const r = await be.chatAppendRemote([{ id: 'e1', body: 'hi' }]);
-  assert(r.head === 228, `chatAppend survives a misroute and reports the real head (got ${r.head})`);
-  assert(calls.length === 2, `two requests: misroute + retry (got ${calls.length})`);
-
-  arm(PING(), { ok: true, head: 228 });
-  const h = await tx.fetchHead();
-  assert(h.head === 228, `chatTransport.fetchHead() survives a misroute (got ${h.head})`);
-  assert(calls.length === 2, `chatTransport's own GET path retries too (got ${calls.length})`);
-
-  arm(PING(), { ok: true, assigned: [], head: 229 });
-  const a = await tx.appendEvents([{ id: 'e2', body: 'yo' }]);
-  assert(a.head === 229, `chatTransport.appendEvents() survives a misroute (got ${a.head})`);
-  assert(calls.length === 2, `chatTransport's own POST path retries too (got ${calls.length})`);
-
-  arm(PING(), PING(), PING());
-  const err = await rejects(tx.fetchHead());
-  assert(!!err && /misrout/i.test(err.message), `chatTransport gives up loudly on a persistent misroute (got: ${err && err.message})`);
-}
-
-console.log('\n[7] Detection survives a server that drops the ping marker — the `action` echo');
-{
-  // Forward-compat with the fixed Code.gs, which echoes the action it ran.
-  arm({ ok: true, _action: 'ping', time: 'now' }, GETALL_OK());
-  const err = await rejects(be.hydrate());
-  assert(!err, `an action-echo mismatch is caught and retried even with no service marker (got: ${err && err.message})`);
-  assert(calls.length === 2, `two requests (got ${calls.length})`);
-
-  // Review finding 2 — the echo lives under a RESERVED name, so a handler's own
-  // top-level `action` field is payload, not routing metadata. Reading it as
-  // the echo would make a perfectly-routed reply look misrouted: retried twice
-  // (a duplicate write on anything but the id-deduped actions) and then thrown
-  // as a sync error the player would see. Cheap to prevent today, expensive to
-  // debug the first time a handler needs the field.
-  arm({ ok: true, _action: 'getAll', action: 'somethingElseEntirely', data: snapshot(), chatHead: 227 });
-  const err2 = await rejects(be.hydrate());
-  assert(!err2, `a correctly-echoed reply that ALSO carries its own top-level 'action' field is NOT a misroute (got: ${err2 && err2.message})`);
-  assert(calls.length === 1, `and is not retried (got ${calls.length})`);
-
-  // And the layer below still covers a deployment that echoes nothing at all —
-  // including the interim one that echoed the old un-reserved `action` name.
-  arm({ ok: true, action: 'ping', time: 'now', service: 'cfbp-backend', version: 2 }, GETALL_OK());
-  const err3 = await rejects(be.hydrate());
-  assert(!err3, `a misroute from a deployment this client cannot read an echo from is still caught by the ping marker (got: ${err3 && err3.message})`);
-  assert(calls.length === 2, `two requests (got ${calls.length})`);
-}
-
-console.log('\n[8] The fixed server\'s explicit empty-request reply is treated as a misroute, not a hard error');
-{
-  arm({ ok: false, error: 'Empty request — no action supplied', misrouted: true }, GETALL_OK());
-  const err = await rejects(be.hydrate());
-  assert(!err, `misrouted:true is retried rather than surfaced as a dead error (got: ${err && err.message})`);
-  assert(calls.length === 2, `two requests (got ${calls.length})`);
-}
-
-console.log('\n[9] The guard is NARROW — a genuine server error still fails fast and keeps its message');
-{
-  arm({ ok: false, error: 'Unauthorized' });
-  const err = await rejects(be.hydrate());
-  assert(!!err && /Unauthorized/.test(err.message), `a real error keeps its own message (got: ${err && err.message})`);
-  assert(calls.length === 1, `and is NOT retried — retrying every failure would be a different bug (got ${calls.length})`);
-
-  arm({ ok: true, _action: 'getAll', data: snapshot(), chatHead: 227 });
-  const err2 = await rejects(be.hydrate());
-  assert(!err2, `a correctly-echoed reply passes straight through (got: ${err2 && err2.message})`);
-  assert(calls.length === 1, `with no retry (got ${calls.length})`);
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // [10] SERVER TWIN — backend/Code.gs executed for real in a vm sandbox.
@@ -554,209 +479,13 @@ console.log('\n[12] backend/Code.gs — reads require the shared token');
     '[12e] …and handle() still consults it (the flag has to be wired, not just set)');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// [13] C7, client half — every read request already carries the token.
-// This is the proof that had to exist BEFORE the flag was flipped.
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[13] Client read paths — the token is on every request');
-{
-  const fs = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
+// [13] and [14] are retired with [1]–[9] — see the note at the top of this
+// file. [13] proved the shared token rode on every read request; there is no
+// token. [14] proved the post-cutover allow-list refused thirteen relays before
+// any fetch; there are no relays, which is the stronger form of the same claim
+// and is asserted structurally above and in `adaptertest.mjs [A17]`.
 
-  // [13a] backend.js call() — POST body, driven through the real functions.
-  arm(GETALL_OK());
-  await be.hydrate();
-  assert(calls[0]?.body?.action === 'getAll' && calls[0]?.body?.token === 'tok',
-    `[13a] hydrate() -> getAll carries the token in the POST body (got: ${JSON.stringify(calls[0]?.body && { action: calls[0].body.action, token: calls[0].body.token })})`);
 
-  arm({ ok: true, snapshots: [] });
-  await be.listSnapshots();
-  assert(calls[0]?.body?.token === 'tok', '[13a] listSnapshots carries the token');
-
-  arm({ ok: true, rows: [] });
-  await be.notifyLogFetch('p0', 0);
-  assert(calls[0]?.body?.action === 'notifyLog' && calls[0]?.body?.token === 'tok',
-    '[13a] notifications.js -> notifyLogFetch -> notifyLog carries the token');
-
-  arm({ ok: true, events: [], head: 0 });
-  await be.chatSinceRemote(0, 50);
-  assert(calls[0]?.body?.token === 'tok', '[13a] chatSince carries the token');
-
-  // [13b] chatTransport.js — GET reads put it in the QUERY STRING
-  // (js/chatTransport.js:76, `u.searchParams.set('token', c.token || '')`).
-  arm({ ok: true, head: 12 });
-  await tx.fetchHead();
-  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''),
-    `[13b] chatTransport GET chatHead carries token= in the query string (got: ${calls[0]?.url})`);
-  arm({ ok: true, events: [], head: 12 });
-  await tx.fetchSince(0, 50);
-  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatSince GET carries token=');
-  arm({ ok: true, events: [] });
-  await tx.fetchBefore(99, 50);
-  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatBefore GET carries token=');
-  arm({ ok: true, rows: [] });
-  await tx.fetchMetrics(7);
-  assert(/[?&]token=tok(&|$)/.test(calls[0]?.url || ''), '[13b] chatMetrics GET carries token=');
-  arm({ ok: true, assigned: [], head: 13 });
-  await tx.appendEvents([{ id: 'e9', body: 'x' }]);
-  assert(calls[0]?.body?.token === 'tok', '[13b] chatTransport POST chatAppend carries the token in the body');
-
-  // [13c] STRUCTURAL — the guard that covers the read path nobody has written
-  // yet. Only backend.js and chatTransport.js may talk to the backend URL
-  // (AD-16 for chat); a NEW module that fetches it, or an existing one that
-  // stops attaching the token, fails here rather than at the next redeploy.
-  const jsDir = fileURLToPath(new URL('./js/', import.meta.url));
-  const fetchers = fs.readdirSync(jsDir).filter(f => f.endsWith('.js'))
-    .filter(f => /\bfetch\s*\(/.test(fs.readFileSync(jsDir + f, 'utf8')));
-  // iOS Munera thread, PASS 1b (2026-09-20) — app.js joined this list.
-  // DI-208d's checkNativeShellStaleness() adds ONE new fetch() call, native
-  // only, to the LIVE service-worker.js (never the backend URL, never
-  // app.js's own ~800KB) — the loop below proves it never reaches the
-  // backend the same way it already proves this for the other three.
-  assert(JSON.stringify(fetchers.sort()) === JSON.stringify(['app.js', 'backend.js', 'chatTransport.js', 'data-provider.js', 'extra-point.js', 'push-onesignal.js']),
-    `[13c] exactly six modules call fetch() — the two backend transports, ESPN/ESPN-summary/config.json, and app.js's DI-208d staleness check (got: ${fetchers.join(', ')})`);
-  const beSrc = fs.readFileSync(jsDir + 'backend.js', 'utf8');
-  const txSrc = fs.readFileSync(jsDir + 'chatTransport.js', 'utf8');
-  assert(/JSON\.stringify\(\{\s*action,\s*token:\s*c\.token,/.test(beSrc),
-    '[13c] backend.js call() builds every request body with the token');
-  assert(/u\.searchParams\.set\('token',\s*c\.token/.test(txSrc),
-    '[13c] chatTransport.js get() puts the token on every GET');
-  assert(/JSON\.stringify\(\{\s*action,\s*token:\s*c\.token,/.test(txSrc),
-    '[13c] chatTransport.js post() puts the token on every POST');
-  for (const [f, s] of [['data-provider.js', fs.readFileSync(jsDir + 'data-provider.js', 'utf8')],
-                        ['extra-point.js', fs.readFileSync(jsDir + 'extra-point.js', 'utf8')],
-                        ['push-onesignal.js', fs.readFileSync(jsDir + 'push-onesignal.js', 'utf8')],
-                        ['app.js', fs.readFileSync(jsDir + 'app.js', 'utf8')]]) {
-    assert(!/getBackendConfig\(\)[\s\S]{0,400}?fetch\s*\(/.test(s),
-      `[13c] ${f} does not fetch the backend URL (its fetch() calls go to ESPN / config.json${f === 'app.js' ? ' / the live service-worker.js' : ''})`);
-  }
-  // app.js's fetch() specifically: only ever the hardcoded live
-  // service-worker.js literal, never app.js itself and never derived from
-  // anything the response returns (security condition 11).
-  const appSrc13c = fs.readFileSync(jsDir + 'app.js', 'utf8');
-  assert(/fetch\('https:\/\/irbfootball\.com\/service-worker\.js',\s*\{\s*redirect:\s*'error'\s*\}\)/.test(appSrc13c),
-    "[13c] app.js's one fetch() call is the hardcoded literal https://irbfootball.com/service-worker.js with redirect:'error' (security condition 10)");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// [14] Phase III Step 4 Part B — THE SHEETS RELAY ALLOW-LIST (DI §2.7).
-//
-// This closes adaptertest.mjs's A17 skip, which named this file as its
-// follow-up: the guard lives in call() at js/backend.js, a file Part A could
-// not edit, so Part A asserted only that the ADAPTER can reach no relay and
-// deferred the guard itself to here.
-//
-// THE ASSERTION THAT MATTERS IS "AND NEVER FETCHED". A refusal that happens
-// AFTER the request has gone out is not an interlock — the production league's
-// Sheet has already been read or written by then, which is the entire cross-
-// league bleed §2.7 exists to prevent. Every case below therefore checks
-// `calls.length === 0` as well as the throw, and the fetch stub is armed with
-// NOTHING so that a request would also exhaust it and fail loudly.
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[14] dataMode:\'supabase\' — every Sheets relay except ping/notifyPush is refused BEFORE the fetch (DI §2.7, A17)');
-{
-  assert(be.getDataMode() === 'sheets',
-    '[14] the default dataMode is \'sheets\' — the flag-off world, and what an absent config.json key means (CONVENTIONS #10)');
-
-  // ── the flag-off world is untouched ──────────────────────────────────────
-  arm(PING());
-  const okBefore = await be.pingBackend();
-  assert(okBefore.ok === true && calls.length === 1,
-    '[14] in \'sheets\' mode every relay still goes out exactly as it does today');
-  arm({ ok: true, _action: 'runTrainer', skipped: false });
-  const trainerBefore = await rejects(be.runTrainerRemote({ adminPasswordHash: 'h' }));
-  assert(!trainerBefore && calls.length === 1,
-    '[14] …including the ones the allow-list will later refuse — runTrainer reaches the server in \'sheets\' mode');
-
-  // ── flip the mode ────────────────────────────────────────────────────────
-  assert(be.setDataMode('supabase') === 'supabase', '[14] setDataMode(\'supabase\') takes');
-  assert(be.getDataMode() === 'supabase', '[14] …and getDataMode() reports it');
-
-  // Every REFUSED action, by its own exported relay where there is one. The
-  // list is written out rather than derived, so a relay added later without a
-  // thought about the interlock shows up here as an untested name rather than
-  // being swept into a loop that happens to still pass.
-  const refused = [
-    ['runTrainerRemote',       () => be.runTrainerRemote({ adminPasswordHash: 'h' }),                 'runTrainer'],
-    ['scribeAskRemote',        () => be.scribeAskRemote({ triggerMessageId: 'm1', playerId: 'p1' }),  'scribeAsk'],
-    ['scribeAutonomousRemote', () => be.scribeAutonomousRemote({ trigger: 't' }),                     'scribeAutonomous'],
-    ['scribeClassifyRemote',   () => be.scribeClassifyRemote({ messageId: 'm1' }),                    'scribeClassify'],
-    ['scribeMemoryListRemote',   () => be.scribeMemoryListRemote({ playerId: 'p1' }),                         'scribeMemoryList'],
-    ['scribeMemoryUpsertRemote', () => be.scribeMemoryUpsertRemote({ playerId: 'p1', kind: 'k', text: 't' }), 'scribeMemoryUpsert'],
-    ['scribeMemoryDeleteRemote', () => be.scribeMemoryDeleteRemote({ id: 'x', playerId: 'p1' }),              'scribeMemoryDelete'],
-    ['scribeMemorySyncRemote',   () => be.scribeMemorySyncRemote({ adminPasswordHash: 'h' }),                 'scribeMemorySync'],
-    ['createSnapshot',         () => be.createSnapshot('label'),                                      'snapshot'],
-    ['listSnapshots',          () => be.listSnapshots(),                                              'listSnapshots'],
-    ['restoreSnapshot',        () => be.restoreSnapshot('snap1'),                                     'restoreSnapshot'],
-    ['hydrate (getAll)',       () => be.hydrate(),                                                    'getAll'],
-    ['notifyLogFetch',         () => be.notifyLogFetch('p1', 0),                                     'notifyLog'],
-  ];
-  for (const [name, run, action] of refused) {
-    arm();                                    // NOTHING queued: a fetch would also exhaust the stub
-    const err = await rejects(run());
-    assert(!!err && err.name === 'SheetsRelayRefusedError',
-      `[14] ${name} throws a typed SheetsRelayRefusedError in supabase data mode`);
-    assert(!!err && err.code === 'sheets_relay_refused',
-      `[14] …with code 'sheets_relay_refused' (got ${err && err.code})`);
-    assert(!!err && err.action === action, `[14] …naming the refused action '${action}' (got ${err && err.action})`);
-    assert(!!err && err.interlocked === true,
-      '[14] …flagged as a DESIGNED refusal, not an outage, so the sync badge does not go red for a Step 6 feature');
-    assert(calls.length === 0, `[14] …and NOTHING was fetched (got ${calls.length} request(s)) — the refusal is before the wire`);
-  }
-
-  // ── the two allowed actions still work ───────────────────────────────────
-  arm(PING());
-  const p = await be.pingBackend();
-  assert(p.ok === true && calls.length === 1 && calls[0].body.action === 'ping',
-    '[14] `ping` is on the allow-list and still reaches the Sheet — the Comm → Settings connection test keeps working');
-
-  arm({ ok: true, _action: 'notifyPush', sent: 1 });
-  const np = await rejects(be.notifyPushRelay({ dedupKey: 'd1', playerIds: ['p1'], title: 'T', body: 'B', destination: 'chat', event: 'E' }));
-  assert(!np, `[14] \`notifyPush\` is on the allow-list and does not throw (got: ${np && np.message})`);
-  assert(calls.length === 1 && calls[0].body.action === 'notifyPush',
-    '[14] …and the request really went out: OneSignal external_ids are league-unique by construction (D-4)');
-
-  // ── the allow-list itself cannot be widened at runtime ───────────────────
-  // Security F-3/F-E's lesson, applied here: a FROZEN ARRAY, so index
-  // assignment, push, and Array.prototype.push.call all throw in strict mode.
-  // A Set would have looked identical and been mutable through its internal slot.
-  const listed = be._sheetsRelayAllowlistForTest();
-  assert(JSON.stringify(listed) === JSON.stringify(['ping', 'notifyPush']),
-    `[14] the allow-list is exactly ['ping','notifyPush'] (got ${JSON.stringify(listed)})`);
-  listed.push('runTrainer');
-  assert(JSON.stringify(be._sheetsRelayAllowlistForTest()) === JSON.stringify(['ping', 'notifyPush']),
-    '[14] …and the accessor returns a COPY, so a caller mutating what it got cannot widen the real list');
-  {
-    const fs = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const src = fs.readFileSync(fileURLToPath(new URL('./js/backend.js', import.meta.url)), 'utf8');
-    assert(/const SHEETS_RELAY_ALLOWLIST = Object\.freeze\(\[/.test(src),
-      '[14] …and the real list is a FROZEN ARRAY, not a Set (a Set\'s contents are internal slots that Object.freeze cannot reach)');
-    // Non-vacuity: prove the guard is the FIRST thing call() does, above
-    // getBackendConfig() and therefore unambiguously above the fetch.
-    // Comments stripped first — the guard's OWN comment says "above
-    // getBackendConfig()", and matching prose instead of code is how a static
-    // rule passes over the thing it is describing rather than over the thing
-    // that runs (RG-49's shape).
-    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/[^\n]*$/gm, '');
-    const at = code.indexOf('async function call(action');
-    const callBody = code.slice(at, at + 900);
-    assert(at > 0 && callBody.indexOf('SHEETS_RELAY_ALLOWLIST') > -1
-      && callBody.indexOf('SHEETS_RELAY_ALLOWLIST') < callBody.indexOf('getBackendConfig()'),
-      '[14] the guard is the first statement in call() — above the config read, above the body build, above fetch()');
-  }
-
-  // ── R2, THE RELEASE: the mode is not a one-way door ──────────────────────
-  // Driven forward rather than asserted about — a rollback (DI §8.2 flips both
-  // keys back) must restore every relay on the next config read.
-  be.setDataMode('sheets');
-  arm({ ok: true, _action: 'runTrainer', skipped: false });
-  const back = await rejects(be.runTrainerRemote({ adminPasswordHash: 'h' }));
-  assert(!back && calls.length === 1,
-    '[14] R2: back in \'sheets\' mode the refused relays work again — a rollback restores them with no code change');
-  assert(be.setDataMode('nonsense') === 'sheets' && be.setDataMode(undefined) === 'sheets',
-    '[14] anything that is not literally \'supabase\' normalizes to \'sheets\' (CONVENTIONS #10, fail-safe direction)');
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');

@@ -14,19 +14,22 @@
  *
  * Run:  node nativeguardtest.mjs
  *
+ * ── WHAT THIS FILE BECAME (2026-09-23, the Sheets retirement) ───────────────
+ * It was the RUNTIME proof of AD-67's two origin-positive guards. Both guards,
+ * and both transports they fronted, are deleted — so the decision is now
+ * satisfied by an ABSENCE, and this file is where that absence is asserted.
+ * The sections' own headers carry the full history of what they used to drive.
+ *
  * Covers:
- *   [1] js/backend.js — pingBackend() refuses loudly on a genuine native
- *       origin (isNativeShell() true AND location.protocol==='capacitor:'),
- *       and never reaches fetch().
- *   [2] js/backend.js — the SAME spoof S-C1/S-C8 exist to stop (a fully
- *       native-shaped window.Capacitor on a real https: origin) does NOT
- *       trigger the refusal — proceeds to the ordinary "not configured"
- *       error exactly as web always has.
- *   [3] js/backend.js — plain web (no window.Capacitor at all) is
- *       byte-unaffected: same "not configured" error, same shape.
- *   [4] js/chatTransport.js — appendEvents()/fetchSince() refuse loudly on a
- *       genuine native origin, and never reach fetch().
- *   [5] js/chatTransport.js — the same spoof-on-https proof, mirrored.
+ *   [1]–[7] THE ABSENCE, over the WHOLE js/ tree rather than the two files
+ *       that used to carry the guards, because "can anything here reach Apps
+ *       Script" is a property of the tree: no Apps Script origin, no
+ *       /macros/s/ deployment path, no backendUrl/backendToken read, no
+ *       `call('<action>')` dispatcher, no Cloud Sync URL/token inputs, and a
+ *       config.json that ships neither the URL nor the token — plus the one
+ *       fetch left in js/backend.js, named, because it reads config.json.
+ *       `isNativeOrigin()` itself survives (js/auth.js and js/push-onesignal.js
+ *       still have native branches) and nothing re-implements it.
  *   [8] WEB INERTNESS OF js/app.js's IMPORT SURFACE, in a child process with
  *       NOTHING else running (RG-192): importing app.js with no Capacitor
  *       schedules no timer, no interval, no fetch and no rAF, and
@@ -64,130 +67,125 @@ function setOrigin({ native, scheme }) {
   globalThis.location = { protocol: scheme };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// [1] backend.js — genuine native origin refuses loudly, never reaches fetch
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[1] js/backend.js call() (via pingBackend()) — genuine native origin refuses…');
+// ──────────────────────────────────────────────────────────────────────────────
+// [1]–[7] — AD-67 IS SATISFIED BY AN ABSENCE NOW (2026-09-23)
+//
+// WHAT THEY PROVED. AD-67: the native iOS shell never speaks Google
+// Sheets/Apps Script, for ANY action, INDEPENDENT of `_dataMode` — because
+// security-reviewer AMENDMENT 1 finding F2 was that a dataMode-keyed guard
+// fails OPEN on an offline cold boot, before a config read has set the mode.
+// The guards were ORIGIN-POSITIVE (S-C1/S-C8's shape): `isNativeOrigin()` in
+// js/platform.js answers true only for the genuine `capacitor:` scheme, so a
+// spoofed `window.Capacitor` on a real https: origin could never use it to
+// downgrade a web session. These sections drove both halves — the refusal on a
+// genuine native origin, with fetch NEVER reached, and the spoof-on-https
+// proof that a web session is unaffected — against js/backend.js's `call()` and
+// js/chatTransport.js's `get()`/`post()`, plus the source-level rule that
+// neither file re-implements the origin check, plus §[7]: the Cloud Sync card,
+// whose live URL/token inputs were a UI path a shell could POST through even
+// with the runtime refusal in place (AMENDMENT 1 finding F1).
+//
+// ALL FOUR OF THOSE THINGS ARE DELETED. `call()`, `get()`, `post()` and the
+// Cloud Sync card went with the Apps Script transport. AD-67 asked that the
+// shell never reach Apps Script; no code in this app can reach it, from any
+// origin, which is the strongest form the decision can take — an absence rather
+// than a guard, and a guard is one edit away from a gap.
+//
+// WHAT IS ASSERTED INSTEAD is exactly that absence, over the WHOLE js/ tree
+// rather than over the two files that used to carry the guards — because the
+// question "can anything here reach Apps Script" is a property of the tree.
+// ──────────────────────────────────────────────────────────────────────────────
+console.log('\n[1]–[7] AD-67 — no module in js/ can reach Apps Script from ANY origin (the guards are retired with what they guarded)…');
 {
-  backend.setBackendConfig('https://script.google.com/macros/s/FAKE/exec', 'tok');
-  setOrigin({ native: true, scheme: 'capacitor:' });
-  fetchCalls = 0;
-  const res = await backend.pingBackend();
-  assert(res.ok === false, '[1a] pingBackend() resolves ok:false on a genuine native origin');
-  assert(/AD-67|native app/i.test(res.error || ''), `[1b] the error names the native refusal, not a generic backend failure (got "${res.error}")`);
-  assert(fetchCalls === 0, '[1c] …and fetch() was NEVER called — the refusal is the first line of call(), before even the allow-list guard');
-  backend.clearBackendConfig();
-}
+  const { readdirSync } = await import('node:fs');
+  const jsDir = new URL('./js/', import.meta.url);
+  const files = readdirSync(jsDir).filter((f) => f.endsWith('.js'));
+  assert(files.length >= 25, `fixture: the scan enumerated js/ (${files.length} modules) — an empty readdir would make every rule below vacuous`);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// [2] backend.js — SPOOF PROOF: native-shaped window.Capacitor on https: does
-//     NOT trigger the refusal (origin-positive, mirrors S-C1/S-C8)
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[2] js/backend.js call() — SPOOFED window.Capacitor on a real https: origin must NOT refuse…');
-{
-  backend.clearBackendConfig();   // no config → the ORDINARY "not configured" path
-  setOrigin({ native: true, scheme: 'https:' });   // the spoof: native-shaped, real web origin
-  fetchCalls = 0;
-  const res = await backend.pingBackend();
-  assert(res.ok === false, '[2a] still resolves ok:false (no config set) — same failure shape as always');
-  assert(!/AD-67|native app/i.test(res.error || ''), `[2b] the error is the ORDINARY "not configured" message, NOT the native refusal (got "${res.error}") — a spoof on https: cannot masquerade as native`);
-  assert(/not configured/i.test(res.error || ''), `[2c] specifically the pre-existing "Backend not configured" error (got "${res.error}")`);
-}
+  const offenders = [];
+  for (const f of files) {
+    const src = await readFile(new URL(f, jsDir), 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    if (/script\.google\.com/.test(code)) offenders.push(f + ':script.google.com');
+    if (/macros\/s\//.test(code)) offenders.push(f + ':/macros/s/ path');
+    if (/backendToken|backendUrl/.test(code)) offenders.push(f + ':backendUrl/backendToken');
+  }
+  assert(offenders.length === 0,
+    `[1] NO module in js/ names an Apps Script URL, a /macros/s/ deployment path, or the backendUrl/backendToken config keys in executable code (found: ${JSON.stringify(offenders)})`);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// [3] backend.js — plain web (no window.Capacitor at all) is byte-unaffected
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[3] js/backend.js call() — plain web, no Capacitor anywhere, unaffected…');
-{
-  backend.clearBackendConfig();
-  setOrigin({ native: false, scheme: 'https:' });
-  fetchCalls = 0;
-  const res = await backend.pingBackend();
-  assert(res.ok === false && /not configured/i.test(res.error || ''),
-    `[3a] identical "not configured" failure on plain web (got "${res.error}")`);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// [4] chatTransport.js — genuine native origin refuses loudly, never fetches
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[4] js/chatTransport.js get()/post() (via fetchSince()/appendEvents()) — genuine native origin refuses…');
-{
-  backend.setBackendConfig('https://script.google.com/macros/s/FAKE/exec', 'tok');
-  setOrigin({ native: true, scheme: 'capacitor:' });
-  fetchCalls = 0;
-
-  let getErr = null;
-  try { await chatTransport.fetchSince(0, 10); } catch (e) { getErr = e; }
-  assert(getErr && /AD-67|native app/i.test(String(getErr.message || getErr)),
-    `[4a] fetchSince() (get()) throws the native refusal (got ${getErr ? getErr.message : 'no throw'})`);
-  assert(fetchCalls === 0, '[4b] …and fetch() was never called (get())');
-
-  let postErr = null;
-  try { await chatTransport.appendEvents([{ id: 'e1', seq: 1 }]); } catch (e) { postErr = e; }
-  assert(postErr && /AD-67|native app/i.test(String(postErr.message || postErr)),
-    `[4c] appendEvents() (post()) throws the native refusal (got ${postErr ? postErr.message : 'no throw'})`);
-  assert(fetchCalls === 0, '[4d] …and fetch() was never called (post())');
-
-  backend.clearBackendConfig();
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// [5] chatTransport.js — SPOOF PROOF, mirrored
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[5] js/chatTransport.js get()/post() — SPOOFED window.Capacitor on a real https: origin must NOT refuse…');
-{
-  backend.clearBackendConfig();
-  setOrigin({ native: true, scheme: 'https:' });
-  fetchCalls = 0;
-
-  let getErr = null;
-  try { await chatTransport.fetchSince(0, 10); } catch (e) { getErr = e; }
-  assert(getErr && !/AD-67|native app/i.test(String(getErr.message || getErr)),
-    `[5a] fetchSince() does NOT throw the native refusal on a spoofed-but-https origin (got ${getErr ? getErr.message : 'no throw'})`);
-  assert(getErr && /not configured/i.test(String(getErr.message || getErr)),
-    `[5b] …it throws the ORDINARY "not configured" error instead (got ${getErr ? getErr.message : 'no throw'})`);
-}
-
-// Restore a clean global state (defensive — this file exits right after).
-delete globalThis.window;
-delete globalThis.location;
-
-// ─────────────────────────────────────────────────────────────────────────────
-// [6] Source-level guard: js/backend.js and js/chatTransport.js each import
-//     isNativeOrigin() from js/platform.js — never re-implement the predicate
-//     (AD-68's single-source-of-truth rule extends to the security branches).
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[6] Source-level — both files import isNativeOrigin() from js/platform.js, not a second implementation…');
-{
   const backendSrc = await readFile('./js/backend.js', 'utf8');
   const transportSrc = await readFile('./js/chatTransport.js', 'utf8');
-  assert(/import\s*\{\s*isNativeOrigin\s*\}\s*from\s*['"]\.\/platform\.js['"]/.test(backendSrc),
-    '[6a] js/backend.js imports isNativeOrigin from ./platform.js');
-  assert(/import\s*\{\s*isNativeOrigin\s*\}\s*from\s*['"]\.\/platform\.js['"]/.test(transportSrc),
-    '[6b] js/chatTransport.js imports isNativeOrigin from ./platform.js');
-  assert(!/location\.protocol\s*===?\s*['"]capacitor:/.test(backendSrc),
-    '[6c] js/backend.js never re-implements the origin check inline (no second location.protocol literal)');
-  assert(!/location\.protocol\s*===?\s*['"]capacitor:/.test(transportSrc),
-    '[6d] js/chatTransport.js never re-implements the origin check inline');
+  const strip = (t) => t.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/async function call\s*\(/.test(strip(backendSrc)),
+    '[2] js/backend.js has no call() — the function AD-67\'s first guard was the first line of');
+  assert(!/async function (get|post)\s*\(action/.test(strip(transportSrc)),
+    '[3] js/chatTransport.js has no get()/post() — the two functions AD-67\'s second guard fronted');
+  // THE ONE FETCH LEFT IN EITHER FILE, named rather than implied.
+  const beFetches = [...strip(backendSrc).matchAll(/fetch\(([^)]*)/g)].map((m) => m[1].slice(0, 40));
+  assert(beFetches.length === 1 && /config\.json/.test(beFetches[0]),
+    `[4] the only fetch() left in js/backend.js reads config.json — a same-origin static file beside index.html, which the shell serves from its own bundle (got ${JSON.stringify(beFetches)})`);
+
+  const appSrc = await readFile('./js/app.js', 'utf8');
+  assert(!/id="be-url"/.test(appSrc) && !/id="be-token"/.test(appSrc),
+    '[5] js/app.js renders no Web App URL or Access Token input anywhere — AMENDMENT 1 finding F1\'s UI path is gone, not merely hidden behind isNativeShell()');
+  assert(!/be-test-btn|be-save-btn|be-seed-btn|be-snapshot-btn/.test(appSrc),
+    '[6] …and none of the Cloud Sync buttons is rendered or bound on ANY platform');
+
+  // `isNativeOrigin()` itself is untouched and STILL USED — by js/auth.js and
+  // js/push-onesignal.js, which have their own native branches. This rule is
+  // what keeps AD-68's single-source-of-truth claim honest now that the two
+  // biggest consumers are gone.
+  const platformSrc = await readFile('./js/platform.js', 'utf8');
+  assert(/export function isNativeOrigin/.test(platformSrc),
+    '[7] js/platform.js still exports isNativeOrigin() — the predicate survives its two biggest consumers, and nothing re-implements it');
+
+  // ── THE THREE REMAINING SHAPES OF "CAN ANYTHING STILL REACH APPS SCRIPT" ───
+  // Named separately from the URL scan above because each is a DIFFERENT door
+  // and a tree can be clean of one while carrying another.
+  //
+  // (i) THE DISPATCHER. Every Apps Script request in this app's history went
+  //     through one function — `call(action, payload)` in js/backend.js — or
+  //     through chatTransport's own `get()`/`post()`. A surviving `call('…')`
+  //     anywhere in js/ would mean a second one had been written.
+  const callers = [];
+  for (const f of files) {
+    const code = strip(await readFile(new URL(f, jsDir), 'utf8'));
+    for (const m of code.matchAll(/(?:^|[^.\w])call\(\s*['"]([a-zA-Z]+)['"]/g)) callers.push(f + ":call('" + m[1] + "')");
+  }
+  assert(callers.length === 0,
+    `[7] no module in js/ calls a named Apps Script action — the \`call('<action>')\` dispatcher shape appears nowhere (found: ${JSON.stringify(callers)})`);
+
+  // (ii) THE CREDENTIAL. A URL with no token is inert, and a token with no URL
+  //      is a secret nobody needs shipped. Both are gone from the deployed
+  //      config, which is what Drew's rotation ceremony rests on: there is
+  //      nothing left in the repo for a rotation to have to chase.
+  const cfgRaw = await readFile('./config.json', 'utf8');
+  const cfg = JSON.parse(cfgRaw);
+  assert(!('backendUrl' in cfg) && !('backendToken' in cfg),
+    `[7] config.json carries NO backendUrl and NO backendToken (keys present: ${JSON.stringify(Object.keys(cfg))}) — the Apps Script credential does not ship with the site any more`);
+  assert(!/script\.google\.com/.test(cfgRaw),
+    '[7] …and the /exec URL appears nowhere in it, not even in a comment key — a URL left behind reads as a live endpoint to the next person');
+  assert(cfg.authMode === 'supabase' && cfg.dataMode === 'supabase' && typeof cfg.supabaseAnonKey === 'string' && cfg.supabaseAnonKey.length > 20,
+    'fixture: …and the keys that DO matter are intact — this is a removal, not a blanked config (CLAUDE.md: never commit config.json with real values missing)');
+
+  // (iii) THE SERVICE WORKER. STATIC_ASSETS is what a device actually
+  //       downloads; a stale entry there is a file the shell keeps serving
+  //       after the tree stops shipping it.
+  const swSrc = await readFile('./service-worker.js', 'utf8');
+  assert(/\.\/js\/backend\.js/.test(swSrc),
+    '[7] service-worker.js still precaches ./js/backend.js — the module SURVIVES the retirement (config read, dataMode, the Sheets-era mirror wipe), so dropping it from STATIC_ASSETS would break the shell cache');
+  assert(!/script\.google\.com/.test(swSrc),
+    '[7] …and names no Apps Script origin of its own');
+  const reimplementers = [];
+  for (const f of files) {
+    if (f === 'platform.js') continue;
+    const code = strip(await readFile(new URL(f, jsDir), 'utf8'));
+    if (/location\.protocol\s*===?\s*['"]capacitor:/.test(code)) reimplementers.push(f);
+  }
+  assert(reimplementers.length === 0,
+    `[7] …and no module re-implements the origin check inline (found: ${JSON.stringify(reimplementers)})`);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// [7] Source-level — the Cloud Sync card is not rendered inside the shell
-//     (DI-208g/S-C14's other half: hiding the UI path a spoofed shell could
-//     otherwise POST through, alongside the runtime refusal proved above).
-// ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[7] Source-level — js/app.js does not render the Cloud Sync card inside the native shell…');
-{
-  const appSrc = await readFile('./js/app.js', 'utf8');
-  assert(/if \(!isNativeShell\(\)\) sections\.push\(`\s*\n\s*<div class="admin-section" data-comm-tab="data">\s*\n\s*<div class="admin-section-title">☁️ Cloud Sync/.test(appSrc),
-    '[7a] the Cloud Sync admin-section push is gated on !isNativeShell() — on native, the section (and its be-* inputs) is never added to the panel HTML at all');
-  // No separate guard is needed at the be-* handler-binding block: those
-  // handlers all use `document.getElementById('be-...')?.addEventListener`,
-  // and an element that was never rendered is `null` there too — the
-  // optional-chain no-ops automatically once the card above stops rendering.
-  assert(/document\.getElementById\('be-test-btn'\)\?\.addEventListener/.test(appSrc),
-    '[7b] the be-* handler bindings still use optional chaining (no separate native guard needed there — a missing element already no-ops)');
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [8] RG-192 — WEB INERTNESS, PROVED IN AN EMPTY PROCESS.

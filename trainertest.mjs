@@ -1581,33 +1581,42 @@ console.log("\n[28b] BLOCK 1 Mutation-prove — delete a section from the ported
 
 console.log("\n[29] REVIEWER NOTE 5 (2026-09-20) — once serverJobs.trainer is TRUE, no path in this build reaches Apps Script's runTrainer…");
 {
-  // THE RISK the F4 switch-on actually carries is a double SPEND: while the Supabase Trainer is on,
-  // an Apps Script `runTrainer` is a second paid Anthropic call against the frozen Sheet, drawn on
-  // no ledger this project can see. js/app.js's button branches on the switch — but a branch at ONE
-  // call site is a convention, not a guarantee. The refusal is inside the relay, so this is a
-  // property of the MODULE, not of one handler, and it is tested as one.
+  // THE RISK the F4 switch-on carried was a double SPEND: while the Supabase Trainer was on, an
+  // Apps Script `runTrainer` was a second paid Anthropic call against the frozen Sheet, drawn on
+  // no ledger this project could see. js/app.js's button branched on the switch — but a branch at
+  // ONE call site is a convention, not a guarantee, so the refusal went INSIDE the relay: a
+  // property of the MODULE, not of one handler, and tested as one.
+  //
+  // RETIRED-AND-STRENGTHENED, 2026-09-23. The Apps Script relay is deleted, so the refusal is
+  // UNCONDITIONAL rather than switch-gated and the double-spend risk is closed by construction
+  // rather than by a gate. What this section asserts now is that BOTH arms of js/app.js's button
+  // answer in DI-T6.0(f)'s envelope — because the false arm is still reachable (a device whose
+  // settings blob has not hydrated, or a league with the job flipped off) and it must say
+  // something the existing `result.skipped` branch can render. An export that threw, or one that
+  // was deleted outright, would turn that arm into a TypeError in a click handler.
   const storageMod29 = await import('./js/storage.js');
   const scribeAgent29 = await import('./js/scribeAgent.js');
   const settings29 = storageMod29.getSettings();
 
-  storageMod29.saveSetting('serverJobs', { trainer: false });
-  // OFF: the relay is reached. `js/backend.js` has no configured backend under this harness, so
-  // the observable is simply that it does NOT return the switch refusal.
-  const off = await scribeAgent29.runTrainerRemote({ adminPasswordHash: 'x' }).catch((e) => ({ threw: String(e && e.message) }));
-  assert(!(off && off.skipped === 'disabled' && /server Trainer is switched on/.test(String(off.error || ''))),
-    `29-1: with the switch OFF the legacy Apps Script relay is still reached — the rollback path is intact and byte-identical to today (got ${JSON.stringify(off).slice(0, 120)})`);
+  for (const flag of [false, true]) {
+    storageMod29.saveSetting('serverJobs', { trainer: flag });
+    // `.catch()` so that a mutation which makes this THROW is a clean RED rather than an
+    // unhandled rejection that kills the suite before it can print a summary — a mutation whose
+    // symptom is "no output" is indistinguishable from a harness problem.
+    const r = await scribeAgent29.runTrainerRemote({ adminPasswordHash: 'x' })
+      .catch((e) => ({ threw: String(e && e.message ? e.message : e) }));
+    assert(r && r.ok === true && r.skipped === 'disabled',
+      `29-1/${flag}: with serverJobs.trainer ${flag ? 'ON' : 'OFF'} the legacy relay answers the DI-T6.0(f) envelope (ok:true, skipped:'disabled') rather than throwing — js/app.js's existing result.skipped branch renders it with no new branch (got ${JSON.stringify(r)})`);
+    assert(/retired/i.test(String(r.error || '')) && /Edge Function/.test(String(r.error || '')),
+      `29-2/${flag}: …and the reason SAYS the relay was retired and names where the Trainer runs now, so a commissioner who reaches this arm is told rather than left with a silent no-op (got ${JSON.stringify(r.error)})`);
+  }
 
-  storageMod29.saveSetting('serverJobs', { trainer: true });
-  // `.catch()` so that REMOVING the gate is a clean RED here rather than an unhandled rejection
-  // that kills the suite before it can print a summary — a mutation whose symptom is "no output"
-  // is indistinguishable from a harness problem, which is the failure mode the flush shim at the
-  // bottom of this file exists to prevent. Proven: mutation M10 (2026-09-20) turns 29-2 red.
-  const on = await scribeAgent29.runTrainerRemote({ adminPasswordHash: 'x' })
-    .catch((e) => ({ threw: String(e && e.message ? e.message : e) }));
-  assert(on && on.ok === true && on.skipped === 'disabled',
-    `29-2: with the switch ON the relay REFUSES, in the standard DI-T6.0(f) envelope shape, so js/app.js's existing result.skipped branch renders it with no new branch (got ${JSON.stringify(on)})`);
-  assert(/server Trainer is switched on/.test(String(on.error || '')),
-    '29-3: …and the reason says why, so a commissioner who clicks the button is told rather than left with a silent no-op');
+  // THE STRUCTURAL HALF, which is the one that could regress: nothing in the module can reach
+  // Apps Script any more, because there is nothing to import.
+  const agentSrc29 = await readFile(fileURLToPath(new URL('./js/scribeAgent.js', import.meta.url)), 'utf8');
+  const agentCode29 = agentSrc29.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/from '\.\/backend\.js'/.test(agentCode29),
+    '29-3: js/scribeAgent.js imports NOTHING from js/backend.js — the four relays it wrapped (scribeAsk, runTrainer, scribeAutonomous, scribeClassify) are deleted, so the double-spend this section was written about is closed by construction rather than by a gate that could be edited');
 
   storageMod29.saveSetting('serverJobs', settings29.serverJobs === undefined ? {} : settings29.serverJobs);
 }

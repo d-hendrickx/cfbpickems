@@ -488,6 +488,109 @@ function _queueOneSignalCall(fn) {
  *  never coming back nothing, and an unbounded loop is a background timer on
  *  every phone in the league. */
 const IDENTITY_RETRY_DELAYS_MS = [400, 4000];
+
+/**
+ * ══ DI-254 (UN-236) — THE IDENTITY TOKEN ════════════════════════════════════
+ *
+ * WHY. `OneSignal.login('p2')` is a string anybody can type into a console on
+ * irbfootball.com, and until OneSignal is told to check, it complies — binding
+ * that browser to another player's notifications. The remedy is OneSignal's
+ * Identity Verification: a JWT, signed server-side with a secret that never
+ * leaves the Edge Function, proving the device is asking for its OWN id.
+ *
+ * WHAT THIS HALF DOES, and the two rules it must never break:
+ *   • it fetches a token from `push-identity-token` and passes it as
+ *     `OneSignal.login(id, token)` — at the ONE chokepoint below, which is
+ *     already the only place in the app that calls login()/logout() (RG-192);
+ *   • IT NEVER PROMPTS. Minting a token is a fetch. It cannot raise the
+ *     permission sheet, and nothing on this path calls anything that can.
+ *   • IT NEVER TOUCHES STORAGE. The token lives in this module's memory for the
+ *     life of the page and nowhere else — not `load()`/`save()`, not
+ *     localStorage, not a cookie. A credential that outlives the tab is a
+ *     credential somebody can find later, and it is re-mintable in one call.
+ *
+ * WHEN THE MINT FAILS, THE DEVICE STAYS UNLINKED — on purpose, and this is the
+ * part worth reading twice. A `login()` without a token, once enforcement is on,
+ * is refused by OneSignal anyway; the difference is only whether the app knows.
+ * So a failed mint folds into the EXISTING bounded retry ladder
+ * (`_scheduleIdentityRetry`, 400ms then 4000ms then stop), and after that the
+ * device reads, through the status line that already exists, "This device is
+ * registered for push but isn't linked to your account yet… Tap Reconnect."
+ * NO red banner (AD-06 is about sync, and this is not sync), no toast, no
+ * prompt, and Reconnect re-runs `loginOneSignal()`, which mints again.
+ *
+ * ── WHY THE SUPABASE CLIENT ARRIVES BY `await import()` ────────────────────
+ * `js/auth.js` imports THIS module (for `logoutOneSignal()` on sign-out), so a
+ * static `import … from './auth.js'` here would close a cycle — and the import
+ * graph's acyclicity is a claim other modules already reason from in writing
+ * (see js/chat.js's header). A dynamic import inside the call creates no module
+ * edge at all: by the time this runs, `auth.js` is long since evaluated and the
+ * import resolves from cache. The precedent is `js/push-selftest.js:155`, which
+ * reaches `getJobRuns` the same way.
+ */
+/** 24h tokens, re-minted five minutes early: a token that expires mid-call is a
+ *  login that fails for a reason nobody can see. */
+const IDENTITY_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+/** `{ subject, token, expiresAtMs }` — MEMORY ONLY. Cleared by _resetForTest(),
+ *  and by closing the tab, which is the whole of its lifetime. */
+let _identityToken = null;
+/** Test seam ONLY. See `_setIdentityMinterForTest()`. */
+let _identityMinter = null;
+
+/**
+ * Ask the Edge Function for this device's own token. Never throws; every
+ * outcome is `{ok}` because every outcome is a state the caller has to handle.
+ *
+ * THE FUNCTION TAKES NO IDENTITY ARGUMENT, and that is the design: the id it
+ * signs comes from the caller's own Supabase JWT, server-side, through
+ * `my_member_id` under RLS. There is deliberately nowhere on the wire to ask
+ * for somebody else's.
+ */
+async function _mintIdentityToken() {
+  if (typeof _identityMinter === 'function') {
+    try { return await _identityMinter(); } catch { return { ok: false, reason: 'mint-threw' }; }
+  }
+  try {
+    const { getSupabaseClient, getActiveLeagueId } = await import('./auth.js');
+    const client = getSupabaseClient();
+    const leagueId = getActiveLeagueId();
+    if (!client || !leagueId) return { ok: false, reason: 'no-session' };
+    const { data, error } = await client.functions.invoke('push-identity-token', { body: { league_id: leagueId } });
+    if (error) return { ok: false, reason: 'unreachable' };
+    const token = data && typeof data.token === 'string' ? data.token : '';
+    if (!token) return { ok: false, reason: String((data && data.skipped) || 'no-token') };
+    const expiresAtMs = Date.parse((data && data.expiresAt) || '');
+    return { ok: true, token, expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : 0 };
+  } catch {
+    return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/**
+ * The cached token for `target`, minting one when there is nothing usable.
+ *
+ * THE CACHE IS KEYED ON THE SUBJECT. A handover (logout, then a different
+ * player's login on the same handset) must never reuse the previous occupant's
+ * token — that would be the impersonation this feature exists to stop, arriving
+ * from our own cache instead of a console.
+ *
+ * AN UNPARSEABLE `expiresAt` IS NOT CACHED AT ALL. A token whose expiry we
+ * cannot read is one we cannot refresh on time, and minting again is one cheap
+ * call (CONVENTIONS #10: an absent field is not a value to invent).
+ */
+async function _identityTokenFor(target) {
+  const cached = _identityToken;
+  if (cached && cached.subject === target
+      && cached.expiresAtMs - Date.now() > IDENTITY_TOKEN_REFRESH_MARGIN_MS) {
+    return { ok: true, token: cached.token };
+  }
+  const minted = await _mintIdentityToken();
+  if (!minted.ok) return minted;
+  _identityToken = minted.expiresAtMs
+    ? { subject: target, token: minted.token, expiresAtMs: minted.expiresAtMs }
+    : null;
+  return { ok: true, token: minted.token };
+}
 /** Reasons worth a retry: the SDK/its config might still turn up. Everything
  *  else ('unsupported-browser', 'not-installed-ios', 'not-configured',
  *  'web-push-not-enabled', 'app-id-mismatch', 'wrong-site-origin') is a settled
@@ -577,8 +680,33 @@ async function _assertIdentity(target, gen, attempt = 0) {
     if (RETRYABLE_INIT_REASONS.has(init.reason)) _scheduleIdentityRetry(target, gen, attempt);
     return;
   }
+  // ── DI-254 — THE TOKEN, BEFORE THE LOGIN, AND NO LOGIN WITHOUT ONE ────────
+  //
+  // A login() with no token is refused by OneSignal once enforcement is on, so
+  // "try anyway" would not be a degraded success — it would be the same
+  // failure, minus any record that we knew. The mint is therefore a precondition
+  // of the call, and a failed mint arms the SAME bounded ladder an
+  // SDK-not-loaded init already gets (400ms, 4000ms, then the device reads
+  // "isn't linked… Reconnect" and waits for a tap).
+  //
+  // A LOGOUT NEEDS NO TOKEN: it asserts nobody, so there is no identity to
+  // prove — and a sign-out that could be blocked by a network failure would
+  // leave a handed-off phone on the previous player's id, which is the exact
+  // thing correction #2 exists to prevent.
+  let identityToken = '';
+  if (target) {
+    const minted = await _identityTokenFor(String(target));
+    // The same staleness re-check the awaits above make: a retry for an identity
+    // this device has already left must not resume after its own await.
+    if (attempt > 0 && gen !== _identityGen) return;
+    if (!minted.ok) {
+      _scheduleIdentityRetry(target, gen, attempt);
+      return;
+    }
+    identityToken = minted.token;
+  }
   _callSdk(
-    target ? (OneSignal => OneSignal.login(String(target))) : (OneSignal => OneSignal.logout()),
+    target ? (OneSignal => OneSignal.login(String(target), identityToken)) : (OneSignal => OneSignal.logout()),
     (ok) => {
       // ══ SECURITY F-2 (RG-192 gate, 2026-09-20) — A SLOW CALL MUST NOT WIN ══
       //
@@ -1182,9 +1310,32 @@ export function wireNotificationClicks(onClick) {
   });
 }
 
+/**
+ * DI-254, TEST SEAM ONLY — stand in for the `push-identity-token` call.
+ *
+ * WHY IT EXISTS: the production path is `await import('./auth.js')` + a live
+ * `functions.invoke`, which in a Node harness resolves to "no session" and would
+ * turn every existing identity assertion in pushtest/notifytest/authtest into a
+ * test of the offline branch. A suite injects its own minter once and drives the
+ * real chokepoint.
+ *
+ * DELIBERATELY NOT CLEARED BY `_resetForTest()`, unlike everything else here.
+ * Every other field below is PAGE state and a scenario must not inherit it; this
+ * is HARNESS state — the suite's standing answer to "what does the server say" —
+ * and the existing suites call `_resetForTest()` between scenarios, which would
+ * otherwise silently unplug it mid-file. Pass `null` to restore the real path.
+ */
+export function _setIdentityMinterForTest(fn) { _identityMinter = typeof fn === 'function' ? fn : null; }
+
 /** Test-only reset — mirrors the _resetForTest() convention used elsewhere
  *  (chat.js, backend.js) so notifytest.mjs can exercise loadAppId() fresh. */
 export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
+  // DI-254 — the minted token is per-PAGE state, and it is a CREDENTIAL. A
+  // scenario inheriting the previous one's token would be a handset reusing the
+  // previous occupant's proof of identity, which is the very thing UN-236
+  // closes; the cache is keyed on the subject so production cannot do it, and
+  // this makes the suite unable to either.
+  _identityToken = null;
   _appId = null;
   // SECURITY F-2 — the shared in-flight read is per-PAGE state; a suite driving
   // several scenarios in one process is several pages, and one surviving here

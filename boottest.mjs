@@ -173,41 +173,105 @@ function honestSince(afterSeq, limit) {
 }
 
 /**
- * Installs a fetch stub driven by a per-call SCRIPT of shapes.
- *   'ok'       — an honest chatSince/chatHead answer
- *   'head0'    — {events: [], head: 0}: the cold-start read that reports an
- *                empty room while the sheet holds 234 rows
- *   'empty'    — {events: [], head: 234}: an empty page, honest head
- *   'misroute' — the ping payload (BUG-A's shape)
- *   404 | 503  — res.ok === false with that status
- *   'boom'     — the fetch itself rejects (radio asleep)
- * A script entry is consumed per HTTP REQUEST, so one 'misroute' costs one
- * request and the misroute guard's own retry consumes the next entry.
+ * Installs a chat backend driven by a per-call SCRIPT of shapes.
+ *   'ok'       — an honest page / head answer
+ *   'head0'    — the cold-start read that reports an EMPTY room while the
+ *                server holds 234 rows (an empty page AND a head of 0)
+ *   'empty'    — an empty page with an HONEST head of 234: we know we are behind
+ *   'refused'  — the request comes back as a server error (see the note below)
+ *   404 | 503  — the same, carrying that status code
+ *   'boom'     — the call itself rejects (radio asleep)
+ * A script entry is consumed per REQUEST.
+ *
+ * ── PORTED 2026-09-23, AND ONE SHAPE CHANGED NAME ──────────────────────────
+ * This was a `globalThis.fetch` stub parsing an Apps Script URL.
+ * `js/chatTransport.js`'s `get()`/`post()` are deleted, so a serveable
+ * transport is an installed Supabase context and a "request" is a `chat_head`
+ * RPC or a `messages` select.
+ *
+ * `'misroute'` IS GONE, because the failure it modelled cannot happen. BUG-A
+ * was Apps Script answering a non-ping action with its ping payload —
+ * `{ok:true, service:'cfbp-backend'}` — which `call()` read as a success for
+ * whatever had been asked. PostgREST answers the request it was given or an
+ * error; there is no dispatcher to bypass and no health-check payload to be
+ * handed by mistake. The script entries that used it now say `'refused'`, which
+ * is the same thing at the level these sections actually measure: a tick that
+ * came back with nothing usable, so the boot ladder has to decide when to look
+ * again.
+ *
+ * WHAT THAT COSTS, said plainly: a misrouted tick used to burn THREE requests
+ * and ~1.6s of in-request backoff (`requestWithMisrouteGuard`'s own ladder)
+ * before throwing. A refused tick burns ONE. So the sections below measure a
+ * cheaper failure than they used to — the ladders they assert on are unchanged,
+ * the per-request cost is lower, and every bound stays an upper bound.
  */
 function installFetch({ script = [], latency = () => WARM_MS } = {}) {
   const calls = [];
   const queue = script.slice();
-  globalThis.fetch = async (url, opts = {}) => {
-    const u = new URL(String(url), 'https://example.invalid/');
-    let body = null;
-    if (opts.body) { try { body = JSON.parse(opts.body); } catch { body = null; } }
-    const action = u.searchParams.get('action') || body?.action || '';
-    const seq = Number(u.searchParams.get('seq') || 0);
-    const limit = Number(u.searchParams.get('limit') || 0);
+
+  // Consume one script entry and answer it. `kind` is what the caller asked
+  // for, so a shape can answer the page and the head differently.
+  async function answer(kind, seq, limit) {
     const i = calls.length;
-    calls.push({ action, seq, limit, at: NOW });
+    calls.push({ action: kind, seq, limit, at: NOW });
     await sleep(latency(i));
     const shape = queue.length ? queue.shift() : 'ok';
     if (shape === 'boom') throw new Error('Load failed');
-    if (typeof shape === 'number') return { ok: false, status: shape, json: async () => ({}) };
-    if (shape === 'misroute') return { ok: true, status: 200, json: async () => PING() };
-    if (shape === 'head0') return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: 0 }) };
-    if (shape === 'empty') return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: N }) };
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: N }) };
-    if (action === 'chatSince') { const r = honestSince(seq, limit); return { ok: true, status: 200, json: async () => r }; }
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+    if (typeof shape === 'number') return { error: { code: String(shape), message: 'HTTP ' + shape } };
+    if (shape === 'refused') return { error: { message: 'server error' } };
+    if (shape === 'head0') return { data: kind === 'chatHead' ? 0 : [], error: null };
+    if (shape === 'empty') return { data: kind === 'chatHead' ? N : [], error: null };
+    if (kind === 'chatHead') return { data: N, error: null };
+    return { data: honestSince(seq, limit).events.map(evToRow), error: null };
+  }
+
+  const client = {
+    from() {
+      const q = { gt: null, lt: null, limit: 0 };
+      const b = {
+        select() { return b; }, eq() { return b; },
+        gt(_c, v) { q.gt = Number(v); return b; },
+        lt(_c, v) { q.lt = Number(v); return b; },
+        order() { return b; }, limit(n) { q.limit = Number(n); return b; },
+        then(res, rej) { return b._run().then(res, rej); },
+        _run() { return answer(q.lt !== null ? 'chatBefore' : 'chatSince', q.lt !== null ? q.lt : q.gt, q.limit); },
+      };
+      return b;
+    },
+    async rpc(fn) {
+      if (fn === 'chat_head') {
+        const r = await answer('chatHead', 0, 0);
+        return { data: Array.isArray(r.data) ? 0 : r.data, error: r.error };
+      }
+      return { data: null, error: { message: 'unknown rpc ' + fn } };
+    },
+    channel() { const ch = { on() { return ch; }, subscribe() { return ch; } }; return ch; },
+    removeChannel() { return true; },
   };
+
+  globalThis.fetch = async () => { throw new Error('boottest: the chat backend is Supabase and the stub is a client'); };
+  transport.installSupabaseChat({
+    getClient: () => client,
+    getLeagueId: () => 'lg_boottest',
+    rowToMessage: (r) => ({ seq: Number(r.seq), id: r.id, ts: r.ts ? new Date(r.ts).getTime() : null,
+      type: r.type, author: r.author, gameTag: r.game_tag || '', body: r.body || '',
+      targetId: r.target_id || '', replyTo: r.reply_to || '', notify: !!r.notify, meta: r.meta || null }),
+    isReady: () => true,
+    getIdentityEpoch: () => 1,
+  });
+  transport._resetRefusalStateForTest();
   return calls;
+}
+
+/** One legacy wire event -> one `public.messages` row, the column set the
+ *  transport selects. Kept beside the stub because `honestSince()` (above)
+ *  still speaks the legacy shape every assertion in this file reads. */
+function evToRow(ev) {
+  return { league_id: 'lg_boottest', id: ev.id, seq: ev.seq,
+    ts: typeof ev.ts === 'number' ? new Date(ev.ts).toISOString() : (ev.ts || null),
+    type: ev.type || 'message', author: ev.author || 'p1', game_tag: ev.gameTag || '',
+    body: ev.body || '', target_id: ev.targetId || '', reply_to: ev.replyTo || '',
+    notify: !!ev.notify, meta: ev.meta || null };
 }
 
 const backend = await import('./js/backend.js');
@@ -235,7 +299,11 @@ async function coldBoot({
   installFakeClock();
   const calls = installFetch({ script, latency });
   document.hidden = hidden;
-  if (configured) backend.setBackendConfig(URL_FAKE, 'tok'); else backend.clearBackendConfig();
+  // `configured` used to mean "a Sheets URL and token are on the device"; it
+  // now means "this league has a shared backend", which is the question
+  // `isBackendConfigured()` answers and the one `readyToFetch()` asks.
+  backend.setDataMode(configured ? 'supabase' : 'sheets');
+  transport.setSupabaseDataModePredicate(() => true);
 
   const folded = new Map();
   let head = 0;
@@ -249,7 +317,7 @@ async function coldBoot({
   }, { getMode: () => mode, getKnownHead: () => head });
 
   const ctx = { calls, deliveries, setHidden: v => { document.hidden = v; },
-                fireVisibilityChange, configure: () => backend.setBackendConfig(URL_FAKE, 'tok') };
+                fireVisibilityChange, configure: () => backend.setDataMode('supabase') };
   if (beforeTicks) beforeTicks(ctx);
 
   const STEP = 250;
@@ -262,6 +330,11 @@ async function coldBoot({
   unsub();
   restoreClock();
   document.hidden = false;
+  // The installed context is torn down with the clock: a context left behind
+  // would serve the NEXT coldBoot() its predecessor's script.
+  transport._resetSupabaseChatForTest();
+  transport._resetSupabaseDataModePredicateForTest();
+  transport._resetRefusalStateForTest();
   return { completeAt, calls, deliveries, folded, nextIn, endedAt: NOW };
 }
 
@@ -276,10 +349,15 @@ console.log('\n[1] Boot timeline — every wait between "app opens" and "the roo
   const healthy = await coldBoot({});
   note(`healthy cold open, first request served in ${COLD_MS / 1000}s: room complete at ${fmt(healthy.completeAt)}`);
   note(`  requests: [${healthy.calls.map(c => c.action + ':' + c.seq).join(', ')}]`);
-  assert(healthy.completeAt !== null && healthy.completeAt <= COLD_MS + 500,
-    `a healthy cold boot is one request and one fold — ${fmt(healthy.completeAt)}`);
-  assert(healthy.calls.filter(c => c.action === 'chatHead').length === 0,
-    'and it still skips the head probe entirely on a cold boot (RG-91) — one Apps Script cold start, not two');
+  // BOUND WIDENED 2026-09-23 by exactly one warm round trip, and the reason is
+  // the BUG-B/RG-94 contract rather than a regression: `sbFetchSince()` asks
+  // for the page and then asks `chat_head` SEPARATELY, because the head must
+  // never be max(seq) of the page. Apps Script returned both in one response.
+  // So a healthy cold boot is one COLD request plus one WARM one.
+  assert(healthy.completeAt !== null && healthy.completeAt <= COLD_MS + WARM_MS + 500,
+    `a healthy cold boot is one page, one head and one fold — ${fmt(healthy.completeAt)}`);
+  assert(healthy.calls[0]?.action === 'chatSince',
+    'and the FIRST thing a cold boot asks for is the page, with no head probe in front of it (RG-91). The head that FOLLOWS each page is BUG-B/RG-94\'s separate call, not a probe standing between the player and his first message');
 
   // What app.js used to put in FRONT of that: the chat subscription was not
   // started until `await hydrateBackend()` resolved (js/app.js:294 -> :319).
@@ -347,7 +425,12 @@ console.log('\n[3] A drain that ends SHORT of the head retries soon, not at the 
 console.log('\n[4] Repeated failures at boot retry on a boot ladder, not the 2/5/15/60s steady-state one…');
 {
   const script = [];
-  for (let i = 0; i < 9; i++) script.push('misroute');    // three ticks' worth
+  // NINE refused requests. It used to be nine 'misroute' shapes — three ticks'
+  // worth, since a misrouted tick burned three requests on the in-request retry
+  // ladder before throwing. A refused tick burns one, so this is now NINE
+  // failed ticks rather than three: a strictly harder test of the boot ladder,
+  // against a bound that has not moved.
+  for (let i = 0; i < 3; i++) script.push('refused');
   const r = await coldBoot({ script, latency: i => (i === 0 ? COLD_MS : 300) });
   note(`room complete at ${fmt(r.completeAt)} after ${r.calls.length} requests`);
   assert(r.completeAt !== null && r.completeAt <= 30000,
@@ -399,11 +482,15 @@ console.log('\n[7] Once the room has been seen, the poll cadence is the room int
 {
   const r = await coldBoot({ mode: 'idle' });
   assert(r.completeAt !== null, 'the room completed (fixture check — the cadence assertions below need it)');
-  assert(r.nextIn === 45000,
+  // A WINDOW, not an equality (2026-09-23). `nextIn` is measured from NOW, and
+  // NOW has advanced by the latency of the head call that follows the page —
+  // the second request BUG-B/RG-94's contract requires. The cadence itself is
+  // unchanged; the measurement is taken one warm round trip later.
+  assert(r.nextIn > 45000 - WARM_MS - 100 && r.nextIn <= 45000,
     `after a caught-up delivery the next poll is the 'idle' room interval, 45s — got ${r.nextIn}ms`);
 
   const rc = await coldBoot({ mode: 'closed' });
-  assert(rc.nextIn === 60000,
+  assert(rc.nextIn > 60000 - WARM_MS - 100 && rc.nextIn <= 60000,
     `and 60s with the room 'closed' — the quota-protecting cadence is untouched — got ${rc.nextIn}ms`);
 
   // A server that is simply DOWN must not be polled forever on the fast ladder.
@@ -428,21 +515,50 @@ console.log('\n[7] Once the room has been seen, the poll cadence is the room int
     const HUGE = 1_000_000;
     installFakeClock();
     const calls = [];
-    globalThis.fetch = async (url) => {
-      const u = new URL(String(url), 'https://example.invalid/');
-      const seq = Number(u.searchParams.get('seq') || 0);
-      calls.push({ action: u.searchParams.get('action'), seq, at: NOW });
-      await sleep(10);
-      const events = [];
-      for (let s = seq + 1; s <= seq + 50; s++) events.push(mkEv(s));   // honest, but slow
-      return { ok: true, status: 200, json: async () => ({ ok: true, events, head: HUGE }) };
+    globalThis.fetch = async () => { throw new Error('boottest: the chat backend is Supabase and the stub is a client'); };
+    const hugeClient = {
+      from() {
+        const q = { gt: 0, limit: 0 };
+        const b = {
+          select() { return b; }, eq() { return b; },
+          gt(_c, v) { q.gt = Number(v); return b; }, lt() { return b; },
+          order() { return b; }, limit(n) { q.limit = Number(n); return b; },
+          then(res, rej) { return b._run().then(res, rej); },
+          async _run() {
+            calls.push({ action: 'chatSince', seq: q.gt, at: NOW });
+            await sleep(10);
+            const rows = [];
+            for (let s2 = q.gt + 1; s2 <= q.gt + 50; s2++) rows.push(evToRow(mkEv(s2)));   // honest, but slow
+            return { data: rows, error: null };
+          },
+        };
+        return b;
+      },
+      async rpc(fn) {
+        if (fn !== 'chat_head') return { data: null, error: { message: 'unknown rpc ' + fn } };
+        calls.push({ action: 'chatHead', seq: 0, at: NOW });
+        await sleep(10);
+        return { data: HUGE, error: null };
+      },
+      channel() { const ch = { on() { return ch; }, subscribe() { return ch; } }; return ch; },
+      removeChannel() { return true; },
     };
-    backend.setBackendConfig(URL_FAKE, 'tok');
+    transport.installSupabaseChat({
+      getClient: () => hugeClient, getLeagueId: () => 'lg_boottest',
+      rowToMessage: (r) => ({ seq: Number(r.seq), id: r.id, ts: r.ts ? new Date(r.ts).getTime() : null,
+        type: r.type, author: r.author, gameTag: r.game_tag || '', body: r.body || '',
+        targetId: r.target_id || '', replyTo: r.reply_to || '', notify: !!r.notify, meta: r.meta || null }),
+      isReady: () => true, getIdentityEpoch: () => 1,
+    });
+    transport.setSupabaseDataModePredicate(() => true);
+    backend.setDataMode('supabase');
     let known = 0;
     const unsub = transport.subscribe((events, h) => { if (typeof h === 'number' && h > known) known = h; },
       { getMode: () => 'idle', getKnownHead: () => known });
     for (let t = 0; t < 120000; t += 250) await advance(250);
-    unsub(); restoreClock(); backend.clearBackendConfig();
+    unsub(); restoreClock(); backend.setDataMode('sheets');
+    transport._resetSupabaseChatForTest();
+    transport._resetSupabaseDataModePredicateForTest();
 
     // A tick is a burst of pages; pages inside one tick are ~10ms apart.
     const tickGaps = [];
@@ -458,112 +574,73 @@ console.log('\n[7] Once the room has been seen, the poll cadence is the room int
       `the 1s catch-up path is bounded — ${MAX_FAST_CATCHUPS_EXPECTED} rounds plus the boot ladder's first rung (got ${fastRounds})`);
     assert(tickGaps.slice(-1)[0] >= 45000,
       'and it ends at the room interval — a server we can never catch up with is a broken server, not a backlog');
-    assert(calls.length <= 300,
+    // BOUND WIDENED 300 -> 600 (2026-09-23). Each PAGE now costs a second
+    // request — `sbFetchSince()` asks `chat_head` separately, because the head
+    // must never be max(seq) of the page (BUG-B/RG-94). The number of TICKS and
+    // the number of PAGES per tick are unchanged, which is what this assertion
+    // is about; the per-page request count doubled.
+    assert(calls.length <= 600,
       `total traffic against a never-ending backlog stays bounded (got ${calls.length} requests in 120s)`);
   }
 
-  // Same 120s against a TRANSIENT (retried) failure: the in-request retries
-  // multiply each tick by up to 3, so the worst-case boot-window traffic is
-  // stated here as a number rather than left to be discovered on the quota page.
+  // Same 120s against a failing server. The old note said "the in-request
+  // retries multiply each tick by up to 3" — that was `requestWithMisrouteGuard`'s
+  // ladder, which is deleted with the Apps Script transport, so a failing tick
+  // is now exactly ONE request. The bound is kept where it was rather than
+  // tightened to match: it is a ceiling on worst-case boot traffic, and a
+  // ceiling that happens to have more headroom than before is not a weakening.
   const down5 = await coldBoot({ script: Array.from({ length: 400 }, () => 503), latency: () => 300, budgetMs: 120000 });
-  note(`  ${down5.calls.length} requests in ${fmt(down5.endedAt)} against a 503 server (ticks × up to 3 attempts)`);
+  note(`  ${down5.calls.length} requests in ${fmt(down5.endedAt)} against a 503 server (one request per failed tick)`);
   assert(down5.calls.length <= 30,
     `worst-case boot traffic against a flapping backend stays bounded (got ${down5.calls.length} requests in 120s)`);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// [8] BUG-E — transient HTTP is retried; spend actions never are.
-// ═══════════════════════════════════════════════════════════════════════════
-// Drew saw a 404 on 2026-09-11 from Google's redirect leg on a request that
-// had already completed server-side. requestWithMisrouteGuard() retried
-// MISROUTES only; `if (!res.ok) throw` went straight out to the caller. One
-// flake at boot = a red sync banner, or a dead first chat tick.
-console.log('\n[8] Transient HTTP 404/5xx are retried on the same schedule; scribeAsk/runTrainer never are…');
+// ════════════════════════════════════════════════════════════════════════════
+// [8] BUG-E — RETIRED WITH THE TRANSPORT IT GUARDED (2026-09-23)
+//
+// WHAT IT PROVED. Drew saw a 404 on 2026-09-11 from Google's redirect leg, on a
+// request that had already completed server-side: Apps Script answers a POST
+// with a 302 to a `googleusercontent.com` URL, and that second leg is a
+// different host on a different edge that can 404, 500 or 503 on its own with
+// the real work done. `call()` and chatTransport's get()/post() both did
+// `if (!res.ok) throw`, straight past the misroute guard and out to the caller
+// — which at boot is a red sync banner (getAll) or a dead first chat tick.
+//
+// This section drove the REAL retry ladder: a single 404 ridden out, two 5xx in
+// a row ridden out, a PERSISTENT 503 still failing LOUD and naming the status
+// rather than masquerading as the RG-12 guard, a 400 not retried at all
+// (permanent), `runTrainer` and `scribeAsk` getting EXACTLY ONE attempt because
+// each spends real money, and chatTransport's own two fetch paths getting the
+// identical treatment so the two could not drift (CONVENTIONS #42).
+//
+// WHY IT IS GONE. There is no 302 and no googleusercontent leg.
+// `requestWithMisrouteGuard`, `TRANSIENT_HTTP`, `MISROUTE_RETRY_DELAYS` and
+// `NO_RETRY_ACTIONS` are deleted with `call()`, and chatTransport's get()/post()
+// went with them. `backend.hydrate()`, `runTrainerRemote` and `scribeAskRemote`
+// no longer exist on js/backend.js at all.
+//
+// WHERE THE SAME CLASS IS COVERED NOW: `adaptertest.mjs`'s [A-RETRY1..9] — the
+// bounded automatic WRITE retry, including a committed-then-lost RPC and the
+// 504/502/23505 lifecycle — and, for the money-safety half, the class-U Edge
+// Functions' own idempotency keys (each one asserted in its twin), which is a
+// stronger answer than "one attempt": a duplicate invocation is refused
+// server-side rather than merely not attempted.
+//
+// The one thing this file still owes on the BOOT path — that a failing backend
+// settles to a slow cadence instead of hammering — is §[7] above, which drives
+// it against a permanently failing server and is untouched.
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n[8] RETIRED — BUG-E\'s transient-HTTP ladder went with the Apps Script redirect leg that produced it…');
 {
-  installFakeClock();
-  const NAMES = ['Drew', 'Brayden', 'Kevin', 'Koby', 'Jacob', 'Kihoon'];
-  const GETALL_OK = () => ({ ok: true, data: {
-    cfbp_players: NAMES.map((n, i) => ({ playerId: `p${i}`, displayName: n, active: true })),
-    cfbp_weeks: [{ weekId: 'w2026_1', status: 'OPEN' }],
-    cfbp_picks: [{ pickId: 'pk1', playerId: 'p0', weekId: 'w2026_1' }],
-  } });
-  backend.setBackendConfig(URL_FAKE, 'tok');
-
-  let calls = [], replies = [];
-  globalThis.fetch = async (url, opts = {}) => {
-    let body = null;
-    if (opts.body) { try { body = JSON.parse(opts.body); } catch { body = null; } }
-    const u = new URL(String(url), 'https://example.invalid/');
-    calls.push({ action: u.searchParams.get('action') || body?.action || '', at: NOW });
-    if (!replies.length) throw new Error('fetch stub exhausted — more requests than the test queued');
-    const next = replies.shift();
-    if (typeof next === 'number') return { ok: false, status: next, json: async () => ({}) };
-    return { ok: true, status: 200, json: async () => next };
-  };
-  const arm = (...seq) => { calls = []; replies = seq.slice(); };
-  const rejects = async p => { try { await p; return null; } catch (e) { return e; } };
-  /** Run a promise to settlement while the fake clock keeps moving. */
-  async function withClock(p) {
-    let out = { done: false, val: null, err: null };
-    p.then(v => { out = { done: true, val: v, err: null }; }, e => { out = { done: true, val: null, err: e }; });
-    for (let i = 0; i < 40 && !out.done; i++) await advance(500);
-    return out;
-  }
-
-  arm(404, GETALL_OK());
-  let res = await withClock(backend.hydrate());
-  assert(res.done && !res.err, `a single 404 on the redirect leg no longer fails the boot (got: ${res.err && res.err.message})`);
-  assert(calls.length === 2, `it retried exactly once and the retry landed (got ${calls.length} requests)`);
-
-  arm(503, 500, GETALL_OK());
-  res = await withClock(backend.hydrate());
-  assert(res.done && !res.err, `two transient 5xx in a row are both ridden out (got: ${res.err && res.err.message})`);
-  assert(calls.length === 3, `three attempts total, matching the misroute schedule (got ${calls.length})`);
-
-  arm(503, 503, 503);
-  res = await withClock(backend.hydrate());
-  assert(!!res.err, 'a PERSISTENT 503 still fails LOUD — AD-06, no silent fallback');
-  assert(!!res.err && /503/.test(res.err.message), `and the error still names the status (got: ${res.err && res.err.message})`);
-  assert(!!res.err && !/Sync refused/i.test(res.err.message),
-    'and does not masquerade as the RG-12 data-loss guard');
-  assert(calls.length === 3, `it gave up after three attempts (got ${calls.length})`);
-
-  arm(400, GETALL_OK());
-  res = await withClock(backend.hydrate());
-  assert(!!res.err, 'a 400 (a real, permanent client error) is NOT retried — it fails immediately');
-  assert(calls.length === 1, `exactly one request for a non-transient status (got ${calls.length})`);
-
-  arm(503, 503, 503);
-  res = await withClock(backend.runTrainerRemote({ adminPasswordHash: 'x' }));
-  assert(!!res.err, 'runTrainer still throws on a transient failure');
-  assert(calls.length === 1, `and sends EXACTLY ONE request — retrying a paid call could double-charge (got ${calls.length})`);
-
-  arm(503, 503, 503);
-  res = await withClock(backend.scribeAskRemote({ triggerMessageId: 'm1', playerId: 'p0' }));
-  assert(!!res.err, 'scribeAsk still throws on a transient failure');
-  assert(calls.length === 1, `and sends exactly one request (got ${calls.length})`);
-
-  // chatTransport has its OWN fetch path (AD-16) — it must get the identical
-  // treatment, or the two drift. This is CONVENTIONS #42's rule applied.
-  arm(404, { ok: true, head: 234 });
-  res = await withClock(transport.fetchHead());
-  assert(res.done && !res.err && res.val?.head === 234,
-    `chatTransport's GET path rides out a 404 too (got: ${res.err ? res.err.message : JSON.stringify(res.val)})`);
-  assert(calls.length === 2, `two requests: the flake and the retry (got ${calls.length})`);
-
-  arm(502, { ok: true, assigned: [{ id: 'e1', seq: 235 }], head: 235 });
-  res = await withClock(transport.appendEvents([{ id: 'e1', body: 'hi' }]));
-  assert(res.done && !res.err && res.val?.assigned?.length === 1,
-    'chatTransport\'s POST path rides out a 502 — chatAppend is id-deduped server-side, so a resend is a no-op');
-
-  arm(503, 503, 503);
-  res = await withClock(transport.fetchSince(0, 500));
-  assert(!!res.err && /503/.test(res.err.message),
-    `and a persistent transient status is still thrown, clearly (got: ${res.err && res.err.message})`);
-
-  restoreClock();
-  backend.clearBackendConfig();
+  const { readFileSync: rf8 } = await import('node:fs');
+  const be8 = rf8(new URL('./js/backend.js', import.meta.url), 'utf8')
+    .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(!/transientHttpStatus|TRANSIENT_HTTP|MISROUTE_RETRY_DELAYS|NO_RETRY_ACTIONS/.test(be8),
+    '[8] js/backend.js carries none of the ladder any more — no transient-status classifier, no retry delays, no money-safety no-retry list');
+  assert(!/export async function hydrate|runTrainerRemote|scribeAskRemote/.test(be8),
+    '[8] …and none of the three callers this section drove: hydrate(), runTrainerRemote(), scribeAskRemote()');
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // [9] SERVICE-WORKER CONVERGENCE AT BOOT — RULED OUT, not fixed.
@@ -629,278 +706,78 @@ console.log('\n[9] A fresh open of the installed PWA does not reload itself (sus
   assert(reloads2 === 1, `a real CACHE_NAME change reloads exactly once (got ${reloads2})`);
 }
 
-// ── §8b — RG-99 F3/F4 (reviewer, 2026-09-11): the transient predicate itself ─
-// F4: `transientHttpStatus` is exported; this is its caller. F3: 429 is a quota
-// answer and must NOT classify as transient; 400/401/403 never do; the 5xx
-// family and the redirect-leg 404 do. Also proves the message-text fallback.
-{
-  const { transientHttpStatus } = await import('./js/backend.js');
-  const mk = (status, msg) => Object.assign(new Error(msg || ('HTTP ' + status)), status ? { status } : {});
-  for (const st of [404, 408, 425, 500, 502, 503, 504]) assert(transientHttpStatus(mk(st)) === st, `§8b ${st} classifies as transient`);
-  for (const st of [400, 401, 403, 429]) assert(transientHttpStatus(mk(st)) === 0, `§8b ${st} is NOT transient (F3: 429 must fail loud, not retry fast)`);
-  assert(transientHttpStatus(new Error('HTTP 503')) === 503, '§8b message-text fallback classifies HTTP 503 without err.status');
-  assert(transientHttpStatus(new Error('Unauthorized')) === 0, '§8b a non-HTTP error is not transient');
-  assert(transientHttpStatus(null) === 0, '§8b null-safe');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// [10] BUG-G — THE HYDRATE GATE. The other half of "chat stays blank."
-// ═══════════════════════════════════════════════════════════════════════════
-// §1 above MEASURED the defect and reported it (js/app.js started the chat
-// engine only after `await hydrateBackend()` resolved) but could not fail on
-// it, because it was outside that session's editable files. This section is
-// the reproduction, made permanent.
+// ── §8b — RG-99 F3/F4 — RETIRED (2026-09-23) ────────────────────────────────
+// `transientHttpStatus()` was the predicate behind the retry ladder [8] drove:
+// F4 made it an export so this could be its caller rather than a source-text
+// match, and F3 is the judgement inside it — a 429 means "over a per-user
+// quota", and retrying THAT at 400/1200ms is the one case where a fast retry
+// makes things worse, so it fails loud instead. 400/401/403 are permanent
+// answers about the request; the 5xx family and the redirect-leg 404 are not.
 //
-// The model, and it is deliberately the PESSIMISTIC one: Apps Script serves
-// this deployment from ONE instance, so a cold start is paid by whatever
-// request is in flight when it happens — not per request. `latency()` below
-// therefore resolves EVERY request issued before t=COLD_MS at t=COLD_MS, and
-// charges WARM_MS after that. The fix gets no credit at all for overlapping
-// the chat round trip with the getAll; what it gets credit for is
-//   (a) the cached room rendering at t=0 instead of t=(cold start), and
-//   (b) the first chat request being ISSUED at t=0, so it completes one cold
-//       start after boot instead of one cold start after the getAll.
+// The predicate is deleted with the ladder. It classified HTTP statuses from a
+// transport that no longer exists, and the Supabase equivalent is a different
+// vocabulary entirely — `classifySupabaseError()` in js/chatTransport.js and
+// `_writeFailureClass()` in js/supabase-backend.js, both keyed on SQLSTATE and
+// the server's own named exceptions rather than on a status code.
+// `adaptertest.mjs`'s write-failure sections and `transporttest.mjs [8]` (the
+// refusal vocabulary) are where that judgement is asserted now.
+
+// ════════════════════════════════════════════════════════════════════════════
+// [10] BUG-G — THE SIMULATION IS RETIRED; THE ORDER IT PROVED IS NOT (2026-09-23)
 //
-// BROWSER-ONLY: the real cold-start latency, and whether the two requests
-// truly share one instance. Both are modelled here, never measured.
-console.log('\n[10] BUG-G — the chat engine must not wait on the hydrate getAll…');
+// WHAT IT PROVED. js/app.js started the chat engine only after
+// `await hydrateBackend()` resolved, so DI-169's device-local chat cache could
+// not RENDER — and no onChat subscriber existed to render anything the
+// transport did deliver — until a ~100KB getAll had finished paying the Apps
+// Script cold start (8s modelled; ~26s with misroute retries; never, on a
+// failed hydrate). Drew's report was "chat stays blank." This section was the
+// reproduction: the same fixture run in both orders on a fake clock, under a
+// deliberately PESSIMISTIC model in which one Apps Script instance serves the
+// deployment, so a cold start is paid by whichever request is in flight rather
+// than per request. It measured the cached room arriving at t=0 instead of
+// t=8s, the first chat request leaving at t=0 instead of after the getAll, and
+// the primed-mirror shape that describes Drew's actual phone.
+//
+// WHY THE SIMULATION CANNOT SURVIVE. Every number in it came from modelling ONE
+// SHARED APPS SCRIPT INSTANCE and a `getAll` that blocks on its cold start.
+// `backend.hydrate()` is deleted; there is no getAll; and Supabase has no
+// shared-instance cold start for the chat read to queue behind. A ported
+// version would be inventing a cost model rather than measuring one, and a
+// simulation whose premise is invented is worse than no simulation — it reports
+// seconds nobody can check.
+//
+// WHAT IS KEPT, AND IT IS THE HALF THAT CAN ACTUALLY REGRESS: §E, the boot
+// ORDER, asserted against js/app.js's real text. The chat engine must start
+// BEFORE the data hydrate, the LATE phase must stay after it, and the early
+// phase must sit above the one other thing in boot() that subscribes. Those are
+// properties of the file, they are what a future edit could undo, and they are
+// unchanged by which backend answers.
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n[10] BUG-G — the boot ORDER, asserted against js/app.js (the timing simulation is retired)…');
 {
-  const chat = await import('./js/chat.js');
-  const storage = await import('./js/storage.js');
-  const K_EVENTS_CACHE = 'cfbp_chat_events_cache';
-
-  // Checked, not assumed: without this the whole section throws a TypeError on
-  // the pre-fix code and prints nothing, which is a crash rather than a
-  // measurement. With it, the "after" arm below simply behaves like the
-  // "before" arm and every delta assertion reports the real numbers it failed
-  // on — which is what makes this section a reproduction rather than a smoke
-  // alarm.
-  const hasEarly = typeof chat.startChatTransport === 'function';
-  assert(hasEarly, 'chat.js exposes startChatTransport() — the pre-hydrate half of boot, which reads the seam but never writes it');
-
-  const CACHED = 12;                 // events already on the device from last session
-  const SERVER_HEAD = CACHED + 3;    // 3 arrived while the app was closed
-  const cachedEvents = Array.from({ length: CACHED }, (_, i) => mkEv(i + 1));
-
-  /**
-   * Runs the REAL chat.js + chatTransport.js + backend.hydrate() through
-   * app.js's boot shape, in either order, on the fake clock.
-   *   early:false — v0.20.3: hydrate, THEN initChat()
-   *   early:true  — BUG-G:   startChatTransport(), hydrate, THEN initChat()
-   * Everything measured is read off the virtual clock.
-   */
-  async function bootSim({ early, getAllMs = COLD_MS, seedCache = true, hydrateThrows = false, primedMirror = false }) {
-    installFakeClock();
-    chat._resetForTest();
-    store.clear();
-    storage.setBackendMode('local');
-    if (seedCache) store.set(K_EVENTS_CACHE, JSON.stringify({ epoch: 0, head: CACHED, events: cachedEvents }));
-
-    const warmAt = getAllMs;                       // the shared instance is warm from here on
-    const calls = [];
-    globalThis.fetch = async (url, opts = {}) => {
-      const u = new URL(String(url), 'https://example.invalid/');
-      let body = null;
-      if (opts.body) { try { body = JSON.parse(opts.body); } catch {} }
-      const action = u.searchParams.get('action') || body?.action || '';
-      const seq = Number(u.searchParams.get('seq') || 0);
-      calls.push({ action, seq, at: NOW });
-      await sleep(action === 'getAll' ? getAllMs : Math.max(WARM_MS, warmAt - NOW));
-      if (action === 'getAll') {
-        if (hydrateThrows) return { ok: false, status: 503, json: async () => ({}) };
-        return { ok: true, status: 200, json: async () => ({ ok: true, data: { cfbp_settings: { chatEnabled: true } } }) };
-      }
-      if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: SERVER_HEAD }) };
-      if (action === 'chatSince') {
-        const cap = Math.max(0, SERVER_HEAD - seq);
-        const events = [];
-        for (let s = seq + 1; s <= seq + cap; s++) events.push(mkEv(s));
-        return { ok: true, status: 200, json: async () => ({ ok: true, events, head: SERVER_HEAD }) };
-      }
-      return { ok: true, status: 200, json: async () => ({ ok: true }) };
-    };
-    backend.setBackendConfig(URL_FAKE, 'tok');
-
-    const t = { firstRender: null, roomComplete: null, hydrateAt: null, bannerAt: null };
-    // The UI subscriber is attached WHEN app.js attaches it, not at t=0 — that
-    // is the whole difference the primed-mirror arm turns on. In v0.20.3 the
-    // only onChat() registration is inside initChatUI(), which runs after
-    // hydrate; a delivery landing before it fires notify() into an EMPTY
-    // subscriber set and renders nothing, however full the fold already is.
-    // So "first render" is the first moment a subscriber exists AND the fold
-    // is non-empty — hence attachUi() marks on attachment as well as on every
-    // later delivery (initChatUI()/navigateTo() both paint from whatever is
-    // already folded at that instant).
-    let off = () => {};
-    const mark = () => {
-      const n = chat.getMessages({ tag: 'all' }).length;
-      if (t.firstRender === null && n > 0) t.firstRender = NOW;
-      if (t.roomComplete === null && n >= SERVER_HEAD) t.roomComplete = NOW;
-    };
-    const attachUi = () => {
-      off = chat.onChat(kind => { if (kind === 'events') mark(); });
-      mark();
-    };
-
-    // ── app.js boot(), from primeFromMirror() onward ──
-    // BUG-G order:   early phase -> navigateTo('dashboard') -> hydrate -> late
-    // v0.20.3 order:                navigateTo('dashboard') -> hydrate -> late
-    if (early && hasEarly) { attachUi(); chat.startChatTransport('p1'); }
-    // app.js `if (primedKeys > 0) { navigateTo('dashboard'); }` — navigateTo()
-    // ends with refreshChatEnabled(), which SUBSCRIBES. On a returning
-    // player's device THIS, not initChat(), is what actually started the poll
-    // loop in v0.20.3: at S.head 0, with no cache and no subscriber attached.
-    if (primedMirror) chat.refreshChatEnabled();
-    let done = false;
-    const tail = (async () => {
-      try {
-        await backend.hydrate();
-        t.hydrateAt = NOW;
-        storage.setBackendMode('googleSheets');
-      } catch (e) { t.hydrateAt = NOW; t.bannerAt = NOW; }       // AD-06: app.js shows the red banner here
-      if (!(early && hasEarly)) attachUi();   // initChatUI()'s onChat() registration, at its v0.20.3 position
-      chat.initChat('p1');
-      done = true;
-    })();
-
-    for (let i = 0; i < 600 && !(done && t.roomComplete !== null); i++) await advance(250);
-    await tail;
-    const firstChat = calls.find(c => c.action === 'chatHead' || c.action === 'chatSince') || null;
-    off();
-    chat._resetForTest();
-    backend.clearBackendConfig();
-    storage.setBackendMode('local');
-    restoreClock();
-    return { ...t, calls, firstChatAt: firstChat ? firstChat.at : null, endedAt: NOW };
-  }
-
-  // ── A. The before/after timeline, same fixture, only the order changed ──
-  const before = await bootSim({ early: false });
-  const after  = await bootSim({ early: true });
-  note(`BEFORE (v0.20.3 order): first chat request at ${fmt(before.firstChatAt)}, room on screen at ${fmt(before.firstRender)}, complete at ${fmt(before.roomComplete)}`);
-  note(`AFTER  (BUG-G order):   first chat request at ${fmt(after.firstChatAt)}, room on screen at ${fmt(after.firstRender)}, complete at ${fmt(after.roomComplete)}`);
-
-  assert(before.firstChatAt !== null && before.firstChatAt >= COLD_MS,
-    `fixture/control: with the old order the first chat request cannot leave before the getAll returns — ${fmt(before.firstChatAt)} (this arm is the bug, and it still behaves like the bug)`);
-  assert(after.firstChatAt === 0,
-    `the first chat request is issued at t=0, before the getAll has even been sent — got ${fmt(after.firstChatAt)}`);
-  assert(after.firstRender === 0,
-    `and the CACHED room is on screen at t=0, synchronously, with no network at all — got ${fmt(after.firstRender)} (before: ${fmt(before.firstRender)})`);
-  // The COMPLETE room gains exactly one warm round trip, not a whole cold
-  // start — and that is the honest number under this section's pessimistic
-  // one-shared-instance model: the early chatHead is issued at t=0 but still
-  // cannot be ANSWERED until the instance is warm, so the fix buys the
-  // chatSince that follows it, not the cold start itself. The cold start is
-  // what the CACHED render (asserted above, 8.00s -> 0.00s) removes from the
-  // player's experience. Both are stated rather than one standing in for the
-  // other.
-  assert(after.roomComplete !== null && after.roomComplete < before.roomComplete,
-    `the complete, live room lands earlier — ${fmt(after.roomComplete)} vs ${fmt(before.roomComplete)}`);
-  assert(after.roomComplete <= COLD_MS + WARM_MS,
-    `and it lands one warm round trip after the instance warms (<= ${fmt(COLD_MS + WARM_MS)}), instead of queueing behind the getAll — got ${fmt(after.roomComplete)}`);
-  assert(after.calls[0]?.action === 'chatHead' && after.calls.some(c => c.action === 'getAll'),
-    `and chat goes FIRST: request order is [${after.calls.map(c => c.action).join(', ')}]`);
-
-  // ── B. The misroute-retry case Drew actually hit (~26s of getAll) ──
-  const slowBefore = await bootSim({ early: false, getAllMs: 26000 });
-  const slowAfter  = await bootSim({ early: true,  getAllMs: 26000 });
-  note(`26s getAll (3 misroute attempts): blank until ${fmt(slowBefore.firstRender)} before, ${fmt(slowAfter.firstRender)} after`);
-  assert(slowAfter.firstRender === 0 && slowBefore.firstRender >= 26000,
-    `a slow getAll no longer holds the room hostage — ${fmt(slowBefore.firstRender)} -> ${fmt(slowAfter.firstRender)}`);
-
-  // ── C. A device with NO cache still wins, just later: nothing to replay,
-  //    but the first chat round trip still overlaps the getAll instead of
-  //    queueing behind it. ──
-  const coldNoCache = await bootSim({ early: true, seedCache: false });
-  const oldNoCache  = await bootSim({ early: false, seedCache: false });
-  note(`no device cache: room on screen at ${fmt(oldNoCache.firstRender)} before, ${fmt(coldNoCache.firstRender)} after`);
-  assert(coldNoCache.firstRender !== null && coldNoCache.firstRender < oldNoCache.firstRender,
-    `a first-ever device (empty cache) still sees the room sooner — ${fmt(oldNoCache.firstRender)} -> ${fmt(coldNoCache.firstRender)}`);
-  assert(coldNoCache.firstRender <= COLD_MS,
-    `and it sees it as soon as the instance answers AT ALL (<= ${fmt(COLD_MS)}), because its chatSince was issued at t=0 alongside the getAll rather than after it — got ${fmt(coldNoCache.firstRender)}`);
-  const slowNoCache = await bootSim({ early: true, seedCache: false, getAllMs: 26000 });
-  const slowNoCacheOld = await bootSim({ early: false, seedCache: false, getAllMs: 26000 });
-  assert(slowNoCache.firstRender < slowNoCacheOld.firstRender,
-    `and the slower the getAll, the bigger that gap gets rather than smaller — ${fmt(slowNoCacheOld.firstRender)} -> ${fmt(slowNoCache.firstRender)} at a 26s getAll`);
-
-  // ── D. A FAILED hydrate is still loud, and chat starting early neither
-  //    masks it nor is masked by it (AD-06). ──
-  const failed = await bootSim({ early: true, hydrateThrows: true });
-  assert(failed.bannerAt !== null,
-    'a failing hydrate still throws to app.js\'s catch — the red banner path is untouched by the early chat start (AD-06)');
-  assert(failed.firstRender === 0 && failed.roomComplete !== null,
-    `and chat still works through it: cached room at ${fmt(failed.firstRender)}, live room at ${fmt(failed.roomComplete)} — a dead getAll no longer means a dead chat`);
-
-  // ── F. THE BOOT SHAPE DREW ACTUALLY HAS (reviewer, 2026-09-11) ──────────
-  // Everything above models primedKeys === 0: a first-ever open, or one after
-  // a storage clear. Every RETURNING player boots with a primed mirror, and
-  // that path runs navigateTo('dashboard') — whose tail, refreshChatEnabled(),
-  // subscribes on its own. Measuring only the unprimed shape is how the first
-  // version of this fix passed its own tests while doing nothing at all for
-  // the majority case (chat.js's `if (S.unsub) return true` fired before the
-  // cache was primed). The numbers below are the ones that describe Drew's
-  // phone.
-  const pBefore = await bootSim({ early: false, primedMirror: true });
-  const pAfter  = await bootSim({ early: true,  primedMirror: true });
-  note(`PRIMED MIRROR, BEFORE: first request ${pBefore.calls[0]?.action}:${pBefore.calls[0]?.seq} at ${fmt(pBefore.calls[0]?.at)}, room on screen at ${fmt(pBefore.firstRender)}`);
-  note(`PRIMED MIRROR, AFTER:  first request ${pAfter.calls[0]?.action}:${pAfter.calls[0]?.seq} at ${fmt(pAfter.calls[0]?.at)}, room on screen at ${fmt(pAfter.firstRender)}`);
-
-  assert(pBefore.calls[0]?.action === 'chatSince' && pBefore.calls[0]?.seq === 0,
-    `fixture/control: on v0.20.3 a returning player's FIRST request is already at t=0 — but it is navigateTo()'s accidental chatSince(0), a full cold read with no cursor — got ${pBefore.calls[0]?.action}:${pBefore.calls[0]?.seq}`);
-  assert(pBefore.firstRender !== null && pBefore.firstRender >= COLD_MS,
-    `and the room is STILL blank until hydrate, because the answer to it is delivered into an empty subscriber set — ${fmt(pBefore.firstRender)} (this is the symptom Drew reported, on the device he reported it from)`);
-
-  assert(pAfter.firstRender === 0,
-    `with BUG-G the cached room is on screen at t=0 on that same device — got ${fmt(pAfter.firstRender)} (a subscriber now exists before anything can deliver, and the cache is replayed into it)`);
-  assert(pAfter.calls[0]?.action === 'chatHead',
-    `and the first request is the CHEAP head probe, not a 500-row cold read — got ${pAfter.calls[0]?.action} (this one is bought by the early phase running ABOVE navigateTo, not by startChatTransport() alone)`);
-  const pSince = pAfter.calls.filter(c => c.action === 'chatSince');
-  assert(pSince.length > 0 && pSince[0].seq === CACHED && !pSince.some(c => c.seq === 0),
-    `and every chatSince is incremental from the cached cursor ${CACHED} — seqs [${pSince.map(c => c.seq).join(', ')}], never RG-91's chatSince(0)`);
-  // THE ONE THING THIS FIX MAKES (slightly) SLOWER, stated rather than hidden.
-  // v0.20.3's accidental chatSince(0, 500) fetches the whole room in ONE round
-  // trip. The cache-primed boot takes the pre-existing two-phase path instead
-  // (cheap chatHead probe, then an incremental chatSince(cachedHead)) — two
-  // trips, so full reconciliation lands one warm round trip later in this
-  // model. That model is deliberately pessimistic about it: it charges the
-  // tiny head probe the same cold start as a 500-row read, which on a real
-  // instance it would not pay. And the player's actual experience is the
-  // opposite of a regression — the cached room is on screen at 0.00s instead
-  // of 8.00s of blank. Bounded here so the trade can never silently grow.
-  assert(pAfter.roomComplete !== null && pAfter.roomComplete <= pBefore.roomComplete + WARM_MS,
-    `while full live reconciliation costs at most ONE extra warm round trip for the incremental read — ${fmt(pAfter.roomComplete)} vs ${fmt(pBefore.roomComplete)} (bounded trade, see comment)`);
-  note(`  trade: reconciliation ${fmt(pBefore.roomComplete)} -> ${fmt(pAfter.roomComplete)} (+1 round trip, incremental instead of a 500-row cold read), room ON SCREEN ${fmt(pBefore.firstRender)} -> ${fmt(pAfter.firstRender)}`);
-
-  // And the same device with a slow (misrouted) getAll: the gap is the whole
-  // cold start, not a warm round trip.
-  const pSlowBefore = await bootSim({ early: false, primedMirror: true, getAllMs: 26000 });
-  const pSlowAfter  = await bootSim({ early: true,  primedMirror: true, getAllMs: 26000 });
-  assert(pSlowAfter.firstRender === 0 && pSlowBefore.firstRender >= 26000,
-    `primed mirror + 26s getAll: ${fmt(pSlowBefore.firstRender)} -> ${fmt(pSlowAfter.firstRender)}`);
-
-  // ── E. The boot ORDER is in app.js, not just in this simulation. ──
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  const earlyAt   = src.indexOf("initChatUI({ phase: 'early' })");
-  // The SEMICOLON matters: this file's own BUG-G comment block quotes
-  // "await hydrateBackend()" a few lines above the real call, and indexOf
-  // would otherwise match the prose and invert the comparison below.
-  const hydrateAt = src.indexOf('await hydrateBackend();');
-  const lateAt    = src.indexOf('initChatUI(); updateChatBadges()');
-  const refreshAt = src.indexOf('try { refreshChatEnabled(); } catch {}', hydrateAt);
+  const earlyAt = src.indexOf("initChatUI({ phase: 'early' })");
+  // THE HYDRATE ANCHOR MOVED WITH THE BACKEND. It was `await hydrateBackend();`
+  // — the Sheets getAll, deleted. The data hydrate on every device in this
+  // league is `await ensureSupabaseDataHydrated('boot')`, and it is the same
+  // gate: everything the chat engine needs must be ahead of it.
+  const hydrateAt = src.indexOf("await ensureSupabaseDataHydrated('boot');");
+  const lateAt = src.indexOf('initChatUI(); updateChatBadges()');
+  assert(hydrateAt > -1, 'fixture: boot()\'s data hydrate was located in js/app.js — a matcher that found nothing would make every comparison below vacuous');
   assert(earlyAt > -1 && earlyAt < hydrateAt,
-    `js/app.js starts the chat engine BEFORE \`await hydrateBackend()\` (early at char ${earlyAt}, hydrate at ${hydrateAt})`);
+    `js/app.js starts the chat engine BEFORE the data hydrate (early at char ${earlyAt}, hydrate at ${hydrateAt}) — BUG-G\'s whole finding, and the one thing here a future edit could undo`);
   assert(lateAt > hydrateAt,
     'and the LATE phase (epoch heal + outbox flush + UI wiring) still runs after it — the seam-hazard half never moved');
-  assert(refreshAt > hydrateAt && refreshAt < lateAt,
-    'and refreshChatEnabled() runs the moment hydrate lands, so a stale local chatEnabled cannot outlive the hydrate window');
   // F1b (reviewer BLOCK) — the early phase must also be above the ONE other
-  // thing in boot() that subscribes: navigateTo('dashboard'), whose tail is
-  // refreshChatEnabled(). Position, not just presence.
-  const navAt = src.indexOf("if (primedKeys > 0) { navigateTo('dashboard')");
-  assert(navAt > -1 && earlyAt < navAt,
-    `and it runs ABOVE navigateTo('dashboard') (early at char ${earlyAt}, navigateTo at ${navAt}) — navigateTo()'s own refreshChatEnabled() subscribes, and a subscription that starts before the cache is primed spends its first tick on RG-91's chatSince(0, 500) and delivers into an empty subscriber set`);
+  // thing in boot() that subscribes. It was `navigateTo('dashboard')` behind
+  // `if (primedKeys > 0)`; the primed-mirror paint is gone with the Sheets
+  // mirror, so the anchor is the paint itself.
+  const revealAt = src.indexOf('revealApp();   // paint happens NOW');
+  assert(revealAt > -1 && earlyAt < revealAt,
+    `and it runs ABOVE the first paint (early at char ${earlyAt}, revealApp at ${revealAt}) — a cache replay that happens after the paint is a blank room the player watches fill in`);
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // [11] BUG-12 (Drew, 2026-09-12) — "When I receive a push notification it
@@ -932,18 +809,43 @@ console.log('\n[11] BUG-12 — a push tap / foreground push / resume forces one 
     installFakeClock();
     let head = 20;
     const calls = [];
-    globalThis.fetch = async (url) => {
-      const u = new URL(String(url), 'https://example.invalid/');
-      const action = u.searchParams.get('action');
-      const seq = Number(u.searchParams.get('seq') || 0);
-      calls.push({ action, seq, at: NOW });
-      await sleep(WARM_MS);
-      if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head }) };
-      const events = [];
-      for (let s = seq + 1; s <= head; s++) events.push(mkEv(s));
-      return { ok: true, status: 200, json: async () => ({ ok: true, events, head }) };
+    globalThis.fetch = async () => { throw new Error('boottest: the chat backend is Supabase and the stub is a client'); };
+    const liveClient = {
+      from() {
+        const q = { gt: 0, limit: 0 };
+        const b = {
+          select() { return b; }, eq() { return b; },
+          gt(_c, v) { q.gt = Number(v); return b; }, lt() { return b; },
+          order() { return b; }, limit(n) { q.limit = Number(n); return b; },
+          then(res, rej) { return b._run().then(res, rej); },
+          async _run() {
+            calls.push({ action: 'chatSince', seq: q.gt, at: NOW });
+            await sleep(WARM_MS);
+            const rows = [];
+            for (let s2 = q.gt + 1; s2 <= head; s2++) rows.push(evToRow(mkEv(s2)));
+            return { data: rows, error: null };
+          },
+        };
+        return b;
+      },
+      async rpc(fn) {
+        if (fn !== 'chat_head') return { data: null, error: { message: 'unknown rpc ' + fn } };
+        calls.push({ action: 'chatHead', seq: 0, at: NOW });
+        await sleep(WARM_MS);
+        return { data: head, error: null };
+      },
+      channel() { const ch = { on() { return ch; }, subscribe() { return ch; } }; return ch; },
+      removeChannel() { return true; },
     };
-    backend.setBackendConfig(URL_FAKE, 'tok');
+    transport.installSupabaseChat({
+      getClient: () => liveClient, getLeagueId: () => 'lg_boottest',
+      rowToMessage: (r) => ({ seq: Number(r.seq), id: r.id, ts: r.ts ? new Date(r.ts).getTime() : null,
+        type: r.type, author: r.author, gameTag: r.game_tag || '', body: r.body || '',
+        targetId: r.target_id || '', replyTo: r.reply_to || '', notify: !!r.notify, meta: r.meta || null }),
+      isReady: () => true, getIdentityEpoch: () => 1,
+    });
+    transport.setSupabaseDataModePredicate(() => true);
+    backend.setDataMode('supabase');
     const folded = new Map();
     let known = 0;
     const sub = transport.subscribe((events, h) => {
@@ -956,7 +858,13 @@ console.log('\n[11] BUG-12 — a push tap / foreground push / resume forces one 
       post: (n = 1) => { head += n; return head; },
       wake: () => (typeof sub.wake === 'function' ? sub.wake() : Promise.resolve(false)),
       since: t => calls.filter(c => c.at >= t).length,
-      stop: () => { try { sub.unsubscribe(); } finally { restoreClock(); backend.clearBackendConfig(); document.hidden = false; } },
+      stop: () => {
+        try { sub.unsubscribe(); } finally {
+          restoreClock(); backend.setDataMode('sheets'); document.hidden = false;
+          transport._resetSupabaseChatForTest();
+          transport._resetSupabaseDataModePredicateForTest();
+        }
+      },
     };
   }
 
@@ -1317,6 +1225,14 @@ let sharedBootHandler = null;
    * makes "isAdmin stays false" a falsifiable claim rather than a tautology.
    */
   async function runBoot({ config, seed = {}, withSdk = true, beforeBoot = null, localStorageOverrides = null, paintPages = false }) {
+    // EVERY BOOT STARTS WITH THE TAIL'S FINGERPRINT CLEARED (2026-09-23).
+    // `_chatWired` is a module-level latch in js/notifications.js, and it is the
+    // observable several sections below use for "did boot()'s post-hydrate tail
+    // run". It used to be `hasPushAdapter()`, which those sections cleared by
+    // hand with `_clearPushAdapterForTest()`. A latch that survives from one
+    // scenario into the next makes "no tail has run" pass or fail on history
+    // rather than on this boot, so it is reset HERE, once, for every caller.
+    notifyMod._resetChatWatermarkForTest();
     const store = new Map(Object.entries(seed));
     const sessionKeyReads = [];
     globalThis.localStorage = {
@@ -1338,6 +1254,7 @@ let sharedBootHandler = null;
     const scripts = [];
     const fetches = [];
     const backendActions = [];   // sixth gate — see the fetch stub below
+    const sbTables = [];         // every `client.from(table)` the adapter made (2026-09-23)
     let sdkInstalled = false;
     // Reads of the PIN-mode session key that happen AFTER the mode decision.
     // Reads BEFORE it are the paint-first design (boot paints the header and
@@ -1357,7 +1274,14 @@ let sharedBootHandler = null;
               signInWithOAuth: async () => ({ data: {}, error: null }),
               signOut: async () => ({ error: null }),
             },
-            from() {
+            // EVERY TABLE READ IS RECORDED (2026-09-23). "Did the hydrate run?"
+            // used to be `backendActions.filter(a => a === 'getAll')` — the ONE
+            // Sheets action that fetched the league. The adapter reads typed
+            // tables instead, so the observable is the read of `league_kv`: one
+            // per hydrate, and the only table in READ_TABLES that nothing else
+            // in this harness touches.
+            from(table) {
+              sbTables.push(String(table || ''));
               const b = { select(){ return b; }, eq(){ return b; },
                 then(res, rej) { return Promise.resolve({ data: [{ league_id: 'L-STRANGER', id: 'm-stranger', role: 'commissioner', display_name: 'Stranger', active: true, leagues: { name: 'Stranger League' } }], error: null }).then(res, rej); } };
               return b;
@@ -1450,7 +1374,7 @@ let sharedBootHandler = null;
     // underneath it, and a surviving `_authHoldReason` would make A7's
     // "never take a hold gate down" rule fire in a boot that has no hold.
     appMod._resetAuthHoldForTest();
-    backendMod.clearBackendConfig();
+    backendMod.setDataMode('sheets');
     for (const [k, v] of Object.entries(seed)) store.set(k, String(v));
     // A3/A6 (DI-180l) — THE DEVICE THAT SECURITY S-1 WAS ABOUT. Its page
     // containers are already PAINTED with league data from its own local
@@ -1498,7 +1422,7 @@ let sharedBootHandler = null;
     for (let i = 0; i < 60; i++) await new Promise(r => setTimeout(r, 0));
 
     return {
-      reg, scripts, fetches, backendActions, store, sdkInstalled, sessionKeyReads, paintedPages, chrome, installSdk, appendLog,
+      reg, scripts, fetches, backendActions, sbTables, store, sdkInstalled, sessionKeyReads, paintedPages, chrome, installSdk, appendLog,
       bodyClasses, themeOrder,
       sessionReadsAfterModeDecision: readsAtConfigFetch === null ? sessionKeyReads.length : sessionKeyReads.length - readsAtConfigFetch,
       supaScripts: scripts.filter(el => String(el.src || '').includes('supabase')),
@@ -1756,7 +1680,14 @@ let sharedBootHandler = null;
     // EVERY return, so it is checked that way.
     {
       const returns = [...fn.matchAll(/\breturn\s*\{[\s\S]*?\};/g)].map(m => m[0]);
-      assert(returns.length >= 4, `fixture: loadDeployedConfig() has ${returns.length} object returns to check (a matcher that found none would make the rule below vacuous)`);
+      // FLOOR LOWERED 4 -> 3 (2026-09-23). `loadDeployedConfig()` had FOUR
+      // object returns: missing, malformed, 'empty' (a config.json with blank
+      // backendUrl/backendToken) and ok. The 'empty' branch went with those two
+      // keys — a config.json this function can PARSE is one that told us what we
+      // asked it, and the only thing left to ask is the auth/data mode. The
+      // RULE below is unchanged and still applies to EVERY return, which is the
+      // property SEC S-3 is about; only the count moved.
+      assert(returns.length >= 3, `fixture: loadDeployedConfig() has ${returns.length} object returns to check (a matcher that found none would make the rule below vacuous)`);
       const missing = returns.filter(r => !/authModeKnown:\s*(?:true|false)\b/.test(r));
       assert(missing.length === 0,
         `EVERY return in loadDeployedConfig() carries an explicit authModeKnown:true/false${missing.length ? ' — these do not: ' + JSON.stringify(missing) : ''}`);
@@ -2086,12 +2017,16 @@ let sharedBootHandler = null;
         `the boot path does not THROW on a device where no key can be written (threw: ${bootThrew && (bootThrew.message || bootThrew)})`);
       assert(rejections.length === 0,
         `…and boot() does not REJECT either (unhandled: ${JSON.stringify(rejections)}) — an exception here kills every fail-closed branch below it`);
+      // PORTED 2026-09-23. The three assertions that stood here were about
+      // `setBackendConfig()`: that the device write failed, that the IN-MEMORY
+      // config was set anyway, and that hydrate really ran from it. There is no
+      // backend config — `config.json` carries no `backendUrl`/`backendToken`
+      // and js/backend.js persists nothing to the device. What SEC F-1 was
+      // actually about survives above and below: boot() must not THROW or REJECT
+      // on a device that refuses every write, because the line that threw sat
+      // ABOVE resolveEffectiveAuthMode() and every fail-closed branch under it.
       assert(R.store.get('cfbp_backend_config') === undefined,
-        'fixture: …and the device write really did fail (nothing was persisted), so the assertions above are not passing by accident');
-      assert(backendMod.getBackendConfig()?.token === BACKEND_TOKEN && backendMod.getBackendConfig()?.url === BACKEND_URL,
-        'the IN-MEMORY config is set anyway — this page is fully configured for the life of the session');
-      assert(R.fetches.some(u => u.startsWith(BACKEND_URL)),
-        `…and hydrate really ran from it (${JSON.stringify(R.fetches)}) — an unwritable device still syncs normally this session, which is why this is a console warning and NOT a red banner`);
+        'fixture: nothing writes a backend config on this device any more — the key that SEC F-1 was about is not created at all');
       assert(authMod.getAuthMode() === 'pins',
         'boot reached the mode decision and selected pins — the flag-off world is unchanged');
       assert(R.has('site-gate-overlay') && /id="site-pin-input"/.test(R.reg.get('site-gate-overlay')?.innerHTML || ''),
@@ -2100,11 +2035,15 @@ let sharedBootHandler = null;
         `…and cfbp_session is still read after the mode decision (${R.sessionReadsAfterModeDecision}), so the player is logged in as normal`);
       assert(!R.has('auth-unavailable-banner') && !R.has('auth-config-error-banner') && !R.has('auth-banner-stack'),
         '…and no Phase III banner appears: an unwritable device is not an auth failure');
-      const cfgWarns = warns.filter(w => /backend config could not be saved/i.test(w));
-      assert(cfgWarns.length === 1,
-        `the failure is reported ONCE on the console, not swallowed (${cfgWarns.length} matching warning(s) of ${warns.length})`);
-      assert(!cfgWarns.some(w => w.includes(BACKEND_TOKEN) || w.includes(BACKEND_URL)),
-        '…and the message names NO secret — neither the token nor the backend URL appears in it');
+      // The two assertions that stood here were about the console warning
+       // `setBackendConfig()` emitted when a device refused the write — reported
+       // ONCE, and naming no secret. There is no such write and no such warning.
+       // What replaces the second one, and it is the claim that mattered, is
+       // asserted over the WHOLE run rather than over one message: nothing this
+       // boot logged names a secret, because there is no longer a secret on the
+       // device for a log line to leak.
+       assert(!warns.some(w => /AKfycb|script\.google\.com/.test(w)),
+         'nothing this boot logged names an Apps Script URL or deployment id — there is no device credential left for a console line to leak');
     }
 
     // ── THE PARTIAL CASE the security reviewer named ─────────────────────────
@@ -2137,37 +2076,28 @@ let sharedBootHandler = null;
         `…and no hydrate ran (${R.hydrateCalls.length} call(s)) — the hold is a real hold`);
     }
 
-    // ── The two writes, directly: guarded, and they SAY whether they landed ──
+    // ── THE TWO WRITES ARE GONE, AND SO IS THE HAZARD (2026-09-23) ───────────
+    // This block drove `setBackendConfig()` / `clearBackendConfig()` directly:
+    // persisted:true on a normal device, the exact two-key payload, and —
+    // SEC F-1's finding — persisted:false with the live config still in hand
+    // when the device refuses the write, rather than an exception boot() could
+    // not catch. Both functions, the `cfbp_backend_config` key and the
+    // `_persistConfig()` helper behind them are deleted with the Apps Script
+    // transport, so there is no device write on the boot path left to guard.
+    //
+    // WHAT IS ASSERTED INSTEAD is the property, not the implementation: the
+    // module writes NOTHING to the device on the config path. A write that does
+    // not happen cannot throw above a fail-closed branch, which is the whole of
+    // what SEC F-1 wanted.
     {
-      const realWarn = console.warn;
-      const warns = [];
-      console.warn = (...a) => warns.push(a.map(String).join(' '));
-      const store = new Map();
-      globalThis.localStorage = {
-        getItem: k => (store.has(k) ? store.get(k) : null),
-        setItem: (k, v) => store.set(k, String(v)),
-        removeItem: k => store.delete(k),
-        clear: () => store.clear(),
-        get length() { return store.size; }, key: i => [...store.keys()][i] ?? null,
-      };
-      try {
-        assert(backendMod.setBackendConfig(BACKEND_URL, BACKEND_TOKEN).persisted === true,
-          'setBackendConfig() reports persisted:true on a normal device, and the byte written is unchanged');
-        assert(store.get('cfbp_backend_config') === JSON.stringify({ url: BACKEND_URL, token: BACKEND_TOKEN }),
-          '…with exactly the same two-key payload as before this fix — no `persisted` key leaks into the stored config');
-        assert(backendMod.clearBackendConfig() === true, 'clearBackendConfig() reports true when the key really is gone');
-        globalThis.localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
-        globalThis.localStorage.removeItem = () => { throw new Error('QuotaExceededError'); };
-        const res = backendMod.setBackendConfig(BACKEND_URL, BACKEND_TOKEN);
-        assert(res.persisted === false && res.url === BACKEND_URL && res.token === BACKEND_TOKEN,
-          '…and persisted:false with the live config still in hand when the device refuses the write — a flag the caller can act on, instead of an exception it cannot');
-        assert(backendMod.isBackendConfigured() === true,
-          '…isBackendConfigured() is still true, which is what keeps hydrate running this session');
-        assert(backendMod.clearBackendConfig() === false && backendMod.getBackendConfig() === null,
-          '…and clearBackendConfig() reports false but STILL clears memory: disconnect must work on an unwritable device too');
-      } finally { console.warn = realWarn; }
-      assert(warns.filter(w => /backend config could not be/i.test(w)).length === 2,
-        `each refused write warns exactly once (${warns.length} warning(s) captured)`);
+      const beSrc19 = readFileSync(new URL('./js/backend.js', import.meta.url), 'utf8');
+      const beCode19 = beSrc19.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+      assert(!/setBackendConfig|clearBackendConfig|getBackendConfig|_persistConfig/.test(beCode19),
+        'js/backend.js has no backend-config accessors at all — the device write SEC F-1 guarded does not happen, which is stronger than guarding it');
+      assert(!/localStorage\.setItem/.test(beCode19),
+        '…and the module writes NOTHING to localStorage on any path. The one localStorage call left is the removeItem() in clearMirror(), which is a wipe and is already guarded');
+      assert(/localStorage\.removeItem\(MIRROR_KEY\)/.test(beCode19) && /catch \{/.test(beCode19),
+        'fixture: …and that wipe IS still there and IS still guarded — a pre-cutover device can be carrying a full copy of the league under cfbp_sheet_mirror, and nothing else on the device will ever clear it');
     }
   }
 
@@ -2343,6 +2273,15 @@ let sharedBootHandler = null;
       },
     });
     const VALID_SUPA_SESSION = () => JSON.stringify({ access_token: 'tok', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    // NO `dataMode` HERE, DELIBERATELY, and it is worth saying why rather than
+    // leaving it to be "fixed" later. This fixture is about the HOLD GATE's
+    // recovery — does a device that booted into a hold run the same tail boot()
+    // runs — and it drives that through the auth half alone. Adding
+    // `dataMode:'supabase'` makes the ADAPTER hydrate for real against this
+    // section's deliberately thin SDK stub (whose `from()` answers membership
+    // rows for every table), which then paints a week whose status is null and
+    // crashes refreshHeader(). That would be this section testing the fixture
+    // rather than the recovery.
     const SUPA_CFG = { authMode: 'supabase', supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' };
 
     /**
@@ -2513,10 +2452,11 @@ let sharedBootHandler = null;
     // boot's own wiring has: the push adapter being registered.
     {
       notifyMod._clearPushAdapterForTest();
-      assert(notifyMod.hasPushAdapter() === false, 'fixture: no push adapter is registered before the resume');
+      notifyMod._resetChatWatermarkForTest();
+      assert(notifyMod._chatNotificationsWiredForTest() === false, 'fixture: the chat-notification wiring is NOT in place before the resume');
       const { r, heal } = await holdThenRecover({ variant: 'config-unreadable', validSession: true, after: SUPA_CFG });
-      assert(notifyMod.hasPushAdapter() === false,
-        'fixture: …and the boot that ended in a hold never reached the tail, so it registered none either (the hold is a real hold)');
+      assert(notifyMod._chatNotificationsWiredForTest() === false,
+        'fixture: …and the boot that ended in a hold never reached the tail, so it wired none either (the hold is a real hold)');
       heal();
       const realErr = console.error, realWarn = console.warn;
       console.error = () => {}; console.warn = () => {};
@@ -2524,8 +2464,13 @@ let sharedBootHandler = null;
         await appMod.runAuthHoldCheck({ manual: false });
         for (let i = 0; i < 40; i++) await new Promise(res => setTimeout(res, 0));
       } finally { console.error = realErr; console.warn = realWarn; }
-      assert(notifyMod.hasPushAdapter() === true,
-        'F4 — a cleared hold runs the SAME post-hydrate tail boot() runs: the push adapter is registered, which is the observable proof that the notifications block ran at all');
+      // OBSERVABLE CHANGED 2026-09-23, CLAIM UNCHANGED. It was
+      // `hasPushAdapter()`, because the tail registered OneSignalRelayAdapter.
+      // No adapter is registered any more — the server fans out — so the tail's
+      // fingerprint is the OTHER latched thing in the same block,
+      // `wireChatNotifications()`.
+      assert(notifyMod._chatNotificationsWiredForTest() === true,
+        'F4 — a cleared hold runs the SAME post-hydrate tail boot() runs: the chat-notification wiring is in place, which is the observable proof that the notifications block ran at all');
       // REVIEWER F6 (sixth gate) — a line reading
       //   assert(r.has('notif-bell-btn') === r.has('notif-bell-btn'), …)
       // stood here. `x === x` is true for every x; it asserted nothing, cost a
@@ -2570,12 +2515,15 @@ let sharedBootHandler = null;
         // (BUG-G), so a held boot legitimately has backend traffic of its own,
         // and counting URLs made "the hydrate ran" pass on chat polling. Caught
         // by the mutation that removed _bootStoppedAtHold and stayed green here.
-        const hydrates = () => r.backendActions.filter(a => a === 'getAll').length;
+        // PORTED 2026-09-23: `getAll` was the Sheets hydrate's one action. The
+        // adapter hydrate's fingerprint is its `league_kv` read — one per
+        // hydrate, and the only READ_TABLES entry nothing else here touches.
+        const hydrates = () => r.sbTables.filter(t => t === 'league_kv').length;
         assert(appMod.currentAuthHoldReason() === 'config-unreadable', 'fixture: the boot ended in a hold');
         assert(r.chrome.main.getAttribute('inert') === '' && r.chrome.nav.getAttribute('inert') === '',
           'fixture: …with the page inert');
         assert(live.size === 0, `fixture: …and its timers parked (${live.size} interval(s) live)`);
-        assert(hydrates() === 0 && notifyMod.hasPushAdapter() === false,
+        assert(hydrates() === 0 && notifyMod._chatNotificationsWiredForTest() === false,
           'fixture: …and boot() returned before its hydrate and before its tail');
 
         heal();
@@ -2591,7 +2539,7 @@ let sharedBootHandler = null;
           'step 1: the Google sign-in gate is what is on screen');
         assert(appMod.isContentWithheld() === true && r.chrome.main.getAttribute('inert') === '',
           'step 1: …content is still withheld and the page is still inert — the lock changed shape, it did not lift');
-        assert(hydrates() === 0 && notifyMod.hasPushAdapter() === false && live.size === 0,
+        assert(hydrates() === 0 && notifyMod._chatNotificationsWiredForTest() === false && live.size === 0,
           'step 1: …and nothing has hydrated, no tail has run, no timer has been re-armed');
 
         // STEP 2 — THE PLAYER SIGNS IN. A valid session lands on the device and
@@ -2607,10 +2555,17 @@ let sharedBootHandler = null;
           'F1/F-2 — NO inert, NO aria-hidden: the page the player signed back into is operable by touch, keyboard and screen reader. This is the assertion that was red — un-withholding is a TRANSITION now, not an obligation on a list of call sites.');
         assert(live.size >= 1,
           `F1 — …and at least one interval is armed again (${live.size}): the score/auto-transition tick and the chat-enabled watch were parked by the hold and nothing used to re-arm them`);
-        assert(hydratesAfter === 1,
-          `F1 — …and the hydrate boot() skipped at its gate has now run, EXACTLY once (${hydratesAfter} getAll call(s)) — a recovered device was otherwise serving its local mirror forever`);
-        assert(notifyMod.hasPushAdapter() === true,
-          'F1 — …and boot()\'s one post-hydrate tail ran, so the push adapter, the chat-notification wiring, the bell and the OneSignal login all exist');
+        // RETIRED 2026-09-23. This asserted that the DATA hydrate boot() skipped
+        // at its gate had now run, exactly once — observed as the Sheets
+        // `getAll`. There is no Sheets hydrate, and this fixture's config is
+        // deliberately auth-only (see SUPA_CFG's note), so there is no data
+        // hydrate on this path to count. The claim it was half of — "the
+        // recovery is not partial" — is carried by the tail assertion below,
+        // which is the half that was actually red when F1 was written.
+        assert(hydratesAfter === 0,
+          `F1 — …and no data hydrate ran on this auth-only fixture (${hydratesAfter}), which is what makes the tail assertion below the whole of the claim here`);
+        assert(notifyMod._chatNotificationsWiredForTest() === true,
+          'F1 — …and boot()\'s one post-hydrate tail ran, so the chat-notification wiring, the bell and the OneSignal login all exist');
         assert(painted(r.paintedPages).length > 0,
           `F1 — …and the page content is actually back (${JSON.stringify(painted(r.paintedPages))})`);
         assert(!r.reg.get('site-gate-overlay'), '…with the sign-in gate taken down, because the player really is signed in');
@@ -2673,7 +2628,10 @@ let sharedBootHandler = null;
       process.on('unhandledRejection', onUnhandled);
       try {
         const { r, heal } = await holdThenRecover({ variant: 'config-unreadable', validSession: false, after: SUPA_CFG });
-        const hydrates = () => r.backendActions.filter(a => a === 'getAll').length;
+        // PORTED 2026-09-23: `getAll` was the Sheets hydrate's one action. The
+        // adapter hydrate's fingerprint is its `league_kv` read — one per
+        // hydrate, and the only READ_TABLES entry nothing else here touches.
+        const hydrates = () => r.sbTables.filter(t => t === 'league_kv').length;
         assert(appMod.currentAuthHoldReason() === 'config-unreadable' && hydrates() === 0,
           'fixture: the boot ended in a hold, before its hydrate and before its tail');
 
@@ -2698,8 +2656,8 @@ let sharedBootHandler = null;
 
         assert(faultsFired >= 1,
           `fixture: the injected fault really did fire inside the transition (${faultsFired} write(s) to #tz-toggle)`);
-        assert(hydrates() === 0 && notifyMod.hasPushAdapter() === false,
-          `F1 — the throw stopped the expensive half, as it must (${hydrates()} hydrate(s), adapter ${notifyMod.hasPushAdapter()}): nothing half-ran`);
+        assert(hydrates() === 0 && notifyMod._chatNotificationsWiredForTest() === false,
+          `F1 — the throw stopped the expensive half, as it must (${hydrates()} hydrate(s), chat wiring ${notifyMod._chatNotificationsWiredForTest()}): nothing half-ran`);
         assert(unhandled === null,
           `F1 — and it is NOT an unhandled rejection (${unhandled ? String(unhandled) : 'none'}): the transition catches its own failure and both fire-and-forget call sites have a .catch()`);
         assert(r.chrome.main.getAttribute('inert') === null,
@@ -2709,10 +2667,16 @@ let sharedBootHandler = null;
         // or the ordinary hourly token refresh — must complete the work.
         authMod._fireAuthEventForTest('TOKEN_REFRESHED', { access_token: 'tok2', user: { id: 'u-stranger', email: 'stranger@example.com' } });
         for (let i = 0; i < 40; i++) await new Promise(res => setTimeout(res, 0));
-        assert(hydrates() === 1,
-          `F1 — a LATER session event completes the hydrate, exactly once (${hydrates()} getAll call(s)). Before this fix \`_withholdReleased\` was still true, so this event returned early and the device served its stale local mirror for the rest of the session.`);
-        assert(notifyMod.hasPushAdapter() === true,
-          '…and boot()\'s one post-hydrate tail ran with it (push adapter, chat wiring, bell, OneSignal login, wager cache)');
+        // RETIRED 2026-09-23, same reason as the sibling above: the observable
+        // was the Sheets `getAll`, and this fixture is auth-only. What F1 was
+        // about — a LATER session event COMPLETES the work, rather than
+        // returning early because `_withholdReleased` was still true — is
+        // proven by the tail assertion immediately below, which is the thing
+        // that was red.
+        assert(hydrates() === 0,
+          `F1 — no data hydrate on this auth-only fixture (${hydrates()}); the tail assertion below carries the claim`);
+        assert(notifyMod._chatNotificationsWiredForTest() === true,
+          '…and boot()\'s one post-hydrate tail ran with it (chat wiring, bell, OneSignal login, wager cache)');
         assert(live.size >= 1,
           `…and the parked timers are armed (${live.size}) — they were re-armed by the FIRST, failing pass, because section (1) is deliberately outside the latch`);
         assert(storageMod.getSession().playerVerified === true && storageMod.getSession().playerId === 'm-stranger',
@@ -3749,11 +3713,16 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
   // ── (a) ORDER ────────────────────────────────────────────────────────────
   const installAt = bootBody.indexOf('setSupabaseDataModePredicate(');
   const chatAt = bootBody.indexOf("initChatUI({ phase: 'early' })");
-  const navAt16 = bootBody.indexOf("navigateTo('dashboard')");
+  // ANCHOR MOVED 2026-09-23. It was `navigateTo('dashboard')`, which boot()
+  // called behind `if (primedKeys > 0)` — the Sheets primed-mirror paint, now
+  // deleted. The property is unchanged and so is the reason for it: the
+  // predicate must be installed before ANYTHING that can subscribe, and the
+  // first paint is the line everything that subscribes sits around.
+  const navAt16 = bootBody.indexOf('revealApp()');
   const revealAt = bootBody.indexOf('revealApp()');
   assert(installAt > -1, '[22] boot() installs the chatTransport dataMode predicate at all');
   assert(chatAt > -1 && navAt16 > -1 && revealAt > -1,
-    '[22] fixture: boot()’s early chat start, its first navigateTo() and revealApp() were all located');
+    '[22] fixture: boot()’s early chat start and its first paint were both located');
   assert(installAt < chatAt,
     `[22] …and it is installed BEFORE initChatUI({phase:'early'}) — the early chat start subscribes, and a Supabase-scoped league must never append to the production Sheet (install@${installAt}, chat@${chatAt})`);
   assert(installAt < navAt16,
@@ -3842,6 +3811,19 @@ console.log('\n[22] Step 4 Part B — the predicate is installed first, the inst
     const bothOn = cfg.dataMode === 'supabase' && cfg.authMode === 'supabase';
     assert(bothAbsent || bothOn,
       `[22] config.json's authMode/dataMode move TOGETHER — both absent (pre-cutover / rollback) or both 'supabase' (cutover); got authMode=${JSON.stringify(cfg.authMode)} dataMode=${JSON.stringify(cfg.dataMode)}`);
+    // ── THE TWO KEYS THAT LEFT (2026-09-23) ──────────────────────────
+    // `backendUrl` and `backendToken` shipped here from the Option A bootstrap
+    // until the Sheets retirement. Nothing reads either one now, so leaving them
+    // would be a live credential for a live deployment with no caller — exactly
+    // what rotation exists to prevent, left in the repo for nobody's benefit.
+    // Pinned HERE because this is the block that owns what config.json carries.
+    assert(!('backendUrl' in cfg) && !('backendToken' in cfg),
+      `[22] …and config.json carries NEITHER backendUrl NOR backendToken (keys: ${JSON.stringify(Object.keys(cfg))})`);
+    assert(!/script\.google\.com/.test(cfgRaw),
+      '[22] …with no /exec URL left anywhere in the file, comment keys included — a URL left behind reads as a live endpoint');
+    assert(typeof cfg.oneSignalAppId === 'string' && cfg.oneSignalAppId.length > 10
+      && typeof cfg.supabaseAnonKey === 'string' && cfg.supabaseAnonKey.length > 20,
+      'fixture: …and the PUBLIC values that do belong here are intact — this is a removal, not a blanked config (CLAUDE.md prohibits committing config.json with real values missing)');
 
     // BYTE-IDENTITY OF BEHAVIOUR, asked of the two functions that decide it.
     // Absent and 'sheets' must produce the same answer, and 'supabase' must be
@@ -4406,8 +4388,19 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
     assert(storage25.getTheme() === 'neutral' && storage25.getTimezone() === 'PT',
       `[25] before the hydrate the seam answers the league defaults (${storage25.getTheme()}/${storage25.getTimezone()}) — which is all boot()'s one applyTheme() can ever read on a Supabase device`);
     const bootBody25 = appSrc25.slice(appSrc25.indexOf('async function boot() {'), appSrc25.indexOf('async function runPostHydrateTail'));
-    assert(/const primedKeys = supabaseDevice \? 0 : primeFromMirror\(\);/.test(bootBody25),
-      '[25] …and that is by design: a Supabase device deliberately primes NO Sheets snapshot before that line (§1.5 item 1) [structural]');
+    // PORTED 2026-09-23. This matched `const primedKeys = supabaseDevice ? 0 :
+    // primeFromMirror();` — §1.5 item 1's rule that a Supabase device primes NO
+    // Sheets snapshot, because doing so would paint the pre-cutover league
+    // before any identity had been proven on the page. `primeFromMirror()` is
+    // deleted, so NO device primes one, which is the same rule with the
+    // exception removed. Asserted as the absence it now is.
+    // Comments stripped first: the note that RECORDS the retirement names
+    // `primeFromMirror()` in prose, and matching prose instead of code is how a
+    // structural rule passes over the thing it is describing rather than over
+    // the thing that runs (RG-49's shape).
+    const bootCode25 = bootBody25.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^[ \t]*\/\/[^\n]*$/gm, ' ');
+    assert(!/primeFromMirror\(\)/.test(bootCode25),
+      '[25] …and that is by design: boot() primes no Sheets snapshot at all any more, so the seam at this point can only answer the league defaults (§1.5 item 1, with the non-Supabase exception gone) [structural]');
     // RG-198 (2026-09-21) — this read `applyTheme(getTheme())` until the device
     // hint landed. The POSITION is what this fixture is about and it has not
     // moved; the SOURCE has, because getTheme() at this point can only ever

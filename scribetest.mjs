@@ -890,7 +890,7 @@ console.log('\n[16] F4 remediation — SCRIBE_INTERACTIVE_ENABLED OFF on the SER
   const scribeLinesMod16 = await import('./js/scribeLines.js');
   chatMod16._resetForTest();
   storageMod16.saveSetting('scribeInteractiveEnabled', true);   // client-side convenience gate ON
-  backendMod16.setBackendConfig('https://example.invalid/exec', 'test-token');
+  backendMod16.setDataMode('supabase');
   const priorFetch = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: true, json: async () => ({ ok: true, disabled: true }) });
 
@@ -903,7 +903,7 @@ console.log('\n[16] F4 remediation — SCRIBE_INTERACTIVE_ENABLED OFF on the SER
   assert(reply16.body.includes('(running on canned lines right now)'), 'the degrade marker is present');
 
   globalThis.fetch = priorFetch;
-  backendMod16.clearBackendConfig();
+  backendMod16.setDataMode('sheets');
 }
 
 console.log('\n[17] F5 remediation — scribeWebSearchEnabled client toggle is now WIRED, and only ever RESTRICTS (never overrides the server master switch)…');
@@ -912,18 +912,36 @@ console.log('\n[17] F5 remediation — scribeWebSearchEnabled client toggle is n
   const storageMod17 = await import('./js/storage.js');
   const backendMod17 = await import('./js/backend.js');
   const scribeAgentMod17 = await import('./js/scribeAgent.js');
-  backendMod17.setBackendConfig('https://example.invalid/exec', 'tok');
+  // PORTED 2026-09-23. The claim is unchanged — the commissioner's toggle is
+  // TRANSMITTED, not merely read (F5's whole finding was that
+  // `isScribeWebSearchEnabled()` was consulted and then dropped) — but the wire
+  // it rides is the `scribe-ask` Edge Function now, not an Apps Script POST
+  // body. `js/scribeAgent.js`'s `scribeAskRemote()` no longer branches at all:
+  // there is one route, and it goes through `chatTransport.js`'s `askScribe()`.
+  const { installFakeChat } = await import('./testchatfake.mjs');
+  const projection17 = await import('./js/supabase-projection.js');
+  const transport17 = await import('./js/chatTransport.js');
+  backendMod17.setDataMode('supabase');
   storageMod17.saveSetting('scribeWebSearchEnabled', false);
+  storageMod17.saveSetting('serverJobs', { scribeAsk: true });
   let capturedBody17 = null;
-  const priorFetch17 = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => { capturedBody17 = JSON.parse(opts.body); return { ok: true, json: async () => ({ ok: true, throttled: true, reason: 'not_configured' }) }; };
+  const fake17 = installFakeChat(transport17, projection17, {
+    // The injected `getSettings` is what askScribe()'s own client-half switch
+    // reads (Step 6 Phase 3) — the same seam js/app.js wires at boot.
+    getSettings: () => storageMod17.getSettings(),
+    invokeFn: (name, body) => {
+      if (name === 'scribe-ask') capturedBody17 = body;
+      return { data: { ok: true, skipped: 'not_configured' }, error: null };
+    },
+  });
   await scribeAgentMod17.scribeAskRemote({ triggerMessageId: 't1', playerId: 'p1' });
   assert(capturedBody17 && capturedBody17.webSearch === false, 'the client toggle OFF is actually SENT to the server as req.webSearch:false — it used to be read (isScribeWebSearchEnabled) but never transmitted');
   storageMod17.saveSetting('scribeWebSearchEnabled', true);
   await scribeAgentMod17.scribeAskRemote({ triggerMessageId: 't2', playerId: 'p1' });
   assert(capturedBody17.webSearch === true, 'the client toggle ON sends req.webSearch:true');
-  globalThis.fetch = priorFetch17;
-  backendMod17.clearBackendConfig();
+  fake17.uninstall();
+  storageMod17.saveSetting('serverJobs', {});
+  backendMod17.setDataMode('sheets');
 
   // (b) server-side — RESTRICTION ONLY, never an override of the master switch.
   const envA = buildSandbox();
@@ -1199,33 +1217,53 @@ console.log('\n[26] BUG-D — the @scribe ask must never race its own trigger me
   const sleep26 = ms => new Promise(r => setTimeout(r, ms));
   const DEGRADE_MARK = '(running on canned lines right now)';
 
+  const { installFakeChat } = await import('./testchatfake.mjs');
+  const projection26 = await import('./js/supabase-projection.js');
+  const transport26 = await import('./js/chatTransport.js');
+  let lastFake26 = null;
+  const installFakeChat26 = (opts) => {
+    if (lastFake26) lastFake26.uninstall();
+    lastFake26 = installFakeChat(transport26, projection26, {
+      ...opts,
+      getSettings: () => storageMod26.getSettings(),
+    });
+    return lastFake26;
+  };
+
+  // PORTED 2026-09-23. The mock was an Apps Script `fetch` serving `chatAppend`
+  // and `scribeAsk`; it is now a Supabase chat context serving `chat_append`
+  // and the `scribe-ask` Edge Function. EVERY RULE IT MODELS IS UNCHANGED,
+  // including the one the whole section turns on: the server looks the trigger
+  // up in the log it can actually SEE, and answers "not found" when the append
+  // has not landed. `_shared/scribe-ask` applies the identical rule against
+  // `public.messages` that Code.gs's `scribeFindMessageById_` applied against
+  // the sheet.
   function mockBackend26({ appendDelayMs = 0, appendFails = false, appendHangs = false } = {}) {
-    const st = { serverLog: new Map(), seq: 0, order: [], asks: [] };
-    globalThis.fetch = async (url, opts) => {
-      const req = JSON.parse(opts.body);
-      if (req.action === 'chatAppend') {
+    const st = { serverLog: new Map(), seq: 0, order: [], asks: [], fake: null };
+    st.fake = installFakeChat26({
+      append: (events) => {
         st.order.push('chatAppend:request');
         if (appendFails) throw new Error('network down');
-        if (appendHangs) await new Promise(() => {});   // never settles, and holds no timer
-        if (appendDelayMs) await sleep26(appendDelayMs);
-        const assigned = (req.events || []).map(ev => {
-          const seq = ++st.seq; st.serverLog.set(ev.id, seq);
-          return { id: ev.id, seq, ts: Date.now() };
-        });
-        st.order.push('chatAppend:committed');
-        return { ok: true, json: async () => ({ ok: true, _action: 'chatAppend', assigned, head: st.seq }) };
-      }
-      if (req.action === 'scribeAsk') {
-        // The server's own rule, verbatim: look the trigger up in the log it
-        // can actually see (Code.gs scribeFindMessageById_).
-        const sawTrigger = st.serverLog.has(req.triggerMessageId);
+        if (appendHangs) return new Promise(() => {});   // never settles, and holds no timer
+        const commit = () => {
+          const assigned = (events || []).map((ev) => {
+            const seq = ++st.seq; st.serverLog.set(ev.id, seq);
+            return { id: ev.id, seq, ts: Date.now() };
+          });
+          st.order.push('chatAppend:committed');
+          return { assigned };
+        };
+        return appendDelayMs ? sleep26(appendDelayMs).then(commit) : commit();
+      },
+      invokeFn: (name, body) => {
+        if (name !== 'scribe-ask') return { data: null, error: { message: 'no function' } };
+        const sawTrigger = st.serverLog.has(body.triggerMessageId);
         st.order.push('scribeAsk:request');
-        st.asks.push({ triggerMessageId: req.triggerMessageId, sawTrigger });
-        if (!sawTrigger) return { ok: true, json: async () => ({ ok: false, _action: 'scribeAsk', error: 'Trigger message not found' }) };
-        return { ok: true, json: async () => ({ ok: true, _action: 'scribeAsk', responseMessageId: 'scribe_llm_' + req.triggerMessageId }) };
-      }
-      return { ok: true, json: async () => ({ ok: true, _action: req.action }) };
-    };
+        st.asks.push({ triggerMessageId: body.triggerMessageId, sawTrigger });
+        if (!sawTrigger) return { data: { ok: false, error: 'Trigger message not found' }, error: null };
+        return { data: { ok: true, responseMessageId: 'scribe_llm_' + body.triggerMessageId }, error: null };
+      },
+    });
     return st;
   }
 
@@ -1237,7 +1275,8 @@ console.log('\n[26] BUG-D — the @scribe ask must never race its own trigger me
   const degradeFor26 = id => chatMod26.getMessages({ tag: 'all' }).find(m => m.id === 'scribe_llm_' + id);
 
   storageMod26.saveSetting('scribeInteractiveEnabled', true);
-  backendMod26.setBackendConfig('https://example.invalid/exec', 'tok');
+  storageMod26.saveSetting('serverJobs', { scribeAsk: true });
+  backendMod26.setDataMode('supabase');
 
   // ── (a) the reproduction, now inverted: a 300ms append must be ACKED before
   //        the ask goes out, and the server must be able to see the trigger.
@@ -1318,7 +1357,7 @@ console.log('\n[26] BUG-D — the @scribe ask must never race its own trigger me
     'a trigger id that was never queued here asks immediately instead of stalling for the full bound');
 
   globalThis.fetch = priorFetch26;
-  backendMod26.clearBackendConfig();
+  backendMod26.setDataMode('sheets');
   chatMod26._resetForTest();
 }
 

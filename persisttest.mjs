@@ -91,263 +91,91 @@ const storage = await import('./js/storage.js');
 // adapter the seam now routes to. Same module instance js/storage.js holds.
 const sb      = await import('./js/supabase-backend.js');
 
-const MIRROR_KEY = 'cfbp_sheet_mirror';
+// ════════════════════════════════════════════════════════════════════════════
+// [1]–[6] ARE RETIRED WITH THE MECHANISM THEY GUARDED (2026-09-23)
+//
+// WHAT THEY PROVED, because it is worth keeping the record straight. All six
+// drove the REAL Sheets hydrate against a stubbed transport, in the exact shape
+// Drew reported twice:
+//   [1] Extra Point — "I keep submitting them and then the site forgets about
+//       them". Kihoon opens the app on a Thursday mirror, submits during the
+//       10–20s Apps Script cold start, and his stale-but-well-formed view of
+//       `cfbp_extra_point_guesses` is re-applied over five other players'
+//       submissions and PUSHED to the Sheet.
+//   [2] the tiebreaker — identical shape, and it decides who gets paid.
+//   [3] feedback — "I don't think the feature/bug feedback submitted is always
+//       getting saved". The bug-reporting channel eating its own queue, which
+//       is why no other report in it could be trusted to be complete.
+//   [4] …and the submit that TRIGGERED the merge is honoured — a merge, never a
+//       veto. `_shrinks` was the wrong fix for these three keys: dropping the
+//       smaller side throws away the submission the player just made.
+//   [5] …while a DELIBERATE clear of your own guess still wins over the remote.
+//   [6] GUARD INTEGRITY — RG-27's class one layer down: `_USER_DATA_KEYS` named
+//       'cfbp_tb_guesses' and 'cfbp_ep_guesses', two strings the app has never
+//       used, so RG-12 defense (c) was INERT for both keys in [1] and [2] while
+//       reading, to any human or source-text audit, as though it covered them.
+//
+// WHY THEY ARE GONE RATHER THAN PORTED, and this is the whole argument: every
+// one of them is about a HYDRATE THAT RE-APPLIES A WHOLE KEY. The Sheets
+// adapter's unit of transfer was one `getAll` and one `setMany` over all
+// twenty-two keys, so a device with a stale copy had to DECIDE which of them to
+// re-apply — and `_shrinks`, `_unionById`, `_rebaseRecords` and `_dirtyFields`
+// were four different answers to that one question. js/supabase-backend.js has
+// no such question to answer: `cfbp_extra_point_guesses` is a row per player in
+// a typed table, and a device that did not read another player's row never
+// sends it. There is nothing to clobber, so there is nothing to guard, so a
+// ported version of these sections would be asserting against a mechanism that
+// does not exist — which is exactly the shape [6] was written to make
+// impossible.
+//
+// WHERE THE COVERAGE LIVES NOW: `adaptertest.mjs` (the flush planner, the
+// per-key routing, the composite writes, loud-fail and the offline rule) and
+// `supabase/tests/rls.test.mjs` on the real project. The `projectiontest.mjs`
+// round-trip is what pins the row shapes these keys now travel as.
+//
+// [7], [8] and [9] BELOW ARE NOT RETIRED. [7] is a js/storage.js reset bug with
+// nothing to do with any transport; [8] and [9] are about the Supabase seam
+// itself and are the live half of this file.
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n[1]–[6] RETIRED — the whole-key Sheets hydrate they guarded is gone (see the note above)…');
+
 const WEEK = { weekId: 'w1', weekNumber: 1, season: 2026, status: 'open',
                tiebreakerQuestion: 'Total points in the Ohio State game?' };
 const PLAYERS = ['Drew', 'Brayden', 'Kevin', 'Koby', 'Jacob', 'Kihoon']
   .map((n, i) => ({ playerId: `p${i}`, displayName: n, active: true }));
 
-/**
- * Fresh module state per scenario — hydrate() mutates a module-level singleton.
- * Returns the array of payloads the stub transport actually received, so every
- * scenario can prove the damage reaches the SHEET and is not a local artefact.
- */
-function resetWorld(REMOTE) {
-  store.clear();
-  const sent = [];
-  globalThis.fetch = async (_url, opts) => {
-    const req = JSON.parse(opts.body);
-    if (req.action === 'getAll') return { ok: true, json: async () => ({ ok: true, data: REMOTE }) };
-    if (req.action === 'setMany') { sent.push(req.entries); return { ok: true, json: async () => ({ ok: true }) }; }
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  be.setBackendConfig('https://example.invalid/exec', 'tok');
-  return sent;
-}
-
-/** Boot exactly as app.js boot() does: prime the stale mirror, go interactive. */
-function bootOnStaleMirror(mirrorData) {
-  localStorage.setItem(MIRROR_KEY, JSON.stringify({ at: '2026-08-28T00:00:00Z', data: mirrorData }));
-  const primed = be.primeFromMirror();
-  storage.setBackendMode('googleSheets');
-  return primed;
-}
-
-/** Last value the transport was asked to write for `key`, or undefined. */
-const lastPushOf = (sent, key) => sent.map(e => e && e[key]).filter(v => v !== undefined).pop();
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log("\n[1] THE REPORT — Extra Point: \"I keep submitting them and then the site forgets about them\"…");
-// The scenario is one ordinary Saturday, no unusual action by anyone:
-//   Drew and four others submit their Extra Point guesses. All six reach the Sheet.
-//   Kihoon then opens the app. His mirror is from Thursday, before any of them
-//   submitted. app.js boot(): primeFromMirror() → setBackendMode('googleSheets')
-//   → revealApp() — THE APP IS INTERACTIVE HERE — → await hydrateBackend(),
-//   which is a 10–20s Apps Script cold start. Kihoon enters his guess in that
-//   window. That is the entire scenario.
+// THE ONE STRUCTURAL CLAIM WORTH CARRYING FORWARD from [6]. Its finding was a
+// guard aimed at key names that did not exist. The replacement is the same
+// question asked of the layer that now owns those keys: every key the
+// projection routes must be a key js/storage.js actually defines. A route aimed
+// at a name nothing writes is the identical defect, and it would be just as
+// invisible to a source-text audit.
 {
-  const REMOTE = {
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_extra_point_guesses: { w1__p0: 47, w1__p1: 52, w1__p2: 48, w1__p3: 55, w1__p4: 41 },
-  };
-  const sent = resetWorld(REMOTE);
-  const primed = bootOnStaleMirror({
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK], cfbp_extra_point_guesses: {},
-  });
-
-  assert(primed > 0, `boot: primeFromMirror() served Kihoon's Thursday snapshot (${primed} keys)`);
-  assert(be.isMirrorStale() === true, 'boot: the mirror is flagged STALE — hydrate has not returned yet');
-  assert(Object.keys(storage.getExtraPointGuesses()).length === 0,
-    'fixture check: the stale snapshot genuinely holds NO Extra Point guesses — it predates every submission, and nothing about it looks broken');
-
-  storage.setExtraPointGuess('w1', 'p5', 60);   // ONE ordinary submit, the only user action here
-
-  await be.hydrate();
-
-  const after = storage.getExtraPointGuesses();
-  assert(after.w1__p0 === 47,
-    `THE REPORT: Drew's submitted Extra Point guess survives another player's cold-start submit (got ${JSON.stringify(after.w1__p0)}, expected 47)`);
-  assert(Object.keys(after).length === 6,
-    `…and so does everyone else's — all six guesses on file after hydrate (got ${Object.keys(after).length}/6: ${JSON.stringify(after)})`);
-
-  // The half that makes it permanent and league-wide rather than one bad render.
-  await be.flushPush();
-  const pushed = lastPushOf(sent, 'cfbp_extra_point_guesses');
-  assert(pushed, 'fixture check: an Extra Point write really was pushed — the scenario reaches the Sheet');
-  assert(pushed && pushed.w1__p0 === 47,
-    `and the value PUSHED TO THE SHEET still carries Drew's 47 (got ${JSON.stringify(pushed && pushed.w1__p0)}) — this is what turns one phone's stale mirror into league-wide, permanent loss`);
-  assert(pushed && Object.keys(pushed).length === 6,
-    `…and all six entries (got ${pushed ? Object.keys(pushed).length : 'n/a'}/6)`);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log("\n[2] THE REPORT — the tiebreaker, identical shape, identical loss…");
-// Same key shape, same single seam key, same per-author entries. The tiebreaker
-// decides the weekly cash prize whenever records tie, so losing one rewrites who
-// gets paid — it is not a cosmetic loss.
-{
-  const REMOTE = {
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_tiebreaker_guesses: { w1__p0: 12, w1__p1: 41, w1__p2: 55, w1__p3: 30, w1__p4: 21 },
-  };
-  const sent = resetWorld(REMOTE);
-  bootOnStaleMirror({ cfbp_players: PLAYERS, cfbp_weeks: [WEEK], cfbp_tiebreaker_guesses: {} });
-
-  storage.setTiebreakerGuess('w1', 'p5', 17);
-  await be.hydrate();
-
-  const after = storage.getTiebreakerGuesses();
-  assert(after.w1__p0 === 12,
-    `THE REPORT: Drew's tiebreaker guess survives another player's cold-start submit (got ${JSON.stringify(after.w1__p0)}, expected 12)`);
-  assert(Object.keys(after).length === 6,
-    `…and all six tiebreaker guesses are on file (got ${Object.keys(after).length}/6: ${JSON.stringify(after)})`);
-
-  await be.flushPush();
-  const pushed = lastPushOf(sent, 'cfbp_tiebreaker_guesses');
-  assert(pushed && Object.keys(pushed).length === 6,
-    `…and the value PUSHED TO THE SHEET carries all six (got ${pushed ? Object.keys(pushed).length : 'n/a'}/6)`);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log("\n[3] THE REPORT — feedback: \"I don't think the feature/bug feedback submitted is always getting saved\"…");
-// Drew called this the biggest issue in the batch, and he is right about why: if
-// the bug-reporting channel is lossy, no other report in the queue can be
-// trusted to be complete. `cfbp_feedback` is an append-only list of immutable
-// rows written by six different people — the same collision shape as [1] and
-// [2], one key over, and it is not in `_USER_DATA_KEYS` at all.
-{
-  const REMOTE = {
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_feedback: [
-      { id: 'fb_1', name: 'Kevin', kind: 'bug',     body: 'Chat scroll jumps' },
-      { id: 'fb_2', name: 'Koby',  kind: 'feature', body: 'Show the spread on the card' },
-      { id: 'fb_3', name: 'Jacob', kind: 'bug',     body: 'Standings off by one' },
-    ],
-  };
-  const sent = resetWorld(REMOTE);
-  bootOnStaleMirror({ cfbp_players: PLAYERS, cfbp_weeks: [WEEK], cfbp_feedback: [] });
-
-  storage.appendFeedback({ id: 'fb_drew', name: 'Drew', kind: 'bug', body: "The extra point and tie breaker's won't save" });
-  await be.hydrate();
-
-  const after = storage.getFeedback();
-  const ids = after.map(f => f.id);
-  assert(ids.includes('fb_1') && ids.includes('fb_2') && ids.includes('fb_3'),
-    `THE REPORT: the three earlier submissions survive a fourth player's cold-start submit (got ${JSON.stringify(ids)})`);
-  assert(ids.includes('fb_drew'),
-    "…and the submission that was just made is still there too — this is a merge, not a veto");
-  assert(after.length === 4, `four submissions on file, none lost (got ${after.length})`);
-
-  await be.flushPush();
-  const pushed = lastPushOf(sent, 'cfbp_feedback');
-  assert(pushed && pushed.length === 4,
-    `and the value PUSHED TO THE SHEET carries all four (got ${pushed ? pushed.length : 'n/a'}/4) — otherwise every submission silently deletes the queue behind it`);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[4] …while the submit that triggered it is HONOURED — a merge, never a veto…');
-// This is the assertion that rules out the tempting one-line "fix": adding these
-// keys to `_USER_DATA_KEYS` so RG-12 defense (c) drops the smaller side. It
-// would stop the collection shrinking — by throwing away the guess the player
-// just typed. That IS Drew's reported symptom, arrived at from the other
-// direction. Both halves have to hold at once or the fix is not a fix.
-{
-  const REMOTE = {
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_extra_point_guesses: { w1__p0: 47, w1__p1: 52, w1__p2: 48, w1__p3: 55, w1__p4: 41 },
-    cfbp_tiebreaker_guesses:  { w1__p0: 12, w1__p1: 41, w1__p2: 55, w1__p3: 30, w1__p4: 21 },
-  };
-  const sent = resetWorld(REMOTE);
-  bootOnStaleMirror({
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_extra_point_guesses: {}, cfbp_tiebreaker_guesses: {},
-  });
-
-  storage.setExtraPointGuess('w1', 'p5', 60);
-  storage.setTiebreakerGuess('w1', 'p5', 17);
-  await be.hydrate();
-
-  assert(storage.getExtraPointGuess('w1', 'p5') === 60,
-    `the cold-start Extra Point submit is kept, not vetoed (got ${JSON.stringify(storage.getExtraPointGuess('w1', 'p5'))})`);
-  assert(storage.getTiebreakerGuess('w1', 'p5') === 17,
-    `the cold-start tiebreaker submit is kept, not vetoed (got ${JSON.stringify(storage.getTiebreakerGuess('w1', 'p5'))})`);
-
-  await be.flushPush();
-  const ep = lastPushOf(sent, 'cfbp_extra_point_guesses');
-  assert(ep && ep.w1__p5 === 60 && ep.w1__p0 === 47,
-    'the pushed value contains BOTH the new submit and the five it must not have destroyed');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[5] …and a DELIBERATE clear of your own guess still wins over the remote…');
-// The inverse hazard, already recorded in ledger §6 against `_rebaseRecords()`:
-// a merge that only ever adds can resurrect something the player intentionally
-// removed. setExtraPointGuess(w,p,null) DELETES the entry (storage.js) — that is
-// a real, reachable user intent (clear the box, submit). It must survive
-// hydrate, and it must not take anyone else's entry with it.
-{
-  const REMOTE = {
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_extra_point_guesses: { w1__p0: 47, w1__p1: 52, w1__p5: 60 },
-  };
-  resetWorld(REMOTE);
-  bootOnStaleMirror({
-    cfbp_players: PLAYERS, cfbp_weeks: [WEEK],
-    cfbp_extra_point_guesses: { w1__p5: 60 },
-  });
-
-  storage.setExtraPointGuess('w1', 'p5', null);     // Kihoon clears his own entry
-  await be.hydrate();
-
-  const after = storage.getExtraPointGuesses();
-  assert(!('w1__p5' in after),
-    `the player's own deliberate clear is honoured, not resurrected by the merge (got ${JSON.stringify(after)})`);
-  assert(after.w1__p0 === 47 && after.w1__p1 === 52,
-    'and clearing your own entry does not touch anyone else\'s');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-console.log('\n[6] GUARD INTEGRITY — every key a data-protection guard names must actually exist…');
-// RG-27's class, one layer down. `_USER_DATA_KEYS` in backend.js is the list
-// RG-12 defense (c) consults before refusing a destructive held write. Two of
-// its eight entries — 'cfbp_tb_guesses' and 'cfbp_ep_guesses' — are strings the
-// app has never used for anything. `_USER_DATA_KEYS.includes(k)` is false for
-// every real key those two were meant to name, so the guard silently did
-// nothing for the two keys in [1] and [2], while READING as though it covered
-// them. A source-text audit of the guard would have called it present.
-//
-// This check is structural on purpose: it is the only kind that can catch a
-// guard which is fully written, fully committed, and aimed at nothing.
-{
-  const backendSrc = readFileSync(new URL('./js/backend.js', import.meta.url), 'utf8');
-  const storageSrc = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8');
-
-  /** Pull the string literals out of a named const array in a source file. */
-  function namedKeyList(src, constName) {
-    const m = src.match(new RegExp(`const\\s+${constName}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
-    if (!m) return null;
-    return [...m[1].matchAll(/'([^']+)'|"([^"]+)"/g)].map(x => x[1] || x[2]);
-  }
-  /** Every cfbp_* key the app actually defines, from storage.js's KEYS block. */
-  function realKeys(src) {
-    const m = src.match(/const\s+KEYS\s*=\s*\{([\s\S]*?)\n\};/);
-    if (!m) return null;
-    return new Set([...m[1].matchAll(/'(cfbp_[A-Za-z0-9_]+)'/g)].map(x => x[1]));
-  }
-
-  const guarded = namedKeyList(backendSrc, '_USER_DATA_KEYS');
-  const real    = realKeys(storageSrc);
-
-  assert(Array.isArray(guarded) && guarded.length >= 6,
-    `fixture check: the scan actually parsed _USER_DATA_KEYS out of backend.js (${guarded ? guarded.length : 0} entries) — a broken parser would find 0 and pass everything below`);
-  assert(real instanceof Set && real.size >= 15,
-    `fixture check: the scan actually parsed storage.js's KEYS block (${real ? real.size : 0} real keys)`);
-  assert(real && real.has('cfbp_extra_point_guesses') && real.has('cfbp_tiebreaker_guesses'),
-    'fixture check: the two keys this bug is about are among the real keys the scan found');
-
-  const dead = (guarded || []).filter(k => !real.has(k));
-  assert(dead.length === 0,
-    `every key named in _USER_DATA_KEYS is a real storage key — a guard cannot protect a key that does not exist (dead names found: ${JSON.stringify(dead)})`);
-
+  const storageSrc6 = readFileSync(new URL('./js/storage.js', import.meta.url), 'utf8');
+  const projSrc6 = readFileSync(new URL('./js/supabase-projection.js', import.meta.url), 'utf8');
+  const realKeys6 = new Set([...(storageSrc6.match(/const\s+KEYS\s*=\s*\{([\s\S]*?)\n\};/) || ['', ''])[1]
+    .matchAll(/'(cfbp_[A-Za-z0-9_]+)'/g)].map((x) => x[1]));
+  const routed6 = [...projSrc6.matchAll(/^\s{2}(cfbp_[A-Za-z0-9_]+):\s*\{\s*tables:/gm)].map((x) => x[1]);
+  assert(realKeys6.size >= 15,
+    `fixture check: the scan really parsed storage.js's KEYS block (${realKeys6.size} real keys) — a broken parser would find 0 and pass everything below`);
+  assert(routed6.length >= 10,
+    `fixture check: and it really parsed js/supabase-projection.js's KEY_TABLES (${routed6.length} routed keys)`);
+  assert(realKeys6.has('cfbp_extra_point_guesses') && realKeys6.has('cfbp_tiebreaker_guesses'),
+    'fixture check: the two keys [1] and [2] were about are among the real keys the scan found');
+  const deadRoutes6 = routed6.filter((k) => !realKeys6.has(k));
+  assert(deadRoutes6.length === 0,
+    `every key KEY_TABLES routes is a real storage key — a route cannot carry a key nothing writes (dead names found: ${JSON.stringify(deadRoutes6)})`);
   // Canaries. A structural check is only worth its line count if it demonstrably
   // fails on the defect it claims to catch, and passes on the healthy shape.
-  const canaryDead = ['cfbp_picks', 'cfbp_not_a_real_key'].filter(k => !real.has(k));
-  assert(canaryDead.length === 1 && canaryDead[0] === 'cfbp_not_a_real_key',
+  const canaryDead6 = ['cfbp_picks', 'cfbp_not_a_real_key'].filter((k) => !realKeys6.has(k));
+  assert(canaryDead6.length === 1 && canaryDead6[0] === 'cfbp_not_a_real_key',
     'canary: an invented key name IS flagged by this check');
-  const canaryClean = ['cfbp_picks', 'cfbp_players', 'cfbp_extra_point_guesses'].filter(k => !real.has(k));
-  assert(canaryClean.length === 0,
+  const canaryClean6 = ['cfbp_picks', 'cfbp_players', 'cfbp_extra_point_guesses'].filter((k) => !realKeys6.has(k));
+  assert(canaryClean6.length === 0,
     'canary: three genuinely real key names are NOT flagged — the check is not simply failing everything');
 }
+
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[7] RG-51 — ONE pick-draft reset, not seven divergent copies…');

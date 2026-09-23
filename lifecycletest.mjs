@@ -123,7 +123,7 @@ const PLAYERS = [
 ];
 PLAYERS.forEach(([id, name]) => storage.addPlayer({ playerId: id, displayName: name, active: true }));
 storage.saveSetting('chatEnabled', true);
-backend.setBackendConfig('https://example.invalid/exec', 'tok');
+backend.setDataMode('supabase');
 
 const week = (weekId, n, status, over = {}) => ({
   weekId, season: '2026', weekNumber: n, label: `Week ${n}`,
@@ -252,11 +252,15 @@ console.log('\n[2] The gates — demo week, signed out, chat off, backend absent
     '2-5: chat turned OFF by the commissioner posts nothing AND leaves the ledger unwritten — the notice arrives on the first navigation after chat comes back');
   storage.saveSetting('chatEnabled', true);
 
-  const cfg = backend.getBackendConfig();
-  backend.clearBackendConfig();
+  // 2-6 — PORTED 2026-09-23. It used to clear the Sheets URL/token; the gate
+  // reads `isBackendConfigured()`, which now answers the league's DATA MODE.
+  // Same question ("is there anywhere for this to go"), same gate, one fact
+  // instead of two.
+  const mode26 = backend.getDataMode();
+  backend.setDataMode('sheets');
   assert(emitting(() => postPicksLockedNotice(w2)).queued === 0,
-    '2-6: …and neither does a device with no backend configured');
-  backend.setBackendConfig(cfg.url, cfg.token);
+    '2-6: …and neither does a device with no shared backend — a local-only device does not announce anything to a league it cannot reach');
+  backend.setDataMode(mode26);
 
   const q = emitting(() => postPicksLockedNotice(w2));
   assert(q.queued === 1 && readLedger().includes('sys_lc_PICKS_LOCKED_lc_w2'),
@@ -476,7 +480,7 @@ console.log('\n[7] Retired surfaces stay retired…');
 
 // ── Teardown ────────────────────────────────────────────────────────────────
 chat._resetForTest();
-backend.clearBackendConfig();
+backend.setDataMode('sheets');
 storage.clearSession();
 resetLedger();
 

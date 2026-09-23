@@ -1831,9 +1831,15 @@ export function renderChatPage() {
     }
   }
 
-  const banner = st.offline ? `<div class="chat-offline-banner">⚠️ CHAT OFFLINE — ${st.staleDeployment
-    ? 'the backend deployment is out of date. Commissioner: open Apps Script → Deploy → Manage deployments → Edit → <b>New version</b>, then reload.'
-    : `messages are not syncing. Retrying… <span class="text-xs">(${esc(st.lastError || '')})</span>`}</div>` : '';
+  // ONE ARM NOW (2026-09-23). The other said "the backend deployment is out of
+  // date. Commissioner: open Apps Script → Deploy → Manage deployments…", which
+  // is an instruction nobody can follow any more and, worse, an instruction
+  // that would send the commissioner to a project that no longer serves this
+  // app while his real problem went undiagnosed. It was driven by
+  // `st.staleDeployment`, retired with the Apps Script chat transport.
+  const banner = st.offline
+    ? `<div class="chat-offline-banner">⚠️ CHAT OFFLINE — messages are not syncing. Retrying… <span class="text-xs">(${esc(st.lastError || '')})</span></div>`
+    : '';
 
   // UN-104: the two-line header ("Chat" + a "📋 SCRIBE on duty" subtitle) is
   // gone — Drew asked whether the header needs to be there at all given

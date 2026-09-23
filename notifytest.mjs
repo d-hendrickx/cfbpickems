@@ -477,12 +477,40 @@ console.log('\n[10] F2 — server-fired notifyLog fold (merge / dedup / readAt r
   storage.setNotifications([]);
 }
 
-console.log('\n[11] F2 — pollNotifyLog never throws (no backend configured in this harness)…');
+console.log('\n[11] F2 — the CFBP_NOTIFY_LOG fold is RETIRED; its device cache is now a drain…');
 {
+  // `pollNotifyLog()` is deleted (2026-09-23). It fetched CFBP_NOTIFY_LOG —
+  // the Apps Script scanReminders trigger's own record of PICKS_REMINDER /
+  // PICKS_LOCKING_SOON — and folded it into a device-local cache. N1 / DI-N5
+  // (2026-09-12) had already removed BOTH of its call sites (the boot wiring
+  // and the 60-second tick), so the two assertions here were the only things
+  // calling it at all.
+  //
+  // WHAT SERVES THE NEED NOW: the `reminders` Edge Function writes those rows
+  // into `public.notifications`, which the adapter hydrates as
+  // `cfbp_notifications` — so they arrive through the ordinary read path and
+  // `getNotificationsForPlayer()` merges them with the client-authored rows.
+  //
+  // WHAT IS ASSERTED INSTEAD, and it is the half that could still regress: the
+  // device cache is a DRAIN, not a leak. Rows a device folded before the
+  // cutover still RENDER (dropping the read would make them vanish on deploy
+  // day), and nothing fills it again.
   notif._resetNotifyLogCacheForTest();
-  let threw = false;
-  try { await notif.pollNotifyLog(players[0].playerId, { force: true }); } catch { threw = true; }
-  assert(!threw, 'pollNotifyLog resolves cleanly when isBackendConfigured() is false — notifyLogFetch no-ops rather than throwing');
+  assert(typeof notif.pollNotifyLog === 'undefined',
+    'pollNotifyLog() is DELETED, not left as a no-op — a poller that resolves cleanly is indistinguishable from one that works, and this one has had no call site since 2026-09-12');
+  const pid11 = players[0].playerId;
+  localStorage.setItem('cfbp_notify_log_cache', JSON.stringify({
+    byPlayer: { [pid11]: { cursorSeq: 9, records: [{
+      id: 'ntf_predrain', playerId: pid11, event: 'PICKS_REMINDER',
+      actor: { kind: 'system', playerId: null }, title: 'Picks close soon', body: 'x',
+      destination: { tab: 'picks' }, createdAt: new Date().toISOString(), readAt: null,
+      dedupKey: 'PICKS_REMINDER|w1|24h|' + pid11,
+    }] } },
+  }));
+  assert(notif.getServerNotifyLogForPlayer(pid11).some(r => r.id === 'ntf_predrain'),
+    'a row folded before the cutover is still READ from the device cache — the drain does not throw away what a player already has');
+  assert(notif.getNotificationsForPlayer(pid11).some(n => n.id === 'ntf_predrain'),
+    '…and it still reaches the Center through the ordinary merge, beside the client-authored rows');
   notif._resetNotifyLogCacheForTest();
 }
 
@@ -599,24 +627,27 @@ console.log('\n[12b] BUG-C — every page of a multi-page cold-boot backfill is 
 
   globalThis.setTimeout = fn => { timers.push(fn); return timers.length; };
   globalThis.clearTimeout = () => {};
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    calls.push(action);
-    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD }) };
-    if (action === 'chatSince') {
-      const r = serverSince(Number(u.searchParams.get('seq') || 0), Number(u.searchParams.get('limit') || 0));
-      return { ok: true, json: async () => r };
-    }
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  backend.setBackendConfig('https://example.invalid/exec', 'tok12b');
+  // PORTED 2026-09-23. This stub parsed an Apps Script URL; `js/chatTransport.js`'s
+  // `get()`/`post()` are deleted, so a serveable transport is a Supabase chat
+  // context. `serverSince`'s page cap is untouched — the 500-row page is what
+  // makes this a THREE-page cold boot, which is the whole shape BUG-C is about.
+  globalThis.fetch = async () => { throw new Error('[12b] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  const { installFakeChat } = await import('./testchatfake.mjs');
+  const projection12b = await import('./js/supabase-projection.js');
+  const transport12b = await import('./js/chatTransport.js');
+  const fake12b = installFakeChat(transport12b, projection12b, {
+    head: () => HEAD,
+    since: (seq, limit) => serverSince(seq, limit),
+  });
+  // `calls` is reset per run below and read by nothing in this section; the
+  // stub's own recorder (`fake12b.calls`) is the live one.
+  backend.setDataMode('supabase');
 
   // wireAfterPages: 0 = wired before the fold has anything (CASE 2 shape);
   // 1 = wired once page one has landed and the head is real but INCOMPLETE
   // (CASE 1 shape, the between-pages variant).
   async function coldBoot(prefix, wireAfterPages) {
-    idPrefix = prefix; HEAD = N; timers.length = 0; calls.length = 0;
+    idPrefix = prefix; HEAD = N; timers.length = 0; calls.length = 0; fake12b.calls.length = 0;
     chat._resetForTest();
     notif._resetChatWatermarkForTest();
     const captured = [];
@@ -779,10 +810,18 @@ console.log('\n[12b] BUG-C — every page of a multi-page cold-boot backfill is 
       `a 1,200-message live burst produces ZERO pushes and ONE recorded refusal, not 6,000 pushes — got ${dSends} sends, ${dTrips.length} trips`);
     notif._clearPushAdapterForTest();
   } finally {
+    // UNINSTALLING THE FAKE IS LOAD-BEARING (2026-09-23). It used to be enough
+    // to put `globalThis.fetch` back, because the transport read the network
+    // through it. It reads an INSTALLED CONTEXT now, and a context left behind
+    // serves every later section's `chat.initChat()` a 1,237-message room —
+    // which showed up as [13]'s mutation canary measuring a 1,251-message
+    // storm instead of a 51-message one, i.e. a canary that no longer proved
+    // what it claimed.
+    fake12b.uninstall();
     globalThis.fetch = _realFetch;
     globalThis.setTimeout = _realST;
     globalThis.clearTimeout = _realCT;
-    backend.clearBackendConfig();
+    backend.setDataMode('sheets');
     chat._resetForTest();
     notif._clearPushAdapterForTest();
     notif._resetChatWatermarkForTest();
@@ -1340,10 +1379,24 @@ console.log('\n[20] NON-BLOCKING #4/#5 — device-local read state (all origins)
     { id: 'ntf_local_old', playerId: pid20d, event: 'PICKS_OPENED', createdAt: staleLocalOldIso, readAt: null, dedupKey: 'dk_local_old', body: 'local old' },
     { id: 'ntf_local_fresh_extra', playerId: pid20d, event: 'PICKS_OPENED', createdAt: new Date().toISOString(), readAt: null, dedupKey: 'dk_local_fresh_extra', body: 'local fresh extra' },
   ];
-  const unioned = be._unionByIdForTest(localList, remoteList, 'id');
-  assert(unioned.some(n => n.id === 'ntf_remote_fresh'), 'union: the remote row survives');
-  assert(unioned.some(n => n.id === 'ntf_local_fresh_extra'), 'union: a local-only fresh row survives — a held-write replay loses no rows');
-  assert(unioned.some(n => n.id === 'ntf_local_old'), 'union DOES resurrect the old local-only row by id — this is the hazard read-time retention exists to hide');
+  // ── (c) PORTED 2026-09-23 ───────────────────────────────────
+  // `be._unionByIdForTest` was js/backend.js's RG-49 union-by-id, the guard
+  // that stopped a stale device's held write from CLOBBERING the whole
+  // `cfbp_notifications` array on its way back to the Sheet. It is deleted with
+  // the Sheets mirror: js/supabase-backend.js writes ROW-LEVEL DIFFS to a typed
+  // table, so six writers append six rows and there is nothing to union on the
+  // client. `adaptertest.mjs`'s flush-planner sections are the live coverage.
+  //
+  // THE HALF THAT IS STILL THIS SUITE'S, and the reason the fixture below is
+  // kept rather than deleted: read-time retention must HIDE an old row however
+  // it got into the list. That was true of a resurrected union row and it is
+  // true of a row that simply sat in the table, and it is the property the
+  // Center's "<=200, <=30 days" promise actually rests on. The union is
+  // modelled inline — this is a FIXTURE now, not a call into the app.
+  const unioned = [...remoteList, ...localList.filter(l => !remoteList.some(r => r.id === l.id))];
+  assert(unioned.some(n => n.id === 'ntf_remote_fresh'), 'fixture: the remote row is in the merged list');
+  assert(unioned.some(n => n.id === 'ntf_local_fresh_extra'), 'fixture: a local-only fresh row is too');
+  assert(unioned.some(n => n.id === 'ntf_local_old'), 'fixture: and so is the 46-day-old one — which is what the read surface below has to deal with');
 
   storage.setNotifications(unioned);
   const readSurface20 = notif.getNotificationsForPlayer(pid20d);
@@ -1352,37 +1405,33 @@ console.log('\n[20] NON-BLOCKING #4/#5 — device-local read state (all origins)
   assert(!readSurface20.some(n => n.id === 'ntf_local_old'),
     'a resurrected 46-day-old row from the union is HIDDEN by read-time retention (prune is age-based at read, so the resurrection is invisible, not merely rare)');
 
-  // (d) structural — cfbp_notifications is registered in backend.js's
-  // append-only union map, the same pattern as cfbp_feedback.
+  // (d) structural — PORTED 2026-09-23. This asserted that `cfbp_notifications`
+  // was registered in js/backend.js's `_APPEND_ONLY_ID` union map. That map,
+  // and the hydrate rebase it fed, are deleted with the Sheets mirror.
+  //
+  // THE STRUCTURAL CLAIM THAT REPLACES IT is stronger and is the one that
+  // matters on a typed table: `notifications` is a ROWS-kind route in the
+  // projection, so a write is a per-row diff rather than a whole-key replace —
+  // which is why there is nothing left for a union to protect.
+  const projSource20 = await readFile(fileURLToPath(new URL('./js/supabase-projection.js', import.meta.url)), 'utf8');
+  assert(/cfbp_notifications:\s*\{\s*tables:\s*\['notifications'\],\s*kind:\s*'rows'\s*\}/.test(projSource20),
+    "cfbp_notifications is a 'rows'-kind route in js/supabase-projection.js's KEY_TABLES — six writers append six rows to a typed table, so the RG-49 clobber this section was written about cannot arise");
   const beSource = await readFile(fileURLToPath(new URL('./js/backend.js', import.meta.url)), 'utf8');
-  assert(/_APPEND_ONLY_ID\s*=\s*\{[^}]*cfbp_notifications\s*:\s*'id'/.test(beSource),
-    "cfbp_notifications is registered in js/backend.js's _APPEND_ONLY_ID union map (RG-49 pattern, same as cfbp_feedback)");
+  assert(!/_APPEND_ONLY_ID/.test(beSource),
+    "…and js/backend.js's `_APPEND_ONLY_ID` map is GONE rather than left inert. An inert guard whose comments still describe a protection is the RG-27 failure mode exactly: a source-text match cannot tell a working guard from one nothing calls");
 
   storage.setNotifications([]);
 }
 
 console.log('\n[21] NON-BLOCKING #7 — failed poll does not burn the throttle window; dead code removed; auto-prune wired…');
 {
-  // (a) a failed notifyLogFetch must NOT advance _lastLogPollAt — the very
-  // next (unforced) call must still reach the network rather than silently
-  // skipping for up to NOTIFY_LOG_POLL_MS.
-  const be = await import('./js/backend.js');
-  notif._resetNotifyLogCacheForTest();
-  const savedConfig = be.getBackendConfig();
-  be.setBackendConfig('https://example.invalid/exec', 'tok');   // isBackendConfigured():true, so notifyLogFetch actually calls out
-  const savedFetch = globalThis.fetch;
-  let fetchCalls = 0;
-  globalThis.fetch = async () => { fetchCalls++; throw new Error('network disabled in notifytest'); };
-  try {
-    await notif.pollNotifyLog(players[0].playerId);   // _lastLogPollAt is 0 post-reset — this attempt is allowed regardless of the bug
-    assert(fetchCalls === 1, 'first poll attempt actually reached the network (fetch called once)');
-    await notif.pollNotifyLog(players[0].playerId);   // unforced — must STILL be allowed if the first failure did not burn the window
-    assert(fetchCalls === 2, 'a FAILED poll does not burn the 60s throttle window — the very next unforced call still reaches the network');
-  } finally {
-    globalThis.fetch = savedFetch;
-    if (savedConfig) be.setBackendConfig(savedConfig.url, savedConfig.token); else be.clearBackendConfig();
-    notif._resetNotifyLogCacheForTest();
-  }
+  // (a) RETIRED 2026-09-23 with `pollNotifyLog()` itself. F7's finding was that
+  // `_lastLogPollAt` advanced BEFORE the fetch, so one failed boot poll burned
+  // the whole 60-second window and compounded a single miss into a much longer
+  // blackout. There is no poll and no window: the `reminders` Edge Function
+  // writes straight into `public.notifications`, which arrives on the ordinary
+  // hydrate. Section [11] above asserts what is left — the device cache drains
+  // and nothing refills it.
 
   // (b) dead fireBatchNotification() removed; autoPruneNotifySentIfDue_()
   // actually wired into scanReminders(), not just defined.
@@ -1932,6 +1981,14 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
 
   installPushStubs();
   const push = await import('./js/push-onesignal.js');
+  // DI-254 (2026-09-23) — every OneSignal.login() now carries an identity token
+  // minted by the `push-identity-token` Edge Function, and a mint that fails is
+  // a deliberate NO LOGIN (see that module's own header). This file is about the
+  // ORDERING of login/logout, not about the mint, so it stands in a server that
+  // always answers. pushtest.mjs §[12t] is where the failing mint is driven.
+  push._setIdentityMinterForTest(async () => ({
+    ok: true, token: 'header.claims.signature', expiresAtMs: Date.now() + 86400000,
+  }));
 
   // ── [24a] one distinct reason per failure class ───────────────────────────
   const classes = [
@@ -2034,12 +2091,26 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
   // remaining-problem copy and never a generic toast, which is the same guarantee
   // this rule exists to give; listing them here is the exemption, not a loophole,
   // and a NEW reason still lands in `unmapped` until somebody decides where it goes.
+  // DI-254 (2026-09-23) adds FOUR MORE, and the same discipline applies: the
+  // identity-token mint's reasons are INTERNAL. `_assertIdentity()` branches on
+  // `.ok` and nothing else — a failed mint arms the existing bounded retry
+  // ladder and then the device reads the 🔔 card's already-written "isn't linked
+  // to your account yet. Tap Reconnect", which is the useful sentence. Which
+  // internal call could not reach the Edge Function is not a sentence anyone can
+  // act on, and a toast for it would be a prompt-free boot suddenly talking.
+  // The clause immediately below PROVES the exemption rather than asserting it:
+  // these four can be shown never to leave the two functions that produce them.
   const OK_REASONS = new Set([
     'granted', 'initialized',
     'opted-in',            // ensurePushSubscription() success
     'opt-in-failed',       // -> PUSH_STATUS_STILL_NO_SUBSCRIPTION
     'not-granted',         // unreachable from the UI (permission is checked first)
     'native-unavailable',  // the native shell; the card has its own copy (DI-210e)
+    // DI-254 — the mint's four, all consumed inside the module (see above).
+    'unreachable',         // the Edge Function could not be reached
+    'no-session',          // no Supabase client / no active league yet
+    'no-token',            // the server answered, with a `skipped` and no token
+    'mint-threw',          // the injected test minter threw
   ]);
   //   Captures the whole right-hand side of `reason:` and harvests every
   //   string literal in it, so a reason produced by a TERNARY
@@ -2068,6 +2139,29 @@ console.log('\n[24] Push "Turn On" — one distinct reason per failure class, bo
   const unmapped = [...reasons].filter(r => !toasts.has(r));
   assert(unmapped.length === 0,
     `[24e] EVERY reason js/push-onesignal.js can emit has its own message in js/app.js's pushFailureMessage() — no reason falls through to a generic toast (unmapped: ${unmapped.join(', ') || 'none'})`);
+  // ── [24e2] DI-254 — THE MINT'S EXEMPTION IS EVIDENCED, NOT DECLARED.
+  //
+  // Four reasons were just added to OK_REASONS above. An exemption list is
+  // exactly where a real unmapped reason goes to hide, so the claim behind it —
+  // "these never reach a toast, because nothing outside the mint ever reads
+  // them" — is checked here rather than trusted. If a later edit surfaces one,
+  // the assertion below fails and the author has to decide where it goes, which
+  // is the whole property the rule above exists to give.
+  {
+    const codeE = stripComments(pushSrc);
+    const assertIdx = codeE.indexOf('async function _assertIdentity');
+    const assertBody = assertIdx > -1 ? codeE.slice(assertIdx, codeE.indexOf('function _scheduleIdentityRetry', assertIdx)) : '';
+    assert(assertBody.length > 0, '[24e2] fixture — _assertIdentity()\'s body was located (a scan over an empty string would assert nothing)');
+    assert(/minted\.ok/.test(assertBody) && !/minted\.reason/.test(assertBody),
+      '[24e2] _assertIdentity() branches on the mint\'s `.ok` and NEVER on its `.reason` — which is what makes the four exempt reasons internal by construction rather than by care');
+    assert(!/return\s+minted\b/.test(assertBody),
+      '[24e2] …and it never hands the mint result back to a caller, so no reason of the mint\'s can reach pushFailureMessage() by being returned through it');
+    for (const r of ['unreachable', 'no-session', 'no-token', 'mint-threw']) {
+      const sites = [...codeE.matchAll(new RegExp(`reason:\\s*'${r}'`, 'g'))].length
+        + [...codeE.matchAll(new RegExp(`'${r}'`, 'g'))].length;
+      assert(sites > 0, `[24e2] …and '${r}' is really produced somewhere (non-vacuity: an exemption for a reason nobody emits pre-approves the name for whatever lands on it next)`);
+    }
+  }
   const orphaned = [...toasts].filter(r => !reasons.has(r));
   assert(orphaned.length === 0,
     `[24e] and no message is stranded on a reason that no longer exists — a rename breaks this in BOTH directions (orphans: ${orphaned.join(', ') || 'none'})`);

@@ -755,11 +755,20 @@ console.log('\n[12] DI-D2 — approving a fact candidate applies it to SCRIBE\'s
 // ═════════════════════════════════════════════════════════════════════════
 console.log('\n[13] Structural — memory rows never enter the KV seam; the defaults are the real relays…');
 {
+  // UN-237/238 (DI-260, 2026-09-23) — THESE USED TO NAME js/backend.js's FOUR
+  // `scribeMemory*Remote` RELAYS. Those relays pointed at Apps Script actions
+  // the post-cutover allow-list refused, which is the failure Drew reported;
+  // they are now deleted and the defaults are the Supabase adapter's own calls.
+  // The assertion's JOB is unchanged and is the reason it is by IDENTITY rather
+  // than by name: a stub in this file can never be mistaken for the app's
+  // wiring, and a default that silently reverted to a look-alike would pass
+  // every behavioural test in this suite.
+  const sbAdapter = await import('./js/supabase-backend.js');
   const defaults = _scribeMemoryTransportDefaultsForTest();
-  assert(defaults.list === backend.scribeMemoryListRemote, 'the default list transport IS js/backend.js\'s scribeMemoryListRemote — a stub in this file can never be mistaken for the app\'s wiring');
-  assert(defaults.upsert === backend.scribeMemoryUpsertRemote, 'the default upsert transport IS backend.scribeMemoryUpsertRemote');
-  assert(defaults.remove === backend.scribeMemoryDeleteRemote, 'the default delete transport IS backend.scribeMemoryDeleteRemote');
-  assert(defaults.sync === backend.scribeMemorySyncRemote, 'the default sync transport IS backend.scribeMemorySyncRemote');
+  assert(defaults.list === sbAdapter.scribeMemoryList, 'the default list transport IS js/supabase-backend.js\'s scribeMemoryList — a stub in this file can never be mistaken for the app\'s wiring');
+  assert(defaults.upsert === sbAdapter.scribeMemoryUpsert, 'the default upsert transport IS sb.scribeMemoryUpsert');
+  assert(defaults.remove === sbAdapter.scribeMemoryDelete, 'the default delete transport IS sb.scribeMemoryDelete');
+  assert(defaults.sync === sbAdapter.scribeMemoryApply, 'the default sync transport IS sb.scribeMemoryApply — the rename is deliberate: the sweep is `scribe_memory_apply(p_league)` now, and no credential is sent because the RPC derives the commissioner from the JWT');
 
   const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
   const start = src.indexOf('// ═══ BUILD 3, GROUP D pass 2');
@@ -960,12 +969,12 @@ console.log('\n[14] FEAT-5 — 🤝 wager memory: action, modal, ack controls, �
 
   // Offline: the memory write goes STRAIGHT to Apps Script — there is no outbox
   // behind it — so the copy must not pretend there is a queue (AD-06).
-  backend14.clearBackendConfig();
+  backend14.setDataMode('sheets');
   const offline = await app.logWager({ messageId: 'm_claim', claim: 'USC is not ranked', counterpartyId: 'p3', dueWeekId: 'wk7' });
   assert(offline.ok === false && offline.skipped === 'offline'
       && offline.message === "Not connected — a wager can't be logged right now.",
     '14-48: backend unreachable -> the write is REFUSED with the honest line. A memory write has no durable outbox, and the copy must not imply one (AD-06)');
-  backend14.setBackendConfig('https://example.invalid/exec', 'tok');
+  backend14.setDataMode('supabase');
 
   // Server rejects (e.g. Apps Script not yet redeployed: unknown kind "wager").
   let sent = null;
@@ -1023,7 +1032,7 @@ console.log('\n[14] FEAT-5 — 🤝 wager memory: action, modal, ack controls, �
     '14-61: there are exactly two answers. A third value is refused at the boundary rather than stored and discovered later by a reader that does not handle it');
 
   _restoreScribeMemoryTransportForTest();
-  backend14.clearBackendConfig();
+  backend14.setDataMode('sheets');
   storage.clearSession();
   _setScribeMemoryCacheForTest(null, []);
   _setWagerCacheForTest([]);

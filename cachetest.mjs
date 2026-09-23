@@ -157,19 +157,27 @@ function seedCache({ epoch = 0, head, events }) {
   store.set(K_EVENTS_CACHE, JSON.stringify({ epoch, head, events }));
 }
 
+const { installFakeChat } = await import('./testchatfake.mjs');
+const projectionMod = await import('./js/supabase-projection.js');
+const transportMod = await import('./js/chatTransport.js');
+
+let _fake = null;
 function resetAll() {
+  // The installed chat context is torn down FIRST: a context left behind would
+  // serve the NEXT section's `initChat()` the previous section's room, which is
+  // the same class of cross-section bleed `chat._resetForTest()` exists for.
+  if (_fake) { _fake.uninstall(); _fake = null; }
   chat._resetForTest();
   notif._resetChatWatermarkForTest();
   notif._clearPushAdapterForTest?.();
   chatUi._resetToastsForTest();
   resetToastMountCount();
-  backend.clearBackendConfig();
+  backend.setDataMode('sheets');
   storage.saveSetting('chatEpochSeq', 0);
   store.delete(K_EVENTS_CACHE);
   resetCacheWriteSpy();
 }
 
-const URL_FAKE = 'https://example.invalid/exec';
 
 /** A generic honest chatSince responder, same shape as boottest.mjs's
  *  honestSince(): server head is `getHead()` (a live function, so a test can
@@ -184,30 +192,35 @@ function honestSince(getHead, afterSeq, limit, idPrefix = '') {
   return { ok: true, events, head };
 }
 
-/** Installs a controllable fetch stub. `getHead()` is a live function so a
- *  test can move the server's head between calls (simulating "something
- *  arrived while the app was closed" or "a genuinely new live message"). */
+/**
+ * Installs a controllable chat backend. `getHead()` is a live function so a
+ * test can move the server's head between calls (simulating "something arrived
+ * while the app was closed" or "a genuinely new live message").
+ *
+ * PORTED 2026-09-23. This was a `globalThis.fetch` stub that parsed an Apps
+ * Script URL; `js/chatTransport.js`'s `get()`/`post()` are deleted, so a
+ * serveable transport is now an installed Supabase context. `honestSince()`'s
+ * page cap is untouched, and the returned `calls` array keeps the identical
+ * `{ action, seq, limit }` shape every assertion in this file reads.
+ */
 function installFetch(getHead, idPrefix = '') {
-  const calls = [];
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    const limit = Number(u.searchParams.get('limit') || 0);
-    calls.push({ action, seq, limit });
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: getHead() }) };
-    if (action === 'chatSince') { const r = honestSince(getHead, seq, limit, idPrefix); return { ok: true, status: 200, json: async () => r }; }
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
-  };
-  return calls;
+  _fake = installFakeChat(transportMod, projectionMod, {
+    head: () => getHead(),
+    since: (seq, limit) => honestSince(getHead, seq, limit, idPrefix),
+  });
+  return _fake.calls;
 }
 
-/** A fetch stub whose promise NEVER settles — models "a network round trip
+/** A backend whose every answer NEVER settles — models "a network round trip
  *  is in flight but has not answered yet" without needing any clock control
  *  at all: §1/§2 only need to observe state SYNCHRONOUSLY right after
  *  initChat() returns, before anything has a chance to resolve. */
 function installHangingFetch() {
-  globalThis.fetch = async () => new Promise(() => {});
+  _fake = installFakeChat(transportMod, projectionMod, {
+    head: () => new Promise(() => {}),
+    since: () => new Promise(() => {}),
+  });
+  return _fake.calls;
 }
 
 /** Real microtask flush using REAL timers (0ms) — enough to let a resolved
@@ -244,7 +257,7 @@ console.log('\n[1] Boot-from-cache renders N events before any fetch resolves…
   const N = 40;
   const events = Array.from({ length: N }, (_, i) => mkEv(i + 1));
   seedCache({ epoch: 0, head: N, events });
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();          // the network NEVER answers during this test
 
   chat.initChat('p1');            // synchronous: cache read + ingest() happen before subscribe()'s first tick can resolve anything
@@ -266,7 +279,7 @@ console.log('\n[2] Epoch mismatch drops the cache — boot renders empty until l
   const events = Array.from({ length: 10 }, (_, i) => mkEv(i + 1));
   seedCache({ epoch: 5, head: 10, events });         // cache written under an OLD epoch
   storage.saveSetting('chatEpochSeq', 7);            // room was cleared again since — current epoch is 7
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();
 
   chat.initChat('p1');
@@ -287,7 +300,7 @@ console.log('\n[2] Epoch mismatch drops the cache — boot renders empty until l
   resetAll();
   seedCache({ epoch: 0, head: 10, events });
   storage.saveSetting('chatEpochSeq', 0);
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();
   chat.initChat('p1');
   assert(chat.getMessages({ tag: 'all' }).length === 10,
@@ -309,7 +322,7 @@ console.log('\n[3] Cached replay relays ZERO pushes (notifications.js) and ZERO 
   const N = 25;
   const events = Array.from({ length: N }, (_, i) => mkEv(i + 1, { author: 'p2', notify: true }));
   seedCache({ epoch: 0, head: N, events });
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();
 
   chat.initChat('p1');
@@ -348,7 +361,7 @@ console.log('\n[4] Live reconciliation after a cache-primed boot: S.caughtUp fli
   seedCache({ epoch: 0, head: CACHED_HEAD, events });
 
   let serverHead = CACHED_HEAD + 3;      // 3 messages arrived while the app was closed
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const calls = installFetch(() => serverHead);
 
   chat.initChat('p1');                   // cache replay: S.head=30, S.caughtUp=false
@@ -419,7 +432,7 @@ console.log('\n[5] >500 paging still reaches the true head from a cache-primed b
   seedCache({ epoch: 0, head: CACHED_HEAD, events });
 
   const TRUE_HEAD = 1200;                // 700 more events arrived while closed — 2 more pages beyond the cache window
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const calls = installFetch(() => TRUE_HEAD);
 
   chat.initChat('p1');
@@ -506,7 +519,7 @@ console.log('\n[7] RG-100 F2 × DI-169 — a head:0 cold-start artifact never wr
 {
   resetAll();
   let serverHead70 = 0;         // the sheet has not warmed up yet — reports empty
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const calls70 = installFetch(() => serverHead70);
 
   chat.initChat('p1');
@@ -578,7 +591,7 @@ console.log('\n[8] BUG-H/RG-101 — a cache-primed boot with NOTHING new still l
     const events = Array.from({ length: CACHED_HEAD }, (_, i) => mkEv(i + 1, { id: prefix + (i + 1), author: 'p2', notify: true }));
     seedCache({ epoch: 0, head: CACHED_HEAD, events });
     let serverHead = CACHED_HEAD;                 // NOTHING arrived while the app was closed
-    backend.setBackendConfig(URL_FAKE, 'tok');
+    backend.setDataMode('supabase');
     const calls = installFetch(() => serverHead, prefix);
     resetCacheWriteSpy();
 
@@ -670,7 +683,7 @@ console.log('\n[9] DI-169 structural corrections — chat OFF replays nothing, a
   const events = Array.from({ length: 12 }, (_, i) => mkEv(i + 1, { id: 'h9_' + (i + 1) }));
   seedCache({ epoch: 0, head: 12, events });
   storage.saveSetting('chatEnabled', false);
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const calls9 = installFetch(() => 12, 'h9_');
   chat.initChat('p1');
   await settle();
@@ -683,7 +696,7 @@ console.log('\n[9] DI-169 structural corrections — chat OFF replays nothing, a
   // zero to the enabled gate, not to something else about the fixture.
   resetAll();
   seedCache({ epoch: 0, head: 12, events });
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();
   chat.initChat('p1');
   assert(chat.getMessages({ tag: 'all' }).length === 12, 'fixture check: with chat ON the same cache replays all 12 messages');
@@ -693,19 +706,15 @@ console.log('\n[9] DI-169 structural corrections — chat OFF replays nothing, a
   resetAll();
   const BIG = 200;                       // 200 × ~3KB bodies ≈ 600KB, double the 300KB budget
   let serverHeadB = 0;
-  backend.setBackendConfig(URL_FAKE, 'tok');
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: serverHeadB }) };
-    if (action === 'chatSince') {
-      const after = Number(u.searchParams.get('seq') || 0);
+  backend.setDataMode('supabase');
+  _fake = installFakeChat(transportMod, projectionMod, {
+    head: () => serverHeadB,
+    since: (after) => {
       const evs = [];
       for (let s = after + 1; s <= serverHeadB; s++) evs.push(mkEv(s, { id: 'h9b_' + s, body: 'x'.repeat(3000) }));
-      return { ok: true, status: 200, json: async () => ({ ok: true, events: evs, head: serverHeadB }) };
-    }
-    return { ok: true, status: 200, json: async () => ({ ok: true }) };
-  };
+      return { events: evs };
+    },
+  });
   serverHeadB = BIG;
   const t0 = Date.now();
   chat.initChat('p1');
@@ -757,7 +766,7 @@ console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, 
   const preEpoch = Array.from({ length: 20 }, (_, i) => mkEv(i + 1, { id: 'g10a_' + (i + 1), author: 'p2', notify: true }));
   seedCache({ epoch: 0, head: 20, events: preEpoch });
   storage.saveSetting('chatEpochSeq', 0);          // stale/local value, as read BEFORE hydrate
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   let headA = 20;
   const callsA = installFetch(() => headA, 'g10a_');
 
@@ -801,7 +810,7 @@ console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, 
   resetAll();
   storage.saveSetting('chatEnabled', true);        // stale local value says ON
   seedCache({ epoch: 0, head: 6, events: Array.from({ length: 6 }, (_, i) => mkEv(i + 1, { id: 'g10b_' + (i + 1) })) });
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const callsB = installFetch(() => 6, 'g10b_');
   chat.startChatTransport('p1');
   assert(chat._isPollingActiveForTest() === true, 'a device whose last-known setting says chat is ON starts polling immediately, before hydrate');
@@ -821,7 +830,7 @@ console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, 
   resetAll();
   storage.saveSetting('chatEnabled', false);
   seedCache({ epoch: 0, head: 6, events: Array.from({ length: 6 }, (_, i) => mkEv(i + 1, { id: 'g10b2_' + (i + 1) })) });
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const callsB2 = installFetch(() => 6, 'g10b2_');
   const startedB2 = chat.startChatTransport('p1');
   assert(startedB2 === false && chat._isPollingActiveForTest() === false && chat.getMessages({ tag: 'all' }).length === 0,
@@ -845,21 +854,20 @@ console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, 
   // fix removes. The hanging-fetch deferral below makes that observable: the
   // first read is STILL IN FLIGHT when initChat() runs.
   resetAll();
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   let releaseFirst = null;
-  const callsC = [];
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    callsC.push({ action, seq });
-    if (callsC.length === 1) {
-      await new Promise(r => { releaseFirst = r; });      // the cold start: answers only when we say so
-    }
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: 4 }) };
-    const r = honestSince(() => 4, seq, 500, 'g10c_');
-    return { ok: true, status: 200, json: async () => r };
+  let heldOnce = false;
+  const holdFirst = async () => {
+    if (heldOnce) return;
+    heldOnce = true;
+    await new Promise((r) => { releaseFirst = r; });      // the cold start: answers only when we say so
   };
+  const fakeC = installFakeChat(transportMod, projectionMod, {
+    head: async () => { await holdFirst(); return 4; },
+    since: async (seq, limit) => { await holdFirst(); return honestSince(() => 4, seq, limit, 'g10c_'); },
+  });
+  _fake = fakeC;
+  const callsC = fakeC.calls;
 
   chat.startChatTransport('p1');                    // tick #1 leaves, and hangs
   await settle();
@@ -888,19 +896,14 @@ console.log('\n[10] BUG-G — the transport starts before hydrate: stale epoch, 
   const capturedD = [];
   notif.registerPushAdapter({ isConfigured: () => true, send: async r => { capturedD.push(r); return { ok: true }; } });
   notif.wireChatNotifications();
-  backend.setBackendConfig(URL_FAKE, 'tok');
-  let headD = 0;                                    // the sheet's getLastRow() has not warmed up
-  const callsD = [];
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    callsD.push({ action, seq });
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: headD }) };
-    if (headD === 0) return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: 0 }) };
-    const r = honestSince(() => headD, seq, 500, 'g10d_');
-    return { ok: true, status: 200, json: async () => r };
-  };
+  backend.setDataMode('supabase');
+  let headD = 0;                                    // the server's head has not warmed up
+  const fakeD = installFakeChat(transportMod, projectionMod, {
+    head: () => headD,
+    since: (seq, limit) => (headD === 0 ? { events: [] } : honestSince(() => headD, seq, limit, 'g10d_')),
+  });
+  _fake = fakeD;
+  const callsD = fakeD.calls;
 
   chat.startChatTransport('p1');                    // no device cache here — the first read IS the head:0 artifact
   await settle();
@@ -962,7 +965,7 @@ console.log('\n[11] BUG-G F1 — a subscription that already exists (navigateTo 
   const cachedA = Array.from({ length: 12 }, (_, i) => mkEv(i + 1, { id: 'g11a_' + (i + 1) }));
   seedCache({ epoch: 0, head: 12, events: cachedA });
   storage.saveSetting('chatEpochSeq', 0);
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   // A RECORDING hanging stub, not installFetch(): §11A asserts only synchronous
   // state, and a request that actually resolves here would deliver §11A's
   // events into §11B's fold (an unsubscribed in-flight tick still settles its
@@ -1000,7 +1003,7 @@ console.log('\n[11] BUG-G F1 — a subscription that already exists (navigateTo 
   const cachedB = Array.from({ length: 12 }, (_, i) => mkEv(i + 1, { id: 'g11b_' + (i + 1) }));
   seedCache({ epoch: 0, head: 12, events: cachedB });
   storage.saveSetting('chatEpochSeq', 0);
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   let headB = 15;                                  // 3 arrived while the app was closed
   const callsB = installFetch(() => headB, 'g11b_');
 
@@ -1032,17 +1035,19 @@ console.log('\n[11] BUG-G F1 — a subscription that already exists (navigateTo 
   const staleEv = { id: 'g11c_stale', seq: null, ts: 1, type: 'message', author: 'p1', body: 'stale test chatter', notify: true };
   store.set('cfbp_chat_outbox2', JSON.stringify([staleEv]));   // a queued send persisted by a PREVIOUS session
   storage.saveSetting('chatEpochSeq', 0);
-  backend.setBackendConfig(URL_FAKE, 'tok');                   // device-local key — already true at boot on a returning device
+  backend.setDataMode('supabase');                   // device-local key — already true at boot on a returning device
   const appends = [];
-  globalThis.fetch = async (url, opts = {}) => {
-    const u = new URL(String(url));
-    let body = null;
-    if (opts.body) { try { body = JSON.parse(opts.body); } catch {} }
-    const action = u.searchParams.get('action') || body?.action || '';
-    if (action === 'chatAppend') { appends.push(body); return { ok: true, status: 200, json: async () => ({ ok: true, assigned: [] }) }; }
-    if (action === 'chatHead') return { ok: true, status: 200, json: async () => ({ ok: true, head: 0 }) };
-    return { ok: true, status: 200, json: async () => ({ ok: true, events: [], head: 0 }) };
-  };
+  _fake = installFakeChat(transportMod, projectionMod, {
+    head: () => 0,
+    since: () => ({ events: [] }),
+    append: (events) => {
+      appends.push({ events });
+      // Assign a seq so chat.js reconciles and does not re-queue the event —
+      // `{ assigned: [] }` (what the old Apps Script stub answered) would leave
+      // it pending and the second flush would send it a second time.
+      return { assigned: (events || []).map((e, i) => ({ id: e.id, seq: 1000 + i, ts: Date.now() })) };
+    },
+  });
 
   chat.refreshChatEnabled();          // navigateTo('dashboard'), pre-hydrate — reaches flushOutbox()
   chat.startChatTransport('p1');      // the early phase, pre-hydrate
@@ -1086,7 +1091,7 @@ console.log('\n[12] BUG-G F-2 — after the EARLY phase alone, a tap on the teas
   seedCache({ epoch: 0, head: 5, events: cached });
   storage.saveSetting('chatEpochSeq', 0);
   storage.saveSetting('chatEnabled', true);
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   installHangingFetch();
 
   // ── EARLY PHASE ONLY — hydrate has not happened and may never happen. ──
@@ -1159,7 +1164,7 @@ console.log('\n[13] BUG-12 — wakeChat() puts the pushed message in the room wi
   //      push tap forces the fetch instead of waiting for the next poll. ──
   resetAll();
   let serverHead = 12;
-  backend.setBackendConfig(URL_FAKE, 'tok');
+  backend.setDataMode('supabase');
   const calls13 = installFetch(() => serverHead, 'w');
   chat.initChat('p1');
   const settled13 = await waitFor(() => chat.chatStatus().caughtUp === true);
@@ -1185,8 +1190,14 @@ console.log('\n[13] BUG-12 — wakeChat() puts the pushed message in the room wi
   ]);
   assert(second !== 'HUNG',
     `13-4: a second tap inside the wake window still RESOLVES (in ${Date.now() - t0}ms) — a deep link that awaits a wake which never answers is a dead tap`);
-  assert(calls13.length - callsBefore2 <= 2,
-    `13-5: …on at most one forced round trip's worth of requests, not one per tap (got ${calls13.length - callsBefore2}) — the bound that keeps a flapping tab off the Apps Script quota`);
+  // BOUND WIDENED 2026-09-23, and the number is the only thing that moved.
+  // `sbFetchSince()` makes TWO server calls where Apps Script's `chatSince`
+  // made one — the page and then a SEPARATE `chat_head`, because the head must
+  // never be max(seq) of the page (BUG-B/RG-94). So one forced round trip is up
+  // to three requests (head probe, page, head) rather than up to two. The claim
+  // is unchanged: ONE round trip's worth, not one per tap.
+  assert(calls13.length - callsBefore2 <= 3,
+    `13-5: …on at most one forced round trip's worth of requests, not one per tap (got ${calls13.length - callsBefore2}) — the bound that keeps a flapping tab off the backend`);
   note(`  requests: [${calls13.map(c => c.action + (c.action === 'chatSince' ? ':' + c.seq : '')).join(', ')}]`);
 
   resetAll();

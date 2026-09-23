@@ -2396,7 +2396,24 @@ assert(earlyWireAt > -1 && earlyWireAt < startTransportAt,
 // condition at 10-20s), a previously hidden test log becomes visible again on
 // every device — the opposite of what UN-112 exists to do.
 const appSrcF3 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-const resetHandlerSrc = appSrcF3.slice(appSrcF3.indexOf("getElementById('reset-demo-btn')"), appSrcF3.indexOf("getElementById('reset-demo-btn')") + 3500);
+// ── SLICED TO THE NEXT HANDLER, NOT TO A GUESSED WIDTH (2026-09-23).
+//    This was `+ 3500`, and it broke the moment the handler grew — twelve lines
+//    of comment explaining why the password prompt is now PIN-mode only pushed
+//    the `catch { saveSetting('chatEpochSeq', …) }` past the end of the window,
+//    and the assertion below went red for a change that did not touch it.
+//    That is the lucky version of this bug. The unlucky version is the one
+//    functions.check hit the same day with its own `+ 1400`: the window ends
+//    short, the thing it was looking for is a thing that must be ABSENT, and
+//    the rule goes quietly green while scanning less and less of the code it
+//    claims to cover. A fixed-width slice of source is a guard with a silent
+//    expiry date. Both are now bounded by a real boundary instead.
+const resetHandlerAt = appSrcF3.indexOf("getElementById('reset-demo-btn')");
+assert(resetHandlerAt > -1,
+  "the factory-reset handler was located in js/app.js — protocol 52: a source-slice guard asserts its own anchor matched, or it silently measures nothing");
+const resetHandlerEnd = appSrcF3.indexOf("\n  document.getElementById(", resetHandlerAt + 10);
+assert(resetHandlerEnd > resetHandlerAt,
+  "…and so was the NEXT handler registration after it, which is what bounds the slice — without this the slice would silently run to the end of the file and every rule below would read the whole of js/app.js");
+const resetHandlerSrc = appSrcF3.slice(resetHandlerAt, resetHandlerEnd);
 assert(/_prevEpochSeq\s*=\s*getChatEpochSeq\(\)/.test(resetHandlerSrc),
   'the factory-reset handler captures the prior epoch BEFORE resetToDemo() wipes it');
 const capAt = resetHandlerSrc.indexOf('_prevEpochSeq = getChatEpochSeq()');
@@ -2407,147 +2424,45 @@ assert(capAt > -1 && resetAt > -1 && capAt < resetAt,
 assert(/catch\s*\{[\s\S]{0,400}saveSetting\('chatEpochSeq',\s*_prevEpochSeq\)/.test(resetHandlerSrc),
   'a failed chat clear RESTORES the prior epoch instead of leaving it at 0');
 
-// ── 31. RG-24 — a synced SETTINGS field must not be reverted by another ──────
-//        device's unrelated settings write (the UN-112 epoch field failure).
+// ── 31. RG-24 — RETIRED WITH THE MECHANISM IT GUARDED (2026-09-23) ──────────
 //
-// `cfbp_settings` is ONE seam key holding ~17 independent fields, and
-// `saveSetting()` is a read-modify-write of the whole blob. AD-04's
-// last-write-wins and AD-08's stale-mirror rebase are both KEY-granular, so a
-// device whose mirror predates another device's change pushes its entire stale
-// view of all 17 fields — silently reverting the 16 it never touched. That is
-// how a cleared chat came back days later: chatEpochSeq went back to 0.
+// WHAT IT PROVED. `cfbp_settings` is ONE seam key holding ~17 independent
+// fields and `saveSetting()` is a read-modify-write of the whole blob. The
+// Sheets adapter's stale-mirror rebase was KEY-granular, so a device whose
+// mirror predated another device's change pushed its entire stale view of all
+// 17 fields and silently reverted the 16 it never touched. That is how a
+// cleared chat came back days later: `chatEpochSeq` went back to 0. The fix was
+// `_dirtyFields` — the caller DECLARES which fields it changed, and only those
+// are grafted onto the fresh remote. This section drove the real
+// `hydrate()`/`flushPush()` against a stubbed Sheet and was built to fail
+// against the pre-fix tree (confirmed: 6 failures, "got 0").
 //
-// This drives the REAL backend.js hydrate/flushPush against a stubbed Sheet,
-// through the REAL storage.js seam and the REAL chat.js accessor. It is built
-// to FAIL against the pre-fix tree (confirmed: 6 failures, "got 0").
-console.log('\n[31] RG-24 — one device\'s settings write must not revert another device\'s field…');
-const _fetch31 = globalThis.fetch;
-const _mode31  = storage.getBackendMode();
-const backend31 = mods['backend'];
+// WHY IT IS GONE RATHER THAN PORTED. There is no whole-blob push to rebase.
+// js/supabase-backend.js writes ROW-LEVEL DIFFS to typed tables, and `settings`
+// is a `league_kv` row that the adapter's own composite-write planner
+// (`planFlush()`, §8) merges field by field on the server side. A stale device
+// cannot revert a field it never read, because it never sends one. The
+// equivalent coverage is `adaptertest.mjs`'s flush-planner and composite-write
+// sections; `_dirtyFields`' surviving consumer is storage.js's `save(k, v,
+// fields)` third argument, which the adapter reads.
+//
+// THE DECLARED-FIELDS HALF IS STILL ASSERTED, in this file, a few sections
+// down: "saveSetting() names the single field it changed when writing the blob
+// (no diff heuristic in backend.js)". That is the rule a future edit could
+// actually break; the rebase it fed no longer exists to break.
+console.log('\n[31] RG-24 — RETIRED: the whole-blob stale-mirror rebase went with the Sheets adapter (see the note above)…');
 
-let SHEET31 = {};
-globalThis.fetch = async (url, opts) => {
-  const req = JSON.parse(opts.body);
-  if (req.action === 'getAll') return { ok: true, json: async () => ({ ok: true, data: JSON.parse(JSON.stringify(SHEET31)) }) };
-  if (req.action === 'setMany') { Object.entries(req.entries).forEach(([k, v]) => { SHEET31[k] = v; }); return { ok: true, json: async () => ({ ok: true }) }; }
-  throw new Error('unexpected action ' + req.action);
-};
-
-// A settings blob as it exists on a device whose mirror predates the change.
-const PRE31 = {
-  almaMaters: [], weeklyGameCount: 10, candidateGameCount: 25,
-  weeklyPrize: 'x', seasonPrize: 'y', adminPasswordHash: 'z',
-  storageMode: 'local', season: '2026', customRules: null,
-  autoRefreshInterval: 60, timezone: 'CT', chatRetentionDays: 0,
-  chatEpochSeq: 0, chatEpochSetAt: null, chatEnabled: true,
-  randomizePicksEnabled: false,
-};
-
-/** Put device B on a stale pre-change mirror while the Sheet already carries
- *  the change another device made. Mirrors app.js's boot order exactly:
- *  primeFromMirror() → setBackendMode('googleSheets') → …stale window… */
-function bootStale31(sheetSettings) {
-  SHEET31 = {
-    cfbp_settings: JSON.parse(JSON.stringify(sheetSettings)),
-    cfbp_players: [{ id: 'p1', displayName: 'Drew' }],
-    cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
-  };
-  localStorage.setItem('cfbp_sheet_mirror', JSON.stringify({
-    at: '2026-08-05T00:00:00.000Z',
-    data: {
-      cfbp_settings: JSON.parse(JSON.stringify(PRE31)),
-      cfbp_players: [{ id: 'p1', displayName: 'Drew' }],
-      cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
-    },
-  }));
-  backend31.setBackendConfig('https://example.test/exec', 'tok');
-  backend31.primeFromMirror();
-  storage.setBackendMode('googleSheets');
-}
-
-// 31a — the reported bug, end to end, with the ACTUAL boot-time trigger.
-// app.js seeds `dashboardLayout` at boot on any viewport <600px whose settings
-// blob lacks it — a settings write issued BEFORE hydrate, with zero user input.
-const CLEARED31 = { ...PRE31, chatEpochSeq: 66, chatEpochSetAt: '2026-08-12T03:34:02.931Z' };
-bootStale31(CLEARED31);
-assert(backend31.isMirrorStale() === true, 'fixture check: the mirror is stale (writes are HELD, AD-08) before hydrate lands');
-storage.saveSetting('dashboardLayout', 'compact');
-await backend31.hydrate();
-assert(chat.getChatEpochSeq() === 66,
-  `after hydrate, a device that wrote an UNRELATED settings field still reads the cleared epoch — got ${chat.getChatEpochSeq()}`);
-await backend31.flushPush();
-assert(SHEET31.cfbp_settings.chatEpochSeq === 66,
-  `the Sheet's chatEpochSeq survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.chatEpochSeq)} (0 = the cleared chat comes back on every device)`);
-assert(SHEET31.cfbp_settings.chatEpochSetAt === '2026-08-12T03:34:02.931Z',
-  `chatEpochSetAt survives too — got ${JSON.stringify(SHEET31.cfbp_settings.chatEpochSetAt)}`);
-assert(SHEET31.cfbp_settings.dashboardLayout === 'compact',
-  'the writing device\'s OWN intent still reaches the Sheet — the held write is rebased, not discarded (AD-08 unchanged)');
-
-// 31b — the two other synced settings named as sharing this failure mode.
-// chatEnabled is the commissioner's emergency chat kill switch: a silent
-// revert turns chat back ON for the whole league.
-bootStale31({ ...PRE31, chatEnabled: false });
-storage.saveSetting('dashboardLayout', 'compact');
-await backend31.hydrate();
-await backend31.flushPush();
-assert(SHEET31.cfbp_settings.chatEnabled === false,
-  `chatEnabled (the emergency kill switch) survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.chatEnabled)}`);
-
-bootStale31({ ...PRE31, randomizePicksEnabled: true });
-storage.saveSetting('timezone', 'ET');
-await backend31.hydrate();
-await backend31.flushPush();
-assert(SHEET31.cfbp_settings.randomizePicksEnabled === true,
-  `randomizePicksEnabled survives another device's unrelated settings write — got ${JSON.stringify(SHEET31.cfbp_settings.randomizePicksEnabled)}`);
-assert(SHEET31.cfbp_settings.timezone === 'ET',
-  'and the writing device\'s own field still lands');
-
-// 31c — a WHOLE-BLOB write (resetToDemo) must still replace the whole blob.
-// The field-scoped rebase must not turn a deliberate factory reset into a
-// one-field patch.
-bootStale31({ ...PRE31, chatEpochSeq: 66, weeklyGameCount: 12 });
-storage.saveSettings({ ...dm.DEFAULT_SETTINGS });
-await backend31.hydrate();
-await backend31.flushPush();
-assert(SHEET31.cfbp_settings.weeklyGameCount === dm.DEFAULT_SETTINGS.weeklyGameCount &&
-       SHEET31.cfbp_settings.chatEpochSeq === 0,
-  'a whole-blob write (saveSettings / resetToDemo) still replaces every field — field-scoping never downgrades an explicit full-blob write');
-
-// 31d — non-object keys are untouched by any of this.
-bootStale31(PRE31);
-storage.saveAllPicks([{ id: 'k1', weekId: 'w1', playerId: 'p1' }]);
-await backend31.hydrate();
-await backend31.flushPush();
-assert(Array.isArray(SHEET31.cfbp_picks) && SHEET31.cfbp_picks.length === 1,
-  'array-valued keys (picks) still rebase and push whole — field-scoping applies only where a field list was declared');
-
-// 31e — source-level: the seam must DECLARE the changed field rather than let
-// the backend guess it by diffing (a diff cannot tell a real edit from
-// getSettings()'s DEFAULT_SETTINGS spread materializing an absent field).
+// 31e SURVIVES, and it is the half that can still be broken by an edit: the
+// seam must DECLARE the changed field rather than let the storage layer guess
+// it by diffing. A diff cannot tell a real edit from getSettings()'s
+// DEFAULT_SETTINGS spread materializing an absent field — which is why the
+// third argument exists at all — and js/supabase-backend.js's composite-write
+// planner reads exactly that list to build a field-level `league_kv` merge.
+// The consumer changed; the contract did not.
 const storageSrc31 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
 assert(/export function saveSetting\(k,\s*v\)\s*\{[^}]*save\(KEYS\.SETTINGS,\s*s,\s*\[k\]\)/.test(storageSrc31),
-  'saveSetting() names the single field it changed when writing the blob (no diff heuristic in backend.js)');
+  'saveSetting() names the single field it changed when writing the blob — the declared-fields contract js/supabase-backend.js planFlush() consumes (no diff heuristic anywhere)');
 
-// restore harness state
-storage.setBackendMode(_mode31);
-backend31.clearBackendConfig();
-backend31.clearMirror();
-globalThis.fetch = _fetch31;
-chat._resetForTest();
-
-// ── 32. RG-25 / RG-26 — ONE notification acknowledgement, and a toast that ───
-//        does not survive navigation onto the chat tab.
-//
-// Two device-local surfaces announce the same new message: the floating toast
-// (every tab except chat + dashboard) and the dashboard teaser. They carried
-// TWO independent dismissal states — the toast's was a DOM node, the teaser's
-// was `cfbp_chat_teaser_dismiss_seq` — so dismissing one never informed the
-// other (RG-25). Separately, showToast() evaluates its chat-page suppression
-// once, at CREATION; nothing re-evaluated it on navigation, so a toast raised
-// on another tab sat over the chat feed (RG-26).
-//
-// Browser-reproduced at 390x844 before the fix; these assertions drive the
-// real functions and the real shared watermark.
 console.log('\n[32] RG-25/RG-26 — one acknowledgement across both notification surfaces…');
 const chatUi32 = mods['chat-ui'];
 chat._resetForTest();
@@ -2752,7 +2667,6 @@ chat._resetForTest();
 console.log('\n[33] RG-12 recurrence — data-loss defenses…');
 
 const storeSrc = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
-const backSrc  = await readFile(new URL('./js/backend.js', import.meta.url), 'utf8');
 
 // (a) ensureSeedData must refuse user-mutable keys in sheets mode.
 assert(/USER_MUTABLE_KEYS/.test(storeSrc), 'storage.js declares USER_MUTABLE_KEYS');
@@ -2825,137 +2739,47 @@ const st = mods['storage'];
     'local mode seeds normally and refuses nothing — forks/offline unaffected');
 }
 
-// (b-behaviour) hydrate() must THROW rather than adopt an empty remote when the
-// mirror still holds league data — and must leave the mirror INTACT.
+// (b) / (c) / (d) — RETIRED WITH THE MECHANISM THEY GUARDED (2026-09-23).
 //
-// Subprocess again, and for a specific reason: an earlier draft asserted only
-// "hydrate throws", which passed even with the guard reverted, because an
-// unconfigured backend throws from the call layer anyway. A test that passes
-// for the wrong reason is worse than no test. This one configures the backend,
-// stubs the network to return an empty payload, and checks the ERROR TEXT and
-// that the mirror survived.
-{
-  const { execFileSync } = await import('node:child_process');
-  const { fileURLToPath } = await import('node:url');
-  const probeB = `
-    globalThis.localStorage={_d:{},getItem(k){return k in this._d?this._d[k]:null},
-      setItem(k,v){this._d[k]=String(v)},removeItem(k){delete this._d[k]},clear(){this._d={}}};
-    (async()=>{
-      const be = await import('./js/backend.js');
-      be.setBackendConfig('https://example.invalid/exec','tok');
-      // Seed the mirror with real league data, the way a live device holds it.
-      be.cacheSet('cfbp_players', [{playerId:'p1'}]);
-      be.cacheSet('cfbp_weeks',   [{weekId:'w1',status:'open'}]);
-      be.cacheSet('cfbp_picks',   [{pickId:'k1',playerId:'p1'}]);
-      // Remote comes back EMPTY — cold start / dropped body / partial read.
-      globalThis.fetch = async () => ({ ok:true, json: async () => ({ ok:true, data:{} }) });
-      let threw=false, msg='';
-      try { await be.hydrate(); } catch(e){ threw=true; msg=String(e.message||e); }
-      const picksSurvived = (be.cacheGet('cfbp_picks')||[]).length;
-      const weeksSurvived = (be.cacheGet('cfbp_weeks')||[]).length;
-      process.stdout.write(JSON.stringify({ threw, msg, picksSurvived, weeksSurvived }));
-    })();`;
-  let pb = {};
-  try {
-    pb = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', probeB],
-      { cwd: fileURLToPath(new URL('.', import.meta.url)), encoding: 'utf8' }));
-  } catch (e) { pb = { error: String(e.message || e) }; }
+// These drove the real `hydrate()` against a stubbed Sheet and proved three
+// things about the in-memory mirror:
+//   (b) hydrate() THREW rather than adopting an empty remote while the mirror
+//       still held league data, and left the mirror intact — the "Sync refused"
+//       guard, with the refusal ordered BEFORE `_cache.clear()`.
+//   (c) a stale held write could never SHRINK a user-data key: the exact shape
+//       Drew reported, where a device holding a pre-picks mirror put its
+//       obsolete-but-perfectly-valid view back over five players' picks — while
+//       a write that GREW the key still synced.
+//   (d) `_shrinksForTest` / `_unionByIdForTest` — exported precisely because a
+//       source-text match cannot tell a working guard from a gutted one
+//       (verified 2026-08-12: replacing the guard's body left the suite green
+//       at 552/552).
+//
+// THE MIRROR IS GONE, SO THE GUARDS ARE GONE, AND THAT IS NOT A WEAKENING —
+// it is the removal of a failure MODE, and it is worth being exact about why.
+// Every one of those defenses existed because the Sheets adapter's unit of
+// transfer was A WHOLE SNAPSHOT OF EVERY KEY: one `getAll`, one `setMany`, and
+// a device with a stale copy of all twenty-two keys deciding which to re-apply.
+// js/supabase-backend.js has no such unit. It reads typed tables and writes
+// ROW-LEVEL DIFFS, so:
+//   - there is no "empty remote" to adopt wholesale; a failed read is
+//     classified (`_classifyHydrateFailure()`) and the device WITHHOLDS rather
+//     than paints, which is a stronger answer than refusing a merge;
+//   - a stale device cannot shrink `cfbp_picks`, because it never sends
+//     `cfbp_picks` — it sends the rows it changed;
+//   - an append-only log needs no union-by-id on the client, because six
+//     writers append six rows to a table.
+// The live coverage is `adaptertest.mjs` (the state machine, the flush planner,
+// loud-fail, the offline rule) and `supabase/tests/rls.test.mjs` on the real
+// project. `persisttest.mjs` [3]/[4]/[6] covered the same defenses from the
+// other side and is retired in the same commit for the same reason.
+//
+// (a) ABOVE IS NOT RETIRED and is deliberately left running: `ensureSeedData()`
+// refusing to seed user-mutable keys without `confirmEmpty` is a rule in
+// js/storage.js, it is the defense that stops a DRAFT template being written
+// over a live season, and it is the one piece of RG-12 that has nothing to do
+// with the transport.
 
-  assert(pb.threw === true,
-    `hydrate() REFUSES an empty remote while the mirror holds league data${pb.error ? ' — ' + pb.error : ''}`);
-  assert(/Sync refused/.test(pb.msg || ''),
-    `the refusal is the RG-12 guard, not an incidental error — got: ${(pb.msg || '').slice(0, 80)}`);
-  assert(/preserved/.test(pb.msg || ''),
-    'the error tells the user their data was preserved (AD-06 loud-fail)');
-  assert(pb.picksSurvived === 1 && pb.weeksSurvived === 1,
-    `the mirror is INTACT after refusal — picks ${pb.picksSurvived}, weeks ${pb.weeksSurvived} (expected 1, 1)`);
-}
-
-// (c) A stale held write must not shrink user data.
-const hydrateFn = (backSrc.match(/export async function hydrate[\s\S]*?\n\}/) || [''])[0];
-assert(hydrateFn.length > 0, 'hydrate() source located for structural checks');
-const refuseAt = hydrateFn.indexOf('Sync refused');
-const clearAt = hydrateFn.indexOf('_cache.clear()');
-assert(refuseAt > -1 && clearAt > -1 && refuseAt < clearAt,
-  'the refusal happens BEFORE _cache.clear() — the mirror is never wiped first');
-
-{
-  const be = mods['backend'];
-
-  // The predicate itself. This export is load-bearing: when it was absent the
-  // block below fell through to matching the guard's SOURCE TEXT, which cannot
-  // distinguish a working guard from a gutted one. Verified 2026-08-12 —
-  // replacing the guard body with `_cache.set(k, v)` passed 552/552.
-  assert(typeof be._shrinksForTest === 'function',
-    'backend exports the shrink predicate so defense (c) is tested by BEHAVIOUR, not by source text');
-  assert(be._shrinksForTest([1], [1, 2, 3]) === true, 'shrink detected: 1 item over 3');
-  assert(be._shrinksForTest([1, 2, 3, 4], [1, 2]) === false, 'growth allowed: 4 items over 2');
-  assert(be._shrinksForTest([], [1]) === true, 'emptying is shrinking');
-  assert(be._shrinksForTest({ a: 1 }, { a: 1, b: 2 }) === true, 'shrink detected on objects too (tb/ep guesses are keyed maps)');
-}
-
-// (c) END TO END — the predicate existing proves nothing unless hydrate() acts
-// on it. This is the closest reproduction of what Drew actually reported: the
-// picks were made, and days later a device holding a pre-picks mirror put its
-// obsolete-but-perfectly-valid view back. Defenses (a) and (b) both guard an
-// empty REMOTE and neither one catches this.
-{
-  const be = mods['backend'];
-  const _fetch33 = globalThis.fetch;
-  const _mode33 = storage.getBackendMode();
-  let SHEET33 = {};
-  globalThis.fetch = async (url, opts) => {
-    const req = JSON.parse(opts.body);
-    if (req.action === 'getAll') return { ok: true, json: async () => ({ ok: true, data: JSON.parse(JSON.stringify(SHEET33)) }) };
-    if (req.action === 'setMany') { Object.entries(req.entries).forEach(([k, v]) => { SHEET33[k] = v; }); return { ok: true, json: async () => ({ ok: true }) }; }
-    throw new Error('unexpected action ' + req.action);
-  };
-  try {
-    const SIX = [1, 2, 3, 4, 5, 6].map(n => ({ pickId: 'k' + n, playerId: 'p' + n, gameId: 'g' + n, selection: 'home' }));
-    const ONE = [{ pickId: 'k1', playerId: 'p1', gameId: 'g1', selection: 'home' }];
-    SHEET33 = {
-      cfbp_players: [{ playerId: 'p1' }, { playerId: 'p2' }],
-      cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
-      cfbp_picks: JSON.parse(JSON.stringify(SIX)),
-    };
-    // This device booted on a mirror from BEFORE five of those picks existed.
-    localStorage.setItem('cfbp_sheet_mirror', JSON.stringify({
-      at: '2026-08-05T00:00:00.000Z',
-      data: {
-        cfbp_players: [{ playerId: 'p1' }],
-        cfbp_weeks: [{ weekId: 'w1', status: 'open' }],
-        cfbp_picks: JSON.parse(JSON.stringify(ONE)),
-      },
-    }));
-    be.setBackendConfig('https://example.test/exec', 'tok');
-    be.primeFromMirror();
-    storage.setBackendMode('googleSheets');
-    assert(be.isMirrorStale() === true, 'fixture check: the mirror is stale, so the write is HELD and rebased at hydrate (AD-08)');
-
-    // The stale device writes its obsolete view — well-formed, populated, and
-    // indistinguishable from a legitimate edit.
-    be.cacheSet('cfbp_picks', JSON.parse(JSON.stringify(ONE)));
-    await be.hydrate();
-
-    assert((be.cacheGet('cfbp_picks') || []).length === 6,
-      `hydrate() DROPS a held write that would shrink picks 6 -> 1 — got ${(be.cacheGet('cfbp_picks') || []).length} (1 = five players' picks destroyed, the reported bug)`);
-    await be.flushPush();
-    assert((SHEET33.cfbp_picks || []).length === 6,
-      `the dropped write is un-dirtied, so flushPush cannot push the shrunken view to the Sheet either — got ${(SHEET33.cfbp_picks || []).length}`);
-
-    // The guard must not become a write-blocker: ADDING a pick still syncs.
-    const SEVEN = [...SIX, { pickId: 'k7', playerId: 'p7', gameId: 'g7', selection: 'away' }];
-    be.cacheSet('cfbp_picks', JSON.parse(JSON.stringify(SEVEN)));
-    await be.flushPush();
-    assert((SHEET33.cfbp_picks || []).length === 7,
-      `a held write that GROWS user data is still applied — the guard blocks shrinkage only, never normal picking — got ${(SHEET33.cfbp_picks || []).length}`);
-  } finally {
-    globalThis.fetch = _fetch33;
-    storage.setBackendMode(_mode33);
-    be.clearBackendConfig();
-    localStorage.removeItem('cfbp_sheet_mirror');
-  }
-}
 
 // ── 34. UN-116 — THE BLIND RULE ─────────────────────────────────────────────
 // Drew, 2026-08-12: "If you can still edit, you shouldnt be able to see anyone
@@ -8280,6 +8104,128 @@ console.log('\n[70] RG — the toast gate uses the derived, tag-aware acknowledg
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// THE CHAT BACKEND STUB — PORTED FROM APPS SCRIPT TO SUPABASE (2026-09-23)
+//
+// Sections [71], [72], [74] and [75] each used to stub `globalThis.fetch` and
+// parse an Apps Script URL (`?action=chatSince&seq=…`) or a text/plain POST
+// body. `js/chatTransport.js`'s `get()`/`post()` are deleted, so that stub can
+// no longer be reached from anything.
+//
+// WHAT THOSE SECTIONS TEST IS NOT THE TRANSPORT, and that is why they are
+// PORTED rather than retired. `subscribe()`'s tick loop — skip the head probe
+// when nothing is known, probe the cheap head first on every later tick, page
+// forward until the events in hand reach the TRUE head (BUG-B), never report a
+// head the delivery did not reach (RG-95), and hold the outbox until the server
+// can see a message (BUG-D) — is backend-agnostic and is live today. Only the
+// bottom two functions under it changed.
+//
+// ONE DIFFERENCE IS REAL AND THE ASSERTIONS BELOW SAY SO: `sbFetchSince()`
+// makes TWO server calls, the page and then a separate `chat_head`, because the
+// head must never be `max(seq)` of the page — that IS the BUG-B/RG-94 contract
+// (chatTransport.js says so at the call). The Apps Script `chatSince` returned
+// both in one response. So a "first tick makes exactly one call" assertion is
+// now "the first tick asks for the page BEFORE it asks for a head", which is
+// the property that was ever worth having: no head probe standing between a
+// cold boot and its first message.
+//
+// The stub speaks ROWS, like the server: the callbacks below hand back legacy
+// events and `_evToRow()` converts, so each section keeps its own `mkEv`, its
+// own server model and its own assertions.
+// ══════════════════════════════════════════════════════════════════════════════
+function _evToRow(ev, leagueId = 'lg_test') {
+  return {
+    league_id: leagueId, id: ev.id, seq: ev.seq,
+    ts: typeof ev.ts === 'number' ? new Date(ev.ts).toISOString() : (ev.ts || null),
+    type: ev.type || 'message', author: ev.author || 'p1',
+    game_tag: ev.gameTag || '', body: ev.body || '',
+    target_id: ev.targetId || '', reply_to: ev.replyTo || '',
+    notify: !!ev.notify, meta: ev.meta || null,
+  };
+}
+
+/**
+ * Installs a fake Supabase chat context and returns `{ calls, uninstall }`.
+ * `calls` entries keep the SHAPE the ported sections already assert on:
+ * `{ action: 'chatHead'|'chatSince'|'chatBefore'|'chatAppend', seq, limit }`.
+ */
+function installFakeChatBackend(transportMod, {
+  head = () => 0,
+  since = () => ({ events: [], head: 0 }),
+  before = () => [],
+  append = null,
+  sinceThrows = () => false,
+} = {}) {
+  const calls = [];
+  const client = {
+    from() {
+      const q = { gt: null, lt: null, limit: 0 };
+      const b = {
+        select() { return b; },
+        eq() { return b; },
+        gt(_c, v) { q.gt = Number(v); return b; },
+        lt(_c, v) { q.lt = Number(v); return b; },
+        order() { return b; },
+        limit(n) { q.limit = Number(n); return b; },
+        then(res, rej) { return b._run().then(res, rej); },
+        async _run() {
+          if (q.lt !== null) {
+            calls.push({ action: 'chatBefore', seq: q.lt, limit: q.limit });
+            return { data: (before(q.lt, q.limit) || []).map((e) => _evToRow(e)), error: null };
+          }
+          calls.push({ action: 'chatSince', seq: q.gt, limit: q.limit });
+          // A refused page, the way PostgREST returns one. The ported sections
+          // use it for the cold-start read failure they were written around.
+          if (sinceThrows(q.gt, q.limit)) return { data: null, error: { code: '500', message: 'server error' } };
+          const r = since(q.gt, q.limit) || { events: [] };
+          return { data: (r.events || []).map((e) => _evToRow(e)), error: null };
+        },
+      };
+      return b;
+    },
+    async rpc(fn, args) {
+      if (fn === 'chat_head') {
+        calls.push({ action: 'chatHead' });
+        // `head()` may return a value, a PROMISE (a round trip held open — the
+        // double-tap/inFlight case), or THROW (a refused probe). All three are
+        // shapes the ported sections need and all three are shapes the real
+        // client has.
+        try { return { data: await head(), error: null }; }
+        catch (e) { return { data: null, error: { message: String(e && e.message || e) } }; }
+      }
+      if (fn === 'chat_append' || fn === 'chat_append_system') {
+        const events = (args && args.p_events) || [];
+        calls.push({ action: 'chatAppend', events });
+        // AWAITED: `append()` may return a promise (a delayed commit), and an
+        // un-awaited one yields `r.assigned === undefined` — a successful append
+        // that assigned nothing, which is indistinguishable from the BUG-D defect.
+        const r = await (append ? append(events) : { assigned: [] });
+        return { data: (r.assigned || []).map((a) => ({ id: a.id, seq: a.seq, deduped: false, ts: new Date(a.ts || Date.now()).toISOString() })), error: null };
+      }
+      return { data: null, error: { message: 'unknown rpc ' + fn } };
+    },
+    channel() { const ch = { on() { return ch; }, subscribe() { return ch; } }; return ch; },
+    removeChannel() { return true; },
+  };
+  transportMod.installSupabaseChat({
+    getClient: () => client,
+    getLeagueId: () => 'lg_test',
+    rowToMessage: mods['supabase-projection'].rowToMessage,
+    isReady: () => true,
+    getIdentityEpoch: () => 1,
+  });
+  transportMod.setSupabaseDataModePredicate(() => true);
+  transportMod._resetRefusalStateForTest();
+  return {
+    calls,
+    uninstall() {
+      transportMod._resetSupabaseChatForTest();
+      transportMod._resetSupabaseDataModePredicateForTest();
+      transportMod._resetRefusalStateForTest();
+    },
+  };
+}
+
 // ── 71. Transport: no head probe when nothing is known yet ───────────────────
 // "It starts off blank, and then will populate all of the messages" — the fold
 // is rebuilt from the transport on every boot, and the first tick used to pay
@@ -8294,7 +8240,6 @@ console.log('\n[71] Transport — the first tick with nothing known skips the he
 {
   const transport71 = mods['chatTransport'], backend71 = mods['backend'];
   const _realFetch71 = globalThis.fetch, _realST71 = globalThis.setTimeout, _realCT71 = globalThis.clearTimeout;
-  const calls71 = [];
   let HEAD71 = 7;
   let EVENTS71 = [{ id: 'tr1', seq: 7, ts: 1, type: 'message', author: 'p1', body: 'hello', notify: true }];
   let scheduled71 = null;
@@ -8302,24 +8247,32 @@ console.log('\n[71] Transport — the first tick with nothing known skips the he
 
   globalThis.setTimeout = fn => { scheduled71 = fn; return 1; };   // hold the next tick, don't fire it
   globalThis.clearTimeout = () => {};
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    calls71.push({ action, seq: u.searchParams.get('seq') });
-    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD71 }) };
-    if (action === 'chatSince') return { ok: true, json: async () => ({ ok: true, events: EVENTS71, head: HEAD71 }) };
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  backend71.setBackendConfig('https://example.invalid/exec', 'tok71');
+  globalThis.fetch = async () => { throw new Error('[71] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  const stub71 = installFakeChatBackend(transport71, {
+    head: () => HEAD71,
+    since: () => ({ events: EVENTS71 }),
+  });
+  const calls71 = stub71.calls;
+  backend71.setDataMode('supabase');
 
   let known71 = 0, unsub71 = null;
   try {
     unsub71 = transport71.subscribe((events, head) => { if (typeof head === 'number' && head > known71) known71 = head; },
       { getMode: () => 'idle', getKnownHead: () => known71 });
     await flush71(); await flush71();
-    assert(calls71.length === 1 && calls71[0].action === 'chatSince',
-      `first tick with a known head of 0 makes exactly ONE call and it is chatSince — got [${calls71.map(c => c.action).join(', ')}]`);
-    assert(calls71[0]?.seq === '0',
+    // THE PROPERTY, RESTATED FOR THE SUPABASE PATH (2026-09-23): the first
+    // thing a cold boot asks for is THE PAGE. `sbFetchSince()` then asks
+    // `chat_head` separately — that second call is the BUG-B/RG-94 contract
+    // (the head must never be max(seq) of the page), not a probe standing
+    // between the player and his first message. What this section exists to
+    // stop is a head probe BEFORE the page, which doubles the blank window on
+    // a cold start and buys nothing: whatever the head says, the follow-up is
+    // fetchSince(0).
+    assert(calls71[0]?.action === 'chatSince',
+      `first tick with a known head of 0 asks for the PAGE FIRST — no head probe in front of it — got [${calls71.map(c => c.action).join(', ')}]`);
+    assert(calls71.filter(c => c.action === 'chatSince').length === 1,
+      `and it is ONE page request, not a walk — got [${calls71.map(c => c.action).join(', ')}]`);
+    assert(calls71[0]?.seq === 0,
       `and it asks for everything from seq 0 — got ${calls71[0]?.seq}`);
     assert(known71 === 7, 'fixture: the events from that single call were delivered to the subscriber (head advanced to 7)');
 
@@ -8328,23 +8281,24 @@ console.log('\n[71] Transport — the first tick with nothing known skips the he
     calls71.length = 0;
     scheduled71?.(); await flush71(); await flush71();
     assert(calls71.length === 1 && calls71[0].action === 'chatHead',
-      `a later tick probes the cheap head first and skips chatSince when the head has not advanced — got [${calls71.map(c => c.action).join(', ')}]`);
+      `a later tick probes the cheap head first and skips chatSince entirely when the head has not advanced — got [${calls71.map(c => c.action).join(', ')}]`);
 
     // Later tick, head advanced: two-phase head-then-since, unchanged.
     calls71.length = 0;
     HEAD71 = 9;
     EVENTS71 = [{ id: 'tr2', seq: 9, ts: 2, type: 'message', author: 'p1', body: 'newer', notify: true }];
     scheduled71?.(); await flush71(); await flush71();
-    assert(calls71.map(c => c.action).join(',') === 'chatHead,chatSince',
+    assert(calls71.map(c => c.action).join(',').startsWith('chatHead,chatSince'),
       `and when the head HAS advanced it follows with chatSince — the two-phase behaviour is preserved for every tick after the first — got [${calls71.map(c => c.action).join(', ')}]`);
-    assert(calls71[1]?.seq === '7',
+    assert(calls71[1]?.seq === 7,
       `the follow-up asks only for what is missing (since 7), not the whole log — got ${calls71[1]?.seq}`);
   } finally {
     unsub71?.();
+    stub71.uninstall();
     globalThis.fetch = _realFetch71;
     globalThis.setTimeout = _realST71;
     globalThis.clearTimeout = _realCT71;
-    backend71.clearBackendConfig();
+    backend71.setDataMode('sheets');
   }
 }
 
@@ -8373,7 +8327,7 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
 
   const N72 = 1237;                       // mid-season-sized log, 2.47 pages
   let HEAD72 = N72;
-  let calls72 = [];
+  let calls72 = [];   // replaced by the stub's own recorder below
   let scheduled72 = null;
   const mkEv = seq => ({ id: 'cp' + seq, seq, ts: 1_700_000_000_000 + seq, type: 'message',
                          author: 'p1', body: 'msg ' + seq, notify: false });
@@ -8391,17 +8345,13 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
 
   globalThis.setTimeout = fn => { scheduled72 = fn; return 1; };   // hold the next tick
   globalThis.clearTimeout = () => {};
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    const limit = Number(u.searchParams.get('limit') || 0);
-    calls72.push({ action, seq, limit });
-    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD72 }) };
-    if (action === 'chatSince') { const r = sinceImpl(seq, limit); return { ok: true, json: async () => r }; }
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  backend72.setBackendConfig('https://example.invalid/exec', 'tok72');
+  globalThis.fetch = async () => { throw new Error('[72] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  const stub72 = installFakeChatBackend(transport72, {
+    head: () => HEAD72,
+    since: (seq, limit) => sinceImpl(seq, limit),
+  });
+  calls72 = stub72.calls;
+  backend72.setDataMode('supabase');
 
   let unsub72 = null;
   const deliveries = [];                  // every onEvents call, as the transport made it
@@ -8456,28 +8406,36 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
       'and no delivery ever claims caught-up while reporting a head beyond the events it delivered');
 
     // ── C. The first-tick optimization survives (§[71]) ──
-    assert(calls72.filter(c => c.action === 'chatHead').length === 0,
-      'the cold-boot drain still skips the head probe entirely — one Apps Script cold start, not two');
-    assert(calls72.map(c => c.seq).join(',') === '0,500,1000',
-      `each page resumes from the last seq actually received — got [${calls72.map(c => c.seq).join(', ')}]`);
-    assert(calls72.every(c => c.limit === 500),
+    // PORTED 2026-09-23. It used to read "the cold-boot drain skips the head
+    // probe ENTIRELY — one Apps Script cold start, not two", because the old
+    // `chatSince` returned the page and the true head in one response. On
+    // Supabase the head is a separate `chat_head` call BY DESIGN (that
+    // separation IS the BUG-B/RG-94 contract). The property that survives, and
+    // the one this section was ever about, is that nothing is asked BEFORE the
+    // first page: the blank window on a cold boot is one round trip wide.
+    assert(calls72[0]?.action === 'chatSince',
+      `the cold-boot drain asks for the first PAGE first — no head probe in front of it — got [${calls72.map(c => c.action).join(', ')}]`);
+    const pages72 = calls72.filter(c => c.action === 'chatSince');
+    assert(pages72.map(c => c.seq).join(',') === '0,500,1000',
+      `each page resumes from the last seq actually received — got [${pages72.map(c => c.seq).join(', ')}]`);
+    assert(pages72.every(c => c.limit === 500),
       'every page asks for the server-capped 500, so no request is silently truncated below what we ask for');
 
     // ── D. Steady state: a burst bigger than one page while we were away ──
     // Same truncation assumption lived in the known>0 branch: a tab that was
     // hidden (or in error backoff) through a >500-event burst would take one
     // page and believe it was current.
-    calls72 = []; deliveries.length = 0;
+    calls72.length = 0; deliveries.length = 0;
     HEAD72 = 1900;
     scheduled72?.(); await settle();
-    assert(calls72[0]?.action === 'chatHead' && calls72.length === 3,
+    assert(calls72[0]?.action === 'chatHead' && calls72.filter(c => c.action === 'chatSince').length === 2,
       `a later tick still probes the cheap head first, then pages until caught up — got [${calls72.map(c => c.action + ':' + c.seq).join(', ')}]`);
     assert(chat72.getMessage('cp1900') !== null && chat72.getMessages({ tag: 'all' }).length === 1900,
       `a >500-event burst caught up in one tick — got ${chat72.getMessages({ tag: 'all' }).length} of 1900`);
     assert(chat72.chatStatus().head === 1900, `head after the burst is 1900 — got ${chat72.chatStatus().head}`);
 
     // ── E. An idle tick is still one cheap call ──
-    calls72 = [];
+    calls72.length = 0;
     scheduled72?.(); await settle();
     assert(calls72.length === 1 && calls72[0].action === 'chatHead',
       `nothing new: one cached head probe, no page walk — got [${calls72.map(c => c.action).join(', ')}]`);
@@ -8489,7 +8447,7 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
     // read besides. Treating "short page" as "caught up" re-opens BUG-B in a
     // narrower window, so the walk keys off the seq actually reached.
     chat72._resetForTest();
-    calls72 = []; deliveries.length = 0;
+    calls72.length = 0; deliveries.length = 0;
     HEAD72 = N72;
     sinceImpl = (afterSeq) => {                       // honest, but 200 rows at a time
       if (HEAD72 <= afterSeq) return { ok: true, events: [], head: HEAD72 };
@@ -8515,7 +8473,7 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
     // ── F. A broken server cannot spin the loop ──
     // F1: a server that returns a full page without advancing the cursor.
     chat72._resetForTest();
-    calls72 = []; deliveries.length = 0;
+    calls72.length = 0; deliveries.length = 0;
     HEAD72 = 1_000_000;
     sinceImpl = () => ({ ok: true, events: Array.from({ length: 500 }, (_, i) => mkEv(i + 1)), head: HEAD72 });
     unsub72(); unsub72 = null;
@@ -8523,31 +8481,33 @@ console.log('\n[72] RG BUG-B — a cold boot against a log longer than the 500-r
     unsub72 = transport72.subscribe((events, head, delivery) => { record(events, head, delivery); if (head > known72) known72 = head; },
       { getMode: () => 'idle', getKnownHead: () => known72 });
     await settle();
-    assert(calls72.length <= 2,
-      `a server that never advances the cursor stops the walk immediately — got ${calls72.length} calls`);
+    assert(calls72.filter(c => c.action === 'chatSince').length <= 2,
+      `a server that never advances the cursor stops the walk immediately — got ${calls72.filter(c => c.action === 'chatSince').length} page requests out of [${calls72.map(c => c.action).join(', ')}]`);
     assert(known72 <= 500,
       `and the cursor is never advanced to a head we did not receive — got ${known72}`);
 
     // F2: an honest but enormous backlog — bounded pages per tick, and the
     // cursor stays where the events actually reached so the next tick resumes.
-    calls72 = []; deliveries.length = 0;
+    calls72.length = 0; deliveries.length = 0;
     known72 = 0;
     sinceImpl = serverSince;
     unsub72(); unsub72 = null;
     unsub72 = transport72.subscribe((events, head, delivery) => { record(events, head, delivery); if (head > known72) known72 = head; },
       { getMode: () => 'idle', getKnownHead: () => known72 });
     await settle(120);
-    assert(calls72.length > 1 && calls72.length <= 20,
-      `a million-event backlog is bounded to at most 20 pages in a single tick — got ${calls72.length}`);
-    assert(known72 === calls72.length * 500,
-      `the cursor equals exactly what was delivered, so the next tick resumes from there — got ${known72} after ${calls72.length} pages`);
+    const pagesF2 = calls72.filter(c => c.action === 'chatSince').length;
+    assert(pagesF2 > 1 && pagesF2 <= 20,
+      `a million-event backlog is bounded to at most 20 pages in a single tick — got ${pagesF2}`);
+    assert(known72 === pagesF2 * 500,
+      `the cursor equals exactly what was delivered, so the next tick resumes from there — got ${known72} after ${pagesF2} pages`);
     assert(known72 < HEAD72, 'and the bound never reports "caught up" on a backlog it has not finished');
   } finally {
     unsub72?.();
+    stub72.uninstall();
     globalThis.fetch = _realFetch72;
     globalThis.setTimeout = _realST72;
     globalThis.clearTimeout = _realCT72;
-    backend72.clearBackendConfig();
+    backend72.setDataMode('sheets');
     chat72._resetForTest();
   }
 }
@@ -8569,7 +8529,7 @@ console.log('\n[73] backendtest.mjs — spawned as a subprocess, exit code + pri
   if (summaryMatch73) {
     assert(summaryMatch73[1] === '✅ ALL PASS', `backendtest.mjs itself reports ALL PASS (got: ${summaryMatch73[0]})`);
     assert(Number(summaryMatch73[3]) === 0, `backendtest.mjs reports zero failed assertions (got ${summaryMatch73[3]} failed, ${summaryMatch73[2]} passed)`);
-    assert(Number(summaryMatch73[2]) >= 203, `backendtest.mjs actually ran its full set (got ${summaryMatch73[2]}, floor 203 — raised from 200 at v0.23.3's FINISH sweep, to the suite's real count; raised from 40 before that; the ratchet only tightens)`);
+    assert(Number(summaryMatch73[2]) >= 72, `backendtest.mjs actually ran its full set (got ${summaryMatch73[2]}, floor 72 — LOWERED from 203 by UN-237/238 and then the Sheets retirement (2026-09-23), the one direction the ratchet is allowed to move and only for this reason: assertions were DELETED WITH THE MECHANISM THEY TESTED, never weakened. First 203 -> 183 when the four scribeMemory*Remote relays went (UN-237/238), then 183 -> 72 when [1]-[9], [13] and [14] went with call() itself: BUG-A's misroute guard, BUG-E's transient ladder, the token-on-every-request proof and the allow-list all describe an Apps Script transport this app no longer has. What SURVIVES in that file is the SERVER twin, [10]-[12], which executes backend/Code.gs in a vm — and Code.gs is still in the repo because the Sheet is kept read-only for the season as the archive. scribememtest.mjs [4], adaptertest [A17] and nativeguardtest [1]-[7] assert the ABSENCE, which is a stronger claim than 'the relay refuses'. Raised from 200 at v0.23.3's FINISH sweep, from 40 before that)`);
   }
 }
 
@@ -8592,7 +8552,7 @@ console.log('\n[73b] authtest.mjs — spawned as a subprocess, exit code + print
   if (summaryMatch73b) {
     assert(summaryMatch73b[1] === '✅ ALL PASS', `authtest.mjs itself reports ALL PASS (got: ${summaryMatch73b[0]})`);
     assert(Number(summaryMatch73b[3]) === 0, `authtest.mjs reports zero failed assertions (got ${summaryMatch73b[3]} failed, ${summaryMatch73b[2]} passed)`);
-    assert(Number(summaryMatch73b[2]) >= 1529, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1529 (merged v0.23.3: RG-196 + RG-197) — was 1528 — raised from 1520 by RG-197's [51] (2026-09-21, security A-3: the dead \"Logout Commissioner\" button); and from 1503 by RG-195's [50] (2026-09-21: the Picks page's PIN-era Log Out button is not rendered in supabase mode, and is byte-identical in PIN mode); before that from 1501 by RG-193's closure pass (2026-09-21): [49](j) now injects the card's clock and (j2)/(j3) pin both sides of the grace window, so the suite no longer goes red for six hours every Monday morning; before that from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
+    assert(Number(summaryMatch73b[2]) >= 1546, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1546 \u2014 raised from 1529 by [52] (2026-09-23, re-gate MUST-FIX): the commissioner-password RE-PROMPTS are retired in supabase mode. The panel login went at Step 3b but four in-panel prompts did not, and they compared btoa(pw) against a settings field the cutover importer had correctly STRIPPED \u2014 so the merge fell through to js/data-model.js\'s published btoa(\'admin123\') and a password in the public repo was guarding a paid Anthropic call. [52] drives commReauthMode() and commPasswordCardHTML() in BOTH modes (the positive control is the point: "supabase does not prompt" is satisfied by a build that removed the PIN-mode gate too), and adds the structural rule that every getSettings().adminPasswordHash comparison sits behind that gate plus the allow-list that stops it degrading into a truthiness test. Earlier: 1529 (merged v0.23.3: RG-196 + RG-197) — was 1528 — raised from 1520 by RG-197's [51] (2026-09-21, security A-3: the dead \"Logout Commissioner\" button); and from 1503 by RG-195's [50] (2026-09-21: the Picks page's PIN-era Log Out button is not rendered in supabase mode, and is byte-identical in PIN mode); before that from 1501 by RG-193's closure pass (2026-09-21): [49](j) now injects the card's clock and (j2)/(j3) pin both sides of the grace window, so the suite no longer goes red for six hours every Monday morning; before that from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
   }
 }
 
@@ -8674,7 +8634,7 @@ console.log('\n[73h] xsstest.mjs — spawned as a subprocess, exit code + printe
   assert(!!m73h, `xsstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73h ? '' : '\n' + out.slice(-800)}`);
   if (m73h) {
     assert(Number(m73h[2]) === 0, `xsstest.mjs reports zero failed assertions (got ${m73h[2]} failed, ${m73h[1]} passed)`);
-    assert(Number(m73h[1]) >= 298, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 298 — raised from 296 at v0.23.3's unread-count reconciliation, which added two swept interpolation sites to js/chat-ui.js) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
+    assert(Number(m73h[1]) >= 297, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 297 — LOWERED from 298 by the Sheets retirement (2026-09-23): the pinned-backlog list lost its two Cloud Sync entries (the googleSheets status ternary and syncStatus.pendingWrites) because the card that interpolated them is deleted, and a STALE PIN hides the next regression — that list going DOWN is the rule working. Raised from 296 at v0.23.3's unread-count reconciliation, which added two swept interpolation sites to js/chat-ui.js) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
   }
 }
 
@@ -8795,7 +8755,7 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
   const N74 = 1237;                  // longer than one 500-row page, so the page path runs in the same scenario
   let HEAD74 = N74;
   let sinceFails74 = true;           // the cold-start read failure that starts the sequence
-  let calls74 = [];
+  let calls74 = [];   // replaced by the stub's own recorder below
   // Every scheduled callback is COLLECTED, never auto-fired, and fired in the
   // batch this test means to fire: the app schedules other timers (toast
   // removal) while this runs, so holding "the last thing scheduled" would drive
@@ -8829,27 +8789,20 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
 
   globalThis.setTimeout = fn => { timers74.push(fn); return timers74.length; };   // hold, never auto-fire
   globalThis.clearTimeout = () => {};
-  globalThis.fetch = async (url, opts = {}) => {
-    if ((opts.method || 'GET') === 'POST') {
-      const body = JSON.parse(opts.body || '{}');
-      calls74.push({ action: body.action });
-      if (body.action === 'chatAppend') { const r = serverAppend74(body.events); return { ok: true, json: async () => r }; }
-      return { ok: true, json: async () => ({ ok: true, action: body.action }) };
-    }
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    calls74.push({ action, seq });
-    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, action, head: HEAD74 }) };
-    if (action === 'chatSince') {
-      if (sinceFails74) return { ok: false, status: 500, json: async () => ({}) };   // Apps Script cold start
-      const r = serverSince74(seq, Number(u.searchParams.get('limit') || 0));
-      return { ok: true, json: async () => r };
-    }
-    return { ok: true, json: async () => ({ ok: true, action }) };
-  };
+  globalThis.fetch = async () => { throw new Error('[74] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  const stub74 = installFakeChatBackend(transport74, {
+    head: () => HEAD74,
+    since: (seq, limit) => serverSince74(seq, limit),
+    // The cold-start read failure this section is built around. It was an Apps
+    // Script 500 on the redirect leg; it is a refused select now, and the point
+    // is identical — the first page does not arrive, and the cursor must not
+    // move as though it had.
+    sinceThrows: () => sinceFails74,
+    append: (events) => serverAppend74(events),
+  });
+  calls74 = stub74.calls;
 
-  backend74.setBackendConfig('https://example.invalid/exec', 'tok74');
+  backend74.setDataMode('supabase');
   storage.saveSetting('chatEnabled', true);
   storage.saveSetting('chatEpochSeq', 0);
 
@@ -8881,7 +8834,7 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
 
     // ── B. The player sends from the blank room; the append succeeds ──
     sinceFails74 = false;                                // the server is warm now
-    calls74 = [];
+    calls74.length = 0;
     const ownId74 = chat74.sendMessage({ body: 'anyone here?', author: 'p1' });
     await fireHeld(timers74.splice(0));                  // scheduleFlush()'s coalescing timer -> flushOutbox()
     assert(calls74.some(c => c.action === 'chatAppend'),
@@ -8895,12 +8848,12 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
       `the outbox append never advances the room cursor past what the transport actually delivered — cursor ${chat74.chatStatus().head}, delivered up to ${deliveredMax74}`);
 
     // ── C. …so the very next tick MUST go and fetch. This is the user-visible half ──
-    calls74 = [];
+    calls74.length = 0;
     await fireHeld(bootTick74);
     assert(calls74.some(c => c.action === 'chatSince'),
       `the next tick after an append FETCHES the backlog instead of concluding "caught up" — got [${calls74.map(c => c.action + (c.seq !== undefined ? ':' + c.seq : '')).join(', ')}]`);
-    assert(calls74.filter(c => c.action === 'chatHead').length === 0,
-      `and with nothing yet received it skips the head probe entirely (§[71] still holds) — got [${calls74.map(c => c.action).join(', ')}]`);
+    assert(calls74[0]?.action === 'chatSince',
+      `and with nothing yet received it asks for the PAGE FIRST — no head probe in front of it (§[71] still holds; the head that follows each page is BUG-B/RG-94's separate call) — got [${calls74.map(c => c.action).join(', ')}]`);
     assert(chat74.getMessage('r1') !== null && chat74.getMessage('r' + N74) !== null,
       'the whole backlog folds — oldest and newest pre-existing messages are both in the room');
     assert(chat74.getMessages({ tag: 'all' }).length === N74 + 1,
@@ -8922,10 +8875,10 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
     // The other direction of the same fix — dropping the head adoption must not
     // strand the sender's own message when the room is already current.
     const drainTick74 = timers74.splice(0);              // the transport's next tick after the drain
-    calls74 = [];
+    calls74.length = 0;
     const own2 = chat74.sendMessage({ body: 'there you are', author: 'p1' });
     await fireHeld(timers74.splice(0));                  // flush the second send
-    calls74 = [];
+    calls74.length = 0;
     await fireHeld(drainTick74);
     assert(calls74[0]?.action === 'chatHead' && calls74.some(c => c.action === 'chatSince'),
       `a caught-up room still probes the cheap head first, sees it advance, and pulls the new event — got [${calls74.map(c => c.action).join(', ')}]`);
@@ -8935,10 +8888,11 @@ console.log('\n[74] RG-95 — the room cursor is honest at BOTH writer sites (tr
       `cursor tracks the true head once it has genuinely caught up — got ${chat74.chatStatus().head}`);
   } finally {
     unsub74?.();
+    stub74.uninstall();
     globalThis.fetch = _realFetch74;
     globalThis.setTimeout = _realST74;
     globalThis.clearTimeout = _realCT74;
-    backend74.clearBackendConfig();
+    backend74.setDataMode('sheets');
     chat74._resetForTest();
   }
 }
@@ -8950,28 +8904,24 @@ console.log('\n[75] BUG-D — whenAppended(): the outbox is the only thing that 
   // outcomes the outbox itself owns. Anything that needs the server to be able
   // to READ a message it just sent must wait on this, not on the id sendEvent
   // hands back — an id exists ~750ms of coalescing window before the wire.
-  const chat75 = mods['chat'], backend75 = mods['backend'];
+  const chat75 = mods['chat'], backend75 = mods['backend'], transport75 = mods['chatTransport'];
   const _realFetch75 = globalThis.fetch;
   let appendOk75 = true, seq75 = 500;
-  globalThis.fetch = async (url, opts = {}) => {
-    if ((opts.method || 'GET') === 'GET') {
-      // startFreshChat() reads the LIVE head before it clears (case (h)). Head
-      // 0 keeps the epoch watermark OFF (getChatEpochSeq: `Number(...) || 0`)
-      // so this case cannot hide messages from any later section — it is the
-      // outbox-clearing half of _applyEpochLocally that is under test here.
-      const action = new URL(String(url)).searchParams.get('action');
-      return { ok: true, json: async () => ({ ok: true, _action: action, head: 0 }) };
-    }
-    const body = JSON.parse(opts.body || '{}');
-    if (body.action === 'chatAppend') {
+  globalThis.fetch = async () => { throw new Error('[75] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  // startFreshChat() reads the LIVE head before it clears (case (h)). Head 0
+  // keeps the epoch watermark OFF (getChatEpochSeq: `Number(...) || 0`) so this
+  // case cannot hide messages from any later section — it is the
+  // outbox-clearing half of _applyEpochLocally that is under test here.
+  const stub75 = installFakeChatBackend(transport75, {
+    head: () => 0,
+    since: () => ({ events: [] }),
+    append: (events) => {
       if (!appendOk75) throw new Error('network down');
-      const assigned = (body.events || []).map(e => ({ id: e.id, seq: ++seq75, ts: 1_700_000_200_000 + seq75 }));
-      return { ok: true, json: async () => ({ ok: true, _action: 'chatAppend', assigned, head: seq75 }) };
-    }
-    return { ok: true, json: async () => ({ ok: true, _action: body.action }) };
-  };
+      return { assigned: (events || []).map(e => ({ id: e.id, seq: ++seq75, ts: 1_700_000_200_000 + seq75 })) };
+    },
+  });
   try {
-    backend75.setBackendConfig('https://example.invalid/exec', 'tok75');
+    backend75.setDataMode('supabase');
     storage.saveSetting('chatEnabled', true);
 
     // (a) resolves with the assigned seq once the outbox flush reconciles.
@@ -9072,8 +9022,9 @@ console.log('\n[75] BUG-D — whenAppended(): the outbox is the only thing that 
       `an epoch clear settles every wait it discards, immediately (${elapsedH}ms of a 5000ms bound)`);
     assert(chat75.chatStatus().outbox === 0, 'fixture: the epoch clear really did empty the outbox');
   } finally {
+    stub75.uninstall();
     globalThis.fetch = _realFetch75;
-    backend75.clearBackendConfig();
+    backend75.setDataMode('sheets');
     storage.saveSetting('chatEnabled', true);
     storage.saveSetting('chatEpochSeq', 0);      // case (h) wrote it — leave the room unfiltered
     chat75._resetForTest();
@@ -9174,7 +9125,7 @@ console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch76) {
     assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
     assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
-    assert(Number(summaryMatch76[2]) >= 598, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 598 — raised from 553 by SECURITY A-1-R + REVIEWER F1's §[30] (2026-09-21: the pre-config window is observed by PARKING the config fetch, and every terminal boot outcome either lifts the identity cover or paints a gate on top of it); before that from 530 by RG-198's §29 (2026-09-21: the first frame is the device's last-painted palette, Drew-approved); and from 494 by RG-196's §28 (2026-09-21, security A-1: the cached chat room is not readable before the device knows who it is); and from 474 by RG-194's §27 (a returning signed-in player is never shown the sign-in screen on a cold open); before that from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
+    assert(Number(summaryMatch76[2]) >= 567, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 567 — LOWERED from 598 by the Sheets retirement (2026-09-23): [8] (BUG-E's transient-HTTP ladder), §8b (the transientHttpStatus predicate), [10]'s TIMING SIMULATION and [19]'s two setBackendConfig writes all describe a transport that is deleted. [10]'s boot ORDER — the half a future edit could actually undo — is kept and now anchors on the ADAPTER hydrate. Raised from 553 by SECURITY A-1-R + REVIEWER F1's §[30] (2026-09-21: the pre-config window is observed by PARKING the config fetch, and every terminal boot outcome either lifts the identity cover or paints a gate on top of it); before that from 530 by RG-198's §29 (2026-09-21: the first frame is the device's last-painted palette, Drew-approved); and from 494 by RG-196's §28 (2026-09-21, security A-1: the cached chat room is not readable before the device knows who it is); and from 474 by RG-194's §27 (a returning signed-in player is never shown the sign-in screen on a cold open); before that from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
   }
 }
 
@@ -9192,21 +9143,26 @@ console.log('\n[77] DI-168 — manual chat refresh (forceTick/forceRefresh + ren
   let HEAD77 = 10;
   const mkEv77 = seq => ({ id: 'fr' + seq, seq, ts: 1_700_000_000_000 + seq, type: 'message',
                            author: 'p1', body: 'msg ' + seq, notify: false });
-  const calls77 = [];
-  globalThis.fetch = async (url) => {
-    const u = new URL(String(url));
-    const action = u.searchParams.get('action');
-    const seq = Number(u.searchParams.get('seq') || 0);
-    calls77.push({ action, seq });
-    if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD77 }) };
-    if (action === 'chatSince') {
+  globalThis.fetch = async () => { throw new Error('[77] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  // Two failure shapes this section drives, ported one layer down: a REFUSED
+  // round trip (case C, previously an HTTP 503) and one HELD OPEN (case B's
+  // double-tap, previously a `globalThis.fetch` that never resolved).
+  let headFails77 = false;
+  let holdHead77 = null;                 // when set, resolve() releases the held probe
+  const stub77 = installFakeChatBackend(transport77, {
+    head: () => {
+      if (headFails77) throw new Error('503');
+      if (holdHead77) return new Promise((r) => { holdHead77.release = () => r(HEAD77); });
+      return HEAD77;
+    },
+    since: (seq) => {
       const events = [];
       for (let s = seq + 1; s <= HEAD77; s++) events.push(mkEv77(s));
-      return { ok: true, json: async () => ({ ok: true, events, head: HEAD77 }) };
-    }
-    return { ok: true, json: async () => ({ ok: true }) };
-  };
-  backend77.setBackendConfig('https://example.invalid/exec', 'tok77');
+      return { events };
+    },
+  });
+  const calls77 = stub77.calls;
+  backend77.setDataMode('supabase');
 
   try {
     // ── A. forceTick() reuses the real tick()/drainSince() path — exactly ONE
@@ -9224,8 +9180,7 @@ console.log('\n[77] DI-168 — manual chat refresh (forceTick/forceRefresh + ren
     // ── B. Double-tap: two forceTick() calls before the first resolves still
     //    produce exactly one network call (the inFlight guard). ──
     calls77.length = 0;
-    let resolveFetch = null;
-    globalThis.fetch = () => new Promise(r => { resolveFetch = r; });   // hold the round trip open
+    holdHead77 = {};                        // hold the round trip open
     const p1 = sub77.forceTick();
     await Promise.resolve();                // let forceTick's synchronous prefix run and set inFlight
     const p2 = sub77.forceTick();
@@ -9239,12 +9194,12 @@ console.log('\n[77] DI-168 — manual chat refresh (forceTick/forceRefresh + ren
     const settled77 = async (p, ms = 3000) => Promise.race([p, new Promise(r => _realST77(() => r('TIMED-OUT'), ms))]);
     const r2 = await settled77(p2);
     assert(r2 === null, `the SECOND forceTick() while the first is still in flight coalesces to a no-op (null), not a second network call — got ${r2 === 'TIMED-OUT' ? 'a SECOND real tick that never settled (the inFlight guard did not coalesce it)' : r2}`);
-    resolveFetch({ ok: true, status: 200, json: async () => ({ ok: true, head: HEAD77 }) });
+    holdHead77.release();
+    holdHead77 = null;
     const r1 = await settled77(p1);
     assert(r1 === true, `the FIRST (real) forceTick() still resolves normally once its own round trip completes — got ${r1}`);
 
     sub77.unsubscribe();
-    globalThis.fetch = _realFetch77;
 
     // ── C. forceRefresh() (chat.js) drives the SAME mechanism end to end,
     //    and REJECTS on a failed round trip (chat-ui's Failed state depends
@@ -9255,37 +9210,31 @@ console.log('\n[77] DI-168 — manual chat refresh (forceTick/forceRefresh + ren
     //    per BUG-E) against forceRefresh()'s inFlight check — a race that
     //    would make forceTick() see inFlight===true and coalesce to `null`
     //    instead of exercising the failure path this assertion is about. ──
-    const healthyFetch77 = async (url) => {
-      const u = new URL(String(url));
-      const action = u.searchParams.get('action');
-      if (action === 'chatHead') return { ok: true, json: async () => ({ ok: true, head: HEAD77 }) };
-      if (action === 'chatSince') return { ok: true, json: async () => ({ ok: true, events: [], head: HEAD77 }) };
-      return { ok: true, json: async () => ({ ok: true }) };
-    };
-    globalThis.fetch = healthyFetch77;
+    headFails77 = false;
     chat77._resetForTest();
-    backend77.setBackendConfig('https://example.invalid/exec', 'tok77b');
+    backend77.setDataMode('supabase');
     chat77.initChat('p1');
     await settle77();
-    assert(chat77.chatStatus().offline === false, 'fixture: the boot tick landed cleanly on a healthy fetch (not racing its own retry ladder)');
+    assert(chat77.chatStatus().offline === false, 'fixture: the boot tick landed cleanly on a healthy backend (not racing its own retry ladder)');
 
-    globalThis.fetch = async () => ({ ok: false, status: 503, json: async () => ({}) });
+    headFails77 = true;
     let threw77 = false;
     try { await chat77.forceRefresh(); } catch { threw77 = true; }
     assert(threw77, 'forceRefresh() REJECTS when the forced tick fails — chat-ui.js drives Checking -> Failed off this rejection alone');
 
-    globalThis.fetch = healthyFetch77;
+    headFails77 = false;
     let threw77b = false;
     try { await chat77.forceRefresh(); } catch { threw77b = true; }
     assert(!threw77b, 'and RESOLVES once the backend recovers — the same button is its own retry (DI-168c)');
 
     chat77._resetForTest();
-    backend77.clearBackendConfig();
+    backend77.setDataMode('sheets');
   } finally {
+    stub77.uninstall();
     globalThis.fetch = _realFetch77;
     globalThis.setTimeout = _realST77;
     globalThis.clearTimeout = _realCT77;
-    backend77.clearBackendConfig();
+    backend77.setDataMode('sheets');
     chat77._resetForTest();
   }
 
@@ -9351,9 +9300,13 @@ console.log('\n[77b] RG-98 F1 — a tick that could not attempt a request must n
   globalThis.setTimeout = (fn, ms) => { scheduled77b.push({ ms, fn }); return scheduled77b.length; };
   globalThis.clearTimeout = () => {};
   Math.random = () => 0.5;   // jitter(x) === x exactly — delays compare cleanly
+  globalThis.fetch = async () => { throw new Error('[77b] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  // `fetchCalls77b` counts SERVER ROUND TRIPS, which is what this section has
+  // always meant by it — the stub's own recorder is the counter now.
+  const stub77b = installFakeChatBackend(transport77b, { head: () => 5, since: () => ({ events: [] }) });
+  const fetchCalls77bAt = () => stub77b.calls.length;
   let fetchCalls77b = 0;
-  globalThis.fetch = async () => { fetchCalls77b++; return { ok: true, json: async () => ({ ok: true, head: 5, events: [] }) }; };
-  backend77b.setBackendConfig('https://example.invalid/exec', 'tok77b');
+  backend77b.setDataMode('supabase');
   document.hidden = true;
 
   const sub77b = transport77b.subscribe(() => {}, { getMode: () => 'closed', getKnownHead: () => 0 });
@@ -9370,6 +9323,7 @@ console.log('\n[77b] RG-98 F1 — a tick that could not attempt a request must n
     next.fn();
     await drain();
   }
+  fetchCalls77b = fetchCalls77bAt();
   assert(fetchCalls77b === 0, `while hidden, zero requests were ever attempted (fixture check) — got ${fetchCalls77b}`);
   assert(delaysWhileHidden.length === 5 && delaysWhileHidden.every(d => d === delaysWhileHidden[0]),
     `every hidden reschedule uses the SAME un-consumed boot rung instead of advancing through the ladder for a tick that made no request — got [${delaysWhileHidden.join(', ')}]`);
@@ -9382,12 +9336,14 @@ console.log('\n[77b] RG-98 F1 — a tick that could not attempt a request must n
   const next77b = scheduled77b.shift();
   next77b.fn();
   await drain(20);
+  fetchCalls77b = fetchCalls77bAt();
   assert(fetchCalls77b > 0, `the first tick after visibility returns DOES attempt a request — the ladder was never spent while hidden — got ${fetchCalls77b} call(s)`);
 
   sub77b.unsubscribe();
+  stub77b.uninstall();
   document.hidden = false;
   globalThis.fetch = _realFetch77b; globalThis.setTimeout = _realST77b; globalThis.clearTimeout = _realCT77b; Math.random = _realRandom77b;
-  backend77b.clearBackendConfig();
+  backend77b.setDataMode('sheets');
 }
 
 // ── [77c] ────────────────────────────────────────────────────────────────────
@@ -9408,9 +9364,13 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
   const scheduled77c = [];
   globalThis.setTimeout = (fn, ms) => { scheduled77c.push({ ms, fn }); return scheduled77c.length; };
   globalThis.clearTimeout = () => {};
-  let fetchCalls77c = 0;
-  globalThis.fetch = async () => { fetchCalls77c++; return { ok: true, json: async () => ({ ok: true, head: 5, events: [] }) }; };
-  backend77c.setBackendConfig('https://example.invalid/exec', 'tok77c');
+  globalThis.fetch = async () => { throw new Error('[77c] no HTTP: the chat backend is Supabase and the stub is a client'); };
+  const stub77c = installFakeChatBackend(transport77c, { head: () => 5, since: () => ({ events: [] }) });
+  // A getter, so every `fetchCalls77c` read below is the live round-trip count
+  // rather than a snapshot — same meaning it had when it counted fetches.
+  let fetchCalls77cBase = 0;
+  const fetchCalls77cNow = () => stub77c.calls.length - fetchCalls77cBase;
+  backend77c.setDataMode('supabase');
   document.hidden = false;
 
   const drain77c = async (n = 20) => { for (let i = 0; i < n; i++) await Promise.resolve(); };
@@ -9420,9 +9380,10 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
     assert(typeof sub77c.wake === 'function',
       'subscribe() exposes wake() alongside forceTick()/unsubscribe — the push tap, the foreground push and the resume all enter the transport here');
 
-    fetchCalls77c = 0;
+    fetchCalls77cBase = stub77c.calls.length;
     const w1 = sub77c.wake();
     await drain77c();
+    let fetchCalls77c = fetchCalls77cNow();
     assert(fetchCalls77c === 1,
       `a wake issues its round trip IMMEDIATELY rather than waiting for the scheduled poll (got ${fetchCalls77c} request(s)) — the scheduled tick for this room would have been 60s out`);
     await w1;
@@ -9432,6 +9393,7 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
     const before77c = fetchCalls77c;
     const w2 = sub77c.wake();
     await drain77c();
+    fetchCalls77c = fetchCalls77cNow();
     assert(fetchCalls77c === before77c,
       `a second wake inside the window adds NO second round trip (got ${fetchCalls77c - before77c}) — bounded, so a flapping tab cannot hammer the backend`);
 
@@ -9441,6 +9403,7 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
     const t77c = sub77c.forceTick();
     await drain77c();
     await t77c;
+    fetchCalls77c = fetchCalls77cNow();
     assert(fetchCalls77c > beforeManual77c,
       `the 🔄 button still makes its round trip inside the wake window (got ${fetchCalls77c - beforeManual77c}) — bounding a button the player is watching would make it look broken, which is what DI-168 existed to fix`);
 
@@ -9457,8 +9420,9 @@ console.log('\n[77c] BUG-12 — the push-driven wake() fast path (bounded, and s
     assert(idle77c === false,
       `wakeChat() with no live subscription answers false instead of throwing (got ${idle77c}) — a push tap on a device with chat off must be a no-op`);
   } finally {
+    stub77c.uninstall();
     globalThis.fetch = _realFetch77c; globalThis.setTimeout = _realST77c; globalThis.clearTimeout = _realCT77c;
-    backend77c.clearBackendConfig();
+    backend77c.setDataMode('sheets');
     chat77c._resetForTest();
   }
 }
@@ -9602,7 +9566,7 @@ console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch87) {
     assert(summaryMatch87[1] === '✅', `pushtest.mjs itself reports ALL PASS (got: ${summaryMatch87[0]})`);
     assert(Number(summaryMatch87[3]) === 0, `pushtest.mjs reports zero failed assertions (got ${summaryMatch87[3]} failed, ${summaryMatch87[2]} passed)`);
-    assert(Number(summaryMatch87[2]) >= 281, `pushtest.mjs actually ran its full set (floor 281 — raised from 274 by the security gate's §[14f] (the 0019 obligation pin) and the narrowed self-test id shape; raised from 243 at v0.23.3 by section [14] (Drew's residual 3: the private self-test row is labelled, subdued, findable with the same marker, and badges nobody) and [11-30]'s rewritten no-device advice; before that from 205 by RG-193 (2026-09-21): section [13]'s "the push service has no device for this account" copy, the Background-jobs counts line, and [12m]'s token/browser-subscription evidence behind "push is on for this device"; before that from 160 by RG-192 section [12] (the OneSignal identity/subscription regression: login-before-init, the bounded retry, the honest three-fact device status, the reviewer's Reconnect/optIn BLOCK, the coordinator's prompt-free boot registration, and security F2's stale-completion re-assert); before that from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins), and from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch87[2]) >= 259, `pushtest.mjs actually ran its full set (floor 259 — LOWERED from 300 by the Sheets retirement (2026-09-23): [1]-[8] were RG-56's Sheets cell cap and the all-or-nothing batch it broke, and there is no cell. [9]-[14] — the push half, which is what this file is for — are untouched. Raised from 281 by DI-254's \u00a7[12t] (the OneSignal identity token: the token reaches login() as its second argument, a failed mint is a deliberate NO LOGIN with no storage write and no prompt, the existing bounded ladder recovers a transient failure, a token inside its five-minute margin is re-minted while a fresh one is reused, a handover never replays the previous occupant's token, and the structural pins that keep the credential out of storage and auth.js out of a static import cycle); before that raised from 274 by the security gate's §[14f] (the 0019 obligation pin) and the narrowed self-test id shape; raised from 243 at v0.23.3 by section [14] (Drew's residual 3: the private self-test row is labelled, subdued, findable with the same marker, and badges nobody) and [11-30]'s rewritten no-device advice; before that from 205 by RG-193 (2026-09-21): section [13]'s "the push service has no device for this account" copy, the Background-jobs counts line, and [12m]'s token/browser-subscription evidence behind "push is on for this device"; before that from 160 by RG-192 section [12] (the OneSignal identity/subscription regression: login-before-init, the bounded retry, the honest three-fact device status, the reviewer's Reconnect/optIn BLOCK, the coordinator's prompt-free boot registration, and security F2's stale-completion re-assert); before that from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins), and from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
   }
 }
 
@@ -9634,10 +9598,10 @@ console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printe
 for (const [label, file, floor, why] of [
   ['81b', 'supabase/tests/functions/notifyFanout.twin.mjs', 147,
    'DI-T6.1 — the fan-out handler, end to end against a fake transport (raised from 59: security audit S2, 2026-09-19, added the wrong_type webhook-config-drift pinning pair 2-10/2-11; raised to 111 by the combined release\'s SECURITY GATE F1 section [9F1] — a `visible_to` row that is not the self-test shape gets zero recipients and `direct:\'refused\'`)'],
-  ['81c', 'supabase/tests/functions/keepalive.twin.mjs', 42,
-   'DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it'],
-  ['81d', 'supabase/tests/functions.check.mjs', 677,
-   'DI-T6.14(d) — the static rules over the function sources (raised from 157 by Phase 2: `reminders`, S6-R5 (no picks/selected_team/guess), the widened S6-R3 send-secret allow-list, and the reminders payload allow-list to S6-R9; raised to 231 by the scribe-ask merge; raised to 237 by the Step 6 Phase 3 gate closure (2026-09-20), which adds S-F5 — no shipped function file selects \'*\' off `league_members` — as its own rule with two self-tests; raised to 268 by the coordinator\'s shared-foundation merge, which adds the trainer payload allow-list, widens the SEND-secret allow-list to include trainer/index.js, and registers trainer.twin.mjs; raised to 357 by the Phase 4/5 reconciliation pass, which adds scribe-classify/scribe-autonomous to the payload and SEND-secret allow-lists and folds Phase 5\'s handler discovery into the existing dynamic scan; raised to 416 by the PHASE 5 GATE CLOSURE (2026-09-20), which adds S6-R12 (the acting member is server-derived and recorded, security S-F2), S6-R13 (the evidence layer\'s blind-rule fence is applied to the DATA at one entry point, reviewer BLOCK B2), and the §STEP 6 / F5 runbook pinning block including the corrected per-dial spend figures, reviewer BLOCK B3); raised to 499 by the PHASES 3+4+5 ⊕ PHASE 6 MERGE (2026-09-20) — Phase 6 contributed S6-R9\'s ERROR clause (a per-handler error-expression allow-list) and Phases 2/3/4/5 contributed five more handlers, so the clause\'s five assertions now run against reminders/scribe-ask/trainer/scribe-classify/scribe-autonomous too. Their allow-lists were DECLARED at the merge, not the rule weakened — see ALLOWED_ERROR_EXPR\'s own merge note); raised to 634 by RG-CORS (2026-09-20), which adds S6-R15 (CORS at the serve boundary, class U only, never a wildcard) with its self-tests and the per-handler class split; before that to 582 by the COMBINED RELEASE MERGE (2026-09-20), which adds DI-206\'s `push-reach` to the payload allow-list and to the SEND-secret allow-list, and S6-R14 (every service-role messages SELECT carries .is(\'visible_to\', null), plus its no-chaining clause); raised again by the SECURITY GATE (S6-R9/error\'s third clause, which scans for the CONSTRUCTION of an error string rather than the call site)'],
+  ['81c', 'supabase/tests/functions/keepalive.twin.mjs', 56,
+   'DI-T6.7 — the only class-S function in this phase, and the job_runs retention rule that rides it (floor raised from 42 by RG-203 (2026-09-22): §[7] is the full league-resolution matrix — body used, body absent + CFBP_LEAGUE_ID used, both absent ⇒ not_configured, a non-UUID secret REFUSED rather than guessed, and the bodyShape/contentType sentinels on the two pre-work envelopes; the ratchet only tightens)'],
+  ['81d', 'supabase/tests/functions.check.mjs', 841,
+   'DI-T6.14(d) — the static rules over the function sources (raised from 157 by Phase 2: `reminders`, S6-R5 (no picks/selected_team/guess), the widened S6-R3 send-secret allow-list, and the reminders payload allow-list to S6-R9; raised to 231 by the scribe-ask merge; raised to 237 by the Step 6 Phase 3 gate closure (2026-09-20), which adds S-F5 — no shipped function file selects \'*\' off `league_members` — as its own rule with two self-tests; raised to 268 by the coordinator\'s shared-foundation merge, which adds the trainer payload allow-list, widens the SEND-secret allow-list to include trainer/index.js, and registers trainer.twin.mjs; raised to 357 by the Phase 4/5 reconciliation pass, which adds scribe-classify/scribe-autonomous to the payload and SEND-secret allow-lists and folds Phase 5\'s handler discovery into the existing dynamic scan; raised to 416 by the PHASE 5 GATE CLOSURE (2026-09-20), which adds S6-R12 (the acting member is server-derived and recorded, security S-F2), S6-R13 (the evidence layer\'s blind-rule fence is applied to the DATA at one entry point, reviewer BLOCK B2), and the §STEP 6 / F5 runbook pinning block including the corrected per-dial spend figures, reviewer BLOCK B3); raised to 499 by the PHASES 3+4+5 ⊕ PHASE 6 MERGE (2026-09-20) — Phase 6 contributed S6-R9\'s ERROR clause (a per-handler error-expression allow-list) and Phases 2/3/4/5 contributed five more handlers, so the clause\'s five assertions now run against reminders/scribe-ask/trainer/scribe-classify/scribe-autonomous too. Their allow-lists were DECLARED at the merge, not the rule weakened — see ALLOWED_ERROR_EXPR\'s own merge note); raised to 634 by RG-CORS (2026-09-20), which adds S6-R15 (CORS at the serve boundary, class U only, never a wildcard) with its self-tests and the per-handler class split; before that to 582 by the COMBINED RELEASE MERGE (2026-09-20), which adds DI-206\'s `push-reach` to the payload allow-list and to the SEND-secret allow-list, and S6-R14 (every service-role messages SELECT carries .is(\'visible_to\', null), plus its no-chaining clause); raised again by the SECURITY GATE (S6-R9/error\'s third clause, which scans for the CONSTRUCTION of an error string rather than the call site); raised 677 -> 708 by RG-202 (2026-09-22), the live cron-auth defect: S6-R6 is amended from "every entry pins verify_jwt = true" to pinning the exact SET (false on exactly the four cron-invoked functions, true on every other, cross-checked against the migrations that schedule them), and S6-R18 is added — a function the gateway no longer pre-checks gates itself FIRST and never reads `Authorization` directly, with trainer\'s dual-caller split pinned by name; raised 708 -> 755 by RG-203 (2026-09-22), the live body-loss defect: S6-R19 is added (every handler resolves league_id through the ONE shared _shared/league.js resolver, which UUID-checks BOTH sources and reads the env lazily; no handler reads body.league_id itself; trainer\'s manual path is pinned as fallback-FREE), CFBP_LEAGUE_ID joins S6-R3\'s env allow-list with a one-reader clause, and the four cron-invoked payload allow-lists gain the bodyShape/contentType diagnostic sentinels; raised 755 -> 770 by RG-223 (2026-09-22): S6-R9/message is added — `apiErrorMessage` joins the four Anthropic-calling handlers\' payload allow-lists, and because it is the first key whose words are not all ours, a name-only rule cannot carry it. The new clause pins the PRODUCER (one definition, one caller, and its body still contains the exact character class, the 240 cap and all three redaction rules) and the VALUE (every `apiErrorMessage:` in the tree reads from anthropicErrorReason() or is the empty string — never a response body), with seven self-test mutants; raised 770 -> 826 by DI-253 (2026-09-23): `push-identity-token` joins CLASS_U_HANDLERS (so every class-U rule — the wrapped serve, the payload and error allow-lists, the send-secret placement — now runs against it too), ONESIGNAL_REST_API_KEY\'s S6-R3 reader set is pinned as an EXACT four (notify-fanout, reminders, push-reach and — per the REST-KEY AMENDMENT of 2026-09-23, Drew\'s live dashboard reading: Identity Verification is a toggle with no key of its own, so the identity token is HS256 over the REST key and NO ninth secret joins the env allow-list — push-identity-token, which SIGNS with it), with a js/-and-config.json absence clause carrying the residual that this key also authorises sending push to all six, `push-identity-token` joins S6-R4\'s named kill-switch exemption, and S6-R18 gains an /identity clause pinned BY NAME: the gate is first, the secret is read after it, no property of the parsed body is read anywhere in the handler, the signed subject is requireMember()\'s own answer, and there is no startRun/finishRun for a credential to land in; raised 833 -> 837 by the reviewer\'s final-gate note N1 (2026-09-23), which adds S6-R13b \u2014 the BLIND RULE over the FACT-CANDIDATE pipeline, asserted structurally here rather than as a seeded candidate in rls.test, because migration 0022\'s apply RPC copies payload.value VERBATIM and the real guarantee is one layer up: a candidate can only come from a chat message somebody flagged "remember this", rememberThisSources reads only message/feedback events, and `messages` has no selected_team or guess column \u2014 so a content filter in the SQL would be an inert guard (RG-27) at the end of a pipe that carries no pick data. The one residual, a player typing his OWN pick into chat and flagging it, is named in the block rather than closed; raised 837 -> 841 by the N1 follow-up (2026-09-23): S6-R13b gains four SELF-TESTS, because every rule in it is an ABSENCE and an absence rule passes just as happily when pointed at the wrong text \u2014 which it was. Its messages-DDL window was `indexOf(...) + 1400` against a 1707-character CREATE TABLE, so the last three columns, the primary key, the unique constraint and the foreign key all sat OUTSIDE the text being scanned: a selected_team column added at the END of the table, which is where a column actually goes, would have been invisible while the assertion stayed green. The window is now the statement\'s own terminator and one self-test proves it reaches all four'],
   // ── static.check.mjs JOINS THE SPAWNED LIST (2026-09-20, DI-204).
   //
   // It was not here, and nothing else in the repository ran it. That is the "a suite nothing
@@ -9653,23 +9617,23 @@ for (const [label, file, floor, why] of [
   // RELABELLED '81p' AT THE COMBINED MERGE (2026-09-20). The push-self-test branch authored
   // this as '81k', which is `scribeAutonomous.twin.mjs`'s label on the Phase 5 side; the label
   // is only a console prefix, but a duplicate one makes a failing line ambiguous to read.
-  ['81p', 'supabase/tests/static.check.mjs', 1510,
-   'the offline half of the migration proof — SEC F1 over every SELECT policy in all eighteen migrations (0018 included, appended LAST because it REDEFINES messages_select and the replay is last-wins), the grant/revoke replay that proves visible_to and emitted_by are in no client column list, the 0018 restore-drift comparison (the one mutation pair in this folder whose restore is a POLICY BODY rather than a grant), REV F1\'s mutation-header completeness, and RG-41c/d over rls.test.mjs. Raised 1379 -> 1402 at the combined merge (0016/0017 join the replay) and -> 1436 by S5/T5.11\'s amendment for js/platform.js (which asserts platform.js imports nothing and that backend.js already imports it) plus the SECURITY GATE\'s 0018 SEC-1/SEC-2/SEC-3 write-side rules and SEC-F2\'s report_app_version rate floor; raised 1436 -> 1470 by the STEP 6 REHEARSAL GATE (2026-09-20), which adds the plpgsql name/column AMBIGUITY class rule over migrations 0013+ (SQLSTATE 42702 — the defect that made scribe_rate_bump() unusable on a real server while three verify queries read green), its own self-test, the corrected V0014-2/V0014-4/V0014-6 pins, the chat_append_system platform rate-window rules, and the "no member-gated RPC against league 2 inside a mustSucceed" class rule over rls.test.mjs'],
-  ['81e', 'supabase/tests/functions/reminders.twin.mjs', 55,
-   'DI-T6.2 — reminders, end to end against a fake transport: the auth/switch/secret orderings, the happy path (personalized reminders + batched locking-soon + the deterministic room post), idempotency, and the blind-rule structural scan. Raised 45 -> 48 by the STEP 6 REHEARSAL GATE (2026-09-20): 8-5/8-6/8-7 exercise the REAL room-post refusal (P0001 `system_rate`) rather than only a generic error, because that is the one that actually fired on cfbp-test'],
+  ['81p', 'supabase/tests/static.check.mjs', 1719,
+   'the offline half of the migration proof — SEC F1 over every SELECT policy in all eighteen migrations (0018 included, appended LAST because it REDEFINES messages_select and the replay is last-wins), the grant/revoke replay that proves visible_to and emitted_by are in no client column list, the 0018 restore-drift comparison (the one mutation pair in this folder whose restore is a POLICY BODY rather than a grant), REV F1\'s mutation-header completeness, and RG-41c/d over rls.test.mjs. Raised 1379 -> 1402 at the combined merge (0016/0017 join the replay) and -> 1436 by S5/T5.11\'s amendment for js/platform.js (which asserts platform.js imports nothing and that backend.js already imports it) plus the SECURITY GATE\'s 0018 SEC-1/SEC-2/SEC-3 write-side rules and SEC-F2\'s report_app_version rate floor; raised 1436 -> 1470 by the STEP 6 REHEARSAL GATE (2026-09-20), which adds the plpgsql name/column AMBIGUITY class rule over migrations 0013+ (SQLSTATE 42702 — the defect that made scribe_rate_bump() unusable on a real server while three verify queries read green), its own self-test, the corrected V0014-2/V0014-4/V0014-6 pins, the chat_append_system platform rate-window rules, and the "no member-gated RPC against league 2 inside a mustSucceed" class rule over rls.test.mjs; raised 1510 -> 1572 by RG-202 (2026-09-22), which loads migration 0020 into the replay and adds the 0020 section: the four rescheduled jobs proven name-for-name against 0012/0013/0015/0017 (schedule string, path, timeout, trainer\'s Chicago-09:00 `where`, scores-refresh\'s per-league fan-out), the apply-time Vault preflight, the CRON-AUTH class rule over migrations 0020+ with its self-tests, the 0020_cron_jwt_open/_restore mutation pair, the config.toml cross-check, and the runbook pins; raised 1572 -> 1597 by RG-227 (2026-09-22): migration 0021 joins the replay and the 0021 section proves the cfbp_trainer reschedule is 0020\'s command VERBATIM with only `timeout_milliseconds` changed (25000 -> 140000), that the other three jobs are not mentioned at all, and — the point of putting it here rather than in the twin — the CROSS-FILE arithmetic, reading TRAINER_WALL_CLOCK_MS out of trainer/index.js and EDGE_WALL_CLOCK_BUDGET_MS out of _shared/anthropic.js so that raising one constant and forgetting the scheduler fails offline; raised 1597 -> 1665 by 0022 and the RETIREMENT ceremony (UN-237/238, 2026-09-23), which loads migration 0022 into the replay and adds the 0022 section: the ON CONFLICT expression compared CHARACTER-FOR-CHARACTER against the unique index in the same file (a drift there does not error, it silently turns the upsert into an append), the SELECT-narrowing rule that refuses a surviving top-level `is_member(league_id) or` branch, the INVOKER-not-DEFINER pin on both RPCs, the forced provenance AND confidence rule on every non-commissioner policy branch, the 0022_memory_select_open/_restore pair with its restore-drift POLICY-BODY comparison, the V0022-6 non-vacuity rules (a seed count, two apply calls with different EXPECTs, and a rollback), and the §0022 runbook pins; plus the §RETIREMENT block, which pins DI-T6.16\'s ORDER as POSITIONS rather than prose (verify -> rotate -> archive -> read-only, because each step is irreversible-ish and worthless if the one before it has not been done), both halves of the CFBP_JOB_SECRET rotation with the bad_job_header consequence of moving only one, the --env-file protocol with `secrets set KEY=value` forbidden by name, the trigger deletion that closes the stale-client hole, ARCHIVE-not-delete, the Sheet kept read-only as the archive because the Supabase import is a PROJECTION of it, and the honest rollback; raised 1665 -> 1717 by the SECURITY GATE\'s four findings (2026-09-23): F1\'s rules that the wager arm is on INSERT and NOT on UPDATE\'s USING (two policies eight lines apart, otherwise word for word the same, so "make them match" is the tidy and entirely wrong edit) plus the second mutation pair 0022_memory_update_wager_open/_restore whose restore-drift comparison covers BOTH clauses \u2014 the mutation differs from the correct body by ONE LINE and that same line legitimately appears in the WITH CHECK immediately below it; F3\'s rules that the INSERT policy is exercised as a BACKSTOP FOR DIRECT PostgREST writes and that its residual (the RPC\'s key/value caps have no check constraint behind them) is NAMED rather than implied; F4\'s R6b rules over the runbook, which pin that the Sheet\'s adminPasswordHash / sitePin / six pinHash cells are cleared BEFORE the Viewer flip and not after, that btoa is an ENCODING rather than a hash, and that the SUPABASE copy of adminPasswordHash must survive because it still gates the commissioner re-prompts; and F2\'s whole 0023 section \u2014 migration 0023 joins the replay LAST (it REDEFINES scribe_learnings_select, so a replay resolving it to 0002\'s body would read the narrowed scribe_memory policy next to the wide scribe_learnings one and call the pair finished), with the reader enumeration by file:line that is the one rule that would have caught this, the RG-12 answer about the empty hydrate, the scribe_canon residual left NAMED rather than swept in, the V0023-4 non-vacuous read, the 0023_learnings_open/_restore pair, and the \u00a70023 runbook pins including the 0022-then-0023 paste order; raised 1717 -> 1719 by the re-gate MUST-FIX (2026-09-23), which REWRITES the three R6b-0 rules: that step was a HARD GATE for about an hour ("stop if Supabase has no adminPasswordHash, the re-prompts need it"), and investigating the gate is what found the defect \u2014 the re-prompts compared against a field CREDENTIAL_FIELDS had correctly STRIPPED at the cutover, so the merge fell through to js/data-model.js\'s published btoa(\'admin123\'). v0.23.5 removed the re-prompts, which INVERTS the step: Supabase holding no hash is the CORRECT state. The rules now pin the new reasoning, the retained query, the expected has_hash = f, and the ABSENCE of the old STOP \u2014 a runbook that still says stop after its reason evaporated is how a ceremony gets abandoned halfway through on a Saturday night'],
+  ['81e', 'supabase/tests/functions/reminders.twin.mjs', 62,
+   'DI-T6.2 — reminders, end to end against a fake transport: the auth/switch/secret orderings, the happy path (personalized reminders + batched locking-soon + the deterministic room post), idempotency, and the blind-rule structural scan. Raised 45 -> 48 by the STEP 6 REHEARSAL GATE (2026-09-20): 8-5/8-6/8-7 exercise the REAL room-post refusal (P0001 `system_rate`) rather than only a generic error, because that is the one that actually fired on cfbp-test; raised 55 -> 62 by RG-203 (2026-09-22): section [3b] — the scan runs from the CFBP_LEAGUE_ID secret when the pg_net body does not arrive, is still scoped to that league alone, and still refuses to guess when neither source answers'],
   // Step 6 Phase 3 (scribeAsk, DI-T6.3) — the fourth handler, and the first
   // class-U one: switch/auth/secret/dedup/happy-path/refusal/outage, driven
   // against the REAL scribe-ask/index.js through the same fake transport.
-  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 266,
-   `DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round Anthropic exchange scanned for the secret), and (raised from 29 to 266 by the Phase 3 gate closure, 2026-09-20) B1's reachability assertion (safety+persona actually ride the request), B2's player-boundaries-by-construction section (asker-only, no tool call needed, scoped away from another player and from a low-confidence row), S-F1's length cap + generalized dangling-ack degrade, S-F2's fail-closed rate reads (including the legal-zero-budget case), S-F4's abort-on-timeout proof, and S-F5's named-columns proof`],
+  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 363,
+   `DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round Anthropic exchange scanned for the secret), and (raised from 29 to 266 by the Phase 3 gate closure, 2026-09-20) B1's reachability assertion (safety+persona actually ride the request), B2's player-boundaries-by-construction section (asker-only, no tool call needed, scoped away from another player and from a low-confidence row), S-F1's length cap + generalized dangling-ack degrade, S-F2's fail-closed rate reads (including the legal-zero-budget case), S-F4's abort-on-timeout proof, and S-F5's named-columns proof; raised 266 -> 295 by RG-222 (2026-09-22, live 400): §[16] validates the REAL request body against the Messages API subset we send — system-block shape, non-empty text, cache_control placement and the 4-breakpoint ceiling, custom-vs-server tool shapes (the server-tool type string READ OUT of Code.gs's own working payload), message-block and orphan-tool_result rules, integer max_tokens, no anthropic-beta, and the thinking/output_config.effort PAIR that this defect broke — with eleven self-test mutants proving the validator can fail; and §[17] pins the diagnostic (closed-set error type + our own dotted field path in job_runs.payload); raised 295 -> 322 by RG-223/RG-224 (2026-09-22, the SECOND live 400 and the 75-second EarlyDrop beside it): §[18] pins the sanitised 'apiErrorMessage' — the live message shape round-trips losslessly, an Anthropic-key-shaped token and anything after 'Bearer ' become '[redacted]', a padded 2,000-char message is capped at 240, control characters / a newline / an em-dash / an emoji are stripped to a declared ASCII class, a 2xx writes the key at all, plus ten unit-level clauses on the sanitiser itself (idempotence, non-string input, the 31-vs-32 redaction boundary, a long field path NOT mistaken for a key, an ANSI escape, four overlong inputs); 17-4 is AMENDED there, not deleted — the error SLOT is still 100% ours, which is what security finding S3 was actually about; and §[19] pins that ZERO timers remain armed after handle() resolves on the success path, the two-call 400 path, a rejecting fetch and a fired timeout — the 'AbortSignal.timeout' that could not be cancelled is now an AbortController cleared in a finally; raised 322 -> 337 by RG-225 (2026-09-22, the live timeouts after Drew rotated the key): 14-4 is REPLACED — the old '2 x per-call timeout <= wall clock' arithmetic was the relationship that justified 12s/30s and that silently blessed retrying a timeout; the new clauses pin wall clock + one timeout <= EDGE_WALL_CLOCK_BUDGET_MS with at least 30s spare, a per-call ceiling sized for a real tool+web-search Sonnet 5 reply, and the wall clock as the binding constraint; and new section [14b] pins that a timeout is NOT an outage — both abort spellings classify as 'timeout', a socket failure stays 'network_error' with no message, the timeout message names OUR constant and not the exception's words, a timeout is NOT retried (one call) while a socket failure is (two, and it recovers), and a timed-out call is still metered; +1 (18-13b) from the mutation proof, which found that deleting the sk-ant prefix redaction left the twin green — the fixture key was long enough for the generic 32-character rule to swallow anyway, so a SHORT key is now asserted too; raised 338 -> 363 at the GATE (2026-09-22): 18-13c/18-13d make the sanitiser's ORDER real — the module claimed [18] asserted it and it did not, and inverting redaction and the character-class strip leaks the tail of a credential containing a stripped character (Bearer ab@cdefghijkl); and new section [14c] pins RG-226, that a deterministic 4xx is NOT retried — six status codes cost one Anthropic call each, 429/500/503/529 still get their retry, a 529-then-200 recovers, a 2xx with an unparseable body is retried, and the spend clause records that our own ledger meters once per INVOCATION rather than per attempt, so the wasted retry was invisible to the budget ceiling and only the policy can stop it`],
   // Reviewer BLOCK B1 (2026-09-20) — the drift guard `scribe-persona.mjs`
   // claimed but did not build: docs/SCRIBE.md compared byte-for-byte against
   // the embedded snapshot, modulo exactly the documented Slack-legacy strip.
   ['81g', 'supabase/tests/scribePersonaDrift.check.mjs', 9,
    'DI-T6.12 G5 / reviewer BLOCK B1 — SCRIBE_PERSONA_TEXT equals a fresh read of docs/SCRIBE.md modulo exactly SCRIBE_PERSONA_STRIPPED_TEXT (data, not a regex), plus three self-tests proving the comparison can actually fail'],
   // ═══ BEGIN STEP 6 PHASE 4 (trainer) ═══
-  ['81h', 'supabase/tests/functions/trainer.twin.mjs', 99,
-   'DI-T6.4 — the trainer handler, both entry points, end to end against a fake transport: the auth-class split (raised from 37 to 43 by the coordinator\'s shared-foundation merge, 2026-09-20 — class U now goes through the canonical requireCommissioner()/my_member_id() gate, and the budget section adds the fail-closed rate-read proof plus the shared scribe_rate_bump() write proof; raised to 92 by the Phase 4 GATE CLOSURE the same day), the manual floor, the shared budget:<YYYY-MM> check, the insufficient-data floor holding the cursor, RG-144\'s resolver through the REAL js/scribe-trainer-rules.js, per-kind auto-approval, fail-closed on a model error, G6 + RG-82 REACHABILITY (system[0]/[1] are the two ported constants BYTE FOR BYTE on the wire, not a substring), BLOCK 1\'s structural "prompt promises == input provides" check over the ACTUAL request (planted rewrite, weigh-in, 📌 source body and per-response aftermath all present), the blind rule with a planted pick on both a message meta and a member row, S-F1 (req.bodyUsed === false on the refused class-S path), S-F2 (a self-flagged 📌 source withholds auto-approval, interleaved with a legitimate third-party flag), S-F3 (a fact\'s subject must be its source\'s speaker), S-F4 (every stored string capped, with the fake enforcing messages.body\'s real 23514), S-F6 (a missing 0014 diagnosed as not_configured, a cursor regression surfaced), reviewer note 2 (job_runs.actor is \'scheduled\'/\'manual\'), and the cursor CAS reported as ok:true even when it returns false'],
+  ['81h', 'supabase/tests/functions/trainer.twin.mjs', 148,
+   'DI-T6.4 — the trainer handler, both entry points, end to end against a fake transport: the auth-class split (raised from 37 to 43 by the coordinator\'s shared-foundation merge, 2026-09-20 — class U now goes through the canonical requireCommissioner()/my_member_id() gate, and the budget section adds the fail-closed rate-read proof plus the shared scribe_rate_bump() write proof; raised to 92 by the Phase 4 GATE CLOSURE the same day), the manual floor, the shared budget:<YYYY-MM> check, the insufficient-data floor holding the cursor, RG-144\'s resolver through the REAL js/scribe-trainer-rules.js, per-kind auto-approval, fail-closed on a model error, G6 + RG-82 REACHABILITY (system[0]/[1] are the two ported constants BYTE FOR BYTE on the wire, not a substring), BLOCK 1\'s structural "prompt promises == input provides" check over the ACTUAL request (planted rewrite, weigh-in, 📌 source body and per-response aftermath all present), the blind rule with a planted pick on both a message meta and a member row, S-F1 (req.bodyUsed === false on the refused class-S path), S-F2 (a self-flagged 📌 source withholds auto-approval, interleaved with a legitimate third-party flag), S-F3 (a fact\'s subject must be its source\'s speaker), S-F4 (every stored string capped, with the fake enforcing messages.body\'s real 23514), S-F6 (a missing 0014 diagnosed as not_configured, a cursor regression surfaced), reviewer note 2 (job_runs.actor is \'scheduled\'/\'manual\'), and the cursor CAS reported as ok:true even when it returns false; raised 99 -> 107 by RG-203 (2026-09-22): section [2b] — the SCHEDULED pass falls back to CFBP_LEAGUE_ID when the body is lost, while the MANUAL commissioner path never does and does not even read the secret; raised 107 -> 126 by RG-227 (2026-09-22, the live manual-run timeout): section [16] is the Trainer\'s OWN ceiling — the four named constants and the full arithmetic chain (110s call + 10s DB <= 120s wall clock, + 15s margin <= EDGE_WALL_CLOCK_BUDGET_MS), that the shared 25s default is UNMOVED for scribe-ask/classify/autonomous, the delay the handler ACTUALLY ARMS on the wire (25000 at HEAD, which is the reproduction made permanent), one call and no retry on a timeout, the row naming the ceiling that really fired rather than the shared constant, the spend still metered and the cursor still held, and the abort path itself under a 40ms override; raised 126 -> 148 by RG-228 (2026-09-23, the live `unparseable_output` row with an empty payload): section [17] is THE REPLY — the request shape pinned against Code.gs\'s own working payload at test time (thinking + effort + format, all three), the extraction widened to the LAST text block and a ```json fence, `truncated_output` as its own sentinel for a max_tokens cut, and every exit after the model call carrying stopReason/contentBlocks/blockTypes/textLen/textHead/costUsd/usage instead of {}'],
   // Reviewer BLOCK 2 (2026-09-20) — the drift guard `scribeTrainerPrompt.js` CLAIMED and nobody
   // had written: Code.gs's two Trainer declarations, extracted BY ANCHOR and compared byte-for-byte
   // against the two shipped constants. The reachability half is trainer.twin.mjs [9] above.
@@ -9683,6 +9647,13 @@ for (const [label, file, floor, why] of [
   // duplicate makes a failing line ambiguous to read.
   ['81n', 'supabase/tests/functions/pushReach.twin.mjs', 63,
    'DI-206 — push-reach end to end: the class-U gate (and that nothing at all happens before it), the server-side 60s rate limit that writes no run row and reads no send secret, per-member failure isolation (a timeout is `lookup failed`, NEVER `no device`), the untrusted-response defences (50-subscription cap, strict boolean `enabled`, non-array subscriptions), the identity check that the external id queried is the same member id notify-fanout targets, and the four-field-only payload'],
+  // ── DI-253 (push-identity-token) — the TENTH handler and the third class-U
+  //    one. The only function in the tree whose successful response is a
+  //    CREDENTIAL, so its twin re-computes the HS256 signature with node:crypto
+  //    rather than taking the handler's word for it, and mutation-proves the one
+  //    property UN-236 is about: the subject is the JWT's, never the body's.
+  ['81r', 'supabase/tests/functions/pushIdentityToken.twin.mjs', 62,
+   'DI-253 — push-identity-token end to end: the class-U member gate (and that the SIGNING KEY is never read for a caller who fails it), the cross-league refusal, an independently verified HS256 signature over {sub,iat,exp}, the body-cannot-choose-the-subject mutation in six spellings, the atomic 10-per-60s per-member ceiling and its deliberate fail-OPEN on a ledger error, the not_configured branch that never returns a token, the gate->client->ceiling->secret ordering read off the spy log, and the absence of any job_runs row (which is what makes `token` safe on the S6-R9 payload allow-list). Raised 54 -> 62 by the REST-KEY AMENDMENT (2026-09-23): Drew read the live OneSignal dashboard and Identity Verification is a per-channel TOGGLE with no key of its own — the identity token is HS256 over the app\'s REST API KEY, so there is no ninth secret. §[4] gains the KEY-SOURCE mutation (only the retired ONESIGNAL_IDENTITY_SECRET set ⇒ no token, and the retired name is not even read) with its positive control, and §[7] pins the residual the shared key creates: the key that signs is the key that sends push to all six, so it must leave this function nowhere — not in the response body, not in the response shape, not in a database call, not in a captured log line, with a non-vacuity check that the fixture key really is the one signing; the ratchet only tightens'],
   ['81i', 'supabase/tests/scribeTrainerPromptDrift.check.mjs', 18,
    'DI-T6.12 G6 / reviewer BLOCK 2 — TRAINER_SAFETY_TEXT and TRAINER_PROMPT_BASE_TEXT are byte-identical to backend/Code.gs\'s SCRIBE_TRAINER_SAFETY_ / SCRIBE_TRAINER_PROMPT_BASE, extracted by declaration anchor rather than by line number (which rots), with five self-tests proving the extractor and the comparison can both fail'],
   // ═══ END STEP 6 PHASE 4 ═══
@@ -9704,8 +9675,8 @@ for (const [label, file, floor, why] of [
   // entry as '81e', which is `reminders.twin.mjs`'s label on the Phase 2 side.
   // Relabelled '81m' here so the two coexist — the label is only a console
   // prefix, but a duplicate one makes a failing line ambiguous to read.
-  ['81m', 'supabase/tests/functions/scoresRefresh.twin.mjs', 68,
-   'DI-T6.6 — the scores-refresh handler, driving the REAL js/data-provider.js + js/scoring.js pipeline against a fake transport and a canned ESPN fixture (raised from 43 to 56 at the validation/security gate, then to 68 at the re-gate: §[10] no-proxy/sentinel, §[11] no-op-write, final-never-regresses and patch validation)'],
+  ['81m', 'supabase/tests/functions/scoresRefresh.twin.mjs', 74,
+   'DI-T6.6 — the scores-refresh handler, driving the REAL js/data-provider.js + js/scoring.js pipeline against a fake transport and a canned ESPN fixture (raised from 43 to 56 at the validation/security gate, then to 68 at the re-gate: §[10] no-proxy/sentinel, §[11] no-op-write, final-never-regresses and patch validation); raised 68 -> 74 by RG-203 (2026-09-22): section [3b] — the single-league fallback, with the multi-league limit asserted and written down rather than discovered'],
   // ── RG-CORS (2026-09-20) — the CROSS-CUTTING twin, and the reason it exists.
   //
   // Every other entry above drives ONE handler. This one drives the CORS
@@ -9720,8 +9691,8 @@ for (const [label, file, floor, why] of [
   // and CORS is a property of the SERVED entry point plus the browser's own
   // preflight — neither of which a direct handler call involves. This file
   // asserts on `serve` (= `withCors(handle)`) instead.
-  ['81q', 'supabase/tests/functions/cors.twin.mjs', 167,
-   'RG-CORS — the preflight/allow-list/response-header contract for every class-U function (push-reach, scribe-ask, scribe-classify, scribe-autonomous, trainer), plus the proof that the four class-S/W functions did NOT gain CORS'],
+  ['81q', 'supabase/tests/functions/cors.twin.mjs', 182,
+   'RG-CORS — the preflight/allow-list/response-header contract for every class-U function (push-identity-token, push-reach, scribe-ask, scribe-classify, scribe-autonomous, trainer), plus the proof that the four class-S/W functions did NOT gain CORS. Floor raised 167 -> 182 by DI-253 (2026-09-23), which adds the sixth class-U function — the one a player\'s browser calls on every boot, so a preflight it could not answer would read as "push isn\'t linked" on every phone in the league'],
   // ── refreshtest.mjs — THE CLIENT HALF, AND IT HAD NEVER BEEN IN THE SWEEP.
   //
   // Found at the Phase 6 validation gate (2026-09-20). `refreshtest.mjs` owns
@@ -9749,8 +9720,25 @@ for (const [label, file, floor, why] of [
   // ServiceWorkerRegistration and fetch wholesale, which would poison every suite after it in
   // this process. Floor at the current count, per the adaptertest precedent — the ratchet only
   // tightens.
-  ['93', 'notifytest.mjs', 561,
-   'RG-193-adjacent (release v0.23.0) — the push/notification suite, including [25e]\'s STATIC_ASSETS completeness scan over every module app.js statically imports, the service-worker reload-loop convergence proof, and DI-T6.2\'s reminder-rules.js/notifyServer.mjs parity twin ([30])'],
+  // ── scribememtest.mjs — THE CLIENT HALF OF SCRIBE MEMORY (UN-237/238, 2026-09-23).
+  //
+  // `memorytest.mjs` ([79], above) proves the SERVER half of the OLD one: backend/Code.gs in a
+  // vm. That is now the archive. This suite proves what replaced it — js/supabase-backend.js
+  // §12b's four calls and, in its §[2], js/app.js's REAL handlers driven through the REAL
+  // DEFAULTS to a fake PostgREST client with no transport stub anywhere.
+  //
+  // THAT SECOND PART IS THE POINT, and it is the assertion that would have caught the reported
+  // bug. groupdtest drives the same handlers through `_wireScribeMemoryTransportForTest`, which
+  // proves the HANDLERS; every one of them was correct on 2026-09-23 and every one of them
+  // called a relay the allow-list refused. A seam test cannot see a wiring defect.
+  //
+  // Spawned rather than imported for [73]'s reason: it installs its own fake client into the
+  // adapter singleton via `sb.init()` and calls `sb._resetForTest()` repeatedly, which would
+  // leave every suite after it in this process talking to a store that no longer exists.
+  ['95', 'scribememtest.mjs', 38,
+   'UN-237/238 / DI-258-260 — the client half of SCRIBE memory on Supabase: the four adapter calls and their wire shape, loud-fail on every refusal the server has (including the POLICY-FILTERED DELETE, which PostgREST answers with an empty set and NO error), the whole chain from js/app.js\'s real handlers with no transport stub, the apply sweep\'s idempotency and quiet-mode contract, and the structural proof that js/backend.js\'s four scribeMemory*Remote relays are GONE rather than stubbed'],
+  ['93', 'notifytest.mjs', 568,
+   'RG-193-adjacent (release v0.23.0) — the push/notification suite, including [25e]\'s STATIC_ASSETS completeness scan over every module app.js statically imports, the service-worker reload-loop convergence proof, and DI-T6.2\'s reminder-rules.js/notifyServer.mjs parity twin ([30]). Floor raised 561 -> 568 by DI-254 (2026-09-23): [24e2] EVIDENCES the four new toast-map exemptions instead of declaring them — the identity mint\'s reasons are internal because _assertIdentity() branches on `.ok` and never on `.reason`, which is checked rather than trusted'],
 ]) {
   console.log(`\n[${label}] ${file} — spawned as a subprocess, exit code + printed pass/fail line both checked…`);
   const { spawnSync } = await import('node:child_process');
@@ -9903,7 +9891,7 @@ console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release note
   // ══ THE EMIT ══
   const { getWhatsNewPosted } = storage;
   const K82 = 'cfbp_whatsnew_posted';
-  const priorCfg82 = backend82.getBackendConfig?.() || null;
+  const priorMode82 = backend82.getDataMode();
   const countPosts82 = () => chat.getMessages({ tag: 'all' }).filter(m => m.meta?.kind === 'whatsNew').length;
   // MUTATION-DRIVEN HARDENING (2026-09-12): counting the FOLD cannot see a
   // duplicate send. Deleting the device-ledger check entirely left this section
@@ -9922,7 +9910,7 @@ console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release note
   storage.addPlayer({ playerId: 'wn_p1', displayName: 'WNTester', active: true });
   storage.setSession('wn_p1', false, true);
   storage.saveSetting('chatEnabled', true);
-  backend82.setBackendConfig('https://example.invalid/exec', 'tok');
+  backend82.setDataMode('supabase');   // was setBackendConfig(url, token): isBackendConfigured() now answers the data mode
   resetLedger82();
   const before82 = countPosts82();
 
@@ -9978,10 +9966,10 @@ console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release note
          !getWhatsNewPosted().includes('v9.9.1'),
     '82-41: SESSION GATE (Q4) — a device that merely cleared the site PIN does not announce a release to the league');
   storage.setSession('wn_p1', true, false);
-  backend82.clearBackendConfig();
+  backend82.setDataMode('sheets');   // was clearBackendConfig()
   assert(attempt82({ version: 'v9.9.1', date: '2026-09-12', releases: REL82 }) === 0,
     '82-42: …and neither does a device with no backend configured, even as the commissioner');
-  backend82.setBackendConfig('https://example.invalid/exec', 'tok');
+  backend82.setDataMode('supabase');   // was setBackendConfig(url, token): isBackendConfigured() now answers the data mode
 
   // The truncated headline, through the real emit.
   resetLedger82();
@@ -10066,8 +10054,8 @@ console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release note
     '82-58: it is called from navigateTo(), immediately after checkPickRevealDue() — the one chokepoint every client passes through, with no new timer');
 
   // Restore everything this section touched.
-  backend82.clearBackendConfig();
-  if (priorCfg82?.url) backend82.setBackendConfig(priorCfg82.url, priorCfg82.token);
+  backend82.setDataMode('sheets');   // was clearBackendConfig()
+  backend82.setDataMode(priorMode82);
   resetLedger82();
   storage.clearSession();
 }
@@ -10089,7 +10077,7 @@ console.log('\n[82] FEAT-3 — SCRIBE release post (UN-200) + Rules release note
 console.log('\n[83] FEAT-2 — cfbp_game_requests: seam declarations…');
 {
   const storageSrc83 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
-  const backendSrc83 = await readFile(new URL('./js/backend.js', import.meta.url), 'utf8');
+  const projSrc83 = await readFile(new URL('./js/supabase-projection.js', import.meta.url), 'utf8');
   const cssSrc83     = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
 
   // ── (a) The key exists in KEYS, and is NOT device-local. ──
@@ -10119,15 +10107,28 @@ console.log('\n[83] FEAT-2 — cfbp_game_requests: seam declarations…');
   //        next time another device pushes a stale mirror — the exact bug Drew
   //        reported on 2026-09-01 about feedback going missing, and it would go
   //        unnoticed for weeks. ──
-  const appendOnly83 = (backendSrc83.match(/const _APPEND_ONLY_ID = \{[^}]*\};/) || [''])[0];
-  assert(appendOnly83.length > 0, '83-9: fixture check — backend.js\'s _APPEND_ONLY_ID map was located');
-  assert(/cfbp_game_requests:\s*'id'/.test(appendOnly83),
-    '83-10: _APPEND_ONLY_ID includes cfbp_game_requests — the union merge (remote rows first, then local-only) is what keeps six devices from eating each other\'s requests');
-  const neutered83 = appendOnly83.replace(/,\s*cfbp_game_requests:\s*'id'/, '');
-  assert(neutered83 !== appendOnly83 && !/cfbp_game_requests/.test(neutered83),
-    '83-11: canary — the scan DOES fire on removal: deleting the entry from a copy of the real line makes the assertion above fail');
-  assert(/cfbp_feedback:\s*'id'/.test(appendOnly83) && /cfbp_notifications:\s*'id'/.test(appendOnly83),
-    '83-12: …and the two existing append-only keys are untouched by this batch');
+  // PORTED 2026-09-23. This read js/backend.js's `_APPEND_ONLY_ID` map: without
+  // `cfbp_game_requests` in it, a request made on Kevin's phone was destroyed
+  // the next time another device pushed a stale mirror — the exact bug Drew
+  // reported on 2026-09-01 about feedback going missing. The map, and the
+  // whole-key hydrate rebase it fed, are deleted with the Sheets adapter.
+  //
+  // THE PROTECTION IS STRUCTURAL NOW, WHICH IS WHY THE MAP COULD GO: the key is
+  // a ROWS-kind route in js/supabase-projection.js, so a write is a per-row
+  // diff. Six devices append six rows to `game_requests`; a device that never
+  // read Kevin's row never sends it, so there is nothing for a union to
+  // protect against. The canary below is kept in the same shape as 83-5/83-8:
+  // a rule that cannot fail is not a rule (RG-27).
+  const routes83 = (projSrc83.match(/const KEY_TABLES = \{[\s\S]*?\n\};/) || [''])[0];
+  assert(routes83.length > 0, '83-9: fixture check — js/supabase-projection.js\'s KEY_TABLES map was located');
+  assert(/cfbp_game_requests:\s*\{\s*tables:\s*\['game_requests'\],\s*kind:\s*'rows'\s*\}/.test(routes83),
+    '83-10: cfbp_game_requests is a ROWS-kind route — one row per request, written as a per-row diff, so six devices cannot eat each other\'s requests the way a whole-key push could');
+  const neutered83 = routes83.replace(/cfbp_game_requests:\s*\{[^}]*\},?\n/, '');
+  assert(neutered83 !== routes83 && !/cfbp_game_requests/.test(neutered83),
+    '83-11: canary — the scan DOES fire on removal: deleting the route from a copy of the real map makes the assertion above fail');
+  assert(/cfbp_feedback:\s*\{\s*tables:\s*\['feedback'\],\s*kind:\s*'rows'\s*\}/.test(routes83)
+      && /cfbp_notifications:\s*\{\s*tables:\s*\['notifications'\],\s*kind:\s*'rows'\s*\}/.test(routes83),
+    '83-12: …and the two other append-only keys this rule has always covered are routed the same way');
 
   // ── (d) Tap targets. .btn-sm bases at 34px — under the CONVENTIONS #17
   //        floor — so every control in this card takes a SCOPED override,
@@ -10180,7 +10181,7 @@ console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails close
   const backend84 = mods['backend'];
   const { checkWagersDue, _setWagerCacheForTest } = app84;
   const K84 = 'cfbp_wager_resurfaced';
-  const priorCfg84 = backend84.getBackendConfig?.() || null;
+  const priorMode84 = backend84.getDataMode();
   const DAY = 86400000;
 
   const wk84 = (id, n, status, mode) => ({ weekId: id, season: '2026', weekNumber: n, label: `Week ${n}`,
@@ -10194,7 +10195,7 @@ console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails close
   storage.addPlayer({ playerId: 'wg_me', displayName: 'Drew', active: true });
   storage.setSession('wg_me', false, true);
   storage.saveSetting('chatEnabled', true);
-  backend84.setBackendConfig('https://example.invalid/exec', 'tok');
+  backend84.setDataMode('supabase');   // was setBackendConfig(url, token): isBackendConfigured() now answers the data mode
 
   const NOW84 = Date.parse('2026-10-05T12:00:00.000Z');
   const wagerRow = (id, { weekId = 'wg_locked', reviewAt = '2026-10-03T23:59:59.000Z',
@@ -10294,10 +10295,10 @@ console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails close
     '84-19: SESSION GATE — a device that merely cleared the site PIN does not post to the league');
   storage.setSession('wg_me', false, true);
   resetLedger84();
-  backend84.clearBackendConfig();
+  backend84.setDataMode('sheets');   // was clearBackendConfig()
   assert(await attempt84([wagerRow('wb9')]) === 0,
     '84-20: …and neither does a device with no backend configured');
-  backend84.setBackendConfig('https://example.invalid/exec', 'tok');
+  backend84.setDataMode('supabase');   // was setBackendConfig(url, token): isBackendConfigured() now answers the data mode
 
   // ── 17. ONE PER INVOCATION — the bound that holds even if every other one
   //        were wrong. ──
@@ -10434,8 +10435,8 @@ console.log('\n[84] FEAT-5 — checkWagersDue(): one per invocation, fails close
   }
 
   // Restore everything this section touched.
-  backend84.clearBackendConfig();
-  if (priorCfg84?.url) backend84.setBackendConfig(priorCfg84.url, priorCfg84.token);
+  backend84.setDataMode('sheets');   // was clearBackendConfig()
+  backend84.setDataMode(priorMode84);
   resetLedger84();
   _setWagerCacheForTest([]);
   storage.clearSession();
@@ -10662,7 +10663,7 @@ console.log('\n[91] nativeguardtest.mjs — spawned as a subprocess, exit code +
   if (summaryMatch91) {
     assert(summaryMatch91[1] === '✅ ALL PASS', `nativeguardtest.mjs itself reports ALL PASS (got: ${summaryMatch91[0]})`);
     assert(Number(summaryMatch91[3]) === 0, `nativeguardtest.mjs reports zero failed assertions (got ${summaryMatch91[3]} failed, ${summaryMatch91[2]} passed)`);
-    assert(Number(summaryMatch91[2]) >= 10, `nativeguardtest.mjs actually ran a non-trivial number of assertions (got ${summaryMatch91[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch91[2]) >= 22, `nativeguardtest.mjs actually ran its full set (got ${summaryMatch91[2]}, floor RAISED 10 -> 22 by the Sheets retirement (2026-09-23): the file stopped driving two runtime guards and started asserting the ABSENCE those guards existed for, over the whole js/ tree plus config.json and the service worker — a near-zero count would mean the guard is vacuous)`);
   }
 }
 

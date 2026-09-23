@@ -87,6 +87,9 @@
 
 import {
   toRows, fromRows, KEY_TABLES, canonicalize, stripCredentials,
+  // UN-237/238 (DI-260) — `scribe_memory` is NOT a mirror key and never will be
+  // (see §12b), but its row<->record shape is still the projection's to own.
+  rowToMemory,
 } from './supabase-projection.js';
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3068,6 +3071,151 @@ function _foldRealtimeRow(table, payload) {
       catch (e) { console.warn(`[sb] could not re-project ${key} after a league_kv event`, e && e.message); }
     }
   }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// 12b · SCRIBE MEMORY (UN-237/238, DI-260, migration 0022) — four thin calls
+// ══════════════════════════════════════════════════════════════════════════
+/**
+ * THESE ARE NOT PART OF THE MIRROR, AND THAT IS THE POINT.
+ *
+ * `scribe_memory` is deliberately absent from `ROUTES`/`READ_TABLES`: its rows
+ * must be PHYSICALLY DELETABLE (DI-D2 — "Delete anything you told it" is a
+ * promise the storage seam cannot keep, because a seam write is a whole-key
+ * replace and RG-49's union would resurrect the row on the next stale hydrate).
+ * So memory has always lived outside `load()`/`save()`, in a module-level cache
+ * in js/app.js with an explicit refresh. That stays true here; what changes is
+ * only WHICH backend answers.
+ *
+ * They live in this module rather than js/app.js because this module is the one
+ * that already holds the injected client and league id (§1.3 — registered,
+ * never imported), and a second `createClient()` anywhere would race auth.js's
+ * own refresh loop. They are NOT in js/backend.js any more: that file's four
+ * `scribeMemory*Remote` relays were deleted with the rest of the Apps Script
+ * transport, which is what this replaces.
+ *
+ * THE RETURN SHAPES ARE THE RELAY'S, VERBATIM — `{ ok, records }`,
+ * `{ ok, record }`, `{ ok, deleted }`, `{ ok, applied, skipped }`. js/app.js's
+ * four call sites (`refreshScribeMemory`, `scribeFileAddTopic`,
+ * `scribeFileSetTolerance`, `scribeFileDeleteRow`, `logWager`, `answerWager`,
+ * `syncApprovedScribeFacts`) are unchanged by this move, which is what keeps
+ * the change reviewable: one transport swapped, zero call-site rewrites.
+ *
+ * LOUD-FAIL, NEVER A SILENT EMPTY (AD-06). Every one of these THROWS on a
+ * server error and on a missing client/league. The callers already wrap in
+ * try/catch and already have honest copy for the failure — `SCRIBE_FILE_LOAD_
+ * ERROR` on the read, `SCRIBE_FILE_SAVE_ERROR` scoped to the control that
+ * failed on a write, and the commissioner's "⚠️ Approved, but applying it to
+ * SCRIBE's memory failed: …" toast on the sweep. Returning `{records: []}` on
+ * an outage would render as "SCRIBE knows nothing about you," which is a
+ * different and much worse sentence.
+ */
+function _memoryCall() {
+  const client = _safe('getClient');
+  const leagueId = _safe('getActiveLeagueId');
+  // NOTE ON THE WORDING: no em-dash before the word SCRIBE. loadtest [65]'s app-wide
+  // retired-tic scan reads `— SCRIBE` as v2.1's retired reflex closer, and it scans CODE lines
+  // across every js/*.js file precisely so a fix in one file cannot hide a survivor in another.
+  // A player-facing sentence is not a SCRIBE line, but the scan cannot know that, and a
+  // permanently-red guard is worse than a comma.
+  if (!client) throw new Error('Not signed in, so SCRIBE\'s memory is unavailable on this device right now.');
+  if (!leagueId) throw new Error('No league is active yet, so SCRIBE\'s memory cannot be read or written.');
+  return { client, leagueId };
+}
+
+/** The server's own words, or a readable fallback. The message is rendered by
+ *  js/app.js through `escHtml()` (CONVENTIONS #12) like every other untrusted
+ *  string; the named exceptions 0022 raises (`not_commissioner`, `not_owner`,
+ *  `bad_kind_for_player`, `bad_subject`, `bad_key`) are what make a refusal
+ *  diagnosable instead of "something went wrong". */
+function _memoryError(what, error) {
+  const msg = String((error && (error.message || error.details || error.hint)) || error || '');
+  const e = new Error(msg ? `${what}: ${msg}` : `${what} failed`);
+  e.code = String((error && error.code) || '');
+  return e;
+}
+
+/**
+ * DI-260 — a PLAIN SELECT, not an RPC. 0022's narrowed `scribe_memory_select`
+ * already scopes the read to self + wager + commissioner, so an RPC here would
+ * be a second, weaker copy of a rule the database already enforces for every
+ * caller including a hand-written PostgREST request.
+ *
+ * `playerId` is accepted for call-site compatibility and is deliberately NOT
+ * sent as a filter: under the old relay it WAS the ownership claim (the server
+ * narrowed to whatever string the client sent), and keeping it as a filter here
+ * would read as though it still were. The JWT decides now. js/app.js's own
+ * `.filter(row => row.playerId === playerId)` survives on the other side as a
+ * render-scope narrowing, which is all it ever was.
+ */
+export async function scribeMemoryList({ playerId = '', kinds = null } = {}) {
+  const { client, leagueId } = _memoryCall();
+  let q = client.from('scribe_memory')
+    .select('id,subject_member_id,kind,key,value,provenance,confidence,created_at,review_at,source_message_id,refreshed_at')
+    .eq('league_id', leagueId);
+  if (Array.isArray(kinds) && kinds.length) q = q.in('kind', kinds);
+  const { data, error } = await q;
+  if (error) throw _memoryError('SCRIBE memory could not be read', error);
+  // NEVER RE-IMPLEMENT A PROJECTION (this module's own header rule).
+  // `rowToMemory` is the single definition of the legacy record shape.
+  return { ok: true, records: (data || []).map(rowToMemory), playerId };
+}
+
+/** DI-258's RPC. The record is passed through as-is: the server reads both
+ *  `playerId` (the legacy field every call site builds) and `subject_member_id`,
+ *  and it FORCES provenance/confidence for a non-commissioner regardless of
+ *  what is in here. */
+export async function scribeMemoryUpsert(record = {}) {
+  const { client, leagueId } = _memoryCall();
+  const { data, error } = await client.rpc('scribe_memory_upsert', {
+    p_league: leagueId, p_record: record,
+  });
+  if (error) throw _memoryError('That could not be saved to SCRIBE\'s memory', error);
+  const row = data && data.row;
+  return { ok: true, record: row ? rowToMemory(row) : null };
+}
+
+/**
+ * A PLAIN DELETE, for the same reason the list is a plain select: 0022's
+ * widened `scribe_memory_delete` policy (commissioner OR the row's own subject)
+ * is the rule, and a DEFINER RPC would be a second one.
+ *
+ * `.select('id')` on the delete is what makes "did anything actually go" an
+ * answerable question — PostgREST answers a policy-filtered delete with an
+ * empty set and NO error, so without it a refused delete would resolve happily
+ * and js/app.js would drop the row from its cache until the next refresh
+ * brought it back. That is the silent-failure shape AD-06 exists to prevent,
+ * and it is one line away by default.
+ */
+export async function scribeMemoryDelete({ id = '', playerId = '' } = {}) {
+  const { client, leagueId } = _memoryCall();
+  if (!id) throw new Error('No memory row was named for deletion.');
+  const { data, error } = await client.from('scribe_memory').delete()
+    .eq('league_id', leagueId).eq('id', id).select('id');
+  if (error) throw _memoryError('That could not be deleted from SCRIBE\'s memory', error);
+  if (!(data || []).length) {
+    throw new Error('The server refused to delete that row — it belongs to another player, or it is already gone.');
+  }
+  return { ok: true, deleted: true, id, playerId };
+}
+
+/**
+ * DI-259's RPC — the direct fix for Drew's reported failure.
+ *
+ * NO CREDENTIAL IS SENT, and the dropped argument is the change worth naming.
+ * The relay required `adminPasswordHash` because a PIN-gated app had no
+ * authenticated identity and the shared backend token shipped on every device
+ * (AD-05). The RPC derives the caller from the signed-in Supabase session's own
+ * JWT and raises `not_commissioner` itself, which is a real check rather than a
+ * hash comparison against a value every player already had. The parameter is
+ * still ACCEPTED so js/app.js's call site does not have to change, and it is
+ * ignored — the same shape `runTrainerViaEdgeFunction()` already uses.
+ */
+export async function scribeMemoryApply(/* { adminPasswordHash } ignored */) {
+  const { client, leagueId } = _memoryCall();
+  const { data, error } = await client.rpc('scribe_memory_apply', { p_league: leagueId });
+  if (error) throw _memoryError('SCRIBE\'s memory could not be updated', error);
+  return { ok: true, applied: Number(data && data.applied) || 0, skipped: Number(data && data.skipped) || 0 };
 }
 
 // ══════════════════════════════════════════════════════════════════════════

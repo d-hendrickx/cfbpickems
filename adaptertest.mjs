@@ -1985,26 +1985,26 @@ await section('\n[A16] Q8 — a SCRIBE approve flip patches by SYNTHESIZED ID, n
 
 // ══════════════════════════════════════════════════════════════════════════
 await section('\n[A17] the Sheets RELAY allow-list (§2.7)…', async () => {
-  // PART B LANDED (2026-09-18) — the skip is CLOSED. The allow-list guard now
-  // exists in `call()` at js/backend.js, and `backendtest.mjs [14]` drives it:
-  // thirteen relays refused with a typed SheetsRelayRefusedError
-  // {code:'sheets_relay_refused'} and ZERO fetches, `ping`/`notifyPush` allowed
-  // through, the frozen-array allow-list, the guard's position above
-  // getBackendConfig(), and the R2 release back to 'sheets' mode.
+  // ── THE ALLOW-LIST IS GONE BECAUSE THE RELAY IS (2026-09-23) ──────────────
+  // Step 4 Part B put a guard in `call()` at js/backend.js: every relay except
+  // `ping`/`notifyPush` refused with a typed `SheetsRelayRefusedError` once
+  // `dataMode` was 'supabase', so a Supabase-scoped league could not read or
+  // write the production league's Sheet. `backendtest.mjs [14]` drove thirteen
+  // of them, each refused before any fetch.
   //
-  // Asserted STRUCTURALLY here rather than re-driven, because driving backend.js
-  // needs the fetch stub backendtest owns; what this file is responsible for is
-  // that the two halves exist and name each other.
+  // THE SHEETS RETIREMENT REPLACES A GUARD WITH AN ABSENCE, which is strictly
+  // stronger: an allow-list is one edit away from admitting an action, and a
+  // deleted transport is not. So what this section asserts now is that neither
+  // half exists — not the refusal class, not the list, and not `call()` itself.
   {
     const beSrc = readFileSync(join(__dirname, 'js', 'backend.js'), 'utf8');
-    assert(/class SheetsRelayRefusedError extends Error/.test(beSrc)
-      && /this\.code = 'sheets_relay_refused'/.test(beSrc),
-      'A17: js/backend.js exports the typed SheetsRelayRefusedError the design named');
-    assert(/const SHEETS_RELAY_ALLOWLIST = Object\.freeze\(\['ping', 'notifyPush'\]\)/.test(beSrc),
-      "A17: …with the allow-list frozen to exactly ['ping','notifyPush'] (Drew decision D-4)");
-    const btSrc = readFileSync(join(__dirname, 'backendtest.mjs'), 'utf8');
-    assert(/SheetsRelayRefusedError/.test(btSrc) && /NOTHING was fetched/.test(btSrc),
-      'A17: …and backendtest.mjs drives it, including the never-fetched half');
+    const beCode = beSrc.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    assert(!/SheetsRelayRefusedError|SHEETS_RELAY_ALLOWLIST/.test(beCode),
+      'A17: js/backend.js has no SheetsRelayRefusedError and no allow-list — there is nothing left for either to gate');
+    assert(!/async function call\s*\(/.test(beCode) && !/script\.google\.com/.test(beCode),
+      "A17: …and no call() and no Apps Script URL anywhere in executable code. An allow-list is one edit away from admitting an action; a deleted transport is not");
+    assert(!/\bfetch\s*\(/.test(beCode.replace(/fetch\('config\.json[^)]*\)/g, ' ')),
+      'A17: …and the ONE fetch left in the module is the config.json read — a same-origin static file beside index.html, not a backend');
   }
   // What Part A could already assert, and still does: the adapter itself never reaches a relay.
   const src = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8');
@@ -2018,12 +2018,17 @@ await section('\n[A17] the Sheets RELAY allow-list (§2.7)…', async () => {
 await section('\n[A18] the CHAT TRANSPORT interlock (§7.3)…', async () => {
   let fetches = 0;
   globalThis.fetch = async () => { fetches++; throw new Error('network disabled in adaptertest'); };
-  // Flag OFF: byte-identical to today — the transport tries, and fails for the
-  // ordinary reason (no backend config), never for the interlock.
+  // Flag OFF: PORTED 2026-09-23. This used to assert that the transport TRIED
+  // and failed for the ordinary reason (no backend config) rather than for the
+  // interlock — the flag-off world, where 'sheets' meant a live Apps Script
+  // log. There is no such world: `chatTransportMode()` never answers 'sheets'
+  // again, so predicate-false is `interlocked` too. What survives, and is what
+  // this section is actually for, is the ON half below: refused BEFORE any
+  // fetch, typed, all five.
   transport.setSupabaseDataModePredicate(() => false);
   let e = await transport.appendEvents([{ id: 'x' }]).then(() => null, (err) => err);
-  assert(e && e.name !== 'ChatTransportUnavailableError',
-    'predicate FALSE: appendEvents fails for the ordinary reason, not the interlock');
+  assert(e && e.name === 'ChatTransportUnavailableError',
+    'predicate FALSE: appendEvents is refused too — a device with no shared chat backend has nowhere to append, and says so with the typed designed-refusal error');
 
   // Flag ON: refused BEFORE any fetch, typed.
   transport.setSupabaseDataModePredicate(() => true);
@@ -2041,13 +2046,22 @@ await section('\n[A18] the CHAT TRANSPORT interlock (§7.3)…', async () => {
     assert(e && e.interlocked === true, `${name}()’s error is marked interlocked (a designed refusal, not an outage)`);
   }
   assert(fetches === before, 'and NOT ONE fetch was issued (the refusal is before the request)');
-  assert(/next build/.test(e.message), 'the message is the copy §7.3 specifies');
-  // Restored, and PROVEN restored: a suite that left the interlock on would make
-  // every later chat assertion in the same process pass for the wrong reason.
-  transport.setSupabaseDataModePredicate(() => false);
-  const after = await transport.fetchHead().then(() => null, (err) => err);
-  assert(after && after.name !== 'ChatTransportUnavailableError',
-    'and the predicate is restored afterwards (the interlock is off again for anything later in this process)');
+  // COPY AMENDED 2026-09-23. §7.3's original sentence was "Chat moves to the new
+  // system in the next build", which was true while this error only ever meant
+  // Step 4's cross-league interlock. It now ALSO means "this device has no
+  // shared chat backend at all", so telling that player to wait for the next
+  // build would be a promise nobody made.
+  assert(/no shared backend/.test(e.message) && !/next build/.test(e.message),
+    'the message says the device has no shared backend, and no longer promises a next build');
+  // Restored, and PROVEN restored. The observable had to change with the copy:
+  // predicate-false no longer lets a request out (there is no Apps Script path
+  // behind it), so "restored" is proven by the MODE rather than by a successful
+  // fetch. A suite that left an INSTALLED predicate answering true behind it
+  // would make every later chat assertion in this process pass for the wrong
+  // reason, and the reset below is what stops that.
+  transport._resetSupabaseDataModePredicateForTest();
+  assert(transport.chatTransportMode() === 'interlocked',
+    'and the predicate is reset afterwards — nothing later in this process inherits an installed predicate answering true');
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3623,9 +3637,18 @@ await section('\n[A-HIDE3] the hide listeners are registered ONCE per page, thou
   const reset = app.slice(app.indexOf('export function _resetAuthHoldForTest'), app.indexOf('export function showGoogleSignInGate'));
   assert(reset.length > 0 && !/_unloadListenersWired/.test(reset),
     '[A-HIDE3] …and the test hook that drops _postHydrateTailDone does NOT drop it — a window keeps its listeners across a re-driven boot, and a suite that re-armed them would be measuring a page that cannot exist [structural]');
-  assert((app.match(/addEventListener\('pagehide'/g) || []).length === 1
-    && (app.match(/addEventListener\('beforeunload'/g) || []).length === 1,
-    '[A-HIDE3] …and there is exactly one registration site for each of the two unload events [structural]');
+  // AMENDED 2026-09-23: there is ONE hide event registered here now, not two.
+  // `beforeunload` carried `flushPush()`, the SHEETS queue, and went with it.
+  // The `pagehide` + `visibilitychange:hidden` pair is the one that matters on a
+  // phone anyway — RG-179's own finding was that `beforeunload` is not reliable
+  // on iOS, so the line that just went was not carrying this weight there even
+  // while it existed.
+  assert((app.match(/addEventListener\('pagehide'/g) || []).length === 1,
+    '[A-HIDE3] …and there is exactly one registration site for `pagehide` [structural]');
+  assert((app.match(/addEventListener\('beforeunload'/g) || []).length === 0,
+    '[A-HIDE3] …and none at all for `beforeunload`, whose only handler was the retired Sheets flushPush() [structural]');
+  assert((app.match(/addEventListener\('visibilitychange'/g) || []).length >= 1,
+    '[A-HIDE3] …while visibilitychange:hidden — the event iOS actually delivers — is still wired beside it');
 });
 
 // ══════════════════════════════════════════════════════════════════════════

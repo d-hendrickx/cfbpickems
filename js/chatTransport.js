@@ -61,33 +61,36 @@
  *    "redeploy Code.gs" instead of a generic offline banner.
  */
 
-import { getBackendConfig, isBackendConfigured, requestWithMisrouteGuard } from './backend.js';
-// DI-208g / S-C14 (iOS Munera, PASS 1b, Drew "Approve", 2026-09-19/20) — see
-// get()/post()'s first line, below.
-import { isNativeOrigin } from './platform.js';
+// ── THE APPS SCRIPT HALF OF THIS MODULE IS GONE (2026-09-23) ────────────────
+// This file used to import `getBackendConfig` / `requestWithMisrouteGuard`
+// (the /exec URL, the shared token and BUG-A's misroute retry) and
+// `isNativeOrigin` (AD-67's refusal, so the iOS shell could never reach Apps
+// Script). Its `get()` and `post()` are deleted with them: a transport that
+// cannot be reached needs no guard against reaching it, and AD-67 is satisfied
+// by there being no Apps Script code path at all rather than by a check in
+// front of one.
+//
+// `isBackendConfigured` is still imported, and its meaning is now "does this
+// league have a shared backend" (js/backend.js). It is what `readyToFetch()`
+// asks on the non-Supabase arm, and on that arm the answer is now always
+// false — a local-only device has no room to poll.
+//
+// AD-16 IS UNCHANGED AND IS THE REASON THIS FILE SHRANK RATHER THAN MOVED:
+// chatTransport.js is still the only module that touches the chat backend.
+// There is now one backend instead of two.
+import { isBackendConfigured } from './backend.js';
 
 /**
- * BUG-A (2026-09-11) — this module has its OWN fetch calls (get/post below), so
- * js/backend.js's `call()` guard does not cover it. A deployed Apps Script that
- * answers a non-ping action with its ping payload (`{ok:true, service:
- * 'cfbp-backend'}`) would have made `appendEvents()` report a message as
- * appended when it never reached the log, and `fetchSince()` report head 0 —
- * i.e. silent chat loss wearing the same "chat is offline" costume RG-09 wore.
+ * A Sheets-era failure class, RETIRED with the transport that produced it.
  *
- * The detection rule is IMPORTED rather than re-implemented: two copies of a
- * transport invariant is how they drift. `requestWithMisrouteGuard` is a pure
- * retry wrapper around a caller-supplied fetch — AD-16 still holds, this file
- * remains the only module that knows the chat URLs, actions and polling.
+ * `StaleDeploymentError` existed because an Apps Script deployment that
+ * predated the chat endpoints answered every call with `Unknown action: …` —
+ * the v0.16 chat-outage root cause, which looked exactly like "chat is
+ * offline" and was not. There is no deployment to be stale now, and Supabase
+ * answers a missing RPC with PGRST202, which `classifySupabaseError()` handles.
+ * The class, `classify()` and the `unknown action` test are deleted together;
+ * nothing throws it and nothing catches it.
  */
-
-export class StaleDeploymentError extends Error {
-  constructor(action) {
-    super(`Backend deployment is out of date (no '${action}' endpoint). ` +
-          `Open Apps Script → Deploy → Manage deployments → Edit → New version.`);
-    this.name = 'StaleDeploymentError';
-    this.stale = true;
-  }
-}
 
 /**
  * ── PHASE III STEP 4, §7.3 — THE CHAT TRANSPORT INTERLOCK ────────────────────
@@ -118,7 +121,13 @@ export class StaleDeploymentError extends Error {
  */
 export class ChatTransportUnavailableError extends Error {
   constructor(action) {
-    super('Chat moves to the new system in the next build. '
+    // COPY UPDATED 2026-09-23. It read "Chat moves to the new system in the
+    // next build", which was true while this error only ever meant Step 4's
+    // cross-league interlock. It now ALSO means "this device has no shared
+    // chat backend at all" — the state a local-only (PIN-mode) device is in
+    // since the Apps Script transport was retired — and telling that player to
+    // wait for the next build would be a promise nobody made.
+    super('Chat is unavailable on this device: it has no shared backend right now. '
       + `Nothing was sent or read ('${action}' was refused before any request).`);
     this.name = 'ChatTransportUnavailableError';
     this.code = 'chat_transport_unavailable';
@@ -362,7 +371,20 @@ export function _resetSupabaseChatForTest() {
  *  Exported because js/scribeAgent.js's `@scribe` branch (DI-T5.6) needs the same answer and
  *  must not form a second opinion about it. */
 export function chatTransportMode() {
-  if (!interlocked()) return 'sheets';
+  // ── 'sheets' IS NO LONGER A REACHABLE VALUE (2026-09-23) ──────────────────
+  // It used to be the answer for "the predicate is not installed, or says this
+  // league is not on Supabase", and it meant "use the Apps Script chat log".
+  // There is no Apps Script chat log. That state is now 'interlocked', which is
+  // the state this module already had for "refuse before any request, loudly,
+  // with a typed error the caller classifies as a designed refusal rather than
+  // an outage" — exactly the right shape for it.
+  //
+  // WHAT A PLAYER SEES on such a device: chat says it is offline and the outbox
+  // holds. That is the honest rendering of a league with no shared backend, and
+  // it is strictly better than the alternative this replaces (posting into a
+  // Sheet nobody reads). The RETURN TYPE is unchanged so no caller had to move;
+  // the string 'sheets' simply never comes out of here again.
+  if (!interlocked()) return 'interlocked';
   return _sbChat ? 'supabase' : 'interlocked';
 }
 
@@ -661,68 +683,19 @@ function classifySupabaseError(action, error) {
   return mk('retryable', server || 'Chat could not reach the server.');
 }
 
-function classify(action, err) {
-  if (/unknown action/i.test(String(err?.message || err))) return new StaleDeploymentError(action);
-  return err;
-}
-
-async function get(action, params = {}) {
-  // DI-208g / S-C14 — THE NATIVE-ORIGIN REFUSAL, before even §7.3's interlock
-  // below. Same reasoning as js/backend.js's call(): AD-67 is independent of
-  // dataMode, so this cannot key off the interlock (which is a §7.3/dataMode
-  // concern) — it keys off isNativeOrigin() instead, which a spoofed
-  // window.Capacitor on a real https: origin cannot pass (origin-positive,
-  // S-C1/S-C8's shape).
-  if (isNativeOrigin()) throw new Error('Chat transport refused: Google Sheets/Apps Script is never reachable from the native app (AD-67).');
-  // FIRST LINE (of the §7.3 half), before the config read and before any
-  // fetch. The order matters: a device in Supabase data mode may still hold a
-  // perfectly valid Sheets config, so "not configured" would never fire and
-  // the request would go out.
-  if (interlocked()) throw new ChatTransportUnavailableError(action);
-  const c = getBackendConfig();
-  if (!c || !c.url) throw new Error('Backend not configured');
-  const u = new URL(c.url);
-  u.searchParams.set('action', action);
-  u.searchParams.set('token', c.token || '');
-  Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) u.searchParams.set(k, String(v)); });
-  const data = await requestWithMisrouteGuard(action, async () => {
-    const res = await fetch(u.toString(), { method: 'GET', redirect: 'follow' });
-    // BUG-E — carry the status on the error so requestWithMisrouteGuard can tell
-    // a transient (retryable) status from a permanent one without parsing prose.
-    if (!res.ok) { const e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
-    return res.json();
-  });
-  if (!data.ok) throw classify(action, new Error(data.error || 'Backend error'));
-  return data;
-}
-
-async function post(action, payload = {}) {
-  // DI-208g / S-C14 — same refusal, same position, for the write half. See
-  // get()'s comment above; `appendEvents()` is the one that matters most
-  // here — an append that reached the production Sheet could not be taken
-  // back, so this runs before even §7.3's own "before any fetch" rule.
-  if (isNativeOrigin()) throw new Error('Chat transport refused: Google Sheets/Apps Script is never reachable from the native app (AD-67).');
-  // §7.3 — same rule, same position, for the write half. `appendEvents()` is
-  // the one that matters most: an append that reached the production Sheet
-  // could not be taken back.
-  if (interlocked()) throw new ChatTransportUnavailableError(action);
-  const c = getBackendConfig();
-  if (!c || !c.url) throw new Error('Backend not configured');
-  const data = await requestWithMisrouteGuard(action, async () => {
-    const res = await fetch(c.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, token: c.token, ...payload }),
-      redirect: 'follow',
-    });
-    // BUG-E — carry the status on the error so requestWithMisrouteGuard can tell
-    // a transient (retryable) status from a permanent one without parsing prose.
-    if (!res.ok) { const e = new Error('HTTP ' + res.status); e.status = res.status; throw e; }
-    return res.json();
-  });
-  if (!data.ok) throw classify(action, new Error(data.error || 'Backend error'));
-  return data;
-}
+// ── `get()` AND `post()` ARE DELETED (2026-09-23) ───────────────────────────
+// They were this module's own fetch pair against the Apps Script web app: GET
+// with the action and token in the query string for chatHead/chatSince/
+// chatBefore/chatMetrics, POST with text/plain (preflight-free) for chatAppend.
+// Both carried the PRODUCTION league's token to the PRODUCTION league's Sheet,
+// which is why §7.3's interlock was written in front of them in Step 4.
+//
+// With them go: the AD-67 native-origin refusal (nothing left to refuse), the
+// `requestWithMisrouteGuard` wrapper (BUG-A/BUG-E — a misrouted Apps Script
+// reply and a 404 on the googleusercontent redirect leg), and the
+// `classify()`/`StaleDeploymentError` pair.
+//
+// The six exported functions below now have ONE arm each instead of two.
 
 // ══════════════════════════════════════════════════════════════════════════════════════════
 // SUPABASE IMPLEMENTATION (Phase III Step 5) — the same six functions, a different backend.
@@ -944,52 +917,47 @@ function sbTs(value) {
 
 // ── Interface ────────────────────────────────────────────────────────────────
 
+// EVERY ONE OF THE FIVE BELOW HAD TWO ARMS UNTIL 2026-09-23. The `routeOrRefuse()`
+// call is kept — it is what turns 'interlocked' into the typed refusal callers
+// already classify as designed rather than as an outage — but there is only one
+// destination past it now.
+
 export async function appendEvents(events) {
-  if (routeOrRefuse('chatAppend') === 'supabase') return sbAppendEvents(events);
-  const r = await post('chatAppend', { events });
-  // `head` here is the server's TRUE sheet head, NOT a head this device has
-  // received events up to. RG-95: chat.js deliberately ignores it, and no
-  // other caller may adopt it as a poll cursor — doing so claims every event
-  // between here and the true head as already seen. It stays on the return
-  // only as a transport-level diagnostic (backendtest.mjs asserts on it to
-  // prove an append survived a misroute, BUG-A); treat it as read-only.
-  return { assigned: r.assigned || [], head: r.head ?? 0 };
+  routeOrRefuse('chatAppend');
+  return sbAppendEvents(events);
 }
 
 export async function fetchSince(seq, limit = 300) {
-  if (routeOrRefuse('chatSince') === 'supabase') return sbFetchSince(seq, limit);
-  const r = await get('chatSince', { seq, limit });
-  return { events: r.events || [], head: r.head ?? 0 };
+  routeOrRefuse('chatSince');
+  return sbFetchSince(seq, limit);
 }
 
 export async function fetchBefore(seq, limit = 100) {
-  if (routeOrRefuse('chatBefore') === 'supabase') return sbFetchBefore(seq, limit);
-  const r = await get('chatBefore', { seq, limit });
-  return { events: r.events || [] };
+  routeOrRefuse('chatBefore');
+  return sbFetchBefore(seq, limit);
 }
 
 export async function fetchHead() {
-  if (routeOrRefuse('chatHead') === 'supabase') return sbFetchHead();
-  const r = await get('chatHead');
-  return { head: r.head ?? 0 };
+  routeOrRefuse('chatHead');
+  return sbFetchHead();
 }
 
 /**
- * DI-T5.10 — `fetchMetrics()` is an APPS SCRIPT QUOTA DIAGNOSTIC. Supabase has no such thing:
- * there is no execution count, no per-day cap and no CacheService hit rate to report. So in
- * Supabase mode it answers honestly rather than inventing an empty series, and the extra
- * `unsupported` flag is what lets the Comm→Settings card say "not applicable" instead of the
- * current "No metrics yet — they accrue once chat traffic starts", which would be a lie on a
- * backend that has no such metric.
+ * DI-T5.10 — `fetchMetrics()` WAS an APPS SCRIPT QUOTA DIAGNOSTIC: executions, the per-day cap
+ * and the CacheService hit rate. Supabase has no such thing, and since 2026-09-23 neither does
+ * this app. It answers honestly — `unsupported: true` — rather than inventing an empty series,
+ * which is what lets the Comm→Settings card say "not applicable" instead of "No metrics yet,
+ * they accrue once chat traffic starts": a sentence that would be a lie on a backend that has no
+ * such metric. The signature keeps its `days` parameter shape for its one caller; the value is
+ * unused and is not read.
  *
  * NAMED FOLLOW-UP (D-6): reading that flag is a two-string change in js/app.js:13361 and
  * js/app.js:13348, which Step 4 Part B owns right now. Until it lands the card falls through to
  * the existing empty-state copy — visibly wrong, never misleading about DATA.
  */
-export async function fetchMetrics(days = 7) {
-  if (routeOrRefuse('chatMetrics') === 'supabase') return { rows: [], unsupported: true };
-  const r = await get('chatMetrics', { days });
-  return { rows: r.rows || [] };
+export async function fetchMetrics(/* days */) {
+  routeOrRefuse('chatMetrics');
+  return { rows: [], unsupported: true };
 }
 
 /**
@@ -1322,6 +1290,12 @@ export function subscribe(onEvents, opts = {}) {
 
   /** Which "can this tick reach the network" question applies, per backend. */
   function readyToFetch(m) {
+    // The second arm is now unreachable in practice: `chatTransportMode()` only
+    // ever answers 'supabase' or 'interlocked', and the caller checks
+    // 'interlocked' first. It is kept rather than collapsed because it is the
+    // honest answer to the question the function asks — a league with no shared
+    // backend has nothing to fetch — and because collapsing it to `sbReady()`
+    // would make the predicate lie on the one path that still reaches it.
     return m === 'supabase' ? sbReady() : isBackendConfigured();
   }
 

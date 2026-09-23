@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.4';
-export const APP_VERSION_DATE = '2026-09-21';
+export const APP_VERSION = 'v0.23.5';
+export const APP_VERSION_DATE = '2026-09-23';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -51,6 +51,18 @@ export const APP_VERSION_DATE = '2026-09-21';
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.23.5',
+    date: '2026-09-23',
+    added: [],
+    fixed: [
+      'Google Sheets is retired. The league now runs entirely on the new backend — nothing in the app talks to the old spreadsheet any more.',
+      'Approving a SCRIBE fact now actually reaches SCRIBE\'s memory, and "Run Trainer now" no longer reports a failure after a run that worked.',
+      'My SCRIBE File — your hard limits, roast tolerance and 🗑 all save again. Only you and the commissioner can see your file now; wagers stay public.',
+      'Your phone now proves it\'s yours before notifications are attached to it — nobody else\'s browser can sign itself up for your alerts.',
+      'The commissioner no longer gets asked for a password inside the panel — being the commissioner is the check.',
+    ],
+  },
   {
     version: 'v0.23.4',
     date: '2026-09-21',
@@ -472,14 +484,15 @@ import {
   computeEffectiveLockAt, computeEffectiveLiveAt, computeFirstKickoff, computeLastKickoff,
 } from './scoring.js';
 
+// ── js/backend.js IS DOWN TO FOUR IMPORTS (2026-09-23) ──────────────────────
+// It used to give this file eighteen: the Sheets config pair, the mirror prime,
+// hydrate/seed/flush/refresh, the snapshot trio, the ping, the status channel
+// and the sync-status panel. All of it is deleted with the Apps Script
+// transport — see that file's header for what went and what took over each
+// job. What is left is the config read, the "is there a shared backend"
+// predicate, and the wipe of the Sheets-era device snapshot.
 import {
-  getBackendConfig, setBackendConfig, clearBackendConfig,
-  isBackendConfigured, isBackendReady, pingBackend,
-  hydrate as hydrateBackend, seedFromLocal, flushPush,
-  refreshFromBackend, createSnapshot, listSnapshots, restoreSnapshot,
-  onBackendStatus, getSyncStatus, loadDeployedConfig,
-  primeFromMirror, isMirrorStale, clearMirror,
-  scribeMemoryListRemote, scribeMemoryUpsertRemote, scribeMemoryDeleteRemote, scribeMemorySyncRemote,
+  isBackendConfigured, loadDeployedConfig, clearMirror,
 } from './backend.js';
 
 // Phase III Step 3a (DI-180, DI-181, DI-184) — the sign-in front door.
@@ -643,7 +656,12 @@ import {
 import {
   wireChatNotifications, destinationFor,
   LIFECYCLE_EVENTS, CATEGORY_OF_EVENT,
-  registerPushAdapter, OneSignalRelayAdapter,
+  // `OneSignalRelayAdapter` was imported beside this until 2026-09-23. It is
+  // deleted: its send() was the client -> Apps Script -> OneSignal hop, and
+  // every push now comes from `notify-fanout` off a `messages` DB webhook.
+  // `registerPushAdapter` stays — the two-method seam is what "swapping
+  // providers means writing a new adapter" meant, and it is still true.
+  registerPushAdapter,
   // Phase III Step 6 — ONE client gate shared by every phase: DI-T6.1's
   // notify-fanout gate, DI-T6.4's own, and DI-T6.6's scoresRefresh check (see
   // the note at runAutoRefreshTick()). There is no second implementation.
@@ -877,7 +895,9 @@ async function applyAuthModeDecision() {
   // object), so this cannot leave `deployed` undefined; boot() reuses it for
   // the hydrate block rather than fetching twice.
   const deployed = await loadDeployedConfig();
-  if (deployed.ok) setBackendConfig(deployed.url, deployed.token);
+  // `setBackendConfig(deployed.url, deployed.token)` stood here until
+  // 2026-09-23. It persisted the Apps Script /exec URL and its shared token to
+  // this device; both keys are gone from config.json and nothing reads them.
   const authMode = resolveEffectiveAuthMode(deployed);
   configureAuth({ ...deployed, authMode });
 
@@ -1892,11 +1912,11 @@ async function boot() {
   //      mirror can never clobber fresher remote data.
   let backendErrorBanner = null;
 
-  onBackendStatus((status, detail) => {
-    updateSyncBadge(status);
-    if (status === 'error' && detail?.error) showBackendErrorBanner(detail.error);
-    if (status === 'synced') hideBackendErrorBanner();
-  });
+  // `onBackendStatus(...)` stood here until 2026-09-23. It drove the sync badge
+  // and the red banner off the SHEETS adapter's status channel. Supabase has
+  // its own, richer one — `sb.onStatus(onSupabaseDataStatus)`, wired in
+  // `wireSupabaseAdapter()` above, which distinguishes refused / offline /
+  // held / error and owns both the badge and the banner. One channel, not two.
 
   // ── DI §1.5 item 1 / §6.2 — NO SHEETS MIRROR ON A SUPABASE DEVICE ─────────
   // On a device whose last SUCCESSFUL config read said 'supabase', priming the
@@ -1913,13 +1933,20 @@ async function boot() {
   // paint-first is untouched: no network, no await, and on every flag-off
   // device it answers '' or 'pins' and this line is byte-identical to before.
   const supabaseDevice = (() => { try { return getLastKnownAuthMode() === 'supabase'; } catch { return false; } })();
-  const primedKeys = supabaseDevice ? 0 : primeFromMirror();
   let rendered = false;
-
-  if (primedKeys > 0) {
-    setBackendMode('googleSheets');   // serve last-known data instantly
-    updateSyncBadge('syncing');
-  }
+  // ── THE SHEETS MIRROR PRIME IS GONE (2026-09-23) ──────────────────────────
+  // `primeFromMirror()` read `cfbp_sheet_mirror` synchronously and painted the
+  // last-known league in under a second, which is what AD-08's fast boot was
+  // built on. On a Supabase device it was ALREADY skipped (DI §1.5 item 1 /
+  // §6.2: priming it there would paint the pre-cutover league before any
+  // identity had been proven on the page), and `supabaseDevice` is true on
+  // every device in this league. What is left is a device that is NOT on
+  // Supabase — i.e. local-only — and such a device has no mirror to prime,
+  // because nothing has written one since the Sheet was retired.
+  //
+  // THE FAST BOOT ITSELF IS NOT LOST: js/supabase-backend.js's
+  // `primeFromSnapshot()` is the same idea under an owner tuple, and it is
+  // called from `ensureSupabaseDataHydrated()` before the hydrate.
 
   // ── RG-198 — THE FIRST PAINT IS THIS DEVICE'S LAST-PAINTED PALETTE ────────
   // `getTheme()` reads the PLAYER record, which on a Supabase device does not
@@ -1992,8 +2019,11 @@ async function boot() {
   // button that works during the hydrate instead of after it.
   try { wireScribeFileEntry(); } catch (e) { console.warn('[scribe] file entry wiring failed (early)', e); }
 
-  if (primedKeys > 0) { navigateTo('dashboard'); rendered = true; }
-  // (No mirror yet: leave the built-in section skeletons up until we know
+  // `if (primedKeys > 0) { navigateTo('dashboard'); rendered = true; }` stood
+  // here. With the Sheets mirror retired there is never a primed paint at this
+  // point, so the built-in section skeletons stay up until the hydrate lands —
+  // which is what the note below has always described and is now the only path.
+  // (No mirror: leave the built-in section skeletons up until we know
   //  whether this device is cloud-connected — never flash seeded demo data
   //  over a shared league, and never seed INTO an unhydrated backend.)
 
@@ -2162,23 +2192,16 @@ async function boot() {
       await runPostHydrateTail();
       return;
     }
-    if (isBackendConfigured()) {
-      await hydrateBackend();          // cold start happens here, off-screen
-      setBackendMode('googleSheets');
-      // BUG-G — the early start above read the LAST-KNOWN settings.chatEnabled.
-      // This is the first instant the real one is readable, so reconcile here
-      // rather than waiting for initChatUI() a few lines down: a commissioner
-      // who turned chat off while this device was closed must not have it
-      // polling through the whole hydrate-to-render window. Idempotent, and
-      // it subscribes on the OFF->ON direction too.
-      try { refreshChatEnabled(); } catch {}
-      ensureSeedData();
-      refreshHeader();
-      navigateTo(rendered ? (state.currentTab || 'dashboard') : 'dashboard');
-      rendered = true;
-    } else if (deployed.ok === false && deployed.reason === 'malformed') {
+    // ── THE SHEETS HYDRATE ARM IS GONE (2026-09-23) ───────────────────────
+    // `if (isBackendConfigured()) { await hydrateBackend(); setBackendMode(
+    // 'googleSheets'); … }` stood here. It was already unreachable on every
+    // device in this league — the Supabase branch above returns — and it is
+    // now unreachable everywhere, because `isBackendConfigured()` answers the
+    // data mode and a non-Supabase device is local-only. The two arms below
+    // are what a local-only device has always taken.
+    if (deployed.ok === false && deployed.reason === 'malformed') {
       console.error('[backend] config.json malformed:', deployed.error);
-      backendErrorBanner = `config.json is invalid (${deployed.error}). Cross-device sync is OFF.`;
+      backendErrorBanner = `config.json is invalid (${deployed.error}). Cross-device sync is OFF and this device is running on its own local data.`;
       if (!rendered) { setBackendMode('local'); initStorage(); navigateTo(bootDefaultTab()); rendered = true; }
     } else {
       // No config anywhere — fork-friendly local-only mode.
@@ -2291,7 +2314,12 @@ async function runPostHydrateTail() {
     // clear silently did nothing on exactly those boots — leaving LAST session's
     // `true` in place, which is the failure this line exists to prevent.
     setPushActiveDurable(false);
-    registerPushAdapter(new OneSignalRelayAdapter());   // §4 — provider isolation: absent adapter is also a valid state, never required
+    // `registerPushAdapter(new OneSignalRelayAdapter())` stood here. NO ADAPTER
+    // IS REGISTERED NOW, and §4's own note is what makes that correct rather
+    // than a gap: "an absent adapter is also a valid state, never required."
+    // The server fans out; `deliverPush()` marks the record 'skipped', which is
+    // the honest state and is the state every device is in. See the §4 header
+    // in js/notifications.js for the audit of every caller that reached it.
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
     setupNotifBell();
     renderNotifBell();
@@ -2392,13 +2420,19 @@ async function runPostHydrateTail() {
   // lifetime; this latch is page lifetime; the test hook deliberately does not touch it.
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function' && !_unloadListenersWired) {
     _unloadListenersWired = true;
-    window.addEventListener('beforeunload', () => { try { flushPush(); } catch {} });
-    // SUPABASE MODE HAD NO EQUIVALENT (found while root-causing RG-179, 2026-09-19): flushPush() is
-    // the SHEETS queue. The adapter debounces ~800ms, and a phone kills a backgrounded PWA almost at
-    // once — so any write made just before closing the app (a pick, a preference) was silently lost.
-    // `pagehide` + `visibilitychange:hidden` are the two events iOS actually delivers; `beforeunload`
-    // is not reliable there. sb.flush() is safe to over-call: it no-ops when nothing is dirty and
-    // HOLDS (never drops) when the adapter is stale or not serving. Fire-and-forget by necessity.
+    // `window.addEventListener('beforeunload', () => flushPush())` stood here
+    // until 2026-09-23. `flushPush()` was the SHEETS queue and is deleted.
+    //
+    // THE SUPABASE EQUIVALENT BELOW IS NOW THE ONLY ONE, and it is the better
+    // of the two anyway (found while root-causing RG-179, 2026-09-19): the
+    // adapter debounces ~800ms and a phone kills a backgrounded PWA almost at
+    // once, so any write made just before closing the app (a pick, a
+    // preference) was silently lost. `pagehide` + `visibilitychange:hidden` are
+    // the two events iOS actually delivers; `beforeunload` is not reliable
+    // there — which means the line that just went was not carrying this weight
+    // on a phone even while it existed. sb.flush() is safe to over-call: it
+    // no-ops when nothing is dirty and HOLDS (never drops) when the adapter is
+    // stale or not serving. Fire-and-forget by necessity.
     const _flushSupabaseOnHide = () => { try { if (isSupabaseDataMode()) sb.flush().catch(() => {}); } catch {} };
     window.addEventListener('pagehide', _flushSupabaseOnHide);
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
@@ -2446,20 +2480,11 @@ function showBackendErrorBanner(message) {
       else showToast(`❌ Still failing: ${sb.getStatus().lastError || 'the league could not be loaded'}`, 'error');
       return;
     }
-    if (!isBackendConfigured()) {
-      showToast('No backend URL configured on this device','error');
-      return;
-    }
-    showToast('⏳ Retrying connection…','warning');
-    try {
-      await hydrateBackend();
-      setBackendMode('googleSheets');
-      hideBackendErrorBanner();
-      showToast('✅ Connection restored','success');
-    } catch (err) {
-      showToast(`❌ Still failing: ${err.message||err}`,'error');
-      showBackendErrorBanner(String(err.message || err));
-    }
+    // The Sheets arm (`hydrateBackend()` + setBackendMode('googleSheets'))
+    // stood here. There is one backend now, so there is one Retry: the branch
+    // above is the whole handler, and a device that is not in Supabase mode is
+    // local-only and has nothing to retry against.
+    showToast('This device is running on its own local data — there is no shared backend to reconnect to.', 'warning');
   });
   document.getElementById('beb-close-btn')?.addEventListener('click', () => { el.style.display = 'none'; });
 }
@@ -5082,16 +5107,34 @@ const SCRIBE_HARDLINE_BODY = 'Topics SCRIBE will never bring up about you. Priva
 const SCRIBE_PRIVACY_FOOTNOTE = 'This is a UI-level boundary, not a technical one — the commissioner administers the underlying data. Real per-player privacy is planned but not built yet (see the SSO roadmap).';
 
 // ── Transport seam ──────────────────────────────────────────────────────────
-// The DEFAULT is the real js/backend.js relay set; production never rewires
-// it. The seam exists so groupdtest.mjs can drive delete/add/tolerance
-// end-to-end with no network — and the test additionally asserts that these
-// defaults ARE the backend exports by identity, so a stubbed test can never
-// quietly prove something about a stub instead of about the app.
+// The DEFAULT is the real adapter call set; production never rewires it. The
+// seam exists so groupdtest.mjs and memorytest.mjs can drive delete/add/
+// tolerance end-to-end with no network — and the tests additionally assert that
+// these defaults ARE the adapter exports by identity, so a stubbed test can
+// never quietly prove something about a stub instead of about the app.
+//
+// ── UN-237/238 (DI-260, 2026-09-23) — THESE WERE js/backend.js's FOUR RELAYS ──
+// `scribeMemoryListRemote` / `UpsertRemote` / `DeleteRemote` / `SyncRemote`
+// pointed at Apps Script actions that `SHEETS_RELAY_ALLOWLIST` refused after the
+// Supabase cutover — which is the error Drew read out of the app:
+// "Refusing to send 'scribeMemorySync' to the Google Sheet…". The four relays
+// are now DELETED, not merely unchosen, along with the rest of that transport.
+//
+// NO BRANCH ON `dataMode` HERE, deliberately. An `isSupabaseDataMode() ? … : …`
+// would imply a second, working path for the other arm, and there is none: PIN
+// mode is local-only from this release (there is no Apps Script to reach). One
+// transport, one set of failure messages, nothing to keep in step.
+//
+// `sync` maps to the adapter's `scribeMemoryApply` — a rename, not a
+// re-contract. The call site still passes `{ adminPasswordHash }` and the
+// adapter still returns `{ ok, applied, skipped }`; the credential is simply
+// ignored now, because the RPC derives the commissioner from the JWT rather
+// than from a hash that shipped on every player's device (AD-05).
 const SCRIBE_MEMORY_TRANSPORT_DEFAULTS = {
-  list: scribeMemoryListRemote,
-  upsert: scribeMemoryUpsertRemote,
-  remove: scribeMemoryDeleteRemote,
-  sync: scribeMemorySyncRemote,
+  list: sb.scribeMemoryList,
+  upsert: sb.scribeMemoryUpsert,
+  remove: sb.scribeMemoryDelete,
+  sync: sb.scribeMemoryApply,
 };
 let scribeMemoryTransport = { ...SCRIBE_MEMORY_TRANSPORT_DEFAULTS };
 /** TEST SEAM (same convention as scribeAgent.js's wireScribeRemoteTransport). */
@@ -9441,6 +9484,91 @@ function commLogoutButtonHTML() {
 export const _commLogoutButtonHTMLForTest = commLogoutButtonHTML;
 
 /**
+ * HOW A COMMISSIONER RE-PROVES HE IS THE COMMISSIONER, in one place.
+ * Drew, 2026-09-23: *"we got rid of the admin console password but run trainer
+ * still requires a password… make a note this will be moved to the admin
+ * console."* Coordinator re-gate, same day: retire the re-prompts in supabase
+ * mode. This is that decision, named once so the four call sites cannot drift.
+ *
+ *   'role'      supabase — the session already proves it. `isAdmin` comes from
+ *               `league_members.role` (Step 3b, renderCommPage's own branch),
+ *               and every destructive action is gated AGAIN server-side against
+ *               `is_commissioner` off the JWT. There is nothing left for a
+ *               client-side string comparison to add.
+ *   'password'  PIN mode — BYTE-IDENTICAL to what it has always been. A PIN
+ *               device has no verified role, so the prompt is the only gate
+ *               that exists and removing it there would be the real weakening
+ *               (CLAUDE.md's locked decision, unchanged for that mode).
+ *
+ * ── WHY THIS IS A SECURITY *IMPROVEMENT*, NOT A RELAXATION ─────────────────
+ * Read this before restoring a prompt "to be safe". The re-prompts compared
+ * `btoa(pw)` against `getSettings().adminPasswordHash`. On the live league that
+ * field DOES NOT EXIST: `js/supabase-projection.js`'s `CREDENTIAL_FIELDS`
+ * ("S1 — never let a secret enter Supabase") stripped it at the cutover import
+ * on 2026-09-19, deliberately and correctly. The settings merge therefore falls
+ * through to `js/data-model.js`'s DEFAULT_SETTINGS, whose value is
+ * `btoa('admin123')` — a constant written in plain sight in a file anybody can
+ * read. Since 2026-09-19 the gate in front of "spend real money at Anthropic"
+ * has been a password published in the repo. Drew's own run today accepted it.
+ *
+ * So the choice was never "a password or nothing". It was "a public default, or
+ * the verified role the server checks anyway". The role wins on every reading.
+ *
+ * WHAT REPLACES THE PROMPT IS NOT NOTHING. Where an action is consequential for
+ * a reason other than authorisation — the Trainer spends money at Anthropic —
+ * the call site keeps a plain `confirm()`. That was always the honest half of
+ * that prompt; the password half was the part that was not working.
+ */
+function commReauthMode() {
+  return getAuthMode() === 'supabase' ? 'role' : 'password';
+}
+export const _commReauthModeForTest = commReauthMode;
+
+/**
+ * The "Commissioner Password" half of the Security & Settings card, and its
+ * trailing divider. ABSENT in supabase mode — not disabled, not hidden with
+ * CSS. The [51] precedent (`commLogoutButtonHTML`), for the same reason it
+ * gives: a control that cannot do what it says is worse than no control,
+ * because it reports success. Here it would be worse still — "🔑 Password
+ * changed" while `saveSetting('adminPasswordHash', …)` writes a credential into
+ * the settings blob EVERY DEVICE HYDRATES, guarding nothing, for a mode in
+ * which nothing reads it.
+ *
+ * SPLICED WITH `+`, NOT `${}`. Same rule `dataActionsRowHTML()` documents: a
+ * call interpolated into a markup template is a new site on xsstest's [9c-2]
+ * backlog, and this function emits only its own literal markup — there is no
+ * user data in it to escape. Concatenation keeps that ratchet at zero.
+ *
+ * The Site PIN card below it is deliberately NOT touched here. It is dead in
+ * supabase mode too (there is no front door to gate) and it renders the current
+ * PIN in plain text, which is worth its own look — but widening a security fix
+ * mid-review is how a small correct change becomes an unreviewed large one.
+ * Raised as its own item instead.
+ */
+function commPasswordCardHTML() {
+  if (commReauthMode() === 'role') return '';
+  return `
+          <div class="card-title mb-sm">Commissioner Password</div>
+          <p class="text-muted text-xs mb-sm">Used to access this Commissioner panel and authorize full resets.</p>
+          <div class="form-group">
+            <label class="form-label">Current password</label>
+            <input class="form-input" id="sec-pw-current" type="password" autocomplete="current-password" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">New password</label>
+            <input class="form-input" id="sec-pw-new" type="password" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm new password</label>
+            <input class="form-input" id="sec-pw-confirm" type="password" autocomplete="new-password" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="sec-change-pw-btn">🔑 Change Password</button>
+
+          <div class="divider"></div>`;
+}
+export const _commPasswordCardHTMLForTest = commPasswordCardHTML;
+
+/**
  * …and the ROW they live in. Both of its buttons are conditional now — Full
  * Factory Reset has been hidden in `dataMode:'supabase'` since Step 4 — so on
  * the live league the row would render as an empty `flex` container sitting
@@ -10188,114 +10316,49 @@ export function renderCommPage() {
         </div>
       </div>`);
 
-    // ── Cloud Sync (shared backend) ──
-    const beCfg = getBackendConfig() || { url:'', token:'' };
-    const beMode = getBackendMode();
-    const beReady = isBackendReady();
-    const syncStatus = getSyncStatus();
-    // Friendly "12 seconds ago" formatter
-    const syncAgo = (iso) => {
-      if (!iso) return 'never';
-      const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-      if (s < 5) return 'just now';
-      if (s < 60) return `${s}s ago`;
-      if (s < 3600) return `${Math.floor(s/60)}m ago`;
-      if (s < 86400) return `${Math.floor(s/3600)}h ago`;
-      return new Date(iso).toLocaleString();
-    };
-    // DI-208g / S-C14 (PASS 1b, 2026-09-19/20, Drew "Approve") — the Cloud
-    // Sync card and its be-* handlers are not rendered/bound inside the
-    // native shell. AD-67: the iOS app never speaks Apps Script, full stop;
-    // security-reviewer's AMENDMENT 1 finding F1 was that this card renders
-    // unconditionally with live URL/token inputs that a shell could actually
-    // POST through (a real path to Apps Script the runtime refusal in
-    // js/backend.js's call() alone does not make disappear from the UI).
-    // isNativeShell() (not isNativeOrigin()) is correct here: hiding a card
-    // is cosmetic, not the security boundary — that boundary is the
-    // origin-positive refusal in backend.js/chatTransport.js, which a
-    // spoofed Capacitor on https: cannot pass either way.
-    if (!isNativeShell()) sections.push(`
-      <div class="admin-section" data-comm-tab="data">
-        <div class="admin-section-title">☁️ Cloud Sync (Google Sheets)</div>
-        <div class="card">
-          <p class="text-secondary text-sm mb-sm">
-            Connect a Google Sheet so all players share the same data across devices.
-            Status: <strong>${beMode==='googleSheets'&&beReady?'✅ Connected':beMode==='googleSheets'?'⚠️ Configured, not connected':'⚪ Local only (this device)'}</strong>
-          </p>
-
-          ${beMode==='googleSheets'&&beReady ? `
-          <div class="sync-status-panel">
-            <div class="card-title mb-sm">What syncs &amp; when</div>
-            <ul class="sync-explainer">
-              <li><strong>Every write auto-syncs.</strong> Player pick submissions, commissioner edits to games/spreads/scores, results calculations, reset operations — all push to the Sheet automatically within ~1 second.</li>
-              <li><strong>Reads</strong> use a local in-memory mirror seeded from the Sheet at startup, so the app stays fast and works briefly offline. Pull manually (below) to refresh from a teammate's recent edit.</li>
-              <li><strong>Device-local</strong> (does NOT sync, by design): your login session, the site-PIN unlock state, and the Sheet URL/token on this device.</li>
-              <li><strong>If a sync fails</strong> (network drop, Sheet quota hit) the change is queued in the local cache and retries on the next write. The status badge at the top shows ⚠️ when this happens.</li>
-              <li><strong>Manual exports</strong> (Export Data section) still work and are recommended as periodic offline backups in addition to auto-sync.</li>
-            </ul>
-            <div class="sync-stats">
-              <div><span class="micro-label">Last successful sync</span><strong>${syncAgo(syncStatus.lastSyncAt)}</strong></div>
-              <div><span class="micro-label">Pending writes</span><strong>${syncStatus.pendingWrites}</strong></div>
-              <div><span class="micro-label">Last error</span><strong>${syncStatus.lastError ? escHtml(syncStatus.lastError) : '—'}</strong></div>
-            </div>
-            <div class="flex gap-sm mt-sm flex-wrap">
-              <button class="btn btn-ghost btn-sm" id="be-flush-now-btn">⚡ Flush pending now</button>
-              <button class="btn btn-ghost btn-sm" id="be-pull-now-btn">⬇️ Pull latest from Sheet</button>
-            </div>
-          </div>
-          ` : ''}
-
-          <div class="form-group">
-            <label class="form-label">Web App URL <span class="text-muted text-xs">(ends in /exec)</span></label>
-            <input class="form-input" id="be-url" placeholder="https://script.google.com/macros/s/…/exec" value="${escHtml(beCfg.url||'')}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Access Token</label>
-            <input class="form-input" id="be-token" type="password" placeholder="from Apps Script setup" value="${escHtml(beCfg.token||'')}" />
-          </div>
-          <div class="flex gap-sm flex-wrap mb-md">
-            <button class="btn btn-secondary btn-sm" id="be-test-btn">🔌 Test Connection</button>
-            <button class="btn btn-primary btn-sm" id="be-save-btn">💾 Save & Connect</button>
-            <button class="btn btn-ghost btn-sm" id="be-disconnect-btn">Disconnect</button>
-          </div>
-          <div class="divider"></div>
-          <p class="text-muted text-xs mb-sm">First-time setup: push THIS device's data up to seed an empty Sheet, or pull the Sheet's data down to this device.</p>
-          <div class="flex gap-sm flex-wrap mb-md">
-            <button class="btn btn-secondary btn-sm" id="be-seed-btn">⬆️ Push local data to Sheet (seed)</button>
-            <button class="btn btn-secondary btn-sm" id="be-pull-btn">⬇️ Pull Sheet data to this device</button>
-          </div>
-          <div class="divider"></div>
-          <p class="text-muted text-xs mb-sm">Season backups (snapshots) live in the Sheet and can be restored.</p>
-          <div class="flex gap-sm flex-wrap mb-sm">
-            <button class="btn btn-secondary btn-sm" id="be-snapshot-btn">📸 Create Snapshot</button>
-            <button class="btn btn-ghost btn-sm" id="be-list-snapshots-btn">📜 List Snapshots</button>
-          </div>
-          <div id="be-snapshots-list" class="text-xs text-muted"></div>
-        </div>
-      </div>`);
+    // ══════════════════════════════════════════════════════════════════════
+    // THE "☁️ Cloud Sync (Google Sheets)" CARD IS DELETED (2026-09-23).
+    //
+    // It was a Comm → Data section with live Web App URL and Access Token
+    // inputs and eight buttons: 🔌 Test Connection, 💾 Save & Connect,
+    // Disconnect, ⬆️ Push local data to Sheet (seed), ⬇️ Pull Sheet data,
+    // ⚡ Flush pending now, ⬇️ Pull latest, 📸 Create Snapshot and
+    // 📜 List Snapshots (with per-row Restore). Every one of them called a
+    // js/backend.js export that no longer exists.
+    //
+    // WHAT REPLACES EACH, so nothing is silently lost:
+    //   Test Connection      → Comm → Data → Background jobs, and
+    //                          📲 Send test push, which proves the real path
+    //                          end to end rather than that a URL answers.
+    //   Save & Connect /     → config.json's authMode/dataMode pair. There is
+    //   Disconnect             no per-device backend setup any more (AD-05's
+    //                          Option A, finished).
+    //   Push/Pull            → the adapter hydrates on boot, on identity
+    //                          change and on the banner's Retry.
+    //   Flush pending now    → `sb.flush()` on pagehide/visibilitychange,
+    //                          which is automatic and covers the case a manual
+    //                          button never could (a backgrounded PWA).
+    //   Snapshot / List /    → `snapshot_league()` (0012), which runs
+    //   Restore                server-side; `import-backup.mjs` is the restore,
+    //                          and it is Drew's to run. THIS IS A REAL
+    //                          REDUCTION IN THE UI and is recorded as such:
+    //                          the commissioner can no longer take a backup by
+    //                          tapping a button. It is deliberate — the buttons
+    //                          it removes wrote to a Sheet that is now a
+    //                          read-only archive, so keeping them would have
+    //                          been a backup button that backed up nothing.
+    //
+    // The card was also the last place in the shipped UI that rendered the
+    // Apps Script token into an <input value="…">, which is why
+    // `isNativeShell()` had to hide it (DI-208g / S-C14, security-reviewer
+    // AMENDMENT 1 finding F1). That whole consideration goes with it.
+    // ══════════════════════════════════════════════════════════════════════
 
     // ── Security & Settings (password change, site PIN) ──
     sections.push(`
       <div class="admin-section" data-comm-tab="settings">
         <div class="admin-section-title">🔐 Security &amp; Settings</div>
-        <div class="card">
-          <div class="card-title mb-sm">Commissioner Password</div>
-          <p class="text-muted text-xs mb-sm">Used to access this Commissioner panel and authorize full resets.</p>
-          <div class="form-group">
-            <label class="form-label">Current password</label>
-            <input class="form-input" id="sec-pw-current" type="password" autocomplete="current-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">New password</label>
-            <input class="form-input" id="sec-pw-new" type="password" autocomplete="new-password" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Confirm new password</label>
-            <input class="form-input" id="sec-pw-confirm" type="password" autocomplete="new-password" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-change-pw-btn">🔑 Change Password</button>
-
-          <div class="divider"></div>
+        <div class="card">` + commPasswordCardHTML() + `
           <div class="card-title mb-sm">Site PIN (front-door gate)</div>
           <p class="text-muted text-xs mb-sm">The PIN required to open the app. Current: <strong class="font-display">${escHtml(getEffectiveSitePin())}</strong>. Players will need the new PIN on their next visit (existing unlocked devices stay unlocked).</p>
           <div class="form-group">
@@ -11476,18 +11539,44 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('scribe-run-trainer-btn')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     // Reviewer SIGNIFICANT #8 — a Trainer run spends real money at Anthropic,
-    // so it carries the same commissioner-password confirmation the other
-    // consequential Data-tab actions do (the factory-reset flow above is the
-    // precedent, same `btoa(pw)` comparison). The check is re-performed
-    // SERVER-side against the stored hash; this local comparison only exists
-    // to fail fast with a clear message instead of a round trip.
-    const pw = prompt('Enter the Commissioner password to run the SCRIBE Trainer. This makes a paid model call.');
-    if (!pw) return;
-    const adminPasswordHash = btoa(pw);
-    if (adminPasswordHash !== getSettings().adminPasswordHash) {
-      showToast('❌ Incorrect password — Trainer run cancelled', 'error'); return;
+    // so it carries a confirmation. WHAT that confirmation is now depends on
+    // the mode, and the two halves of the original gate have been separated
+    // because they were never the same question (Drew + coordinator re-gate,
+    // 2026-09-23; see `commReauthMode()` for the whole argument):
+    //
+    //   AUTHORISATION — "are you the commissioner". In supabase mode the
+    //     session already answers it, and the Edge Function answers it AGAIN
+    //     server-side: `supabase/functions/trainer/index.js` imports
+    //     `requireCommissioner` from `_shared/auth.js` and applies it off the
+    //     signed-in JWT before it spends anything. The client comparison this
+    //     replaced was worth LESS than nothing, because `adminPasswordHash` is
+    //     absent on this league and the merge fell through to the published
+    //     `btoa('admin123')` default.
+    //   COST — "this makes a paid model call". Still true, still worth asking,
+    //     and nothing about auth changes that. It stays, as a plain confirm.
+    //
+    let adminPasswordHash = '';
+    if (commReauthMode() === 'password') {
+      const pw = prompt('Enter the Commissioner password to run the SCRIBE Trainer. This makes a paid model call.');
+      if (!pw) return;
+      adminPasswordHash = btoa(pw);
+      if (adminPasswordHash !== getSettings().adminPasswordHash) {
+        showToast('❌ Incorrect password — Trainer run cancelled', 'error'); return;
+      }
+    } else if (!confirm('Run the SCRIBE Trainer now? This makes a paid model call and can take up to two minutes.')) {
+      return;
     }
-    btn.disabled = true; const original = btn.textContent; btn.textContent = 'Running…';
+    // RG-227 (live, 2026-09-22) — THE LABEL TELLS THE TRUTH ABOUT THE WAIT.
+    // It read 'Running…', which for a button that answers in a second or two is
+    // fine and for this one is not: the Trainer is ONE Anthropic call over a
+    // week of chat and takes 30-90 seconds (TRAINER_HTTP_TIMEOUT_MS is 110s).
+    // A commissioner watching an unchanging 'Running…' for a minute and a half
+    // has no way to tell a slow run from a hung one, and the obvious response —
+    // reload, tap again — hits the one-per-hour manual floor and reads as a
+    // second failure. `functions.invoke()` sets NO client-side deadline (the
+    // browser's own connection timeouts are the only ceiling), so the client
+    // really does wait for the answer; the copy now says how long that is.
+    btn.disabled = true; const original = btn.textContent; btn.textContent = 'Running… up to 2 min';
     try {
       // ── Phase III Step 6 PHASE 4 (trainer) — DI-T6.4's client half. ─────────────────────────
       // Call the Edge Function ONLY when `settings.serverJobs.trainer` is true; otherwise this
@@ -11507,7 +11596,31 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
         // success/error/warning; a skip is advisory, not a failure.
         showToast(`ℹ️ Trainer skipped: ${result.error || result.skipped}`, 'warning');
       } else if (result && result.ok) {
-        await refreshFromBackend();   // server wrote directly through the seam — pull it into the mirror
+        // The Trainer writes `scribe_learnings`/`scribe_canon`/`scribe_reports`
+        // SERVER-SIDE, outside this device's debounced push, so the mirror has
+        // to be pulled forward before the review surface can show the run.
+        //
+        // UN-237 (2026-09-23) — this was `refreshFromBackend()`, js/backend.js's
+        // Sheets `getAll`. On a Supabase league that call reached the retired
+        // relay and threw, so a SUCCESSFUL Trainer run landed in the catch below
+        // and toasted "Trainer run failed" — the run had in fact completed.
+        await ensureSupabaseDataHydrated('trainer-run');
+        // ── UN-237 / DI-259's OTHER CALLER ──────────────────────────────────
+        // `statusFor('fact_candidate', …)` never auto-approves, so on today's
+        // rules this sweep normally finds nothing. It is fired anyway, and the
+        // reason is the `autoApproveEligible` flag the Trainer already carries:
+        // the moment that rule changes — or a candidate is approved on another
+        // device between runs — an approved fact would otherwise sit unapplied
+        // until somebody happened to tap Approve on a DIFFERENT one, because
+        // the sweep is league-wide and has no per-row trigger.
+        //
+        // QUIET, because it is not what the commissioner asked for. A sweep
+        // that applied something still says so; one that found nothing says
+        // nothing rather than following "Training run complete" with "Nothing
+        // new to apply", which reads as a failure of the thing he just ran.
+        // Fire-and-forget: it has its own toast and its own catch, and the
+        // Trainer's result does not depend on it.
+        syncApprovedScribeFacts({ quiet: true });
         showToast('🧠 SCRIBE Training run complete', 'success');
       } else {
         showToast(`⚠️ Trainer run failed: ${result && result.error ? result.error : 'unknown error'}`, 'error');
@@ -12152,9 +12265,23 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // UN-112: the confirm copy used to claim this deletes ALL data — now that
     // chat is wired in below, that would be a lie (chat is HIDDEN, not
     // deleted, same as retention). Corrected in both prompts.
-    const pw = prompt('Enter Commissioner password to confirm FULL factory reset. This deletes ALL data including all weeks and players, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab):');
-    if (!pw) return;
-    if (btoa(pw) !== getSettings().adminPasswordHash) { showToast('❌ Incorrect password — reset cancelled','error'); return; }
+    // THE PASSWORD GATE IS PIN-MODE ONLY (2026-09-23) — and on the live league
+    // this whole handler is already unreachable twice over: the control is not
+    // rendered (`dataActionsRowHTML()` omits it in `dataMode:'supabase'`) and
+    // the line above returns. The branch is written anyway rather than left as
+    // a bare `prompt`, because "unreachable today" is how an ungated compare
+    // survives into the day somebody makes it reachable — and because the
+    // comparison it guards is against the published `btoa('admin123')` default
+    // whenever the stored hash is absent.
+    //
+    // NOTE WHAT THIS ACTION IS: `resetToDemo()` is a LOCAL, CLIENT-ONLY rewrite
+    // of the mirror. There is no `is_commissioner` RPC behind it to fall back
+    // on — which is precisely why it does not run in supabase mode at all.
+    if (commReauthMode() === 'password') {
+      const pw = prompt('Enter Commissioner password to confirm FULL factory reset. This deletes ALL data including all weeks and players, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab):');
+      if (!pw) return;
+      if (btoa(pw) !== getSettings().adminPasswordHash) { showToast('❌ Incorrect password — reset cancelled','error'); return; }
+    }
     if(!confirm('FINAL WARNING: This will permanently delete ALL weeks, picks, players, results, and standings, and hides all prior chat history (chat rows are hidden, not deleted — reversible from the Data tab). Type OK to proceed.'))return;
     // v0.17.5 (caught in review): resetToDemo() writes DEFAULT_SETTINGS, which
     // resets chatEpochSeq to 0 — so if the awaited startFreshChat() below then
@@ -12200,6 +12327,12 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
 
   // ── Security & Settings: change Commissioner password ──
   document.getElementById('sec-change-pw-btn')?.addEventListener('click', ()=>{
+    // SECOND GUARD, the `reset-demo-btn` pattern (reviewer, 2026-09-19). The
+    // card is not rendered in supabase mode (`commPasswordCardHTML()`), so this
+    // listener has nothing to bind to there — but a render guard and a handler
+    // guard fail independently, and what this handler does when it is wrong is
+    // write a credential into the settings blob every device hydrates.
+    if (commReauthMode() === 'role') return;
     const cur = document.getElementById('sec-pw-current')?.value || '';
     const next = document.getElementById('sec-pw-new')?.value || '';
     const confirm2 = document.getElementById('sec-pw-confirm')?.value || '';
@@ -12249,112 +12382,14 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     showToast(email ? 'Commissioner email saved' : 'Commissioner email cleared', 'success');
   });
 
-  // ── Cloud Sync (backend) handlers ──
-  document.getElementById('be-test-btn')?.addEventListener('click', async ()=>{
-    const url=document.getElementById('be-url')?.value.trim();
-    const token=document.getElementById('be-token')?.value.trim();
-    if(!url){showToast('Enter the Web App URL first','error');return;}
-    setBackendConfig(url, token);
-    showToast('⏳ Testing…','warning');
-    const r=await pingBackend();
-    showToast(r.ok?`✅ Reached backend (${r.service||'ok'})`:`❌ ${r.error||'No response'}`, r.ok?'success':'error');
-  });
-
-  document.getElementById('be-save-btn')?.addEventListener('click', async ()=>{
-    const url=document.getElementById('be-url')?.value.trim();
-    const token=document.getElementById('be-token')?.value.trim();
-    if(!url||!token){showToast('URL and token are both required','error');return;}
-    setBackendConfig(url, token);
-    showToast('⏳ Connecting…','warning');
-    try{
-      await hydrateBackend();
-      setBackendMode('googleSheets');
-      ensureSeedData();
-      showToast('✅ Connected — this device now uses shared data','success');
-      refreshHeader(); renderCommPage();
-    }catch(err){
-      showToast(`❌ Connect failed: ${err.message||err}`,'error');
-    }
-  });
-
-  document.getElementById('be-disconnect-btn')?.addEventListener('click', ()=>{
-    if(!confirm('Disconnect from the shared Sheet and use this device only? Local data remains; shared data is untouched.'))return;
-    setBackendMode('local');
-    clearBackendConfig();
-    initStorage();
-    showToast('Disconnected — using local data','warning');
-    refreshHeader(); renderCommPage();
-  });
-
-  document.getElementById('be-seed-btn')?.addEventListener('click', async ()=>{
-    if(!isBackendConfigured()){showToast('Save & connect first','error');return;}
-    if(!confirm('Push THIS device\'s data up to seed the Sheet? Existing keys on the Sheet are kept (not overwritten).'))return;
-    showToast('⏳ Seeding…','warning');
-    try{
-      const snapshot=exportAllDataRaw();
-      const n=await seedFromLocal(snapshot,false);
-      showToast(`✅ Seeded ${n} data keys to the Sheet`,'success');
-    }catch(err){showToast(`❌ ${err.message||err}`,'error');}
-  });
-
-  document.getElementById('be-pull-btn')?.addEventListener('click', async ()=>{
-    if(!isBackendConfigured()){showToast('Save & connect first','error');return;}
-    showToast('⏳ Pulling…','warning');
-    try{
-      await refreshFromBackend();
-      setBackendMode('googleSheets');
-      showToast('✅ Pulled shared data to this device','success');
-      refreshHeader(); renderCommPage();
-    }catch(err){showToast(`❌ ${err.message||err}`,'error');}
-  });
-
-  // Flush any debounced pending writes to the Sheet immediately. Useful when
-  // the user is about to close the tab and wants the most recent edits to land.
-  document.getElementById('be-flush-now-btn')?.addEventListener('click', async ()=>{
-    showToast('⏳ Flushing pending writes…','warning');
-    try {
-      const r = await flushPush();
-      showToast(r.pushed ? `✅ Pushed ${r.pushed} pending writes` : '✅ Nothing pending — already synced','success');
-      renderCommPage();
-    } catch(err){ showToast(`❌ Flush failed: ${err.message||err}`,'error'); }
-  });
-  // Same as the existing be-pull-btn but available inside the status panel for proximity.
-  document.getElementById('be-pull-now-btn')?.addEventListener('click', async ()=>{
-    showToast('⏳ Pulling latest…','warning');
-    try {
-      await refreshFromBackend();
-      showToast('✅ Pulled latest from Sheet','success');
-      renderCommPage();
-    } catch(err){ showToast(`❌ Pull failed: ${err.message||err}`,'error'); }
-  });
-
-  document.getElementById('be-snapshot-btn')?.addEventListener('click', async ()=>{
-    if(!isBackendConfigured()){showToast('Save & connect first','error');return;}
-    const label=prompt('Snapshot label (optional, e.g. "End of Week 5"):')||'';
-    showToast('⏳ Creating snapshot…','warning');
-    try{ const r=await createSnapshot(label); showToast(`📸 Snapshot saved (${r.id})`,'success'); }
-    catch(err){showToast(`❌ ${err.message||err}`,'error');}
-  });
-
-  document.getElementById('be-list-snapshots-btn')?.addEventListener('click', async ()=>{
-    if(!isBackendConfigured()){showToast('Save & connect first','error');return;}
-    const el=document.getElementById('be-snapshots-list'); if(el)el.innerHTML='Loading…';
-    try{
-      const snaps=await listSnapshots();
-      if(!el)return;
-      if(!snaps.length){el.innerHTML='No snapshots yet.';return;}
-      el.innerHTML=snaps.map(s=>`<div class="flex-between" style="padding:4px 0;border-bottom:1px solid var(--border)">
-        <span>${escHtml(s.label||'(no label)')} · <span class="text-muted">${new Date(s.createdAt).toLocaleString()}</span></span>
-        <button class="btn btn-ghost btn-sm be-restore-snap" data-id="${escHtml(s.id)}">Restore</button>
-      </div>`).join('');
-      el.querySelectorAll('.be-restore-snap').forEach(b=>b.addEventListener('click', async ()=>{
-        if(!confirm('Restore this snapshot? Current shared data is backed up first, then overwritten.'))return;
-        showToast('⏳ Restoring…','warning');
-        try{ await restoreSnapshot(b.dataset.id); showToast('✅ Restored','success'); refreshHeader(); renderCommPage(); }
-        catch(err){showToast(`❌ ${err.message||err}`,'error');}
-      }));
-    }catch(err){ if(el)el.innerHTML=`Error: ${escHtml(String(err.message||err))}`; }
-  });
+  // The nine `be-*` Cloud Sync handlers stood here until 2026-09-23 and are
+  // deleted with the card they bound to (see the note at its render site, in
+  // the Comm → Data sections above, for what replaced each button). Every one
+  // of them called a js/backend.js export that no longer exists —
+  // `pingBackend`, `setBackendConfig`, `clearBackendConfig`, `hydrate`,
+  // `seedFromLocal`, `flushPush`, `refreshFromBackend`, `createSnapshot`,
+  // `listSnapshots`, `restoreSnapshot` — so leaving any of them bound would be
+  // a button that throws a ReferenceError on tap.
 
   // ── Priority 14: Weekly Summary email (preview + send via mail client) ──
   document.getElementById('weekly-summary-preview-btn')?.addEventListener('click', () => {
@@ -13129,6 +13164,17 @@ function renderChatEpochAdmin() {
 }
 
 function renderCommLogin(c) {
+  // THIRD GUARD, and the outermost of the three is `renderCommPage()`'s own
+  // branch at the `!session.isAdmin` fork — in supabase mode it renders DI-182c's
+  // permission-denied card and returns, so nothing reaches here (Step 3b,
+  // DI-180g). This function is therefore already dead on the live league; the
+  // guard exists because what it protects is a `btoa(val) === …` comparison
+  // that, with the stored hash absent, compares against the published
+  // `btoa('admin123')` default — i.e. the one shape where "unreachable" and
+  // "grants commissioner to anybody who read the repo" are one edit apart.
+  // Rendering NOTHING rather than a broken form: an empty container is the
+  // honest output for a login that cannot log anybody in.
+  if (commReauthMode() === 'role') { c.innerHTML = ''; return; }
   c.innerHTML=`
     <div class="section-header"><h2>Commissioner</h2></div>
     <div class="card admin-login-card">
@@ -14606,23 +14652,34 @@ export function applyScribeLearningDecision(idx, approved) {
  * stamped `memoryAppliedAt`), so a double-tap reports `applied: 0` rather
  * than writing anything twice.
  *
- * The credential it does send is the hash already sitting in the settings
- * blob every device hydrates — so passing it here exposes nothing that was
- * not already on every player's device (AD-05's same honest scope). The
- * server still requires it, which keeps a stale/mis-wired client from
- * triggering the sweep.
+ * IT SENDS NO CREDENTIAL AT ALL (2026-09-23). It used to pass
+ * `{ adminPasswordHash: getSettings().adminPasswordHash || '' }`, which the
+ * retired Apps Script relay really did check. `scribe_memory_apply()` (0022 §6)
+ * takes exactly ONE argument and it is the league; the caller is derived from
+ * the JWT and the commissioner gate is in the function body. So the argument
+ * was already ignored on the live league — and an ignored credential in a
+ * request body is still a credential in a log, a breakpoint and a stack trace.
+ * On top of which, with the stored hash absent post-cutover, the value being
+ * sent was the published `btoa('admin123')` default. Dropped.
  *
  * Exported for groupdtest.mjs: the assertion that approving a fact candidate
  * fires this EXACTLY once needs the real function, not a look-alike.
  */
-export async function syncApprovedScribeFacts() {
+export async function syncApprovedScribeFacts({ quiet = false } = {}) {
   try {
-    const r = await scribeMemoryTransport.sync({ adminPasswordHash: getSettings().adminPasswordHash || '' });
+    const r = await scribeMemoryTransport.sync();
     if (r && r.ok === false) throw new Error(r.error || 'sync failed');
     const applied = Number(r && r.applied) || 0;
-    showToast(applied
-      ? `🧠 ${applied} approved fact${applied === 1 ? '' : 's'} now in SCRIBE's memory`
-      : "🧠 Nothing new to apply. SCRIBE's memory is already current", 'success');
+    // `quiet` SUPPRESSES ONLY THE ZERO CASE, and only for the caller that did
+    // not ask for a sweep (the post-Trainer auto-apply). An applied count is
+    // always announced — a fact that has just entered SCRIBE's memory is a
+    // change to what it will say about somebody, and that is never silent.
+    // A FAILURE is never quiet either; the catch below has no branch on it.
+    if (applied || !quiet) {
+      showToast(applied
+        ? `🧠 ${applied} approved fact${applied === 1 ? '' : 's'} now in SCRIBE's memory`
+        : "🧠 Nothing new to apply. SCRIBE's memory is already current", 'success');
+    }
     return r;
   } catch (err) {
     // Loud, never silent (AD-06's instinct on a commissioner action): the
@@ -19068,15 +19125,12 @@ async function releaseWithholdIfResolved(reason) {
       // from the Sheet. Same one function every other caller uses, so the
       // recovery path cannot carry a second, partial copy of the sequence —
       // which is precisely the defect reviewer F4 closed on this very function.
+      // ONE ARM (2026-09-23): the `else if (isBackendConfigured())` Sheets
+      // hydrate that used to follow this is deleted with the transport. A
+      // device that is not in Supabase mode is local-only and has nothing to
+      // re-hydrate; its data never left the device.
       if (isSupabaseDataMode()) {
         await ensureSupabaseDataHydrated('hold-recovery');
-      } else if (isBackendConfigured()) {
-        await hydrateBackend();
-        setBackendMode('googleSheets');
-        try { refreshChatEnabled(); } catch {}
-        ensureSeedData();
-        refreshHeader();
-        navigateTo(state.currentTab || 'dashboard');
       }
     } catch (err) {
       console.error('[backend] hydrate failed (post-hold):', err);

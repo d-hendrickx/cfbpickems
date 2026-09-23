@@ -29,7 +29,7 @@
  */
 
 import {
-  appendEvents, subscribe, fetchBefore, fetchHead, StaleDeploymentError,
+  appendEvents, subscribe, fetchBefore, fetchHead,
 } from './chatTransport.js';
 import { isBackendConfigured } from './backend.js';
 // XSS-HARDEN round 3 (F3-1) — the react fold's emoji ALLOW-LIST. data-model.js
@@ -86,7 +86,14 @@ const S = {
   failed: new Map(),         // id -> ev
   flushTimer: null,
   offline: false,
-  staleDeployment: false,
+  // `staleDeployment` lived here until 2026-09-23. It meant "the deployed Apps
+  // Script predates the chat endpoints" — the v0.16 chat-outage root cause,
+  // which answered every call `Unknown action: …` and looked exactly like an
+  // offline transport. There is no deployment to be stale: chatTransport.js has
+  // one backend, and a missing Supabase RPC answers PGRST202, which
+  // `classifySupabaseError()` already classifies as retryable. The flag, the
+  // `StaleDeploymentError` it was set from, and the chat-ui banner arm that
+  // told the commissioner to redeploy Code.gs are all gone together.
   lastError: '',
   viewOpen: false,
   selfId: null,
@@ -108,7 +115,7 @@ const S = {
 function notify(kind, detail) { S.subs.forEach(fn => { try { fn(kind, detail); } catch {} }); }
 export function onChat(fn) { S.subs.add(fn); return () => S.subs.delete(fn); }
 export function chatStatus() {
-  return { head: S.head, offline: S.offline, staleDeployment: S.staleDeployment,
+  return { head: S.head, offline: S.offline,
            lastError: S.lastError, outbox: S.outbox.length, failed: S.failed.size,
            mode: roomMode(), caughtUp: S.caughtUp };
 }
@@ -1140,11 +1147,11 @@ export function whenAppended(id, { timeoutMs = APPEND_ACK_TIMEOUT_MS } = {}) {
 }
 
 function handleTransportError(err) {
+  // Records the message for the offline banner. The `StaleDeploymentError`
+  // branch that used to be here went with the Apps Script transport (see the
+  // note at S.staleDeployment's old home): nothing throws it, so the branch
+  // could only ever have been dead code that looked like a live classification.
   S.lastError = String(err?.message || err);
-  if (err instanceof StaleDeploymentError || err?.stale) {
-    S.staleDeployment = true;
-    if (!S.offline) { S.offline = true; notify('offline', { error: S.lastError, stale: true }); }
-  }
 }
 
 // ── Subscription (adaptive polling lives in the transport) ────────────────────
@@ -1388,10 +1395,9 @@ function _subscribeNow() {
       getMode: roomMode,
       getKnownHead: () => S.head,
       onStatus: (s, detail) => {
-        if (s === 'online') { S.offline = false; S.staleDeployment = false; notify('online'); }
+        if (s === 'online') { S.offline = false; notify('online'); }
         if (s === 'offline') {
           S.offline = true;
-          if (detail?.stale) S.staleDeployment = true;
           S.lastError = detail?.error || '';
           notify('offline', detail);
         }
@@ -2175,7 +2181,7 @@ export function _resetForTest() {
   S.forceTick = null;                                     // DI-168 — same lifecycle as S.unsub, above
   S.wake = null;                                          // BUG-12 — same lifecycle again
   S.items.clear(); S.buffered.clear(); S.head = 0; S.outbox = []; S.failed.clear();
-  S.offline = false; S.staleDeployment = false;
+  S.offline = false;
   S.backfillLow = null; S.viewOpen = false; S.caughtUp = false;
   _eventsCacheBuf = [];                                   // DI-169 — no leaking raw events into the next test section's writes
   _cachePrimed = false;                                   // BUG-G — the once-per-session prime latch is session state, same lifecycle as the buffer above

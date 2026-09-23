@@ -614,14 +614,26 @@ console.log('\n[11] Write volume — carrying the flags must not multiply Sheet 
   assert(newWrites === legacyWrites,
     `[11] (b) carrying the two kickoff flags writes exactly as often: ${newWrites} vs ${legacyWrites}`);
 
-  // (c) Sheet-level truth: the push unit is the KEY, not the game and not the
-  //     field. backend.cacheSet() dirties a Set of keys and debounces 800ms, so
-  //     a whole tick collapses to ONE queued write however many games moved.
-  const before = backend.getSyncStatus().pendingWrites;
-  for (let i = 0; i < 10; i++) backend.cacheSet(GAMES_KEY, TEN.map(g => ({ ...g, kickoffConfirmed: true })));
-  const after = backend.getSyncStatus().pendingWrites;
-  assert(after - before <= 1,
-    `[11] (c) 10 cacheSet() calls on cfbp_games queue at most ONE pending Sheet write (delta=${after - before})`);
+  // (c) BACKEND-level truth: the push unit is the KEY, not the game and not the
+  //     field, so a whole tick collapses to ONE queued write however many games
+  //     moved.
+  //
+  //     PORTED 2026-09-23. It used to drive `backend.cacheSet()` and read
+  //     `backend.getSyncStatus().pendingWrites` — the Sheets mirror's dirty-key
+  //     Set and its 800ms debounce, both deleted with that adapter. The claim
+  //     is the same one layer over: js/supabase-backend.js's `set()` marks the
+  //     KEY dirty and `planFlush()` builds one operation per key per flush, not
+  //     one per row. `adaptertest.mjs`'s flush-planner sections are the live
+  //     coverage of that; what is asserted HERE is the half this suite owns —
+  //     that a refresh tick touches exactly ONE storage key however many games
+  //     it rewrites, which is what makes the per-key debounce sufficient.
+  const keysTouched = new Set();
+  const realSetItem2 = globalThis.localStorage.setItem;
+  globalThis.localStorage.setItem = (k, v) => { keysTouched.add(k); return realSetItem2.call(globalThis.localStorage, k, v); };
+  for (let i = 0; i < 10; i++) for (const g of TEN) storage.saveGame({ ...g, kickoffConfirmed: true });
+  globalThis.localStorage.setItem = realSetItem2;
+  assert(keysTouched.size === 1 && keysTouched.has(GAMES_KEY),
+    `[11] (c) 100 saveGame() calls touch exactly ONE storage key (${GAMES_KEY}) — which is why one debounced flush per key is enough however many games a tick moves (got ${JSON.stringify([...keysTouched])})`);
 
   // (d) And the reason the flags are different in kind from live display data:
   //     they are terminal. Once ESPN says timeValid:true it does not flip back

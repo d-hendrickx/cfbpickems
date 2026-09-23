@@ -35,7 +35,12 @@
  */
 import { getSettings, getScribeLearnings, getScribeCanon } from './storage.js';
 import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
-import { scribeAskRemote as scribeAskRemoteBackend, runTrainerRemote as runTrainerRemoteBackend, scribeAutonomousRemote as scribeAutonomousRemoteBackend, scribeClassifyRemote as scribeClassifyRemoteBackend } from './backend.js';
+// ── NOTHING IS IMPORTED FROM js/backend.js ANY MORE (2026-09-23) ────────────
+// The four Apps Script relays this module wrapped — `scribeAskRemote`,
+// `runTrainerRemote`, `scribeAutonomousRemote`, `scribeClassifyRemote` — are
+// deleted with the transport. Each had a Supabase twin already, gated on its
+// own `settings.serverJobs.*` switch; what goes is the OTHER arm of each
+// branch, not the branch's outcome.
 import { chatTransportMode, askScribe } from './chatTransport.js';
 // ── PHASE III STEP 6 (Phases 3/4/5) — the class-U Edge Function seam ────────
 // `getSupabaseClient`/`getActiveLeagueId` from js/auth.js (no cycle: auth.js imports backend.js,
@@ -106,31 +111,34 @@ export function getActiveContext() {
  *  from a prompt, never read out of the synced settings blob, so the person
  *  triggering paid model calls has to actually know the password.
  *
- *  ── REVIEWER NOTE 5 (2026-09-20) — THE LEGACY PATH IS GATED HERE, STRUCTURALLY. ──
- *  The switch-on's real risk is a DOUBLE SPEND, not a double post: while
- *  `settings.serverJobs.trainer` is true, an Apps Script `runTrainer` is a
- *  second, independent paid Anthropic call — against the frozen Google Sheet,
- *  so it is not even analysing real data, and it draws on no budget this
- *  project can see. js/app.js's button already branches on the switch, but a
- *  branch at ONE call site is a convention, not a guarantee: the next caller
- *  of this exported function would reopen it silently. So the refusal lives
- *  INSIDE the relay. Once the switch is true, NO code path in this build can
- *  reach Apps Script's runTrainer — the caller gets the standard envelope
- *  shape back (`{ok:true, skipped:'disabled'}`, DI-T6.0(f)) so app.js's
- *  existing `result.skipped` branch renders it without a new branch.
+ *  ── RETIRED 2026-09-23. THE FUNCTION SURVIVES; ITS TRANSPORT DOES NOT. ──
+ *  Reviewer note 5 (2026-09-20) put the refusal INSIDE this relay rather than
+ *  only at js/app.js's button, because the switch-on's real risk was a DOUBLE
+ *  SPEND: while `settings.serverJobs.trainer` was true, an Apps Script
+ *  `runTrainer` was a second, independent paid Anthropic call — against a
+ *  frozen Sheet, so not even analysing real data, and drawing on no budget this
+ *  project could see. That refusal is now UNCONDITIONAL, because there is
+ *  nothing behind it: the Apps Script /exec URL is gone from config.json and
+ *  `call()` is gone from js/backend.js.
  *
- *  This bounds only THIS build. A phone on an OLDER cached shell has no
- *  knowledge of the switch and still calls Apps Script directly — which is
- *  why deleting the Apps Script Monday trigger is a HARD, numbered
- *  precondition of the F4 switch-on (docs/SUPABASE_LIVE_RUNBOOK.md §S6F4-P0),
- *  not a tidy-up afterwards. Code cannot close a stale-client hole; a deleted
- *  trigger can. */
-export async function runTrainerRemote({ adminPasswordHash = '' } = {}) {
-  if (isServerJobEnabled('trainer')) {
-    return { ok: true, skipped: 'disabled',
-      error: 'The server Trainer is switched on — the legacy Apps Script Trainer is not called from this build' };
-  }
-  return runTrainerRemoteBackend({ adminPasswordHash });
+ *  THE EXPORT SURVIVES rather than being deleted because it is the honest
+ *  answer to a real question. js/app.js's button branches
+ *  `isServerJobEnabled('trainer') ? runTrainerViaEdgeFunction() : runTrainerRemote()`,
+ *  and the false arm still happens — on a device whose settings blob has not
+ *  hydrated, or a league where Drew has flipped the job off. It must say
+ *  something, and `{ok:true, skipped:'disabled'}` (DI-T6.0(f)'s envelope) is
+ *  what app.js's existing `result.skipped` branch already renders as an
+ *  advisory toast. Deleting the export would make that arm a TypeError.
+ *
+ *  THE STALE-CLIENT NOTE IS NOW CLOSED, not merely bounded. It used to read:
+ *  "a phone on an OLDER cached shell has no knowledge of the switch and still
+ *  calls Apps Script directly — code cannot close a stale-client hole; a
+ *  deleted trigger can." Drew deletes the triggers and archives the deployment
+ *  in the retirement ceremony (SUPABASE_LIVE_RUNBOOK §RETIREMENT), which is
+ *  what actually shuts that door for every client, cached or not. */
+export async function runTrainerRemote(/* { adminPasswordHash } */) {
+  return { ok: true, skipped: 'disabled',
+    error: 'The Apps Script Trainer was retired on 2026-09-23. Run it from Comm \u2192 Data, which calls the trainer Edge Function.' };
 }
 
 /**
@@ -213,10 +221,14 @@ export async function runTrainerViaEdgeFunction() {
 // device, so this adds no bytes to a flag-off boot.
 export async function scribeAskRemote({ triggerMessageId, playerId, weekId = '', gameTag = '' }) {
   const webSearch = isScribeWebSearchEnabled();
-  if (chatTransportMode() !== 'sheets') {
-    return askScribe({ triggerMessageId, playerId, weekId, gameTag, webSearch });
-  }
-  return scribeAskRemoteBackend({ triggerMessageId, playerId, weekId, gameTag, webSearch });
+  // ONE ROUTE (2026-09-23). This used to read
+  // `if (chatTransportMode() !== 'sheets') return askScribe(...)` and fall
+  // through to the Apps Script relay otherwise. `chatTransportMode()` never
+  // answers 'sheets' any more and there is no relay to fall through to, so the
+  // branch and its second arm are both gone. `askScribe()` itself already
+  // handles every non-Supabase state by returning the canned-line degrade —
+  // that contract is stated in its own header and is unchanged.
+  return askScribe({ triggerMessageId, playerId, weekId, gameTag, webSearch });
 }
 
 // ── Build 3, Group D (2026-09-11, DI-D1/DI-D2) ──────────────────────────────
@@ -247,45 +259,47 @@ export function isScribeAutonomousEnabled() {
   return getSettings().scribeAutonomousEnabled !== false;
 }
 
-// ── The two new backend relays ──────────────────────────────────────────────
+// ── THE AUTONOMOUS / CLASSIFY TRANSPORT SEAM ────────────────────────────────
 //
-// STOP-AND-REPORT, PER THE TASK'S OWN INSTRUCTION. These two actions need a
-// transport, and this module has none of its own: it relays through NAMED
-// wrappers exported by js/backend.js (`scribeAskRemote`, `runTrainerRemote`
-// above), because `call()` — the one function that knows the URL, the token,
-// the misroute guard (RG-92) and the NO_RETRY_ACTIONS money-safety list — is
-// module-private there by design. js/backend.js is NOT in this pass's
-// editable file set, and re-implementing `call()` here would be a parallel
-// transport: a second place that knows the backend URL, a second place that
-// could miss a misroute, and a second path that could retry a paid action.
-// That is precisely the class of shortcut AD-02/AD-16 exist to prevent.
+// HISTORY, KEPT SHORT BUT KEPT. These two actions spend real money at
+// Anthropic, so they were never allowed to be retried. Pass 1 (2026-09-11)
+// built this as an INJECTION seam rather than re-implementing a transport here,
+// because `call()` — the one function that knew the URL, the token, the
+// misroute guard (RG-92) and the NO_RETRY_ACTIONS money-safety list — was
+// module-private in js/backend.js, and a second copy of it here would have been
+// exactly the parallel abstraction AD-02/AD-16 forbid. The coordinator then
+// wired the real Apps Script pair into it, and Step 6 Phase 5 added the Edge
+// Function branch below.
 //
-// So the transport is INJECTED instead of invented. Until it is wired, both
-// relays resolve to `{ ok:true, skipped:'transport_unwired' }` — a clean
-// no-op that costs nothing and posts nothing, which is the correct behaviour
-// for an autonomous path that is allowed to stay silent (C1's contract).
-//
-// WIRED (coordinator, 2026-09-11) — js/backend.js now exports both relays
-// and carries both on its NO_RETRY_ACTIONS list, so neither is ever retried:
-// each one spends real money and gets exactly one attempt. Pass 1 shipped
-// this as an injection seam because js/backend.js was outside its file set
-// and re-implementing `call()` here would have been a parallel transport —
-// a second place knowing the backend URL, a second place able to miss a
-// misroute (RG-92). That reasoning is why the seam still exists below; it is
-// now a TEST seam rather than a placeholder.
-let remoteTransport = { autonomous: scribeAutonomousRemoteBackend, classify: scribeClassifyRemoteBackend };
+// AS OF 2026-09-23 THE SEAM HAS NO PRODUCTION DEFAULT, and that is the whole of
+// the change here. The Apps Script pair is deleted; `scribe-autonomous` and
+// `scribe-classify` are the only transports, reached through
+// `invokeScribeEdgeFunction()` when the job switch is on. With both slots null,
+// the pre-existing `transport_unwired` branch answers every other case —
+// `{ ok:true, skipped:'transport_unwired' }`, a clean no-op that costs nothing
+// and posts nothing, which is the correct behaviour for an autonomous path that
+// is allowed to stay silent (C1's contract). Nothing about the gate order, the
+// money-safety reasoning or `isScribeAutonomousReady()` changes.
+// RETIRED 2026-09-23 — the DEFAULTS are now NULL, not the Apps Script relay
+// pair. `wireScribeRemoteTransport()` survives as a pure TEST seam (scoringtest
+// drives the whole D1 gate through stubs), and `isScribeAutonomousReady()`
+// below reads it exactly as before: with both unwired, autonomy is ready only
+// when the server switch is on, which is the true state of every device.
+let remoteTransport = { autonomous: null, classify: null };
 
-/** TEST SEAM — swaps the two relays out (scoringtest.mjs drives the entire
- *  D1 gate through stubs, with no network). Production never calls this: the
- *  default above IS the real js/backend.js relay pair. Calling it with `{}`
- *  deliberately unwires both, which is how a test proves the "transport
- *  unavailable -> reserve nothing, never touch tier-0" path. */
+/** TEST SEAM — swaps the two relays in (scoringtest.mjs drives the entire
+ *  D1 gate through stubs, with no network). Production never calls this, and
+ *  since 2026-09-23 the default is BOTH UNWIRED rather than the Apps Script
+ *  relay pair. Calling it with `{}` restores that default, which is how a test
+ *  proves the "transport unavailable -> reserve nothing, never touch tier-0"
+ *  path — the path every device is now on whenever the server switch is off. */
 export function wireScribeRemoteTransport({ autonomous = null, classify = null } = {}) {
   remoteTransport = { autonomous, classify };
 }
-/** Restores the production relays after a test has replaced them. */
+/** Restores the production state after a test has replaced it. Since 2026-09-23
+ *  that state is "both unwired" — the Apps Script pair this restored is gone. */
 export function _restoreScribeRemoteTransportForTest() {
-  remoteTransport = { autonomous: scribeAutonomousRemoteBackend, classify: scribeClassifyRemoteBackend };
+  remoteTransport = { autonomous: null, classify: null };
 }
 
 // ── PHASE III STEP 6, PHASE 5 — THE EDGE FUNCTION SEAM, DEFINED HERE, GATED ON THE SAME BOOLEAN
