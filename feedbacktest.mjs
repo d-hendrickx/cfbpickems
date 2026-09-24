@@ -1805,6 +1805,115 @@ console.log('\n[28d] Mutation — anchor reverted to \'.chat-actions\'-only (tmp
   }
 }
 
+// ═════════════════════════════════════════════════════════════════════════
+// 29. RG — A REFUSAL ABOUT ONE EVENT MUST NOT DESTROY A DIFFERENT ONE
+//     (live bug, v0.25.0, 2026-09-24)
+// ═════════════════════════════════════════════════════════════════════════
+// SYMPTOM: ⭐ → Mid → a reason chip wrote NOTHING to the server. Not the
+// rating, not the chips, not the "why" — and no error anywhere.
+//
+// WHY IT IS IN *THIS* FILE and not reasonchiptest.mjs: the popover, the
+// debounce, the fold and the event shape were all proved innocent (every one
+// of them enqueues correctly, reasonchiptest §[7]/§[7F] already pins it). The
+// defect is one layer down, in the OUTBOX → TRANSPORT leg that this suite
+// already owns a fake for (§[12]).
+//
+// THE MECHANISM, in two halves:
+//   1. js/chatTransport.js's sbAppendEvents() splits a batch into RUNS
+//      (`sbPlanBatches`) — SCRIBE/system-authored events go to
+//      `chat_append_system`, a player's own go to `chat_append`. The run loop
+//      was FAIL-FAST: the first refused run threw out of the whole function,
+//      so every LATER run — a completely different set of events, belonging to
+//      a different author and sent to a different RPC — was never attempted at
+//      all. Not refused. Not queued. Never asked.
+//   2. js/chat.js's flushOutbox() then charged that refusal to EVERY event in
+//      the batch, including the ones the server never saw, and after
+//      MAX_ATTEMPTS moved them to `S.failed` — where `notify('failed')` has no
+//      subscriber for anything that is not a rendered message
+//      (js/chat-ui.js's handleChatEvent handles only events/offline/online/
+//      epochApplied). A player's feedback was therefore destroyed in silence.
+//
+// v0.25.0 is when this became reachable every day rather than in theory: the
+// release stages a What's New post, Package C stages changelog posts and
+// Package D stages more SCRIBE traffic — all `author:'scribe'`, all through
+// this same outbox, all ahead of whatever the player taps next. Every one of
+// `chat_append_system`'s refusals (0010: bad_system_id, bad_system_type,
+// bad_system_body, system_rate, bad_state) is a way for one SCRIBE post to
+// take a player's feedback down with it.
+//
+// THE ASSERTION THAT BITES is 29-2: the player's run must actually be ISSUED.
+// 29-1 alone could be satisfied by a retry that got lucky later; "the request
+// was never even made" is the defect.
+console.log('\n[29] RG (live, v0.25.0) — a refused SCRIBE post must not silently destroy the player\'s feedback…');
+{
+  const { installFakeChat: installFakeChat29 } = await import('./testchatfake.mjs');
+  const projection29 = await import('./js/supabase-projection.js');
+
+  _resetForTest();
+  store.delete('cfbp_chat_outbox2');
+  storage.saveSetting('scribeFeedbackEnabled', true);
+  storage.saveSetting('chatEnabled', true);
+  storage.setSession('p1', false, true);
+  backend.setDataMode('supabase');
+
+  let seq29 = 5000;
+  const landed29 = [];
+  const fake29 = installFakeChat29(chatTransport, projection29, {
+    head: () => seq29,
+    since: () => ({ events: [] }),
+    // The server refuses the SCRIBE post and accepts everything else — exactly
+    // what `chat_append_system`'s own guards do to a post whose week/game/id
+    // it will not take (0010:308-446), while `chat_append` is perfectly happy.
+    append: (events) => {
+      if (events.some(e => e.author === 'scribe')) throw new Error('bad_system_id');
+      events.forEach(e => landed29.push(e));
+      return { assigned: events.map(e => ({ id: e.id, seq: ++seq29, ts: Date.now() })) };
+    },
+  });
+
+  try {
+    ingest([ev({ id: 'rg_s1', seq: 1, ts: 1000, author: 'scribe', body: 'a SCRIBE line' })]);
+    // A SCRIBE post the server will refuse (a What's New / changelog post),
+    // queued FIRST — which is what a boot-time post is relative to anything the
+    // player taps afterwards.
+    sendEvent({ type: 'message', author: 'scribe', body: 'What\'s New in v0.25.0', notify: true, meta: { kind: 'whatsNew' } });
+    // …and then the player's own three writes, in the same coalescing window:
+    // the exact ⭐ → Mid → chip → why sequence Drew reported.
+    recordFeedback({ targetId: 'rg_s1', category: 'rating', value: 'mid', author: 'p1' });
+    scribeFeedback.recordFeedbackReasons({ targetId: 'rg_s1', chips: ['too_long'], author: 'p1' });
+    recordFeedback({ targetId: 'rg_s1', category: 'reason_note', value: 'it went on too long', author: 'p1' });
+    assert(chat._outboxForTest().length === 4,
+      `[29] fixture — one SCRIBE post and the player's three feedback events are queued together (got ${chat._outboxForTest().length})`);
+
+    await chat.flushOutbox();
+    await new Promise(r => setTimeout(r, 20));
+
+    const playerRuns = fake29.calls.filter(c => c.action === 'chatAppend' && c.events.every(e => e.author === 'p1'));
+    assert(playerRuns.length === 1,
+      `[29] 29-2 THE ONE THAT BITES — the player's own run was actually ISSUED. A refusal about a SCRIBE post is an answer about a DIFFERENT event, sent to a DIFFERENT RPC; it must not cancel a request that was never made (got ${playerRuns.length} player run(s))`);
+    const cats = landed29.filter(e => e.type === 'feedback').map(e => e.meta?.category);
+    assert(cats.length === 3 && cats.includes('rating') && cats.includes('reason') && cats.includes('reason_note'),
+      `[29] 29-1 — all three of the player's feedback events reach the server: the rating, the chip set and the "why" (got ${JSON.stringify(cats)})`);
+    assert(JSON.stringify(landed29.find(e => e.meta?.category === 'reason')?.meta?.value) === JSON.stringify(['too_long']),
+      '[29] 29-3 — …and the chip set arrives as the full array it was written as, not mangled on the way through the run split');
+
+    // The SCRIBE post is STILL refused. The fix isolates the runs; it does not
+    // paper over a refusal, and a post the server will not take must still end
+    // up failed rather than retrying forever.
+    await chat.flushOutbox(); await new Promise(r => setTimeout(r, 20));
+    await chat.flushOutbox(); await new Promise(r => setTimeout(r, 20));
+    assert(!landed29.some(e => e.author === 'scribe'),
+      '[29] 29-4 — the refused SCRIBE post still never lands. Isolating the runs is not the same as swallowing the refusal');
+    assert(landed29.filter(e => e.type === 'feedback').length === 3,
+      `[29] 29-5 — …and the player's three events are not re-sent as collateral on every retry of a post that has nothing to do with them (got ${landed29.filter(e => e.type === 'feedback').length})`);
+  } finally {
+    fake29.uninstall();
+    backend.setDataMode('sheets');
+    _resetForTest();
+    store.delete('cfbp_chat_outbox2');
+  }
+}
+
 // ── Final cleanup — every mutant tmpdir this file created is removed, and
 // real source under cfb-pickems/js/ is confirmed byte-identical to what was
 // read at the top of the run. Every mutation in this file ran against a

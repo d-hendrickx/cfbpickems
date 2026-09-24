@@ -568,11 +568,20 @@ console.log('\n[13] Structural — app.js\'s two dynamic-import call sites are c
   // confirms this regex actually discriminates rather than being vacuous.
   const GATED_IMPORT_RE = /if\s*\(\s*isNative(?:Shell|Origin)\s*\(\s*\)\s*\)\s*\{[^}]*import\(['"]\.\/push-native\.js['"]\)/gs;
   const importSites = [...appSrc.matchAll(/import\(['"]\.\/push-native\.js['"]\)/g)];
-  // Four call sites, all real code: boot-tail adapter registration +
+  // Five call sites, all real code: boot-tail adapter registration +
   // foreground/click wiring, the session-chokepoint identity call, the
-  // priming-card button's click handler, and refreshNotifSettingsBody()'s
-  // status read.
-  assert(importSites.length === 4, `[13a] app.js dynamic-imports push-native.js at exactly the four expected call sites (got ${importSites.length})`);
+  // priming-card button's click handler, refreshNotifSettingsBody()'s status
+  // read, and — added by the native push-active flag fix (2026-09-24; RG number assigned at the ledger) — refreshPushActiveFlag()'s own.
+  // That fifth one is the fix: the push-ACTIVE flag used to resolve through
+  // js/push-onesignal.js's subscriptionState(), which answers
+  // 'native-unavailable' inside the shell, so a native handset with
+  // notifications AUTHORIZED was permanently classified as "push is not
+  // reaching this device" and kept showing the in-app chat preview alongside
+  // every push. It now reads nativePushState() here, exactly as
+  // refreshNotifSettingsBody() already did — the same fact, no longer read two
+  // different ways. pushtest.mjs §[15] owns the behaviour; this count is the
+  // structural half, and it stays EXACT so a sixth site has to be justified.
+  assert(importSites.length === 5, `[13a] app.js dynamic-imports push-native.js at exactly the five expected call sites (got ${importSites.length})`);
   const gatedSites = [...appSrc.matchAll(GATED_IMPORT_RE)];
   assert(gatedSites.length === importSites.length,
     `[13b] EVERY import('./push-native.js') call site is textually inside an isNativeShell()/isNativeOrigin() guard (found ${gatedSites.length} of ${importSites.length})`);
@@ -595,6 +604,85 @@ console.log('\n[13] Structural — app.js\'s two dynamic-import call sites are c
   const nativeIdentityIdx = appSrc.indexOf("native.loginNativePush(sess.playerId); else native.logoutNativePush();");
   assert(chokepointIdx > -1 && nativeIdentityIdx > -1 && nativeIdentityIdx - chokepointIdx < 1200,
     `[13e] the native identity call sits immediately beside the existing OneSignal chokepoint call, not a separately-invented location (distance ${nativeIdentityIdx - chokepointIdx} chars)`);
+
+  // ── [13f] RG-243 (2026-09-24) — THE SUBSCRIPTION REPAIR'S NATIVE INERTNESS.
+  //
+  // RG-243 added a fourth re-arm to this same session chokepoint:
+  // `maybeAutoOptInPush()`, RG-192's prompt-free "permission granted, no
+  // subscription" repair. It is the only one of the four that is NOT wrapped in
+  // an isNativeShell()/isNativeOrigin() gate — deliberately, because it is
+  // shared code whose inertness on native is TRANSITIVE: it reaches the web SDK
+  // only through `ensureOneSignalInit()`, and js/push-onesignal.js returns
+  // `{ok:false, reason:'unsupported-browser'}` from that function's first line
+  // inside the shell (DI-210e).
+  //
+  // "Transitive" is exactly the kind of guarantee that quietly stops being true,
+  // and the reviewer's note on f2c3297 was that `maybeAutoOptInPush` appeared
+  // NOWHERE in this file. So it is pinned here on both halves, in the shape
+  // The web-inertness pin established by the native push-active flag fix (2026-09-24; RG number assigned at the ledger): the structure that makes it true,
+  // and the behaviour that proves the structure means what it says.
+  const optInBody = (() => {
+    const start = appSrc.indexOf('export async function maybeAutoOptInPush(');
+    return start === -1 ? '' : appSrc.slice(start, appSrc.indexOf('\n}', start));
+  })();
+  assert(optInBody.length > 0, '[13f] fixture check — maybeAutoOptInPush() was located in app.js, so the clauses below are not scanning an empty string');
+
+  const rearmIdx = appSrc.indexOf('Promise.resolve(maybeAutoOptInPush(sess.playerId))');
+  assert(rearmIdx > -1 && rearmIdx > nativeIdentityIdx && rearmIdx - nativeIdentityIdx < 2500,
+    `[13g] the subscription repair is re-armed at the SAME session chokepoint, textually BELOW the native identity call — never between the two identity calls, which [13e] pins adjacent (distance ${rearmIdx - nativeIdentityIdx} chars)`);
+
+  // The SDK gate must come FIRST. Every call that could reach the OneSignal web
+  // SDK — the device read, the subscribe, the identity bind — must sit after
+  // the `ensureOneSignalInit()` whose answer is what makes native a no-op.
+  const initIdx = optInBody.indexOf('await ensureOneSignalInit()');
+  const sdkCalls = ['pushDeviceStatus(', 'ensurePushSubscription(', 'loginOneSignal(', 'refreshPushActiveFlag('];
+  const early = sdkCalls.filter((c) => { const i = optInBody.indexOf(c); return i > -1 && i < initIdx; });
+  assert(initIdx > -1 && early.length === 0,
+    `[13h] inside maybeAutoOptInPush(), EVERY web-SDK call sits after \`await ensureOneSignalInit()\` — that one call is the whole of its native inertness, so nothing may reach the SDK ahead of it (early: ${JSON.stringify(early)})`);
+  assert(!/import\(['"]\.\/push-native\.js['"]\)/.test(optInBody),
+    '[13i] …and it imports push-native.js not at all: it is the WEB repair, and [13a]\'s exact five-site count is what would otherwise have to grow');
+}
+{
+  // ── [13j] …AND THE TRANSITIVE GUARANTEE ITSELF, EXERCISED RATHER THAN READ.
+  //    js/push-onesignal.js is imported fresh under a native `window.Capacitor`
+  //    and asked the one question maybeAutoOptInPush() asks it.
+  const savedCapacitor = window.Capacitor;
+  const savedDocument = globalThis.document;
+  const savedFetch = globalThis.fetch;
+  const touched = [];
+  try {
+    window.Capacitor = { isNativePlatform: () => true };
+    globalThis.document = {
+      body: { appendChild: (n) => touched.push(['appendChild', n]) },
+      head: { appendChild: (n) => touched.push(['appendChild', n]) },
+      getElementById: () => null,
+      createElement: (t) => { touched.push(['createElement', t]); return {}; },
+    };
+    globalThis.fetch = async (...a) => { touched.push(['fetch', String(a[0])]); throw new Error('network refused by the test'); };
+
+    const os = await import(`./js/push-onesignal.js?native13j=${Date.now()}`);
+    const nativeAnswer = await os.ensureOneSignalInit();
+    assert(nativeAnswer && nativeAnswer.ok === false && nativeAnswer.reason === 'unsupported-browser',
+      `[13j] inside the shell, ensureOneSignalInit() answers the inert shape — so the repair's \`if (!init.ok) return false\` fires and nothing below it ever runs (got ${JSON.stringify(nativeAnswer)})`);
+    assert(touched.length === 0,
+      `[13k] …having touched NOTHING on the way there: no script element created, no node appended, not one fetch. The web SDK is never loaded inside the shell, which is what makes an ungated shared call site safe (touched ${JSON.stringify(touched.map((t) => t[0]))})`);
+    assert(typeof window.OneSignal === 'undefined',
+      '[13l] …and no `window.OneSignal` global exists afterwards — DI-210e suppresses the SDK, it does not merely ignore its answer');
+
+    // NON-VACUITY. Without the Capacitor bridge the SAME call must NOT answer
+    // 'unsupported-browser', or [13j] would pass on a function that simply
+    // always refuses and would prove nothing about the native branch.
+    delete window.Capacitor;
+    touched.length = 0;
+    const web = await import(`./js/push-onesignal.js?web13m=${Date.now()}`);
+    const webAnswer = await web.ensureOneSignalInit();
+    assert(webAnswer && webAnswer.reason !== 'unsupported-browser',
+      `[13m] NON-VACUITY: with no Capacitor bridge the same call takes a different path entirely — [13j] is reading the native branch, not a function that refuses everything (got ${JSON.stringify(webAnswer)})`);
+  } finally {
+    if (savedCapacitor === undefined) delete window.Capacitor; else window.Capacitor = savedCapacitor;
+    globalThis.document = savedDocument;
+    if (savedFetch === undefined) delete globalThis.fetch; else globalThis.fetch = savedFetch;
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -3059,8 +3059,12 @@ let sharedBootHandler = null;
     // read — `initChatUI({phase:'early'})`, BUG-G, deliberately — and that
     // replays `cfbp_chat_events_cache`. `#page-dashboard` is statically
     // `.active` in index.html, so js/chat-ui.js's handleChatEvent('events')
-    // finds dashboardPageActive() true and inserts #dash-chat-teaser:
-    // `<strong>author</strong>: body.slice(0,64)`.
+    // used to find dashboardPageActive() true and insert #dash-chat-teaser:
+    // `<strong>author</strong>: body.slice(0,64)`. (That card was retired
+    // 2026-09-24, Option A — the replay still runs here and still drives the
+    // tab-title count and the PWA icon badge, which is what this section now
+    // measures. The reasoning below is unchanged; only the worked example is
+    // historical.)
     //
     // And it renders for a viewer with NO IDENTITY, because
     // `isUnreadFor(m, null, …)` (js/chat.js) compares `m.author !== selfId`
@@ -3118,7 +3122,8 @@ let sharedBootHandler = null;
       // the very call readAndPrimeEventsCache() makes with the parsed events
       // (js/chat.js, `ingest(parsed.events, parsed.head, {fromCache: true})`),
       // into that boot's own DOM. Same function, same notification, same
-      // handleChatEvent('events') path that inserts the teaser.
+      // handleChatEvent('events') path — which inserted the teaser until
+      // 2026-09-24 and still drives the title/badge surfaces this asserts on.
       const EV28 = () => ({ id: 'm7', seq: 7, ts: Date.now() - 60000, type: 'message',
         author: 'm-kihoon', body: 'taking the Aggies -7 and the over, easy money', notify: true });
       const STATES28 = [
@@ -3163,12 +3168,20 @@ let sharedBootHandler = null;
 
         const dash = r.reg.get('page-dashboard');
         assert(!!dash && dash.classList.contains('active'),
-          `[28] ${label}: fixture — #page-dashboard exists and is ACTIVE, exactly as index.html ships it (the teaser inserts into it, and js/chat-ui.js's dashboardPageActive() asks for exactly this selector)`);
+          `[28] ${label}: fixture — #page-dashboard exists and is ACTIVE, exactly as index.html ships it (the teaser inserted into it until 2026-09-24, and js/chat-ui.js's dashboardPageActive() asks for exactly this selector)`);
         const dashHTML = String(dash?.innerHTML || '');
+        // 2026-09-24: this row is now UNCONDITIONAL — the teaser is retired for
+        // every viewer (Option A), so its absence here no longer demonstrates
+        // the identity guard. Kept as a tripwire, not as evidence. The
+        // assertion immediately below it, and the title/badge rows under that,
+        // are what still carry [28] A: they are about the cached message's
+        // CONTENT and about surfaces that DO render for a resolved member
+        // ([28] B proves they come back), so they still fail if the cover is
+        // armed too late.
         assert(!/dash-chat-teaser/.test(dashHTML),
-          `[28] ${label}: NO chat teaser is in the DOM — no member's name, no message text, before this device knows who it is (got ${JSON.stringify(dashHTML.slice(0, 160))})`);
+          `[28] ${label}: NO chat teaser is in the DOM (unconditional since the card was retired — tripwire, not evidence) (got ${JSON.stringify(dashHTML.slice(0, 160))})`);
         assert(!/Aggies -7/.test(dashHTML) && !/m-kihoon/.test(dashHTML),
-          `[28] ${label}: …and none of the cached message's words reached the page by any other route`);
+          `[28] ${label}: …and none of the cached message's words reached the page by any other route — THIS is the row that still proves the cover, because it is about content rather than about one retired card`);
         assert(!/^\(\d/.test(String(globalThis.document.title || '')),
           `[28] ${label}: …and the tab title carries no unread count (got ${JSON.stringify(globalThis.document.title)})`);
         assert(badgeCalls.length === 0,
@@ -3210,8 +3223,22 @@ let sharedBootHandler = null;
           badgeCalls.length = 0;
           await quiet28(async () => { chatMod28.ingest([EV28()]); });
           const dash = r.reg.get('page-dashboard');
-          assert(/dash-chat-teaser/.test(String(dash?.innerHTML || '')) && /Aggies -7/.test(String(dash?.innerHTML || '')),
-            `[28] B — and the SAME room renders in full for the resolved member: the guard is "who is asking", not "hide the teaser" (got ${JSON.stringify(String(dash?.innerHTML || '').slice(0, 120))})`);
+          // INVERTED 2026-09-24 (teaser retired, Drew — Option A). This used to
+          // assert the OPPOSITE: `/dash-chat-teaser/` AND `/Aggies -7/` present,
+          // i.e. "the SAME room renders in full for the resolved member: the
+          // guard is 'who is asking', not 'hide the teaser'." The card is gone
+          // for everybody now, so its presence can no longer carry that proof.
+          //
+          // THE NON-VACUITY MOVED, IT DID NOT DISAPPEAR — the two assertions
+          // immediately below are what now prove the resolved member really is
+          // being told about this message: the tab-title count and the PWA icon
+          // badge both come back on for them, and both are gated by the same
+          // chatViewerUnresolved() predicate [28] A pins as OFF for an
+          // unresolved device. Do not delete those two without replacing this
+          // leg's proof; without them [28] B asserts only absences and would
+          // pass on an app that had gone silent for everyone.
+          assert(!/dash-chat-teaser/.test(String(dash?.innerHTML || '')) && !/Aggies -7/.test(String(dash?.innerHTML || '')),
+            `[28] B — no chat teaser and no message text on the dashboard even for a RESOLVED member: the card is retired for everybody, not conditionally hidden (got ${JSON.stringify(String(dash?.innerHTML || '').slice(0, 120))})`);
           assert(/^\(\d/.test(String(globalThis.document.title || '')),
             `[28] B — …the tab title carries the count again (got ${JSON.stringify(globalThis.document.title)})`);
           assert(badgeCalls.some(c => c.startsWith('set:')),
@@ -3406,7 +3433,8 @@ let sharedBootHandler = null;
   // run. The window the finding is about is entirely BEFORE that:
   //
   //   boot()  →  initChatUI({phase:'early'})   ← replays cfbp_chat_events_cache,
-  //                                              inserts #dash-chat-teaser,
+  //                                              inserted #dash-chat-teaser
+  //                                              (retired 2026-09-24),
   //                                              writes document.title "(n)",
   //                                              calls navigator.setAppBadge(n)
   //          →  armBootIdentityCover()          ← used to be HERE, too late

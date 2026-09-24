@@ -836,16 +836,21 @@ console.log('\n[A2] RENDERED ORDER — both pages, default and customized…');
          sectionIds(renderStand({ playerId: 'p1', verified: true }))[0] === 'stand-history',
     'A2i: the two pages hold independent orders under one registry — neither page has drifted into a second copy of the mechanism');
 
-  // The chat teaser is PINNED above everything (DI-179c / DI-179k item 2): it
-  // is inserted afterbegin by renderDashboard(), OUTSIDE the inner template,
-  // and chat-ui.js replaces that node in place on live activity.
+  // A2j REWRITTEN 2026-09-24 (teaser retired, Drew — Option A). It used to
+  // assert the chat teaser was PINNED above every reorderable section
+  // (DI-179c / DI-179k item 2) — inserted afterbegin by renderDashboard(),
+  // outside the inner template, and replaced in place by chat-ui.js on live
+  // activity. The card is gone, so the pinning rule has nothing to govern.
+  //
+  // The assertion is INVERTED rather than deleted because this suite is the
+  // one that would notice the card coming back: layout order is exactly where
+  // a reintroduced Dashboard card would first show up, and DI-179k item 2's
+  // "pinned above the sections" slot is still sitting there in the code
+  // (the prelink banner uses it). A2k below proves the fixture can see that
+  // slot at all, so this is not vacuous.
   const dTeaser = renderDash({ playerId: 'p1', verified: true });
-  if (has(dTeaser, 'dash-chat-teaser')) {
-    assert(at(dTeaser, 'dash-chat-teaser') < at(dTeaser, 'data-section-id='),
-      'A2j: the chat teaser stays pinned ABOVE every reorderable section, in a non-default order');
-  } else {
-    assert(true, 'A2j: chat teaser not emitted in this fixture (chat off) — pinning is unobservable here, covered by the browser pass');
-  }
+  assert(!has(dTeaser, 'dash-chat-teaser') && !has(dTeaser, 'dash-chat-preview'),
+    'A2j: the Dashboard renders with NO chat teaser and no message preview — the card is retired, and this is where a reintroduction would surface first');
   // …as do the week selector and refresh bar, for the same reason: a control
   // that decides WHICH week is below it would be a defect, not a preference.
   assert(at(dTeaser, 'refresh-bar') < at(dTeaser, 'data-section-id='),

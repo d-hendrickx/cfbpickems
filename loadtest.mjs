@@ -764,8 +764,15 @@ assert(!/Locker Room/.test(navChatBlock), 'nav: the Chat tab no longer reads "Lo
 assert(/<h2>Chat\s*<span class="badge badge-beta"/.test(chatUiSrc), 'chat page header reads "Chat" (badge now renders inline in the same <h2>)');
 assert(!/<h2>Locker Room<\/h2>/.test(chatUiSrc), 'chat page header no longer reads "Locker Room"');
 
-assert(/dash-chat-title">Chat /.test(chatUiSrc), 'dashboard teaser card TITLE reads "Chat"');
-assert(!/dash-chat-title">Locker Room/.test(chatUiSrc), 'dashboard teaser card title no longer reads "Locker Room"');
+// The two rows here asserted the teaser card's TITLE read "Chat" and not
+// "Locker Room" — one entry point in UN-104's naming split. The card is
+// retired (2026-09-24, Option A, Drew), so the split has one fewer entry
+// point to govern. Replaced with the absence, in the section that owns the
+// vocabulary, so a reintroduced card cannot quietly come back speaking the
+// old name. The surviving entry points (nav tab, page header, Rules heading)
+// are asserted above and below and are untouched.
+assert(!/dash-chat-title/.test(chatUiSrc) && !/dash-chat-preview/.test(chatUiSrc),
+  'the dashboard teaser card is gone from chat-ui.js entirely — neither its title nor its preview markup survives to carry a name (retired 2026-09-24)');
 
 const appJsSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
 assert(/<h3>💬 Chat<\/h3>/.test(appJsSrc), 'Rules section heading reads "💬 Chat"');
@@ -812,18 +819,16 @@ assert(chatUi.gameChatBubbleHTML('gameA') === '',
 storage.saveSetting('chatEnabled', true);
 assert(chatUi.gameChatBubbleHTML('gameA') !== '', 'sanity: the SAME bubble renders something once chat is back on');
 
-// Surface 2 — dashboard teaser card.
-// SECURITY A-1-R (2026-09-21): the teaser also requires a RESOLVED viewer now
-// (latestUnreadNotifying()'s identityKnown() guard). This block is about the
-// chat-OFF gate, so it establishes an identity first — otherwise the "sanity"
-// leg below would pass for the wrong reason and the OFF leg would prove nothing.
-storage.setSession('p_surface2', false, true);
-storage.saveSetting('chatEnabled', false);
-assert(chatUi.dashboardChatTeaserHTML() === '',
-  'chat OFF: the dashboard teaser renders nothing, even with a real notifying message present (surface 2)');
-storage.saveSetting('chatEnabled', true);
-assert(chatUi.dashboardChatTeaserHTML() !== '', 'sanity: the SAME teaser renders something once chat is back on');
-storage.clearSession();
+// Surface 2 — the dashboard teaser card — WAS HERE. Two assertions (the
+// chat-OFF leg and its sanity leg) are DELETED, not inverted: 2026-09-24,
+// teaser retired, Drew (Option A). Item A's rule is "chat OFF hides every
+// chat surface"; a surface that no longer exists in any state has nothing to
+// say about that rule, and asserting its permanent absence here would be
+// filed under the wrong requirement. The absence itself is pinned in §[11]
+// (no teaser markup survives in chat-ui.js) and behaviourally in layouttest
+// A2j and boottest [28] B.
+//
+// Surfaces 1, 3 and 4 below are untouched and still carry item A.
 
 // Surfaces 3+4 — the chat page itself and the bottom-nav entry. The DOM stub
 // at the top of this harness returns null from getElementById('page-chat')
@@ -977,57 +982,48 @@ assert(/unread from p2/.test(bubbleTitleTxt || ''),
 localStorage.removeItem('cfbp_chat_lastseen2');
 storage.clearSession();
 
-// ── 15. Items D+E — dashboard teaser: dismissible ambient, no quick-reply ────
-console.log('\n[15] Items D+E — dashboard teaser: dismissible ambient, no quick-reply…');
-chat._resetForTest();
-storage.saveSetting('chatEnabled', true);
-localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
-// SECURITY A-1-R (2026-09-21) — THE TEASER NOW REQUIRES A RESOLVED VIEWER.
-// §[14] above ends with clearSession(), and latestUnreadNotifying() gained the
-// identityKnown() guard that the other four unread entry points already had:
-// with no identity, `m.author !== selfId` excluded nobody, so the viewer who
-// was NOBODY was handed the newest message in the room — a member's name and 64
-// characters of what they wrote, on a page nobody had signed into. This section
-// is about the DISMISSAL mechanics, so it signs somebody in; the identity gate
-// itself is boottest [30] and unreadtest [13].
-storage.setSession('p_teaser', false, true);
-
-assert(chatUi.dashboardChatTeaserHTML() === '', 'zero messages ever: the teaser renders nothing (no empty card)');
-
-chat.ingest([ev({ id: 'd1', seq: 1, ts: 1000, body: 'first message', author: 'p1' })]);
-const teaser1 = chatUi.dashboardChatTeaserHTML();
-assert(teaser1 !== '', 'a real notifying message makes the teaser render');
-assert(/data-teaser-seq="1"/.test(teaser1), 'the teaser stamps its own seq (not a boolean) for dismissal tracking');
-
-// Dismiss — device-local, via lsSet, storing the SEQ.
-const teaserSeqMatch = teaser1.match(/data-teaser-seq="(\d+)"/);
-localStorage.setItem('cfbp_chat_teaser_dismiss_seq', teaserSeqMatch[1]);
-assert(chatUi.dashboardChatTeaserHTML() === '', 'dismissed: stays dismissed for the SAME message');
-
-// Only a strictly HIGHER seq counts as new activity (spec's own definition) —
-// prove this is a real number comparison, not a boolean flag.
-assert(chatUi.dashboardChatTeaserHTML() === '', 'still dismissed a second time with no new activity (idempotent)');
-chat.ingest([ev({ id: 'd2', seq: 2, ts: 2000, body: 'second message', author: 'p2' })]);
-const teaser2 = chatUi.dashboardChatTeaserHTML();
-assert(teaser2 !== '', 'reappears for genuinely new activity since dismissal (a HIGHER seq)');
-assert(/data-teaser-seq="2"/.test(teaser2), 'the reappeared card stamps the NEW latest seq');
-
-// Chat disabled overrides everything, dismissed or not.
-storage.saveSetting('chatEnabled', false);
-assert(chatUi.dashboardChatTeaserHTML() === '', 'chat disabled: the teaser never renders, dismissed or not');
-storage.saveSetting('chatEnabled', true);
-
-// E — the quick-reply input is GONE. Source guard so it can never creep back
-// (this is exactly the kind of thing that quietly returns during a later
-// unrelated edit if there's no tripwire).
+// ── 15. RETIRED — the dashboard teaser (items D+E) ──────────────────────────
+//
+// THIS SECTION USED TO BE THE TEASER'S DISMISSAL MECHANICS: eleven assertions
+// covering the empty state, the seq stamp, "stays dismissed for the same
+// message", idempotence, "reappears only for a strictly HIGHER seq", the
+// chat-OFF override, and item E's source guard against the quick-reply input
+// creeping back.
+//
+// ALL DELETED 2026-09-24 — teaser retired, Drew (Option A). Every one of them
+// was about a card that no longer exists in any state, so none could be
+// inverted into a meaningful claim; "a deleted function returns ''" is not a
+// requirement. The one thing worth keeping from the block — that no teaser
+// markup survives anywhere — is asserted once in §[11] above.
+//
+// WHAT DID NOT GO WITH THEM, AND WHERE IT LIVES NOW. The dismissal watermark
+// these assertions drove is NOT teaser state: RG-25 made it the shared "this
+// device has acknowledged through seq N" cursor, §[32] and §[69] below drive
+// it directly, and js/chat-ui.js renamed it (CHAT_ACK_SEQ_KEY / chatAckSeq() /
+// setChatAckSeq()) in the same pass so it could not be mistaken for residue.
+// The STORED KEY STRING 'cfbp_chat_teaser_dismiss_seq' is deliberately
+// unchanged and still appears throughout this file — six live devices have a
+// cursor under it (CONVENTIONS #10).
+//
+// Item E's guard is kept, narrowed, because it is a tripwire against markup
+// creeping back rather than a statement about the card: if a future pass ever
+// reintroduces a dashboard chat surface, it must not arrive carrying the
+// quick-reply input Drew rejected in the first place.
+console.log('\n[15] Teaser retired — only the never-rebuild-this tripwires remain…');
 assert(!/dash-quick-input/.test(chatUiSrc) && !/dash-quick-send/.test(chatUiSrc) && !/Quick reply…/.test(chatUiSrc),
-  'item E: no quick-reply input/send-button/placeholder survives anywhere in chat-ui.js');
+  'item E (kept as a tripwire): no quick-reply input/send-button/placeholder survives anywhere in chat-ui.js');
 assert(!/\.dash-chat-quick\b/.test(cssSrc) && !/\.dash-chat-input\b/.test(cssSrc),
-  'item E: no .dash-chat-quick/.dash-chat-input CSS survives');
-assert(/dash-chat-dismiss/.test(chatUiSrc) && /dash-chat-dismiss/.test(cssSrc),
-  'item D: a dedicated ✕ dismiss control exists in both markup and CSS (distinct from the open-chat tap area)');
-localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
-storage.clearSession();   // put the world back the way [14] left it
+  'item E (kept as a tripwire): no .dash-chat-quick/.dash-chat-input CSS survives');
+assert(!/dash-chat-dismiss/.test(chatUiSrc) && !/dash-chat-dismiss/.test(cssSrc),
+  'item D is retired with the card: the ✕ dismiss control is gone from BOTH markup and CSS (this assertion was the opposite until 2026-09-24 — it required the control to exist)');
+// Comment lines are excluded deliberately: js/chat-ui.js keeps a dated block
+// comment NAMING both functions, so the next reader knows what was removed and
+// why. A raw source match would be satisfied by that explanation.
+const teaserCode15 = chatUiSrc.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+assert(typeof chatUi.dashboardChatTeaserHTML === 'undefined'
+    && !/dashboardChatTeaserHTML\(/.test(teaserCode15)
+    && !/bindDashboardTeaser\(/.test(teaserCode15),
+  'neither dashboardChatTeaserHTML() nor bindDashboardTeaser() survives as an export, a definition or a call anywhere in the executable source — the retirement is complete, not just unrendered');
 
 // ── 16. Item F — game thread header colors: static, dashboard-mirrored ───────
 console.log('\n[16] Item F — game thread header colors: static, dashboard-mirrored…');
@@ -1417,7 +1413,14 @@ assert(typeof chatUi._toastWouldSuppress === 'function',
 if (typeof chatUi._toastWouldSuppress === 'function') {
   const realQS23 = document.querySelector;
   document.querySelector = sel => (sel === '#page-dashboard.active' ? {} : null);
-  assert(chatUi._toastWouldSuppress(false) === true, 'toast suppressed while the Dashboard tab is active (the teaser already conveys it)');
+  // The Dashboard term's RATIONALE is retired (2026-09-24) — its stated reason
+  // was "the ambient teaser already conveys it", and the teaser is gone. The
+  // TERM is still in the predicate and still asserted here because the whole
+  // predicate is production-unreachable now (js/chat-ui.js's showToast() has no
+  // callers), so removing it would churn four suites' pins for no behavioural
+  // change. Read this row as "the predicate is unchanged", not as "the
+  // Dashboard has a reason to suppress".
+  assert(chatUi._toastWouldSuppress(false) === true, 'toast still suppressed while the Dashboard tab is active — vestigial since the teaser was retired, kept because the predicate is no longer reachable from production at all');
   document.querySelector = sel => (sel === '#page-chat.active' ? {} : null);
   assert(chatUi._toastWouldSuppress(false) === true, 'toast still suppressed while the Chat tab is active (pre-existing rule, unchanged)');
   document.querySelector = () => null;
@@ -1426,22 +1429,40 @@ if (typeof chatUi._toastWouldSuppress === 'function') {
   document.querySelector = realQS23;
 }
 
-console.log('\n[23c] UN-102b — the dashboard teaser never resurfaces the viewer\'s OWN post…');
+// UN-102b — "never resurface the viewer's OWN post back at them". RE-POINTED
+// 2026-09-24 (teaser retired, Drew — Option A). These three assertions used to
+// read the teaser's rendered HTML; the rule they protect does not live in the
+// teaser and never did. It lives in chat.js's latestUnreadNotifying(), which
+// the teaser merely called — and which chat.js still exports and still uses to
+// answer "what is the newest thing worth announcing". Re-pointed at that
+// function so the rule keeps its coverage instead of being deleted with its
+// old display surface.
+console.log('\n[23c] UN-102b — the announcement picker never resurfaces the viewer\'s OWN post…');
 chat._resetForTest();
 storage.saveSetting('chatEnabled', true);
 localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
 storage.setSession('p1', false, true);   // "I" am p1 — no real player record needed (me() only reads the session)
 chat.ingest([ev({ id: 'selfpost1', seq: 1, ts: 1000, body: 'my own post', author: 'p1' })]);
-assert(chatUi.dashboardChatTeaserHTML() === '',
-  'UN-102b: posting your OWN message never resurfaces the teaser with your own text back at you (pre-fix, this returned your own post)');
+assert(chat.latestUnreadNotifying('p1', chatUi._notifAckSeq()) === null,
+  'UN-102b: your OWN message is never offered as the newest thing worth announcing (pre-fix, this returned your own post — and the teaser then previewed your own text back at you)');
 chat.ingest([ev({ id: 'otherpost1', seq: 2, ts: 2000, body: 'reply from someone else', author: 'p2' })]);
-assert(chatUi.dashboardChatTeaserHTML() !== '', 'sanity: a message from someone ELSE still surfaces the teaser normally');
-assert(/reply from someone else/.test(chatUi.dashboardChatTeaserHTML()), 'the surfaced teaser previews the OTHER player\'s text, not your own');
+const announce23c = chat.latestUnreadNotifying('p1', chatUi._notifAckSeq());
+assert(announce23c !== null, 'sanity: a message from someone ELSE still is offered normally');
+assert(/reply from someone else/.test(announce23c?.body || ''),
+  'and it is the OTHER player\'s message that comes back, not your own — the exclusion falls through to the next candidate rather than going silent');
 storage.clearSession();
 localStorage.removeItem('cfbp_chat_teaser_dismiss_seq');
 chat._resetForTest();
 
-console.log('\n[23d] UN-102c — toast "stays for" duration preference…');
+// [23d] 2026-09-24 — THE STORAGE HALF SURVIVES, THE UI HALF IS HIDDEN.
+// UN-102c's three controls ("Toasts", "Stays for", "Sound") governed the in-app
+// toast and its blip. Both are production-unreachable after Option A, so the
+// rows were removed from prefsPanelHTML() rather than left as switches that do
+// nothing. The STORED PREFERENCES ARE DELIBERATELY UNTOUCHED (CONVENTIONS #10
+// — six live player records carry them; a default that changed under them
+// would be a data change dressed up as a UI change), which is why the
+// defaults/round-trip assertions below are unchanged and still pass.
+console.log('\n[23d] UN-102c — the "stays for" preference still stores, but no longer renders…');
 storage.addPlayer(dm.createPlayer('Batch2Tester', '', '4321', '', 'B2'));
 const b2Players = storage.getPlayers();
 const b2Player = b2Players[b2Players.length - 1];
@@ -1455,8 +1476,16 @@ assert(storage.getNotifPrefs().toastDuration === 0, 'toastDuration round-trips t
 storage.clearSession();
 assert(/getNotifPrefs\(\)\.toastDuration/.test(chatUiSrc) || /const prefMs = getNotifPrefs\(\)\.toastDuration/.test(chatUiSrc),
   'drainToast() reads the duration from getNotifPrefs() rather than a hardcoded 6000');
-assert(/prefsPanelHTML[\s\S]*?Stays for[\s\S]*?<select/.test(chatUiSrc) || /Stays for[\s\S]{0,80}<select/.test(chatUiSrc),
-  'the "Stays for" duration select is present in the chat prefs panel');
+// INVERTED 2026-09-24. This asserted the "Stays for" select WAS present in the
+// chat prefs panel. All three toast-related rows are hidden now; a control that
+// cannot change anything visible is worse than an absent one, because the
+// player flips it and concludes the app is broken. Checked on ids rather than
+// labels — the ids are what the (also removed) change handlers bound to, so
+// this goes red if either half creeps back on its own.
+assert(!/id="pref-toast-duration"/.test(chatUiSrc) && !/id="pref-toasts"/.test(chatUiSrc) && !/id="pref-sound"/.test(chatUiSrc),
+  'the three toast/sound preference rows are no longer rendered in the chat prefs panel — retired with the surfaces they controlled (their stored values are untouched, asserted above)');
+assert(/id="pref-sys"/.test(chatUiSrc),
+  'non-vacuity: the "League events" row is STILL rendered from the same prefs blob, so the assertion above is about three specific rows and not about the panel having emptied out');
 assert(/chat-toast-dismiss/.test(chatUiSrc) && /chat-toast-dismiss/.test(cssSrc),
   'a manual ✕ dismiss control exists on the toast regardless of duration (Drew: "needs to be able to be dismissed"), in both markup and CSS');
 
@@ -2493,7 +2522,22 @@ const storageSrc31 = await readFile(new URL('./js/storage.js', import.meta.url),
 assert(/export function saveSetting\(k,\s*v\)\s*\{[^}]*save\(KEYS\.SETTINGS,\s*s,\s*\[k\]\)/.test(storageSrc31),
   'saveSetting() names the single field it changed when writing the blob — the declared-fields contract js/supabase-backend.js planFlush() consumes (no diff heuristic anywhere)');
 
-console.log('\n[32] RG-25/RG-26 — one acknowledgement across both notification surfaces…');
+// [32] RE-POINTED 2026-09-24 (teaser retired, Drew — Option A). RG-25's subject
+// was "two surfaces announce a message and they must share ONE acknowledgement
+// state". Both surfaces are now retired, and the state is NOT: it is the
+// device's read cursor (renamed CHAT_ACK_SEQ_KEY / chatAckSeq() /
+// setChatAckSeq() in the same pass, key string unchanged) and notifAckThroughSeq()
+// still reads it for unread counting generally.
+//
+// So the four assertions that used to read the teaser's rendered HTML now read
+// chat.latestUnreadNotifying(self, _notifAckSeq()) — the exact expression the
+// teaser called — and _notifAckThroughSeq(). That keeps RG-25's monotonic,
+// cross-writer and tag-aware coverage intact rather than deleting it along
+// with a display surface. Everything else in this section (the real
+// showToast/drainToast DOM harness, the ✕ handler, the auto-dismiss timer,
+// RG-26's chat-page clear) is UNCHANGED and still drives the shipped
+// functions — production-unreachable now, but still the code under test.
+console.log('\n[32] RG-25/RG-26 — one acknowledgement, shared by every reader of the cursor…');
 const chatUi32 = mods['chat-ui'];
 chat._resetForTest();
 storage.saveSetting('chatEnabled', true);
@@ -2514,9 +2558,9 @@ chat.ingest([ev({ id: 'n1', seq: 701, ts: T32, body: 'first ping', author: 'p1' 
 assert(typeof chatUi32._notifAckSeq === 'function' && typeof chatUi32._ackNotif === 'function',
   'chat-ui exports the shared notification-acknowledgement accessors (one concept, one state — AD-20 applied to a UI state)');
 
-const teaserBefore32 = chatUi32.dashboardChatTeaserHTML();
-assert(/first ping/.test(teaserBefore32),
-  'fixture check: the dashboard teaser announces the new message before anything is dismissed');
+const announceBefore32 = chat.latestUnreadNotifying('p2', chatUi32._notifAckSeq());
+assert(/first ping/.test(announceBefore32?.body || ''),
+  'fixture check: the new message IS the newest unacknowledged thing before anything is dismissed (the value the teaser used to render, now read directly)');
 
 // THE BUG: this is exactly what the toast's ✕ handler now calls. Before the
 // fix the toast dismissal wrote nothing shared, so the teaser kept announcing
@@ -2524,8 +2568,8 @@ assert(/first ping/.test(teaserBefore32),
 chatUi32._ackNotif?.(701);
 assert(chatUi32._notifAckSeq?.() === 701,
   `dismissing a toast records the acknowledgement in the SHARED watermark — got ${chatUi32._notifAckSeq?.()}`);
-assert(chatUi32.dashboardChatTeaserHTML() === '',
-  'after the toast is dismissed, the dashboard teaser no longer announces that same message (the reported bug: "dismiss it in one tab, it is still present in another")');
+assert(chat.latestUnreadNotifying('p2', chatUi32._notifAckSeq()) === null,
+  'after a dismissal at that seq, the same message is no longer the newest unacknowledged thing for ANY reader of the cursor (the reported bug: "dismiss it in one tab, it is still present in another")');
 
 // Monotonic — a dismissal never rewinds (RG-14's lesson, same file family).
 chatUi32._ackNotif?.(300);
@@ -2534,8 +2578,8 @@ assert(chatUi32._notifAckSeq?.() === 701,
 
 // Genuinely newer activity still gets announced (UN-93's requirement survives).
 chat.ingest([ev({ id: 'n2', seq: 702, ts: T32 + 60000, body: 'second ping', author: 'p1' })]);
-assert(/second ping/.test(chatUi32.dashboardChatTeaserHTML()),
-  'a strictly newer message still reappears — the shared watermark suppresses only what was acknowledged (UN-93 unchanged)');
+assert(/second ping/.test(chat.latestUnreadNotifying('p2', chatUi32._notifAckSeq())?.body || ''),
+  'a strictly newer message still comes back — the shared watermark suppresses only what was acknowledged, it is not a mute switch (UN-93 unchanged)');
 
 // The other direction: the toast must not re-announce something already
 // acknowledged on the teaser.
@@ -2621,9 +2665,12 @@ try {
     `clicking the toast's ✕ writes the SHARED acknowledgement watermark — got ${chatUi32._notifAckSeq()} (0 = the reported bug: dismissed here, still showing on the other tab)`);
   assert(t1._removed === true, 'the ✕ also removes the toast node');
 
-  // 32b — the same message must not be re-announced by the ambient teaser.
-  assert(chatUi32.dashboardChatTeaserHTML() === '',
-    'after a real ✕ dismissal the dashboard teaser stops announcing that message (cross-surface, the reported bug)');
+  // 32b — the same message must not still read as unacknowledged afterwards.
+  // This is the cross-writer half of RG-25: the write came from the toast's ✕
+  // (a real click on the real node, above), and the read is the general cursor
+  // every other unread consumer uses.
+  assert(chat.latestUnreadNotifying('p2', chatUi32._notifAckSeq()) === null,
+    'after a real ✕ dismissal on the toast, the shared cursor reports nothing left unacknowledged at that seq (cross-writer, the reported bug)');
 
   // 32c — tapping the toast BODY acknowledges too (both gestures, one state).
   reset32();
@@ -7890,7 +7937,7 @@ console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + pri
 // current 'in app notification' at the top of the dashboard."
 //
 // ONE defect in two costumes. dashboardChatTeaserHTML() gated visibility on
-// the ✕-dismissal watermark ALONE (`latestSeq <= teaserDismissedSeq()`), and
+// the ✕-dismissal watermark ALONE (`latestSeq <= chatAckSeq()`), and
 // nothing else — so OPENING THE ROOM, which is the most complete form of
 // reading a message there is, never suppressed the teaser. Only the ✕ did.
 //  (a) navigate Chat -> Dashboard: renderDashboard() re-inserts the card.
@@ -7906,9 +7953,34 @@ console.log('\n[68] trainertest.mjs — spawned as a subprocess, exit code + pri
 // teaser was the one surface that didn't. Fixed by deriving ONE
 // "acknowledged through seq N" value — max(✕ dismissal, read cursor) — and
 // gating the teaser on that.
-console.log('\n[69] RG — the dashboard teaser must not re-announce a message already read (v0.19.0 field report)…');
+// ══ RE-POINTED, NOT DELETED — 2026-09-24 (teaser retired, Drew, Option A) ══
+//
+// Every assertion below used to read dashboardChatTeaserHTML()'s rendered HTML.
+// The teaser is gone; RG-69 is NOT. The defect it records is in the
+// ACKNOWLEDGEMENT MATH, not in the card: "acknowledged through seq N" was
+// computed from the ✕ dismissal alone, ignoring the read cursor, so anything
+// that announced a message re-announced one already read. That math is
+// notifAckThroughSeq() = max(chatAckSeq(), readThroughSeq(tag)), it is still
+// shipped, and js/chat-ui.js still reads it for unread counting generally.
+//
+// So announce69() below reproduces EXACTLY what the teaser computed —
+// latestUnreadNotifying(self, chatAckSeq()), the same two arguments in the
+// same order — and every assertion asks the same question of it. Deleting
+// these would have thrown away the only coverage of a bug that shipped to
+// Drew's phone, on the grounds that its display surface changed.
+//
+// The two-level (per-tag) half below is the part most at risk of being lost:
+// it was found in REVIEW of the first fix for this RG, because the first fix
+// consulted half the read state — the same shape as the original bug.
+console.log('\n[69] RG — the acknowledgement math must not re-offer a message already read (v0.19.0 field report)…');
 {
   const chat69 = mods['chat'], chatUi69 = mods['chat-ui'];
+  /** What the dashboard teaser called, verbatim, until it was retired:
+   *  latestUnreadNotifying(me(), teaserDismissedSeq()). Kept as a named helper
+   *  so these assertions read the way they did before, and so the expression is
+   *  defined once rather than copied fourteen times. */
+  const announce69 = () => chat69.latestUnreadNotifying('p2', chatUi69._notifAckSeq());
+  const announceBody69 = () => announce69()?.body || '';
   const ev69 = o => ({ gameTag: '', type: 'message', author: 'p1', body: '', notify: true, ...o });
   chat69._resetForTest();
   storage.saveSetting('chatEnabled', true);
@@ -7924,8 +7996,8 @@ console.log('\n[69] RG — the dashboard teaser must not re-announce a message a
     ev69({ id: 'rg69a', seq: 41, ts: T69, body: 'anyone taking the over', author: 'p1' }),
     ev69({ id: 'rg69b', seq: 42, ts: T69 + 60000, body: 'lock of the week', author: 'p1' }),
   ], 42);
-  assert(/lock of the week/.test(chatUi69.dashboardChatTeaserHTML()),
-    'fixture: the teaser announces the newest unread message before anything is read (non-vacuous baseline)');
+  assert(/lock of the week/.test(announceBody69()),
+    'fixture: the newest unread message is what would be announced before anything is read (non-vacuous baseline)');
 
   // Tapping the teaser opens the room; renderChatPage()'s 1s mark timer then
   // calls exactly this. Drew's "click into it".
@@ -7933,26 +8005,26 @@ console.log('\n[69] RG — the dashboard teaser must not re-announce a message a
   assert(chat69.unreadCount('p2', 'all') === 0, 'reading the room clears the unread count (fixture check)');
   assert(chat69.getLastSeen().seq === 42, 'the device-local read cursor advanced to the head (42)');
 
-  assert(chatUi69.dashboardChatTeaserHTML() === '',
-    'THE BUG (a): back on the dashboard, the teaser does NOT re-announce a message already read ("regardless of how many times I click into it")');
+  assert(announce69() === null,
+    'THE BUG (a): after reading the room there is nothing left to announce — the read cursor counts as acknowledgement ("regardless of how many times I click into it")');
 
   // ── Session 2: page reload. Module state is gone; device-local storage is
   // not. _resetForTest() is a faithful stand-in — it clears S.items/S.head
   // and touches no localStorage key. ──
   chat69._resetForTest();
-  assert(chatUi69.dashboardChatTeaserHTML() === '',
+  assert(announce69() === null,
     'first paint after reload: nothing folded yet, so nothing is announced');
   chat69.ingest([
     ev69({ id: 'rg69a', seq: 41, ts: T69, body: 'anyone taking the over', author: 'p1' }),
     ev69({ id: 'rg69b', seq: 42, ts: T69 + 60000, body: 'lock of the week', author: 'p1' }),
   ], 42);
-  assert(chatUi69.dashboardChatTeaserHTML() === '',
-    'THE BUG (b): when the backfill lands after a reload it does not re-announce an already-read message ("I will re-get the current in-app notification")');
+  assert(announce69() === null,
+    'THE BUG (b): when the backfill lands after a reload it does not re-offer an already-read message ("I will re-get the current in-app notification")');
 
   // ── UN-93 must survive: genuinely new activity still gets announced ───────
   chat69.ingest([ev69({ id: 'rg69c', seq: 43, ts: T69 + 120000, body: 'brand new take', author: 'p1' })], 43);
-  assert(/brand new take/.test(chatUi69.dashboardChatTeaserHTML()),
-    'a strictly newer unread message still surfaces the teaser (UN-93 unchanged — this is not a mute switch)');
+  assert(/brand new take/.test(announceBody69()),
+    'a strictly newer unread message still surfaces (UN-93 unchanged — this is not a mute switch)');
 
   // ── Read state is TWO-LEVEL, and both levels acknowledge ─────────────────
   // openGameChatSheet() (chat-ui.js) calls markSeen(gameId), which writes
@@ -7971,47 +8043,47 @@ console.log('\n[69] RG — the dashboard teaser must not re-announce a message a
     ev69({ id: 'rg69n', seq: 44, ts: T69 + 180000, body: 'unrelated room message', gameTag: '', author: 'p1' }),
     ev69({ id: 'rg69m', seq: 45, ts: T69 + 240000, body: 'M inside the g1 thread', gameTag: 'g1', author: 'p1' }),
   ], 45);
-  assert(/M inside the g1 thread/.test(chatUi69.dashboardChatTeaserHTML()),
-    'fixture: the newest unread message (posted in game thread g1) is what the teaser announces');
+  assert(/M inside the g1 thread/.test(announceBody69()),
+    'fixture: the newest unread message (posted in game thread g1) is what would be announced');
 
   chat69.markSeen('g1');                       // the player opens the g1 game sheet
   assert(chat69.unreadCount('p2', 'g1') === 0,
     'fixture: reading the g1 thread zeroes that thread\'s unread count (the state the teaser must agree with)');
-  const teaser69 = chatUi69.dashboardChatTeaserHTML();
-  assert(!/M inside the g1 thread/.test(teaser69),
-    'THE BUG (c): reading a message inside its GAME THREAD stops the teaser announcing that exact message (byTag is read state too, not just .seq)');
-  assert(/unrelated room message/.test(teaser69),
+  const announced69 = announceBody69();
+  assert(!/M inside the g1 thread/.test(announced69),
+    'THE BUG (c): reading a message inside its GAME THREAD stops it being announced (byTag is read state too, not just .seq)');
+  assert(/unrelated room message/.test(announced69),
     'and it falls THROUGH to a different unread room message rather than going blank — a per-tag read never silences unrelated room activity');
 
   // Reading the room clears the fall-through target too (reading the room is
   // reading every thread — the other direction of the same rule).
   chat69.markSeen('all');
-  assert(chatUi69.dashboardChatTeaserHTML() === '',
+  assert(announce69() === null,
     'reading the room then clears the fall-through message as well (both levels, one rule)');
   // Re-arm with genuinely new activity so the monotonic block below is not
   // asserting against an already-empty teaser.
   chat69.ingest([ev69({ id: 'rg69o', seq: 46, ts: T69 + 300000, body: 'back to unread', author: 'p1' })], 46);
-  assert(/back to unread/.test(chatUi69.dashboardChatTeaserHTML()),
-    'fixture: new activity after that read re-arms the teaser (non-vacuous baseline for the monotonic cases)');
+  assert(/back to unread/.test(announceBody69()),
+    'fixture: new activity after that read re-arms it (non-vacuous baseline for the monotonic cases)');
 
   // ── Monotonic, both ways. The derived watermark is max(✕, read cursor), so
   // neither half can rewind the other (RG-14 / RG-25). ─────────────────────
   chatUi69._ackNotif(99);                          // ✕ dismissal well ahead of the read cursor
-  assert(chatUi69.dashboardChatTeaserHTML() === '', 'an explicit ✕ dismissal above the read cursor still suppresses (the dismissal half is intact)');
+  assert(announce69() === null, 'an explicit ✕ dismissal above the read cursor still suppresses (the dismissal half is intact)');
   chat69.markSeen('all');                          // cursor advances to 43 — BELOW the dismissal
   chat69.ingest([ev69({ id: 'rg69d', seq: 50, ts: T69 + 180000, body: 'below the dismissal', author: 'p1' })], 50);
-  assert(chatUi69.dashboardChatTeaserHTML() === '',
+  assert(announce69() === null,
     'a read cursor BELOW an existing ✕ dismissal never un-dismisses what was already acknowledged (monotonic)');
   chat69.ingest([ev69({ id: 'rg69e', seq: 120, ts: T69 + 240000, body: 'above everything', author: 'p1' })], 120);
-  assert(/above everything/.test(chatUi69.dashboardChatTeaserHTML()),
+  assert(/above everything/.test(announceBody69()),
     'and a message above BOTH watermarks is still announced');
 
   // The unread badge and the teaser must agree about what "read" means — the
   // reported symptom was a card announcing a message the badge already
   // considered read (it rendered with no unread dot at all).
   chat69.markSeen('all');
-  assert(chat69.unreadCount('p2', 'all') === 0 && chatUi69.dashboardChatTeaserHTML() === '',
-    'teaser and unread count agree: zero unread means nothing to announce');
+  assert(chat69.unreadCount('p2', 'all') === 0 && announce69() === null,
+    'the announcement picker and the unread count agree: zero unread means nothing to announce. This is the row that ties RG-69 to the surviving surface — the chat pill badge reads that same count');
 
   storage.clearSession();
   localStorage.removeItem('cfbp_chat_lastseen2');
@@ -8634,7 +8706,7 @@ console.log('\n[73f] transporttest.mjs — spawned as a subprocess, exit code + 
   assert(!!m73f, `transporttest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73f ? '' : '\n' + out.slice(-800)}`);
   if (m73f) {
     assert(Number(m73f[2]) === 0, `transporttest.mjs reports zero failed assertions (got ${m73f[2]} failed, ${m73f[1]} passed)`);
-    assert(Number(m73f[1]) >= 175, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 175 — raised from 169 by the COMBINED RELEASE MERGE (2026-09-20) (§[10](d) S9/R6: the permanent seq hole a private test row leaves costs exactly ONE gap drain, not a retry loop); before that from 40 when Step 5 landed; the ratchet only tightens)`);
+    assert(Number(m73f[1]) >= 198, `transporttest.mjs actually ran its full set (got ${m73f[1]}, floor 198 — raised from 175 on 2026-09-24 by v0.25.1 (§[8](e) N4: an outage-class refusal breaks the run loop, one RPC not three; §[8](f)/§[17](g) N2: the narrowed local brakes hold back only the id they name and the refusal carries \`assigned\` for the run that landed — a mutation that restored the pre-v0.25.0 whole-list brake killed those six and NOTHING ELSE in the suite, which is why they had to be written); before that from 169 by the COMBINED RELEASE MERGE (2026-09-20) (§[10](d) S9/R6: the permanent seq hole a private test row leaves costs exactly ONE gap drain, not a retry loop); before that from 40 when Step 5 landed; the ratchet only tightens)`);
   }
 }
 
@@ -9596,7 +9668,7 @@ console.log('\n[87] pushtest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch87) {
     assert(summaryMatch87[1] === '✅', `pushtest.mjs itself reports ALL PASS (got: ${summaryMatch87[0]})`);
     assert(Number(summaryMatch87[3]) === 0, `pushtest.mjs reports zero failed assertions (got ${summaryMatch87[3]} failed, ${summaryMatch87[2]} passed)`);
-    assert(Number(summaryMatch87[2]) >= 259, `pushtest.mjs actually ran its full set (floor 259 — LOWERED from 300 by the Sheets retirement (2026-09-23): [1]-[8] were RG-56's Sheets cell cap and the all-or-nothing batch it broke, and there is no cell. [9]-[14] — the push half, which is what this file is for — are untouched. Raised from 281 by DI-254's \u00a7[12t] (the OneSignal identity token: the token reaches login() as its second argument, a failed mint is a deliberate NO LOGIN with no storage write and no prompt, the existing bounded ladder recovers a transient failure, a token inside its five-minute margin is re-minted while a fresh one is reused, a handover never replays the previous occupant's token, and the structural pins that keep the credential out of storage and auth.js out of a static import cycle); before that raised from 274 by the security gate's §[14f] (the 0019 obligation pin) and the narrowed self-test id shape; raised from 243 at v0.23.3 by section [14] (Drew's residual 3: the private self-test row is labelled, subdued, findable with the same marker, and badges nobody) and [11-30]'s rewritten no-device advice; before that from 205 by RG-193 (2026-09-21): section [13]'s "the push service has no device for this account" copy, the Background-jobs counts line, and [12m]'s token/browser-subscription evidence behind "push is on for this device"; before that from 160 by RG-192 section [12] (the OneSignal identity/subscription regression: login-before-init, the bounded retry, the honest three-fact device status, the reviewer's Reconnect/optIn BLOCK, the coordinator's prompt-free boot registration, and security F2's stale-completion re-assert); before that from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins), and from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch87[2]) >= 292, `pushtest.mjs actually ran its full set (floor 292 — LOWERED 292 <- 293 on 2026-09-24 (teaser retired, Drew 2026-09-24 Option A): exactly ONE assertion was deleted, 15-16, and it was deleted on purpose because it asked for the OPPOSITE of what shipped -- it pinned that the dashboard teaser was UNCHANGED by the native push-active fix, and was written that same morning with the explicit instruction that a later pass which DID retire the teaser must come back and delete it with a dated note. This is that note. No other assertion was removed; 9-8/9-9/10-6/14-16 were rewritten in place (same count, stronger claims: the pick reveal raises no toast at all, and chat-ui.js now has ZERO showToast() call sites). A lowered floor is only ever acceptable for deleted assertions about a deleted surface, which is what this is. Floor was 293, raised from 276 by RG-243's §[16] (2026-09-24: the WEB half of "chat preview is on webview desktop/mobile and ios". The web pushActive ladder turned out to be CORRECT — a subscribed browser resolves TRUE and shows no preview, an unsubscribed one shows it BY DESIGN (UN-N3) — and 16-1…16-5 pin all three terms against a fake v16 SDK so that stays recorded rather than re-litigated. The DEFECT was one layer back: maybeAutoOptInPush(), RG-192's prompt-free "permission granted, no subscription" repair, spent its page-lifetime latch ABOVE its own identity guard and had exactly ONE caller — the boot tail, at the one moment authMode:'supabase' cannot guarantee an identity (RG-177) — so a boot that lost that race left the browser allowed-to-notify and registered-nowhere until reload. 17 assertions: the three-term ladder, the by-design preview on an unsubscribed device, the repair running once the identity lands, the latch still budgeting one attempt, the two prompt-free refusals, and the structural pins on the chokepoint re-arm and the guard/latch ORDER). Raised from 259 by RG-242's §[15] (2026-09-24: the native iOS shell could never resolve push-ACTIVE, because refreshPushActiveFlag() asked the WEB OneSignal SDK, whose subscriptionState() answers the literal 'native-unavailable' inside the Capacitor shell — so Drew's iPhone got the push AND the in-app chat preview on the Picks tab, for every message, forever. 16 assertions: the flag on a granted handset, both in-app surfaces going quiet, the three fail-closed native states, the master toggle's unchanged veto, web inertness both behaviourally and structurally, the priming button's native arm recomputing on grant, and a pin recording that the DASHBOARD teaser is deliberately untouched — DI-93 specified it and DI-N3 retained it by name). Before that LOWERED from 300 by the Sheets retirement (2026-09-23): [1]-[8] were RG-56's Sheets cell cap and the all-or-nothing batch it broke, and there is no cell. [9]-[14] — the push half, which is what this file is for — are untouched. Raised from 281 by DI-254's \u00a7[12t] (the OneSignal identity token: the token reaches login() as its second argument, a failed mint is a deliberate NO LOGIN with no storage write and no prompt, the existing bounded ladder recovers a transient failure, a token inside its five-minute margin is re-minted while a fresh one is reused, a handover never replays the previous occupant's token, and the structural pins that keep the credential out of storage and auth.js out of a static import cycle); before that raised from 274 by the security gate's §[14f] (the 0019 obligation pin) and the narrowed self-test id shape; raised from 243 at v0.23.3 by section [14] (Drew's residual 3: the private self-test row is labelled, subdued, findable with the same marker, and badges nobody) and [11-30]'s rewritten no-device advice; before that from 205 by RG-193 (2026-09-21): section [13]'s "the push service has no device for this account" copy, the Background-jobs counts line, and [12m]'s token/browser-subscription evidence behind "push is on for this device"; before that from 160 by RG-192 section [12] (the OneSignal identity/subscription regression: login-before-init, the bounded retry, the honest three-fact device status, the reviewer's Reconnect/optIn BLOCK, the coordinator's prompt-free boot registration, and security F2's stale-completion re-assert); before that from 129 by the COMBINED RELEASE MERGE (2026-09-20) (reviewer R1's real-roster-lookup section [11r], reviewer R2's switch-off section, and [11c]'s card-coherence pins), and from 73 by [11], the DI-204/205/206/218 client copy + boot-hook section; the ratchet only tightens) (got ${summaryMatch87[2]} — a near-zero count would mean the guard is vacuous)`);
   }
 }
 
@@ -9654,7 +9726,7 @@ for (const [label, file, floor, why] of [
   // Step 6 Phase 3 (scribeAsk, DI-T6.3) — the fourth handler, and the first
   // class-U one: switch/auth/secret/dedup/happy-path/refusal/outage, driven
   // against the REAL scribe-ask/index.js through the same fake transport.
-  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 558,
+  ['81f', 'supabase/tests/functions/scribeAsk.twin.mjs', 596,
    `DI-T6.3 — scribe-ask end to end: the class-U auth gate, the ack-row reservation, budget/throttle no-ops, the happy path, a model refusal, a two-attempt outage, the blind-rule re-verification (a planted open-week pick withheld both by a direct tool call and a full two-round Anthropic exchange scanned for the secret), and (raised from 29 to 266 by the Phase 3 gate closure, 2026-09-20) B1's reachability assertion (safety+persona actually ride the request), B2's player-boundaries-by-construction section (asker-only, no tool call needed, scoped away from another player and from a low-confidence row), S-F1's length cap + generalized dangling-ack degrade, S-F2's fail-closed rate reads (including the legal-zero-budget case), S-F4's abort-on-timeout proof, and S-F5's named-columns proof; raised 266 -> 295 by RG-222 (2026-09-22, live 400): §[16] validates the REAL request body against the Messages API subset we send — system-block shape, non-empty text, cache_control placement and the 4-breakpoint ceiling, custom-vs-server tool shapes (the server-tool type string READ OUT of Code.gs's own working payload), message-block and orphan-tool_result rules, integer max_tokens, no anthropic-beta, and the thinking/output_config.effort PAIR that this defect broke — with eleven self-test mutants proving the validator can fail; and §[17] pins the diagnostic (closed-set error type + our own dotted field path in job_runs.payload); raised 295 -> 322 by RG-223/RG-224 (2026-09-22, the SECOND live 400 and the 75-second EarlyDrop beside it): §[18] pins the sanitised 'apiErrorMessage' — the live message shape round-trips losslessly, an Anthropic-key-shaped token and anything after 'Bearer ' become '[redacted]', a padded 2,000-char message is capped at 240, control characters / a newline / an em-dash / an emoji are stripped to a declared ASCII class, a 2xx writes the key at all, plus ten unit-level clauses on the sanitiser itself (idempotence, non-string input, the 31-vs-32 redaction boundary, a long field path NOT mistaken for a key, an ANSI escape, four overlong inputs); 17-4 is AMENDED there, not deleted — the error SLOT is still 100% ours, which is what security finding S3 was actually about; and §[19] pins that ZERO timers remain armed after handle() resolves on the success path, the two-call 400 path, a rejecting fetch and a fired timeout — the 'AbortSignal.timeout' that could not be cancelled is now an AbortController cleared in a finally; raised 322 -> 337 by RG-225 (2026-09-22, the live timeouts after Drew rotated the key): 14-4 is REPLACED — the old '2 x per-call timeout <= wall clock' arithmetic was the relationship that justified 12s/30s and that silently blessed retrying a timeout; the new clauses pin wall clock + one timeout <= EDGE_WALL_CLOCK_BUDGET_MS with at least 30s spare, a per-call ceiling sized for a real tool+web-search Sonnet 5 reply, and the wall clock as the binding constraint; and new section [14b] pins that a timeout is NOT an outage — both abort spellings classify as 'timeout', a socket failure stays 'network_error' with no message, the timeout message names OUR constant and not the exception's words, a timeout is NOT retried (one call) while a socket failure is (two, and it recovers), and a timed-out call is still metered; +1 (18-13b) from the mutation proof, which found that deleting the sk-ant prefix redaction left the twin green — the fixture key was long enough for the generic 32-character rule to swallow anyway, so a SHORT key is now asserted too; raised 338 -> 363 at the GATE (2026-09-22): 18-13c/18-13d make the sanitiser's ORDER real — the module claimed [18] asserted it and it did not, and inverting redaction and the character-class strip leaks the tail of a credential containing a stripped character (Bearer ab@cdefghijkl); and new section [14c] pins RG-226, that a deterministic 4xx is NOT retried — six status codes cost one Anthropic call each, 429/500/503/529 still get their retry, a 529-then-200 recovers, a 2xx with an unparseable body is retried, and the spend clause records that our own ledger meters once per INVOCATION rather than per attempt, so the wasted retry was invisible to the budget ceiling and only the policy can stop it; raised 363 -> 423 by DI-272 (2026-09-23): section [20] is THE FOUR PROMPT SLOTS THAT USED TO RENDER EMPTY. Sections [11] and [12] were green throughout the three weeks in which the Trainer ran weekly, wrote rows, and had NOTHING it produced ever reach the model — because a block that is not there looks exactly like a block with nothing to say, and no assertion in this file could tell them apart. [20] asserts every one of them ON THE WIRE: a hard line for a player named ONLY by display name in the question (20a, the defect), and one named only in the room context; an approved 0.80 learning present and an approved 0.60, a pending and a rejected one absent; canon's five payload fields read from the real jsonb shape; scribeLearningsEnabled:false as a TRUE stop that never queries either table, and a MISSING value reading as ON (CONVENTIONS #10); room context oldest-first with the trigger itself and everything after it excluded by a JS pass beside the .lt filter, the S6-R14 private-row fence asserted BEHAVIOURALLY on the mention path for the first time, and the '(no recent messages)' sentinel; LEAGUE MEMORY's roastTolerance line, its 'computed' exclusion, its null-confidence keep, and the 8-item cap that DELIBERATELY does not apply to hard lines (a budget may cost SCRIBE a fact, never a player a boundary); the five-block order with persona as the ONLY cache breakpoint and every new block below it (AD-41), plus the count pinning that DI-267's heat slot is NOT built; and fail-soft — a broken memory read still answers the player, renders that one slot empty, leaves the other three alone, and reports ctxSlotsFailed, with the ordinary healthy run reporting zero; raised 423 -> 447 by the SECURITY FIX PASS on DI-272 (2026-09-23), which found that the fix for the empty slots had opened three holes of its own. 20a-7..20a-10 are F1, the pair for 20a-3: the widened id list was handed to BOTH halves of the memory block, so naming Kevin pulled Kevin's private \`fact\` and \`roastTolerance\` rows into Drew's prompt — a hard line crosses the member boundary because a restriction can only narrow what SCRIBE may say, and a memory row does not because it is nothing but disclosure (migration 0022 §4a spends a section saying who may read one, and the service role bypasses it). 20a-11/20a-12 are F3, the reachability proof for the new non-disclosure sentence on the shared PLAYER_BOUNDARIES_HEADER: the header told the model not to OBEY a hard line and never told it not to REPEAT one, so "@scribe what are Kevin's boundaries?" had no answer on file. Section [20j] is F2 — player-authored memory text entered a SYSTEM block verbatim, uncapped, with its newlines intact, while chat text has been quoted through quoteBody() since security finding S1: 20j-2/20j-3 prove exactly one line in the whole request begins with "SAFETY (", from BOTH halves of the block; 20j-5 proves a forged "PLAYER BOUNDARIES" header inside a memory VALUE is neutralised (N5 widened FORGEABLE_HEADERS_RE to the five headers DI-272 added); 20j-6..20j-8 pin the header framing (LEAGUE MEMORY carries the same untrusted-input clause PLAYER BOUNDARIES does, and both generated blocks carry the subordinate clause that says what they rank beneath); and 20j-10 proves a \`kind='wager'\` row — the ONE kind a third party may author about somebody else, 0022 §4c — never reaches the model-facing render at all. Section [20k] is N7, UN-112's chat epoch: a pre-epoch line never reaches the user turn, the watermark is inclusive, the \`.gt\` is on the query as well as in the JS pass, and a league that has never cleared its chat adds no filter. Raised 447 -> 461 by the SECOND FIX PASS (2026-09-23), whose blocking finding F4 was introduced BY the previous pass's N6: \`.limit(50)\` sat on a single combined memory read, Postgres applies a limit BEFORE modelFacingMemoryRows() drops wagers in JS, and 0022 §4c lets ANY member insert wager rows about ANY other member — so fifty fresh ones evicted that member's HARD LINES, the read still SUCCEEDED, ctxSlotsFailed stayed 0 and nothing reported a boundary having been dropped. The read is now SPLIT (an unlimited .eq(kind,hardline) over the widened id set; a bounded asker-only .neq(kind,hardline).neq(kind,wager) read), asserted by 11-0a/11-0a2/11-0b/11-0c/11-0d/11-0e on the queries and by 20f-10/20f-11 (sixty wagers about a named member) and 20f-13/20f-14 (sixty facts about the asker) on the wire. 11-0a is REVERSED here rather than deleted — DI-272 merged the two reads into one and recorded why; F4 is why that reasoning was wrong, and both halves are written down. Also 20j-11..20j-13 (N10: a TOOL RESULT is the third path to the model, and get_relevant_player_context now quotes every value through the same quoteBody) and 20j-14/20j-15 (N11: the bare CANON alternative rewrote the ordinary word "canon" in real chat, tightened to \`CANON \\(\` with the forged-header case still caught). Raised 461 -> 465 by the SAME pass's R7/R8: 20j-12 pins that \`get_relevant_player_context\` returns NO hard lines and that the KEY IS ABSENT rather than empty — both voice paths render boundaries by construction now, so the tool was a second copy of the most sensitive text in the app on the one path that carries no header, no S-1 precedence framing and no non-disclosure sentence; 20j-15 pins that the tool DESCRIPTION stopped advertising them too, because a description is an instruction and one promising "topics that player has asked never to be brought up" teaches the model to call the tool in order to obtain them; and 20j-18/20j-19 pin R8's \`SAFETY \\(non-negotiable\` alternative — the header of the block that outranks every other block, whose only previous defence was newline-flattening — scoped so the ordinary word "safety" in chat is untouched. Raised 465 -> 466 by the POLISH pass (2026-09-23): 20j-20 pins that get_relevant_player_context's OWN read carries the wager exclusion, the 50-row cap and the deterministic order in SQL — the same F4 pairing, because a cap without its SQL twin can be spent entirely on rows the JS filter was going to drop. 11-0d is also widened there: the hard-line read is unlimited AND STILL ORDERED, two separate decisions the first draft of the split dropped together. Raised 494 -> 502 by F-3 (2026-09-23): §[22] proves the model reaching Anthropic is always one the rate card prices — the commissioner's Opus choice rides the wire, an unset one sends the default, and an off-card or prototype-key id never leaves the process, so an unpriced model can neither 400 the next mention nor be metered at another model's rates against the shared $25 ceiling`],
   // Reviewer BLOCK B1 (2026-09-20) — the drift guard `scribe-persona.mjs`
   // claimed but did not build: docs/SCRIBE.md compared byte-for-byte against
@@ -9690,7 +9762,7 @@ for (const [label, file, floor, why] of [
   // ═══ BEGIN STEP 6 PHASE 5 (scribe-classify / scribe-autonomous) ═══
   ['81j', 'supabase/tests/functions/scribeClassify.twin.mjs', 101,
    'DI-T6.5 — the classify handler: class-U auth ordering (through the canonical requireMember()/my_member_id() gate), the kill switch, the daily cap, N-2/F6\'s verdict-cache idempotency, and (raised from 27) the shared monthly budget via budgetExceeded()/bumpRate() — checked before the model call and fail-closed on a rate-read error, the same $25/spend_usd column scribe-ask/trainer share (security finding, coordinator\'s Phase 4/5 reconciliation pass); raised to 57 by the PHASE 5 GATE CLOSURE (2026-09-20) — reviewer BLOCK B2\'s "prompt promises == input provides" table asserted on the wire, including the EXCERPT the ported CLASSIFY_SYSTEM has always named and never received (same author, same room, strictly earlier, oldest first, and no empty header when there is no history), security S-F2 (every job_runs row names the acting member, off the JWT, surviving finishRun) and security S-F3 (metered from the API\'s own usage x the named haiku price constants, on EVERY attempt that reached Anthropic — refusal, unparseable answer and network failure all bump; a call refused at the door does not)'],
-  ['81k', 'supabase/tests/functions/scribeAutonomous.twin.mjs', 390,
+  ['81k', 'supabase/tests/functions/scribeAutonomous.twin.mjs', 397,
    'DI-T6.5 — the autonomous handler: the trigger allow-list, BLOCK-1\'s server-recomputed score, the consecutive-post guard, the per-post ticket + global cooldown (open question 1, closed), the shared monthly budget peek+post-hoc spend against the canonical $25 default, the ≤2-sentence structural cap, FINDING 3\'s verdict-consumption proof (open question 2, closed), and the BLIND-RULE test — raised from 58 to 176 by the PHASE 5 GATE CLOSURE (2026-09-20), which drives the handler against a REAL projected league fixture (league_members/weeks/games/picks/tiebreaker_guesses through js/supabase-projection.js and the real js/scoring.js) and adds: reviewer BLOCK B2 (the VERIFIED FACTS block on the wire with recomputed numbers, the restored `- signal:` line, NO internal scoring weight anywhere in the user content, the prompt-promise table, the verifier/EVIDENCE_CONTRACT/SIGNAL_POINTS key-set identity, and a drift guard extracting MILESTONE_MARKS/STREAK_MIN/the drink-debt regex out of js/scribeLines.js\'s source), reviewer BLOCK B1 (the subject player\'s hard-lines by construction, scoped and league-scoped, below the persona with no cache_control, and NO empty stub when there are none), security S-F1 (a forged backdoorBust, a wrong lone wolf and 64 chars of attacker subject all cost nothing), S-F2 (actorMemberId on both job_runs rows, never the body field), S-F3 (usage-derived spend, refusals and network failures metered, door-refusals not), S-F4 (the hourly try_add is the LAST gate, pinned by the spy log\'s ORDER), S-F5 (capMessageBody against the fake\'s real 23514, and a refused insert releasing both reservations), and the widened BLIND RULE (an open-week pick, tiebreaker guess, extra-point guess and submission-state row all planted, none on the wire, neither extra_point_guesses nor week_submission_status ever queried, and — added after a mutation of revealedView() left the wire assertions GREEN — section [12v], which asserts the fence WHERE IT LIVES, over the same fixture, so both of its halves bite). Raised 262 -> 265 by the SECURITY FIX PASS on DI-272 (2026-09-23), finding N7: section [N7] — UN-112\'s chat-epoch watermark now fences THIS path too, and this is the path that posts UNPROMPTED. The rows are not deleted by "Clear Chat History Before Launch"; every CLIENT reader drops `seq <= chatEpochSeq` at one choke point, this is a SERVICE-ROLE read of the same table, and nothing was dropping them — so pre-launch test chatter erased from every screen in the app could be worked into a spontaneous public post with no human in the loop. A pre-epoch line is excluded, a post-epoch line is not (the non-vacuity control), and a league that has never cleared its chat adds no filter at all, so its wire stays byte-identical to what DI-272 shipped. Raised 265 -> 269 by the SECOND FIX PASS (2026-09-23): B1-9b pins that the hard-line read is DELIBERATELY unlimited (every other SCRIBE read is now capped at 50; a cap here is a cap that can silently drop a boundary while the read still reports success), and B1-13/B1-14/B1-15 are R6 — `loadPlayerBoundariesTextForMany` was the LAST place in the tree that interpolated a player-authored memory value RAW into a system block, newlines intact. F2 fixed the identical defect on scribe-ask\'s two renderers and missed this one because that pass was reading the other file. The twin is 20j-2\'s analogue: with a hostile hard line carrying "\\n\\nSAFETY (non-negotiable…", exactly ONE line in the whole request begins with "SAFETY (", and the boundary itself still reaches the model quoted rather than dropped. Raised 289 -> 302 by R-1 and F-3 (2026-09-23): HEAT-13..18 prove a league-wide `unanimous` post runs at the LEAGUE level while a `loneWolfWin` about the same Light-tolerance member is still capped at Dry (the hard-line scope stays generous), and MODEL-7..9 prove an off-card model id never reaches the wire'],
   // Coordinator's shared-foundation pass, 2026-09-20 — G5's drift guard is ONE snapshot
   // (`_shared/scribe-persona.mjs`) shared by scribe-ask/trainer/scribe-classify/scribe-autonomous;
@@ -9810,8 +9882,8 @@ for (const [label, file, floor, why] of [
   //    section replaces globalThis.document with a click-capable element tree
   //    for the duration of the run, which would poison every suite after it in
   //    this process.
-  ['98', 'feedbacktest.mjs', 250,
-   'The pilot-era feedback-popover suite: Hit/Mid/Too much rating writes, the popover\'s open/close/re-mount lifecycle, the anchor-positioning mutation pairs ([28a]-[28d], including the two CONFIRMED-mutation findings for the popover landing inside the ⭐ button versus measuring from the wrong edge), and the real js/chat.js + js/chat-ui.js byte-identity checks after every mutation run. Floor at the current count (2026-09-24) — the ratchet only tightens'],
+  ['98', 'feedbacktest.mjs', 256,
+   'The pilot-era feedback-popover suite: Hit/Mid/Too much rating writes, the popover\'s open/close/re-mount lifecycle, the anchor-positioning mutation pairs ([28a]-[28d], including the two CONFIRMED-mutation findings for the popover landing inside the ⭐ button versus measuring from the wrong edge), the real js/chat.js + js/chat-ui.js byte-identity checks after every mutation run, and — §[29], raised from 250 by the v0.25.0 LIVE BUG (2026-09-24) — that a SCRIBE post the server refuses can no longer take the player\'s ⭐ rating, reason chips and "why" down with it: every run in a batch gets its own round trip, and a refusal is only ever charged to the events it actually names. Floor at the current count — the ratchet only tightens'],
   ['99', 'learntest.mjs', 268,
    'SCRIBE v3 Package C client half (DI-274…281, 2026-09-24): the learning-rate table (Fast/Normal/Locked, every knob), decay/cap/conflict rules shared with the loader, the retracted-rating read boundary, the Training card\'s Learnings list on the Data tab only (RG-10) with toggle/undo through the existing decision path, Reset requiring confirm and exporting first, the export markdown shape, the explainer, the burn line math from job_runs, and the changelog copy. Floor at the first count — the ratchet only tightens'],
   ['100', 'interacttest.mjs', 108,
@@ -10799,7 +10871,7 @@ console.log('\n[94] unreadtest.mjs — spawned as a subprocess, exit code + prin
   assert(!!m94, `unreadtest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m94 ? '' : '\n' + out.slice(-800)}`);
   if (m94) {
     assert(Number(m94[2]) === 0, `unreadtest.mjs reports zero failed assertions (got ${m94[2]} failed, ${m94[1]} passed)`);
-    assert(Number(m94[1]) >= 68, `unreadtest.mjs actually ran its full set (got ${m94[1]}, floor 68 — raised from 49 by v0.23.3's branch reconciliation §[13] (2026-09-21): the UI reads every unread count through ONE door that carries the {known,count} flag, proven structurally AND by driving the four real surfaces; before that from 29 by the RG-196 gate pass: SECURITY B-1 (§[10]), REVIEWER F6 (§[11]) and the identity-unknown contract (§[12]); the ratchet only tightens)`);
+    assert(Number(m94[1]) >= 88, `unreadtest.mjs actually ran its full set (got ${m94[1]}, floor 88 — RAISED to 88 from 68 on 2026-09-24 (teaser retired, Drew 2026-09-24 Option A) by the new §[16], which pins the one in-app signal the ruling KEPT: an incoming message still increments the chat pill's badge, entering the room still clears it, and neither step floats anything over the page or makes a sound -- asserted on a device with push OFF and sound ON, the exact configuration that used to chirp. §[13]'s teaser leg was rewritten in place to assert the export is absent (same count). Floor was 68, raised from 49 by v0.23.3's branch reconciliation §[13] (2026-09-21): the UI reads every unread count through ONE door that carries the {known,count} flag, proven structurally AND by driving the four real surfaces; before that from 29 by the RG-196 gate pass: SECURITY B-1 (§[10]), REVIEWER F6 (§[11]) and the identity-unknown contract (§[12]); the ratchet only tightens)`);
   }
 }
 
@@ -10843,7 +10915,7 @@ console.log('\n[96] pushnativetest.mjs — spawned as a subprocess, exit code + 
   if (summaryMatch96) {
     assert(summaryMatch96[1] === '✅ ALL PASS', `pushnativetest.mjs itself reports ALL PASS (got: ${summaryMatch96[0]})`);
     assert(Number(summaryMatch96[3]) === 0, `pushnativetest.mjs reports zero failed assertions (got ${summaryMatch96[3]} failed, ${summaryMatch96[2]} passed)`);
-    assert(Number(summaryMatch96[2]) >= 88, `pushnativetest.mjs actually ran its full set (floor 88 — raised from 65 by security gate items N-4 (persisted identity flag survives process death, mutation-proved) and reviewer Finding 2 (a failed initNativePush() must not stay memoized, mutation-proved)) (got ${summaryMatch96[2]} — a near-zero count would mean the guard is vacuous)`);
+    assert(Number(summaryMatch96[2]) >= 96, `pushnativetest.mjs actually ran its full set (floor 96 — raised from 88 by RG-243's [13f]-[13m] (2026-09-24: the security gate on f2c3297 noted that the subscription repair re-armed at the session chokepoint is the only one of the four re-arms NOT wrapped in an isNativeShell()/isNativeOrigin() gate — its inertness inside the shell is TRANSITIVE, through ensureOneSignalInit() returning 'unsupported-browser' (DI-210e), and \`maybeAutoOptInPush\` appeared nowhere in this file. Eight assertions: the re-arm sits below the native identity call rather than between the two [13e] pins adjacent, every web-SDK call inside the repair sits after the init gate, the repair imports push-native.js not at all, and then the transitive guarantee EXERCISED — push-onesignal.js imported fresh under a native window.Capacitor answers the inert shape having created no script element, appended no node and made no fetch, with no window.OneSignal global left behind, plus the non-vacuity run with no bridge that takes a different path entirely). Before that raised from 65 by security gate items N-4 (persisted identity flag survives process death, mutation-proved) and reviewer Finding 2 (a failed initNativePush() must not stay memoized, mutation-proved)) (got ${summaryMatch96[2]} — a near-zero count would mean the guard is vacuous)`);
   }
   // Hygiene: [14]'s mutation section writes one throwaway
   // push-native.pre-mutation.*.js scratch sibling and deletes it in a

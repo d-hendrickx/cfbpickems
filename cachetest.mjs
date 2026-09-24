@@ -335,6 +335,11 @@ console.log('\n[3] Cached replay relays ZERO pushes (notifications.js) and ZERO 
   // distinguish "zero toasts fired" from "one toast fired and is on screen
   // right now" (see the doc comment on toastMountCount, above). Mount count
   // is the unambiguous "was showToast() ever actually invoked" signal.
+  // NOTE 2026-09-24: this now holds TRIVIALLY rather than conditionally — with
+  // the preview surface retired (Option A), chat-ui.js mounts no toast for any
+  // delivery, cache replay or otherwise. Kept because "the cache replay is
+  // silent" is still a true and load-bearing property of a cache-primed boot,
+  // and the relay assertion above it is the one that remains conditional.
   assert(chatUi._toastQueueDepth() === 0 && toastMountCount === 0,
     `chat-ui.js never even MOUNTS a toast for the cache replay — got queue depth ${chatUi._toastQueueDepth()}, mounted ${toastMountCount}`);
 
@@ -375,6 +380,15 @@ console.log('\n[4] Live reconciliation after a cache-primed boot: S.caughtUp fli
   const relaysAfterReconcile = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
   assert(relaysAfterReconcile === 0,
     `the delivery that FIRST reaches the head is itself still classified as history by notifications.js's wasCaughtUp gate — zero relays yet, got ${relaysAfterReconcile}`);
+  // ── HISTORICAL, 2026-09-24. Everything in this paragraph and the next
+  // describes the in-app toast, which no longer exists on any delivery path
+  // (Option A, Drew — chat-ui.js raises no toast at all now). The reset calls
+  // below are harmless and are kept so the mount counter still starts this
+  // block at a known zero, which is what the inverted assertion reads. Left
+  // in full rather than trimmed because it records WHY DI-169d's guard was
+  // shaped the way it was, and that reasoning is the thing a future reader
+  // needs if a preview surface is ever reintroduced.
+  //
   // NOT asserted: "zero toasts for the reconciling delivery." DI-169's
   // fromCache guard covers exactly one thing — the CACHE REPLAY notification
   // (detail.fromCache === true, proven zero in §3, above). The delivery that
@@ -412,8 +426,22 @@ console.log('\n[4] Live reconciliation after a cache-primed boot: S.caughtUp fli
   const liveRelays = captured.filter(r => r.event === 'CHAT_MESSAGE_CREATED').length;
   assert(liveRelays === players.length - 1,
     `a genuinely new message AFTER reconciliation DOES relay — to every other active player (${players.length - 1}) — got ${liveRelays}`);
-  assert(toastMountCount > 0,
-    `and DOES mount a toast for it — proving the fromCache guard is scoped to the cache replay only, not a permanent suppression — got ${toastMountCount}`);
+  // INVERTED 2026-09-24 (teaser/toast retired, Drew — Option A). This used to
+  // read `toastMountCount > 0`: "and DOES mount a toast for it — proving the
+  // fromCache guard is scoped to the cache replay only, not a permanent
+  // suppression." That proof is no longer available to state, because there is
+  // no longer any delivery that mounts a toast: chat-ui.js's handleChatEvent()
+  // has no toast/blip raise at all, and with it went the `!detail?.fromCache`
+  // guard this section was built around. The DI-169d mechanism was retired
+  // along with the surface it protected, not broken.
+  //
+  // The relay assertion immediately above is what keeps this section
+  // non-vacuous — it proves the live delivery genuinely happened and was
+  // classified as new. This line now pins the replacement behaviour: the
+  // player is told by push and by the chat pill's unread badge, never by an
+  // in-app preview.
+  assert(toastMountCount === 0,
+    `no in-app toast is mounted for a live message any more — the preview surface is retired and push is the channel (got ${toastMountCount})`);
   note(`  requests issued: [${calls.map(c => c.action + (c.action === 'chatSince' ? ':' + c.seq : '')).join(', ')}], toasts mounted: total=${toastMountCount}`);
 
   off();

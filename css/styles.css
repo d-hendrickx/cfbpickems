@@ -2176,17 +2176,13 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-thread-won{background:var(--win-bg);color:var(--win);font-weight:700}
 .chat-thread-lost{background:var(--loss-bg);color:var(--loss);font-weight:700}
 
-/* dashboard teaser — item D+E: dismissible ambient indicator, no quick-reply */
-.dash-chat-teaser{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.dash-chat-left{display:flex;gap:10px;align-items:center;min-width:0;flex:1;cursor:pointer}
-.dash-chat-icon{font-size:1.3rem}
-.dash-chat-title{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon);display:flex;gap:6px;align-items:center}
-.dash-chat-preview{font-size:.75rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:56vw}
-.dash-chat-dismiss{flex:0 0 auto;width:40px;height:40px;min-width:40px;min-height:40px;
-  border:none;background:transparent;color:var(--text-muted);font-size:1rem;
-  border-radius:50%;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
-  transition:all var(--transition)}
-.dash-chat-dismiss:hover{background:var(--bg-input);color:var(--text-secondary)}
+/* The dashboard chat teaser's six rules (.dash-chat-teaser / -left / -icon /
+   -title / -preview / -dismiss) were here. Retired 2026-09-24 with the card —
+   Option A, Drew: push is the channel for chat activity, and a push-less
+   device keeps the chat nav pill's unread badge. Nothing else referenced
+   them. The .chat-toast* rules further down are NOT the same thing and stay
+   (that render is production-unreachable but still test-pinned — see
+   showToast() in js/chat-ui.js). */
 
 
 /* ═══ v0.17.0 — one-room chat, notifications, identity ═══ */

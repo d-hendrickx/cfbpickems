@@ -440,7 +440,15 @@ console.log('\n[13] The UI reads every count through ONE door, and it carries th
     assert(navEl._b === null, '…no nav badge element is created');
     assert(!/^\(\d/.test(globalThis.document.title), `…the tab title carries no count (got ${JSON.stringify(globalThis.document.title)})`);
     assert(badgeCalls.length === 0, `…and the installed-app icon is neither set NOR cleared — writing a zero would destroy a true count, not withhold a false one (got ${JSON.stringify(badgeCalls)})`);
-    assert(chatUi.dashboardChatTeaserHTML() === '', '…the dashboard teaser renders nothing');
+    // 2026-09-24 (teaser retired, Drew — Option A): this leg used to be
+    // `chatUi.dashboardChatTeaserHTML() === ''`. The function is deleted, so
+    // the assertion becomes a structural one — the surface is not merely
+    // withheld from this viewer, it does not exist for any viewer. Asserting
+    // the export is absent (rather than deleting the line) keeps A-1's
+    // enumeration of withheld chat surfaces complete: a future reader counting
+    // the surfaces this gate covers still sees the teaser accounted for.
+    assert(typeof chatUi.dashboardChatTeaserHTML === 'undefined',
+      '…and the dashboard teaser is not withheld but GONE — the export no longer exists, so there is no path by which a name and 64 characters reach the dashboard');
     assert(!/\d/.test(chatUi.gameChatBubbleHTML('g1').replace(/[^>]*>/g, '')) || !/chat-bubble-count/.test(chatUi.gameChatBubbleHTML('g1')),
       '…and the game-card bubble shows no unread count');
     assert(!/chat-unread-dot/.test(chatUi._pillsHTMLForTest()),
@@ -605,6 +613,111 @@ console.log('\n[15] The cursor stamp survives a reboot — same member, same lea
     '[15] non-vacuity: a different member+league digests differently, so [15] is measuring the inputs and not a fixed string');
   assert(chat.unreadCount('m-kihoon', 'all') === 84,
     `[15] …and in that genuinely-different scope the cursor correctly reads as zero for them (got ${chat.unreadCount('m-kihoon', 'all')}) — the owner check still does its job`);
+}
+
+// ── [16] THE BADGE IS THE LAST IN-APP SIGNAL STANDING ────────────────────────
+//
+// Added 2026-09-24 (teaser retired, Drew — Option A). The dashboard teaser and
+// the in-app preview toast are both gone; Drew's ruling kept exactly one thing:
+// "we can keep the badges on the chat icon for unread messages."
+//
+// That sentence is now the WHOLE of what a device without push sees in-app, so
+// it needs its own coverage rather than being an incidental beneficiary of the
+// teaser's. Two obligations, and a third that is the point of the whole pass:
+//
+//   (a) an incoming message still increments the chat pill's badge;
+//   (b) entering the room still clears it;
+//   (c) neither step renders a preview — no #chat-toast node is mounted and no
+//       AudioContext is constructed — so "the badge is the only signal" is
+//       asserted as an exclusion, not assumed.
+//
+// Driven through the SHIPPED handler (`_handleChatEventForTest`, the same
+// function initChatUI() registers with onChat) and the SHIPPED
+// updateChatBadges(), never a re-implementation: the whole failure mode this
+// pass exists to avoid is a surface that was deleted in one place and left
+// wired in another.
+console.log('\n[16] The chat pill badge survives the retirement — and nothing else does…');
+{
+  const chatUi16 = await import('./js/chat-ui.js');
+  const realDoc16 = globalThis.document;
+  const realAudio16 = globalThis.AudioContext;
+
+  const navEl16 = { _b: null, querySelector: () => navEl16._b, appendChild: (el) => { navEl16._b = el; } };
+  let appended16 = 0, audio16 = 0;
+  globalThis.document = {
+    ...realDoc16,
+    title: "IRB Pick 'Ems",
+    createElement: () => ({ className: '', textContent: '', id: '', dataset: {}, style: {},
+      _html: '', set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
+      addEventListener() {}, removeEventListener() {}, querySelector: () => null,
+      remove() { navEl16._b = null; } }),
+    querySelectorAll: (sel) => (String(sel).includes('data-tab="chat"') ? [navEl16] : []),
+    // WE ARE ON THE PICKS TAB, and that is the whole point of the fixture.
+    // chat-ui.js asks for '#page-chat.active' and '#page-dashboard.active';
+    // answering null to both is exactly "some other tab", which is where the
+    // preview toast used to land and where Drew reported seeing it ("I'm still
+    // seeing the old in app notifications on the picks page"). Returning null
+    // blindly would have made that an accident, so it is asserted below.
+    querySelector: (sel) => {
+      const s = String(sel);
+      if (s.includes('#page-chat') || s.includes('#page-dashboard')) return null;
+      return null;
+    },
+    getElementById: () => null,
+    body: { appendChild(el) { appended16++; return el; } },
+  };
+  globalThis.AudioContext = class {
+    constructor() { audio16++; this.currentTime = 0; this.destination = {}; }
+    createOscillator() { return { frequency: {}, type: '', connect: () => ({ connect: () => {} }), start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => ({ connect: () => {} }) }; }
+  };
+  try {
+    // [15] above leaves the harness configured for supabase auth, where
+    // storage.js REFUSES PIN-era session/settings writes (AD-58's guard). This
+    // section is about a device-local UI signal in either mode, so it resets to
+    // the suite's default PIN-mode shape first — the same reset [15] itself
+    // performs before configuring its own.
+    auth._resetAuthForTest();
+    auth.configureAuth({});
+    localStorage.clear();
+    signedInAs('mDrew');
+    storage.saveSetting('chatEnabled', true);
+    storage.setNotifPrefs({ toasts: true, sound: true });   // the player ASKED for both
+    storage.setPushActive(false);                            // …and has no push: the worst case
+    chat._resetForTest();
+
+    navEl16._b = null; appended16 = 0; audio16 = 0;
+    chat.ingest(BACKLOG);
+    chatUi16._handleChatEventForTest('events', {});
+
+    assert(chat.unreadCount('mDrew', 'all') === 84,
+      `fixture: 84 messages from somebody else really are unread for this viewer (got ${chat.unreadCount('mDrew', 'all')}) — without this the badge assertions below could pass on an empty room`);
+    assert(chatUi16._toastWouldSuppress(false) === false,
+      'fixture: this harness is on SOME OTHER TAB (not Chat, not Dashboard) — the suppression predicate says nothing would have stopped a toast here, which is what makes the "no toast" assertion below a fact about the retirement rather than about the fixture page');
+    assert(navEl16._b !== null && /\d/.test(String(navEl16._b.textContent || '')),
+      `(a) an incoming message still puts a COUNT on the chat pill — the one in-app signal Drew kept (got ${JSON.stringify(navEl16._b && navEl16._b.textContent)})`);
+
+    assert(appended16 === 0,
+      `(c) …and NOTHING is floated over the page for it — zero nodes appended to document.body, i.e. no #chat-toast (got ${appended16}). This is the surface Drew reported: "the 'Chat' notification that is showing a preview of the chat messages"`);
+    assert(audio16 === 0,
+      `(c) …and the app stays silent — zero AudioContexts constructed, i.e. no blip (got ${audio16}). Asserted on a device with push OFF and sound ON, which is the exact configuration that used to chirp`);
+
+    // (b) Reading the room clears it. markSeen('all') is what renderChatPage()'s
+    //     mark timer calls — Drew's "click into it".
+    chat.markSeen('all');
+    navEl16._b = null;
+    chatUi16._handleChatEventForTest('events', {});
+    assert(chat.unreadCount('mDrew', 'all') === 0,
+      'fixture: reading the room zeroes the underlying count');
+    assert(navEl16._b === null,
+      '(b) …and the pill badge goes away with it — entering the Locker Room is still how the badge clears');
+  } finally {
+    globalThis.document = realDoc16;
+    if (realAudio16 === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = realAudio16;
+    storage.setNotifPrefs({ sound: false });
+    storage.clearSession();
+    chat._resetForTest();
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

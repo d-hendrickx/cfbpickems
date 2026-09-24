@@ -73,8 +73,14 @@ import {
   initChat, startChatTransport, onChat, chatStatus, getMessages, getMessage, resolveTag,
   sendMessage, sendEvent, editMessage, deleteMessage, toggleReact, pinMessage,
   sendGameReact, retryFailed, isFailed, isPending,
-  unreadCountOrUnknown, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen, latestNotifying,
-  latestUnreadNotifying, readThroughSeq,
+  // `latestNotifying` and `latestUnreadNotifying` were imported here until
+  // 2026-09-24: the first fed the in-app preview toast, the second fed the
+  // dashboard teaser. Both surfaces are retired (Option A), so this module no
+  // longer picks "the one message worth announcing" at all. chat.js still
+  // exports both — they are the unread engine's own vocabulary and are still
+  // exercised directly by loadtest §69, unreadtest and pushtest [14].
+  unreadCountOrUnknown, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen,
+  readThroughSeq,
   backfill, chatDigest as _digest, setViewOpen,
   getRetentionDays, isChatEnabled,
   backfillBlockedByEpoch,
@@ -419,6 +425,13 @@ function gameThreadHeaderClass(pick, g) {
 }
 
 // ── Notifications (TRIAL — no push) ───────────────────────────────────────────
+/**
+ * PRODUCTION-UNREACHABLE SINCE 2026-09-24 (Option A, Drew) — its only caller
+ * was the in-app preview raise in handleChatEvent(), removed with the toast.
+ * Body left byte-identical for the same reason showToast()'s is: pushtest
+ * [10] and [15] drive the shipped function through `_playBlipForTest` and
+ * would redden. Delete it with that suite's pins, in one pass.
+ */
 function playBlip() {
   try {
     // N1 follow-up (f), 2026-09-12 — R10 COVERS THE SOUND TOO. showToast()
@@ -441,14 +454,21 @@ function playBlip() {
 }
 
 /**
- * UN-102a: redundancy — while the Dashboard is on screen, the ambient teaser
- * card (dashboardChatTeaserHTML) already conveys new activity persistently,
- * so the floating toast is a second copy of the same information ("the
- * message appears in too many places", Drew). Chat itself keeps its own
- * pre-existing suppression (chatPageActive) for the same reason — you're
- * already looking at the room. `force` (system announcements, e.g. the pick
- * reveal) bypasses BOTH, unchanged from before this batch: those don't ride
- * the human-message teaser and would otherwise go unseen from the dashboard.
+ * DI-102(a)'s DASHBOARD TERM IS VESTIGIAL AS OF 2026-09-24. Its stated reason
+ * was redundancy: "while the Dashboard is on screen, the ambient teaser card
+ * already conveys new activity persistently, so the floating toast is a second
+ * copy of the same information" (Drew: "the message appears in too many
+ * places"). The teaser is retired, so that reason is gone. The term is kept
+ * rather than deleted only because this whole predicate is now
+ * production-unreachable (see showToast() below) — removing it would churn
+ * four suites' assertions about a function nothing calls. It carries no live
+ * rationale; do not cite it as one.
+ *
+ * `chatPageActive()` is DIFFERENT and is NOT vestigial — "you are already
+ * looking at the room" is a live, independent reason that survives the
+ * teaser's retirement. DI-T1 item 6 says so explicitly. Leave it alone.
+ *
+ * `force` bypasses both, unchanged.
  *
  * Exported test-only (see chat.js's `_resetForTest` convention) so the
  * predicate itself — not a re-implementation of it — gets exercised.
@@ -485,8 +505,14 @@ export function _toastWouldSuppress(force = false) {
  *
  * WHAT SURVIVES ON A PUSH-ACTIVE DEVICE: the OS banner (that IS the delivery),
  * wireForegroundSuppression()'s existing "you're already on that tab" rule, the
- * chat unread badge, the dashboard teaser and the room itself. Drew, verbatim:
- * "We can keep the badges on the chat icon for unread messages."
+ * chat unread badge and the room itself. Drew, verbatim: "We can keep the
+ * badges on the chat icon for unread messages."
+ *
+ * AMENDED 2026-09-24 (Option A, Drew) — this sentence used to name "the
+ * dashboard teaser" in that list. It is retired, and so is the in-app toast
+ * this docstring is attached to. The list above is now the whole of it, and it
+ * is the same on a push-INACTIVE device: the paragraph below describing what
+ * such a device keeps is history, not current behaviour.
  *
  * WHAT IS UNCHANGED ON A PUSH-INACTIVE DEVICE: everything below this line —
  * getNotifPrefs().toasts, the duration preference, the ✕, the blip, RG-25's
@@ -499,6 +525,29 @@ export function _toastWouldSuppress(force = false) {
  * iPhone with the app open shows nothing on screen for a moment — the chat
  * badge and the room still carry the notice. The visibilityState fallback was
  * considered and deliberately NOT built; Drew verifies on his phone.
+ */
+/**
+ * ══ PRODUCTION-UNREACHABLE SINCE 2026-09-24 (Option A, Drew) ════════════════
+ *
+ * NOTHING IN THE SHIPPED APP CALLS THIS ANY MORE. Both raise sites are gone:
+ * the incoming-message preview (handleChatEvent) and the pick-reveal
+ * announcement (emitPickRevealEvent). `#chat-toast` can no longer appear on
+ * any screen, on any device, push or no push.
+ *
+ * THE BODY BELOW IS DELIBERATELY UNCHANGED, INCLUDING THE getPushActive()
+ * GATE. The gate is inert now — an unreachable function cannot be reached by
+ * a push-active device either — but four suites drive this function through
+ * `_showToastForTest` and assert its real behaviour: feedbacktest §15 (the
+ * `{force:true}` receipt mechanism), xsstest (escaping of the rendered node),
+ * cachetest (mount counting), brandtest (the .chat-toast z-order rung), plus
+ * pushtest [9]/[10]/[15]'s R10 coverage. Gutting the body to match the dead
+ * call graph would redden all of them — including feedbacktest, which is under
+ * another thread's review — for no behavioural gain.
+ *
+ * TO FINISH THE JOB: delete this function, drainToast(), playBlip(),
+ * _toastWouldSuppress(), every `_*ForTest` toast seam, and the `.chat-toast*`
+ * CSS, IN THE SAME PASS as those five suites' pins. Not before — a half
+ * deletion is what leaves a suite asserting a mechanism that no longer exists.
  */
 function showToast(msg, { force = false } = {}) {
   if (getPushActive()) return;
@@ -590,7 +639,7 @@ export function _clearToastsForChatPage() {
   }
   U.toastQueue.length = 0;
   U.toastShowing = false;
-  if (seqs.length) setTeaserDismissedSeq(Math.max(...seqs));
+  if (seqs.length) setChatAckSeq(Math.max(...seqs));
 }
 /**
  * UN-102c: "stays for" duration is player-configurable (3s / 6s default /
@@ -622,7 +671,7 @@ function drainToast() {
   // the same message on the next tab. A toast that merely TIMES OUT calls
   // advance() only: the ambient teaser exists precisely to catch what you
   // missed (UN-93), so an unseen timeout must not silence it.
-  const acknowledge = () => { if (typeof msg?.seq === 'number') setTeaserDismissedSeq(msg.seq); advance(); };
+  const acknowledge = () => { if (typeof msg?.seq === 'number') setChatAckSeq(msg.seq); advance(); };
   el.querySelector?.('.chat-toast-dismiss')?.addEventListener('click', e => { e.stopPropagation(); acknowledge(); });
   el.addEventListener('click', () => { acknowledge(); navToChat(); });
   document.body.appendChild(el);
@@ -3554,15 +3603,23 @@ function prefsPanelHTML() {
       <div class="chat-accent-row">${ACCENTS.map(a =>
         `<button class="chat-accent-swatch${a === accent ? ' active' : ''}" data-accent="${a}" style="background:${a}"></button>`).join('')}
         <button class="chat-accent-swatch chat-accent-none${!accent ? ' active' : ''}" data-accent="" title="Default">∅</button></div></div>
-    <div class="chat-prefs-row"><label>Toasts</label><input type="checkbox" id="pref-toasts" ${prefs.toasts ? 'checked' : ''}></div>
-    <div class="chat-prefs-row"><label>Stays for</label>
-      <select class="form-input" id="pref-toast-duration">
-        <option value="3000"${prefs.toastDuration === 3000 ? ' selected' : ''}>3s</option>
-        <option value="6000"${prefs.toastDuration == null || prefs.toastDuration === 6000 ? ' selected' : ''}>6s (default)</option>
-        <option value="10000"${prefs.toastDuration === 10000 ? ' selected' : ''}>10s</option>
-        <option value="0"${prefs.toastDuration === 0 ? ' selected' : ''}>Until dismissed</option>
-      </select></div>
-    <div class="chat-prefs-row"><label>Sound</label><input type="checkbox" id="pref-sound" ${prefs.sound ? 'checked' : ''}></div>
+    <!-- ── THREE ROWS HIDDEN 2026-09-24 (Option A, Drew) ─────────────────────
+         "Toasts" (pref-toasts), "Stays for" (pref-toast-duration, 3s/6s/10s/
+         Until dismissed) and "Sound" (pref-sound) all governed the in-app
+         chat toast and its chirp. Both are production-unreachable as of this
+         pass, so all three controls became switches that do nothing — which
+         is worse than an absent control: the player flips one, nothing
+         changes, and concludes the app is broken.
+         HIDDEN, NOT DELETED, and the STORAGE DEFAULTS ARE UNTOUCHED
+         (storage.js getNotifPrefs(): sound/toasts/systemEvents/toastDuration
+         all still default and round-trip — CONVENTIONS #10, old player
+         records must not change behaviour, and systemEvents below is still
+         live and reads from the same blob).
+         WHOSE CALL THE REMOVAL IS: user-experience owns whether these rows
+         come back in some form, disappear for good, or are replaced by a push
+         preference. This pass only stops them lying. Do not delete the
+         storage keys without that input.
+         NO BACKTICKS IN HERE — this markup is inside a template literal. -->
     <div class="chat-prefs-row"><label>League events</label><input type="checkbox" id="pref-sys" ${prefs.systemEvents ? 'checked' : ''}></div>
     <!-- Build 3, Group D (2026-09-11, DI-D4) — the entry point to "My SCRIBE
          File." Rationale in the JS comment above this function; note that
@@ -3625,9 +3682,10 @@ function bindPrefsPanel() {
     renderChatPage();
   });
   document.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
-  document.getElementById('pref-toasts')?.addEventListener('change', e => setNotifPrefs({ toasts: e.target.checked }));
-  document.getElementById('pref-toast-duration')?.addEventListener('change', e => setNotifPrefs({ toastDuration: Number(e.target.value) }));
-  document.getElementById('pref-sound')?.addEventListener('change', e => setNotifPrefs({ sound: e.target.checked }));
+  // The pref-toasts / pref-toast-duration / pref-sound handlers were removed
+  // with their rows (2026-09-24, Option A) — see prefsPanelHTML(). The `?.`
+  // would have made them harmless no-ops, but a listener bound to an id that
+  // this file no longer renders is a false lead for the next reader.
   document.getElementById('pref-sys')?.addEventListener('change', e => { setNotifPrefs({ systemEvents: e.target.checked }); renderChatPage(); });
 }
 
@@ -3845,43 +3903,69 @@ export function _renderSheetMessagesForTest(gameId) {
   renderSheetMessages();
 }
 
-// ── Dashboard teaser: dismissible + ambient, no quick-reply (items D+E) ──────
+// ── The device's chat acknowledgement cursor ─────────────────────────────────
 /**
- * Device-local dismissal (AD-12, widened v0.17.2 — a per-screen UI hint whose
- * loss costs nothing but a repeat, and whose sync would write-amplify the
- * Sheet for no shared benefit). Stores the SEQ at dismissal time, not a
- * boolean, so "genuinely new activity since dismissal" is a plain number
- * comparison — the teaser reappears once a message with a HIGHER seq than
- * this exists, and stays gone otherwise, including across reloads.
+ * RENAMED 2026-09-24 (Option A, Drew) — this family used to be called
+ * `TEASER_DISMISS_KEY` / `teaserDismissedSeq()` / `setTeaserDismissedSeq()`,
+ * after the dashboard teaser that was retired in the same pass. The names were
+ * already wrong before that: RG-25 made this the SHARED "acknowledged through
+ * seq N" cursor, and notifAckThroughSeq() below has consulted it ever since. (CORRECTED at the
+ * 840406d review, 2026-09-24: the unread math does NOT read it — its one caller
+ * is showToast(), now production-unreachable — so the whole family is dormant.
+ * It is kept because six live devices hold a cursor under the key and because
+ * it is the write target if a preview surface ever returns.) A reader arriving after the
+ * teaser's deletion would have seen "teaser" in three identifiers with no
+ * teaser left in the file and deleted them as residue, silently breaking
+ * general unread counting. Renamed to say what they are.
+ *
+ * THE STORED KEY STRING IS DELIBERATELY UNCHANGED. Every device in the league
+ * already has a cursor under `cfbp_chat_teaser_dismiss_seq`; renaming the
+ * string would reset all six to "never acknowledged" and re-announce mail
+ * those players have already read. The identifier is cosmetic, the string is
+ * data (CONVENTIONS #10 — old records must not change behavior).
+ *
+ * Device-local (AD-12, widened v0.17.2 — a per-screen UI hint whose loss costs
+ * nothing but a repeat, and whose sync would write-amplify for no shared
+ * benefit). Stores the SEQ, not a boolean, so "genuinely new activity since
+ * acknowledgement" is a plain number comparison that survives reloads.
  */
-const TEASER_DISMISS_KEY = 'cfbp_chat_teaser_dismiss_seq';
-function teaserDismissedSeq() {
-  const n = Number(lsGet(TEASER_DISMISS_KEY));
-  return Number.isFinite(n) ? n : -1;   // -1 = never dismissed
+const CHAT_ACK_SEQ_KEY = 'cfbp_chat_teaser_dismiss_seq';   // string frozen — see above
+function chatAckSeq() {
+  const n = Number(lsGet(CHAT_ACK_SEQ_KEY));
+  return Number.isFinite(n) ? n : -1;   // -1 = never acknowledged
 }
 /**
- * RG-25 — this watermark is now the ONE "I have acknowledged notifications
- * through seq N" state for this device, shared by BOTH surfaces that announce
- * a new message: the floating toast and this teaser. They previously kept two
- * independent dismissal states for one concept (the toast's was a DOM node
- * that vanished with the tab; the teaser's was this key), so dismissing the
- * toast on Standings left the very same message announced again by the teaser
- * on Dashboard. Same shape as AD-20 — two representations of one concept
- * drift — applied to a UI state instead of a lookup table.
+ * RG-25 — this watermark is the ONE "I have acknowledged notifications through
+ * seq N" state for this device. It was introduced because the two surfaces
+ * that announced a new message — the floating toast and the dashboard teaser —
+ * kept two independent dismissal states for one concept (the toast's was a DOM
+ * node that vanished with the tab; the teaser's was this key), so dismissing
+ * the toast on Standings left the very same message announced again by the
+ * teaser on Dashboard. Same shape as AD-20 — two representations of one
+ * concept drift — applied to a UI state instead of a lookup table.
+ *
+ * BOTH OF THOSE SURFACES ARE RETIRED (Option A, Drew 2026-09-24) AND THIS
+ * CURSOR IS NOT. It outlived them because it was never really theirs:
+ * notifAckThroughSeq() below is DORMANT (its only caller is the production-
+ * unreachable showToast(); the unread math never reads it — verified at review
+ * 2026-09-24). The only writers are the unreachable toast's ✕ and the now-no-op
+ * _clearToastsForChatPage(). Kept for the six live device cursors under the
+ * unchanged key string, and as the write target if a preview returns. Do not delete it as teaser
+ * residue — that is the defect this rename exists to prevent.
  *
  * MONOTONIC. Nothing in this app legitimately rewinds a cursor (RG-14); with
  * two writers instead of one, an out-of-order write could otherwise
  * un-dismiss something the player already dealt with.
  */
-function setTeaserDismissedSeq(seq) {
-  lsSet(TEASER_DISMISS_KEY, String(Math.max(Number(seq) || 0, teaserDismissedSeq())));
+function setChatAckSeq(seq) {
+  lsSet(CHAT_ACK_SEQ_KEY, String(Math.max(Number(seq) || 0, chatAckSeq())));
 }
 /**
  * The ONE "this device has acknowledged notifications through seq N" value,
  * read by both announcing surfaces. TWO things acknowledge a message, and
  * only one of them was ever consulted here:
  *
- *  1. an explicit ✕ on the toast or the teaser  -> teaserDismissedSeq()
+ *  1. an explicit ✕ on the toast or the teaser  -> chatAckSeq()
  *  2. READING THE ROOM                          -> getLastSeen().seq
  *
  * Drew, live v0.19.0 (2026-09-10): "the chat function keeps popping up the
@@ -3916,7 +4000,7 @@ function setTeaserDismissedSeq(seq) {
  * instead of re-announcing the one that was read).
  */
 function notifAckThroughSeq(tag = 'all') {
-  return Math.max(teaserDismissedSeq(), readThroughSeq(tag));
+  return Math.max(chatAckSeq(), readThroughSeq(tag));
 }
 // Test-only accessors (underscore-prefixed per this file's convention — see
 // _toastWouldSuppress, _reactionsHTML) so loadtest drives the real shared
@@ -3924,62 +4008,39 @@ function notifAckThroughSeq(tag = 'all') {
 // the DISMISSAL watermark alone — RG-25's assertions are about what an
 // explicit ✕ writes — while `_notifAckThroughSeq` is the derived gate the
 // surfaces actually read.
-export function _notifAckSeq() { return teaserDismissedSeq(); }
+export function _notifAckSeq() { return chatAckSeq(); }
 export function _notifAckThroughSeq(tag = 'all') { return notifAckThroughSeq(tag); }
-export function _ackNotif(seq) { setTeaserDismissedSeq(seq); }
+export function _ackNotif(seq) { setChatAckSeq(seq); }
 
 /**
- * Item D+E — read-only ambient indicator, no quick-reply input (E), and
- * dismissible (D). Tapping the card body opens chat (data-open-chat);
- * tapping the ✕ dismisses it — two DIFFERENT gestures, not the whole card
- * doing double duty as both, which would be ambiguous about what a tap does.
+ * ══ RETIRED 2026-09-24 — THE DASHBOARD CHAT TEASER (DI-93 / UN-93) ══════════
  *
- * States:
- *  - chat disabled (item A): not rendered.
- *  - zero messages ever (no notifying message exists): not rendered — no
- *    empty card taking up dashboard space.
- *  - acknowledged, nothing unread left (every notifying message is either at
- *    or below the ✕ dismissal, or already read — in the room OR inside its
- *    own game thread): not rendered.
- *  - new activity since that acknowledgement: rendered.
+ * `dashboardChatTeaserHTML()` and `bindDashboardTeaser()` lived here. They
+ * rendered `#dash-chat-teaser`: a dashboard card carrying another member's
+ * name and the first 64 characters of what they wrote.
+ *
+ * WHY IT IS GONE, AND WHY THAT IS NOT A REVERSAL OF DI-93. The card was built
+ * in v0.17.3 (2026-08-07) precisely because there was no other channel to tell
+ * a signed-in player that something had happened while they were out of the
+ * room. Push did not exist yet. It does now, on both platforms, as of
+ * 2026-09-23 (DI-217/239/240/241). A surface built to fill a gap outlives its
+ * reason when the gap closes. Drew, 2026-09-24: "retire chat card now", chat
+ * notifications "should all be through onesignal or native via ios", "we can
+ * keep the badges on the chat icon for unread messages."
+ *
+ * WHAT CARRIES THE NOTICE NOW: the OS push banner, and — on a device without
+ * push — the chat nav pill's unread badge (updateChatBadges(), untouched and
+ * independent of everything deleted here). That badge is a COUNT, not text:
+ * no message content is previewed anywhere outside the Locker Room.
+ *
+ * DO NOT REBUILD IT WITHOUT A NEW DESIGN INPUT. If a push-less device is later
+ * judged to need more than a count, that is a `user-experience` question about
+ * what to show, not a revert of this deletion.
+ *
+ * The acknowledgement cursor this used to share (chatAckSeq(), above) SURVIVES
+ * — see its rename note for why deleting it alongside this would have broken
+ * unread counting generally.
  */
-export function dashboardChatTeaserHTML() {
-  // SECURITY A-1 (RG-196) — the card carries a member's NAME and 64 characters
-  // of what they wrote. See chatViewerUnresolved() for why an unknown viewer
-  // used to be the one who saw the most.
-  if (chatViewerUnresolved()) return '';
-  if (!isChatEnabled()) return '';
-  const self = me();
-  // The newest notifying message that is STILL UNREAD for this viewer, above
-  // the ✕-dismissal watermark. Falls through a message already read (in the
-  // room or in its own game thread) to the next one down, so a per-tag read
-  // silences only what it actually read. null => nothing to announce.
-  const latest = latestUnreadNotifying(self, teaserDismissedSeq());
-  if (!latest) return '';
-  const latestSeq = typeof latest.seq === 'number' ? latest.seq : 0;
-  const badge = unreadBadgeText(unreadForRender(self, 'all'));
-  const preview = `<strong>${esc(nameOf(latest.author))}</strong>: ${esc(latest.body.slice(0, 64))}`;
-  return `
-  <div class="card mb-md dash-chat-teaser" id="dash-chat-teaser" data-teaser-seq="${esc(latestSeq)}">
-    <div class="dash-chat-left" data-open-chat>
-      <span class="dash-chat-icon">💬</span>
-      <div class="dash-chat-body">
-        <div class="dash-chat-title">Chat ${badge ? `<span class="chat-unread-dot">${badge}</span>` : ''}</div>
-        <div class="dash-chat-preview">${preview}</div>
-      </div>
-    </div>
-    <button type="button" class="dash-chat-dismiss" id="dash-chat-dismiss" title="Dismiss" aria-label="Dismiss chat preview">✕</button>
-  </div>`;
-}
-
-function bindDashboardTeaser() {
-  document.getElementById('dash-chat-dismiss')?.addEventListener('click', e => {
-    e.stopPropagation();
-    const card = document.getElementById('dash-chat-teaser');
-    setTeaserDismissedSeq(card?.dataset.teaserSeq);
-    card?.remove();
-  });
-}
 
 // ── Legacy alias (app.js compatibility) ───────────────────────────────────────
 export function setChatChannel(ch) {
@@ -4032,14 +4093,20 @@ export function emitPickRevealEvent(week) {
     body: lines.join('\n'),
     meta: { kind: 'reveal', weekId: week.weekId, title: `${formatWeekLabel(week)} — the picks are in` },
   });
-  // N1 / DI-N3 (UN-204, 2026-09-12) — THE `{force:true}` IS GONE. This is the
-  // exact banner Drew reported ("League just sent a notification that the picks
-  // are in, and it popped up as a banner in the app"): forcing bypassed the
-  // player's own getNotifPrefs().toasts preference AND, before R10 existed,
-  // there was nothing else for it to bypass. Now the reveal rides the same two
-  // gates as every other toast — push-active devices get the push instead, and
-  // push-inactive devices get a toast only if they asked for toasts.
-  showToast({ author: 'system', body: `🔓 ${formatWeekLabel(week)} picks revealed` });
+  // ── RAISE SITE REMOVED 2026-09-24 (Option A, Drew) ────────────────────────
+  // This line called showToast({author:'system', body:'🔓 … picks revealed'}).
+  //
+  // It is the exact banner Drew reported in R10 ("League just sent a
+  // notification that the picks are in, and it popped up as a banner in the
+  // app"). DI-N3 answered that by removing its `{force:true}` and putting it
+  // behind the push-active gate; Option A finishes the job — the in-app toast
+  // surface is retired outright, so a system announcement has no more claim on
+  // it than a message preview does.
+  //
+  // NOTHING IS LOST FROM THE RECORD. sendEvent() above posts the reveal into
+  // the Locker Room as a `notify: true` system event, so it still drives the
+  // chat unread badge and is still there to read. What disappears is only the
+  // floating copy of it.
 }
 
 export function emitKickoffEvent(game) {
@@ -4200,42 +4267,35 @@ function maybeAnniversary() {
 function handleChatEvent(kind, detail) {
   if (kind === 'events') {
     updateChatBadges();
-    // DI-169d — a cache-primed boot delivers its replay through this SAME
-    // 'events' notification (chat.js's ingest(), fromCache: true). Badge and
-    // render below still run unconditionally — instant render IS the entire
-    // point of the cache — only the toast/blip/push-relay path is
-    // suppressed, so a player's own unread backlog from last session never
-    // toasts or plays a sound before they've opened chat, and never
-    // double-fires once the live drain reconciles the same messages a moment
-    // later (a toast that merely times out doesn't self-suppress on a second
-    // delivery — see chat.js's DI-169 comments).
-    if (!detail?.fromCache) {
-      const self = me();
-      const latest = latestNotifying(self);
-      if (latest && latest.author !== self && !latest.local &&
-          typeof latest.seq === 'number' && latest.seq > getLastSeen().seq) {
-        if (!chatPageActive()) { showToast(latest); playBlip(); }
-      }
-    }
+    // ── BOTH IN-APP ANNOUNCEMENT PATHS REMOVED 2026-09-24 (Option A, Drew) ──
+    //
+    // What stood here:
+    //
+    //   1. The preview raise. Guarded by `!detail?.fromCache` (DI-169d, so a
+    //      cache-primed boot never toasted a player's own backlog), it found
+    //      the newest notifying message from somebody else, above the read
+    //      cursor, and off the Chat tab did `showToast(latest); playBlip();`
+    //      — author + 80 characters floated over whatever tab you were on,
+    //      plus a chirp. This is the surface Drew reported on v0.25.1: "it's
+    //      the 'Chat' notification that is showing a preview of the chat
+    //      messages."
+    //
+    //   2. The dashboard teaser's live sync — insert/update/remove
+    //      `#dash-chat-teaser` on every chat event while the Dashboard was on
+    //      screen. The card it maintained is retired; see the block comment
+    //      where it used to be defined.
+    //
+    // Push is the channel for both now. A device WITHOUT push keeps the chat
+    // nav pill's unread badge — updateChatBadges(), one line above, untouched
+    // — and nothing else. Drew: "we can keep the badges on the chat icon."
+    //
+    // DI-169d's `fromCache` distinction died with the thing it protected:
+    // nothing on this path is announcement any more, and the render below has
+    // always run unconditionally because instant render IS the point of the
+    // cache. cachetest's DI-169d assertions now hold trivially rather than
+    // conditionally, which is noted there.
     if (chatPageActive()) renderChatPage();
     if (U.sheetGameId) renderSheetMessages();
-    // Live-sync the teaser while the dashboard is on screen: update it if
-    // present, insert it if new activity just made it eligible again (e.g.
-    // a message arrived with a higher seq than the dismissed one), and
-    // remove it if it's no longer eligible (item D — "reappears only for
-    // genuinely new activity").
-    if (dashboardPageActive()) {
-      const teaser = document.getElementById('dash-chat-teaser');
-      const freshHTML = dashboardChatTeaserHTML();
-      if (teaser) {
-        if (freshHTML) { teaser.outerHTML = freshHTML; bindDashboardTeaser(); }
-        else teaser.remove();
-      } else if (freshHTML) {
-        const host = document.getElementById('page-dashboard');
-        host?.insertAdjacentHTML('afterbegin', freshHTML);
-        bindDashboardTeaser();
-      }
-    }
   }
   if (kind === 'offline' || kind === 'online') {
     if (chatPageActive()) renderChatPage();
@@ -4245,7 +4305,7 @@ function handleChatEvent(kind, detail) {
   // module clears only the keys IT owns, via this notification, rather
   // than chat.js reaching into them directly.
   if (kind === 'epochApplied') {
-    lsRemove(TEASER_DISMISS_KEY);   // same stale-cursor risk as lastseen — a dismissal from before the clear must not suppress genuinely new activity
+    lsRemove(CHAT_ACK_SEQ_KEY);   // same stale-cursor risk as lastseen — a dismissal from before the clear must not suppress genuinely new activity
     lsRemove('cfbp_chat_sheet_hint');   // cosmetic — let the first-use helper reappear in the freshly-cleared room
     resetScribeMemory();
     if (chatPageActive()) renderChatPage();
@@ -4343,17 +4403,11 @@ export function initChatUI(opts = {}) {
   // never ran an early phase (F-2).
   wireDelegatedChatClicks();
 
-  // Rebind the teaser's dismiss control whenever the dashboard re-renders it
-  // (renderDashboard() replaces #page-dashboard's innerHTML wholesale, which
-  // wipes any listeners bound to the previous instance of the card).
-  const rebind = new MutationObserver(() => {
-    const dismissBtn = document.getElementById('dash-chat-dismiss');
-    if (dismissBtn && !dismissBtn._bound) {
-      dismissBtn._bound = true;
-      bindDashboardTeaser();
-    }
-  });
-  try { rebind.observe(document.body, { childList: true, subtree: true }); } catch {}
+  // A MutationObserver stood here to rebind the dashboard teaser's ✕ after
+  // every renderDashboard() (which replaces #page-dashboard's innerHTML
+  // wholesale and wiped the listener). Removed 2026-09-24 with the card it
+  // served — a document-wide childList+subtree observer is not something to
+  // leave running for a control that no longer exists.
 
   maybeAnniversary();
   updateChatBadges();

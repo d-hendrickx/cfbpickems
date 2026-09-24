@@ -4,7 +4,7 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.25.0';
+export const APP_VERSION = 'v0.25.1';
 export const APP_VERSION_DATE = '2026-09-24';
 
 /**
@@ -64,7 +64,26 @@ export const APP_VERSION_DATE = '2026-09-24';
 // is SCRIBE's chat-post headline. Section (b) is skipped per the approved
 // doc: this release's mechanism posts only the headline, so there is no
 // separate chat-post body slot to draft.
+// Release v0.25.1 (2026-09-24) — a FIX-ONLY release, and the first one since
+// the SCRIBE feedback path shipped. `added: []` is the shape three earlier
+// releases already use (v0.23.5, v0.23.4, v0.23.2): whatsNewHasContent() passes
+// on `fixed` alone, and whatsNewHeadline() falls back to `fixed[0]` when `added`
+// is empty, so the SCRIBE release post carries the fix line as its headline
+// rather than a blank one. ONE player-facing line on purpose — the run-loop
+// narrowing and the outage break are the same defect from the player's side:
+// their rating, chips and note now reach the server whatever else is queued.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.25.1',
+    date: '2026-09-24',
+    added: [],
+    fixed: [
+      'Your ratings and reason chips on SCRIBE lines now always reach the server.',
+      'A refused SCRIBE post no longer takes your feedback down with it.',
+      'Chat previews are gone from the Dashboard and Picks — push and the Locker Room are the channels.',
+      '@scribe answers instead of "didn\'t come through clean" when its judge hiccups.',
+    ],
+  },
   {
     version: 'v0.25.0',
     date: '2026-09-24',
@@ -638,7 +657,10 @@ import * as sb from './supabase-backend.js';
 
 // ── v0.16.0 modules ──────────────────────────────────────────────────────────
 import {
-  initChatUI, renderChatPage, gameChatBubbleHTML, dashboardChatTeaserHTML,
+  // `dashboardChatTeaserHTML` was imported here until 2026-09-24 (Option A) —
+  // renderDashboard() was its only consumer in this file and the function
+  // itself is deleted.
+  initChatUI, renderChatPage, gameChatBubbleHTML,
   updateChatBadges, openGameChatSheet, setChatChannel,
   emitPicksLockedEvent, emitGameFinalEvent, emitExtraPointEvent, emitWeekFinalEvent,
   emitPickRevealEvent, emitKickoffEvent, scribeLiveGameCheck,
@@ -2178,8 +2200,17 @@ async function boot() {
   //
   // It used to be armed ~140 lines below, beside revealApp(). That is after
   // the line immediately underneath this one, and the line underneath is what
-  // replays `cfbp_chat_events_cache` and inserts #dash-chat-teaser. A cover
-  // armed after the leak is a cover armed after the leak.
+  // replays `cfbp_chat_events_cache`. A cover armed after the leak is a cover
+  // armed after the leak.
+  //
+  // 2026-09-24: the worked example that made this concrete — the replay
+  // inserting #dash-chat-teaser, a member's name and 64 characters of their
+  // text, into a page nobody had signed into — is gone with the teaser
+  // (Option A). THE ORDER STILL MATTERS AND THIS DOES NOT MOVE. The replay
+  // still runs here, chat-ui.js still renders unread badges and game-card
+  // bubbles off it, and `chatViewerUnresolved()` is a second belt, not a
+  // replacement for arming the cover first. Do not relax this because the
+  // specific leak that proved it was retired.
   //
   // Moved rather than duplicated: an idempotent second call would make this
   // one unfalsifiable — removing it would change nothing, and a defence layer
@@ -2245,9 +2276,14 @@ async function boot() {
   // `primedKeys` is indeed 0, but boot() starts chat ABOVE this line
   // (`initChatUI({phase:'early'})`, BUG-G) and that replays the device's chat
   // cache; `#page-dashboard` is statically `.active` in index.html, so
-  // chat-ui.js's handleChatEvent('events') inserts #dash-chat-teaser — a
+  // chat-ui.js's handleChatEvent('events') used to insert #dash-chat-teaser — a
   // member's name and 64 characters of what they wrote — into a page nobody has
   // signed into. The PIN overlay removed above had been covering that.
+  //
+  // That teaser was retired 2026-09-24 (Option A), so this particular payload
+  // no longer exists. The reasoning is unchanged: the replay still fires here
+  // and still drives league-derived chat surfaces (unread counts, game-card
+  // bubbles), so the content stays inert until this device says who it is.
   //
   // So the overlay is replaced by the app's own existing lock: the content is
   // made INERT (and aria-hidden) from HERE — before revealApp(), which is where
@@ -4601,6 +4637,37 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
       if (sess?.playerId) native.loginNativePush(sess.playerId); else native.logoutNativePush();
     }).catch((e) => console.warn('[push-native] identity wiring failed', e));
   }
+  // ══ RG-243 (2026-09-24) — THE SUBSCRIPTION REPAIR IS A SESSION-CHOKEPOINT
+  //    CONCERN, AND IT WAS THE ONLY ONE MISSING FROM HERE ═════════════════════
+  //
+  // maybeAutoOptInPush() is RG-192's prompt-free fix for "permission granted,
+  // no subscription" — adopted because "five of six players are not going to be
+  // walked through a settings screen" — and it had exactly ONE caller: the boot
+  // tail, inside ensureOneSignalInit().then(). In authMode:'supabase' that is
+  // the one moment the app cannot guarantee an identity (RG-177: the tail runs
+  // before the league resolves), so a boot that lost that race left the browser
+  // allowed-to-notify and registered-nowhere for the life of the page — what
+  // notify-fanout records as `reason:"no_subscription"`. Every neighbour on this
+  // chokepoint is the same re-arm for the same class of boot-order loss:
+  // loginOneSignal() (RG-192), refreshWagerCache() (RG-120),
+  // refreshPushActiveFlag() (DI-N3). This one was never added.
+  //
+  // DELIBERATELY BELOW the two identity calls, not between them: they are one
+  // decision read twice (web + native) and pushnativetest [13e] pins them
+  // adjacent so a third site cannot be invented between them.
+  //
+  // IT CANNOT PROMPT AND IT CANNOT LOOP. The function refuses unless
+  // `Notification.permission === 'granted'` (v16's optIn() raises the native
+  // sheet otherwise, and DI-A2 puts the permission sheet behind the Turn On
+  // button and nowhere else), it refuses when the player's own master push
+  // preference is off, and its page-lifetime latch still budgets the whole page
+  // at one attempt. Inert in the shell: ensureOneSignalInit() resolves
+  // 'unsupported-browser' on native (DI-210e). Fire-and-forget with its own
+  // catch — it never throws, and a repair must never hold up a session change.
+  if (sess?.playerId) {
+    try { Promise.resolve(maybeAutoOptInPush(sess.playerId)).catch(e => console.warn('[push] the subscription repair failed', e)); }
+    catch (e) { console.warn('[push] the subscription repair could not start', e); }
+  }
   // RG-120 (2026-09-12) — REFRESH THE WAGER CACHE ON SIGN-IN. refreshWagerCache()
   // early-returns when there is no playerId and leaves its `wagerCacheLoaded`
   // latch false, so a device that booted SIGNED OUT and signed in afterwards
@@ -4734,8 +4801,69 @@ export async function refreshPushActiveFlag() {
   let active = false;
   try {
     if (getNotifyPushMaster()) {
-      const state = await subscriptionState();
-      if (state === 'granted') active = await isPushOptedIn();
+      // ══ NATIVE READS ITS OWN TRUTH — the native push-active flag fix (2026-09-24; RG number assigned at the ledger) ══
+      //
+      // Drew, live: *"I'm still seeing the old in app notifications on the picks
+      // page and dashboard"* — "still", because [9]/[10] proved this gate works
+      // and RG-177 proved the flag gets written. Both were about the WEB device.
+      //
+      // `subscriptionState()` returns the literal string 'native-unavailable'
+      // inside the Capacitor shell (js/push-onesignal.js, DI-210e) — it is the
+      // WEB SDK's answer, and the web SDK is deliberately never loaded on
+      // native. That string is not 'granted', so `active` was FALSE on every
+      // native boot, forever, on a handset whose OS permission is AUTHORIZED
+      // and which is receiving the push. Result: the phone buzzes AND
+      // chat-ui.js's showToast() puts the message preview on the Picks tab.
+      //
+      // DI-240 (2026-09-23) had already met this exact problem at the OTHER
+      // consumer of the same fact and ruled on it: refreshNotifSettingsBody()
+      // branches on isNativeShell() and reads js/push-native.js's
+      // nativePushState(), "never subscriptionState()'s 'native-unavailable'
+      // placeholder — that string is now stale copy." This applies the SAME
+      // ruling to the second consumer, which was missed. The priming card and
+      // the delivery decision are two readings of one fact; leaving them
+      // disagreeing is how the app comes to say "✅ Push notifications are on
+      // for this iPhone" while behaving as though this device has none.
+      //
+      // WHY isNativeShell() AND NOT isNativeOrigin(). This decides what the app
+      // DISPLAYS, not where data goes — AD-68/PASS 1b's own split, and the same
+      // predicate refreshNotifSettingsBody() uses eight hundred lines below. A
+      // spoofed window.Capacitor on https: buys an attacker one suppressed
+      // toast on their own device.
+      //
+      // FAILS CLOSED, identically to the web ladder: 'denied', 'not-asked' and
+      // 'unsupported' (an unreachable plugin — a shell built before the
+      // OneSignal binary linked, or a bare spoof) all resolve FALSE, so a device
+      // that is NOT being pushed keeps every in-app surface it has (UN-N3).
+      //
+      // KNOWN GAP, STATED RATHER THAN PAPERED OVER: this is TWO of the web
+      // ladder's three facts (master × OS permission). The third fact —
+      // "OneSignal holds a live subscription for this handset", isPushOptedIn()
+      // on the web — IS AVAILABLE ON NATIVE AND IS SIMPLY NOT WIRED YET. The
+      // Capacitor plugin exposes `getPushSubscriptionOptedIn()` and
+      // `getPushSubscriptionId()` (@onesignal/capacitor-plugin
+      // dist/index.d.ts:229-235). An earlier revision of this comment asserted
+      // native "exposes no equivalent"; that was wrong, corrected 2026-09-24.
+      //
+      // So this arm is KNOWINGLY two-of-three, and it fails OPEN on RG-192's
+      // class: permission AUTHORIZED with no live subscription reads as
+      // push-active here, which is the one state RG-192 taught us can be
+      // quietly broken. Accepted for now because DI-240's priming card claims
+      // push is on from those same two facts — agreeing with what the player
+      // is shown beats inventing a third verdict — and because the in-app
+      // surfaces this flag used to suppress are themselves retired as of
+      // 2026-09-24, so a wrong TRUE now costs nothing visible.
+      //
+      // DO NOT WIRE THE THIRD FACT HERE. It is a separate design input
+      // (ledger §6 follow-up); adding it inline would change what "push is on"
+      // means on native without the priming card agreeing.
+      if (isNativeShell()) {
+        const native = await import('./push-native.js');
+        active = (await native.nativePushState()) === 'granted';
+      } else {
+        const state = await subscriptionState();
+        if (state === 'granted') active = await isPushOptedIn();
+      }
     }
   } catch (e) {
     console.warn('[push] could not resolve push-active state; treating this device as push-INACTIVE', e);
@@ -5173,9 +5301,28 @@ let _autoOptInTried = false;
 export function _resetAutoOptInForTest() { _autoOptInTried = false; }
 export async function maybeAutoOptInPush(playerId) {
   if (_autoOptInTried) return false;
+  // ══ RG-243 (2026-09-24) — A CALL THAT COULD NOT TRY MUST NOT SPEND THE ONE
+  //    ATTEMPT ════════════════════════════════════════════════════════════════
+  //
+  // The identity guard used to sit BELOW the latch, inside the try. In
+  // authMode:'supabase' that made the latch self-defeating: boot's only call
+  // reads `getSession()` inside `ensureOneSignalInit().then(...)`, and the tail
+  // it lives in routinely runs BEFORE memberships resolve — RG-177's own
+  // finding, `ensureSupabaseDataHydrated('boot')` returns false immediately
+  // when the active league is not there yet and `runPostHydrateTail()` runs
+  // anyway. So the single page-lifetime attempt was burned on a `null`, the
+  // identity landed milliseconds later at the session chokepoint, and the
+  // browser stayed "allowed to notify, registered nowhere" for the life of the
+  // page — which is what notify-fanout records as `reason:"no_subscription"`.
+  //
+  // The latch itself is unchanged in PURPOSE (one attempt per page load, so a
+  // re-render can never put a device on a subscribe/re-subscribe treadmill);
+  // only the moment it is spent moves, to the first call that can actually do
+  // the work. A signed-out page can now reach this line many times and each
+  // one returns here having touched no SDK and no network.
+  if (!playerId) return false;
   _autoOptInTried = true;
   try {
-    if (!playerId) return false;
     // …FOR THIS PLAYER ID, not for whoever the session happens to say is here.
     // This function is handed the id it is about to bind, so reading the
     // preference by that same id makes it impossible for the two to disagree —
@@ -5238,6 +5385,13 @@ function bindNotifSettingsBody(ov, playerId) {
           showToast(res.ok ? '✅ Push notifications are on for this iPhone.'
             : "Push wasn't turned on. You can also turn it on in iPhone Settings.", res.ok ? 'success' : 'error');
         }
+        // the native push-active flag fix (2026-09-24; RG number assigned at the ledger) — THE SAME LINE THE WEB ARM RUNS BELOW, and it was missing
+        // here. DI-N3 names a permission grant as one of the moments
+        // `pushActive` can change; this arm was added ahead of that call and
+        // returns before reaching it, so a native player who taps Turn On and
+        // grants keeps getting the in-app chat preview for every message the
+        // phone is now also pushing, until the next cold launch.
+        refreshPushActiveFlag();
         await refreshNotifSettingsBody(ov, playerId);
         return;
       }
@@ -8462,20 +8616,24 @@ export function selectableDashboardWeeks(weeks, isCommissioner) {
 
 function renderDashboard() {
   renderDashboardInner();
-  // v0.16.0 — chat teaser card pinned to the top of the dashboard
+  // The chat teaser card (v0.16.0, DI-93) was inserted here — `afterbegin` on
+  // the page host, pinned above every ordered section. Retired 2026-09-24
+  // (Option A, Drew): push is the channel for chat activity now, and the chat
+  // nav pill's unread badge is what a push-less device keeps. See the block
+  // comment in js/chat-ui.js where dashboardChatTeaserHTML() was defined.
+  // `host` stays — the prelink banner below shares it.
   const host = document.getElementById('page-dashboard');
-  if (host && !document.getElementById('dash-chat-teaser')) {
-    host.insertAdjacentHTML('afterbegin', dashboardChatTeaserHTML());
-  }
   // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
-  // Inserted the same way the chat teaser is: `afterbegin` on the page host,
+  // Inserted the way the chat teaser was: `afterbegin` on the page host,
   // AFTER renderDashboardInner() has painted. That makes it a banner ABOVE the
   // ordered sections rather than a new section within them, so RG-01's locked
-  // section order is untouched — the same reason the teaser is placed this way
+  // section order is untouched — the same reason the teaser was placed this way
   // and not pushed into the section list.
   //
-  // It sits above the chat teaser deliberately: the teaser is an invitation, the
-  // banner is a deadline. prelinkBannerHTML() returns '' in every mode but
+  // It used to sit above the chat teaser deliberately — the teaser was an
+  // invitation, the banner is a deadline. With the teaser retired (2026-09-24)
+  // it is simply the first thing on the page. prelinkBannerHTML() returns '' in
+  // every mode but
   // 'prelink' and while any hold gate is up, so this is inert for everybody
   // except the six founders in the shadow period.
   //

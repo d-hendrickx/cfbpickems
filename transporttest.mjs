@@ -728,6 +728,60 @@ _realLog('\n[8] Supabase mode — the refusal vocabulary (S6, S7, and bad_state)
       'not_member / not_authenticated / PGRST301 are classified IDENTITY and handed on — Step 4 §5.2 gives identity ONE classifier, in js/auth.js, and this is not it');
     assert(transport._refusalStateForTest().permanent.length === 0,
       '…and an identity refusal never memoises the id: the answer is expected to change once the session resolves');
+
+    // (e) N4 (reviewer, v0.25.1) — AN OUTAGE IS ABOUT THE CONNECTION, SO IT STOPS THE RUN LOOP.
+    //     The v0.25.0 fix made a per-event refusal stop being an answer about the other runs, and
+    //     that is right — but the SAME loop also carries the class of error that is not about an
+    //     event at all: a dead network, a 5xx, a dropped socket. Every later run would be issued
+    //     into the same dead connection, get the same answer, and be kept by the outbox anyway —
+    //     so the extra requests buy the player nothing and cost a flapping device N round trips
+    //     per flush where one would do. Same reasoning the rate limit already breaks on (D-5).
+    transport._resetRefusalStateForTest();
+    fake.S.rpc.length = 0;
+    fake.S.refuse = () => ({ message: 'TypeError: fetch failed' });   // no server vocabulary at all — the socket is gone
+    const outage = await transport.appendEvents([
+      { id: 'net_p1', type: 'message', author: 'p1', body: 'one', notify: false, meta: null },
+      { id: 'net_sys', type: 'message', author: 'scribe', body: 'two', notify: false, meta: null },
+      { id: 'net_p2', type: 'message', author: 'p1', body: 'three', notify: false, meta: null },
+    ]).then(() => null, (err) => err);
+    assert(outage instanceof transport.ChatWriteRefusedError && outage.refusal === 'retryable' && !outage.retryAfterMs,
+      'N4: a dead network is the RETRYABLE catch-all — not permanent, and not the rate limit\'s 60s cooldown (nothing about this answer says the member is sending too fast)');
+    assert(fake.S.rpc.length === 1,
+      `N4: THREE runs (player / system / player), and exactly ONE request left the device. Issuing the other two into a socket that has just failed is amplification with no benefit — they can only return the same error, and the outbox keeps their events either way (got ${fake.S.rpc.length} RPC(s))`);
+    assert((outage.assigned || []).length === 0
+      && transport._refusalStateForTest().permanent.length === 0
+      && transport._refusalStateForTest().parked.length === 0,
+      'N4: …and nothing is settled, memoised or parked on the strength of an outage — all three events stay the outbox\'s to retry, which is what makes stopping early free');
+
+    // (f) N2 (reviewer, v0.25.1) — LOCAL BRAKE 1 HOLDS BACK THE ID IT NAMES, AND NOTHING ELSE.
+    //     The narrowing shipped in v0.25.0 but was only pinned end-to-end through chat.js
+    //     (feedbacktest §[29]). This is the same claim at the transport's own level, on the calls
+    //     list: a MIXED batch where one id is already permanently refused must still ISSUE the
+    //     other run, and the refusal it throws must carry `assigned` for the event that landed —
+    //     that field is the only thing standing between the player's rating and S.failed.
+    transport._resetRefusalStateForTest();
+    fake.S.refuse = (fn) => (fn === 'chat_append_system' ? { message: 'bad_system_id', code: 'P0001' } : null);
+    await transport.appendEvents([{ id: 'scribe_llm_dead', type: 'message', author: 'scribe', body: 'What\'s New', notify: false, meta: null }])
+      .then(() => null, (e) => e);
+    assert(transport._refusalStateForTest().permanent.includes('scribe_llm_dead'),
+      'N2 fixture — the SCRIBE post is now a remembered permanent refusal, so the next batch containing it hits LOCAL BRAKE 1 with no request');
+    fake.S.refuse = null;                         // the server would take the player's event happily
+    fake.S.rpc.length = 0;
+    const mixed = await transport.appendEvents([
+      { id: 'scribe_llm_dead', type: 'message', author: 'scribe', body: 'What\'s New', notify: false, meta: null },
+      { id: 'p_rate_1', type: 'feedback', author: 'p1', body: '', notify: false, meta: { category: 'rating', value: 'mid' } },
+    ]).then(() => null, (e) => e);
+    const mixedCalls = fake.S.rpc.map((c) => `${c.fn}:${c.args.p_events.map((e) => e.id).join('+')}`);
+    assert(JSON.stringify(mixedCalls) === JSON.stringify(['chat_append:p_rate_1']),
+      `N2: exactly the NAMED id is held back and the player's run is still ISSUED — one chat_append carrying p_rate_1, and no second chat_append_system for an id that cannot change its answer (${JSON.stringify(mixedCalls)})`);
+    assert(mixed instanceof transport.ChatWriteRefusedError && mixed.refusal === 'permanent'
+      && (mixed.assigned || []).length === 1 && mixed.assigned[0].id === 'p_rate_1'
+      && typeof mixed.assigned[0].seq === 'number',
+      'N2: …and the refusal CARRIES `assigned` for the delivered id — flushOutbox reconciles that event instead of charging it an attempt, which is the whole of the v0.25.0 fix seen from this side');
+    assert(fake.S.rows.some((r) => r.id === 'p_rate_1') && !fake.S.rows.some((r) => r.id === 'scribe_llm_dead'),
+      'N2: the log agrees — the player\'s rating is in it and the refused SCRIBE post is not (isolating the runs is not swallowing the refusal)');
+    transport._resetRefusalStateForTest();
+
     assert(FETCHES.length === 0, 'S1: not one Apps Script fetch anywhere in the refusal suite');
   } finally { console.warn = realWarn; fake.S.refuse = null; resetToFlagOff(); }
 }
@@ -1324,6 +1378,42 @@ _realLog('\n[17] AMENDMENT A7 — park a `bad_state` and re-send it, bounded…'
         && fake.S.rpc.filter((c) => c.fn === 'chat_append_system').length === before,
         'A7/R2: a HOLD GATE drops the parked set too — a hold exists so that no league data moves while it is up, and a background ladder quietly re-sending a reveal from behind the lock is the shape DI §6.5 was written to stop, one queue over');
     } finally { console.warn = realWarn2; }
+    resetToFlagOff();
+  }
+
+  // (g) N2 (reviewer, v0.25.1) — LOCAL BRAKE 1b HOLDS BACK THE PARKED ID, AND NOTHING ELSE.
+  //     (c) above proves the parked id's own re-send is answered locally. What it cannot show is
+  //     what happens to the events queued BESIDE it: until v0.25.0 the brake refused the whole
+  //     list, so a parked lifecycle post cancelled the player's next message without ever issuing
+  //     it — the outbox could not tell "refused" from "never asked", and after MAX_ATTEMPTS the
+  //     player's event went to S.failed. The ladder's step here is deliberately far away so the
+  //     park's own re-send cannot be mistaken for the batch's request.
+  {
+    const fake = makeFakeSupabase();
+    installFake(fake);
+    transport._setParkScheduleForTest({ steps: [10000], ceilingMs: 60000 });
+    fake.S.refuse = (fn) => (fn === 'chat_append_system' ? { message: 'bad_state', code: 'P0001' } : null);
+    await transport.appendEvents([sysEv('sys_final_parked_mix')]).then(() => null, () => null);
+    assert(transport._refusalStateForTest().parked.includes('sys_final_parked_mix'),
+      'N2 fixture — the lifecycle post is parked, so the next batch containing it hits LOCAL BRAKE 1b with no request');
+
+    fake.S.refuse = null;                        // the server would take the player's event happily
+    fake.S.rpc.length = 0;
+    const mixed = await transport.appendEvents([
+      sysEv('sys_final_parked_mix'),
+      { id: 'p_chip_1', type: 'feedback', author: 'p1', body: '', notify: false, meta: { category: 'reason', value: ['too_long'] } },
+    ]).then(() => null, (e) => e);
+    const calls = fake.S.rpc.map((c) => `${c.fn}:${c.args.p_events.map((e) => e.id).join('+')}`);
+    assert(JSON.stringify(calls) === JSON.stringify(['chat_append:p_chip_1']),
+      `N2/A7: exactly the PARKED id is held back and the player's run is still ISSUED — one chat_append carrying p_chip_1, and no second chat_append_system for an id this module is already re-sending on its own ladder (${JSON.stringify(calls)})`);
+    assert(mixed instanceof transport.ChatWriteRefusedError && mixed.refusal === 'retryable'
+      && mixed.code === 'bad_state'
+      && (mixed.assigned || []).length === 1 && mixed.assigned[0].id === 'p_chip_1'
+      && typeof mixed.assigned[0].seq === 'number',
+      'N2/A7: …and the retryable refusal CARRIES `assigned` for the delivered id, so flushOutbox settles the player\'s chip set rather than spending an attempt on a park that has nothing to do with it');
+    assert(fake.S.rows.some((r) => r.id === 'p_chip_1')
+      && transport._refusalStateForTest().parked.includes('sys_final_parked_mix'),
+      'N2/A7: the log has the player\'s event, and the parked post is STILL parked — being brake-refused for a batch is not the same as being released from the ladder');
     resetToFlagOff();
   }
 }

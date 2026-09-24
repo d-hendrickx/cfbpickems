@@ -1054,7 +1054,22 @@ export async function flushOutbox() {
     notify('sent', { count: batch.length });
   } catch (err) {
     handleTransportError(err);
+    // ── RG (live bug, v0.25.0, 2026-09-24) — AN EVENT THE SERVER TOOK IS NOT A FAILURE ───────
+    // One batch is several requests (chatTransport.js's `sbPlanBatches` splits it by author kind
+    // and by each RPC's own cap), so a throw from `appendEvents()` can mean "one run was refused
+    // and the others landed". The refusal now carries `assigned` — exactly what the success path
+    // above reads — and those events are reconciled and DROPPED from the queue here, rather than
+    // spending their attempts on a refusal that was never about them and ending on the FAILED
+    // chip for a message that is already in the room.
+    const landed = new Map((Array.isArray(err?.assigned) ? err.assigned : []).map(a => [a.id, a]));
     batch.forEach(o => {
+      const a = landed.get(o.ev.id);
+      if (a) {
+        const item = S.items.get(o.ev.id);
+        if (item) { item.seq = a.seq; if (a.ts) item.ts = a.ts; item.local = false; }
+        settleAppend(o.ev.id, null, a.seq);   // BUG-D — the same acknowledgement the success path gives
+        return;
+      }
       o.attempts++;
       if (o.attempts >= MAX_ATTEMPTS) {
         S.failed.set(o.ev.id, o.ev);

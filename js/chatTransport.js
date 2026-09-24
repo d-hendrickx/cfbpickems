@@ -814,40 +814,94 @@ function sbPlanBatches(events) {
   return runs;
 }
 
+/**
+ * ── RG (live bug, v0.25.0, 2026-09-24) — A REFUSAL IS AN ANSWER ABOUT THE EVENTS IT NAMES,
+ *    AND ABOUT NO OTHERS ─────────────────────────────────────────────────────────────────────
+ *
+ * One batch is not one request. `sbPlanBatches()` splits it into RUNS — SCRIBE/system-authored
+ * events go to `chat_append_system`, a player's own go to `chat_append`, and each RPC has its own
+ * cap — so a single call here is several independent requests about several independent sets of
+ * events, refused for several independent reasons.
+ *
+ * This function used to be FAIL-FAST at three points: the two local brakes refused the WHOLE list
+ * if ANY id in it was parked or permanently refused, and the run loop threw out of the function on
+ * the first refused run. Every LATER run — different events, different author, different RPC — was
+ * then never attempted at all. Not refused: never asked. `flushOutbox()` could not tell the two
+ * apart, so it charged the refusal to everything in the batch, and after MAX_ATTEMPTS moved the lot
+ * to `S.failed` — which has no UI for anything that is not a rendered message. A player's ⭐ rating,
+ * their reason chips and their "why" were destroyed, in silence, by a What's New post the server
+ * happened to decline first.
+ *
+ * So: EVERY run gets its round trip, the first refusal is DEFERRED and thrown after the loop, and
+ * it carries `assigned` — the events that really did land — so the caller settles those instead of
+ * failing them. The refusal itself is unchanged in class, code, copy and bookkeeping; what changed
+ * is only WHICH events it is allowed to speak for.
+ *
+ * THE REFUSALS THAT STILL STOP EVERYTHING are the two that are not about an event at all:
+ *   • THE RATE LIMIT (LOCAL BRAKE 2, and a rate answer from any run) — this member's 60-second
+ *     window on this connection (0002:139 `message_rate_ok`, 0010:289 the system counter, both
+ *     keyed on the same member). Continuing would be hammering a server that has just said stop.
+ *     D-5's rule is unchanged.
+ *   • AN OUTAGE (N4, added 2026-09-24 in v0.25.1) — the RETRYABLE catch-all: a dead network, a
+ *     5xx, a dropped socket. Same category, same reasoning: the later runs would be issued into
+ *     the same dead connection for the same answer, and the outbox keeps their events either way,
+ *     so four failed RPCs where one would do is amplification with nothing bought.
+ * Both are statements about the CONNECTION. A per-event refusal never stops the loop — that
+ * distinction is this whole note.
+ */
 async function sbAppendEvents(events) {
   const list = Array.isArray(events) ? events : [];
   if (!list.length) return { assigned: [], head: 0 };
 
+  const assigned = [];
+  let deferred = null;                                   // the FIRST refusal — thrown once every other event has had its turn
+  const refuse = (err) => { if (!deferred) deferred = err; };
+  const finish = () => {
+    if (deferred) { deferred.assigned = assigned; throw deferred; }
+    // `head` here is the highest seq THIS CALL assigned — it is NOT a head, and RG-95 forbids any
+    // caller adopting it as a poll cursor. chat.js deliberately ignores it, exactly as it ignores
+    // the Sheets path's true head. Kept on the return only so the shape is the same one.
+    const top = assigned.reduce((m, a) => (typeof a.seq === 'number' && a.seq > m ? a.seq : m), 0);
+    return { assigned, head: top };
+  };
+  let pending = list;
+
   // LOCAL BRAKE 1 — a permanently-refused id is answered without a request. See the note on
   // `_permanentRefusals`: the outbox's remaining attempts must not become a retry loop against
-  // the server for an answer that cannot change.
-  const alreadyRefused = list.filter((e) => _permanentRefusals.has(String(e && e.id)));
+  // the server for an answer that cannot change. THE REFUSAL IS DEFERRED AND THE REST OF THE
+  // BATCH STILL GOES (see this function's header): "that one id is unsendable" says nothing at
+  // all about the events queued beside it.
+  const alreadyRefused = pending.filter((e) => _permanentRefusals.has(String(e && e.id)));
   if (alreadyRefused.length) {
     const code = _permanentRefusals.get(String(alreadyRefused[0].id)).code;
     // A COUNT, never a body and never an id (chat.js:1006-1010's rule).
     console.warn(`[chatTransport] ${alreadyRefused.length} event(s) in this batch were already permanently refused (${code}) — not re-sent`);
-    throw new ChatWriteRefusedError({
+    refuse(new ChatWriteRefusedError({
       action: 'chatAppend', code, refusal: 'permanent',
       message: 'That message was refused by the server and will not be sent again.',
       serverMessage: code,
-    });
+    }));
+    pending = pending.filter((e) => !_permanentRefusals.has(String(e && e.id)));
   }
   // LOCAL BRAKE 1b — A7. An id this module is already re-sending on its own ladder must not also
   // be sent by the outbox: "never more than one resend in flight per id" is the amendment's own
   // wording, and two senders for one deterministic id is how a bounded ladder becomes an
   // unbounded one. Refused locally, with no request, and classified RETRYABLE so the outbox KEEPS
-  // the event rather than failing it — the park is what is carrying it.
-  const parkedHere = list.filter((e) => _parked.has(String(e && e.id)));
+  // the event rather than failing it — the park is what is carrying it. Same narrowing as above:
+  // only the PARKED ids are held back.
+  const parkedHere = pending.filter((e) => _parked.has(String(e && e.id)));
   if (parkedHere.length) {
-    throw new ChatWriteRefusedError({
+    refuse(new ChatWriteRefusedError({
       action: 'chatAppend', code: 'bad_state', refusal: 'retryable',
       message: 'Waiting for the week or game this post describes to catch up.',
       serverMessage: 'parked pending state',
       retryAfterMs: _parkSteps[0],
-    });
+    }));
+    pending = pending.filter((e) => !_parked.has(String(e && e.id)));
   }
   // LOCAL BRAKE 2 — D-5's cooldown. A rate limit answered two seconds later is the same answer,
-  // so the transport refuses locally for the rest of the window instead of asking again.
+  // so the transport refuses locally for the rest of the window instead of asking again. This one
+  // is about the CONNECTION, not about an event, so it still refuses the whole call.
   const now = Date.now();
   if (_rateCooldownUntil > now) {
     throw new ChatWriteRefusedError({
@@ -856,11 +910,11 @@ async function sbAppendEvents(events) {
       retryAfterMs: _rateCooldownUntil - now,
     });
   }
+  if (!pending.length) return finish();
 
   const client = sbClient();
   const token = _chatToken();
-  const assigned = [];
-  for (const run of sbPlanBatches(list)) {
+  for (const run of sbPlanBatches(pending)) {
     const fn = run.kind === 'system' ? 'chat_append_system' : 'chat_append';
     const { data, error } = await client.rpc(fn, {
       p_league: token.leagueId,
@@ -871,25 +925,51 @@ async function sbAppendEvents(events) {
       // ── A7 — `bad_state` IS THE ONE REFUSAL THIS MODULE CARRIES ITSELF ─────────────────────
       // It is never memoised here (that would drop it on the first answer) and it does not spend
       // the rate cooldown (it is not a rate limit). The run is PARKED and this module re-sends it
-      // on its own bounded ladder; the throw below is classified RETRYABLE so the outbox keeps the
+      // on its own bounded ladder; the refusal below is classified RETRYABLE so the outbox keeps the
       // event, and LOCAL BRAKE 1b above then answers the outbox's own retries without a request.
       if (/bad_state/i.test(refusal.serverMessage)) {
         _parkBadState(run.events, token);
-        throw new ChatWriteRefusedError({
+        refuse(new ChatWriteRefusedError({
           action: 'chatAppend', code: 'bad_state', refusal: 'retryable',
           message: 'Waiting for the week or game this post describes to catch up.',
           serverMessage: refusal.serverMessage,
           retryAfterMs: _parkSteps[0],
-        });
+        }));
+        continue;
       }
       if (refusal.refusal === 'permanent') _rememberPermanent(run.events.map((e) => e.id), refusal.code || 'refused');
-      if (refusal.retryAfterMs) _rateCooldownUntil = Date.now() + refusal.retryAfterMs;
-      throw refusal;
+      if (refusal.retryAfterMs) { _rateCooldownUntil = Date.now() + refusal.retryAfterMs; refuse(refusal); break; }
+      // ── N4 — AN OUTAGE IS NOT AN ANSWER ABOUT AN EVENT EITHER ──────────────────────────────
+      // `bad_state` was intercepted above and the rate limit carries `retryAfterMs`, so the only
+      // thing still classified RETRYABLE at this line is `classifySupabaseError()`'s catch-all:
+      // a network failure, a 5xx, a dropped socket. That is a statement about the CONNECTION, the
+      // same category as the rate limit, and the later runs can only be issued into the same dead
+      // connection for the same answer. The outbox keeps every un-issued event regardless (a
+      // retryable refusal never fails or memoises anything), so stopping here costs the player
+      // nothing and saves a flapping device one failed round trip per remaining run, every flush.
+      // PER-EVENT refusals — permanent, bad_author, an identity answer — still do NOT break: they
+      // are about the events they name, which is v0.25.0's whole correction.
+      // Reviewer F1 (v0.25.1 gate): "retryable" is the classifier's CATCH-ALL, not a connection
+      // class — an unrecognised SERVER answer (e.g. PGRST202 after a migration paste) lands here
+      // too, and breaking on it would re-create v0.25.0's bug (the player's run never issued) for
+      // that case. So the break is taken only when the refusal carries NO server code or a 5xx —
+      // the two shapes a dead network / dropped socket / gateway failure actually produce. A coded
+      // answer we do not recognise is about THAT run: refuse it and keep issuing the others.
+      const connectionClass = !refusal.code || /^5\d\d$/.test(String(refusal.code));
+      if (refusal.refusal === 'retryable' && connectionClass) { refuse(refusal); break; }
+      refuse(refusal);
+      continue;
     }
     // I6 again. An append whose reply lands after the identity moved must not be reconciled into
     // a room that is no longer this device's: the ids are deterministic and the server deduped
     // them, so nothing is lost by declining to fold the acknowledgement.
     if (_chatOpMoved(token)) {
+      // BY DESIGN THIS IS THE ONE EXIT THAT BYPASSES finish() — no deferred refusal is thrown and
+      // no earlier `assigned` is returned. Both would be addressed to a room this device has left.
+      // On an account handover the outbox has already been wiped at app.js's identity chokepoint
+      // (chat.js's clearOutbox()), so there is nothing left to settle or to fail; on a league move
+      // the ids are deterministic and the rows the server did take are in the log of the room they
+      // were composed for, which is where they belong.
       console.warn('[chatTransport] an append acknowledgement arrived for a league/identity this device has already left — DISCARDED');
       return { assigned: [], head: 0 };
     }
@@ -897,11 +977,7 @@ async function sbAppendEvents(events) {
       assigned.push({ id: a.id, seq: a.seq, ts: sbTs(a.ts), deduped: a.deduped === true });
     }
   }
-  // `head` here is the highest seq THIS CALL assigned — it is NOT a head, and RG-95 forbids any
-  // caller adopting it as a poll cursor. chat.js deliberately ignores it, exactly as it ignores
-  // the Sheets path's true head. Kept on the return only so the shape is the same one.
-  const top = assigned.reduce((m, a) => (typeof a.seq === 'number' && a.seq > m ? a.seq : m), 0);
-  return { assigned, head: top };
+  return finish();
 }
 
 /** `chat_append`/`chat_append_system` return `ts` as a timestamptz string (D-2). The wire event

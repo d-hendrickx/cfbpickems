@@ -220,15 +220,26 @@ console.log('\n[9] N1 / DI-N3 — R10: a push-active device shows no in-app toas
   assert(appended === 1,
     '9-6: …and on a push-inactive device force still works, so a system announcement is not lost to a player who simply turned toasts off');
 
-  // ── The reveal emitter itself no longer forces. ──
+  // ── The reveal emitter raises no toast at all. ──
+  //
+  // STRENGTHENED 2026-09-24 (Option A, Drew). 9-8 and 9-9 used to locate the
+  // `showToast(... 'picks revealed')` call inside emitPickRevealEvent() and
+  // assert it did not pass `{force:true}` — DI-N3's fix for the banner Drew
+  // reported ("League just sent a notification that the picks are in, and it
+  // popped up as a banner in the app"). Option A finished that job: the call
+  // itself is gone, so "it does not force" is replaced by "it does not raise".
+  // The Locker Room post above it still carries the reveal, which is why 9-7
+  // now pins BOTH halves — the emitter exists AND still posts — so 9-8 cannot
+  // pass by the function having been deleted wholesale.
   const chatUiSrc9 = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
   const revealSrc9 = (chatUiSrc9.match(/export function emitPickRevealEvent\([\s\S]*?\n\}/) || [''])[0];
-  assert(revealSrc9.length > 0, '9-7: fixture check — emitPickRevealEvent() was located in js/chat-ui.js');
-  const revealToast9 = (revealSrc9.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
-    .match(/showToast\([^\n]*/) || [''])[0];
-  assert(revealToast9.includes('picks revealed'), '9-8: fixture check — its showToast() call was located inside that function');
-  assert(!/force/.test(revealToast9),
-    `9-9: the pick-reveal toast no longer passes {force:true}. Forcing past a player's own getNotifPrefs().toasts preference was the thing Drew actually saw, and it is gone regardless of push state (got: ${revealToast9.trim()})`);
+  const revealCode9 = revealSrc9.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+  assert(revealSrc9.length > 0 && /sendEvent\(/.test(revealCode9),
+    '9-7: fixture check — emitPickRevealEvent() was located in js/chat-ui.js and still posts the reveal into the room');
+  assert(!/showToast\(/.test(revealCode9),
+    `9-8: the pick reveal raises NO in-app toast — not forced, not gated, not at all (got: ${(revealCode9.match(/showToast\([^\n]*/) || ['(none)'])[0].trim()}). The ritual still happens in the Locker Room; what is gone is the banner floated over whatever tab you were on`);
+  assert(/notify: true/.test(revealCode9),
+    '9-9: …and that room post is still a NOTIFYING event, so retiring the banner did not also silence the unread badge and the push — the notice changed channel, it did not disappear');
 
   // ── The flag itself fails CLOSED. ──
   localStorage.removeItem('cfbp_push_active');
@@ -306,9 +317,15 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
   globalThis.showToast = realWindowToast;
   if (realWindowToast === undefined) delete globalThis.showToast;
 
-  // The call site itself, and the enumeration behind it: after this change the
-  // only showToast() calls left in chat-ui.js are NOTICES, so none of them
-  // needs the force escape hatch to reach a push-active device.
+  // The call site itself, and the enumeration behind it. DI-N3's version of
+  // this read: "the only showToast() calls left in chat-ui.js are NOTICES, so
+  // none of them needs the force escape hatch to reach a push-active device"
+  // — two of them, the pick reveal and the incoming message.
+  //
+  // 2026-09-24 (Option A, Drew): that count is now ZERO. Both notices were
+  // retired, the receipt path below is unaffected, and the enumeration becomes
+  // the strongest form of the same claim — there is no call site left that
+  // COULD force past the gate, because there is no call site left.
   const rewriteLine10 = (chatUiSrc10.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n')
     .match(/[^\n]*Rewrite saved[^\n]*/) || [''])[0];
   assert(/showReceipt\(/.test(rewriteLine10) && !/force/.test(rewriteLine10),
@@ -316,8 +333,8 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
   const toastCalls10 = (chatUiSrc10.split('\n')
     .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l))
     .filter(l => /[^.\w]showToast\(/.test(l) && !/function showToast|_showToastForTest|window\.showToast/.test(l)));
-  assert(toastCalls10.length === 2 && toastCalls10.every(l => !/force/.test(l)),
-    `10-6: …and the ENUMERATION holds — the ${toastCalls10.length} remaining showToast() call sites in chat-ui.js are both notices (the pick reveal and an incoming message) and neither forces past the gate`);
+  assert(toastCalls10.length === 0,
+    `10-6: …and the ENUMERATION is now EMPTY — chat-ui.js has ${toastCalls10.length} showToast() call sites left (expected 0). The two notices it used to hold, the pick reveal and the incoming message, were both retired on 2026-09-24; the function survives only as a test-pinned mechanism (see its note in js/chat-ui.js). Found: ${JSON.stringify(toastCalls10.map(l => l.trim()))}`);
 
   // ── (f) THE BLIP. showToast() stood down on a push-active device; playBlip()
   //      did not, so the phone buzzed AND the app chirped for the same message.
@@ -1751,7 +1768,9 @@ console.log('\n[14] Drew residual 3 — the private self-test row is labelled, s
   // The guard is inside isUnreadFor(), the choke point behind unreadCount,
   // unreadAuthors, mentionUnreadCount AND latestUnreadNotifying — so this one
   // rule covers the nav badge, the tab title, the installed-app icon, the
-  // filter pills, the game bubbles and the dashboard teaser at once.
+  // filter pills and the game bubbles at once. (It covered the dashboard
+  // teaser too, until that card was retired on 2026-09-24 — Option A, Drew.
+  // The choke point is unchanged; it simply has one fewer consumer.)
   chat14._resetForTest();
   chat14.ingest([TEST_ROW()]);
   assert(chat14.unreadCount('p_drew', 'all') === 0,
@@ -1762,9 +1781,15 @@ console.log('\n[14] Drew residual 3 — the private self-test row is labelled, s
   assert(chat14.unreadAuthors('p_drew', 'all').length === 0,
     '14-14: …with nobody to attribute it to');
   assert(chat14.latestUnreadNotifying('p_drew', 0) === null,
-    '14-15: …and the dashboard teaser is never offered it as the newest thing worth announcing (Drew: prefer NOT featuring a test row at all)');
-  assert(chatUi14.dashboardChatTeaserHTML() === '',
-    '14-16: …proven at the teaser itself, not only at the function beneath it');
+    '14-15: …and the announcement picker is never offered it as the newest thing worth announcing (Drew: prefer NOT featuring a test row at all). This fed the dashboard teaser until 2026-09-24; it is still chat.js\'s own "what is the newest unread thing" answer and is still the right place to pin the exclusion');
+  // 14-16 REWRITTEN 2026-09-24 (teaser retired, Drew — Option A). It read
+  // `chatUi14.dashboardChatTeaserHTML() === ''` — "proven at the teaser
+  // itself, not only at the function beneath it". The teaser is deleted, so
+  // the second surface it proved against is gone; asserting the export's
+  // absence keeps the row from silently becoming a one-legged check and
+  // records where the other leg went.
+  assert(typeof chatUi14.dashboardChatTeaserHTML === 'undefined',
+    '14-16: …and there is no longer a second surface to prove it at — the dashboard teaser that consumed latestUnreadNotifying() is retired, so 14-15 is now the whole of this guarantee');
 
   chat14.ingest([REAL_ROW()]);
   assert(chat14.unreadCount('p_drew', 'all') === 1,
@@ -1805,6 +1830,558 @@ console.log('\n[14] Drew residual 3 — the private self-test row is labelled, s
       '14-21: …and the CHIP is not dimmed: the sentence explaining why a row looks faded must not itself be faded');
   }
   chat14._resetForTest();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [15] THE NATIVE PUSH-ACTIVE FLAG FIX (2026-09-24; RG number assigned at the
+//      ledger) — THE NATIVE SHELL COULD NEVER BE "PUSH-ACTIVE", SO THE CHAT
+//      PREVIEW KEPT LANDING IN THE APP
+//
+// Drew, live on v0.25.1: *"I'm still seeing the old in app notifications on the
+// picks page and dashboard"* — and, asked which: *"it's the 'Chat' notification
+// that is showing a preview of the chat messages."*
+//
+// THERE ARE EXACTLY TWO chat-message PREVIEW surfaces outside the Locker Room,
+// and they are different code with different owners:
+//
+//   PICKS TAB  `#chat-toast`         chat-ui.js showToast()/drainToast() —
+//                                    author + the first 80 characters. Stands
+//                                    down on the Chat tab and the Dashboard
+//                                    (_toastWouldSuppress) and nowhere else,
+//                                    which is why the Picks tab is where Drew
+//                                    sees it. DI-102(a).
+//   DASHBOARD  `#dash-chat-teaser`   chat-ui.js dashboardChatTeaserHTML() —
+//                                    author + the first 64 characters. DI-93,
+//                                    and EXPLICITLY retained on a push-active
+//                                    device by DI-N3 ("what survives … the
+//                                    dashboard teaser"). Retiring it is ledger
+//                                    §6's open user-experience item, not this
+//                                    file's business, and nothing here touches
+//                                    it.
+//
+// THIS SECTION IS ABOUT THE FIRST ONE, which is a DEFECT rather than a design
+// question: DI-N3/R10 — Drew's own, already approved — says a device the push
+// is genuinely reaching shows no in-app notice, and [9]/[10] above prove that
+// gate works. What broke is the flag it reads, on one platform.
+//
+// "Still" is the word that matters. RG-177 (2026-09-19) fixed the WEB device's
+// version of this. Native push shipped four days later (DI-217/239/240/241,
+// 2026-09-23) and brought a third way for the same predicate to be wrong:
+// `refreshPushActiveFlag()` resolved its truth through js/push-onesignal.js's
+// `subscriptionState()`, which returns the literal string 'native-unavailable'
+// inside the Capacitor shell (DI-210e) — never 'granted' — so the flag was
+// FALSE on every native boot, forever, on a handset that was receiving the
+// push. DI-240 had already ruled on this exact string for the OTHER consumer of
+// the same fact (refreshNotifSettingsBody reads nativePushState() instead); the
+// second consumer was missed.
+//
+// Driven through the REAL functions on both sides — the shipped
+// `refreshPushActiveFlag()` and the shipped `_showToastForTest` /
+// `_playBlipForTest` seams — for the reason chat-ui.js's own note gives: a
+// re-implementation of the predicate would pass while the shipped one did
+// something else.
+console.log('\n[15] Native push-active flag fix — the native iOS shell resolves its OWN push state, so the chat preview stands down…');
+{
+  const app15 = await import('./js/app.js');
+  const chatUi15 = await import('./js/chat-ui.js');
+
+  // The fixture: a signed-in player (the master toggle is a PLAYER preference)
+  // on a device reporting itself as the Capacitor shell, with a fake
+  // OneSignalCapacitor plugin whose permissionNative() answers the real
+  // OSNotificationPermission enum — the same shape pushnativetest.mjs's
+  // fakePlugin() uses, read from the plugin's own .d.ts, not guessed.
+  storage.savePlayer({ playerId: 'pt15', displayName: 'Native Tester', active: true, preferences: {} });
+  storage.setSession('pt15', false, true);
+  storage.setNotifPrefs({ toasts: true, sound: true });
+
+  const OS_PERM = { NOT_DETERMINED: 0, DENIED: 1, AUTHORIZED: 2 };
+  const installNative = (permission) => {
+    globalThis.window.Capacitor = {
+      isNativePlatform: () => true,
+      Plugins: { OneSignalCapacitor: {
+        async initialize() {}, async login() {}, async logout() {},
+        async permissionNative() { return { permission }; },
+        addListener() { return { remove() {} }; },
+      } },
+    };
+  };
+  const installNativeNoPlugin = () => {
+    globalThis.window.Capacitor = { isNativePlatform: () => true, Plugins: {} };
+  };
+  const uninstallNative = () => { delete globalThis.window.Capacitor; };
+
+  // Count what reaches the DOM and what reaches the speaker, the same way [9]
+  // and [10] do — "no preview" has to mean "nothing was rendered", not merely
+  // "the queue happened to be empty".
+  let appended15 = 0;
+  const realAppend15 = globalThis.document.body.appendChild;
+  globalThis.document.body.appendChild = function (...args) { appended15++; return realAppend15.apply(this, args); };
+  let audio15 = 0;
+  const realAudioCtx15 = globalThis.AudioContext;
+  globalThis.AudioContext = class {
+    constructor() { audio15++; this.currentTime = 0; this.destination = {}; }
+    createOscillator() { return { frequency: {}, type: '', connect: () => ({ connect: () => {} }), start() {}, stop() {} }; }
+    createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => ({ connect: () => {} }) }; }
+  };
+  /** One incoming chat message, exactly as chat-ui.js's handleChatEvent()
+   *  announces it off the Chat tab: the preview toast, then the blip. */
+  const incomingMessage = () => {
+    chatUi15._resetToastsForTest();
+    appended15 = 0; audio15 = 0;
+    chatUi15._showToastForTest({ author: 'system', body: 'Kihoon: taking the points' });
+    chatUi15._playBlipForTest();
+    return { previews: appended15, blips: audio15 };
+  };
+
+  const platform15 = await import('./js/platform.js');
+  const pushNative15 = await import('./js/push-native.js');
+
+  // ── (a) THE DEFECT. Permission AUTHORIZED on the shell means this phone IS
+  //      being reached, and the notification settings card says so in those
+  //      exact words ("✅ Push notifications are on for this iPhone"). ──
+  installNative(OS_PERM.AUTHORIZED);
+  storage.setPushActive(false);
+  assert(platform15.isNativeShell() === true && (await pushNative15.nativePushState()) === 'granted',
+    '15-1: fixture check — the harness really is the native shell and js/push-native.js reads the OS permission as granted (without this the assertions below would be vacuous)');
+  const nativeActive = await app15.refreshPushActiveFlag();
+  assert(nativeActive === true,
+    `15-2: refreshPushActiveFlag() resolves TRUE on a native handset whose OS permission is granted (got ${nativeActive}). It used to ask js/push-onesignal.js's subscriptionState(), which answers the literal 'native-unavailable' inside the shell (DI-210e) — never 'granted' — so this could only ever be false, on every native boot, on a phone that was receiving the push`);
+  assert(storage.getPushActive() === true,
+    '15-3: …and the durable device flag is written, because the toast path is SYNCHRONOUS and reads the cache (CONVENTIONS #9). RG-177\'s deferred-write handling is untouched: this changes what is computed, not how it is stored');
+  {
+    const seen = incomingMessage();
+    assert(seen.previews === 0,
+      `15-4: PICKS TAB — no chat preview is rendered in the app (got ${seen.previews} #chat-toast node(s)). THIS IS THE SURFACE DREW REPORTED: author + 80 characters of the message, floated over whatever tab he is on. _toastWouldSuppress() already stands it down on the Chat tab and the Dashboard, so Picks is exactly where it lands`);
+    assert(seen.blips === 0,
+      `15-5: …and the app stays silent too (got ${seen.blips} blip(s)) — the phone already made a sound for this message. N1 follow-up (f) settled that an audible in-app notification is one of them`);
+  }
+
+  // ── (b) IT STILL FAILS CLOSED. UN-N3 — not having push must never be the
+  //      same as going blind. Every native state that is NOT a live grant keeps
+  //      today's behaviour, unchanged, on both surfaces. ──
+  //
+  // ══ SEAM-LEVEL AS OF 2026-09-24 (teaser retired, Drew — Option A) ═════════
+  //
+  // 15-6, 15-8 and 15-9 below assert that a push-INACTIVE device DOES show the
+  // in-app preview (`previews === 1`, `blips === 1`). THAT IS STILL TRUE OF THE
+  // FUNCTIONS THEY CALL and it is deliberately NOT inverted — but it is no
+  // longer true of the app, and the difference matters to anyone reading this:
+  //
+  //   `incomingMessage()` drives `_showToastForTest` / `_playBlipForTest`
+  //   directly. Those seams still work. What no longer exists is any
+  //   PRODUCTION CALLER of them — chat-ui.js's handleChatEvent() raises no
+  //   toast and no blip for any message, on any device, push or no push, and
+  //   emitPickRevealEvent() no longer raises one either. `#chat-toast` cannot
+  //   reach a real screen.
+  //
+  // WHY THEY STAY AS THEY ARE. These three are the fail-closed half of the
+  // native push-active fix: they prove `refreshPushActiveFlag()` returns FALSE
+  // for denied / not-asked / unsupported / master-off, and they prove it by
+  // showing the flag's DOWNSTREAM EFFECT rather than by reading the flag back
+  // (which 15-3 already does). Inverting them to `previews === 0` would make
+  // every one of them pass on a permanently-true flag — the exact defect the
+  // fix addressed — because zero previews is now the answer either way.
+  // Keeping the seam as the probe keeps the fail-closed proof non-vacuous.
+  //
+  // WHEN THE SEAMS GO (with feedbacktest/brandtest/cachetest/xsstest's pins,
+  // see showToast()'s note in js/chat-ui.js), these three need a different
+  // downstream effect to read, or they collapse into 15-3.
+  for (const [perm, label] of [[OS_PERM.DENIED, 'denied'], [OS_PERM.NOT_DETERMINED, 'not-asked']]) {
+    installNative(perm);
+    storage.setPushActive(true);                  // start from the WRONG answer, so a no-op cannot pass
+    const active = await app15.refreshPushActiveFlag();
+    const seen = incomingMessage();
+    assert(active === false && storage.getPushActive() === false && seen.previews === 1 && seen.blips === 1,
+      `15-6 (${label}): native permission "${label}" ⇒ push-active FALSE, and the in-app preview comes straight back (previews ${seen.previews}, blips ${seen.blips}) — a phone the OS will not notify must keep every surface it has`);
+  }
+  installNativeNoPlugin();
+  storage.setPushActive(true);
+  {
+    const active = await app15.refreshPushActiveFlag();
+    assert(active === false && storage.getPushActive() === false,
+      '15-7: an UNREACHABLE plugin (a shell built before the OneSignal binary linked, or a bare window.Capacitor spoof on https:) reads FALSE. nativePushState() answers \'unsupported\' there, and "I could not check" must never be stored as "push is carrying this device"');
+  }
+  installNative(OS_PERM.AUTHORIZED);
+  storage.setNotifyPushMaster(false);
+  {
+    const active = await app15.refreshPushActiveFlag();
+    const seen = incomingMessage();
+    assert(active === false && seen.previews === 1,
+      `15-8: the player's own master toggle still wins on native (active=${active}, previews=${seen.previews}). Master OFF means no push is coming, so the in-app preview has to keep working — DI-N3's third term is unchanged by this fix, on either platform`);
+  }
+  storage.setNotifyPushMaster(true);
+
+  // ── (c) WEB IS UNTOUCHED. No Capacitor ⇒ the web ladder runs exactly as [9]
+  //      and [10] assert it, and in this harness (no SDK, no App ID) resolves
+  //      the fail-closed FALSE. The structural half names both of its terms,
+  //      because "the web branch still exists" is an absence-of-change claim
+  //      and a single `false` cannot say which function produced it. ──
+  uninstallNative();
+  storage.setPushActive(true);
+  {
+    const active = await app15.refreshPushActiveFlag();
+    const seen = incomingMessage();
+    assert(active === false && seen.previews === 1 && seen.blips === 1,
+      `15-9: off the shell, a device with no SDK and no App ID still resolves FALSE and still shows its in-app preview (active=${active}, previews=${seen.previews}, blips=${seen.blips}) — the web path is not touched by this fix`);
+  }
+  {
+    const appSrc15 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const fn15 = (appSrc15.match(/export async function refreshPushActiveFlag\(\)[\s\S]*?\n\}/) || [''])[0];
+    // Comments blanked, LENGTH PRESERVED (the `strip` convention [11] already
+    // uses): this function's docstring NAMES subscriptionState(),
+    // nativePushState() and isNativeShell() in prose, so a raw match would be
+    // satisfied by the paragraph describing the code instead of the code.
+    const code15 = fn15
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    assert(fn15.length > 0 && fn15.length === code15.length,
+      '15-10: fixture check — refreshPushActiveFlag() was located in js/app.js and the comment blanker preserves length, so the three assertions below cannot pass by matching nothing');
+    assert(/isNativeShell\(\)/.test(code15),
+      '15-11: the branch is taken on js/platform.js\'s isNativeShell() — AD-68\'s ONE platform predicate, the same one refreshNotifSettingsBody() branches on, never a second implementation');
+    assert(/nativePushState\(\)/.test(code15),
+      '15-12: …and the native side reads js/push-native.js\'s own nativePushState(), which is DI-240\'s ruling applied to the second consumer of the same fact: the priming card and the delivery decision may not disagree about whether this iPhone has push');
+    assert(/subscriptionState\(\)/.test(code15) && /isPushOptedIn\(\)/.test(code15),
+      '15-13: …and the WEB ladder still has BOTH of its terms — permission AND a live OneSignal subscription (RG-192\'s lesson: "granted" alone is the one state that can be quietly broken)');
+  }
+
+  // ── (d) THE FOURTH MOMENT, NATIVE'S COPY. DI-N3 names a permission grant as
+  //      one of the moments the answer changes, and the web arm of the priming
+  //      button recomputes right there (notifytest [25g] asserts it). DI-240's
+  //      native arm was added AHEAD of that line and returns before reaching
+  //      it. Structural, and labelled as such: that arm does `await
+  //      import('./push-native.js')`, which a `new Function` sandbox cannot
+  //      resolve — [25g] stubs isNativeShell FALSE for exactly that reason. ──
+  {
+    const appSrc15b = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const at = appSrc15b.indexOf("ov.querySelector('#notif-priming-btn')?.addEventListener('click'");
+    const handler15 = at > 0 ? appSrc15b.slice(at, appSrc15b.indexOf('\n  });', at)) : '';
+    const nativeArm = (handler15.match(/if \(isNativeShell\(\)\) \{[\s\S]*?\n        return;/) || [''])[0];
+    assert(nativeArm.length > 0,
+      '15-14: fixture check — the priming button\'s isNativeShell() arm was located inside the real handler in js/app.js');
+    const nativeCode = nativeArm
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    assert(/refreshPushActiveFlag\(\)/.test(nativeCode),
+      '15-15: the native arm recomputes the push-active flag before it returns, exactly as the web arm does below it (notifytest [25g]) — without it, a native player who just granted permission keeps getting the in-app chat preview for everything the phone is now also pushing, until the next cold launch');
+  }
+
+  // ── (e) 15-16 IS DELETED ON PURPOSE. 2026-09-24. ─────────────────────────
+  //
+  // It asserted: "the dashboard teaser is UNCHANGED by this fix — it still
+  // renders its preview and is still not gated on getPushActive()." It was
+  // written the same day, deliberately, with this instruction attached:
+  //
+  //     "This assertion exists so that a later pass that DOES retire it has to
+  //      come back here and delete it on purpose, with a dated note — rather
+  //      than discovering afterwards that nothing was recording the decision."
+  //
+  // This is that pass, and this is that note. Drew retired the teaser on
+  // 2026-09-24 (Option A) — the whole card, on every device, along with the
+  // in-app preview toast. §6's open user-experience item is closed by ruling,
+  // not by a bugfix quietly widening its scope: the assertion did its job,
+  // which was to make sure this deletion was a decision somebody signed.
+  //
+  // Nothing replaces it here. `dashboardChatTeaserHTML()` no longer exists, so
+  // there is no source to match; the absence is asserted where it is
+  // observable instead — layouttest A2j (the Dashboard renders no teaser),
+  // boottest [28] B (not even for a resolved member) and unreadtest [16] (the
+  // nav badge is the only in-app signal left, and nothing is floated over the
+  // page for an incoming message).
+
+  // Leave the harness the way [15] found it — the shell uninstalled, the
+  // audio/DOM stubs restored, the flag back to its safe default.
+  uninstallNative();
+  globalThis.document.body.appendChild = realAppend15;
+  if (realAudioCtx15 === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = realAudioCtx15;
+  chatUi15._resetToastsForTest();
+  storage.setNotifPrefs({ sound: false });
+  storage.clearSession();
+  storage.setPushActive(false);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [16] RG-243 (2026-09-24) — THE WEB HALF OF "I still see the chat preview",
+//      and it is TWO answers, not one.
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Drew, verbatim: *"Chat preview is on webview desktop/mobile and ios"*. The iOS
+// half was RG-242 ([15] above) and is fixed. This section is the WEB half, and
+// the first thing it does is establish that there is NO defect in the web
+// pushActive ladder — because the investigation that assumed there was one was
+// about to change a predicate that is already correct.
+//
+// THE LIVE FACT THAT SETTLED IT. notify-fanout's rows for 2026-09-24 record
+// Drew's member id p1 as `reason:"no_subscription"` in EVERY fan-out (19:15,
+// 19:31), and a push self-test addressed only to p1 came back from OneSignal
+// invalid:0 / pushed:0. His PHONE receives chat pushes; the BROWSER he was
+// looking at is not a subscribed device. Under DI-N3/R10 that browser is
+// supposed to show the in-app preview — UN-N3 in as many words: "not having push
+// must never be the same as going blind." So (a)-(c) below pin the ladder's
+// three terms against a fake v16 SDK, and the answer they pin is "working".
+//
+// THE ACTUAL DEFECT IS ONE LAYER BACK, and it is why that browser has no
+// subscription to begin with. RG-192's remedy for "permission granted, no
+// subscription" was `maybeAutoOptInPush()` — a prompt-free boot repair, adopted
+// precisely because "five of six players are not going to be walked through a
+// settings screen." It has exactly ONE caller (js/app.js's boot tail, inside
+// `ensureOneSignalInit().then()`), it spends a page-lifetime latch on its very
+// first line, and in authMode:'supabase' it is routinely handed `playerId: null`
+// — RG-177's own finding, restated here because it is load-bearing:
+// `ensureSupabaseDataHydrated('boot')` returns FALSE immediately when the active
+// league is not resolved yet (the membership refresh is deliberately not
+// awaited) and `runPostHydrateTail()` runs anyway. So the repair burns its one
+// attempt on a call it could not act on, the identity lands milliseconds later,
+// and nothing tries again for the life of the page.
+//
+// The asymmetry names the fix layer by itself: `resyncPlayerPreferences()` is
+// the app's ONE session chokepoint and it already re-arms exactly this class of
+// boot-order loss — `loginOneSignal()` for RG-192, `refreshWagerCache()` for
+// RG-120 ("a device that booted SIGNED OUT and signed in afterwards never got a
+// wager list at all this session"), `refreshPushActiveFlag()` for DI-N3. The
+// push-subscription repair was the one that was never added to it.
+console.log('\n[16] RG-243 — the web pushActive ladder is CORRECT; the boot-order hole is in the subscription repair…');
+{
+  const app16    = await import('./js/app.js');
+  const push16   = await import('./js/push-onesignal.js');
+  const chatUi16 = await import('./js/chat-ui.js');
+
+  const saved16 = {
+    document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch,
+    matchMedia: globalThis.matchMedia, Notification: globalThis.Notification,
+    PushSubscriptionOptions: globalThis.PushSubscriptionOptions,
+    OneSignalDeferred: globalThis.OneSignalDeferred, AudioContext: globalThis.AudioContext,
+  };
+  const setNav16 = (v) => { try { globalThis.navigator = v; }
+    catch { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } };
+  const keepAlive16 = async (p) => { const ka = setInterval(() => {}, 5); try { return await p; } finally { clearInterval(ka); } };
+  const settle16 = (ms = 150) => keepAlive16(new Promise(r => setTimeout(r, ms)));
+
+  let CALLS16 = [];
+  let appended16 = 0, audio16 = 0;
+  let browserSub16 = false;
+
+  /**
+   * A fake WEB v16 SDK in the shape js/push-onesignal.js actually consumes —
+   * read from that module, not from memory of the API: `User.PushSubscription
+   * .{optedIn,id,token,optIn(),optOut()}`, `User.externalId`, `login(id,jwt)`,
+   * `logout()`, `Notifications.requestPermission()`, and a deferred queue that
+   * INVOKES its callbacks (never awaits them in series), which is the SDK fact
+   * [12] already models.
+   */
+  function installWeb16({ permission = 'granted', optedIn = true, subId = 'sub-abc', mintOk = true } = {}) {
+    CALLS16 = [];
+    push16._resetForTest({ sdkReadyMs: 400 });
+    push16._setIdentityMinterForTest(mintOk
+      ? async () => { CALLS16.push('mint'); return { ok: true, token: 'tok', expiresAtMs: Date.now() + 86400000 }; }
+      : async () => { CALLS16.push('mint:FAIL'); return { ok: false, reason: 'unreachable' }; });
+    const sub = {
+      optedIn, id: subId,
+      async optIn() { CALLS16.push('optIn'); sub.optedIn = true; sub.id = 'sub-new'; browserSub16 = true; },
+      async optOut() { CALLS16.push('optOut'); sub.optedIn = false; sub.id = undefined; browserSub16 = false; },
+    };
+    const user = { PushSubscription: sub, externalId: '' };
+    const sdk = {
+      async init() { CALLS16.push('init'); },
+      async login(id, jwt) { CALLS16.push(`login(${id})`); user.externalId = String(id); return jwt; },
+      async logout() { CALLS16.push('logout'); user.externalId = ''; },
+      User: user,
+      Notifications: { addEventListener() {}, async requestPermission() { CALLS16.push('requestPermission'); } },
+    };
+    browserSub16 = !!subId;
+    globalThis.document = {
+      addEventListener() {}, removeEventListener() {},
+      getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+      createElement: () => ({ src: '', defer: false, onload: null, onerror: null,
+        set innerHTML(v) {}, get innerHTML() { return ''; }, appendChild() {}, remove() {},
+        addEventListener() {}, removeEventListener() {}, classList: { add() {}, remove() {} }, style: {}, id: '', className: '' }),
+      head: { appendChild(s) { const t = setTimeout(() => s.onload?.(), 5); t?.unref?.(); } },
+      body: { classList: { add() {}, remove() {} }, appendChild() { appended16++; }, innerHTML: '', dataset: {} },
+      hidden: false,
+    };
+    setNav16({ userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130', vendor: 'Google Inc.', maxTouchPoints: 0,
+      serviceWorker: { getRegistration: async () => ({
+        pushManager: { getSubscription: async () => (browserSub16 ? { endpoint: 'https://push.example/x' } : null) } }) } });
+    globalThis.matchMedia = () => ({ matches: false });
+    globalThis.Notification = { permission };
+    globalThis.PushSubscriptionOptions = function () {};
+    globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
+    globalThis.OneSignalDeferred = { push: (fn) => { fn(sdk); } };
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'abad65e9-e9d8-4b69-b342-c43947a7189a' }) });
+    globalThis.AudioContext = class {
+      constructor() { audio16++; this.currentTime = 0; this.destination = {}; }
+      createOscillator() { return { frequency: {}, type: '', connect: () => ({ connect: () => {} }), start() {}, stop() {} }; }
+      createGain() { return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: () => ({ connect: () => {} }) }; }
+    };
+    return sdk;
+  }
+
+  /** One incoming chat message, through the SHIPPED toast + blip seams — the
+   *  same instrument [15] uses, and for the same reason chat-ui.js's own note
+   *  gives: a re-implementation of the predicate would pass while the shipped
+   *  one did something else. */
+  const incoming16 = () => {
+    chatUi16._resetToastsForTest();
+    appended16 = 0; audio16 = 0;
+    chatUi16._showToastForTest({ author: 'system', body: 'Kihoon: taking the points' });
+    chatUi16._playBlipForTest();
+    return { previews: appended16, blips: audio16 };
+  };
+
+  storage.savePlayer({ playerId: 'p16', displayName: 'Web Tester', active: true, preferences: {} });
+  storage.setSession('p16', true, true);
+  storage.setNotifPrefs({ toasts: true, sound: true });
+
+  // ── (a) A SUBSCRIBED WEB DEVICE RESOLVES TRUE, AND THE PREVIEW STANDS DOWN.
+  //      This is the assertion the "web is broken too" hypothesis predicted
+  //      would fail. It does not. Both async terms are driven for real: the
+  //      browser's own Notification.permission AND the SDK's
+  //      User.PushSubscription.optedIn. ──
+  {
+    installWeb16({ permission: 'granted', optedIn: true });
+    storage.setPushActive(false);
+    const st = await keepAlive16(push16.subscriptionState());
+    const opted = await keepAlive16(push16.isPushOptedIn());
+    assert(st === 'granted' && opted === true,
+      `16-1: fixture check — the fake v16 SDK really is seen as a supported, permitted, SUBSCRIBED web browser (subscriptionState=${st}, isPushOptedIn=${opted}). Without both, every assertion below would be vacuous`);
+    const active = await keepAlive16(app16.refreshPushActiveFlag());
+    assert(active === true && storage.getPushActive() === true,
+      `16-2: refreshPushActiveFlag() resolves TRUE on a SUBSCRIBED web browser (got ${active}, flag ${storage.getPushActive()}). The web ladder is NOT the defect — reported as a candidate, driven here end to end, and it holds`);
+    const seen = incoming16();
+    assert(seen.previews === 0 && seen.blips === 0,
+      `16-3: …so an incoming chat message renders NO in-app preview and makes no sound on that browser (previews ${seen.previews}, blips ${seen.blips}) — DI-N3/R10, the same rule [15] proved for the handset`);
+  }
+
+  // ── (b) GRANTED BUT NOT SUBSCRIBED — the RG-192 state, and the state Drew's
+  //      browser is actually in (notify-fanout: p1 "no_subscription", every
+  //      fan-out today). The preview he is seeing there is CORRECT, and the
+  //      assertion says so in those words so a later pass cannot "fix" it. ──
+  {
+    installWeb16({ permission: 'granted', optedIn: false, subId: undefined });
+    storage.setPushActive(true);                 // start from the WRONG answer
+    const active = await keepAlive16(app16.refreshPushActiveFlag());
+    const seen = incoming16();
+    assert(active === false && storage.getPushActive() === false && seen.previews === 1 && seen.blips === 1,
+      `16-4: permission 'granted' with NO OneSignal subscription ⇒ push-active FALSE and the in-app preview comes straight back (active=${active}, previews=${seen.previews}, blips=${seen.blips}). This is UN-N3, not a bug: nothing is being delivered to that browser, so silencing it would leave the player blind on both surfaces. Retiring the preview outright is a user-experience DI, never a bugfix`);
+  }
+
+  // ── (c) THE THIRD TERM, on web. Master OFF means no push is coming. ──
+  {
+    installWeb16({ permission: 'granted', optedIn: true });
+    storage.setNotifyPushMaster(false);
+    storage.setPushActive(true);
+    const active = await keepAlive16(app16.refreshPushActiveFlag());
+    const seen = incoming16();
+    assert(active === false && seen.previews === 1,
+      `16-5: the player's own master toggle still wins on web (active=${active}, previews=${seen.previews}) — DI-N3's third term, asserted on the platform [15-8] asserted it for natively`);
+    storage.setNotifyPushMaster(true);
+  }
+
+  // ── (d) THE DEFECT. A Supabase boot in its REAL order: the tail runs before
+  //      memberships resolve, so the one auto-repair call arrives with nobody
+  //      to repair for — and the identity lands a moment later at the session
+  //      chokepoint. The device must end up subscribed AND linked. ──
+  {
+    installWeb16({ permission: 'granted', optedIn: false, subId: undefined });
+    app16._resetAutoOptInForTest();
+    const atBoot = await keepAlive16(app16.maybeAutoOptInPush(null));   // boot tail: getSession().playerId is null
+    assert(atBoot === false && !CALLS16.includes('optIn'),
+      '16-6: fixture check — the boot-tail call with no resolved identity does no repair (there is nobody to link a subscription to), which is correct on its own');
+    const afterIdentity = await keepAlive16(app16.maybeAutoOptInPush('p16'));  // resyncPlayerPreferences(), milliseconds later
+    await settle16();
+    assert(CALLS16.includes('optIn'),
+      `16-7: THE DEFECT — once the identity lands, the prompt-free repair must still run: OneSignal.User.PushSubscription.optIn() is the ONLY call that creates the subscription (RG-192). Got ${JSON.stringify(CALLS16)}. Pre-fix the page-lifetime latch was spent on its own first line, ABOVE the \`if (!playerId)\` guard, so the boot tail's null call burned the single attempt and the browser stayed "allowed to notify, registered nowhere" for the life of the page — which is exactly what notify-fanout reports for p1`);
+    assert(CALLS16.includes('login(p16)') && afterIdentity === true,
+      `16-8: …and the new subscription is LINKED to the member in the same pass (returned ${afterIdentity}, calls ${JSON.stringify(CALLS16)}) — a subscription with nobody attached is the orphan RG-192 is about, and notify-fanout would keep reporting no_subscription for that player`);
+    const status = await keepAlive16(push16.pushDeviceStatus());
+    assert(status.ok === true,
+      `16-9: …and the device's own three-fact verdict agrees — permission, a live subscription, the external id attached (got ${JSON.stringify(status)}). The verdict is re-read from the SDK, never inferred from the call we just made`);
+  }
+
+  // ── (e) THE LATCH IS STILL A LATCH. "Once per page load" is what keeps this
+  //      off the re-subscribe treadmill; the fix narrows WHEN it is spent, it
+  //      does not remove it. ──
+  {
+    const before = CALLS16.length;
+    const again = await keepAlive16(app16.maybeAutoOptInPush('p16'));
+    assert(again === false && CALLS16.length === before,
+      `16-10: a second call in the same page load does nothing at all (returned ${again}, ${CALLS16.length - before} new SDK call(s)) — the attempt is still budgeted at one, so a player switch or a re-render can never put this device on a subscribe/re-subscribe loop`);
+  }
+
+  // ── (f) IT STILL CANNOT PROMPT, WHICH IS THE PRECONDITION THE WHOLE PATH
+  //      RESTS ON (DI-A2: the permission sheet lives behind the Turn On button
+  //      and nowhere else). v16's optIn() RAISES the native prompt when
+  //      permission is not already granted. ──
+  {
+    installWeb16({ permission: 'default', optedIn: false, subId: undefined });
+    app16._resetAutoOptInForTest();
+    const res = await keepAlive16(app16.maybeAutoOptInPush('p16'));
+    await settle16();
+    assert(res === false && !CALLS16.includes('optIn') && !CALLS16.includes('requestPermission'),
+      `16-11: permission 'default' ⇒ the auto-repair refuses outright: no optIn(), no requestPermission(), no prompt on first paint (calls ${JSON.stringify(CALLS16)}). This is what makes the boot path prompt-free BY CONSTRUCTION rather than by care`);
+  }
+  {
+    installWeb16({ permission: 'granted', optedIn: false, subId: undefined });
+    app16._resetAutoOptInForTest();
+    storage.setNotifyPushMaster(false);
+    const res = await keepAlive16(app16.maybeAutoOptInPush('p16'));
+    await settle16();
+    assert(res === false && !CALLS16.includes('optIn'),
+      `16-12: …and a player whose master push preference is OFF is not overruled either (calls ${JSON.stringify(CALLS16)}) — the app does not subscribe a device on behalf of somebody who said no`);
+    storage.setNotifyPushMaster(true);
+  }
+
+  // ── (g) THE WIRING [structural]. The behavioural half above drives the
+  //      exported function directly; `resyncPlayerPreferences()` is not
+  //      exported, so the claim "the chokepoint calls it" is asserted on the
+  //      shipped source — the same technique [15-15] uses for the priming
+  //      button's native arm. Comments are blanked (length-preserving) because
+  //      that function's prose NAMES every one of these calls. ──
+  {
+    const appSrc16 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const fn16 = (appSrc16.match(/function resyncPlayerPreferences\(\{[\s\S]*?\n\}/) || [''])[0];
+    const code16 = fn16
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    assert(fn16.length > 0 && fn16.length === code16.length,
+      '16-13: fixture check — resyncPlayerPreferences() was located in js/app.js and the comment blanker preserves length');
+    assert(/loginOneSignal\(sess\.playerId\)/.test(code16) && /refreshWagerCache\(/.test(code16) && /refreshPushActiveFlag\(\)/.test(code16),
+      '16-14: fixture check — the chokepoint really is where RG-192, RG-120 and DI-N3 each re-arm their own boot-order loss. That precedent is the argument for the line below, so it is asserted rather than asserted about');
+    assert(/maybeAutoOptInPush\(/.test(code16),
+      '16-15: THE FIX\'S WIRING — the subscription repair is re-armed at the SAME session chokepoint as the identity call beside it. Without it the repair has exactly one caller, in the boot tail, at the one moment authMode:\'supabase\' cannot guarantee an identity (RG-177: the tail runs before the league resolves), and a browser that misses it is "allowed to notify, registered nowhere" until the next reload');
+
+    const fn16b = (appSrc16.match(/export async function maybeAutoOptInPush\(playerId\) \{[\s\S]*?\n\}/) || [''])[0];
+    const code16b = fn16b
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
+    assert(fn16b.length > 0 && code16b.indexOf('if (!playerId) return false;') < code16b.indexOf('_autoOptInTried = true;'),
+      '16-16: …and the page-lifetime latch is spent BELOW the identity guard, not above it — a call that could not even try must not consume the one attempt. Order is the whole fix here, so it is pinned as order [structural]');
+  }
+
+  // ── (h) WHAT THE PLAYER IS TOLD when the repair has not (yet) happened. The
+  //      granted-but-unregistered state renders a card with an action on it,
+  //      and the linked-but-unsubscribed state renders a different one. Both
+  //      are RG-192's copy; this pins that the recovery path still exists for
+  //      the device the auto-repair could not reach. ──
+  {
+    const appSrc16h = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    const card16 = (appSrc16h.match(/function renderPrimingCardHTML\(pushState, device = null\) \{[\s\S]*?\n\}/) || [''])[0];
+    assert(/PUSH_STATUS_NO_SUBSCRIPTION/.test(card16) && /PUSH_STATUS_NOT_LINKED/.test(card16) && /PUSH_STATUS_BTN/.test(card16),
+      '16-17: the 🔔 Notification Center still renders the two RG-192 recovery states — "allowed, but this device isn\'t registered" and "registered but not linked" — each with the Reconnect button. That is the ONLY player-visible surface for this condition, and the auto-repair is what keeps players from having to find it');
+  }
+
+  // ── restore ──────────────────────────────────────────────────────────────
+  push16._setIdentityMinterForTest(null);
+  push16._resetForTest({});
+  app16._resetAutoOptInForTest();
+  chatUi16._resetToastsForTest();
+  globalThis.document = saved16.document; setNav16(saved16.navigator); globalThis.fetch = saved16.fetch;
+  globalThis.matchMedia = saved16.matchMedia; globalThis.Notification = saved16.Notification;
+  globalThis.PushSubscriptionOptions = saved16.PushSubscriptionOptions;
+  globalThis.OneSignalDeferred = saved16.OneSignalDeferred;
+  if (saved16.AudioContext === undefined) delete globalThis.AudioContext; else globalThis.AudioContext = saved16.AudioContext;
+  storage.setNotifPrefs({ sound: false });
+  storage.clearSession();
+  storage.setPushActive(false);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
