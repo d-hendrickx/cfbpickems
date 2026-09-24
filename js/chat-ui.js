@@ -83,8 +83,13 @@ import {
   forceRefresh,
   isPrivateSelfTest,
 } from './chat.js';
-import { scribeInspectMessage, scribeTrigger, resetScribeMemory } from './scribeLines.js';
-import { recordFeedback, getFeedbackFor, isScribeFeedbackEnabled } from './scribeFeedback.js';
+import {
+  scribeInspectMessage, scribeTrigger, resetScribeMemory,
+  REASON_CHIP_COPY, REASON_CHIP_SECTION_COPY,
+} from './scribeLines.js';
+import {
+  recordFeedback, recordFeedbackReasons, getFeedbackFor, isScribeFeedbackEnabled,
+} from './scribeFeedback.js';
 import {
   getSession, getPlayers, getPlayer, getCurrentWeek, getGames, getWeeks,
   getPicks, getEffectiveWeekStatus, arePicksPublic,
@@ -92,7 +97,10 @@ import {
   getNotifPrefs, setNotifPrefs,
   getPushActive,
 } from './storage.js';
-import { formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE, CHAT_ACCENTS } from './data-model.js';
+import {
+  formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE, CHAT_ACCENTS,
+  SCRIBE_FEEDBACK_REASON_CHIPS, SCRIBE_FEEDBACK_CHIP_FAMILY,
+} from './data-model.js';
 import { calculateAtsWinner } from './scoring.js';
 // RG-176 — the generic repaint-survival mechanism. app.js wires it at
 // navigateTo(), but renderChatPage() is ALSO reached from four places that
@@ -1224,6 +1232,95 @@ function persistentStarHTML(m, self) {
 // red on its own assertion rather than only inside messageHTML()'s composite.
 export const _persistentStarHTMLForTest = persistentStarHTML;
 
+// ── DI-268/DI-269 (UN-245/UN-246) — reason chips + the optional "why" ────────
+/**
+ * SUPPRESSION 3 OF 3 (see feedbackButtonHTML and persistentStarHTML above).
+ *
+ * A changelog post and a wager receipt are SCRIBE-authored MECHANISMS, not
+ * SCRIBE LINES — both already refuse the ⭐ entirely, so neither can normally
+ * reach this popover at all. The guard is repeated here anyway because the
+ * failure shape those two functions' comments describe is EXACTLY this one:
+ * honouring the rule in some of the places that render the feature and not in
+ * the others. If a future entry point ever opens the popover on one of these,
+ * it gets a rating and stops there — no chips, no note, nothing that would feed
+ * the Trainer opinions about copy nobody wrote in SCRIBE's voice.
+ *
+ * Unlike its two siblings this one is a named predicate rather than an inline
+ * `if`: the two above are pinned verbatim by feedbacktest's mutation fixtures,
+ * and rewriting them to share this helper would change source text those tests
+ * read. The list of kinds is the same list, deliberately spelled out so a grep
+ * for `wagerLogged` still finds every site.
+ */
+const FEEDBACK_EXTRAS_SUPPRESSED_KINDS = ['whatsNew', 'wagerLogged', 'wagerDue'];
+function feedbackExtrasSuppressed(m) {
+  return FEEDBACK_EXTRAS_SUPPRESSED_KINDS.includes(m?.meta?.kind);
+}
+
+/** The rater's own chip set, defended at the READ boundary as well as the
+ *  write one: the fold stores whatever a 'reason' event carried, and this is a
+ *  render path, so a malformed value must produce an empty row rather than a
+ *  thrown template. */
+function reasonChipsOf(mine) {
+  const raw = mine?.reason;
+  return Array.isArray(raw) ? raw.filter(c => SCRIBE_FEEDBACK_REASON_CHIPS.includes(c)) : [];
+}
+
+/** Chips of one family, in the closed set's own order (DI-268: the order IS
+ *  the render order, so a chip added to the taxonomy appears here without a
+ *  second list to update). */
+function chipsInFamily(family) {
+  return SCRIBE_FEEDBACK_REASON_CHIPS.filter(c => SCRIBE_FEEDBACK_CHIP_FAMILY[c] === family);
+}
+
+function reasonChipHTML(chip, selected) {
+  const label = REASON_CHIP_COPY[chip] || chip;
+  return `<button type="button" class="feedback-chip${selected.includes(chip) ? ' active' : ''}" `
+       + `data-fb-chip="${esc(chip)}" aria-pressed="${selected.includes(chip) ? 'true' : 'false'}">${esc(label)}</button>`;
+}
+
+/**
+ * The second row of the SAME popover — revealed by the rating itself, never by
+ * a second open/close cycle (DI-268's explicit requirement).
+ *
+ * WHAT RENDERS WHEN:
+ *   no rating yet   → nothing. The 2×2 grid stays exactly what it has always
+ *                     been, so a player who only wants to rate still spends one
+ *                     tap and is done. The chip step is OPTIONAL — dismissing
+ *                     with zero chips leaves just the rating, which is the
+ *                     "one extra tap floor" the design input protects.
+ *   mid / too_much  → "What kind of miss?", then the ANNOYING family, then the
+ *                     MEAN family, then the four shared diagnostics. The two
+ *                     families are visually separate because they argue for
+ *                     opposite corrections (talk less vs. hit softer) and
+ *                     Drew's ruling 7 turns on never confusing the two.
+ *   hit             → the single positive chip, alone, no cluster headings —
+ *                     there is nothing to disambiguate when the line landed.
+ * In all three rated states the optional free-text "why" (DI-269) sits last.
+ */
+function reasonSectionHTML(m, self, mine, rating, working) {
+  if (!rating || feedbackExtrasSuppressed(m)) return '';
+  // R-6 — `working` (this popover's own in-flight state) still outranks
+  // everything; below it, what this device last SENT outranks the lagging fold.
+  // See chipsOnFileFor()/noteOnFileFor() for why that override is bounded.
+  const selected = working && Array.isArray(working.chips) ? working.chips : chipsOnFileFor(m.id, self, mine);
+  const note = working && typeof working.note === 'string' ? working.note : noteOnFileFor(m.id, self, mine);
+  const C = REASON_CHIP_SECTION_COPY;
+  const row = chips => `<div class="feedback-chip-row">${chips.map(c => reasonChipHTML(c, selected)).join('')}</div>`;
+  const group = (label, family) => `<div class="feedback-chip-group">${esc(label)}</div>${row(chipsInFamily(family))}`;
+  const body = rating === 'hit'
+    ? `<div class="feedback-reason-prompt">${esc(C.hitPrompt)}</div>${row(chipsInFamily('positive'))}`
+    : `<div class="feedback-reason-prompt">${esc(C.missPrompt)}</div>`
+      + group(C.annoyingGroup, 'annoying')
+      + group(C.meanGroup, 'mean')
+      + group(C.sharedGroup, 'shared');
+  // maxlength AND the boundary clamp in recordFeedback() (DI-269) — the input
+  // stops a human at 280; the clamp stops everything else.
+  return `<div class="feedback-reason">${body}
+    <input type="text" class="feedback-note-input" data-fb-note="1" maxlength="280"
+      value="${esc(note)}" placeholder="${esc(C.notePlaceholder)}" aria-label="${esc(C.noteLabel)}">
+  </div>`;
+}
+
 /**
  * Popover contents. SCRIBE messages: 2×2 grid, 🔥 Hit · 😐 Mid · 🚫 Too much ·
  * ✏️ Rewrite — word label + emoji (not emoji-only; four single-character
@@ -1242,17 +1339,21 @@ export const _persistentStarHTMLForTest = persistentStarHTML;
  * already wrote one"); applied here uniformly across all six options as the
  * same mechanism, same reasoning, not a new one per option.
  */
-function feedbackPopoverHTML(m, self) {
+function feedbackPopoverHTML(m, self, working = null) {
   const mine = self ? (getFeedbackFor(m.id)[self] || {}) : {};
   if (m.author === 'scribe') {
+    // `working` is the popover's own in-flight state and OUTRANKS the fold
+    // while it is open — see mountFeedbackPicker()'s comment on why the fold
+    // cannot be the source of truth between a tap and its server echo.
+    const rating = working && 'rating' in working ? working.rating : (mine.rating || null);
     const opt = (val, emoji, label) =>
-      `<button type="button" class="feedback-pick-option${mine.rating === val ? ' active' : ''}" data-fb-rating="${esc(val)}">${esc(emoji)} ${esc(label)}</button>`;
+      `<button type="button" class="feedback-pick-option${rating === val ? ' active' : ''}" data-fb-rating="${esc(val)}">${esc(emoji)} ${esc(label)}</button>`;
     return `<div class="feedback-picker feedback-picker-grid">
       ${opt('hit', '🔥', 'Hit')}
       ${opt('mid', '😐', 'Mid')}
       ${opt('too_much', '🚫', 'Too much')}
       <button type="button" class="feedback-pick-option${mine.rewrite ? ' active' : ''}" data-fb-rewrite="1">✏️ Rewrite</button>
-    </div>`;
+    </div>${reasonSectionHTML(m, self, mine, rating, working)}`;
   }
   return `<div class="feedback-picker feedback-picker-stack">
     <button type="button" class="feedback-pick-option${mine.remember_this ? ' active' : ''}" data-fb-remember="1">📌 Remember this</button>
@@ -1299,38 +1400,375 @@ export const _feedbackPopoverHTMLForTest = feedbackPopoverHTML;
  * so the reveal-closer's "click inside the revealed message" check still
  * treats a click in the popover as inside (see [17] in feedbacktest.mjs).
  */
-function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage) {
+function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage, surface = 'main') {
   const existing = document.getElementById('chat-feedback-picker');
   const reopening = existing?.dataset?.mid === mid;
   existing?.remove();
   document.getElementById('chat-react-picker')?.remove();   // single-open-at-a-time across BOTH popovers
-  if (reopening) return;
+  // R-4 (2026-09-23) — RE-TAPPING THE ⭐ IS A DISMISSAL, AND A DISMISSAL SAVES.
+  // This path used to be the one exit that wrote nothing: a player who typed a
+  // "why" and then tapped the star again to put the popover away lost the
+  // sentence, silently. Disarm first (a write repaints, and an armed marker
+  // would re-mount the popover being dismissed), then flush.
+  if (reopening) { pendingFeedbackPicker = null; flushOpenFeedbackPicker(); return; }
   const self = me(); if (!self) return;
   const m = getMessage(mid); if (!m) return;
+  // R-4/F-3 — a popover for a DIFFERENT message was just discarded by the
+  // `existing?.remove()` above, and it may hold a typed note or a chip set still
+  // inside its debounce window. Its flush is taken NOW (the mount below is about
+  // to overwrite the module-level slot) but RUN AFTER the new popover mounts:
+  // the write repaints the room, and the repaint re-mounts whatever the marker
+  // names — doing it first would strand this mount on a detached row.
+  const discarded = existing ? takeFeedbackPickerFlush() : null;
   // Row container, never the trigger button — see the block comment above.
   const host = anchorEl.closest?.('.chat-actions, .chat-reactions') || anchorEl;
+  mountFeedbackPicker({ host, m, self, mid, surface, renderFn, working: null });
+  if (existing) flushFeedbackPickerWork(discarded);
+}
+
+/**
+ * DI-268 — THE POPOVER HAS TO OUTLIVE ITS OWN WRITES, AND THAT IS THE WHOLE
+ * REASON THIS FUNCTION EXISTS SEPARATELY FROM THE TOGGLE ABOVE.
+ *
+ * Revealing the reason chips "in the SAME popover, no extra open/close cycle"
+ * runs straight into two facts about this codebase:
+ *
+ *  1. EVERY WRITE REPAINTS THE ROOM. `recordFeedback()` → `sendEvent()` →
+ *     `ingest()` notifies `handleChatEvent`, which calls `renderChatPage()`
+ *     synchronously — and that rebuilds `#page-chat`'s innerHTML, destroying
+ *     this node. The old code sidestepped it by closing the popover on every
+ *     tap; a popover that stays open cannot.
+ *  2. A LOCAL WRITE IS STAMPED {ts:0, seq:0} until the server echoes it back,
+ *     and `applyTo()` drops a same-key event that does not beat the current
+ *     stamp. So the SECOND tap on the same `(author, 'reason')` key does not
+ *     change the fold at all until the echo lands — a pre-existing property
+ *     shared with reactions and ratings, harmless when the control closes on
+ *     the first tap, fatal for a multi-select row that has to show its own
+ *     state back.
+ *
+ * Both are answered by the same two pieces: `working` — the popover's in-flight
+ * truth, which outranks the fold while it is open — and `pendingFeedbackPicker`
+ * — a module-level marker saying "a popover for this message, on this surface,
+ * in this state, was open when the repaint started." `bindMessageActionButtons()`
+ * re-mounts from that marker on the surface that owns it, which is the same
+ * function that re-binds every other per-message control after a repaint, so
+ * the popover is restored by the mechanism that destroyed it rather than by a
+ * second timer racing it.
+ *
+ * The marker is cleared on every dismissal path (outside click, re-tapping the
+ * trigger, opening the reaction picker, a rating cleared back to untouched, any
+ * modal that takes over). A click anywhere in the document that is not in the
+ * popover closes it, so it cannot survive the player leaving the page.
+ */
+let pendingFeedbackPicker = null;   // { mid, surface, author, working } while one is open
+
+/**
+ * F-3(a) — CHIP TAPS COALESCE BEHIND A TRAILING DEBOUNCE (2026-09-23).
+ *
+ * A player picking three chips wrote three rows into the append-only log, two
+ * of which were obsolete the instant the next tap landed. Coalescing is only
+ * safe because `recordFeedbackReasons()` writes a SET, NOT A DIFF: the last row
+ * written IS the whole answer, so dropping the intermediate ones loses nothing
+ * a reader could have used. (A diff-based event could not be debounced at all —
+ * that is the same property AD-09/AD-10's order-independence rests on.)
+ *
+ * MODULE-LEVEL, NOT IN THE MOUNT'S CLOSURE, for the reason everything else
+ * about this popover is: every write repaints the room and the repaint
+ * re-mounts the popover, so closure state is destroyed and rebuilt several
+ * times inside one debounce window. The timer, the pending set and the record
+ * of what was last SENT all have to outlive the node.
+ *
+ * `lastSentChips`/`lastSentNote` are what THIS DEVICE actually put on the wire.
+ * They are not the same as the fold: a local event is stamped {ts:0, seq:0}
+ * until the server echoes it, and applyTo() drops a second write to a key that
+ * already holds a same-stamped op — so right after an edit the fold still reads
+ * the PREVIOUS value. Comparing against the fold is what made Enter-then-blur
+ * write the same note twice (F-3(b)), and it is what would make the R-1 cascade
+ * fire redundantly.
+ */
+const CHIP_WRITE_DEBOUNCE_MS = 400;
+let chipWriteTimer = null;
+let pendingChipWrite = null;   // { mid, author, chips } — tapped, not yet sent
+let lastSentChips = null;      // { mid, author, chips } — the last set this device SENT
+let lastSentNote = null;       // { mid, author, text }  — the last note this device SENT
+// The live popover's "write what I have in flight" closure, taken by the
+// dismissal paths that live outside mountFeedbackPicker() (R-4).
+let openPickerFlush = null;
+
+const lastSentFor = (rec, mid, author) => (rec && rec.mid === mid && rec.author === author ? rec : null);
+function cancelChipWriteTimer() { if (chipWriteTimer) { clearTimeout(chipWriteTimer); chipWriteTimer = null; } }
+
+/** The ONE place a chip set goes on the wire, so `lastSentChips` can never
+ *  disagree with what was actually written. `foldAtSend` is the fold's value
+ *  immediately BEFORE the send — see the R-6 readers below for what it decides. */
+function sendChips({ mid, author, chips }) {
+  const foldAtSend = JSON.stringify(reasonChipsOf(getFeedbackFor(mid)[author]));
+  const ok = typeof recordFeedbackReasons({ targetId: mid, chips, author }) === 'string';
+  if (ok) lastSentChips = { mid, author, chips, foldAtSend };
+  return ok;
+}
+
+/**
+ * R-6 (2026-09-23) — WHAT THIS DEVICE LAST SENT OUTRANKS THE FOLD IN THE
+ * RATER'S OWN ROW, BUT ONLY UNTIL THE LOG MOVES.
+ *
+ * `mine.reason` / `mine.reason_note` lag by one server echo: a local event is
+ * stamped {ts:0, seq:0} and applyTo() drops a second write to a key that
+ * already holds one. A player who edited their "why" and reopened the popover
+ * inside that window was therefore shown the PREVIOUS sentence back — which is
+ * exactly how somebody concludes their edit did not save and types it again.
+ *
+ * THE OVERRIDE IS BOUNDED BY `foldAtSend`, and that bound is the whole reason
+ * this is safe: the record only wins while the fold still reads what it read
+ * when we sent. The moment the fold changes — our own echo arriving, or a
+ * LATER write from the player's other device — the log is authoritative again
+ * and the record is dropped. Without that, a stale local record would shadow
+ * another device's newer value for the rest of the session.
+ *
+ * Only ever the reader's OWN row (`lastSentFor` matches on author), so this
+ * cannot show one player anything about another. Chips get the identical
+ * treatment for the identical reason: the two values are computed three lines
+ * apart in `reasonSectionHTML()` from the same lagging source, and fixing one
+ * and not the other is the failure shape this file's suppression comments
+ * warn about three times over.
+ */
+function chipsOnFileFor(mid, self, mine) {
+  const fold = reasonChipsOf(mine);
+  const sent = lastSentFor(lastSentChips, mid, self);
+  if (!sent) return fold;
+  if (JSON.stringify(fold) !== sent.foldAtSend) { lastSentChips = null; return fold; }
+  // Filtered even coming from our own record: the read boundary is a rule about
+  // EVERY reader, not only untrusted ones (scribeFeedback.js's F-2 note).
+  return sent.chips.filter(c => SCRIBE_FEEDBACK_REASON_CHIPS.includes(c));
+}
+function noteOnFileFor(mid, self, mine) {
+  const fold = typeof mine?.reason_note === 'string' ? mine.reason_note : '';
+  const sent = lastSentFor(lastSentNote, mid, self);
+  if (!sent) return fold;
+  if (fold !== sent.foldAtSend) { lastSentNote = null; return fold; }
+  return sent.text;
+}
+function scheduleChipWrite(next) {
+  // A pending set for a DIFFERENT message/player is a different answer, not an
+  // earlier draft of this one — it goes out rather than being replaced.
+  if (pendingChipWrite && (pendingChipWrite.mid !== next.mid || pendingChipWrite.author !== next.author)) flushPendingChipWrite();
+  pendingChipWrite = next;
+  cancelChipWriteTimer();
+  chipWriteTimer = setTimeout(() => { chipWriteTimer = null; flushPendingChipWrite(); }, CHIP_WRITE_DEBOUNCE_MS);
+}
+/** Write an in-flight set NOW. Every dismissal path calls this: a set tapped
+ *  399ms before the popover closes must not be lost to the closing. */
+function flushPendingChipWrite() {
+  cancelChipWriteTimer();
+  const p = pendingChipWrite;
+  pendingChipWrite = null;
+  return p ? sendChips(p) : false;
+}
+/** Drop an in-flight set for THIS target without writing it — used only where
+ *  the very next line supersedes it (R-1's cascade), never to discard a tap. */
+function dropPendingChipWrite(mid, author) {
+  if (!pendingChipWrite) return;
+  if (pendingChipWrite.mid !== mid || pendingChipWrite.author !== author) { flushPendingChipWrite(); return; }
+  cancelChipWriteTimer();
+  pendingChipWrite = null;
+}
+
+function takeFeedbackPickerFlush() { const f = openPickerFlush; openPickerFlush = null; return f; }
+function flushFeedbackPickerWork(flushNote) { flushPendingChipWrite(); if (flushNote) flushNote(); }
+/** Everything the open popover has typed or tapped but not yet sent. */
+function flushOpenFeedbackPicker() { flushFeedbackPickerWork(takeFeedbackPickerFlush()); }
+/** …and the opposite: forget it all WITHOUT writing it. Only for F-1's owner
+ *  mismatch, where the in-flight work belongs to a player who is no longer the
+ *  one at the keyboard. */
+function dropFeedbackPickerWork() {
+  pendingFeedbackPicker = null;
+  openPickerFlush = null;
+  cancelChipWriteTimer();
+  pendingChipWrite = null;
+}
+
+/**
+ * R-1 — the chips a given rating can actually SHOW. "Hit" renders the single
+ * positive chip; the two miss ratings render the ten miss chips. Filtering on a
+ * flip is what stops a selected chip the player can no longer see (and
+ * therefore can no longer un-tap) from sitting in the log arguing a correction
+ * the rating contradicts. mid ↔ too_much both render the same ten, so this
+ * drops nothing there — DI-268's two miss ratings ask the same question.
+ */
+const chipsForRating = (rating, chips) =>
+  chips.filter(c => (SCRIBE_FEEDBACK_CHIP_FAMILY[c] === 'positive') === (rating === 'hit'));
+
+function mountFeedbackPicker({ host, m, self, mid, surface, renderFn, working }) {
+  document.getElementById('chat-feedback-picker')?.remove();
   const picker = document.createElement('div');
   picker.className = 'reaction-picker feedback-picker-wrap';
   picker.id = 'chat-feedback-picker';
   picker.dataset.mid = mid;
-  picker.innerHTML = feedbackPopoverHTML(m, self);
+  picker.innerHTML = feedbackPopoverHTML(m, self, working);
   host.appendChild(picker);
+
+  const myState = () => getFeedbackFor(mid)[self] || {};
+  const curRating = () => (working && 'rating' in working ? working.rating : (myState().rating || null));
+  // Both fall through to the SAME readers the render uses (R-6), so what the
+  // popover shows and what the handlers believe is on file can never disagree.
+  const chipsOnFile = () => chipsOnFileFor(mid, self, myState());
+  const noteOnFile = () => noteOnFileFor(mid, self, myState());
+  const curChips = () => (working && Array.isArray(working.chips) ? working.chips : chipsOnFile());
+  const noteEl = picker.querySelector('[data-fb-note]');
+  // The LIVE input wins when it exists — a chip tapped after typing must not
+  // write the note back to its pre-typing value when it re-renders the row.
+  const curNote = () => (noteEl ? String(noteEl.value ?? '').slice(0, 280)
+    : (working && typeof working.note === 'string' ? working.note : noteOnFile()));
+  const snapshot = over => ({ rating: curRating(), chips: curChips(), note: curNote(), ...over });
+
+  // F-1 (2026-09-23) — THE MARKER CARRIES ITS OWNER. It holds chips and a note
+  // typed by the player who armed it, and `remountOpenFeedbackPicker()` puts
+  // that state back into a live popover whose writes go out under whoever
+  // `me()` is at the time. On a same-device account switch that does not
+  // repaint on its way through, the next player's first repaint would have
+  // re-mounted the previous player's in-flight text and written it under the
+  // new id. The re-mount now refuses a marker it does not own.
+  const arm = next => (pendingFeedbackPicker = { mid, surface, author: self, working: next });
+  // F-3 — closing flushes an in-flight chip set (a tap 399ms before the
+  // dismissal is still a tap), and releases the out-of-closure flush hook so a
+  // later dismissal path cannot fire a stale one. Disarm BEFORE the write, for
+  // the reason the outside-click closer documents at length.
+  const close = () => { pendingFeedbackPicker = null; openPickerFlush = null; picker.remove(); flushPendingChipWrite(); };
+  arm(working);
+
+  // The ONE place a note goes on the wire, so `lastSentNote` can never disagree
+  // with what was actually written (sendChips' twin, same `foldAtSend` rule).
+  const sendNote = text => {
+    const foldAtSend = typeof myState().reason_note === 'string' ? myState().reason_note : '';
+    const ok = typeof recordFeedback({ targetId: mid, category: 'reason_note', value: text, author: self }) === 'string';
+    if (ok) lastSentNote = { mid, author: self, text, foldAtSend };
+    return ok;
+  };
+  /** Bring the RECORDED chip set into line with `next`, writing only when the
+   *  log would actually change — set-not-diff means one row is the whole
+   *  answer, and a row that says what the last row already said is noise. */
+  const syncChips = next => {
+    dropPendingChipWrite(mid, self);
+    if (JSON.stringify(chipsOnFile()) !== JSON.stringify(next)) sendChips({ mid, author: self, chips: next });
+  };
+
+  /**
+   * Write, then make sure exactly one repaint happens and the popover survives
+   * it. `token` identity is how we tell "nobody repainted us" from "a repaint
+   * already consumed the marker and re-mounted us" — after the latter, the
+   * marker is a DIFFERENT object (the re-mount re-armed it), so calling
+   * renderFn() again would repaint with no marker and close the popover.
+   */
+  const writeAndStayOpen = (next, write) => {
+    const token = arm(next);
+    if (!write()) { close(); renderFn(); return; }
+    if (pendingFeedbackPicker === token) renderFn();
+  };
 
   picker.querySelectorAll('[data-fb-rating]').forEach(opt => opt.addEventListener('click', ev => {
     ev.stopPropagation();
-    const mineNow = getFeedbackFor(mid)[self] || {};
     // Re-tapping the CURRENTLY selected rating clears it back to untouched
     // (same toggle-off semantics toggleReact() already has) — an EXPLICIT
     // clear event (value: null), not silence, so the clear itself round-trips
     // through the record the same way the rating did.
-    const value = mineNow.rating === opt.dataset.fbRating ? null : opt.dataset.fbRating;
-    recordFeedback({ targetId: mid, category: 'rating', value, author: self });
-    picker.remove();
-    renderFn();
+    const value = curRating() === opt.dataset.fbRating ? null : opt.dataset.fbRating;
+    if (!value || feedbackExtrasSuppressed(m)) {
+      // A cleared rating has nothing to explain, and a suppressed post takes no
+      // chips at all — both close on the tap, exactly as this control always has.
+      //
+      // R-1 (2026-09-23) — AND A CLEAR CASCADES. The rating is what REVEALS the
+      // chips and the note, so `reason:['too_mean']` sitting under no rating at
+      // all is an orphan: no screen can show it, no tap can clear it, and
+      // Package C's Trainer would still read it as a live complaint about a
+      // line the player took their objection back on. The retraction goes out
+      // as explicit events in the order the state collapses — rating, chips,
+      // note — and each one only if there is something on file to retract.
+      const clearing = !value;
+      if (clearing) dropPendingChipWrite(mid, self);   // an in-flight set the empty set is about to supersede
+      close();
+      recordFeedback({ targetId: mid, category: 'rating', value, author: self });
+      if (clearing) {
+        if (chipsOnFile().length) sendChips({ mid, author: self, chips: [] });
+        if (noteOnFile()) sendNote('');
+      }
+      renderFn();
+      return;
+    }
+    // R-1 — FLIPPING a rating keeps only the chips the new rating can show (see
+    // chipsForRating). Written inside the same tap so the log never holds a
+    // combination the popover cannot render back.
+    const keep = chipsForRating(value, curChips());
+    writeAndStayOpen(snapshot({ rating: value, chips: keep }), () => {
+      const ok = typeof recordFeedback({ targetId: mid, category: 'rating', value, author: self }) === 'string';
+      if (ok) syncChips(keep);
+      return ok;
+    });
   }));
+
+  // DI-268 — a chip toggles in/out of the CURRENT set. No Save button: the
+  // design input's floor is one extra tap, and a confirm step would make it two
+  // for every chip.
+  //
+  // F-3(a) (2026-09-23) — THE TAP NO LONGER WRITES; it arms the trailing
+  // debounce above, so a burst of taps becomes ONE full-set row. What the
+  // player sees is unchanged: `working` is the popover's in-flight truth and it
+  // is armed before the repaint, exactly as it was when the write was
+  // immediate. Every dismissal path flushes, so the set cannot be lost.
+  picker.querySelectorAll('[data-fb-chip]').forEach(btn => btn.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const chip = btn.dataset.fbChip;
+    const cur = curChips();
+    const next = cur.includes(chip) ? cur.filter(c => c !== chip) : [...cur, chip];
+    const token = arm(snapshot({ chips: next }));
+    scheduleChipWrite({ mid, author: self, chips: next });
+    // Same token check writeAndStayOpen() makes, for the same reason:
+    // scheduleChipWrite() can flush an older set for another target, and that
+    // write repaints — after which the marker is a different object and this
+    // popover has already been re-mounted in its new state.
+    if (pendingFeedbackPicker === token) renderFn();
+  }));
+
+  // DI-269 — the optional "why". Written on Enter, on blur-with-a-change, and
+  // on dismissal (the closer below), never on every keystroke: each write is an
+  // event in an append-only log, and a per-character log is how a season's
+  // worth of chat rows becomes a season's worth of typing.
+  //
+  // F-3(b) (2026-09-23) — COMPARED AGAINST THE LAST TEXT THIS DEVICE SENT, not
+  // against the fold. A local write is stamped {ts:0, seq:0} until the server
+  // echoes it and applyTo() drops a second write to the same
+  // (author,'reason_note') key, so immediately after an edit the fold still
+  // reads the PREVIOUS note — which made Enter-then-blur on unchanged text look
+  // like a change and write the same sentence twice, one row each.
+  const noteChanged = () => !!noteEl && curNote() !== noteOnFile();
+  const writeNote = () => sendNote(curNote());
+  if (noteEl) {
+    // Text typed but not yet written still has to survive a repaint caused by
+    // somebody ELSE's message landing mid-sentence, so it rides the marker.
+    noteEl.addEventListener('input', () => { if (pendingFeedbackPicker) pendingFeedbackPicker.working = snapshot(); });
+    noteEl.addEventListener('change', () => { if (noteChanged()) writeAndStayOpen(snapshot(), writeNote); });
+    noteEl.addEventListener('keydown', kev => {
+      if (kev.key !== 'Enter') return;
+      kev.stopPropagation();
+      if (noteChanged()) writeAndStayOpen(snapshot(), writeNote);
+    });
+  }
+  // R-4 — the dismissal paths that live OUTSIDE this closure (re-tapping the ⭐
+  // in toggleFeedbackPicker, and the reaction picker evicting this popover in
+  // toggleMessageReactPicker) need a way to write what is in flight. They take
+  // this, and taking it clears it, so it can only ever fire for the live mount.
+  openPickerFlush = () => { if (noteChanged()) writeNote(); };
+
   picker.querySelector('[data-fb-rewrite]')?.addEventListener('click', ev => {
     ev.stopPropagation();
-    picker.remove();
+    // R-5 (2026-09-23) — A MODAL TAKING OVER IS A DISMISSAL TOO. close() already
+    // flushes the in-flight chip set; the note has to be said explicitly, and it
+    // is said AFTER close() so the disarmed marker cannot re-mount the popover
+    // this tap is replacing (the detached input still holds the text — the node
+    // is removed, not destroyed, so reading .value here is correct). "Type a
+    // why, then decide to write the line properly" is the most likely next tap
+    // a player mid-complaint makes, and it used to drop the sentence.
+    close();
+    if (noteChanged()) writeNote();
     const mineNow = getFeedbackFor(mid)[self] || {};
     openFeedbackTextModal({
       targetId: mid, category: 'rewrite', renderFn,
@@ -1345,13 +1783,17 @@ function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage) {
     const mineNow = getFeedbackFor(mid)[self] || {};
     // Toggle-style boolean presence — same idiom as a reaction: instant,
     // reversible, no toast (E1 copy strings: "Rating success: no toast").
+    //
+    // CLOSED BEFORE THE WRITE, not after: the write repaints the room, and a
+    // still-armed marker would have the repaint re-mount the popover this tap
+    // is dismissing. The human-message popover has no second state to reveal.
+    close();
     recordFeedback({ targetId: mid, category: 'remember_this', value: !mineNow.remember_this, author: self });
-    picker.remove();
     renderFn();
   });
   picker.querySelector('[data-fb-weighin]')?.addEventListener('click', ev => {
     ev.stopPropagation();
-    picker.remove();
+    close();
     const mineNow = getFeedbackFor(mid)[self] || {};
     // Part 0b correction #7 (binding) — "Weigh in" ALWAYS routes through the
     // rewrite modal with an OPTIONAL text field, rather than an instant
@@ -1378,7 +1820,22 @@ function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage) {
 
   setTimeout(() => {
     const closer = ev => {
+      // A repaint already replaced this node with a fresh mount (which bound
+      // its own closer) — this one has nothing left to close.
+      if (document.getElementById('chat-feedback-picker') !== picker) {
+        document.removeEventListener('click', closer);
+        return;
+      }
       if (!picker.contains(ev.target) && !ev.target.closest?.('[data-fb-open]')) {
+        // DISARM FIRST. Flushing below is a write, and a write repaints — an
+        // armed marker would re-mount the popover being closed.
+        pendingFeedbackPicker = null;
+        openPickerFlush = null;
+        // F-3 — the chip set first (an in-flight set is older than anything
+        // typed after it, and the log should read in the order it happened),
+        // then the note.
+        flushPendingChipWrite();
+        if (noteChanged()) writeNote();
         picker.remove();
         document.removeEventListener('click', closer);
       }
@@ -1386,6 +1843,59 @@ function toggleFeedbackPicker(anchorEl, mid, renderFn = renderChatPage) {
     document.addEventListener('click', closer);
   }, 0);
 }
+
+/**
+ * Put back a popover a repaint took away (DI-268 — see mountFeedbackPicker's
+ * block comment for why one exists to put back).
+ *
+ * Called from `bindMessageActionButtons()`, i.e. once per surface per repaint,
+ * with that surface's own triggers and render function — which is what keeps
+ * the main feed and the game sheet from stealing each other's open popover
+ * when both are on screen. It takes the trigger LIST the binder already
+ * collected rather than re-querying: one selector, one place.
+ *
+ * A marker whose message this surface does not render is LEFT ALONE rather than
+ * cleared: the sheet re-binds after the main feed on the same repaint, and
+ * clearing here would mean whichever surface bound first destroyed the other's
+ * popover. Every dismissal path clears it explicitly; this function only ever
+ * consumes a marker it can actually satisfy.
+ *
+ * F-1 (2026-09-23) — EXCEPT WHEN THE MARKER IS NOT THIS PLAYER'S. The marker
+ * carries in-flight chips and note text typed by whoever armed it, and the
+ * popover it re-mounts writes under `me()` AT THE TIME OF THE TAP. A same-device
+ * account switch that does not repaint on its way through (a PIN sheet, a
+ * handover) therefore had one repaint's worth of window in which the next
+ * player could re-mount the previous player's unsent words and put them in the
+ * append-only log under their own id. Checked BEFORE the surface test, not
+ * after: a marker owned by somebody else is invalid on EVERY surface, so there
+ * is nothing to leave behind for the other surface's bind to pick up. The
+ * in-flight work is DROPPED rather than flushed — the player who typed it is
+ * gone from this device, and a handover deliberately discards unsent work
+ * (chat.js's own outbox handover does the same).
+ */
+function remountOpenFeedbackPicker(triggers, renderFn, surface) {
+  const pending = pendingFeedbackPicker;
+  if (!pending) return;
+  const self = me();
+  if (!self || pending.author !== self) { dropFeedbackPickerWork(); return; }
+  if (pending.surface !== surface) return;
+  const m = getMessage(pending.mid); if (!m) { pendingFeedbackPicker = null; return; }
+  const candidates = (triggers || []).filter(b => b.dataset?.fbOpen === pending.mid);
+  if (!candidates.length) return;
+  // Prefer the ALWAYS-VISIBLE persistent ⭐ row: `.chat-actions` is revealed by
+  // long-press and a fresh repaint has no reveal state, so hosting there would
+  // put the popover inside a hidden row.
+  const anchor = candidates.find(b => String(b.className || '').includes('chat-fb-star')) || candidates[0];
+  const row = anchor.closest?.('.chat-actions, .chat-reactions') || anchor;
+  mountFeedbackPicker({ host: row, m, self, mid: pending.mid, surface, renderFn, working: pending.working });
+}
+// Test-only seam. The re-mount itself is exercised through the REAL binder
+// (`_bindMessageActionButtons`) rather than a seam of its own — WHERE the
+// popover comes back and WHO puts it there is the whole property, and a direct
+// call would prove neither. This exposes only the marker, so a suite can assert
+// that a dismissal really disarmed it (a stale marker is the one failure mode
+// that resurrects a popover nobody opened).
+export function _openFeedbackPickerStateForTest() { return pendingFeedbackPicker; }
 // Test-only seam (same convention as `_persistentStarHTMLForTest` /
 // `_feedbackPopoverHTMLForTest` / `_revealMessageActions`). Reviewer BLOCK
 // finding #1/#2, 2026-09-10: WHERE the popover lands in the DOM is the whole
@@ -2361,11 +2871,20 @@ function bindFilterButtons(root) {
  */
 function bindMessageActionButtons(host, renderFn, surface) {
   host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
-  host?.querySelectorAll('[data-fb-open]').forEach(b => b.addEventListener('click', e => {
+  // ONE query, reused twice below — the wiring and the DI-268 re-mount both
+  // want the same set of triggers, and a second `querySelectorAll` would be a
+  // second place to keep the selector correct (feedbacktest [28](f) pins that
+  // there is exactly one).
+  const fbTriggers = [...(host?.querySelectorAll('[data-fb-open]') || [])];
+  fbTriggers.forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     if (!me()) return;
-    toggleFeedbackPicker(b, b.dataset.fbOpen, renderFn);
+    toggleFeedbackPicker(b, b.dataset.fbOpen, renderFn, surface);
   }));
+  // DI-268 — an open feedback popover is restored HERE, by the same function
+  // that re-binds every other per-message control after a repaint. See
+  // remountOpenFeedbackPicker() for why it has to be re-mounted at all.
+  remountOpenFeedbackPicker(fbTriggers, renderFn, surface);
   host?.querySelectorAll('[data-react-open]').forEach(b => b.addEventListener('click', e => {
     e.stopPropagation();
     if (!me()) return;
@@ -2586,6 +3105,21 @@ function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
   const reopening = existing?.dataset?.mid === mid;
   existing?.remove();
   document.getElementById('chat-feedback-picker')?.remove();   // single-open-at-a-time across BOTH popovers (E1)
+  pendingFeedbackPicker = null;   // …and it stays closed: disarm the re-mount marker (DI-268)
+  // R-4 (2026-09-23) — …but what the player had IN FLIGHT in it is still their
+  // work. This eviction was the second dismissal path that wrote nothing: the
+  // [data-react-open] handler calls stopPropagation(), so the feedback
+  // popover's own outside-click closer never runs for this tap, and an unwritten
+  // "why" plus an undebounced chip set went in the bin. Disarmed first, then
+  // flushed, for the usual reason (a write repaints; an armed marker would
+  // re-mount the popover this tap is evicting).
+  //
+  // KNOWN COST, accepted deliberately: if there really was something to write,
+  // the repaint it causes rebuilds the feed and `anchorEl` below is stale, so
+  // this one reaction picker may open detached and need a second tap. The
+  // reaction picker has no re-mount marker to restore it with, and a lost
+  // sentence is worse than a repeated tap.
+  flushOpenFeedbackPicker();
   if (reopening) return;
   const self = me(); if (!self) return;
   const host = anchorEl.closest?.('.chat-actions') || anchorEl;

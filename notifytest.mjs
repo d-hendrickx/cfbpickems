@@ -2811,9 +2811,16 @@ console.log('\n[25] Service worker: the two registrars converge, and only a real
       // injected name changes; everything this section asserts (one call, disabled
       // for the duration, one toast, re-enabled after, the push-active recompute)
       // is unchanged, because the reviewer ruling it guards is unchanged.
-      new Function('ov', 'showToast', 'enablePushOnThisDevice', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', src)(
+      // DI-240 (native push, 2026-09-23) — the handler gained an `if
+      // (isNativeShell()) { … }` native branch ahead of the web path this
+      // section is proving. `isNativeShell` is injected here, stubbed FALSE
+      // — the real web-side import from js/platform.js — which is what
+      // makes this a genuine web-inertness proof rather than a broken
+      // sandbox: with it false, execution falls straight through to the
+      // EXACT same web call sequence this section has always asserted.
+      new Function('ov', 'showToast', 'enablePushOnThisDevice', 'refreshNotifSettingsBody', 'refreshPushActiveFlag', 'playerId', 'isNativeShell', src)(
         ov, () => { toasts++; }, () => { calls++; return new Promise(r => releases.push(r)); }, async () => {},
-        () => { pushFlagRefreshes++; }, 'p1');
+        () => { pushFlagRefreshes++; }, 'p1', () => false);
       const t1 = handler({ currentTarget: btn });
       const disabledDuring = btn.disabled;
       const t2 = handler({ currentTarget: btn });        // the impatient second tap

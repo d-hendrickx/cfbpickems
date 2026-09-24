@@ -1714,6 +1714,25 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     // size judgment ON THE RECORD before the field ships, and this list has
     // never required that a listed key already have a call site.
     'scribeFrequency', 'scribeAutonomousEnabled',
+    // ── PRE-EXISTING RED, FOUND AND CLOSED 2026-09-23 (SCRIBE v3, Package A).
+    // `saveSetting('scribe', scribeBag)` (js/app.js `setScribePacing`) shipped
+    // with UN-235/DI-252 on 2026-09-21 and was never added here, so THIS
+    // ASSERTION HAS BEEN FAILING SINCE THAT DAY — which is the guard working
+    // exactly as designed and nobody reading it. SIZE JUDGED, which is the
+    // whole point of the list: `settings.scribe` is the rate/model bag
+    // `supabase/functions/_shared/scribe-rate.js`'s `rateSettings()` reads —
+    // six scalar fields today (mentionLimitPlayerHourly, mentionLimitLeagueHourly,
+    // monthlyBudgetUsd, model, effort, webSearchEnabled) plus DI-252's two
+    // pacing integers. Every one is a number, a boolean, or a short model
+    // identifier; none can grow with the season, and nothing writes free text
+    // into it.
+    'scribe',
+    // SCRIBE v3, Package A (2026-09-23, DI-263): the heat dial. Same shape and
+    // same judgment as `scribeFrequency` above — one of five fixed level names
+    // (the longest is 'no_mercy', 8 chars), validated on read against
+    // js/data-model.js's SCRIBE_HEAT_ORDER on BOTH sides of the wire, so it can
+    // never grow.
+    'scribeHeat',
     // small maps/arrays, bounded by a fixed real-world count
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players

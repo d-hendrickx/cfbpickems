@@ -712,6 +712,20 @@ const scribeReply = getMessages({ tag: 'all', types: ['message'] }).find(m => m.
 assert(!!scribeReply, 'fixture check: a SCRIBE reply was actually folded');
 assert(scribeReply.meta?.triggerMessageId === 'human_msg_42', 'meta.triggerMessageId threads the calling human message\'s id through scribeInspectMessage() → scribeTrigger() → the folded event');
 assert(scribeReply.meta?.scribeVersion === SCRIBE_VERSION, 'meta.scribeVersion round-trips exactly like meta.source/meta.trigger already do');
+// ── DI-267 (SCRIBE v3, Package A, 2026-09-23) — THE TWO HEAT FIELDS RIDE THE
+//    SAME META, ON THE SAME POST. `heatLeague` is the dial the commissioner
+//    set; `heatEffective` is what the line that actually went out was. On the
+//    TIER-0 path the second is ALWAYS 'dry', and that is a fact rather than a
+//    default: the canned pools are written in one register and are not tagged
+//    by level (js/scribeLines.js's own SCRIBE v3 block gives the three reasons).
+//    Stamping BOTH is what lets a Trainer report tell "the league was at No
+//    Mercy and this landed flat" apart from "this ran at No Mercy and landed
+//    flat" — on this path only the first is ever true, because tier-0 fires
+//    precisely when the model was unreachable, throttled, over budget or off.
+assert(typeof scribeReply.meta?.heatLeague === 'string' && scribeReply.meta.heatLeague.length > 0,
+  `DI-267: a tier-0 SCRIBE post carries meta.heatLeague — the dial as it stood when the line was written (got ${JSON.stringify(scribeReply.meta?.heatLeague)})`);
+assert(scribeReply.meta?.heatEffective === 'dry',
+  `DI-267: …and meta.heatEffective is 'dry' on this path ALWAYS — a canned line IS a Dry line whatever the dial says. A tier-0 post stamped with the league's hot level would be evidence about a heat this line never ran at (got ${JSON.stringify(scribeReply.meta?.heatEffective)})`);
 assert(scribeReply.meta?.source === 'tier0' && !!scribeReply.meta?.trigger, 'fixture check: the pre-existing meta.source/meta.trigger fields are unaffected by this addition');
 assert(!('activeLearningSnapshot' in (scribeReply.meta || {})), 'meta.activeLearningSnapshot stays UNSET (reserved for E3/E4, never fielded with a placeholder)');
 
@@ -1434,7 +1448,12 @@ console.log('\n[28] Item 3 — persistent ⭐ renders on SCRIBE messages only, o
     .filter(l => l.includes(needle) && !/^\s*(\*|\/\/)/.test(l)).length;
   assert(codeLinesWith(chatUiSrc, 'toggleFeedbackPicker(') === 2,
     '(f) toggleFeedbackPicker appears on exactly TWO code lines — its definition and its ONE call site — so the persistent star did not introduce a second rating path');
-  assert(/toggleFeedbackPicker\(b, b\.dataset\.fbOpen, renderFn\)/.test(chatUiSrc),
+  // The 4th argument (`surface`) arrived with DI-268 (2026-09-23): a popover
+  // that now survives a repaint has to be re-mounted on the surface it was
+  // opened from, and 'main'/'sheet' is the only thing the mount needs that the
+  // trigger element cannot tell it. The assertion's subject is unchanged —
+  // there is still exactly ONE call site and it is still the shared handler.
+  assert(/toggleFeedbackPicker\(b, b\.dataset\.fbOpen, renderFn, surface\)/.test(chatUiSrc),
     '(f) that single call site is the shared [data-fb-open] handler');
   const starFnSrc = (chatUiSrc.match(/function persistentStarHTML\(m, self\) \{[\s\S]*?\n\}/) || [''])[0];
   assert(starFnSrc.length > 0, '(f) fixture check: persistentStarHTML was located in chat-ui.js');

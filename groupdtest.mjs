@@ -103,6 +103,8 @@ const chatUi = await import('./js/chat-ui.js');
 const app = await import('./js/app.js');
 
 const { FREQUENCY_COPY, FREQUENCY_LEVELS } = scribeLines;
+// SCRIBE v3, Package A (2026-09-23) — the heat dial's write, §[16].
+const { setScribeHeat } = scribeAgent;
 const {
   renderScribeParticipationCardHTML, setScribeFrequency, setScribeAutonomousEnabled,
   renderScribeFileBodyHTML, getPlayerProfile, seasonStandingsRows,
@@ -1265,6 +1267,165 @@ console.log('\n[15] DI-252 — SCRIBE pacing: the hourly cap and the cooldown ar
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════
+// 16. DI-263 / DI-267 — THE HEAT CARD, THE TOLERANCE NOTE, AND THE NUDGE
+//
+// The rendered-output half of SCRIBE v3, Package A. `heattest.mjs` proves the
+// arithmetic and the briefs; the two Edge twins prove the wire. What only a
+// RENDER can show is that a commissioner has a control to move, that it is on
+// the right tab, that a player is told what the three tolerance labels now DO,
+// and that the one-time nudge fires exactly once and only when it matters.
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[16] DI-263/DI-267 — the Heat card, the tolerance note, the one-time nudge…');
+{
+  const { renderScribeHeatCardHTML, maybeShowScribeHardLineNudge } = app;
+  const { HEAT_COPY } = scribeLines;
+  const { SCRIBE_HEAT_ORDER } = await import('./js/data-model.js');
+
+  setScribeHeat('dry');
+  const heat = renderScribeHeatCardHTML();
+  assert(/<div class="admin-section" data-comm-tab="settings">/.test(heat),
+    '16-1: RG-10 — the Heat card ships its OWN data-comm-tab="settings" wrapper. An untagged .admin-section renders on all five commissioner tabs, which is a defect this codebase has already shipped once');
+  assert(!/data-comm-tab="(week|games|players|data)"/.test(heat),
+    '16-2: RG-10 negative check — it renders under no other tab');
+  assert(HEAT_COPY.length === 5 && SCRIBE_HEAT_ORDER.every(l => heat.includes(`data-scribe-heat="${l}"`)),
+    '16-3: all FIVE rungs are selectable — Polite / Dry / Spicy / Savage / No Mercy');
+  assert(HEAT_COPY.every(o => heat.includes(o.description)),
+    '16-4: …each rendering its own one-line description, so a commissioner is choosing between descriptions rather than between five adjectives');
+  assert((heat.match(/scribe-freq-opt selected/g) || []).length === 1,
+    '16-5: exactly ONE rung is selected — radio behaviour, never two and never zero');
+  assert(/class="scribe-freq-opt selected"[\s\S]{0,160}data-scribe-heat="dry"/.test(heat),
+    '16-6: …and it is the STORED level');
+  assert(heat.includes("Sets the league's ceiling. Players can still turn it down for themselves in My SCRIBE File — never up past this."),
+    '16-7: DI-263\'s approved copy is present VERBATIM, including the promise a player can lower it and the promise they cannot raise it');
+  assert(heat.includes('This is separate from how OFTEN it talks — raising the heat never makes it post more.'),
+    '16-8: …and the card says out loud that heat is not frequency. UN-243\'s whole failure mode is a correction to one being applied to the other, and the interface is where that separation either holds or quietly stops');
+  assert(heat.includes('Anything a player has put off limits stays off limits at every level.'),
+    '16-9: …and that a hard line outranks the dial — stated on the control that would otherwise look like it could overrule one');
+  assert(!/notif-prefs-row-dim/.test(heat),
+    '16-10: the Heat dial is NEVER dimmed by the participation toggle. Heat governs every SCRIBE line including the replies a direct @SCRIBE question always gets, so dimming it would say "this does nothing right now" — false in exactly the case a player would notice');
+
+  setScribeHeat('no_mercy');
+  assert(/class="scribe-freq-opt selected"[\s\S]{0,180}data-scribe-heat="no_mercy"/.test(renderScribeHeatCardHTML()),
+    '16-11: moving the stored level moves the selected state with it');
+  assert(storage.getSettings().scribeHeat === 'no_mercy',
+    '16-12: …and the write landed in the settings blob through the seam (saveSetting → save(KEYS.SETTINGS, …, [field]), CONVENTIONS #8 / RG-55)');
+  assert(setScribeHeat('nuclear').ok === false && storage.getSettings().scribeHeat === 'no_mercy',
+    '16-13: an unknown level is REFUSED rather than stored — a stored value nothing recognises resolves to the default at every read site, which reads to a commissioner as "the dial does nothing"');
+
+  // ── The player half: what the three tolerance labels now DO. ──
+  const file = renderScribeFileBodyHTML({ profile: getPlayerProfile('p1') });
+  assert(file.includes('Light caps SCRIBE at Dry for you. Standard caps at Savage.'),
+    '16-14: My SCRIBE File states what each tolerance option now does, at the point of the choice. Three labels that meant nothing operationally now mean something specific, and a changelog is not where a player finds that out');
+  assert(file.includes("Leave it unset and the commissioner's setting applies."),
+    '16-15: …including what happens if you never touch it — Drew\'s ruling that an unset tolerance is NO cap, stated rather than left to be inferred');
+  assert(file.includes('Anything under Hard limits is off limits either way.'),
+    '16-16: …and that hard limits are unaffected by the choice, said on the screen where both controls sit together');
+
+  // ── The one-time nudge. ──
+  storage.setSession('p1', true, true);
+  _setScribeMemoryCacheForTest('p1', []);
+  setScribeHeat('dry');
+  const atDry = maybeShowScribeHardLineNudge();
+  assert(atDry.skipped === 'not_above_dry' && !storage.getHardLinePromptSeenAt(),
+    `16-17: at DRY the nudge does NOT fire and nothing is recorded — today's voice is not a reason to warn anybody (got ${JSON.stringify(atDry)})`);
+  setScribeHeat('savage');
+  const first = maybeShowScribeHardLineNudge();
+  assert(first.shown === true,
+    `16-18: the first time this player's effective heat exceeds Dry, it fires — lazily, when it starts to matter for THEM, not for the whole league at launch. (\`shown\` is only returned after the overlay was built and appended; whether it LOOKS right is a browser check, which this file's DOM stub cannot and does not claim to answer.) (got ${JSON.stringify(first)})`);
+  assert(!!storage.getHardLinePromptSeenAt(),
+    '16-19: …and the flag is written when it is SHOWN, not when it is acted on. "Not now" is an answer, and re-asking somebody who already answered is the annoying failure docs/SCRIBE.md §8 spends a section trying not to be');
+  const second = maybeShowScribeHardLineNudge();
+  assert(second.skipped === 'already_seen',
+    `16-20: …so it never fires a second time for that player (got ${JSON.stringify(second)})`);
+  setScribeHeat('dry');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// 17. DI-282 — THE MODEL TOGGLE (Drew, 2026-09-23: "i also want to be able to
+//     toggle if scribe is using sonnet or opus").
+//
+// The rendered half. `heattest.mjs` §[11] proves the constant agrees with the
+// Edge rate card and with SCRIBE_MODEL_DEFAULT; `trainer.twin.mjs` proves the
+// third consumer actually reads the setting. What only a RENDER can show is
+// that the commissioner has two radios on the right tab, that exactly one is
+// selected, that the selection comes from storage rather than from the click,
+// and that the write lands in the `scribe` BAG without taking the four fields
+// that have no client writer with it.
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
+{
+  const { renderScribeModelCardHTML, getScribeModel, setScribeModel } = app;
+  const { SCRIBE_MODEL_CHOICES } = await import('./js/data-model.js');
+
+  // ── The default-when-missing story, first: no `model` key at all. ──
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10, monthlyBudgetUsd: 25 });
+  assert(getScribeModel() === 'claude-sonnet-5' && getScribeModel() === SCRIBE_MODEL_CHOICES[0],
+    `17-1: an UNSET model reads as Sonnet — today's behaviour and the cheaper of the two (CONVENTIONS #10). A missing value must never resolve to the option that multiplies the bill (got ${getScribeModel()})`);
+
+  const card = renderScribeModelCardHTML();
+  assert(/<div class="admin-section" data-comm-tab="settings">/.test(card),
+    '17-2: RG-10 — the Model card ships its OWN data-comm-tab="settings" wrapper. An untagged .admin-section renders on all five commissioner tabs');
+  assert(!/data-comm-tab="(week|games|players|data)"/.test(card),
+    '17-3: RG-10 negative check — it renders under no other tab');
+  assert(SCRIBE_MODEL_CHOICES.length === 2 && SCRIBE_MODEL_CHOICES.every(id => card.includes(`data-scribe-model="${id}"`)),
+    `17-4: BOTH ids are selectable, and they are the ids the server prices — the card cannot offer a model rateSettings() would refuse (got ${JSON.stringify(SCRIBE_MODEL_CHOICES)})`);
+  assert((card.match(/scribe-freq-opt selected/g) || []).length === 1,
+    '17-5: exactly ONE option is selected — radio behaviour, never two and never zero');
+  assert(/class="scribe-freq-opt selected"[\s\S]{0,180}data-scribe-model="claude-sonnet-5"/.test(card),
+    '17-6: …and with nothing stored it is Sonnet, matching getScribeModel()');
+  assert(/Sonnet/.test(card) && /Opus/.test(card),
+    '17-7: the two options are labelled in English — "Sonnet" and "Opus", not the wire ids a commissioner has no reason to read');
+  assert(card.includes('Opus is sharper and costs about 2.5× as much per reply'),
+    '17-8: DI-282\'s cost sentence is present verbatim. The whole decision is sharpness against money, and the multiplier is the only number that makes it a decision');
+  assert(/@SCRIBE replies, unprompted posts and the Trainer/.test(card),
+    '17-9: …and it names all THREE consumers. A toggle that silently governed only the chat replies would be a lie by omission — the Trainer is the most expensive of the three');
+  assert(/role="radiogroup"/.test(card) && (card.match(/role="radio"/g) || []).length === 2,
+    '17-10: it is a radiogroup with two radios, and `aria-checked` rides on each — the same accessible shape the heat and frequency dials use');
+  assert(!/notif-prefs-row-dim/.test(card),
+    '17-11: never dimmed by the participation toggle — the model governs the replies a direct @SCRIBE question always gets, so "this does nothing right now" would be false');
+  assert(!/<svg|<script|onerror=|javascript:/i.test(card),
+    '17-12: no inline SVG (CONVENTIONS #16 — the bottom-nav exception is not widened) and no script sink');
+
+  // ── The write: through the bag, preserving everything else in it. ──
+  const before = { ...(storage.getSettings().scribe || {}) };
+  const wrote = setScribeModel('claude-opus-5');
+  const bag = storage.getSettings().scribe || {};
+  assert(wrote.ok === true && bag.model === 'claude-opus-5' && getScribeModel() === 'claude-opus-5',
+    `17-13: tapping Opus writes settings.scribe.model through the seam — the SAME field _shared/scribe-rate.js's rateSettings() reads, not a top-level key nothing on the server would ever look at (got ${JSON.stringify(bag)})`);
+  assert(bag.autonomousHourlyLimit === before.autonomousHourlyLimit
+    && bag.autonomousCooldownMinutes === before.autonomousCooldownMinutes
+    && bag.monthlyBudgetUsd === before.monthlyBudgetUsd,
+    '17-14: …and the REST OF THE BAG survives. saveSetting(\'scribe\', …) replaces value.scribe as a whole unit (_kvFieldPatch does not deep-merge), so a write without the spread would silently and permanently delete monthlyBudgetUsd and both pacing integers — none of which has another client writer to restore them');
+  assert(/class="scribe-freq-opt selected"[\s\S]{0,180}data-scribe-model="claude-opus-5"/.test(renderScribeModelCardHTML()),
+    '17-15: moving the stored value moves the selected state with it — the card renders from storage, never from the click');
+
+  const refused = setScribeModel('claude-opus-4-1');
+  assert(refused.ok === false && refused.error === 'unknown_model'
+    && (storage.getSettings().scribe || {}).model === 'claude-opus-5',
+    `17-16: an off-list id is REFUSED rather than stored. This string is sent to Anthropic, so an unrecognised value is a live 400 on the next SCRIBE post (RG-222's own failure mode) — and the stored value is left exactly as it was (got ${JSON.stringify(refused)})`);
+  for (const junk of ['', null, undefined, 'constructor', '__proto__', 'CLAUDE-OPUS-5']) {
+    assert(setScribeModel(junk).ok === false,
+      `17-17: …and so is every other unusable value (${JSON.stringify(junk)}) — including prototype keys, because \`includes()\` on a frozen array answers membership rather than truthiness (F-1's rule, one table over)`);
+  }
+
+  // ── The wiring: the render and the handler name the same attribute. ──
+  {
+    const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    assert(/c\.insertAdjacentHTML\('beforeend', renderScribeModelCardHTML\(\)\);/.test(src),
+      '17-18: renderCommPage() actually INSERTS the card. A pure render function nothing calls is a card that exists only in this test (the RG-27 shape)');
+    const wiring = src.slice(src.indexOf("document.querySelectorAll('[data-scribe-model]')"), src.indexOf("const readPacingSelects = () =>"));
+    assert(wiring.length > 0 && /setScribeModel\(id\)/.test(wiring),
+      '17-19: the click handler drives the REAL setScribeModel() — the same refusing write asserted above, not a second copy of the validation');
+    assert(/if \(!setScribeModel\(id\)\.ok\) return;/.test(wiring),
+      '17-20: …and a refused write produces NO toast and NO re-render, so a rejected id never reads as saved');
+    assert(/renderCommPage\(\);/.test(wiring),
+      '17-21: a successful write re-renders the panel, so the selected state after a tap comes from storage — which is what makes a failed seam write visible rather than merely unacknowledged');
+  }
+
+  storage.saveSetting('scribe', { autonomousHourlyLimit: 4, autonomousCooldownMinutes: 10 });
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

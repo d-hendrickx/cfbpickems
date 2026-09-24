@@ -53,6 +53,16 @@ import {
   // its two relays. Same one-directional import as Build 2: scribeAgent.js
   // never imports this module, so there is no cycle.
   getScribeFrequency, isScribeAutonomousReady, scribeAutonomousRemote, scribeClassifyRemote,
+  // SCRIBE v3, Package D (2026-09-24, DI-283) — the reaction relay. Same
+  // one-directional import, same gate shape: it is a no-op unless autonomy is
+  // ready on this device, and the AUTHORITATIVE gate is the server's own
+  // `scribeReact` job switch.
+  scribeReactRemote,
+  // SCRIBE v3, Package A (2026-09-23, DI-267) — the league's heat dial, read
+  // for the META STAMP ONLY. These pools do not change with it (see the
+  // single-register block above the pools); what the stamp records is the gap
+  // between what the commissioner set and what a canned line can actually be.
+  getScribeHeat,
 } from './scribeAgent.js';
 
 // UN-160 (E2) — a hand-bumped constant, analogous to APP_VERSION (js/app.js):
@@ -60,7 +70,7 @@ import {
 // WHICH voice pool generated the line it's rating, months later. Deliberately
 // NOT tied to APP_VERSION itself — SCRIBE's voice can change independently of
 // an app release. Carried on every SCRIBE post via scribeTrigger() below.
-export const SCRIBE_VERSION = '2.1';
+export const SCRIBE_VERSION = '3.0';
 
 const LEDGER_KEY = 'cfbp_scribe_ledger';   // { lineHash: lastUsedMs }
 const LAST_POST_KEY = 'cfbp_scribe_lastpost'; // { rateKey: lastMs } ('' = main room, gameId = per-game)
@@ -70,6 +80,35 @@ const GAME_COOLDOWN = 60 * 60 * 1000;
 
 // ── Line pools ────────────────────────────────────────────────────────────────
 // {NAME} = display name of the subject player. {N} = a number when supplied.
+//
+// ── SCRIBE v3 (2026-09-23): THE POOLS STAY AT ONE REGISTER, AND THAT IS A
+//    DECISION, NOT AN OVERSIGHT. ────────────────────────────────────────────
+// v3 adds a five-level heat dial (docs/SCRIBE.md §4). These canned lines are
+// NOT tagged by level and no hotter variants were written. DI-262 recommends
+// this single-register route and the reasons are worth keeping next to the
+// pools themselves:
+//
+//   THE LLM CARRIES THE HEAT. Every level above Dry is defined by judgement —
+//   commit to one target, land a your-mom joke only if it is absurd enough to
+//   assert nothing, stack profanity ONLY when the stack lands harder than one
+//   clean word. A fixed string cannot make any of those calls; it can only be
+//   hot, every time it fires, at whoever it happens to be about.
+//
+//   THESE LINES ARE THE DEGRADED PATH. Tier-0 fires when the model is
+//   unreachable, throttled, over budget, or switched off. Writing a No Mercy
+//   pool would mean the league's HARSHEST lines are the ones that ship when
+//   the system is least able to judge whether they fit — and with no hard-line
+//   check and no roast-tolerance cap in front of them, because neither of those
+//   lives on this path.
+//
+//   FIVE POOLS × EVERY TRIGGER IS ALSO A CONTENT PROBLEM. The 14-day no-repeat
+//   ledger already burns a pool down; splitting each one five ways either
+//   multiplies the writing or makes each level's pool small enough to become a
+//   tic — the exact failure §6 retired four catchphrases for.
+//
+// So: Dry, everywhere, at every dial position. `loadtest.mjs` §[4] enforces it
+// mechanically (zero stacked profanity, no shouted caps), and `heattest.mjs`
+// asserts the briefs that DO carry heat are the LLM's, not these.
 export const SCRIBE_POOLS = {
   // ── v2.1 voice refresh (2026-09-10): reflex openers/closers ("SCRIBE NOTE:",
   // "Filed.", "Noted.", "Documented.", "— SCRIBE") and the SOAP-note-as-default
@@ -467,12 +506,31 @@ let appendWaitMs = SCRIBE_APPEND_WAIT_MS;
  *  [26] cannot spend 20 real seconds proving the bound exists. */
 export function _setAppendWaitMsForTest(ms) { appendWaitMs = (ms == null ? SCRIBE_APPEND_WAIT_MS : ms); }
 
+/**
+ * DI-267 — THE HEAT STAMP FOR A TIER-0 (CANNED) LINE.
+ *
+ * `heatLeague` is what the commissioner set. `heatEffective` is `SCRIBE_HEAT_DEFAULT`
+ * — 'dry' — ALWAYS, and that is a statement of fact rather than a default:
+ * these pools are written in one register and are not tagged by level (see the
+ * SCRIBE v3 block above SCRIBE_POOLS for why), so a canned line IS a Dry line
+ * whatever the dial says.
+ *
+ * THAT GAP IS THE POINT OF STAMPING IT. A Trainer report correlating feedback
+ * against heat must be able to tell "the league was at No Mercy and this line
+ * landed flat" from "the league was at Dry and this line landed flat" — and on
+ * this path the second is what actually happened, every time, because the model
+ * was unreachable, throttled, over budget or switched off. Without both fields
+ * every degraded line would read as evidence about a heat level it never ran at.
+ */
+const tier0HeatMeta = () => ({ heatLeague: getScribeHeat(), heatEffective: SCRIBE_HEAT_DEFAULT });
+
 export function scribeMentionDegraded({ gameTag = '', subject = '', vars = {}, triggerMessageId = null } = {}) {
   const line = pickLine('mention', vars) || LAST_RESORT_MENTION_LINE;
   const id = `scribe_llm_${triggerMessageId || subject || 'x'}`.replace(/[^a-zA-Z0-9_:-]/g, '');
   sendEvent({ type: 'message', gameTag, body: line + DEGRADED_SUFFIX, author: 'scribe', id,
               notify: true, replyTo: triggerMessageId || '',
               meta: { source: 'tier0', trigger: 'mention', scribeVersion: SCRIBE_VERSION,
+                      ...tier0HeatMeta(),
                       degraded: true,
                       ...(triggerMessageId ? { triggerMessageId } : {}) } });
   return true;   // B3b — this function ALWAYS posts now; there is no silent-no-op path left
@@ -579,6 +637,7 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
   sendEvent({ type: 'message', gameTag, body: line, author: 'scribe', id,
               notify: direct || notify,
               meta: { source: 'tier0', trigger, scribeVersion: SCRIBE_VERSION,
+                       ...tier0HeatMeta(),
                        ...(quote ? { quote } : {}),
                        ...(triggerMessageId ? { triggerMessageId } : {}) } });
   if (!direct) noteRate(gameTag);
@@ -608,15 +667,53 @@ export function scribeInspectMessage({ author, authorName, body, gameTag = '', s
     return fireScribeMention({ gameTag, author, authorName, triggerMessageId });
   }
   // 1b. Build 3, D-2 (correction #6) — CHAT REACTIVITY. A non-@scribe human
-  // message that clears the FREE keyword/shape prefilter buys one capped
-  // `claude-haiku-4-5` classify call, whose points feed the same opportunity
-  // score every other signal goes through. Ordinary chat never reaches the
-  // network: the prefilter is a local regex/substring pass, and
+  // message buys one capped `claude-haiku-4-5` classify call, whose verdict
+  // feeds the same opportunity score every other signal goes through.
   // `considerClaim` is a no-op unless autonomy is ready on this device.
   // Fire-and-forget — this function's synchronous contract is unchanged.
-  if (chatClaimPrefilter(body)) {
-    considerClaim({ triggerMessageId, gameTag, author });
-  }
+  //
+  // ── SCRIBE v3 PACKAGE D (DI-283, 2026-09-24) — THE TRIGGER IS WIDENED FROM
+  //    `chatClaimPrefilter(body)` TO EVERY HUMAN MESSAGE, DELIBERATELY. ──────
+  // The prefilter is a bold-claim keyword pass, and it is exactly right for
+  // the question it was written for: "is this worth asking the classifier
+  // about as a CLAIM?" It is the wrong question for the two things the same
+  // call now also answers — `reactionEmoji` (most reactable messages are not
+  // claims; "my dog died" and "I'm at the airport" carry no claim keyword and
+  // are precisely where a human would react) and `roastOfScribe` (a roast of
+  // SCRIBE almost never contains 'guarantee' or 'lock of the week').
+  //
+  // `chatClaimPrefilter` IS NOT DELETED and is still exported: it remains the
+  // honest description of the CLAIM half, it is asserted by `scoringtest.mjs`,
+  // and a future pass that wants to narrow this trigger again has the function
+  // it would narrow to. What changed is which question decides whether the one
+  // call happens.
+  //
+  // WHAT BOUNDS THE COST, since a keyword gate no longer does:
+  //   - `classifyInFlight` — at most ONE in-flight classify per device, so a
+  //     burst of typing cannot fan out into a burst of paid calls;
+  //   - the SERVER's `settings.scribe.classifyDailyCap` — sized for
+  //     claim-shaped volume at 40/day and raised to 150/day for this change
+  //     (DI-283 §6 open question 5, Drew's number);
+  //   - the 30-minute off-latch, which already gates the CALL and not just the
+  //     post, so a league with the server switch off pays one wasted request
+  //     per half hour rather than one per message.
+  considerClaim({ triggerMessageId, gameTag, author });
+  // 1c. SCRIBE v3 Package D (DI-287) — the heated-exchange detector, fired from
+  // the SAME choke point every other message-driven trigger already uses, so no
+  // call site in js/chat-ui.js changes. Free, local, synchronous and wrapped:
+  // a fold read that throws must never take out the drink-debt and verbosity
+  // triggers below it.
+  //
+  // THE HONEST RACE, NAMED: this reads the device's own OPTIMISTIC fold while
+  // the server verifies against rows the outbox may not have flushed yet
+  // (FLUSH_COALESCE_MS = 750ms). When they disagree the server answers
+  // `unverified` — no reservation, no model call, no spend, no post — and the
+  // next message in the same exchange tries again. The race costs a missed joke
+  // and never a fabricated one, which is the only direction that is allowed to
+  // be wrong here.
+  try {
+    considerHeatedExchange(getMessages({ tag: gameTag || '' }), { gameTag });
+  } catch { /* a fold read is not worth a thrown inspect */ }
   // 2. Drink debt vocabulary
   if (/\bdrink|owes?\b|\bbalance|\bbeer|\bsapporo\b/.test(low)) {
     return scribeTrigger('drinkDebt', { gameTag, subject: 'debt', triggerMessageId });
@@ -681,6 +778,79 @@ export const FREQUENCY_COPY = [
   { level: 'unhinged',  label: 'Unhinged',  description: 'Maximum SCRIBE. You asked for this.' },
 ];
 
+/** SCRIBE v3, Package A (2026-09-23, DI-263) — the HEAT dial's copy, the exact
+ *  sibling of FREQUENCY_COPY above and exported for the same reason: the
+ *  Comm → Settings card imports the approved strings instead of retyping them.
+ *
+ *  ORDER IS COOLEST-FIRST, matching `SCRIBE_HEAT_ORDER` in js/data-model.js —
+ *  a dial whose two ends are "barely speaks" and "maximum" has to read in one
+ *  direction, and heattest.mjs asserts these two orders agree so a level cannot
+ *  be added to one and forgotten in the other.
+ *
+ *  ONE LINE PER LEVEL, product voice, describing what the player will NOTICE
+ *  rather than restating the seven-field brief in docs/SCRIBE.md §4. The brief
+ *  is the contract the model reads; this is the sentence a commissioner reads
+ *  while deciding. Dry names itself as today's voice, because a commissioner
+ *  moving off the default deserves to know what he is moving off. */
+export const HEAT_COPY = [
+  { level: 'polite',   label: 'Polite',    description: 'Notes the evidence and stops. No edge at all.' },
+  { level: 'dry',      label: 'Dry',       description: "Today's voice. Deadpan, one clean observation, out." },
+  { level: 'spicy',    label: 'Spicy',     description: 'Sharper, a little louder, mild language.' },
+  { level: 'savage',   label: 'Savage',    description: 'Real profanity, picks one target and commits.' },
+  { level: 'no_mercy', label: 'No Mercy',  description: 'The ceiling. Takes a side and dares you to reply.' },
+];
+
+/** SCRIBE v3, Package B (DI-268/DI-269) — the reason chips' PLAYER-FACING
+ *  labels, and the two cluster headings above them.
+ *
+ *  PRODUCT VOICE, NOT SCRIBE'S. These are buttons in a popover; the app is
+ *  talking, and SCRIBE.md's register deliberately does not govern the app's own
+ *  copy (the same line MEMORY_COPY below draws). Every label is two words or
+ *  fewer wherever it can be, because this row wraps inside a ~306px popover on
+ *  a phone and a chip that wraps to three lines stops reading as a chip.
+ *
+ *  KEYED BY THE CHIP ID, and `reasonchiptest.mjs` asserts the table covers
+ *  `SCRIBE_FEEDBACK_REASON_CHIPS` exactly — a chip added to the closed set with
+ *  no label here would render as a blank button, which is the one failure a
+ *  closed set is supposed to make impossible.
+ *
+ *  THE HEADINGS DELIBERATELY DO NOT REPEAT A CHIP'S OWN WORDS ("Annoying" is a
+ *  chip; the cluster above it is "Too much SCRIBE"), so a player reading the
+ *  row top to bottom never sees the same phrase twice at two different
+ *  meanings. */
+export const REASON_CHIP_COPY = {
+  annoying: 'Annoying',
+  too_often: 'Too often',
+  tried_too_hard: 'Tried too hard',
+  too_long: 'Too long',
+  too_mean: 'Too mean',
+  crossed_a_line: 'Crossed a line',
+  not_funny: 'Not funny',
+  wrong_target: 'Wrong target',
+  wrong_facts: 'Wrong facts',
+  too_soft: 'Too soft',
+  perfect_more_of_this: 'More of this',
+};
+
+/** The labels AROUND the chips: the one-line prompt, the two family headings,
+ *  the shared-tag heading, and the free-text field's placeholder (DI-269).
+ *  Exported beside the chip labels so the whole popover's copy lives in one
+ *  place and app.js/chat-ui.js never retype an approved string. */
+export const REASON_CHIP_SECTION_COPY = {
+  missPrompt: 'What kind of miss?',
+  hitPrompt: 'What worked?',
+  annoyingGroup: 'Too much SCRIBE',
+  meanGroup: 'Too harsh',
+  sharedGroup: 'Or the line itself',
+  notePlaceholder: 'Say why (optional)',
+  // Screen-reader label for the free-text field. Deliberately makes NO privacy
+  // promise: feedback rides the same append-only chat log every event does, and
+  // the "only you see your own rating" property is a UI-level scoping rule
+  // (chat-ui.js's myFeedbackState), not a storage boundary. Copy that implied
+  // otherwise would be a promise the data model does not keep.
+  noteLabel: 'Why this rating — optional',
+};
+
 /** DI-D4 copy, final, same source document (§1, §2, §4). Exported for pass
  *  2's "My SCRIBE File" modal so the approved strings live in exactly one
  *  place. Product voice, not SCRIBE's — these are the app talking ABOUT
@@ -708,11 +878,19 @@ export const MEMORY_COPY = {
  *  keyword prefilter match is a reason to ASK, never a reason to speak. */
 export const SIGNAL_POINTS = {
   backdoorBust: 50,
+  // SCRIBE v3 Package D (DI-284) — the comeback. 50, which clears `balanced`
+  // on its own; see js/scribe-scoring.js's copy of this table for the whole of
+  // the reasoning. `interacttest.mjs` asserts the two tables are identical, so
+  // an edit to one side without the other goes red rather than quietly
+  // splitting the client's detector from the server's scorer.
+  roastOfScribe: 50,
   chartLeadChange: 45,
   milestone: 40,
   streak: 35,
   loneWolfWin: 30,
   unanimous: 25,
+  // SCRIBE v3 Package D (DI-287) — two players going back and forth.
+  heatedExchange: 20,
   drinkDebt: 15,
   verbosity: 10,
   claim: 0,
@@ -1116,6 +1294,56 @@ function considerClaim({ triggerMessageId, gameTag, author }) {
           skipped === 'disabled_client' || skipped === 'not_configured') {
         autonomyOffUntil = Date.now() + AUTONOMY_OFF_LATCH_MS;
       }
+      // ── SCRIBE v3 PACKAGE D (DI-283) — THE REACTION, FIRED FIRST AND
+      //    INDEPENDENTLY OF THE SCORE.
+      //
+      // A reaction is NOT an autonomous post and must not be gated like one: it
+      // does not go through `considerAutonomous`, it does not reserve the
+      // shared cooldown, and it does not care whether the verdict scored any
+      // points. Its own two caps (`react:hourly`, `react:author:<id>:hourly`)
+      // live server-side, and `js/chat.js`'s consecutive-post guard is
+      // structurally blind to a `react` row anyway (`if (ev.type !== 'message')
+      // continue;`), so an emoji can neither trip nor consume a message floor.
+      //
+      // FIRE-AND-FORGET, AND SILENT ON EVERY FAILURE. The server decides
+      // whether there is an emoji to place (it re-reads its own cached verdict
+      // — this client never sees one and never sends one), so the honest client
+      // contract is "tell the server a message was classified" and nothing
+      // more. A refusal, a cap, a missing verdict and an outage are all the
+      // same outcome here: no emoji appears, which is the common and correct
+      // case by design (UN-266/DI-283's relevance bar).
+      //
+      // GATED ON THE CLASSIFY CALL HAVING PRODUCED A VERDICT AT ALL — a
+      // `skipped` classify (disabled, throttled, over budget, not configured)
+      // has written no verdict, so asking for a reaction would spend a react
+      // ticket to be told the same thing.
+      const classified = !!(r && r.ok && !r.skipped);
+      if (classified) { scribeReactRemote({ messageId: triggerMessageId }).catch(() => {}); }
+
+      // ── SCRIBE v3 PACKAGE D (DI-284) — THE COMEBACK.
+      //
+      // `roastOfScribe` rides the SAME verdict (no second model call). It is a
+      // TRIGGER, not a points override: `roastOfScribe` is worth 50 in
+      // SIGNAL_POINTS on both sides, the server re-reads its own cached verdict
+      // to confirm the boolean, and the post then goes through the identical
+      // gate order every other autonomous post obeys — the per-post ticket, the
+      // 10-minute global cooldown, the hourly cap, the consecutive guard.
+      // Consequence, stated rather than hidden: a roast thirty seconds after an
+      // unrelated SCRIBE post gets silence, which is ruling 7(e)'s literal
+      // reading and is correct.
+      //
+      // THE SUBJECT IS THE MESSAGE ID, matching `claim`'s own shape: the server
+      // forces it there anyway (the verdict is bound to one message), and using
+      // the author would mint a post id that could collide with a different
+      // trigger about the same player in the same ten-minute bucket.
+      const roast = r && r.roastOfScribe === true;
+      if (roast) {
+        return considerAutonomous('roastOfScribe', {
+          subject: triggerMessageId, gameTag, playerId: author,
+          signals: [{ signal: 'roastOfScribe' }], triggerMessageId,
+        });
+      }
+
       const points = Number(r && r.points) || 0;
       if (!points) return null;
       return considerAutonomous('claim', {
@@ -1159,7 +1387,13 @@ function considerClaim({ triggerMessageId, gameTag, author }) {
 // alone would be exactly the fabricated-stat failure SCRIBE.md §9 forbids.
 
 import { calculateAtsWinner, evaluatePick } from './scoring.js';
-import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
+import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT, SCRIBE_HEAT_DEFAULT } from './data-model.js';
+// SCRIBE v3 Package D (DI-287, 2026-09-24) — the heated-exchange predicate,
+// imported rather than written a second time here. `js/scribe-scoring.js` is
+// pure and imports nothing, so it is safe in both runtimes; the SERVER verifies
+// this trigger by running the SAME function over its own `messages` rows, and
+// "verified" can only mean that if there is one implementation rather than two.
+import { heatedExchangeRun, HEATED_MIN_LEN, HEATED_WINDOW_MS } from './scribe-scoring.js';
 
 /** Round-number career/season correct-pick counts worth noticing. RAW
  *  counts, never the weighted tally — a milestone is "you have been right
@@ -1361,6 +1595,76 @@ export function detectWeekSignals({
   }
 
   return signals;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SCRIBE v3 PACKAGE D — DI-287(a): TWO PLAYERS ARGUING.
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// THE FIRST NEW AUTONOMOUS TRIGGER SINCE BUILD 3, and it is deliberately the
+// cheapest possible shape: a CODE-ONLY, NO-MODEL-CALL heuristic over the
+// message stream every client already holds. No new tracked behaviour, no new
+// storage key, no new poll — `detectWeekSignals` above is the same style and
+// this sits beside it.
+//
+// PURE. It reads the list it is handed and returns signals; the impure half
+// (offering the candidate to `considerAutonomous`) is `considerHeatedExchange`
+// below, which is the only function here that touches the gate.
+//
+// WHERE IT CAN BE WRONG, NAMED RATHER THAN DISCOVERED: four alternating
+// messages between two people inside five minutes is ALSO what enthusiastic
+// agreement looks like. SCRIBE commenting on "an argument" that was two
+// friends agreeing hard is a harmless miss — the post is still about a real,
+// verifiable exchange, and the model is handed the messages rather than the
+// word "argument". A model-scored version of this is a different, more
+// expensive feature; this is the one DI-287 asked for.
+
+/**
+ * @param {Array<{type?:string, author?:string, ts?:number}>} recentMessages the
+ *   room's own folded message list, OLDEST FIRST — `getMessages({tag})`'s order.
+ * @returns {Array<{signal:string, subject:string, gameTag:string, evidence:object}>}
+ *   Zero or one signal, in `detectWeekSignals`'s own return shape so the two
+ *   detectors feed the same gate identically.
+ */
+export function detectHeatedExchange(recentMessages, {
+  minLen = HEATED_MIN_LEN, windowMs = HEATED_WINDOW_MS, gameTag = '', now = Date.now(),
+} = {}) {
+  const list = Array.isArray(recentMessages) ? recentMessages : [];
+  // HUMANS ONLY, AND CHAT ONLY. A SCRIBE line or a system row between two
+  // players is not a turn in their argument — counting one would let SCRIBE's
+  // own post manufacture the alternation that justifies its next one, which is
+  // §9.5's "do not create conversation merely to keep SCRIBE talking" arriving
+  // through arithmetic instead of through intent.
+  const human = list.filter((m) => m && m.type === 'message' && !m.deleted
+    && m.author !== 'scribe' && m.author !== 'system');
+  const run = heatedExchangeRun(human.map((m) => ({ author: m.author, ts: m.ts })), { minLen, windowMs, now });
+  if (!run.heated) return [];
+  // The subject is the PAIR, joined in sorted order, so six devices watching
+  // the same exchange mint the same deterministic post id.
+  const subject = run.authors.join('+');
+  return [{
+    signal: 'heatedExchange', subject, gameTag: gameTag || '',
+    evidence: { authors: run.authors, count: run.count, spanMs: run.spanMs, gameTag: gameTag || '' },
+  }];
+}
+
+/**
+ * The impure half — detect, then offer the candidate to the SAME
+ * `considerAutonomous` gate every other signal uses. Called from the chat
+ * render path after a human message lands.
+ *
+ * Returns `considerAutonomous`'s own outcome object, or `null` when nothing was
+ * detected, so a caller can await the promise in a test and production can
+ * ignore it exactly as `scribeInspectMessage` already does.
+ */
+export function considerHeatedExchange(recentMessages, { gameTag = '', now = Date.now() } = {}) {
+  const detected = detectHeatedExchange(recentMessages, { gameTag, now });
+  if (!detected.length) return null;
+  const s = detected[0];
+  return considerAutonomous('heatedExchange', {
+    subject: s.subject, gameTag: s.gameTag,
+    signals: [{ signal: 'heatedExchange' }], now,
+  });
 }
 
 /**

@@ -334,17 +334,38 @@ console.log('\n[8] The remote call fires only when the score clears, and once pe
     'a mention is never an autonomous candidate — that is Group C\'s path and it is never silent');
 }
 
-console.log('\n[9] The classifier path — prefilter -> classify -> points -> score…');
+console.log('\n[9] The classifier path — every human message -> classify -> points -> score…');
+// ── REWRITTEN 2026-09-24 (SCRIBE v3 Package D, DI-283). ────────────────────
+//
+// THIS SECTION USED TO ASSERT THE OPPOSITE OF THE FIRST TWO LINES BELOW, and
+// it was right at the time: `considerClaim` sat behind `chatClaimPrefilter`, a
+// bold-claim keyword pass, and "ordinary chat never reaches the classifier"
+// was the whole cost argument for Build 3's chat reactivity.
+//
+// DI-283 WIDENS THAT TRIGGER TO EVERY HUMAN MESSAGE, deliberately, because the
+// same one call now answers three questions instead of one: `claim` (still
+// claim-shaped), `reactionEmoji` (most reactable messages are NOT claims — "my
+// dog died" carries no keyword and is exactly where a person would react) and
+// `roastOfScribe` (a roast of SCRIBE almost never says "guarantee"). A keyword
+// gate in front of that call is the wrong question asked of the right call.
+//
+// SO THE ASSERTIONS ARE REWRITTEN RATHER THAN DELETED, and what replaces them
+// is the contract that now bounds the cost: ONE in-flight call per device, the
+// off-latch, and the server's own raised daily cap. `chatClaimPrefilter` is
+// still exported and still asserted below — it remains the honest description
+// of the CLAIM half, and it is what a future pass would narrow back to.
 {
   resetAll();
   const calls = wireStub({ classifyResult: { ok: true, claim: true, kind: 'guarantee', confidence: 0.9, points: 45 } });
   scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'what time is kickoff', gameTag: '', triggerMessageId: 'm1' });
   await new Promise(r => setTimeout(r, 5));
-  assert(calls.classify.length === 0, 'ordinary chat never reaches the classifier — the free prefilter is the whole point');
+  assert(calls.classify.length === 1 && calls.classify[0].messageId === 'm1',
+    'DI-283: ORDINARY CHAT IS NOW CLASSIFIED TOO — the trigger is every human message, because reactions and comebacks ride the same verdict and neither is claim-shaped');
 
   scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'Texas covers, I guarantee it', gameTag: '', triggerMessageId: 'm2' });
   await new Promise(r => setTimeout(r, 5));
-  assert(calls.classify.length === 1 && calls.classify[0].messageId === 'm2', 'a message that clears the prefilter is classified, by id (the server re-reads the body itself)');
+  assert(calls.classify.length === 2 && calls.classify[1].messageId === 'm2',
+    'a claim-shaped message is classified too, by id (the server re-reads the body itself)');
   assert(calls.autonomous.length === 1, 'a 45-point guarantee clears Balanced and becomes an autonomous candidate');
   assert(calls.autonomous[0].trigger === 'claim' && calls.autonomous[0].evidence.score === 45,
     `the claim's points enter the same opportunity score as every other signal (got ${calls.autonomous[0].evidence.score})`);
@@ -361,6 +382,38 @@ console.log('\n[9] The classifier path — prefilter -> classify -> points -> sc
   scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'lock of the week', gameTag: '', triggerMessageId: 'm4' });
   await new Promise(r => setTimeout(r, 5));
   assert(calls3.autonomous.length === 0, 'a classifier outage drops the opportunity silently — never a garbled post');
+
+  // ── DI-283 — WHAT BOUNDS THE COST NOW THAT A KEYWORD GATE DOES NOT.
+  //
+  // SINGLE-FLIGHT. A burst of typing must not fan out into a burst of paid
+  // calls: this was always the polite bound and the keyword prefilter was the
+  // hard one. With the trigger widened, this IS the hard one on the device
+  // side (the server's `classifyDailyCap`, raised 40 -> 150 by the same DI, is
+  // the authoritative ceiling).
+  resetAll();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const calls4 = wireStub({ classifyResult: async () => { await gate; return { ok: true, points: 0 }; } });
+  scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'one', gameTag: '', triggerMessageId: 'b1' });
+  scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'two', gameTag: '', triggerMessageId: 'b2' });
+  scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'three', gameTag: '', triggerMessageId: 'b3' });
+  await new Promise(r => setTimeout(r, 5));
+  assert(calls4.classify.length === 1,
+    `three messages typed in one burst buy exactly ONE in-flight classify call (got ${calls4.classify.length}) — the single-flight guard is what makes the widened trigger affordable`);
+  release();
+  await new Promise(r => setTimeout(r, 5));
+  scribeInspectMessage({ author: 'p1', authorName: 'Drew', body: 'four', gameTag: '', triggerMessageId: 'b4' });
+  await new Promise(r => setTimeout(r, 5));
+  assert(calls4.classify.length === 2,
+    `…and the guard RELEASES once the call settles, so the next message is classified normally (got ${calls4.classify.length}) — a latch that stuck would silence the classifier for the rest of the session`);
+
+  // THE PREFILTER SURVIVES, and still answers honestly. It is no longer the
+  // gate; it is still the description of the claim half, and deleting it would
+  // throw away the function a future narrowing pass would narrow back to.
+  assert(typeof scribeLines.chatClaimPrefilter === 'function'
+    && scribeLines.chatClaimPrefilter('it is a lock of the week') === true
+    && scribeLines.chatClaimPrefilter('good morning all') === false,
+    'chatClaimPrefilter is NOT deleted and still behaves — it stopped being the gate, it did not stop being true');
 }
 
 console.log('\n[10] Tier 0 is unchanged — the canned line still posts…');

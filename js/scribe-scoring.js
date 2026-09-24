@@ -39,11 +39,27 @@
  *  from a keyword match. */
 export const SIGNAL_POINTS = Object.freeze({
   backdoorBust: 50,
+  // ── SCRIBE v3 PACKAGE D (DI-284, UN-260, 2026-09-24) — THE COMEBACK. ──────
+  // 50, which CLEARS `balanced` (45) ON ITS OWN. Drew's ruling on open
+  // question 2: a message that plainly roasts SCRIBE, addressed at it, should
+  // reliably get an answer rather than needing a second signal in the same
+  // ten-minute bucket to combine with. It still obeys every other gate — the
+  // per-post ticket, the global cooldown, the hourly cap, the consecutive
+  // guard — so "reliably" means "clears the DIAL", never "bypasses the
+  // floors" (SCRIBE.md §14, ruling 7(e): the floors never flex).
+  roastOfScribe: 50,
   chartLeadChange: 45,
   milestone: 40,
   streak: 35,
   loneWolfWin: 30,
   unanimous: 25,
+  // ── SCRIBE v3 PACKAGE D (DI-287, UN-263) — TWO PLAYERS GOING BACK AND
+  //    FORTH. Lower-value than a direct provocation or a scoreboard event on
+  //    purpose: an ambient "I notice you two" is real but lower-stakes than a
+  //    personal roast, and 20 still lets it COMBINE with another signal in the
+  //    same bucket to clear a higher threshold, which is how every other
+  //    signal already behaves.
+  heatedExchange: 20,
   drinkDebt: 15,
   verbosity: 10,
   claim: 0,
@@ -175,4 +191,69 @@ export function classifyVerdictPoints(parsed) {
   const clamped = Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : 0;
   const base = Object.prototype.hasOwnProperty.call(CLASSIFY_POINTS, kind) ? CLASSIFY_POINTS[kind] : 0;
   return (parsed && parsed.claim === true && clamped >= CLASSIFY_MIN_CONFIDENCE) ? base : 0;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// SCRIBE v3 PACKAGE D — DI-287's HEATED-EXCHANGE PREDICATE, IN ONE PLACE.
+// ══════════════════════════════════════════════════════════════════════════
+// THE DETECTOR IS CODE-ONLY AND MODEL-FREE (DI-287's own shape, the same style
+// `detectWeekSignals` already is): the last N `type='message'` rows in one room,
+// inside a window, alternating between EXACTLY TWO distinct human authors.
+//
+// IT LIVES HERE RATHER THAN IN `js/scribeLines.js` BECAUSE BOTH RUNTIMES NEED
+// THE SAME ANSWER. The client DETECTS the opportunity and the server VERIFIES
+// it from its own `messages` rows before a cent is spent — and "verified" has
+// to mean "the server re-derived the same thing", which a second, independently
+// written copy of an alternation rule cannot promise. `js/scribeLines.js` cannot
+// be imported into a Deno Edge Function (it reaches `fetch`, the DOM and
+// `localStorage` — this file's own header explains that at length), and THIS
+// module already is imported by both sides, so it is where a shared predicate
+// belongs. `js/scribeLines.js` imports it from here rather than restating it;
+// `_shared/scribe-evidence.mjs` does the same.
+//
+// PURE: a normalised row list in, a verdict out. No clock read of its own — the
+// caller supplies `now`, the same discipline `scoreOpportunity`'s bucket option
+// already follows.
+
+/** DI-287's own numbers. Four messages, five minutes, exactly two authors. */
+export const HEATED_MIN_LEN = 4;
+export const HEATED_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * @param {Array<{author:string, ts:number}>} rows OLDEST FIRST, one room only,
+ *   `type='message'` only, human authors only (a SCRIBE or system row is not
+ *   part of an argument between two players and the caller drops it).
+ * @param {{minLen?:number, windowMs?:number, now?:number}} opts
+ * @returns {{heated:boolean, authors:string[], count:number, spanMs:number}}
+ *   `authors` is sorted, so two devices that saw the same exchange in a
+ *   different arrival order still name the pair identically — which is what
+ *   makes the deterministic post id for this trigger stable across six phones.
+ */
+export function heatedExchangeRun(rows, { minLen = HEATED_MIN_LEN, windowMs = HEATED_WINDOW_MS, now = 0 } = {}) {
+  const none = { heated: false, authors: [], count: 0, spanMs: 0 };
+  const list = Array.isArray(rows) ? rows.filter((r) => r && String(r.author || '')) : [];
+  if (list.length < minLen) return none;
+  const tail = list.slice(-minLen);
+  // Every timestamp has to be real. A row we cannot place in time cannot be
+  // said to be inside a five-minute window, and "probably recent" is exactly
+  // the guess CONVENTIONS #7 exists to refuse.
+  const times = tail.map((r) => Number(r.ts));
+  if (!times.every((t) => Number.isFinite(t))) return none;
+  const first = Math.min(...times);
+  const last = Math.max(...times);
+  const spanMs = last - first;
+  if (spanMs > windowMs) return none;
+  // The window is measured against the END of the run, not against `now`, so a
+  // caller that passes `now` gets the additional freshness bound and a caller
+  // that does not (a replay, a test fixture) still gets the span rule.
+  if (now && (Number(now) - last) > windowMs) return none;
+  const authors = [...new Set(tail.map((r) => String(r.author)))];
+  if (authors.length !== 2) return none;
+  // ALTERNATING, not merely "two people said four things". Two players
+  // agreeing in two blocks (A A B B) is a conversation; A B A B is the
+  // back-and-forth this trigger is about.
+  for (let i = 1; i < tail.length; i += 1) {
+    if (String(tail[i].author) === String(tail[i - 1].author)) return none;
+  }
+  return { heated: true, authors: authors.slice().sort(), count: tail.length, spanMs };
 }

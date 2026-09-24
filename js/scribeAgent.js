@@ -33,8 +33,16 @@
  *     (`SCRIBE_WEB_SEARCH_ENABLED` Script Property). Exposed here so the
  *     Comm→Settings toggle has something to read/write through the seam.
  */
-import { getSettings, getScribeLearnings, getScribeCanon } from './storage.js';
-import { SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT } from './data-model.js';
+import { getSettings, getScribeLearnings, getScribeCanon, saveSetting } from './storage.js';
+import {
+  SCRIBE_FREQUENCY_LEVELS, SCRIBE_FREQUENCY_DEFAULT,
+  // SCRIBE v3, Package A (DI-263) — the heat dial's canonical table. Same
+  // import, same file, same reason as the frequency pair beside it.
+  SCRIBE_HEAT_INDEX, SCRIBE_HEAT_DEFAULT,
+  // SCRIBE v3, Package C (DI-274) — the learning-rate table, same import, same
+  // file, same reason as the two pairs beside it.
+  SCRIBE_LEARNING_RATE_TABLE, effectiveScribeLearningRate, scribeLearningRateConfig,
+} from './data-model.js';
 // ── NOTHING IS IMPORTED FROM js/backend.js ANY MORE (2026-09-23) ────────────
 // The four Apps Script relays this module wrapped — `scribeAskRemote`,
 // `runTrainerRemote`, `scribeAutonomousRemote`, `scribeClassifyRemote` — are
@@ -250,6 +258,180 @@ export function getScribeFrequency() {
   return Object.prototype.hasOwnProperty.call(SCRIBE_FREQUENCY_LEVELS, level) ? level : SCRIBE_FREQUENCY_DEFAULT;
 }
 
+// ── SCRIBE v3, Package A (2026-09-23, UN-239/UN-240, DI-263) ────────────────
+//
+// THE HEAT DIAL'S READ/WRITE PAIR, deliberately the same shape as the
+// frequency pair above and deliberately NOT folded into it: heat and frequency
+// are independent axes (docs/SCRIBE.md §4, §8), and one accessor answering
+// both questions is the first step toward a correction to one being applied to
+// the other — the exact failure UN-243 exists to prevent.
+
+/** The league's heat CEILING, validated against the canonical table. Default-
+ *  when-missing AND default-when-garbage: 'dry', which IS today's shipped v2.1
+ *  voice — so an absent value reads as current behaviour (CONVENTIONS #10) and
+ *  a malformed one makes SCRIBE tamer-or-equal, never hotter.
+ *
+ *  THE READ IS COOL-FAILING IN BOTH DIRECTIONS, unlike `getScribeFrequency()`
+ *  whose safe direction is "quieter". Same principle, opposite axis: whichever
+ *  way a garbage value resolves must be the way that cannot surprise a player.
+ *
+ *  F-1 (security gate, 2026-09-23) — VALIDATED BY `hasOwnProperty`, exactly as
+ *  `getScribeFrequency()` above has always been. This pair was written from the
+ *  frequency pair and dropped that one detail, so a stored `'constructor'` or
+ *  `'valueOf'` came back OUT of this "validated" accessor unchanged and every
+ *  downstream comparison against SCRIBE_HEAT_INDEX then read `undefined`. */
+export function getScribeHeat() {
+  const level = String(getSettings().scribeHeat || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SCRIBE_HEAT_INDEX, level) ? level : SCRIBE_HEAT_DEFAULT;
+}
+
+/** The commissioner's write. REFUSES an unknown level rather than storing it —
+ *  the same rule `setScribeFrequency()` follows in js/app.js, for the same
+ *  reason: a stored value nothing recognises resolves to the default at every
+ *  read site, which reads to a commissioner as "the dial does nothing."
+ *
+ *  Goes through `saveSetting()` — the storage seam (AD-02, CONVENTIONS #8) —
+ *  which also DECLARES the changed field so the bounded-size push cannot send a
+ *  stale whole blob over a fresh remote (RG-55).
+ *
+ *  F-1 (2026-09-23) — THE REFUSAL IS BY MEMBERSHIP. `!SCRIBE_HEAT_INDEX[lvl]`
+ *  ACCEPTED `'constructor'` and `'__proto__'` and wrote them into the settings
+ *  blob as if they were levels — the precise outcome this function's own
+ *  docstring says it exists to prevent. (The `.toLowerCase()` above happens to
+ *  turn `'toString'`/`'valueOf'` into non-keys, so those two were refused by
+ *  accident rather than by rule. An accident is not a guard: `'constructor'` is
+ *  already lower-case, and `hasOwnProperty` answers all of them the same way
+ *  for the same reason — which is what makes the test below assertable.) */
+export function setScribeHeat(level) {
+  const lvl = String(level || '').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(SCRIBE_HEAT_INDEX, lvl)) return { ok: false, error: 'unknown_level' };
+  saveSetting('scribeHeat', lvl);
+  return { ok: true, level: lvl };
+}
+
+// ── SCRIBE v3, Package C (2026-09-23, UN-250 / DI-274) ──────────────────────
+//
+// THE LEARNING-RATE PAIR, deliberately the same shape as the heat pair above
+// and deliberately NOT folded into it. Heat is HOW HARD a line lands; the
+// learning rate is HOW FAST feedback changes anything at all. One accessor
+// answering both questions is the first step toward a correction to one being
+// applied to the other, which is the exact failure UN-243 exists to prevent —
+// and this is now the THIRD dial, so the pattern matters more, not less.
+
+/** The league's learning rate, VALIDATED against the canonical table.
+ *  Default-when-missing AND default-when-garbage: 'normal', which IS today's
+ *  shipped Trainer behaviour (weekly, three rated responses, auto-apply at
+ *  >=0.9) — so an absent value reads as current behaviour (CONVENTIONS #10).
+ *
+ *  GARBAGE FAILS SLOW, which is this dial's safe direction. A malformed value
+ *  must never be the reason an unattended path that writes rows and spends
+ *  money switched itself on. `effectiveScribeLearningRate()` is the one place
+ *  that rule lives, shared with both Edge Functions. */
+export function getScribeLearningRate() {
+  return effectiveScribeLearningRate(getSettings().scribeLearningRate);
+}
+
+/** The commissioner's write. REFUSES an unknown level rather than storing it,
+ *  the same rule `setScribeHeat()` follows and for the same reason: a stored
+ *  value nothing recognises resolves to the default at every read site, which
+ *  reads to a commissioner as "the dial does nothing."
+ *
+ *  By MEMBERSHIP (`hasOwnProperty`), not truthiness — F-1's rule, which the
+ *  heat pair had to be corrected for. `'constructor'` is already lower-case
+ *  and is truthy on a bare probe. */
+export function setScribeLearningRate(level) {
+  const lvl = String(level || '').trim().toLowerCase();
+  if (!Object.prototype.hasOwnProperty.call(SCRIBE_LEARNING_RATE_TABLE, lvl)) return { ok: false, error: 'unknown_level' };
+  saveSetting('scribeLearningRate', lvl);
+  return { ok: true, level: lvl };
+}
+
+/** The row behind the current dial — the five knobs the explainer paragraph and
+ *  the Training card render from, read from ONE table so the copy can never
+ *  describe a mode the server is not in. */
+export function getScribeLearningRateConfig() {
+  return scribeLearningRateConfig(getSettings().scribeLearningRate);
+}
+
+// ── DI-281 — THE MASTER-MD GRADUATION EXPORT (UN-257) ───────────────────────
+//
+// The plan's own two-speed design: the DATABASE is the fast, messy, living
+// layer; `docs/SCRIBE.md` is the slow, permanent, human-owned one. Until now
+// there was no exit ramp between them — nothing turned a season's proven
+// learnings back into a document Drew could read, edit and paste.
+//
+// DELIBERATELY NOT AUTOMATED, and that is the design input's own instruction:
+// no server write, no `SCRIBE.md` edit, no scheduled run. It produces TEXT.
+// Drew decides what becomes permanent, which is the whole point of the slow
+// layer existing at all.
+//
+// PROVISIONAL ROWS ARE EXCLUDED. A still-provisional learning is by definition
+// one nothing has reconfirmed — it may well expire on its own this week. Only
+// confirmed, approved material graduates.
+
+/** The pure formatter. No DOM, no storage read — takes the two lists and
+ *  returns markdown, so it is unit-testable start to finish (`learntest.mjs`). */
+export function formatLearningsMarkdown({ learnings = [], canon = [], now = new Date() } = {}) {
+  const keep = (learnings || []).filter(l => l
+    && l.kind === 'learning' && l.status === 'approved' && l.provisional !== true);
+  const keepCanon = (canon || []).filter(c => c
+    && c.approvalStatus === 'approved' && c.kind !== 'anti_canon' && c.provisional !== true);
+  const stamp = new Date(now).toISOString().slice(0, 10);
+  const out = [];
+  out.push(`## §17 addendum — learned behaviour (exported ${stamp})`);
+  out.push('');
+  out.push('Generated from the SCRIBE learnings database. Confirmed, approved entries only —');
+  out.push('provisional (unconfirmed) learnings are excluded on purpose. Review every line before');
+  out.push('pasting: this is a candidate, not a decision.');
+  out.push('');
+  if (!keep.length) {
+    out.push('### Behavioural rules');
+    out.push('');
+    out.push('_(none confirmed yet)_');
+  } else {
+    // GROUPED BY CATEGORY, in first-seen order, so the document reads as a set of
+    // topics rather than as a transcript of whatever order the Trainer ran in.
+    const byCategory = new Map();
+    for (const l of keep) {
+      const cat = String(l.category || 'general');
+      if (!byCategory.has(cat)) byCategory.set(cat, []);
+      byCategory.get(cat).push(l);
+    }
+    out.push('### Behavioural rules');
+    out.push('');
+    byCategory.forEach((rows, cat) => {
+      out.push(`**${cat}**`);
+      out.push('');
+      for (const l of rows) {
+        const src = l.source && l.source.quote ? ` _(from: ${String(l.source.quote).replace(/\s+/g, ' ').trim()})_` : '';
+        out.push(`- ${String(l.instruction || '').replace(/\s+/g, ' ').trim()}${src}`);
+      }
+      out.push('');
+    });
+  }
+  out.push('### Worked examples (canon)');
+  out.push('');
+  if (!keepCanon.length) {
+    out.push('_(none confirmed yet)_');
+  } else {
+    for (const c of keepCanon) {
+      out.push(`**CONTEXT:** ${String(c.contextSummary || '').replace(/\s+/g, ' ').trim()}`);
+      out.push(`**FACT:** ${String(c.relevantFacts || '').replace(/\s+/g, ' ').trim()}`);
+      out.push(`**PREFERRED RESPONSE:** "${String(c.preferredResponse || '').replace(/\s+/g, ' ').trim()}"`);
+      out.push(`**WHY:** ${String(c.whyItWorked || '').replace(/\s+/g, ' ').trim()}`);
+      out.push(`**PATTERN:** ${String(c.pattern || '').replace(/\s+/g, ' ').trim()}`);
+      out.push('');
+    }
+  }
+  return out.join('\n');
+}
+
+/** The same thing, over the device's already-hydrated mirrors. Synchronous,
+ *  because every read in this app is (CONVENTIONS #9). */
+export function exportLearningsMarkdown() {
+  return formatLearningsMarkdown({ learnings: getScribeLearnings(), canon: getScribeCanon() });
+}
+
 /** Client-side convenience gate on autonomous participation. `!== false` so a
  *  settings blob written before this field existed reads as ON — the
  *  AUTHORITATIVE gate is SCRIBE_AUTONOMOUS_ENABLED server-side, which
@@ -355,6 +537,42 @@ export async function scribeAutonomousRemote({ trigger, subject = '', evidence =
   } catch {
     return { ok: false, error: 'unreachable' };
   }
+}
+
+// ── SCRIBE v3, PACKAGE D (2026-09-24, UN-259 / DI-283) — THE REACTION RELAY ──
+//
+// Mirrors `scribeClassifyRemote()` below exactly, and deliberately: same client
+// gate, same job-switch read, same `invokeScribeEdgeFunction()` seam, same
+// never-throws contract. What it does NOT mirror is the legacy-transport arm —
+// there has never been an Apps Script `scribeReact` action and there never will
+// be, so a device whose `scribeReact` switch is off answers
+// `{ok:true, skipped:'transport_unwired'}` and nothing happens.
+//
+// THE CLIENT SENDS A MESSAGE ID AND NOTHING ELSE. It does not choose the emoji,
+// does not know what the classifier decided, and could not place a reaction
+// even if it did: `messages_insert` (0002_rls.sql:292) binds
+// `author = author_member_id` for the `authenticated` role, so no browser can
+// author a row as `'scribe'`. Every SCRIBE-authored write in this package is
+// server-side, through the service role, exactly as `scribe-autonomous`'s own
+// posts already are. That constraint is the reason this is a function call
+// rather than a `toggleReact()` from the chat layer.
+//
+// `settings.scribe.reactionsEnabled` is read SERVER-SIDE and is authoritative;
+// `isScribeAutonomousEnabled()` here is the same client-side convenience gate
+// the classify/autonomous pair already share, saving a round trip on a device
+// where the commissioner has turned SCRIBE's unprompted participation off.
+
+/** Relay to `scribe-react` (DI-283). Returns `{ ok, posted?, skipped?, … }`;
+ *  never throws — a reaction that cannot reach the server is DROPPED, never
+ *  retried and never surfaced. An emoji that does not appear is the common and
+ *  correct outcome of this path, not a failure worth reporting to a player. */
+export async function scribeReactRemote({ messageId } = {}) {
+  if (!messageId) return { ok: true, skipped: 'no_message' };
+  if (!isScribeAutonomousEnabled()) return { ok: true, skipped: 'disabled_client' };
+  if (!isServerJobEnabled('scribeReact')) return { ok: true, skipped: 'transport_unwired' };
+  const leagueId = getActiveLeagueId();
+  if (!leagueId) return { ok: true, skipped: 'transport_unwired' };
+  return invokeScribeEdgeFunction('scribe-react', { leagueId, messageId });
 }
 
 /** Relay to `scribe-classify` (DI-T6.5) when the server switch is on, else to backend/Code.gs's

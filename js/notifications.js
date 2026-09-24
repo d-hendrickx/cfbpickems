@@ -167,6 +167,11 @@ import {
   getPlayers, getPlayer, getWeek, getNotifications, setNotifications,
   getNotifyPushMasterFor, getNotifyCategoryPrefsFor, getSettings,
 } from './storage.js';
+// DI-267 (SCRIBE v3, Package A, 2026-09-23) — the content-free-push predicate
+// and its copy, the SAME pair `supabase/functions/_shared/job-rules.mjs`
+// imports. One predicate for both push paths: the server fan-out and this
+// client relay must never disagree about what a lock screen shows.
+import { scribePushIsContentFree, SCRIBE_PUSH_CONTENT_FREE_BODY } from './data-model.js';
 // ── NOTHING IS IMPORTED FROM js/backend.js ANY MORE (2026-09-23) ────────────
 // `notifyPushRelay` (the client -> Apps Script -> OneSignal hop that held the
 // REST key server-side) and `notifyLogFetch` (the read of CFBP_NOTIFY_LOG) are
@@ -259,13 +264,28 @@ export function _deepLinkTableForTest() { return DEEP_LINK_TABLE; }
 // the two against each other across the ambiguous shapes.
 // ══════════════════════════════════════════════════════════════════════════
 
-/** The eight switch names, in DI-T6.0(a)'s own order. A `job` outside this set
- *  can never read as enabled — a typo'd name resolves to OFF, the same
- *  direction as an absent one. Kept in step with `_shared/job-rules.mjs`'s
- *  SERVER_JOBS by a test, not by memory. */
+/** The switch names, in DI-T6.0(a)'s own order, plus SCRIBE v3's one. A `job`
+ *  outside this set can never read as enabled — a typo'd name resolves to OFF,
+ *  the same direction as an absent one. Kept in step with
+ *  `_shared/job-rules.mjs`'s SERVER_JOBS by a test, not by memory
+ *  (notifytest [28-9], which compares the two lists element for element and in
+ *  order — which is what caught this list when `scribeLearn` was added to the
+ *  server's copy first).
+ *
+ *  `scribeLearn` (SCRIBE v3 Package C, DI-273) — the instant-learning webhook.
+ *  It has no CLIENT relay to suppress, unlike every other entry here; it is on
+ *  this list so the Background Jobs card can render its switch and so the two
+ *  readers stay the same decision. */
 export const SERVER_JOB_NAMES = Object.freeze([
   'notifyFanout', 'reminders', 'scribeAsk', 'trainer',
   'scribeClassify', 'scribeAutonomous', 'scoresRefresh', 'keepalive',
+  'scribeLearn',
+  // `scribeReact` (SCRIBE v3 Package D, DI-283) — the emoji reaction writer.
+  // Like `scribeLearn` it has no CLIENT relay to suppress; it is on this list
+  // so the Background Jobs card can render its switch, so
+  // `js/scribeAgent.js`'s `scribeReactRemote()` has one boolean to read, and
+  // so the two readers stay the same decision.
+  'scribeReact',
 ]);
 
 /** The pure decision, over a settings blob that has already been read. Exported
@@ -1096,6 +1116,15 @@ function _scanNewChatMessages() {
       // row — which, since N1, is every lifecycle notice — lowercase "scribe"
       // on the lock screen. One branch; human senders keep displayName.
       const senderName = senderId === 'scribe' ? 'SCRIBE' : (getPlayer(senderId)?.displayName || senderId);
+      // DI-267 (SCRIBE v3, Package A, 2026-09-23) — THE SAME CONTENT-FREE RULE
+      // THE SERVER APPLIES. At Savage and No Mercy a SCRIBE post's push body is
+      // generic instead of the line itself (a lock screen has none of the
+      // context that makes a roast a roast). This relay only runs while
+      // `settings.serverJobs.notifyFanout` is OFF — which is exactly why it has
+      // to agree: a rollback to the client path must not quietly start putting
+      // the hottest lines back on a lock screen. ONE predicate, imported from
+      // data-model.js, shared with `_shared/job-rules.mjs`'s `composePush()`.
+      const contentFree = senderId === 'scribe' && scribePushIsContentFree(getSettings().scribeHeat);
       _fireOne({
         event: LIFECYCLE_EVENTS.CHAT_MESSAGE_CREATED,
         actor: { kind: senderId === 'scribe' ? 'scribe' : 'system', playerId: senderId === 'scribe' ? null : senderId },
@@ -1107,7 +1136,10 @@ function _scanNewChatMessages() {
         // on the identical dedupKey and silently never fire).
         weekId: m.id,
         meta: { messageId: m.id },   // -> destinationFor's ctx.messageId (DI-A5)
-        copyOverride: { title: senderName, body: `${senderName}: ${preview}` },
+        copyOverride: {
+          title: senderName,
+          body: contentFree ? SCRIBE_PUSH_CONTENT_FREE_BODY : `${senderName}: ${preview}`,
+        },
         writeInApp: false,
         categoryOverride,
       });

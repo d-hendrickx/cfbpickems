@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v23-5';
+const CACHE_NAME = 'cfb-pickems-v25-0';
 
 const STATIC_ASSETS = [
   './',
@@ -89,6 +89,22 @@ const STATIC_ASSETS = [
   './js/scribeLines.js',
   './js/scribeAgent.js',     // statically imported by app.js/chat-ui.js — boot-critical (reviewer N1, 2026-09-10)
   './js/scribeFeedback.js',  // same — omitted from the shell cache after the Build 1 merge
+  // SCRIBE v3 Package C (DI-280, 2026-09-23) — js/app.js now STATICALLY imports the
+  // pacing ladder out of js/scribe-trainer-rules.js, the pure dual-runtime module both
+  // Edge Functions already read. It was a server-only file until this build, which is
+  // exactly the shape [25e] exists to catch: a shell cache one module short serves a
+  // graph that cannot resolve, and the symptom is a blank app rather than a missing
+  // feature. It imports only js/data-model.js, which is already precached above.
+  './js/scribe-trainer-rules.js',
+  // SCRIBE v3 Package D (DI-287, 2026-09-24) — the SAME shape one build later, and
+  // [25e] caught it the same way. `js/scribeLines.js` now STATICALLY imports
+  // `js/scribe-scoring.js` for `heatedExchangeRun()`, the alternation predicate the
+  // client detector and the server verifier share. That file had been server-only
+  // since Step 6 (both Edge Functions read it; no browser did), so it was not in
+  // this list — and scribeLines.js is boot-critical, which makes the omission a
+  // blank app on a cold PWA boot rather than a missing feature. It imports nothing
+  // at all, so precaching it pulls in no further graph.
+  './js/scribe-scoring.js',
   './js/extra-point.js',
   './js/recap.js',
   // Phase III Step 3a (reviewer N3 / SEC F6). js/auth.js is statically imported

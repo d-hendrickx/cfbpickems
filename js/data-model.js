@@ -290,6 +290,67 @@ export const REACTION_PALETTE = Object.freeze([
 ]);
 
 /**
+ * SCRIBE v3, Package B (DI-270, UN-247) — WHAT EACH REACTION MEANS WHEN IT
+ * LANDS ON A SCRIBE POST.
+ *
+ * The league already reacts to SCRIBE's lines constantly and nothing has ever
+ * read those taps. This map is the first thing that can: one valence per
+ * palette entry, so a Trainer (Package C) can count agreement and objection
+ * without re-deriving a meaning for 🖕 every time it runs.
+ *
+ * KEYED TO `REACTION_PALETTE` ABOVE, ENTRY FOR ENTRY. `reasonchiptest.mjs`
+ * asserts both directions — every palette emoji is mapped, and nothing is
+ * mapped that is not in the palette — because a half-covered map reads as
+ * "neutral" for the missing half and quietly drags every count toward zero.
+ *
+ * 💀 😭 😅 🤡 👀 ☝️ ARE NEUTRAL ON PURPOSE, NOT BY OVERSIGHT. In casual group
+ * chat 💀 and 😭 usually mean "that killed me," i.e. approval — but they are
+ * also exactly what somebody types when a roast actually stung, and a roast is
+ * the one situation where those two readings are impossible to tell apart
+ * without more context. Scoring an ambiguous tap as approval is how a training
+ * signal learns the wrong lesson from the line that hurt. Neutral costs us a
+ * little signal; a wrong sign costs us the feature. Drew can override any
+ * single emoji here — that is a one-line change and a test update.
+ */
+export const REACTION_VALENCE = Object.freeze({
+  '👍': 'positive', '🔥': 'positive', '😂': 'positive', '🍺': 'positive',
+  '😁': 'positive', '🫡': 'positive', '🤘': 'positive', '🤙': 'positive', '🚀': 'positive',
+  '👎': 'negative', '😬': 'negative', '🖕': 'negative',
+  '💀': 'neutral', '😭': 'neutral', '😅': 'neutral', '🤡': 'neutral', '👀': 'neutral', '☝️': 'neutral',
+});
+
+/**
+ * Valence tally over an ALREADY-FOLDED message's `reactions` object — the
+ * `{ [emoji]: [authorId, …] }` shape chat.js rebuilds on every react/unreact.
+ *
+ * Pure, no storage read, no new fold, no new event type: every reaction this
+ * counts was already stored and already rendered. DI-270's whole delta is that
+ * somebody can now ASK what they add up to.
+ *
+ * An UNKNOWN emoji counts as neutral rather than being dropped, so the three
+ * buckets always sum to the real number of reactions on the post. A count that
+ * silently omits rows is worse than one that parks them in the middle: the
+ * first looks like agreement, the second looks like what it is.
+ *
+ * THE LOOKUP IS CHECKED AGAINST THE THREE BUCKET NAMES, not merely defaulted
+ * with `||`. `REACTION_VALENCE['__proto__']` answers with `Object.prototype` —
+ * truthy — and `out[Object.prototype] += n` would silently mint a fourth key
+ * holding NaN instead of counting the row. chat.js's react fold already refuses
+ * any emoji outside the palette, but this is an exported pure function a future
+ * Trainer can point at raw rows, so the guard belongs here too (CONVENTIONS #7).
+ */
+const REACTION_VALENCE_BUCKETS = Object.freeze(['positive', 'negative', 'neutral']);
+export function reactionValenceCounts(reactions) {
+  const out = { positive: 0, negative: 0, neutral: 0 };
+  Object.entries(reactions || {}).forEach(([emoji, authors]) => {
+    const raw = REACTION_VALENCE[emoji];
+    const v = REACTION_VALENCE_BUCKETS.includes(raw) ? raw : 'neutral';
+    out[v] += Array.isArray(authors) ? authors.length : 0;
+  });
+  return out;
+}
+
+/**
  * The ONE chat-accent palette (XSS-HARDEN round 2, C2, 2026-09-12). Same
  * reasoning as REACTION_PALETTE above: it lived as a literal in chat-ui.js,
  * and storage.js's setAccent() now has to validate against it. storage.js is
@@ -482,6 +543,38 @@ export const DEFAULT_SETTINGS = {
   // Script Property, the feature should work without ALSO needing a second
   // client-side flip.
   scribeAutonomousEnabled: true,
+  // SCRIBE v3, Package A (2026-09-23, UN-239/DI-263) — the HEAT dial. The
+  // league-wide CEILING on how hard a single SCRIBE line may land, stored as
+  // its level name for the same reason `scribeFrequency` is: the UI, the
+  // client and both Edge Functions all read one closed table
+  // (SCRIBE_HEAT_ORDER below) rather than a bare number nobody can interpret.
+  //
+  // DEFAULT 'dry' IS DELIBERATE AND IS NOT DREW'S DAY-ONE SETTING.
+  // Dry IS today's shipped v2.1 voice (docs/SCRIBE.md §4's ladder says so in
+  // its own words), so a missing value reads as CURRENT BEHAVIOUR — exactly
+  // what CONVENTIONS #10 requires of every new field. Drew's stated day-one
+  // choice is No Mercy, and he sets it in Comm → Settings at deploy. A code
+  // default that shipped the league's preference would mean an unset/garbage
+  // value silently resolving to the hottest setting the app has, which is the
+  // wrong direction for every failure mode: a malformed value must make
+  // SCRIBE tamer-or-equal, never hotter (the same rule `scribeFrequency`
+  // follows in the other direction).
+  scribeHeat: 'dry',
+  // SCRIBE v3, Package C (2026-09-23, UN-250/DI-274) — the LEARNING RATE dial.
+  // How fast feedback becomes a live instruction: Fast / Normal / Locked.
+  //
+  // DEFAULT 'normal' IS DELIBERATE AND IS NOT DREW'S DAY-ONE SETTING, for the
+  // same reason `scribeHeat` above defaults to 'dry'. Normal's row of
+  // SCRIBE_LEARNING_RATE_TABLE (below) is BYTE-IDENTICAL to what the Trainer
+  // already does today — weekly cadence, three rated responses minimum,
+  // auto-apply only at confidence >= 0.9, no instant path, no heat exploration
+  // — so a league that has never touched this setting behaves exactly as it did
+  // before the field existed (CONVENTIONS #10). Drew's stated day-one choice is
+  // Fast, and he sets it in Comm -> Settings at deploy. A code default of Fast
+  // would mean an unset or malformed value silently switching on an unattended
+  // path that writes rows and spends money, which is the wrong direction for
+  // every failure mode.
+  scribeLearningRate: 'normal',
 };
 
 // ─── SCRIBE FREQUENCY DIAL (Build 3, Group D, DI-D1) ──────────────────────────
@@ -504,6 +597,319 @@ export const SCRIBE_FREQUENCY_LEVELS = {
   quiet: 85, reserved: 65, balanced: 45, active: 25, unhinged: 15,
 };
 export const SCRIBE_FREQUENCY_DEFAULT = 'balanced';
+
+// ─── SCRIBE HEAT DIAL (SCRIBE v3, Package A, DI-263) ─────────────────────────
+//
+// THE SECOND AXIS, AND IT IS NOT THE FIRST ONE. `scribeFrequency` above is HOW
+// OFTEN SCRIBE speaks; this is HOW HARD a single line may land. They are
+// independent by design and by written rule (docs/SCRIBE.md §4's "Heat and
+// frequency are two different axes" and §8's annoying-vs-mean subsection) —
+// raising heat must never raise frequency, and nothing in this file lets it.
+//
+// IT LIVES HERE FOR THE SAME REASON SCRIBE_FREQUENCY_LEVELS DOES (N-3): both
+// `js/scribeAgent.js` and the Edge Functions need it, `data-model.js` imports
+// nothing, and `supabase/functions/scribe-autonomous/index.js` already imports
+// SCRIBE_FREQUENCY_LEVELS straight from this file — so heat is a shared
+// constant with ONE home rather than a twin somebody has to keep in sync.
+//
+// ORDER IS SEMANTIC. `SCRIBE_HEAT_ORDER` is coolest-first, and
+// `SCRIBE_HEAT_INDEX` is the comparable rank behind `effectiveScribeHeat()`'s
+// min(). Two structures rather than one array lookup because the index is used
+// in comparisons on both sides of the wire and `indexOf()` returning -1 for a
+// garbage value would quietly read as "cooler than Polite".
+export const SCRIBE_HEAT_ORDER = ['polite', 'dry', 'spicy', 'savage', 'no_mercy'];
+export const SCRIBE_HEAT_INDEX = { polite: 1, dry: 2, spicy: 3, savage: 4, no_mercy: 5 };
+export const SCRIBE_HEAT_DEFAULT = 'dry';
+
+/**
+ * A player's roast tolerance → the CEILING it puts on posts about that player.
+ * DI-263, confirmed by Drew 2026-09-23 (open question 3).
+ *
+ * This is what finally gives the three already-shipped `ROAST_TOLERANCE_OPTIONS`
+ * labels an operational meaning — until v3 nothing read the value at all. The
+ * mapping only ever NARROWS: a personal cap can lower what SCRIBE says about
+ * you, it can never raise it above what the commissioner set.
+ */
+export const ROAST_TOLERANCE_HEAT_CAP = { light: 'dry', standard: 'savage', no_limits: 'no_mercy' };
+
+/**
+ * The level that actually governs a post: min(league dial, target's own cap).
+ *
+ * `targetRoastTolerance` FALSY MEANS NO PERSONAL CAP — a general post about
+ * nobody in particular, or a player who has never opened My SCRIBE File. Drew's
+ * ruling 2026-09-23 (open question 5): an unset tolerance defers to the league
+ * level rather than defaulting silent players to `standard`. That is the answer
+ * with no hidden behaviour in it — the dial the commissioner set is the dial,
+ * and a player who wants less says so.
+ *
+ * GARBAGE FAILS COOL, IN BOTH ARGUMENTS (CONVENTIONS #7). An unrecognised
+ * league level resolves to the DEFAULT ('dry', today's voice), never to the
+ * caller's string; an unrecognised tolerance resolves to the same default as a
+ * CAP, which can only lower the result. A malformed value must never be the
+ * reason SCRIBE got hotter.
+ *
+ * A HARD LINE IS NOT MODELLED HERE, ON PURPOSE. Boundaries are checked
+ * separately, before generation, and they beat every level including No Mercy
+ * (docs/SCRIBE.md §4, §9.3). Folding them into a number would imply a heat
+ * level exists at which a boundary stops applying, and none does.
+ *
+ * ── F-1 (security gate, 2026-09-23) — MEMBERSHIP, NOT TRUTHINESS ────────────
+ * Both lookups used to be bare bracket probes (`SCRIBE_HEAT_INDEX[leagueHeat]`,
+ * `ROAST_TOLERANCE_HEAT_CAP[tol] || DEFAULT`), which answer for EVERY KEY ON
+ * `Object.prototype` as well as the five real ones. A tolerance of
+ * `'constructor'` returned the `Object` function — truthy, so the `||` never
+ * fired — and `SCRIBE_HEAT_INDEX[thatFunction]` is `undefined`, so
+ * `undefined <= n` is false and the post ran at the FULL LEAGUE DIAL with the
+ * cap silently skipped. A heat level of `'toString'` did the same thing one
+ * table over. Both values are member-reachable: the tolerance comes off a
+ * `scribe_memory` row a player writes about himself.
+ *
+ * `hasOwnProperty` is therefore the test at every one of these tables, here and
+ * in the four sibling call sites (`scribePushIsContentFree` below,
+ * `scribeHeatBlock()` in _shared/scribe-persona.mjs, `getScribeHeat()` /
+ * `setScribeHeat()` in js/scribeAgent.js) — matching the frequency pair in
+ * scribeAgent.js, which has always read this way. The tolerance ids ARE
+ * `ROAST_TOLERANCE_HEAT_CAP`'s own key set (`light`/`standard`/`no_limits` —
+ * the same three js/app.js's ROAST_TOLERANCE_OPTIONS renders), so validating
+ * against this table IS validating against the option list, with no second copy
+ * of it to drift.
+ */
+export function effectiveScribeHeat(leagueHeat, targetRoastTolerance) {
+  const league = Object.prototype.hasOwnProperty.call(SCRIBE_HEAT_INDEX, leagueHeat)
+    ? leagueHeat : SCRIBE_HEAT_DEFAULT;
+  if (!targetRoastTolerance) return league;
+  const cap = Object.prototype.hasOwnProperty.call(ROAST_TOLERANCE_HEAT_CAP, targetRoastTolerance)
+    ? ROAST_TOLERANCE_HEAT_CAP[targetRoastTolerance] : SCRIBE_HEAT_DEFAULT;
+  return SCRIBE_HEAT_INDEX[cap] <= SCRIBE_HEAT_INDEX[league] ? cap : league;
+}
+
+/**
+ * DI-267 — CONTENT-FREE PUSH AT SAVAGE AND ABOVE, automatic, no toggle
+ * (Drew's ruling 2026-09-23, open question 2).
+ *
+ * A push preview is the one SCRIBE surface that renders on a LOCKED PHONE, in
+ * front of whoever is standing next to it, with none of the context that makes
+ * a roast a roast. At Savage and No Mercy the line itself is the wrong thing to
+ * put there, so the push carries a generic body and the line stays in the room.
+ *
+ * THIS IS NOT SUPPRESSION. The push still fires, to the same recipients, with
+ * the same deep link — S6-D-7 (a) ("SCRIBE-authored rows push exactly like
+ * today") is about WHETHER a SCRIBE row pushes, and that is unchanged. Only the
+ * preview TEXT changes, and only above Spicy.
+ *
+ * Lives in `data-model.js` because BOTH push paths need the identical answer:
+ * `supabase/functions/_shared/job-rules.mjs` (the live server fan-out) and
+ * `js/notifications.js` (the client relay that resumes if `notifyFanout` is
+ * ever switched off). Two copies of this predicate is how the rollback path
+ * quietly keeps leaking the line nobody wanted on a lock screen.
+ *
+ * F-1 (2026-09-23) — `hasOwnProperty`, not a bracket probe, for the reason
+ * `effectiveScribeHeat()` above states at length. Here the consequence ran the
+ * other way and was worse for it: a dial of `'constructor'` made
+ * `SCRIBE_HEAT_INDEX[level]` `undefined`, `undefined >= 4` false, and the push
+ * carried the full line — i.e. the exact lock-screen leak this predicate
+ * exists to stop, reachable from one malformed settings value.
+ */
+export const SCRIBE_PUSH_CONTENT_FREE_BODY = 'SCRIBE posted in the Locker Room';
+export function scribePushIsContentFree(leagueHeat) {
+  const level = Object.prototype.hasOwnProperty.call(SCRIBE_HEAT_INDEX, leagueHeat)
+    ? leagueHeat : SCRIBE_HEAT_DEFAULT;
+  return SCRIBE_HEAT_INDEX[level] >= SCRIBE_HEAT_INDEX.savage;
+}
+
+// ─── SCRIBE MODEL CHOICE (SCRIBE v3, DI-282) ─────────────────────────────────
+//
+// DREW, 2026-09-23: "i also want to be able to toggle if scribe is using sonnet
+// or opus." The two ids the commissioner may choose between, in ONE place, for
+// the same reason the heat ladder is here (N-3): the client card renders from
+// this list and the Edge Functions price and send from
+// `supabase/functions/_shared/scribe-rate.js`'s rate card — two files that must
+// agree about what a legal model id is, and `data-model.js` is the one module
+// in this codebase everything can import.
+//
+// ORDER IS SEMANTIC, exactly like SCRIBE_HEAT_ORDER: [0] IS THE DEFAULT, and it
+// is `claude-sonnet-5` — the same string `_shared/anthropic.js`'s
+// SCRIBE_MODEL_DEFAULT carries, which is what every path already falls back to
+// today. A missing `settings.scribe.model` therefore reads as CURRENT
+// BEHAVIOUR (CONVENTIONS #10) and the cheaper of the two, which is the safe
+// direction for a value that multiplies a bill by 2.5. `heattest.mjs` §[11]
+// asserts the two constants agree and that every choice here is priced on the
+// rate card — an id the rate card does not know would be metered at the Sonnet
+// fallback while being billed as Opus.
+//
+// FROZEN because it is an ALLOW-LIST, enforced at the write boundary
+// (`setScribeModel()` in js/app.js) and again server-side in `rateSettings()`
+// (F-3). A list that can be pushed to at runtime is not an allow-list.
+export const SCRIBE_MODEL_CHOICES = Object.freeze(['claude-sonnet-5', 'claude-opus-5']);
+
+// ─── SCRIBE LEARNING RATE (SCRIBE v3, Package C, DI-274) ─────────────────────
+//
+// THE THIRD DIAL, AND IT IS NOT EITHER OF THE OTHER TWO. `scribeFrequency` is
+// HOW OFTEN SCRIBE speaks; `scribeHeat` is HOW HARD one line may land; this is
+// HOW FAST FEEDBACK CHANGES EITHER OF THEM. Drew's words (2026-09-23): "it needs
+// to really incorporate feedback quickly and change quickly… We can start to
+// dial it in throughout the season."
+//
+// ONE TABLE, FIVE COLUMNS, EVERY CONSUMER READS THE SAME ROW. The five knobs the
+// plan's own chart names live here together rather than as five settings,
+// because five independent settings is five ways for the dial to half-apply —
+// a league on "Locked" whose nightly cron somebody forgot to gate is not locked.
+//
+//   instantAgreeThreshold  how many AGREEING feedback signals (same target, same
+//                          category family, DIFFERENT authors) the instant path
+//                          needs before a learning may auto-apply. `null` = the
+//                          instant path never runs at all.
+//   trainerCadence         'nightly' | 'weekly' | 'manual'. Migration 0024 ships
+//                          BOTH cron entries; the handler no-ops the nightly one
+//                          unless this says 'nightly'.
+//   minRated               the insufficient-data floor (MIN_RATED_RESPONSES's
+//                          replacement as a PARAMETER — 3 stays the default for
+//                          every existing call site).
+//   autoApply              'all_tone_style' (Fast: any applies:true result may
+//                          auto-apply, category permitting) | 'confidence_0_9'
+//                          (today's behaviour) | 'none'.
+//   heatExploration        whether `exploreHeat()` samples +/-1 within the
+//                          league ceiling. Fast only.
+//
+// IT LIVES HERE for SCRIBE_HEAT_ORDER's reason (N-3): both Edge Functions and
+// the client read it, and `data-model.js` imports nothing.
+//
+// 'all_tone_style' IS NOT A SAFETY BYPASS, and the distinction is load-bearing.
+// It relaxes the CONFIDENCE gate only. `isHostileLearningInstruction()`
+// (js/scribe-trainer-rules.js) runs at EVERY rate, before every insert, and a
+// hit force-holds the row for a human regardless of what this table says.
+export const SCRIBE_LEARNING_RATE_ORDER = Object.freeze(['locked', 'normal', 'fast']);
+export const SCRIBE_LEARNING_RATE_DEFAULT = 'normal';
+export const SCRIBE_LEARNING_RATE_TABLE = Object.freeze({
+  fast: Object.freeze({ instantAgreeThreshold: 1, trainerCadence: 'nightly', minRated: 1, autoApply: 'all_tone_style', heatExploration: true }),
+  normal: Object.freeze({ instantAgreeThreshold: 2, trainerCadence: 'weekly', minRated: 3, autoApply: 'confidence_0_9', heatExploration: false }),
+  locked: Object.freeze({ instantAgreeThreshold: null, trainerCadence: 'manual', minRated: 3, autoApply: 'none', heatExploration: false }),
+});
+
+/**
+ * The league's learning rate, VALIDATED — the one reader both runtimes share.
+ *
+ * `hasOwnProperty`, not a bracket probe, for the reason `effectiveScribeHeat()`
+ * states at length (F-1): a stored `'constructor'` answers truthy on a bare
+ * lookup and would come back out of a "validated" accessor unchanged.
+ *
+ * GARBAGE FAILS SLOW, which is this dial's safe direction: an unrecognised value
+ * resolves to 'normal' (today's behaviour), never to 'fast'. A malformed setting
+ * must never be the reason an unattended path started writing rows.
+ */
+export function effectiveScribeLearningRate(raw) {
+  const level = String(raw || '').trim().toLowerCase();
+  return Object.prototype.hasOwnProperty.call(SCRIBE_LEARNING_RATE_TABLE, level)
+    ? level : SCRIBE_LEARNING_RATE_DEFAULT;
+}
+
+/** The whole row for a league's current rate. Always a real row — never
+ *  undefined, never a partially-populated object a caller has to re-default. */
+export function scribeLearningRateConfig(raw) {
+  return SCRIBE_LEARNING_RATE_TABLE[effectiveScribeLearningRate(raw)];
+}
+
+// ─── SCRIBE v3, PACKAGE D — REACTIONS AND BEST-OF-N (DI-283/DI-286) ─────────
+//
+// IT LIVES HERE for the same reason the three dial tables above it do (N-3):
+// both Edge Functions and the client need the same numbers, `js/data-model.js`
+// imports nothing, and it is the only module a Deno function and a browser can
+// both read without dragging the app in behind it. A twin constant is a twin
+// that drifts.
+//
+// NONE OF THESE IS A NEW STORAGE KEY. They are the DEFAULTS behind three
+// commissioner-editable fields in the existing `settings.scribe.*` bag — the
+// same undeclared-nested-object pattern `autonomousHourlyLimit` and
+// `monthlyBudgetUsd` already use, so `DEFAULT_SETTINGS` needs no edit and a
+// league that has never seen them behaves exactly as this file says
+// (CONVENTIONS #10).
+
+/** `settings.scribe.reactionHourlyLimit` — LEAGUE-WIDE reactions per hour.
+ *  `0` is the one explicit "unlimited"; absent or garbage resolves to this.
+ *  Deliberately NOT the `autonomous:*` family's cap: a `react` row is
+ *  structurally exempt from the consecutive-post guard (`js/chat.js`'s fold and
+ *  the server's `consecutiveBlocked()` both skip every `type !== 'message'`
+ *  row), so a reaction can neither trip nor consume a message floor — which is
+ *  exactly why it needs a ceiling of its own rather than sharing one. */
+export const SCRIBE_REACTION_HOURLY_DEFAULT = 8;
+
+/** `settings.scribe.reactionPerAuthorHourlyLimit` — reactions to ONE player's
+ *  messages per hour. Two, because the failure this bounds is not volume in
+ *  aggregate, it is SCRIBE fixating on one person: eight reactions spread over
+ *  six players reads as a member who is paying attention, and eight aimed at
+ *  Kevin reads as a bot with a target. */
+export const SCRIBE_REACTION_PER_AUTHOR_HOURLY_DEFAULT = 2;
+
+/** `settings.scribe.classifyDailyCap`'s NEW default (DI-283, Drew's answer to
+ *  §6 open question 5). The old 40/day was sized for claim-shaped messages
+ *  only; the classify trigger is now every human message, and at a real
+ *  league's ~150-250 messages a week 40 would exhaust itself inside two busy
+ *  evenings and take reactions, comebacks and claims down with it. */
+export const SCRIBE_CLASSIFY_DAILY_CAP_DEFAULT = 150;
+
+/** `settings.scribe.bestOfN` — a CLOSED set of two. `1` is one generation and
+ *  no judge (the pre-v3 behaviour, kept so the feature has an off switch that
+ *  is a number rather than a second boolean); `3` is one generation call
+ *  returning three candidates plus one Haiku judge call.
+ *
+ *  THE DEFAULT IS 3, ON (Drew's §6 decision). The whole brief is
+ *  quality-per-post and the measured cost is $3-7/month; a wrong default in
+ *  this direction costs a few dollars, and in the other it costs the feature. */
+export const SCRIBE_BEST_OF_N_VALUES = Object.freeze([1, 3]);
+export const SCRIBE_BEST_OF_N_DEFAULT = 3;
+
+/** VALIDATED, and garbage resolves to the DEFAULT rather than to 1. Unlike the
+ *  heat and learning-rate dials, whose safe direction is "cooler/slower", this
+ *  one's safe direction is "the quality gate stays on": a malformed value must
+ *  not be the reason SCRIBE started shipping first drafts again. The cost
+ *  ceiling that bounds the other direction already exists and is shared — the
+ *  $25 `budget:<YYYY-MM>` key every voice path checks before it spends. */
+export function effectiveScribeBestOfN(raw) {
+  const n = Number(raw);
+  return SCRIBE_BEST_OF_N_VALUES.includes(n) ? n : SCRIBE_BEST_OF_N_DEFAULT;
+}
+
+// ─── SCRIBE FEEDBACK REASON CHIPS (SCRIBE v3, Package B, DI-268) ─────────────
+//
+// WHY A CLOSED SET AND WHY THESE ELEVEN. A bare Hit/Mid/Too-much rating cannot
+// tell "SCRIBE talks too much" apart from "SCRIBE was cruel," and Drew's
+// ruling 7 says those two complaints take OPPOSITE corrections — the first
+// lowers FREQUENCY, the second lowers HEAT. A single "bad" signal averaged over
+// both is a signal that moves the wrong dial half the time. The two families
+// below are that split, made structural: they are different chips, stored as
+// different strings, and `SCRIBE_FEEDBACK_CHIP_FAMILY` fixes the membership
+// here so Package C's Trainer reads it rather than re-deriving it from names.
+//
+// FROZEN, FOR THE SAME REASON `REACTION_PALETTE` IS: it is an ALLOW-LIST,
+// enforced at the write boundary in `js/scribeFeedback.js`. A list that can be
+// pushed to at runtime is not an allow-list.
+//
+// ORDER IS THE RENDER ORDER — annoying family, mean family, shared diagnostics,
+// then the single positive chip (which renders alone, under Hit).
+export const SCRIBE_FEEDBACK_REASON_CHIPS = Object.freeze([
+  'annoying', 'too_often', 'tried_too_hard', 'too_long',
+  'too_mean', 'crossed_a_line',
+  'not_funny', 'wrong_target', 'wrong_facts', 'too_soft',
+  'perfect_more_of_this',
+]);
+
+/**
+ * Which correction a chip argues for. `annoying` → talk less; `mean` → hit
+ * softer; `shared` → neither dial, this one is about the line itself (it
+ * missed, it aimed at the wrong person, it got a fact wrong, it was limp);
+ * `positive` → do more of that.
+ *
+ * Lives beside the list rather than inside the UI so the Trainer and the
+ * popover agree by construction. `reasonchiptest.mjs` asserts every chip has a
+ * family and every family name is one of the four.
+ */
+export const SCRIBE_FEEDBACK_CHIP_FAMILY = Object.freeze({
+  annoying: 'annoying', too_often: 'annoying', tried_too_hard: 'annoying', too_long: 'annoying',
+  too_mean: 'mean', crossed_a_line: 'mean',
+  not_funny: 'shared', wrong_target: 'shared', wrong_facts: 'shared', too_soft: 'shared',
+  perfect_more_of_this: 'positive',
+});
+export const SCRIBE_FEEDBACK_CHIP_FAMILIES = Object.freeze(['annoying', 'mean', 'shared', 'positive']);
 
 // ─── DEMO PLAYERS — correct alma maters and 2-letter initials ─────────────────
 

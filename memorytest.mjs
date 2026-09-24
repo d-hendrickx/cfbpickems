@@ -1013,9 +1013,42 @@ console.log('\n[15] F6 — the SIGNAL_POINTS twin agrees with the client, and th
     return out;
   };
   const client = parse(m[1]), server = parse(s[1]);
-  assert(Object.keys(client).length === 9, `fixture check: all nine DI-D1 signals parsed from the client (got ${Object.keys(client).length})`);
-  assert(JSON.stringify(client) === JSON.stringify(server),
-    `the client and server point tables are identical — the Trainer replays with the SAME numbers the client scored with (server: ${JSON.stringify(server)})`);
+  // ── AMENDED 2026-09-24 (SCRIBE v3 Package D, DI-284/DI-287). ──────────────
+  //
+  // THIS ASSERTION USED TO BE EQUALITY, and equality stopped being the truth on
+  // the day Apps Script was retired rather than on the day this test broke.
+  // `backend/Code.gs` is a READ-ONLY ARCHIVE (CLAUDE.md: the Sheet is kept as
+  // the archive; every relay is deleted and the deployment is archived). Drew
+  // will never paste it again, so a table in it can never gain a row — while
+  // the LIVE tables legitimately do: Package D adds `roastOfScribe` (50) and
+  // `heatedExchange` (20), and there is no Apps Script runtime left for them to
+  // be added to.
+  //
+  // SO THE PROPERTY IS NARROWED TO THE ONE THAT IS STILL TRUE AND STILL WORTH
+  // HAVING: every signal the ARCHIVE knows must carry the SAME VALUE here. That
+  // is the thing a Trainer replay over historical `job_runs` rows actually
+  // depends on — a 2026 post scored `backdoorBust: 50` and must still replay at
+  // 50. What it can no longer require is that the live client learn no new
+  // signals, which would be a rule that the retired runtime gets a veto over
+  // the shipped one.
+  //
+  // THE SUBSET IS ASSERTED IN THE HONEST DIRECTION: archive ⊆ client. A signal
+  // DELETED from the client still fails here, which is the half of the old
+  // assertion that protects a replay.
+  const shared = Object.keys(server);
+  assert(shared.length === 9,
+    `fixture check: all nine of the ARCHIVE's signals parsed out of backend/Code.gs (got ${shared.length}) — a parse that found none would make the comparison vacuous`);
+  const drifted = shared.filter((k) => client[k] !== server[k]);
+  assert(drifted.length === 0,
+    `every signal the ARCHIVE knows carries the SAME value in the live client — the Trainer replays a historical run with the numbers it was scored with (drifted: ${JSON.stringify(drifted.map((k) => [k, server[k], client[k]]))})`);
+  const missing = shared.filter((k) => !(k in client));
+  assert(missing.length === 0,
+    `…and none of them has been DELETED from the client, which would make a historical replay silently score that signal at zero (missing: ${JSON.stringify(missing)})`);
+  // The live-only additions, named rather than left as an unexplained count
+  // difference for the next reader to rediscover.
+  const added = Object.keys(client).filter((k) => !(k in server));
+  assert(JSON.stringify(added.sort()) === JSON.stringify(['heatedExchange', 'roastOfScribe']),
+    `…and the live client's ONLY signals beyond the archive are Package D's two, named here so the gap is a decision rather than drift (got ${JSON.stringify(added)})`);
 
   const sig = [{ signal: 'unanimous' }, { signal: 'drinkDebt' }];
   assert(env.gs.scribeScoreOpportunity_(sig) === 32.5,

@@ -49,6 +49,10 @@ import * as sb from './supabase-backend.js';
 // no cycle and costs a 'pins' boot nothing (the function early-returns without a
 // configured App ID). Using its EXPORTED accessor, never a reimplementation.
 import { logoutOneSignal } from './push-onesignal.js';
+// AD-68 (2026-09-23, coordinator ruling) — ONE predicate, no second inline
+// implementation. platform.js is zero-dependency and side-effect-free (no
+// import of its own), so this cannot form a cycle back into this file.
+import { isNativeOrigin } from './platform.js';
 
 // ── Typed errors (AD-06 loud-fail) ───────────────────────────────────────────
 // Two named classes, not bare Error strings, because two DIFFERENT callers have
@@ -839,6 +843,30 @@ function ensureClient() {
       autoRefreshToken: true,
       detectSessionInUrl: true,
       flowType: 'pkce',
+      // DI-248 (2026-09-21, iOS Munera thread, K1-amended; round 2 S1 —
+      // security condition C-1 REQUIRES A REAL SHAPE, not mere truthiness;
+      // AMENDED 2026-09-23 by AD-68 — coordinator ruling on the nativeguardtest
+      // [7] finding: "no import added to this file" is RETIRED in favor of
+      // "exactly ONE import, of the shared predicate" — a second, inline
+      // reimplementation of the origin check is what AD-68 exists to forbid,
+      // not new imports per se).
+      // ORIGIN-POSITIVE per security condition 8's own principle:
+      // `undefined` on every web origin, including a spoofed
+      // `window.__cfbpNativeAuthStorage` on an `https:` origin (isNativeOrigin()
+      // — js/platform.js — requires BOTH isNativeShell() AND
+      // `location.protocol === 'capacitor:'`; neither half can be spoofed from
+      // inside page script). Requiring getItem/setItem/removeItem to each be
+      // a real function (not just object truthiness) is the second half of
+      // C-1: js/auth-storage-native.js installs a FROZEN object under a
+      // non-writable, non-configurable property and fails closed if
+      // anything else got there first — this shape check is this file's own
+      // belt to that brace, so a same-shaped-but-wrong object could still
+      // never be handed to the SDK as a storage adapter. Only non-`undefined`
+      // when js/auth-storage-native.js's own dynamic-import boot step
+      // (DI-247/DI-249) has already run and set the global as a side effect.
+      // Posted to docs/THREAD_BOARD.md and acked by this file's owning thread
+      // before this line landed.
+      storage: (isNativeOrigin() && window.__cfbpNativeAuthStorage && typeof window.__cfbpNativeAuthStorage.getItem === 'function' && typeof window.__cfbpNativeAuthStorage.setItem === 'function' && typeof window.__cfbpNativeAuthStorage.removeItem === 'function' && window.__cfbpNativeAuthStorage) || undefined,
     },
   });
   try {

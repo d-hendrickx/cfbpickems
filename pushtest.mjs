@@ -360,10 +360,13 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
   //      settles). Structural, and labelled: boot() needs a live DOM and a
   //      hydrate this harness has no business building (the [9] precedent). ──
   // BOUND RAISED 4000 -> 6000 (2026-09-23): the block grew by the note recording
-  // that `registerPushAdapter(new OneSignalRelayAdapter())` was removed. The
-  // bound exists so the lazy match cannot run away into an unrelated part of the
-  // file, not as a length budget for the block itself.
-  const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,6000}?refreshPushActiveFlag\(\);/) || [''])[0];
+  // that `registerPushAdapter(new OneSignalRelayAdapter())` was removed.
+  // BOUND RAISED 6000 -> 7500 (2026-09-23, DI-217 native push): the block grew
+  // again by the native adapter registration + foreground/click wiring, added
+  // right after the same comment this test anchors on. The bound exists so the
+  // lazy match cannot run away into an unrelated part of the file, not as a
+  // length budget for the block itself.
+  const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,7500}?refreshPushActiveFlag\(\);/) || [''])[0];
   assert(bootBlock10.length > 0, '10-11: fixture check — the notifications boot-wiring block was located in js/app.js');
   // RG-177 (2026-09-19) — the clear still happens here and still happens FIRST;
   // it just goes through setPushActiveDurable() now. Under dataMode:'supabase'
@@ -1291,8 +1294,10 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
       '12j-6: …and not for a signed-out device: a subscription with nobody attached is exactly the orphan this whole fix is about');
 
     // STRUCTURAL — it is actually wired into boot, not merely exported.
+    // BOUND RAISED 4500 -> 7500 (2026-09-23, DI-217 native push) — same block,
+    // same reason as [10-11]'s identical bound above.
     const appSrc12 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-    const bootBlock12 = (appSrc12.match(/Groups A\/B — notifications boot wiring[\s\S]{0,4500}?refreshPushActiveFlag\(\);/) || [''])[0];
+    const bootBlock12 = (appSrc12.match(/Groups A\/B — notifications boot wiring[\s\S]{0,7500}?refreshPushActiveFlag\(\);/) || [''])[0];
     assert(bootBlock12.includes('maybeAutoOptInPush('),
       '12j-7: …and the boot wiring really calls it — an exported function nothing calls fixes nobody');
   }

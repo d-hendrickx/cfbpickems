@@ -2460,6 +2460,10 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
  *   E1 follow-up (2026-09-10)  .chat-fb-star (+ ::after, .is-unrated,
  *       .is-rated) — persistent ⭐ on SCRIBE messages; block at the very
  *       bottom of this file, beside its siblings above
+ *   SCRIBE v3 Package B (2026-09-23, DI-268/DI-269)  .feedback-reason,
+ *       .feedback-reason-prompt, .feedback-chip-group, .feedback-chip-row,
+ *       .feedback-chip (+ .active), .feedback-note-input — the reason-chip
+ *       row and the optional "why", beside .feedback-pick-option below
  *   F1/F4-interim  .chat-img-preview, --chat-img-preview-max-h
  *   F2  .chat-header-actions, .chat-search-row, .chat-search-input,
  *       .chat-search-results, .chat-search-result, .chat-search-result-meta,
@@ -2602,6 +2606,42 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    (styles.css:1686) rather than inventing a second "this is mine" color. */
 .feedback-pick-option.active{border-color:var(--maroon);
   background:var(--maroon-pale);color:var(--maroon)}
+
+/* ── SCRIBE v3, Package B — DI-268 reason chips + DI-269 free-text "why" ──
+   The SECOND ROW of the same popover, revealed by the rating itself (see
+   chat-ui.js's reasonSectionHTML). Widths track .feedback-picker-grid's own
+   math above — 2×150px+gap ≈ 306px, collapsing with it at ≤384px — so the
+   popover never gets wider when the chips appear, only taller. */
+.feedback-reason{width:306px;max-width:calc(100vw - 48px);margin-top:8px;
+  padding-top:8px;border-top:1px solid var(--border)}
+@media (max-width:384px){
+  .feedback-reason{width:180px}
+}
+.feedback-reason-prompt{font-size:.72rem;font-weight:700;
+  color:var(--text-primary);margin-bottom:6px}
+/* The two family headings ("Too much SCRIBE" / "Too harsh") and the shared
+   group. Quiet by design — they exist to keep the two corrections visually
+   apart, not to compete with the chips for attention. */
+.feedback-chip-group{font-size:.64rem;font-weight:600;letter-spacing:.04em;
+  text-transform:uppercase;color:var(--text-muted);margin:6px 0 4px}
+.feedback-chip-row{display:flex;flex-wrap:wrap;gap:6px}
+/* 40px is CONVENTIONS #17's floor and is what a wrapping multi-select row can
+   afford; the four primary options above stay at 44px. */
+.feedback-chip{display:inline-flex;align-items:center;justify-content:center;
+  min-height:40px;padding:4px 10px;border-radius:999px;
+  border:1px solid var(--border);background:var(--bg-card);
+  color:var(--text-primary);font-size:.72rem;font-weight:600;cursor:pointer;
+  box-sizing:border-box;line-height:1.1}
+.feedback-chip:hover{background:var(--bg-input)}
+/* Same maroon "this is mine" language .feedback-pick-option.active uses — a
+   selected chip and a selected rating are the same kind of statement. */
+.feedback-chip.active{border-color:var(--maroon);
+  background:var(--maroon-pale);color:var(--maroon)}
+.feedback-note-input{display:block;width:100%;box-sizing:border-box;
+  margin-top:8px;min-height:40px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg-input);
+  color:var(--text-primary);font-size:.78rem;font-family:inherit}
+.feedback-note-input::placeholder{color:var(--text-muted)}
 
 /* ── F3 — quote-reply polish: hidden-parent / deleted-parent states ─────
    Both extend .chat-reply-quote (styles.css:1667) rather than re-declaring

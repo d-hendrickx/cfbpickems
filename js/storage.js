@@ -730,6 +730,30 @@ export function getNotifPrefs() {
   return { sound: false, toasts: true, systemEvents: true, toastDuration: 6000, ...(_playerPref('notif') || {}) };
 }
 export function setNotifPrefs(prefs) { _setPlayerPref('notif', { ...getNotifPrefs(), ...prefs }); }
+// ── DI-267 (SCRIBE v3, Package A, 2026-09-23) — the one-time hard-line nudge ──
+//
+// A per-PLAYER flag, on the player record's `preferences` like every other
+// per-player state (CLAUDE.md's architecture bullet 4), so the prompt follows
+// the person across devices and a player who dismissed it on his phone does not
+// meet it again on a laptop. Device-level would have been the easy version and
+// the wrong one: this prompt exists because the league's ceiling went up, which
+// is a fact about the player, not about the browser.
+//
+// AN ACCESSOR PAIR THROUGH THE SEAM (AD-02, CONVENTIONS #8) rather than a
+// reader poking `player.preferences` at the call site, which is what the rest of
+// this section does and what makes the seam checkable at all.
+//
+// DEFAULT-WHEN-MISSING: `null` — "never shown". Every existing player record
+// predates this field, and the honest reading of an absent value is that the
+// prompt has not happened yet, which is exactly what makes it fire once
+// (CONVENTIONS #10).
+export function getHardLinePromptSeenAt() {
+  return _playerPref('hardLinePromptSeenAt') || null;
+}
+export function setHardLinePromptSeenAt(iso) {
+  return _setPlayerPref('hardLinePromptSeenAt', String(iso || new Date().toISOString()));
+}
+
 export function getAccentFor(playerId) {
   const p = (load(KEYS.PLAYERS) || []).find(x => x.playerId === playerId);
   return p?.preferences?.accent || null;

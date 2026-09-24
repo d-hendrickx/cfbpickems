@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.23.5';
-export const APP_VERSION_DATE = '2026-09-23';
+export const APP_VERSION = 'v0.25.0';
+export const APP_VERSION_DATE = '2026-09-24';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -50,7 +50,45 @@ export const APP_VERSION_DATE = '2026-09-23';
 // (phrased as NOT YET ON — the jobs are switched on individually after this
 // deploys), and one commissioner-only line. No internal IDs, no invented
 // stats, in the player-facing text itself.
+// Release v0.25.0 (2026-09-24) — SCRIBE v3.0 Release 2 (Package C + D). Ships
+// live Trainer learning (a reason chip or note on a SCRIBE line becomes a
+// rule by that player's very next reply, with a short room changelog
+// crediting them) and the Package D interactive member work: every SCRIBE
+// line is now judged best-of-three before posting, SCRIBE reacts to
+// messages with an emoji, replies when roasted, and occasionally weighs in
+// when it notices two players arguing. Copy scope is deliberately narrow
+// per the approved release-2 cut (WHATS_NEW_RELEASE_2_092426.md §a):
+// commissioner-only surfaces (🎓 Learning Rate card, the Learnings list,
+// budget burn line, the new scheduled jobs, the two learn ceilings) are
+// held out of this player-facing list on purpose. The FIRST `added` item
+// is SCRIBE's chat-post headline. Section (b) is skipped per the approved
+// doc: this release's mechanism posts only the headline, so there is no
+// separate chat-post body slot to draft.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.25.0',
+    date: '2026-09-24',
+    added: [
+      'React with a reason and SCRIBE adjusts on its next reply — then says so.',
+      "Commissioner sets SCRIBE's learning speed; your hard lines still always win.",
+      'SCRIBE now reacts with emoji, argues back if roasted, and keeps receipts.',
+      'Every SCRIBE line is now the best of three drafts, judged first.',
+      'SCRIBE now notices when two players are arguing and weighs in.',
+    ],
+    fixed: [],
+  },
+  {
+    version: 'v0.24.0',
+    date: '2026-09-24',
+    added: [
+      'SCRIBE now has a heat dial — five levels, and you can turn yours down.',
+      'SCRIBE can curse at higher heat, aimed at picks and chat — never real life.',
+      'Rate any SCRIBE line, say why, and your emoji reactions count too.',
+      '@scribe now remembers recent chat and what the Trainer has taught it.',
+      'Set your hard lines now, before the heat goes up.',
+    ],
+    fixed: [],
+  },
   {
     version: 'v0.23.5',
     date: '2026-09-23',
@@ -388,6 +426,16 @@ export function renderReleaseNotesCardHTML(data = WHATS_NEW_RELEASES) {
 
 import {
   WEEK_STATUS, GAME_STATUS, PICK_RESULT, TIME_WINDOW, TIME_ZONES, DEFAULT_TZ,
+  // DI-263 (SCRIBE v3, Package A, 2026-09-23) — the heat table, for the ONE
+  // client-side decision that needs it: whether a given player's effective
+  // ceiling has risen above Dry, which is what the one-time hard-line nudge
+  // fires on. The dial itself is read through scribeAgent's getScribeHeat().
+  effectiveScribeHeat, SCRIBE_HEAT_INDEX, SCRIBE_HEAT_DEFAULT,
+  // DI-282 (2026-09-23) — the two model ids the commissioner may choose
+  // between. ONE list, shared with the Edge rate card's own keys (heattest
+  // §[11] asserts they agree), so the card cannot offer a model the server
+  // would refuse to price.
+  SCRIBE_MODEL_CHOICES,
   ALMA_MATERS, DEFAULT_RULES, DATA_QUALITY, DATA_SOURCE_MODE,
   createPlayer, createGame, createPick, createWeek, formatWeekLabel, formatWeekLabelParts,
   formatGameTime, formatVenueDisplay, formatSpread, getPlayerInitials,
@@ -436,6 +484,10 @@ import {
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
   getTheme, setTheme,
+  // DI-267 (SCRIBE v3, Package A, 2026-09-23) — the one-time hard-line nudge's
+  // per-player flag, read and written through the seam like every other
+  // preference (AD-02).
+  getHardLinePromptSeenAt, setHardLinePromptSeenAt,
   // RG-198 (2026-09-21, Drew-approved) — the DEVICE's memory of the palette it
   // last painted, so a cold boot's first frame is the player's colours instead
   // of the league default. The player record stays authoritative; see
@@ -616,13 +668,27 @@ import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage
 import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field-preserve.js';
 import { isScribeFeedbackEnabled } from './scribeFeedback.js';
 import { isScribeInteractiveEnabled, isScribeWebSearchEnabled, isScribeLearningsEnabled, getActiveContext, runTrainerRemote,
-  getScribeFrequency, isScribeAutonomousEnabled, runTrainerViaEdgeFunction } from './scribeAgent.js';
+  getScribeFrequency, isScribeAutonomousEnabled, runTrainerViaEdgeFunction,
+  // SCRIBE v3, Package A (2026-09-23, DI-263) — the heat dial's read/write
+  // pair, the exact sibling of getScribeFrequency above.
+  getScribeHeat, setScribeHeat,
+  // SCRIBE v3, Package C (2026-09-23, DI-274/DI-281) — the learning-rate
+  // read/write pair (the exact sibling of the two above) and the pure
+  // markdown formatter behind the "Export for SCRIBE.md" button.
+  getScribeLearningRate, setScribeLearningRate, getScribeLearningRateConfig,
+  exportLearningsMarkdown } from './scribeAgent.js';
+// SCRIBE v3, Package C (DI-280) — the pacing ladder and the Trainer's optional
+// structured nudge field, imported from the SHARED pure module both Edge
+// Functions already read. A second copy of "one step, never more" in this file
+// is how the server's proposal and the client's application come to disagree
+// about what a step is.
+import { parsePacingNudge, stepAutonomousCooldown } from './scribe-trainer-rules.js';
 // Build 3, Group D pass 2 (2026-09-11) — the approved copy tables (FREQUENCY_*
 // / MEMORY_COPY, from SCRIBE_COPY_GROUP_D_091126.md) and the ONE impure
 // week-signal wrapper pass 1 built for these two call sites. Imported rather
 // than retyped so the dial's five level descriptions and the memory modal's
 // body/empty-state strings exist in exactly one place.
-import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, MEMORY_COPY, considerWeekSignals,
+import { FREQUENCY_COPY, FREQUENCY_LEVELS, FREQUENCY_DEFAULT, HEAT_COPY, MEMORY_COPY, considerWeekSignals,
          whatsNewPostLine,
          // FEAT-5 (2026-09-12, UN-202) — the four approved wager pools, their
          // deterministic selector, and THE one claim truncation (DI-202n item 5).
@@ -705,6 +771,11 @@ import { isNativeShell } from './platform.js';
 // proof, and this keeps that proof byte-unchanged rather than editing a
 // file outside this pass's write scope for a cosmetic merge.
 import { getAuthPath } from './platform.js';
+// DI-249 (2026-09-21) — a THIRD, separate import statement, same reasoning as
+// the getAuthPath one above: brandtest.mjs's structural proof pins the
+// isNativeShell import line's exact text, so isNativeOrigin gets its own
+// line rather than a merge that would shift that pin.
+import { isNativeOrigin } from './platform.js';
 import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js';
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
@@ -890,6 +961,41 @@ export const _resolveEffectiveAuthModeForTest = resolveEffectiveAuthMode;
  * Every branch below is idempotent — it is called again every 20 seconds while
  * a hold is up.
  */
+// DI-249 — set only inside the isNativeOrigin() branch above; stays null on
+// every web boot (byte-identical default), so showGoogleSignInGate()'s
+// optional-chained read below is always `undefined` on web.
+let _nativeAuthStorageModuleForGate = null;
+// S3 (round 2) — true only when the bounded race below timed out. Stays
+// false on every web boot (byte-identical default) and is the ONE flag the
+// gate call site trusts over whatever notice state a still-pending prime
+// call might eventually, harmlessly, leave behind.
+let _nativeAuthStoragePrimeTimedOut = false;
+// S3 — 30s: generous for a real Keychain/Face-ID round trip (DI-251's own
+// prompt is a human-paced interaction), still bounded so a wedged native
+// call can never hang the rest of boot() forever.
+const NATIVE_AUTH_STORAGE_PRIME_TIMEOUT_MS = 30000;
+let _nativeAuthStoragePrimeTimeoutMsOverride = null;
+function _getNativeAuthStoragePrimeTimeoutMs() {
+  return _nativeAuthStoragePrimeTimeoutMsOverride ?? NATIVE_AUTH_STORAGE_PRIME_TIMEOUT_MS;
+}
+/** S3 test hook — shrinks the bound so a RED-proof doesn't need to wait 30s
+ *  for real. Production never calls this. */
+export function _setNativeAuthStoragePrimeTimeoutMsForTest(ms) { _nativeAuthStoragePrimeTimeoutMsOverride = ms; }
+
+// DI-249/DI-247 K3 (re-applied against RG-194, 2026-09-23) — the ONE place
+// that decides what notice (if any) reaches showGoogleSignInGate(), shared by
+// both of RG-194's paint paths (the immediate call and the deadline's own
+// call in fireSignInGateDeadline()). A timed-out prime OVERRIDES whatever
+// getNativeAuthStorageNotice() reports, because the still-pending call might
+// resolve its own notice at any point after the race gave up. Both flags stay
+// at their defaults on every web boot, so this is `undefined` there.
+function getNativeAuthStorageNoticeForGate() {
+  if (_nativeAuthStoragePrimeTimedOut) {
+    return { message: "Couldn't read your saved sign-in. Please sign in again.", tone: 'error' };
+  }
+  return _nativeAuthStorageModuleForGate?.getNativeAuthStorageNotice?.();
+}
+
 async function applyAuthModeDecision() {
   // loadDeployedConfig() never throws (its own try/catch always returns an
   // object), so this cannot leave `deployed` undefined; boot() reuses it for
@@ -900,6 +1006,62 @@ async function applyAuthModeDecision() {
   // this device; both keys are gone from config.json and nothing reads them.
   const authMode = resolveEffectiveAuthMode(deployed);
   configureAuth({ ...deployed, authMode });
+
+  // ── DI-249 (2026-09-21) — THE ONE NATIVE-ONLY BOOT HOOK, CONDITION 9 ────────
+  // Reached ONLY on a genuine native origin (isNativeOrigin(), not
+  // isNativeShell() alone — the SECURITY-relevant gate, same rule
+  // js/platform.js's own header states for the backend refusal and the auth
+  // path). On web this whole block is never entered — not even the `await`
+  // below is reached — so this adds ZERO awaits and ZERO new timers to the
+  // web boot path (nativeguardtest.mjs [8]'s empty-event-loop guard stays
+  // green; DI-250's byte-identity proof is exactly this: nothing here can
+  // change what a web boot does).
+  //
+  // Placed here — after configureAuth(), before ensureSupabaseSdkLoaded()
+  // below — per DI-249's own ordering requirement: this must resolve BEFORE
+  // hasValidSupabaseSession()'s first read (this function's own, a few lines
+  // down), because that read is exactly what the marker
+  // primeNativeAuthStorage() writes exists to keep honest on native.
+  //
+  // primeNativeAuthStorage() is designed to never throw (every internal
+  // failure routes into its own notice slot, read below) — the try/catch
+  // here is defensive only, so a stubbed throw in a test cannot crash
+  // boot(): it is treated exactly like `ensureSupabaseSdkLoaded()`'s own
+  // failure below, i.e. the boot simply continues into the ordinary
+  // "no valid session" path, never a hang and never a hard failure.
+  //
+  // S3 (reviewer 4 / security condition C-4, round 2) — BOUNDED, not just
+  // defensive. `revealApp()` (the splash-hide + paint call) already ran
+  // ABOVE this point in boot(), per reviewer B2's own locked paint-first
+  // revert (AD-08: prime, paint, gate as an overlay, hydrate in the
+  // background) — that ordering is NOT changed here, on purpose. What WAS
+  // true before this fix: if the plugin bridge call inside
+  // primeNativeAuthStorage() never resolved (a wedged native call, not a
+  // rejection — the one shape a plain try/catch cannot catch), this whole
+  // function would hang on the `await` forever, and EVERYTHING after it —
+  // including the `showGoogleSignInGate()` call a few lines down — would
+  // never run. Chosen fix: bound this call with a ~30s race so a wedge can
+  // no longer stop the REST of boot() from running. On timeout, nothing is
+  // installed, and `_nativeAuthStoragePrimeTimedOut` forces K3's exact
+  // "read error" copy at the one call site that decides whether the gate
+  // needs a message, via getNativeAuthStorageNoticeForGate() above.
+  if (isNativeOrigin()) {
+    try {
+      const nativeAuthStorage = await import('./auth-storage-native.js');
+      _nativeAuthStorageModuleForGate = nativeAuthStorage;
+      let timedOut = false;
+      await Promise.race([
+        nativeAuthStorage.primeNativeAuthStorage(),
+        new Promise(resolve => setTimeout(() => { timedOut = true; resolve(); }, _getNativeAuthStoragePrimeTimeoutMs())),
+      ]);
+      if (timedOut) {
+        console.error('[auth] primeNativeAuthStorage() did not settle within ' + _getNativeAuthStoragePrimeTimeoutMs() + 'ms — failing closed (S3)');
+        _nativeAuthStoragePrimeTimedOut = true;
+      }
+    } catch (e) {
+      console.error('[auth] primeNativeAuthStorage() failed — continuing boot; the sign-in gate will show below', e);
+    }
+  }
 
   // ── SEC F1-R1 / DI-180l — THE CONFIG READ FAILED AND THIS DEVICE WAS ON
   //    SUPABASE ───────────────────────────────────────────────────────────────
@@ -1097,9 +1259,20 @@ async function applyAuthModeDecision() {
       // navigateTo() has run — what is on screen is the empty shell skeleton,
       // which is what the gate was covering anyway. The window is bounded on
       // both sides, and it fails CLOSED at the end of it.
+      //
+      // DI-249/DI-247 K3 (re-applied against RG-194, 2026-09-23) — on native, a
+      // Keychain read failure/cancel/passcode-not-set/auth-failure sets a
+      // notice INSIDE the module the `isNativeOrigin()` branch above just
+      // imported. Threaded into BOTH paints this decision can produce: the
+      // immediate one right below, and the deadline's own paint
+      // (fireSignInGateDeadline(), which calls the same accessor) — the notice
+      // must reach the gate whichever path ends up painting it.
+      // `_nativeAuthStorageModuleForGate` stays null on every web boot, so
+      // this optional-chained read is always `undefined` there — both calls
+      // below are byte-identical to their pre-native form on web.
       if (!hasValidSupabaseSession()) {
         if (hasPersistedSupabaseSession()) armSignInGateDeadline();
-        else showGoogleSignInGate();
+        else showGoogleSignInGate(getNativeAuthStorageNoticeForGate());
       }
       // hasValidSupabaseSession() is a LOCAL, synchronous check (no network) —
       // it does not by itself populate memberships. Kick that off now so the
@@ -2286,6 +2459,12 @@ async function runPostHydrateTail() {
   // panel. Idempotent (wires once) and boot-inert: it reads nothing, writes
   // nothing and fetches nothing until a player actually taps it.
   try { wireScribeFileEntry(); } catch (e) { console.warn('[scribe] file entry wiring failed', e); }
+  // DI-267 (2026-09-23) — the one-time hard-line nudge, in the LATE boot phase
+  // only. It reads `settings.scribeHeat`, which is only true after the hydrate;
+  // firing it in the early phase would read a pre-hydrate blob and could prompt
+  // (or fail to prompt) on a value the league never set. Fire-and-forget with
+  // its own catch — a prompt must never hold up the room opening.
+  try { maybeShowScribeHardLineNudge(); } catch (e) { console.warn('[scribe] hard-line nudge failed', e); }
   // FEAT-5 / DI-202g — the ONE wager-list fetch per session, at chat boot. A
   // read, nothing else: it seeds nothing and writes nothing, so it adds no
   // surface to the boot path RG-12 is about. Fire-and-forget with its own catch
@@ -2320,6 +2499,37 @@ async function runPostHydrateTail() {
     // The server fans out; `deliverPush()` marks the record 'skipped', which is
     // the honest state and is the state every device is in. See the §4 header
     // in js/notifications.js for the audit of every caller that reached it.
+    //
+    // DI-217 (native push, 2026-09-23) — native is the ONE exception: it DOES
+    // get an adapter (a documented no-op — AD-67, js/push-native.js's own
+    // header), because native has a real receive/identity path even though it
+    // never originates a send. Web's "no adapter" state above is UNCHANGED by
+    // this: js/push-native.js is loaded ONLY behind this isNativeShell() guard,
+    // so `deliverPush()` still marks 'skipped' on every browser exactly as
+    // today (pushnativetest.mjs's web-inertness proof; no dynamic import is
+    // even evaluated on web).
+    if (isNativeShell()) {
+      import('./push-native.js').then((native) => {
+        registerPushAdapter(new native.NativePushAdapter());
+        // DI-241 — the native OS banner stays visible by default; this hook
+        // only re-runs BUG-12's fetch-first pattern AND re-enables that
+        // default display (Finding 4: once ANY listener is attached, native
+        // suppresses the banner until proceedWithWillDisplay() is called —
+        // see push-native.js's wireNativeForeground()).
+        native.wireNativeForeground(() => { wakeChat(); });
+        // DI-221/241 — a tap actually navigates on native: there is no
+        // `?ntab=` URL re-open the way the web SDK's merged service worker
+        // provides, so this module resolves the destination and this
+        // callback performs the SAME navigation a web deep link does.
+        native.wireNativeNotificationClicks((dest) => { wakeChat(); deepLinkTo(dest); });
+        // revealApp() already ran well above this boot-wiring block — this
+        // marks the (already-satisfied) ready gate so a click that raced in
+        // during the microtasks between addListener() resolving and this
+        // line cannot navigate before that fact was recorded (see
+        // push-native.js's header on Capacitor's own `retainUntilConsumed`).
+        native.markNativeBootReady();
+      }).catch((e) => console.warn('[push-native] wiring failed', e));
+    }
     wireChatNotifications();                             // DI-B1 — subscribes to chat.js's EXISTING onChat(), zero chat.js changes
     setupNotifBell();
     renderNotifBell();
@@ -4375,6 +4585,22 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // when push isn't configured (empty App ID) or off-browser (loadtest/node).
   const sess = getSession();
   if (sess?.playerId) loginOneSignal(sess.playerId); else logoutOneSignal();
+  // DI-217/239/240 (native push, 2026-09-23) — the SAME session chokepoint,
+  // native's own identity call. isNativeOrigin() (not isNativeShell() alone)
+  // because this changes WHERE DATA GOES (an identity bound at OneSignal) —
+  // AD-68/PASS 1b's security-relevant-branch rule (mirrors the loginOneSignal
+  // line just above). `initNativePush()`'s auto-prompting `initialize()` is
+  // reached ONLY through `loginNativePush()` below, and ONLY when
+  // `sess.playerId` is truthy — a signed-out cold boot (this chokepoint's own
+  // "first evaluation after boot always fires" rule) calls
+  // `logoutNativePush()` instead, which never calls `initialize()` (see that
+  // function's header) — so the OS permission prompt is deferred to the
+  // first real sign-in and never shown on an anonymous launch (DI-240).
+  if (isNativeOrigin()) {
+    import('./push-native.js').then((native) => {
+      if (sess?.playerId) native.loginNativePush(sess.playerId); else native.logoutNativePush();
+    }).catch((e) => console.warn('[push-native] identity wiring failed', e));
+  }
   // RG-120 (2026-09-12) — REFRESH THE WAGER CACHE ON SIGN-IN. refreshWagerCache()
   // early-returns when there is no playerId and leaves its `wagerCacheLoaded`
   // latch false, so a device that booted SIGNED OUT and signed in afterwards
@@ -4645,6 +4871,39 @@ const PUSH_STATUS_STILL_NO_SUBSCRIPTION = "This device still isn't registered fo
 const PUSH_STATUS_STILL_NOT_LINKED = "Push is on, but this device isn't linked to your account yet. Fully close the app, reopen it, and try again.";
 
 function renderPrimingCardHTML(pushState, device = null) {
+  // DI-240 (native push, 2026-09-23) — native's OWN four states, resolved by
+  // js/push-native.js's nativePushState() and passed in prefixed
+  // ('native-granted' etc., see refreshNotifSettingsBody()) so they can never
+  // collide with the web ladder below, which depends on the web OneSignal
+  // SDK's subscriptionState()/pushDeviceStatus() and has no native
+  // equivalent to check `device` against. This REPLACES the old single
+  // 'native-unavailable' catch-all on the path that actually renders on
+  // native (refreshNotifSettingsBody() no longer calls subscriptionState()
+  // when isNativeShell()). The 'native-unavailable' entry a few lines below
+  // is UNREACHABLE from that path now, but stays: js/push-onesignal.js is
+  // off-limits to this pass and its subscriptionState() still returns that
+  // string on native (unchanged), so notifytest.mjs [24f]'s cross-check
+  // (every state subscriptionState() can emit must have card coverage) still
+  // requires it to have a home here.
+  if (pushState === 'native-granted') {
+    return `<div class="card notif-priming-card" id="notif-priming-card">
+    <p class="text-muted text-sm" id="notif-push-status">✅ Push notifications are on for this iPhone.</p>
+  </div>`;
+  }
+  if (pushState === 'native-not-asked') {
+    return `<div class="card notif-priming-card" id="notif-priming-card">
+    <div class="notif-priming-title">Turn on notifications</div>
+    <p class="text-muted text-sm">We'll let you know when picks are about to lock and when games go final. You can turn this off anytime in Settings.</p>
+    <button class="btn btn-primary btn-sm" id="notif-priming-btn">Turn on notifications</button>
+  </div>`;
+  }
+  if (pushState === 'native-denied') {
+    return `<div class="card notif-priming-card" id="notif-priming-card">
+    <p class="text-muted text-sm" id="notif-push-status">Notifications are off for this app. Turn them on in iPhone Settings › Notifications › ${escHtml(getShellBrandName())} to get lock-warning and final-score alerts.</p>
+    <button class="btn btn-ghost btn-sm" id="notif-priming-btn">Open Settings</button>
+  </div>`;
+  }
+  if (pushState === 'native-unsupported') return '';
   if (pushState === 'unconfigured') return '';
   if (pushState === 'granted') {
     if (!device) return '';
@@ -4964,6 +5223,24 @@ function bindNotifSettingsBody(ov, playerId) {
     if (btn.disabled) return;
     btn.disabled = true;
     try {
+      // DI-240 (native push, 2026-09-23) — the SAME button id serves both
+      // native states rendered by renderPrimingCardHTML(): 'native-denied'
+      // can never be re-prompted (the OS will not show a second system sheet
+      // once denied) and must recover through Settings instead;
+      // 'native-not-asked' is the only state this button can actually change.
+      if (isNativeShell()) {
+        const native = await import('./push-native.js');
+        const st = await native.nativePushState();
+        if (st === 'denied') {
+          native.openNativeSettings();
+        } else {
+          const res = await native.requestNativePushPermission(playerId);
+          showToast(res.ok ? '✅ Push notifications are on for this iPhone.'
+            : "Push wasn't turned on. You can also turn it on in iPhone Settings.", res.ok ? 'success' : 'error');
+        }
+        await refreshNotifSettingsBody(ov, playerId);
+        return;
+      }
       const res = await enablePushOnThisDevice(playerId);
       showToast(res.ok ? `✅ ${res.message}` : res.message, res.ok ? 'success' : 'error');
       // N1 / DI-N3 — a permission change is one of the two events that can flip
@@ -4995,15 +5272,27 @@ function bindNotifSettingsBody(ov, playerId) {
 async function refreshNotifSettingsBody(ov, playerId) {
   const body = ov.querySelector('#notif-center-body');
   if (!body) return;
-  const st = await subscriptionState();
-  // RG-192 — the three-fact truth, resolved only when the coarse state is
-  // 'granted' (it is the one state that can be quietly broken; every other state
-  // already renders a card that says what is missing). Fails to `null` — the old
-  // silence — rather than to an invented verdict in either direction.
-  let device = null;
-  if (st === 'granted') {
-    try { device = await pushDeviceStatus(); }
-    catch (e) { console.warn('[push] could not resolve this device\'s push status', e); }
+  let st, device = null;
+  // DI-240 (native push, 2026-09-23) — native reads its OWN four-state truth
+  // (js/push-native.js's nativePushState(), prefixed 'native-' so it can
+  // never collide with the web ladder below), never subscriptionState()'s
+  // 'native-unavailable' placeholder — that string is now stale copy,
+  // superseded on this path (push-onesignal.js itself is unchanged; nothing
+  // else reads that particular value any differently).
+  if (isNativeShell()) {
+    const native = await import('./push-native.js');
+    st = 'native-' + (await native.nativePushState());
+  } else {
+    st = await subscriptionState();
+    // RG-192 — the three-fact truth, resolved only when the coarse state is
+    // 'granted' (it is the one state that can be quietly broken; every other
+    // state already renders a card that says what is missing). Fails to
+    // `null` — the old silence — rather than to an invented verdict in
+    // either direction.
+    if (st === 'granted') {
+      try { device = await pushDeviceStatus(); }
+      catch (e) { console.warn('[push] could not resolve this device\'s push status', e); }
+    }
   }
   body.innerHTML = await renderNotifSettingsBodyHTML(playerId, st, device);
   bindNotifSettingsBody(ov, playerId);
@@ -5081,13 +5370,50 @@ const SCRIBE_HARDLINE_MAX = 80;
 const SCRIBE_CONFIDENCE_CONFIRMED = 0.85;
 const SCRIBE_CONFIDENCE_FLOOR = 0.5;
 /** DI-D4 §Section 3 — plain labels, not SCRIBE-voiced. Stored as a memory row
- *  of kind 'roastTolerance' (schema-present; nothing consumes it yet — DI-D4's
- *  own scope note). */
+ *  of kind 'roastTolerance'.
+ *
+ *  R-3 (reviewer, 2026-09-23) — THIS NOTE USED TO SAY "nothing consumes it
+ *  yet", quoting DI-D4's own scope note. That was true for twelve days and
+ *  stopped being true in the same release this comment shipped in:
+ *  `effectiveScribeHeat()` (js/data-model.js) reads the value as a per-player
+ *  CEILING on SCRIBE's heat, via `loadRoastTolerances()` on both voice paths.
+ *  The three `value` strings below are the keys of `ROAST_TOLERANCE_HEAT_CAP` —
+ *  renaming one here without renaming it there silently removes that player's
+ *  cap, because an unrecognised tolerance resolves to the Dry cap and an
+ *  unwritten one resolves to no cap at all. */
 const ROAST_TOLERANCE_OPTIONS = [
   { value: 'light',     label: 'Light' },
   { value: 'standard',  label: 'Standard' },
   { value: 'no_limits', label: 'No limits' },
 ];
+/**
+ * DI-263 (SCRIBE v3, Package A, 2026-09-23) — WHAT THE THREE LABELS NOW DO.
+ *
+ * The buttons above are unchanged and `scribeFileSetTolerance()` still writes
+ * the same memory row. What is new is that SOMETHING READS IT: the heat dial
+ * caps at these levels for posts about this player (ROAST_TOLERANCE_HEAT_CAP,
+ * js/data-model.js). Three labels that meant nothing operationally now mean
+ * something specific, and a player choosing between them is entitled to know
+ * what, in one line, at the point of the choice — not in a changelog.
+ *
+ * Drew's ruling 2026-09-23: an UNSET tolerance is no personal cap at all, which
+ * is why the last sentence says what happens if you never touch this rather
+ * than leaving a player to infer a default that does not exist.
+ */
+const SCRIBE_TOLERANCE_NOTE = 'Light caps SCRIBE at Dry for you. Standard caps at Savage. '
+  + "No limits follows the commissioner's setting exactly. Leave it unset and the commissioner's "
+  + 'setting applies. Anything under Hard limits is off limits either way.';
+/**
+ * DI-267 — the one-time hard-line nudge.
+ *
+ * FIRES LAZILY, ONCE PER PLAYER, the first time that player's EFFECTIVE heat
+ * would exceed Dry (Drew's ruling, open question 6). Not at launch, not for
+ * everybody: a player whose own cap keeps them at Dry is not affected by the
+ * dial moving and has nothing to act on, and a prompt that fires for people
+ * with nothing to decide is the kind of thing that trains a league to dismiss
+ * prompts without reading them.
+ */
+const SCRIBE_HARDLINE_NUDGE = "SCRIBE's ceiling just went up. Add anything that should always stay off limits before it does.";
 /**
  * F3 (copy amendment, coordinator 2026-09-11) — Section 1's body copy.
  *
@@ -5492,6 +5818,7 @@ export function renderScribeFileBodyHTML({ profile = null, loading = false, erro
     <div class="scribe-file-section">
       <h4 class="scribe-file-h">Roast tolerance</h4>
       <div class="scribe-tolerance-row">${toleranceHTML}</div>
+      <p class="text-muted text-xs scribe-tolerance-note">${escHtml(SCRIBE_TOLERANCE_NOTE)}</p>
       ${errAt('tolerance')}
     </div>
     ${footnote}`;
@@ -5678,6 +6005,85 @@ export async function openScribeFileModal() {
   await refreshScribeMemory(playerId);
   repaintScribeFileBody(ov);
   return ov;
+}
+
+/**
+ * DI-267 — THE ONE-TIME HARD-LINE NUDGE.
+ *
+ * WHEN IT FIRES: once per player, the first time that player's EFFECTIVE heat
+ * would exceed Dry. Not at v3 launch, not for the whole league (Drew's ruling,
+ * open question 6) — lazily, when it starts to matter for THAT player. A player
+ * whose own roast tolerance holds them at Dry has nothing to decide, and a
+ * prompt that fires for people with nothing to decide is how a league learns to
+ * dismiss prompts without reading them.
+ *
+ * WHY IT IS A MODAL AND NOT A TOAST. A toast auto-dismisses after 3.2 seconds
+ * (`showToast()`), and the whole point of this prompt is that the player has a
+ * chance to act BEFORE the ceiling goes up. A prompt you can miss by looking
+ * away is not a chance.
+ *
+ * THE DEEP LINK IS A REAL ONE. "Add one now" opens My SCRIBE File and focuses
+ * the Hard limits input, rather than dropping the player at the top of a modal
+ * and leaving them to find the section the sentence just told them about.
+ *
+ * THE FLAG IS WRITTEN WHEN THE PROMPT IS SHOWN, not when it is acted on. Either
+ * answer — adding a limit, or deciding not to — is an answer, and re-asking a
+ * player who already said "not now" is the annoying failure this feature spends
+ * a whole section of docs/SCRIBE.md §8 trying not to be.
+ *
+ * SIGNED OUT DOES NOTHING. There is no player to prompt, no cap to read and
+ * nowhere to record it (`_setPlayerPref` already no-ops without a session).
+ */
+export function maybeShowScribeHardLineNudge() {
+  const playerId = getSession()?.playerId || '';
+  if (!playerId) return { ok: false, skipped: 'no_session' };
+  if (getHardLinePromptSeenAt()) return { ok: false, skipped: 'already_seen' };
+  // The player's own cap, from whatever the memory cache already holds. An
+  // EMPTY cache reads as NO CAP, which resolves to the league level — the safe
+  // direction for this one prompt: showing it to somebody who turns out to be
+  // capped costs one dismissed dialog, while suppressing it for somebody who is
+  // not costs them the warning entirely. (Most players have never opened My
+  // SCRIBE File at all, so no cap is also the common truth.)
+  const tolerance = String(getPlayerProfile(playerId)?.roastTolerance || '');
+  const effective = effectiveScribeHeat(getScribeHeat(), tolerance);
+  if (SCRIBE_HEAT_INDEX[effective] <= SCRIBE_HEAT_INDEX[SCRIBE_HEAT_DEFAULT]) {
+    return { ok: false, skipped: 'not_above_dry' };
+  }
+  if (typeof document === 'undefined' || !document.body) return { ok: false, skipped: 'no_dom' };
+  setHardLinePromptSeenAt(new Date().toISOString());
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>Heads up</h3><button class="modal-close" id="scribe-hardline-nudge-close">✕</button></div>
+    <div class="card">
+      <p class="text-sm">${escHtml(SCRIBE_HARDLINE_NUDGE)}</p>
+      <div class="flex gap-sm" style="margin-top:12px">
+        <button class="btn btn-primary btn-sm" id="scribe-hardline-nudge-add">Add one now</button>
+        <button class="btn btn-secondary btn-sm" id="scribe-hardline-nudge-later">Not now</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#scribe-hardline-nudge-close')?.addEventListener('click', close);
+  ov.querySelector('#scribe-hardline-nudge-later')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  ov.querySelector('#scribe-hardline-nudge-add')?.addEventListener('click', () => {
+    close();
+    // Item 10's catch, for the same reason: this is async and its result is
+    // intentionally discarded, which without a catch turns any throw into an
+    // unhandled rejection with nothing in the UI to explain it.
+    openScribeFileModal().then(modal => {
+      const input = modal?.querySelector?.('#scribe-hardline-input');
+      if (!input) return;
+      try { input.scrollIntoView({ block: 'center' }); } catch {}
+      try { input.focus(); } catch {}
+    }).catch(err => {
+      console.warn('[scribe-memory] could not open My SCRIBE File from the nudge', err);
+      showToast("Couldn't open your SCRIBE file — try again.", 'error');
+    });
+  });
+  return { ok: true, shown: true };
 }
 
 /**
@@ -11638,11 +12044,62 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // exactly what `set`/`setMany` already exist for.
   document.querySelectorAll('.scribe-approve-btn, .scribe-reject-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const r = applyScribeLearningDecision(Number(btn.dataset.learningIdx), btn.classList.contains('scribe-approve-btn'));
+      const idx = Number(btn.dataset.learningIdx);
+      const approving = btn.classList.contains('scribe-approve-btn');
+      // DI-280 — read the row BEFORE the flip: `applyScribeLearningDecision()`
+      // rewrites the array, and the pacing nudge lives on the row it rewrote.
+      const before = getScribeLearnings()[idx];
+      // ── R2 (reviewer, 2026-09-24) — A HELD ROW ASKS ONCE BEFORE IT GOES LIVE.
+      //    DI-276's whole posture is "loud, not silent": the deny-filter never drops a
+      //    candidate, it holds it for a human. That only works if the human is told which
+      //    one it is holding and why — and Approve is a one-tap control in a list of
+      //    otherwise-ordinary proposals. The badge says it on screen; this says it at the
+      //    moment of the decision, which is the one that cannot be skim-read.
+      //    REJECT IS NOT GATED: refusing a held row needs no ceremony.
+      //
+      //    N1 (re-review, 2026-09-24) — IT NAMES THE TRIGGER, NOT A MOTIVE. See
+      //    `SCRIBE_HOLD_BADGE_REASON` for the whole argument: the filter detects subject
+      //    matter, and "remind Kevin about his wager debt" is held by it and is not an
+      //    attack on anything.
+      if (approving && before && before.flaggedHostile
+        && !confirm('This proposal was held because it touches safety, a hard line, or a player\'s real life. SCRIBE will follow it if you approve it.')) return;
+      const r = applyScribeLearningDecision(idx, approving);
       if (!r.ok) return;
-      showToast(r.approved ? '✅ Approved' : '✖ Rejected', 'success');
+      let extra = '';
+      if (approving && before && before.kind === 'experiment') {
+        // THE ONE EXPERIMENT EFFECT. Everything else stays a proposal log.
+        const moved = applyExperimentPacingNudge(before);
+        if (moved.moved) extra = ` (SCRIBE now waits ${Math.round(moved.ms / 60000)} min between unprompted posts)`;
+      }
+      showToast(r.approved ? `✅ Approved${extra}` : '✖ Rejected', 'success');
       renderCommPage();
     });
+  });
+  // ── DI-279 — the Learnings-list on/off toggle (SCRIBE v3, Package C) ──
+  // ONE control, two labels: "↩ Undo" on a fresh auto-applied row, "⏻ Off/On"
+  // otherwise. Both go through `toggleScribeLearningStatus()`, which writes the
+  // SAME `status` column the Approve/Reject path writes — so the adapter's
+  // `patchCols:['status']` and the `scribe_guard` trigger both see exactly the
+  // one column they already allow, and nothing new had to be granted.
+  document.querySelectorAll('.scribe-learning-toggle-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const r = toggleScribeLearningStatus(Number(btn.dataset.learningIdx));
+      if (!r.ok) return;
+      showToast(r.on ? '⏻ Back on. SCRIBE will use this again' : '⏻ Off. SCRIBE stops using this', 'success');
+      renderCommPage();
+    });
+  });
+  // ── DI-281 — "Export for SCRIBE.md" (SCRIBE v3, Package C) ──
+  // Client-side only: no server write, no `SCRIBE.md` edit, nothing scheduled.
+  // It produces text and Drew decides what becomes permanent, which is the whole
+  // point of the slow layer existing.
+  document.getElementById('scribe-export-learnings-btn')?.addEventListener('click', () => {
+    showScribeLearningsExportModal();
+  });
+  // ── DI-279 / Q5 — Reset. Export FIRST (the modal), then the clear, behind a
+  //    confirm that names exactly what is about to happen.
+  document.getElementById('scribe-reset-learnings-btn')?.addEventListener('click', () => {
+    showScribeLearningsExportModal({ resetAfter: true });
   });
   document.querySelectorAll('.scribe-canon-approve-btn, .scribe-canon-reject-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -14963,6 +15420,286 @@ export function renderScribeParticipationCardHTML() {
 }
 
 /**
+ * DI-263 — the HEAT dial, Comm → Settings, its OWN card beside SCRIBE
+ * Participation.
+ *
+ * A SECOND CARD, NOT A ROW INSIDE THE FIRST ONE, AND THAT IS THE DESIGN.
+ * Heat and frequency are independent axes (docs/SCRIBE.md §4, §8), and the one
+ * failure UN-243 exists to prevent is a correction to one being applied to the
+ * other. Two cards, two headings, two sentences that each name only their own
+ * axis — the interface is where that separation either holds or quietly stops
+ * holding. The copy on each says what the OTHER one does not do.
+ *
+ * Its own `data-comm-tab="settings"` wrapper ships inside the function (RG-10:
+ * an untagged `.admin-section` renders on all five commissioner tabs).
+ *
+ * Exported as a pure HTML function, like its sibling, so a test can assert the
+ * wrapper, the five options and the selected state in RENDERED OUTPUT rather
+ * than by grepping source (RG-27).
+ *
+ * NOT GATED ON `scribeAutonomousEnabled`. Heat governs EVERY SCRIBE line,
+ * including the replies a direct @SCRIBE question always gets — so unlike the
+ * pacing selects above, this control is never dimmed by the participation
+ * toggle. Dimming it would say "this does nothing right now", which would be
+ * false in the exact case a player is most likely to notice.
+ */
+export function renderScribeHeatCardHTML() {
+  const current = String(getScribeHeat() || '').toLowerCase();
+  const level = HEAT_COPY.some(o => o.level === current) ? current : 'dry';
+  const options = HEAT_COPY.map(o => `
+        <button class="scribe-freq-opt${o.level === level ? ' selected' : ''}" data-scribe-heat="${escHtml(o.level)}"
+                role="radio" aria-checked="${o.level === level ? 'true' : 'false'}">
+          <span class="scribe-freq-label">${escHtml(o.label)}</span>
+          <span class="scribe-freq-desc">${escHtml(o.description)}</span>
+        </button>`).join('');
+  const copy = HEAT_COPY.find(o => o.level === level) || {};
+  return `
+    <div class="admin-section" data-comm-tab="settings">
+      <div class="admin-section-title">🌶 SCRIBE Heat</div>
+      <div class="card mb-md" id="comm-scribe-heat-card">
+        <p class="text-muted text-xs mb-sm">How hard SCRIBE is allowed to hit. This is separate from how OFTEN it talks — raising the heat never makes it post more.</p>
+        <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE heat level">${options}</div>
+        <p class="text-muted text-xs">Currently <strong>${escHtml(copy.label || level)}</strong>. Sets the league's ceiling. Players can still turn it down for themselves in My SCRIBE File — never up past this. Anything a player has put off limits stays off limits at every level.</p>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-282 (Drew, 2026-09-23) — THE MODEL TOGGLE.
+//
+// "i also want to be able to toggle if scribe is using sonnet or opus."
+//
+// A THIRD CARD, NOT A ROW INSIDE THE HEAT ONE. The Heat card's entire design
+// argument (DI-263, its docstring above) is that a card carries ONE axis and
+// says out loud what it is not. This is a third axis — which brain, not how
+// hard and not how often — and it is the only one of the three that costs
+// money, so it comes with a cost sentence that would read as a warning about
+// HEAT if it sat under the heat copy. Sibling card, same Settings tab,
+// immediately after Heat.
+//
+// THE VALUE LIVES IN THE `scribe` BAG, not at the top level of settings, for
+// the one reason that matters: `supabase/functions/_shared/scribe-rate.js`'s
+// `rateSettings()` already reads `settings.scribe.model`, and all three model
+// callers (scribe-ask, scribe-autonomous and — as of DI-282 — trainer) resolve
+// through it. A top-level `saveSetting('scribeModel', …)` would be a value
+// nothing on the server would ever read, which is the failure DI-252's own
+// header calls out by name.
+//
+// SIZE BOUND UNCHANGED (almatest §16e). `scribe` is already on the reviewed
+// bounded-size allow-list and `model` is already one of the six scalar fields
+// named in that judgment — this adds a WRITER for an existing field, not a
+// field.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The two options, rendered in `SCRIBE_MODEL_CHOICES`'s own order — [0] is the
+ *  default and the cheaper one, so the card reads cheap-to-expensive the way
+ *  the heat dial reads cool-to-hot. Labels are the short product names because
+ *  the full ids are wire values, not English. */
+const SCRIBE_MODEL_LABELS = { 'claude-sonnet-5': 'Sonnet', 'claude-opus-5': 'Opus' };
+/** DI-282's approved descriptions — one clause each, the difference stated in
+ *  the two terms Drew actually trades off (sharpness and cost). The 2.5x is not
+ *  a slogan: it is `SCRIBE_MODEL_RATES_USD_PER_MTOK` divided out (Opus 5/25 vs
+ *  Sonnet 2/10 per Mtok, input and output alike). */
+const SCRIBE_MODEL_DESCRIPTIONS = {
+  'claude-sonnet-5': 'Today\'s model. Fast, and the cheaper of the two.',
+  'claude-opus-5': 'Sharper writing, about 2.5× the cost per reply.',
+};
+const SCRIBE_MODEL_OPTIONS = SCRIBE_MODEL_CHOICES.map(id => ({
+  value: id,
+  label: Object.prototype.hasOwnProperty.call(SCRIBE_MODEL_LABELS, id) ? SCRIBE_MODEL_LABELS[id] : id,
+  description: Object.prototype.hasOwnProperty.call(SCRIBE_MODEL_DESCRIPTIONS, id) ? SCRIBE_MODEL_DESCRIPTIONS[id] : '',
+}));
+
+/** The stored choice, VALIDATED against the closed list. Missing or unknown ⇒
+ *  `SCRIBE_MODEL_CHOICES[0]` (`claude-sonnet-5`), which is both today's
+ *  behaviour and the cheaper option — the safe direction for a value that
+ *  multiplies a bill (CONVENTIONS #10). The server re-validates independently
+ *  (`rateSettings()`, F-3); neither side trusts the other's clamp. */
+export function getScribeModel() {
+  const bag = getSettings().scribe;
+  const raw = (bag && typeof bag === 'object') ? String(bag.model || '').trim() : '';
+  return SCRIBE_MODEL_CHOICES.includes(raw) ? raw : SCRIBE_MODEL_CHOICES[0];
+}
+
+/**
+ * The write. REFUSES an unknown id rather than storing it, exactly as
+ * `setScribeHeat()` does and for the same reason — and here with a second,
+ * sharper one: this string is sent to Anthropic, so an unrecognised value is a
+ * 400 on the commissioner's next SCRIBE post (RG-222's failure mode).
+ *
+ * SPREADS THE EXISTING BAG, per `setScribePacing()`'s header at length:
+ * `saveSetting('scribe', …)` replaces `value.scribe` AS A WHOLE UNIT through
+ * `_kvFieldPatch`, so the four fields with no client writer
+ * (`classifyDailyCap`, `monthlyBudgetUsd`, `effort`, the two pacing integers)
+ * would be silently and permanently lost without the spread.
+ *
+ * DOES NOT CATCH — a synchronous throw from the seam is the caller's to surface
+ * loudly (AD-06).
+ */
+export function setScribeModel(model) {
+  const id = String(model || '').trim();
+  if (!SCRIBE_MODEL_CHOICES.includes(id)) return { ok: false, error: 'unknown_model' };
+  saveSetting('scribe', { ...(getSettings().scribe || {}), model: id });
+  return { ok: true, model: id };
+}
+
+/**
+ * DI-282 — the Model card, Comm → Settings, sibling to 🌶 SCRIBE Heat.
+ *
+ * Its own `data-comm-tab="settings"` wrapper ships inside the function (RG-10:
+ * an untagged `.admin-section` renders on all five commissioner tabs).
+ *
+ * REUSES the heat/frequency dial's markup (`scribe-freq-dial` / `scribe-freq-opt`
+ * / label / desc) rather than introducing a fourth control shape: it is the
+ * same interaction — tap one of N, one stays selected — and the third radio
+ * group on one tab should not look like a different kind of thing. No new CSS.
+ *
+ * NOT GATED ON `scribeAutonomousEnabled`, same as Heat: the model governs every
+ * SCRIBE line including the replies a direct @SCRIBE question always gets.
+ */
+export function renderScribeModelCardHTML() {
+  const current = getScribeModel();
+  const options = SCRIBE_MODEL_OPTIONS.map(o => `
+        <button class="scribe-freq-opt${o.value === current ? ' selected' : ''}" data-scribe-model="${escHtml(o.value)}"
+                role="radio" aria-checked="${o.value === current ? 'true' : 'false'}">
+          <span class="scribe-freq-label">${escHtml(o.label)}</span>
+          <span class="scribe-freq-desc">${escHtml(o.description)}</span>
+        </button>`).join('');
+  const label = (SCRIBE_MODEL_OPTIONS.find(o => o.value === current) || {}).label || current;
+  return `
+    <div class="admin-section" data-comm-tab="settings">
+      <div class="admin-section-title">🧠 SCRIBE Model</div>
+      <div class="card mb-md" id="comm-scribe-model-card">
+        <p class="text-muted text-xs mb-sm">Which model writes SCRIBE's lines. Opus is sharper and costs about 2.5× as much per reply; it is used by @SCRIBE replies, unprompted posts and the Trainer alike.</p>
+        <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE model">${options}</div>
+        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $25/month budget still stops SCRIBE either way — on Opus it is reached about 2.5× sooner.</p>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-274 (SCRIBE v3, Package C, 2026-09-23) — THE LEARNING-RATE DIAL.
+//
+// A FOURTH CARD ON THE SETTINGS TAB, and it is a fourth AXIS, which is the
+// whole reason it is not a row inside one of the other three. Participation is
+// how OFTEN, Heat is how HARD, Model is WHICH BRAIN — and this is HOW FAST
+// feedback changes any of them. Drew's words: "it needs to really incorporate
+// feedback quickly and change quickly… We can start to dial it in throughout
+// the season."
+//
+// THE COPY IS RENDERED FROM `SCRIBE_LEARNING_RATE_TABLE`, not written twice.
+// The card states the agree-threshold and the cadence, and both come out of
+// the same frozen table the two Edge Functions read — so a card that says
+// "needs two people" can never be describing a server that needs one.
+// ══════════════════════════════════════════════════════════════════════════
+const LEARNING_RATE_COPY = [
+  { level: 'fast', label: 'Fast',
+    description: 'One comment can change SCRIBE within minutes. Expect some overcorrection while it finds the league\'s taste.' },
+  { level: 'normal', label: 'Normal',
+    description: 'Needs two people to agree, and a nightly-to-weekly review. This is what SCRIBE does today.' },
+  { level: 'locked', label: 'Locked',
+    description: 'SCRIBE stops learning. You can still turn its existing rules on and off below.' },
+];
+
+/**
+ * The card. Its own `data-comm-tab="settings"` wrapper ships inside the
+ * function (RG-10: an untagged `.admin-section` renders on all five tabs).
+ *
+ * Reuses the `scribe-freq-dial` / `scribe-freq-opt` markup the other three
+ * dials use — same interaction, same shape, no new CSS.
+ */
+export function renderScribeLearningRateCardHTML() {
+  const current = getScribeLearningRate();
+  const cfg = getScribeLearningRateConfig();
+  const options = LEARNING_RATE_COPY.map(o => `
+        <button class="scribe-freq-opt${o.level === current ? ' selected' : ''}" data-scribe-learning-rate="${escHtml(o.level)}"
+                role="radio" aria-checked="${o.level === current ? 'true' : 'false'}">
+          <span class="scribe-freq-label">${escHtml(o.label)}</span>
+          <span class="scribe-freq-desc">${escHtml(o.description)}</span>
+        </button>`).join('');
+  const label = (LEARNING_RATE_COPY.find(o => o.level === current) || {}).label || current;
+  // EVERY NUMBER IN THIS SENTENCE COMES OUT OF THE SHARED TABLE. If the table
+  // changes, the copy changes with it — which is the difference between a card
+  // that describes the system and a card that describes what somebody once
+  // typed about the system.
+  const detail = current === 'locked'
+    ? 'No new lessons are recorded and the automatic review does not run. Existing rules keep applying until you switch them off.'
+    : `A lesson needs ${cfg.instantAgreeThreshold === 1 ? 'one signal' : `${cfg.instantAgreeThreshold} people to agree`}; `
+      + `the full review runs ${cfg.trainerCadence} and needs at least ${cfg.minRated} rated post${cfg.minRated === 1 ? '' : 's'} to have anything to look at.`;
+  return `
+    <div class="admin-section" data-comm-tab="settings">
+      <div class="admin-section-title">🎓 SCRIBE Learning Rate</div>
+      <div class="card mb-md" id="comm-scribe-learning-rate-card">
+        <p class="text-muted text-xs mb-sm">How fast feedback changes SCRIBE. This is separate from how hard it hits and how often it talks — turning it up does not make SCRIBE meaner, it makes it change its mind sooner.</p>
+        <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE learning rate">${options}</div>
+        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. ${escHtml(detail)} Safety rules and anything a player has put off limits can never be learned away, at any setting.</p>
+      </div>
+    </div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-279 / DI-281 (SCRIBE v3, Package C) — THE TRAINING CARD'S FOUR ADDITIONS.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The four SCRIBE jobs that can spend money at Anthropic. `job_runs.job` values
+ *  (kebab), not the camelCase switch names. */
+const SCRIBE_SPEND_JOBS = Object.freeze(['trainer', 'scribe-learn', 'scribe-ask', 'scribe-autonomous', 'scribe-classify']);
+
+/**
+ * UN-256's burn line — "what is this costing," answered where Drew already
+ * manages SCRIBE.
+ *
+ * ── A DECLARED DEVIATION FROM DI-279, AND THE REASON IS A GRANT. ──────────
+ * The design input says to sum the `scribe_rate` row for the month. THAT TABLE
+ * HAS NO CLIENT GRANT AT ALL — `0002_rls.sql`'s own comment: "scribe_rate,
+ * league_seq_counters: no grant to authenticated at all (service role / trigger
+ * only)", and `0014` grants it to the server-side role only. Reading it from the
+ * browser would need a new grant or a new RPC, which is a security change and
+ * belongs in its own review rather than riding inside a feature card.
+ *
+ * SO THE NUMBER COMES FROM `job_runs.payload.costUsd`, which IS commissioner-
+ * readable (the Background Jobs card already reads that table) and which every
+ * Anthropic-calling handler now writes on EVERY attempt, success or failure
+ * (S-F3, and RG-228 for the Trainer specifically). The two ledgers are bumped
+ * from the same `meterAnthropicAttempt()` call, so they agree by construction —
+ * what differs is COVERAGE: this sums the rows the client fetched, so a month
+ * with more runs than the fetch limit under-reports.
+ *
+ * THAT LIMIT IS STATED ON SCREEN rather than hidden. A budget line that might
+ * be low and does not say so is worse than no budget line.
+ */
+export function computeScribeBurn(rows, { now = new Date(), capUsd = 25 } = {}) {
+  const month = new Date(now).toISOString().slice(0, 7);
+  let usd = 0, runs = 0;
+  for (const r of rows || []) {
+    if (!r || !SCRIBE_SPEND_JOBS.includes(r.job)) continue;
+    const started = String(r.startedAt || '');
+    if (started.slice(0, 7) !== month) continue;
+    const c = Number(r.payload && r.payload.costUsd);
+    if (Number.isFinite(c) && c > 0) usd += c;
+    runs += 1;
+  }
+  return { usd: Math.round(usd * 100) / 100, runs, month, capUsd };
+}
+
+/**
+ * UN-256's explainer — the plain-language paragraph, shortened from the design
+ * doc's §7 and rendered per MODE so it describes the system Drew is actually
+ * running rather than the system in general.
+ *
+ * STATIC PER MODE, three pre-written strings, and that is a named limit rather
+ * than a silent one: it is accurate today, and it needs a one-line edit if the
+ * rate table's own numbers ever change. Flagged in the DI, flagged here.
+ */
+export function scribeTrainingExplainer(rate) {
+  const mode = LEARNING_RATE_COPY.find(o => o.level === rate) || LEARNING_RATE_COPY[1];
+  return 'SCRIBE learns from what you say to it and about it — never from anybody\'s picks. '
+    + `Learning rate is set to ${mode.label}: ${mode.description} `
+    + 'Confirmed lessons stick; unconfirmed ones fade on their own after about a week. '
+    + 'Anything applied without you clicking Approve is announced in the chat and can be switched off below.';
+}
+
+/**
  * E5b — Comm→Data metrics + approve/reject card. Metrics are the SNAPSHOT
  * stored with the most recent report (`entry.metrics`) — never an
  * independent recompute (CONVENTIONS #21's render-path-consistency spirit
@@ -14970,7 +15707,50 @@ export function renderScribeParticipationCardHTML() {
  * this design, per the DI). Approve/reject rows cover all four pending item
  * kinds — learning, experiment, fact_candidate (all three live in
  * `getScribeLearnings()`), and canon (its own key).
+ *
+ * ── SCRIBE v3, PACKAGE C (DI-279) — FOUR ADDITIONS, IN ORDER. ─────────────
+ *   1. a one-paragraph explainer naming the current learning rate (UN-256);
+ *   2. the month's SCRIBE spend against the cap (UN-256);
+ *   3. THE LEARNINGS LIST — every approved/pending row with its source quote,
+ *      an origin badge, and ONE toggle that un-applies it (UN-252). This is
+ *      what turns "Nothing pending review" from the only view of the table
+ *      into a view of what is actually live;
+ *   4. Export and Reset (UN-257, and Q5's full reset after the export).
  */
+// ══════════════════════════════════════════════════════════════════════════
+// N1 + N2 (re-review, 2026-09-24) — THE HOLD BADGE: ONE PRODUCER, AND IT
+// DESCRIBES THE TRIGGER RATHER THAN A MOTIVE.
+// ══════════════════════════════════════════════════════════════════════════
+// The badge and the confirm both used to say the proposal "reads as an attempt
+// to weaken SCRIBE's boundaries." That is a claim about INTENT, and the filter
+// behind it does not detect intent — it detects SUBJECT MATTER. F2's bare
+// real-life patterns (debt / salary / fired / illness / money-owed) hold
+// perfectly ordinary league lines on purpose:
+//
+//   "remind Kevin about his wager debt"       — a real obligation in this app
+//   "bring it up when a coach gets fired"      — a football sentence
+//
+// Both are correctly held for a human to read, and neither is an attack. Telling
+// Drew that his own wager-debt line was an "attempt to weaken SCRIBE's
+// boundaries" is the filter accusing him of something it cannot know — and the
+// predictable result is that he stops believing the badge, which costs us the
+// one case it exists for. So both strings now state WHAT WAS TOUCHED and leave
+// the judgement where it belongs: with the commissioner reading the row.
+//
+// ONE CONSTANT, TWO PLACES. The pending list (which has an Approve button) adds
+// the reason clause; the live Learnings list carries the short label alone,
+// because a live row's context already explains itself. They share the label, so
+// "held for review" means one thing in this card rather than two.
+export const SCRIBE_HOLD_BADGE_LABEL = '⚠️ held for review';
+export const SCRIBE_HOLD_BADGE_REASON = 'touches safety, a hard line, or a player\'s real life';
+/** The only place either badge's markup is written. `flagged` falsy ⇒ '' , so
+ *  every caller is a one-liner and none of them re-states the wording. */
+export function scribeHoldBadgeHTML(flagged, { withReason = false } = {}) {
+  if (!flagged) return '';
+  const text = withReason ? `${SCRIBE_HOLD_BADGE_LABEL} — ${SCRIBE_HOLD_BADGE_REASON}` : SCRIBE_HOLD_BADGE_LABEL;
+  return ` <span class="text-xs" style="color:var(--danger)">${escHtml(text)}</span>`;
+}
+
 export function renderScribeTrainerAdminSectionHTML() {
   const reports = getScribeReports();
   const latest = reports.length ? reports[reports.length - 1] : null;
@@ -14996,8 +15776,17 @@ export function renderScribeTrainerAdminSectionHTML() {
       if (l.kind === 'learning') label = `<strong>[learning/${escHtml(l.category)}]</strong> ${escHtml(l.instruction)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
       else if (l.kind === 'experiment') label = `<strong>[experiment]</strong> ${escHtml(l.experiment)} — ${escHtml(l.reason)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
       else label = `<strong>[fact candidate]</strong> ${escHtml(l.playerId)} · ${escHtml(l.key)}: ${escHtml(l.value)} <span class="text-muted text-xs">(confidence ${l.confidence})</span>`;
+      // ── R2 (reviewer, 2026-09-24) — THE ⚠️ BADGE BELONGS HERE MOST OF ALL.
+      //    The Learnings list below has carried it since DI-279, and that list shows rows
+      //    that are already live. THIS list is the one with an Approve button on it — the
+      //    only place a human decision is actually taken — and it was the one place the
+      //    deny-filter's verdict did not appear. A commissioner clearing a queue of three
+      //    saw "confidence 0.95" on a row whose instruction was held back with nothing on
+      //    screen saying so. ONE PRODUCER for both lists (`scribeHoldBadgeHTML()`), so the
+      //    two cannot drift apart in meaning — N2, and the reason that function exists.
+      const hostileBadge = scribeHoldBadgeHTML(l.flaggedHostile, { withReason: true });
       return `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center">
-        <div class="text-sm" style="flex:1">${label}</div>
+        <div class="text-sm" style="flex:1">${label}${hostileBadge}</div>
         <div class="flex gap-sm">
           <button class="btn btn-secondary btn-sm scribe-approve-btn" data-learning-idx="${idx}">✅ Approve</button>
           <button class="btn btn-ghost btn-sm scribe-reject-btn" data-learning-idx="${idx}">✖ Reject</button>
@@ -15018,18 +15807,267 @@ export function renderScribeTrainerAdminSectionHTML() {
     ? `<div class="divider"></div><div class="card-title mb-sm">Pending review</div>${pendingLearningRows}${pendingCanonRows}`
     : `<div class="divider"></div><p class="text-muted text-xs">Nothing pending review.</p>`;
 
+  // ── DI-279 addition 3 — THE LEARNINGS LIST. Every row that is live or waiting,
+  //    with the evidence behind it and one control that turns it off.
+  //
+  //    ONE CODE PATH, TWO LABELS. "↩ Undo" and "⏻ Off" are the SAME status flip
+  //    (approved → superseded); which word shows is decided by DI-276's own
+  //    discriminator — a row that is less than a day old AND was applied without
+  //    a human click is an Undo, everything else is a switch. Two buttons doing
+  //    one thing is how the two come to behave differently.
+  //
+  //    EVERY PIECE OF ROW DATA IS `escHtml()`-WRAPPED. `source.quote` is a
+  //    player's own typed words and `instruction` is model output derived from
+  //    them; both arrive here through a shared table (CONVENTIONS #12).
+  const nowMs = Date.now();
+  const liveRows = learnings.map((l, idx) => ({ l, idx }))
+    .filter(x => x.l.kind === 'learning' && (x.l.status === 'approved' || x.l.status === 'superseded'))
+    .map(({ l, idx }) => {
+      // DI-276's discriminator, EXACTLY as that input states it: `origin` alone answers
+      // it for the instant path, and for the Trainer path the stamped `confidence`
+      // still answers it, as it does today. NOTE the absence of a `status` term — a row
+      // that was auto-applied and has since been switched OFF was still auto-applied,
+      // and labelling it "you approved this" because it is no longer live would be the
+      // badge lying about the one fact it exists to record.
+      const isAuto = l.origin === 'instant' || Number(l.confidence) >= 0.9;
+      const ageMs = nowMs - Date.parse(l.createdAt || '');
+      const undoable = isAuto && Number.isFinite(ageMs) && ageMs < 24 * 60 * 60 * 1000;
+      const on = l.status === 'approved';
+      const label = on ? (undoable ? '↩ Undo' : '⏻ Off') : '⏻ On';
+      const originBadge = l.origin === 'instant'
+        ? '<span class="text-muted text-xs">🤖 auto (instant)</span>'
+        : (isAuto ? '<span class="text-muted text-xs">🤖 auto (Trainer)</span>'
+          : '<span class="text-muted text-xs">👤 you approved this</span>');
+      // N2 — the SAME producer the pending list uses, short form. It read
+      // "⚠️ flagged" while the pending list said something else entirely, which
+      // is precisely the drift the shared constant now makes impossible.
+      const hostileBadge = scribeHoldBadgeHTML(l.flaggedHostile);
+      const provisional = l.provisional === true
+        ? ' <span class="text-muted text-xs">· provisional, fades if nothing confirms it</span>' : '';
+      // ESCAPED FIRST, TESTED SECOND. The wrapper is applied to the value before
+      // anything branches on it, so there is no path through this ternary on which
+      // a player's own typed words reach the template unwrapped (`xsstest.mjs`'s
+      // classifier proves that structurally, which is the point of writing it this
+      // way rather than the obvious way).
+      const quoteSafe = escHtml(String((l.source && l.source.quote) || ''));
+      const quote = quoteSafe ? `<div class="text-muted text-xs">from: "${quoteSafe}"</div>` : '';
+      return `<div class="flex-between" style="gap:8px;padding:8px 0;border-bottom:1px solid var(--border);align-items:center;opacity:${on ? '1' : '0.55'}">
+        <div class="text-sm" style="flex:1">
+          <div><strong>[${escHtml(l.category || 'general')}]</strong> ${escHtml(l.instruction || '')}</div>
+          ${quote}
+          <div>${originBadge}${hostileBadge}${provisional}</div>
+        </div>
+        <button class="btn btn-ghost btn-sm scribe-learning-toggle-btn" data-learning-idx="${escHtml(String(idx))}">${escHtml(label)}</button>
+      </div>`;
+    }).join('');
+  const learningsListHTML = `<div class="divider"></div>
+      <div class="card-title mb-sm">What SCRIBE has learned</div>
+      ${liveRows || '<p class="text-muted text-xs">Nothing learned yet. SCRIBE is running on its written persona alone.</p>'}`;
+
+  // ── DI-279 addition 2 — the burn line. `_bgJobsCache` is the Background Jobs
+  //    card's ALREADY-FETCHED rows; this adds no query. When that card has not
+  //    loaded yet the line says so rather than showing a confident $0.00, which
+  //    is the one number a budget display must never invent.
+  const burn = computeScribeBurn((_bgJobsCache && _bgJobsCache.rows) || [], { capUsd: scribeMonthlyCapUsd() });
+  // EACH FIGURE IS WRAPPED AND NAMED BEFORE IT REACHES THE TEMPLATE, and the
+  // template carries no `$${…}` pair. Both are for `xsstest.mjs`'s classifier
+  // rather than for the reader: it resolves aliases, so a named wrapped value
+  // classifies where the same call inline next to a literal dollar sign does
+  // not. The cost is three lines; the benefit is that this card enters the
+  // ratchet clean instead of as three more pinned backlog entries.
+  const burnUsd = escHtml(burn.usd.toFixed(2));
+  const burnCap = escHtml(burn.capUsd.toFixed(2));
+  const burnRuns = escHtml(String(burn.runs));
+  const burnHTML = (_bgJobsCache && _bgJobsCache.rows)
+    ? `<p class="text-muted text-xs">💵 USD ${burnUsd} of ${burnCap} this month (SCRIBE), across ${burnRuns} logged runs. Counts the runs this page has loaded; the server ledger is the one that actually stops the spending.</p>`
+    : '<p class="text-muted text-xs">💵 Monthly SCRIBE spend loads with the Background Jobs card below.</p>';
+
   return `
     <div class="admin-section" data-comm-tab="data">
       <div class="admin-section-title">🧠 SCRIBE Training</div>
       <div class="card">
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
-          <p class="text-muted text-xs" style="margin:0">Periodic snapshot, not live — see the "as of" stamp below. ≥0.9-confidence learnings/Canon auto-apply; everything else waits here.</p>
+          <p class="text-muted text-xs" style="margin:0">Periodic snapshot, not live — see the "as of" stamp below.</p>
           <button class="btn btn-primary btn-sm" id="scribe-run-trainer-btn">▶ Run Trainer now</button>
         </div>
+        <p class="text-muted text-xs mb-sm">${escHtml(scribeTrainingExplainer(getScribeLearningRate()))}</p>
+        ${burnHTML}
         ${metricsBlock}
+        ${learningsListHTML}
         ${pendingHTML}
+        <div class="divider"></div>
+        <div class="flex gap-sm" style="flex-wrap:wrap">
+          <button class="btn btn-secondary btn-sm" id="scribe-export-learnings-btn">📤 Export for SCRIBE.md</button>
+          <button class="btn btn-ghost btn-sm" id="scribe-reset-learnings-btn">♻️ Reset everything SCRIBE has learned</button>
+        </div>
+        <p class="text-muted text-xs">Reset shows you the export first, then switches every learning and Canon entry off. Nothing is deleted — the rows stay for the record.</p>
       </div>
     </div>`;
+}
+
+/** The commissioner's own monthly cap, read through the seam. Same default and
+ *  same field `_shared/scribe-rate.js`'s `rateSettings()` uses server-side, so
+ *  the number on screen is the number that actually stops the spending. */
+function scribeMonthlyCapUsd() {
+  const raw = Number((getSettings().scribe || {}).monthlyBudgetUsd);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 25;
+}
+
+/**
+ * DI-279 — the on/off toggle, and it is the SAME decision path the Approve and
+ * Reject buttons use rather than a second writer into the same array.
+ *
+ * `'superseded'` is the off state, not `'rejected'`: a rejected row is one a
+ * commissioner said no to when it was proposed, and a switched-off row is one
+ * that was live and got turned down. `loadActiveLearningsText()` filters
+ * `status = 'approved'`, so anything else stops reaching the prompt either way
+ * — the distinction is for the human reading the list later, which is the
+ * audience this whole card exists for.
+ *
+ * Exported for `learntest.mjs`: the round-trip assertion needs the real
+ * function, not a look-alike bound inside a click handler (RG-27's shape).
+ */
+export function toggleScribeLearningStatus(idx) {
+  const all = getScribeLearnings();
+  const row = all[idx];
+  if (!row) return { ok: false, error: 'no_such_row' };
+  if (row.kind !== 'learning') return { ok: false, error: 'not_a_learning' };
+  const next = row.status === 'approved' ? 'superseded' : 'approved';
+  all[idx] = { ...row, status: next };
+  setScribeLearnings(all);
+  return { ok: true, status: next, on: next === 'approved' };
+}
+
+/**
+ * DI-279 / Q5 — THE FULL RESET, and the export comes first.
+ *
+ * Drew's ruling on open question 5 was the FULL rollback: every learning and
+ * every Canon entry, confirmed or not. This is the "Fast mode drifted somewhere
+ * bad and I want it back" control, and a reset that spares the long-confirmed
+ * rows is not that control.
+ *
+ * ── IT SNAPSHOTS TO THE CLIPBOARD, NOT TO `scribe_reports`. A DECLARED
+ *    DEVIATION, and the reason is a grant. ─────────────────────────────────
+ * DI-279 proposes writing a `payload.kind:'learningsSnapshot'` row into
+ * `scribe_reports` first, and instructs feature-builder to VERIFY the grants
+ * permit a commissioner-client INSERT before relying on it. Verified: they do
+ * not. `0002_rls.sql:191` is `grant select on public.scribe_reports to
+ * authenticated` — SELECT only, no insert grant and no insert policy — and
+ * `js/supabase-backend.js:479` routes `cfbp_scribe_reports` as
+ * `comm:'refuse', player:'refuse'`, so the seam refuses it one layer higher
+ * too. The DI's own fallback is a small new RPC; that is a migration and a new
+ * server-side write path for a snapshot whose reader is a human.
+ *
+ * DI-281's export already produces exactly that snapshot, in a form Drew can
+ * read and keep. So the reset SHOWS IT FIRST and requires him to dismiss the
+ * modal before the clear runs — which satisfies "export first, then clear"
+ * with no new grant, no new RPC and no new migration section.
+ *
+ * `'reverted'` for both arrays: a value that is neither 'approved' nor
+ * 'pending', so every existing reader stops rendering it, and one that reads
+ * differently from 'rejected' (a proposal refused) and 'superseded' (a live
+ * rule switched off) to whoever reads the table afterwards.
+ */
+export function resetScribeLearnings() {
+  const learnings = getScribeLearnings();
+  const canon = getScribeCanon();
+  const touched = { learnings: 0, canon: 0 };
+  const nextLearnings = learnings.map((l) => {
+    if (l && (l.status === 'approved' || l.status === 'pending')) { touched.learnings += 1; return { ...l, status: 'reverted' }; }
+    return l;
+  });
+  const nextCanon = canon.map((c) => {
+    if (c && (c.approvalStatus === 'approved' || c.approvalStatus === 'pending')) { touched.canon += 1; return { ...c, approvalStatus: 'reverted' }; }
+    return c;
+  });
+  setScribeLearnings(nextLearnings);
+  setScribeCanon(nextCanon);
+  return { ok: true, ...touched };
+}
+
+/**
+ * DI-280 — THE ONE EXPERIMENT EFFECT THAT IS REAL.
+ *
+ * Approving an experiment that carries a `pacingNudge` moves
+ * `settings.scribe.autonomousCooldownMs` by EXACTLY one step in the declared
+ * direction. Every other experiment shape produces nothing at all and stays an
+ * honest proposal log — which is the answer to UN-155's gap: not removing the
+ * button (that contradicts the founders' own wish to see feedback move
+ * something), and not leaving it doing nothing while looking like it does.
+ *
+ * `scribeHeat` and `scribeFrequency` are unreachable from here by construction:
+ * this function writes ONE key, and `stepAutonomousCooldown()` is the only thing
+ * that computes its value.
+ */
+/**
+ * DI-281 — the export modal, and (Q5) the reset's own first step.
+ *
+ * `.modal-overlay.centered .modal` verbatim, the same component the game modal
+ * and My SCRIBE File already use — no new sheet, no new CSS.
+ *
+ * COPY-TO-CLIPBOARD, NOT A FILE DOWNLOAD. This is a phone-first app (CONVENTIONS
+ * #14) and a download affordance on a phone produces a file in a place the
+ * person then has to go find; copy is the pattern this app already uses for
+ * shareable text (the ESPN URL button, `copy-url-btn`). The textarea is
+ * selectable as well, for a desktop browser where `navigator.clipboard` is
+ * blocked by permissions.
+ *
+ * WHEN `resetAfter` IS TRUE this is the reset's first half: the same export,
+ * shown before anything is touched, with the destructive button behind a
+ * `confirm()` that names the counts. That is Q5's "full Reset, with the
+ * snapshot export first" satisfied without the `scribe_reports` INSERT the DI
+ * proposed — see `resetScribeLearnings()`'s header for why that INSERT is not
+ * available to a client.
+ */
+export function showScribeLearningsExportModal({ resetAfter = false } = {}) {
+  const markdown = exportLearningsMarkdown();
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  const title = resetAfter ? 'Reset — read this first' : 'Export for SCRIBE.md';
+  const intro = resetAfter
+    ? 'This is everything SCRIBE has confirmed so far. Copy it somewhere safe — the next button switches all of it off.'
+    : 'Confirmed, approved entries only. Provisional (unconfirmed) lessons are left out on purpose. Review every line before pasting into docs/SCRIBE.md.';
+  ov.innerHTML = `<div class="modal">
+    <div class="modal-header"><h3>${escHtml(title)}</h3><button class="modal-close" id="scribe-export-close">✕</button></div>
+    <p class="text-muted text-xs">${escHtml(intro)}</p>
+    <textarea id="scribe-export-text" class="input" rows="14" readonly style="font-family:monospace;font-size:0.75rem">${escHtml(markdown)}</textarea>
+    <div class="flex gap-sm mt-sm" style="flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" id="scribe-export-copy">📋 Copy</button>
+      ${resetAfter ? '<button class="btn btn-danger btn-sm" id="scribe-export-do-reset">♻️ Switch everything off</button>' : ''}
+    </div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#scribe-export-close')?.addEventListener('click', () => ov.remove());
+  ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
+  ov.querySelector('#scribe-export-copy')?.addEventListener('click', () => {
+    navigator.clipboard.writeText(markdown)
+      .then(() => showToast('📋 Copied — paste it into docs/SCRIBE.md', 'success'))
+      .catch(() => showToast('Copy failed — select the text and copy it by hand', 'error'));
+  });
+  ov.querySelector('#scribe-export-do-reset')?.addEventListener('click', () => {
+    // THE CONFIRM NAMES THE COUNTS. "Are you sure?" is a dialog people click
+    // through; "this switches off 9 learnings and 3 Canon entries" is one they
+    // read (CONVENTIONS #25's instinct about silent retroactive changes,
+    // applied to the one control here that is retroactive).
+    const liveL = getScribeLearnings().filter(l => l && (l.status === 'approved' || l.status === 'pending')).length;
+    const liveC = getScribeCanon().filter(c => c && (c.approvalStatus === 'approved' || c.approvalStatus === 'pending')).length;
+    if (!confirm(`Switch off ${liveL} learning${liveL === 1 ? '' : 's'} and ${liveC} Canon entr${liveC === 1 ? 'y' : 'ies'}?\n\nSCRIBE goes back to its written persona alone. Nothing is deleted — the rows stay for the record — but every one of them stops applying.`)) return;
+    const r = resetScribeLearnings();
+    ov.remove();
+    showToast(`♻️ Reset — ${r.learnings} learning(s) and ${r.canon} Canon entr${r.canon === 1 ? 'y' : 'ies'} switched off`, 'success');
+    renderCommPage();
+  });
+  return ov;
+}
+
+export function applyExperimentPacingNudge(row) {
+  const nudge = parsePacingNudge(row && row.pacingNudge);
+  if (!nudge) return { ok: true, moved: false, reason: 'no_nudge' };
+  const bag = getSettings().scribe || {};
+  const step = stepAutonomousCooldown(bag.autonomousCooldownMs, nudge.direction);
+  if (!step.moved) return { ok: true, moved: false, reason: step.reason };
+  saveSetting('scribe', { ...bag, autonomousCooldownMs: step.ms });
+  return { ok: true, moved: true, ms: step.ms, direction: nudge.direction };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -15055,6 +16093,10 @@ const SERVER_JOB_LABELS = Object.freeze({
   scribeAutonomous: 'SCRIBE unprompted posts',
   scoresRefresh: 'Live score refresh',
   keepalive: 'Keep-alive heartbeat',
+  // SCRIBE v3, Package C (DI-273) — the instant-learning webhook.
+  scribeLearn: 'SCRIBE instant learning',
+  // SCRIBE v3, Package D (DI-283) — the emoji reaction writer.
+  scribeReact: 'SCRIBE reactions',
 });
 /** The `job_runs.job` value each switch's function writes — snake/kebab,
  *  not the camelCase switch name (`_shared/runs.js`'s JOB_NAME constants). */
@@ -15062,6 +16104,8 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
   notifyFanout: 'notify-fanout', reminders: 'reminders', scribeAsk: 'scribe-ask',
   trainer: 'trainer', scribeClassify: 'scribe-classify', scribeAutonomous: 'scribe-autonomous',
   scoresRefresh: 'scores-refresh', keepalive: 'keepalive',
+  scribeLearn: 'scribe-learn',
+  scribeReact: 'scribe-react',
 });
 /** Which functions actually exist to deploy, as of this build. Everything
  *  else renders DISABLED with a stated reason (§0.3 item 2: deploying is not
@@ -15080,7 +16124,17 @@ const SERVER_JOB_RUN_NAME = Object.freeze({
  *  for notify-fanout: byte-identical when off/absent, and the legacy relay's call counter proven
  *  at ZERO when the switch is on). Switched on FIFTH, TOGETHER (DI-T6.5's own text) — the runbook
  *  is written to flip both in the same sitting, never one without the other. */
-const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true });
+//  `scribeLearn` (SCRIBE v3 Package C, DI-273) joins at this build — the function,
+//  its twin and the webhook walkthrough (runbook §S6F1-W2) all exist. It is switched
+//  on LAST, and only after Drew has pasted migration 0024 and created the webhook:
+//  deploying it does nothing at all until both of those exist, which is the point of
+//  the switch defaulting OFF.
+//  `scribeReact` (SCRIBE v3 Package D, DI-283) joins at this build — the function,
+//  its twin and `js/scribeAgent.js`'s `scribeReactRemote()` all exist. It depends on
+//  `scribeClassify` being on (it reads that job's cached verdict and makes no model
+//  call of its own), so flipping it alone is a switch with nothing behind it; the
+//  runbook says so in §S6F1-W3.
+const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, reminders: true, scribeAsk: true, trainer: true, scribeClassify: true, scribeAutonomous: true, scoresRefresh: true, scribeLearn: true, scribeReact: true });
 /** Expected cadence in minutes, for the staleness line — only for jobs that
  *  fire AT LEAST DAILY. `notify-fanout` and `scribeAsk` are both EVENT-DRIVEN
  *  (a webhook / a `functions.invoke()` per `@scribe` mention): their "last
@@ -15308,6 +16362,8 @@ const SERVER_JOB_ON_WARNING = Object.freeze({
   scribeClassify: 'This spends money per classified message (Anthropic, capped by the daily classify cap and the shared monthly budget). A STALE cached device (has not loaded the current app version) still calls the old Apps Script classifier directly — a second paid call Apps Script tracks in its own log, invisible to this month’s Supabase spend cap. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
   scribeAutonomous: 'This spends money per unprompted post (Anthropic) and posts to the room without being asked. A STALE cached device has no knowledge of this switch or of the Edge Function’s cooldown — it can independently score the same event and post a SECOND unprompted SCRIBE reply within the same ten minutes, which is the exact double-post this switch exists to prevent. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
   // ═══ END STEP 6 PHASE 5 ═══
+  // ═══ SCRIBE v3 PACKAGE C (DI-273) ═══
+  scribeLearn: 'This spends money PER PIECE OF FEEDBACK (Anthropic, drawn on the same monthly cap) and, at Fast, WRITES A RULE SCRIBE STARTS OBEYING WITHIN SECONDS with nobody clicking Approve. Two things must already be true or this switch does nothing: migration 0024 pasted (the function inserts a column it creates), and the cfbp_scribe_learn Database Webhook created (runbook §S6F1-W2) — without the webhook nothing ever calls the function at all. Every auto-applied rule is announced in the chat and can be switched off in this card; the Learning Rate dial in Settings is the throttle, and Locked stops the instant path entirely.',
 });
 
 /** Module-level cache — `job_runs` is not part of the synchronous storage
@@ -15967,6 +17023,23 @@ function renderCommExtrasV16(week, games) {
     // different shape from that card's list of on/off toggles. Its
     // data-comm-tab="settings" wrapper ships inside the function (RG-10).
     c.insertAdjacentHTML('beforeend', renderScribeParticipationCardHTML());
+    // DI-263 (2026-09-23) — the HEAT dial, its own card directly beneath the
+    // participation one. Adjacent because they are the two halves of "what does
+    // SCRIBE do"; SEPARATE because they are not the same question, and a
+    // commissioner who wants SCRIBE to shut up occasionally must never reach for
+    // the heat control to do it (docs/SCRIBE.md §8).
+    c.insertAdjacentHTML('beforeend', renderScribeHeatCardHTML());
+    // DI-282 (2026-09-23) — the MODEL toggle, third and last of the SCRIBE
+    // dials on this tab: how often (Participation), how hard (Heat), which
+    // brain (Model). Its own card for the reason its docstring gives — it is
+    // the only one of the three that costs money, and a cost sentence under the
+    // heat copy would read as a warning about heat.
+    c.insertAdjacentHTML('beforeend', renderScribeModelCardHTML());
+    // DI-274 (2026-09-23) — the LEARNING RATE dial, fourth and last. How often
+    // (Participation), how hard (Heat), which brain (Model), how fast it changes
+    // its mind (Learning Rate). Its own card for the same reason the other three
+    // are: one axis per card, each saying out loud what it is not.
+    c.insertAdjacentHTML('beforeend', renderScribeLearningRateCardHTML());
   }
 
   // ── handlers ──
@@ -16030,6 +17103,48 @@ function renderCommExtrasV16(week, games) {
       if (!setScribeFrequency(level).ok) return;
       const copy = FREQUENCY_COPY.find(o => o.level === level);
       showToast(`🎚 SCRIBE participation: ${copy ? copy.label : level}`, 'success');
+      renderCommPage();
+    });
+  });
+  // ── DI-263 — the HEAT dial (SCRIBE v3, Package A, 2026-09-23) ──
+  // Wired exactly like the frequency dial above: the write refuses an unknown
+  // level (`setScribeHeat`), the toast names the level so the commissioner sees
+  // what landed, and the page re-renders so the selected state comes from the
+  // stored value rather than from the click.
+  document.querySelectorAll('[data-scribe-heat]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const level = btn.dataset.scribeHeat;
+      if (!setScribeHeat(level).ok) return;
+      const copy = HEAT_COPY.find(o => o.level === level);
+      showToast(`🌶 SCRIBE heat: ${copy ? copy.label : level}`, 'success');
+      renderCommPage();
+    });
+  });
+  // ── DI-282 — the MODEL toggle (SCRIBE v3, 2026-09-23) ──
+  // Wired exactly like the two dials above: the write refuses an unknown id
+  // (`setScribeModel`), the toast names what landed, and the page re-renders so
+  // the selected state comes from the STORED value rather than from the click —
+  // which is what makes a failed write visible instead of merely unacknowledged.
+  document.querySelectorAll('[data-scribe-model]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.scribeModel;
+      if (!setScribeModel(id).ok) return;
+      const opt = SCRIBE_MODEL_OPTIONS.find(o => o.value === id);
+      showToast(`🧠 SCRIBE model: ${opt ? opt.label : id}`, 'success');
+      renderCommPage();
+    });
+  });
+  // ── DI-274 — the LEARNING RATE dial (SCRIBE v3, Package C, 2026-09-23) ──
+  // Wired exactly like the three dials above: the write refuses an unknown
+  // level (`setScribeLearningRate`), the toast names what landed, and the page
+  // re-renders so the selected state comes from the STORED value rather than
+  // from the click.
+  document.querySelectorAll('[data-scribe-learning-rate]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const level = btn.dataset.scribeLearningRate;
+      if (!setScribeLearningRate(level).ok) return;
+      const copy = LEARNING_RATE_COPY.find(o => o.level === level);
+      showToast(`🎓 SCRIBE learning rate: ${copy ? copy.label : level}`, 'success');
       renderCommPage();
     });
   });
@@ -19329,7 +20444,10 @@ function fireSignInGateDeadline() {
     if (currentAuthHoldReason()) return;
     if (document.getElementById('site-gate-overlay')) return;
     console.warn('[auth] a session is persisted on this device but nothing resolved it in time — gating the page rather than leaving an unresolved identity in front of the app');
-    showGoogleSignInGate();
+    // DI-249/DI-247 K3 — same notice source as the immediate paint above; this
+    // is the deadline's own paint of the SAME boot decision, so it carries
+    // the same native Keychain notice, if any. `undefined` on web.
+    showGoogleSignInGate(getNativeAuthStorageNoticeForGate());
   } catch (e) {
     console.error('[auth] the sign-in gate deadline failed to paint', e);
   }
@@ -19364,7 +20482,36 @@ export const _fireSignInGateDeadlineForTest = fireSignInGateDeadline;
  * button's markup, `id`, or the DOM this function renders — only the click
  * handler's body, below.
  */
-export function showGoogleSignInGate() {
+// RG-234 (2026-09-23, Drew's iPhone, bug B-e part 3) — ONE overall watchdog for
+// the whole "Connecting to Google…" window on NATIVE.
+//
+// RG-233 bounded `signInWithOAuth()`. It did not bound the two awaits on either
+// side of it, and Drew's freeze was one of those: the dynamic
+// `import('./auth-native.js')` (on native that resolves through the capacitor://
+// scheme handler — a stall or a silently-404'd request never settles AND never
+// throws) and `Browser.open()` inside auth-native.js. Neither had any timer over
+// it, which is why he saw no message well past 20s. Rather than trust that every
+// future await inside this handler remembers to bound itself, ONE timer is armed
+// the instant the button flips to "Connecting to Google…" and stood down the
+// instant the browser sheet is actually on screen (auth-native.js's
+// `onSheetOpened`). Everything after that is a human reading a Google page,
+// which auth-native.js's own 120s flow timeout already bounds.
+//
+// 25s: comfortably above the 20s signInWithOAuth bound (so a real network
+// failure still reports its own, more specific sentence first) and far below a
+// player's patience.
+const NATIVE_SIGNIN_WATCHDOG_MS = 25000;
+let _nativeSignInWatchdogMsOverride = null;
+function _getNativeSignInWatchdogMs() { return _nativeSignInWatchdogMsOverride ?? NATIVE_SIGNIN_WATCHDOG_MS; }
+/** RG-234 test hook — shrinks the watchdog so a RED/GREEN proof needn't wait
+ *  25s. Production never calls this. */
+export function _setNativeSignInWatchdogMsForTest(ms) { _nativeSignInWatchdogMsOverride = ms; }
+export const _NATIVE_SIGNIN_WATCHDOG_MS_FOR_TEST = NATIVE_SIGNIN_WATCHDOG_MS;
+/** RG-234 — the one sentence the watchdog shows. Deliberately says nothing about
+ *  WHY (we genuinely do not know which await is wedged) and everything about
+ *  what to do next. */
+export const NATIVE_SIGNIN_WATCHDOG_MESSAGE = 'Sign-in is taking too long — try again.';
+export function showGoogleSignInGate(initialNotice) {
   const s = getSettings();
   const titleTop  = s.welcomeTitleTop  || 'welcome to';
   const titleMain = s.welcomeTitleMain || (s.welcomeTitle ? s.welcomeTitle.replace(/^welcome to\s*/i,'') : "irb pick 'ems");
@@ -19401,17 +20548,86 @@ export function showGoogleSignInGate() {
   const btn = document.getElementById('google-gate-submit');
   const label = document.getElementById('google-gate-btn-label');
   const msgEl = document.getElementById('google-gate-message');
+  // RG-233 (2026-09-23) — resolve these THREE nodes live at use time. This gate
+  // can repaint while a sign-in is in flight (fireSignInGateDeadline() calls
+  // showGoogleSignInGate() again), which replaces the nodes captured above with
+  // fresh ones; writing to a detached node then "succeeds" silently and the
+  // player sees a button that still says "Connecting to Google…" and no message
+  // at all. Re-query by id whenever the captured node is no longer in the
+  // document. Pure lookup — no markup, no id, no class changes (DI-216l holds).
+  const liveEl = (cached, id) => (cached && cached.isConnected ? cached : document.getElementById(id));
   const showMessage = (text, tone) => {
-    if (!msgEl) return;
-    msgEl.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
-    msgEl.textContent = text;
-    msgEl.style.display = 'block';
+    const el = liveEl(msgEl, 'google-gate-message');
+    if (!el) return;
+    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    el.textContent = text;
+    el.style.display = 'block';
   };
+  // RG-233 (d) — on native, pull auth-native.js in as soon as the gate paints
+  // (not on the first tap) so its module-load listener registration happens
+  // before any redirect can come back. getAuthPath() is origin-positive, so this
+  // is unreachable on web and no web boot ever requests the file (the same
+  // guarantee authnativetest.mjs already pins for the click-time import).
+  // RG-234 (2026-09-23, bug B-e part 3) — the module the pre-arm below resolved,
+  // kept so the click handler's watchdog can cancel a stalled flow WITHOUT
+  // issuing another dynamic import (the import is itself one of the windows that
+  // can hang, so the recovery path must never depend on one). Stays null on web:
+  // the only two writers are both inside `getAuthPath() === 'native'` branches.
+  let nativeAuthMod = null;
+  if (getAuthPath() === 'native') {
+    import('./auth-native.js')
+      .then(m => { nativeAuthMod = m; m.ensureNativeSignInListeners?.(); })
+      .catch(e => console.warn('[auth] could not pre-arm the native sign-in listeners', e));
+  }
+  // DI-247/DI-251 K3 — a native Keychain-read failure/cancel/passcode-not-set
+  // notice, computed BEFORE this gate painted (js/auth-storage-native.js).
+  // `initialNotice` is `undefined` on every web boot (this function's own
+  // caller passes nothing there), so this is a true no-op on web.
+  if (initialNotice && initialNotice.message) showMessage(initialNotice.message, initialNotice.tone);
+  // RG-233 — which tap owns the UI. A superseded tap's late rejection must not
+  // repaint over the attempt that replaced it.
+  let clickSeq = 0;
   btn?.addEventListener('click', async () => {
     if (btn.disabled) return;
+    const mySeq = ++clickSeq;
+    /** Back to idle: ALWAYS reachable on any throw/reject (RG-233 (a)) — and
+     *  always against the LIVE nodes, never the possibly-detached captures. */
+    const restoreIdle = () => {
+      const b = liveEl(btn, 'google-gate-submit');
+      const l = liveEl(label, 'google-gate-btn-label');
+      if (b) b.disabled = false;
+      if (l) l.textContent = 'Continue with Google';
+    };
     btn.disabled = true;
-    if (msgEl) msgEl.style.display = 'none';
+    { const m = liveEl(msgEl, 'google-gate-message'); if (m) m.style.display = 'none'; }
     if (label) label.textContent = 'Connecting to Google…';
+    // RG-234 — the ONE branch point, read ONCE here so the watchdog below can be
+    // native-only: web's signInWithGoogle() navigates the page away rather than
+    // awaiting anything long, and arming a timer on it would change web behavior
+    // for no defect. getAuthPath() === 'native' still gates the import exactly as
+    // DI-208e requires (authnativetest [10b] proves web never evaluates it).
+    const nativePath = getAuthPath() === 'native';
+    let watchdogTimer = null;
+    let watchdogFired = false;
+    const disarmWatchdog = () => { if (watchdogTimer !== null) { clearTimeout(watchdogTimer); watchdogTimer = null; } };
+    if (nativePath) {
+      watchdogTimer = setTimeout(() => {
+        watchdogTimer = null;
+        watchdogFired = true;
+        console.error('[auth][stage] native-signin-watchdog-expired');
+        // Idle again, against the LIVE nodes (a mid-flow repaint may have
+        // replaced the captures — RG-233's H3).
+        restoreIdle();
+        if (mySeq !== clickSeq) return; // a newer tap owns the UI
+        showMessage(NATIVE_SIGNIN_WATCHDOG_MESSAGE, 'error');
+        // Clear whatever flow state the stalled attempt left behind so the next
+        // tap is a clean "try again" (RG-233 (b)). Synchronous, off the module the
+        // pre-arm already resolved — never a fresh import, which is one of the
+        // things that may be hung.
+        try { nativeAuthMod?.cancelPendingNativeSignIn?.(); }
+        catch (e) { console.warn('[auth] could not cancel the stalled native sign-in', e); }
+      }, _getNativeSignInWatchdogMs());
+    }
     try {
       // DI-208e — the ONE branch point. getAuthPath() is ORIGIN-POSITIVE
       // (security condition 8): 'native' only when isNativeOrigin() holds,
@@ -19420,9 +20636,23 @@ export function showGoogleSignInGate() {
       // auth-native.js — it isn't in service-worker.js's STATIC_ASSETS and
       // must never be (authnativetest.mjs proves the import is never
       // evaluated on web). The web call below is BYTE-UNCHANGED.
-      if (getAuthPath() === 'native') {
-        const { signInWithGoogleNative } = await import('./auth-native.js');
-        await signInWithGoogleNative();
+      if (nativePath) {
+        const nativeAuth = await import('./auth-native.js');
+        nativeAuthMod = nativeAuth;
+        console.warn('[auth][stage] native-module-imported'); // RG-234 (d)
+        // RG-234 — the watchdog already fired while this import was hung: it owns
+        // the button and the message slot now, so this tap says nothing and starts
+        // nothing (a flow the player got no feedback about is worse than none).
+        if (watchdogFired) return;
+        // RG-233 (b) — a stale, never-settled flow from an earlier attempt used
+        // to make every later tap throw "already in progress" forever. Clearing
+        // it here is what makes a second tap mean "try again."
+        nativeAuth.cancelPendingNativeSignIn?.();
+        // RG-234 — `onSheetOpened` stands the watchdog down the moment the system
+        // browser sheet is actually presented. Past that point a long wait is a
+        // human reading a Google page, bounded by auth-native.js's 120s flow
+        // timeout, not a wedge.
+        await nativeAuth.signInWithGoogleNative({ onSheetOpened: disarmWatchdog });
       } else {
         await signInWithGoogle();
       }
@@ -19432,13 +20662,36 @@ export function showGoogleSignInGate() {
       // The native path lands the SAME event through the SAME client
       // (auth-native.js's exchangeCodeForSession() call), so this comment
       // and refreshAuthUI()'s wiring hold for both paths unchanged.
+      disarmWatchdog();
+      // RG-234 — on native the flow RESOLVES in-page (the deep-link round trip
+      // completes here rather than navigating away as web does), so nothing else
+      // ever repaints this button. Drew's frozen "Connecting to Google…" was
+      // partly this: a successful sign-in left the label stuck. The overlay is
+      // removed by the SIGNED_IN event a moment later either way; this makes the
+      // gate honest in the window before that, and if anything upstream ever
+      // fails to remove it, the player is looking at a usable button.
+      if (nativePath) restoreIdle();
     } catch (err) {
-      btn.disabled = false;
-      if (label) label.textContent = 'Continue with Google';
+      disarmWatchdog();
+      // RG-233 (b) — this tap was replaced by a newer one, which now owns both
+      // the button and the message slot. Say nothing, change nothing.
+      if (err && err.supersededNativeFlow) return;
+      // RG-234 — a LATE settle, after the watchdog already restored the button and
+      // showed its message. Ignored: the watchdog's UI stands.
+      if (watchdogFired) return;
+      // RG-233 (a) — idle again on EVERY throw/reject, no exceptions, live nodes.
+      restoreIdle();
+      if (mySeq !== clickSeq) return; // a newer tap is in flight; its UI wins
       const msg = String(err?.message || err || '');
       // DI-180c — cancelled is NOT a failure: no red tone, subtle copy,
       // a DISTINCT code path from a genuine OAuth/network failure.
       if (/cancel|closed|popup/i.test(msg)) showMessage('Sign-in cancelled.', 'notice');
+      // RG-233 (c) — a failure that carries its OWN player-facing sentence
+      // (today: the bounded "Couldn't reach Google — try again." on a
+      // signInWithOAuth() that never came back) shows that sentence instead of
+      // the generic fallback, because "we couldn't reach Google" and "Google
+      // said no" are different things to a player deciding whether to retry.
+      else if (err && typeof err.userMessage === 'string' && err.userMessage) showMessage(err.userMessage, 'error');
       else showMessage("Google sign-in couldn't complete — nothing was saved. Check your connection and try again.", 'error');
     }
   });
@@ -20010,7 +21263,28 @@ export function refreshAuthUI(event, payload) {
   }
 
   if (AUTH_SESSION_EVENTS.includes(event)) {
-    const signedIn = !!payload && hasValidSupabaseSession();
+    // ══ RG-234 (2026-09-23, Drew's iPhone, bug B-e part 3) ═══════════════════
+    // This line was `!!payload && hasValidSupabaseSession()`. That reads the
+    // localStorage MIRROR of the session, which on native is a marker written by
+    // js/auth-storage-native.js. Drew's sign-in completed in full — the console
+    // showed the exchange, the Keychain write, SIGNED_IN, memberships, hydrate —
+    // and the gate stayed on screen saying "Connecting to Google…", because at the
+    // instant THIS handler ran the marker had not been written yet. The real fix
+    // is in the adapter (the marker is now written synchronously inside the
+    // setItem the SDK awaits before notifying anyone). This is the second,
+    // independent guard: the event's OWN payload IS the session, so a native event
+    // carrying a fresh one takes the gate down even if the mirror lags.
+    //
+    // Same freshness test hasValidSupabaseSession() applies, against the payload
+    // instead of the mirror — never merely "a payload exists", which would take
+    // the gate down on an expired INITIAL_SESSION. NATIVE-SCOPED: on web the
+    // SDK's own synchronous localStorage write means the mirror is never behind,
+    // so this term would be dead code there, and scoping it keeps web behavior
+    // byte-identical (AD-68's origin-positive rule: isNativeOrigin(), never
+    // isNativeShell() alone).
+    const payloadSessionFresh = !!payload && typeof payload.access_token === 'string' && !!payload.access_token
+      && (Number(payload.expires_at) || 0) * 1000 > Date.now();
+    const signedIn = !!payload && (hasValidSupabaseSession() || (isNativeOrigin() && payloadSessionFresh));
     if (signedIn) {
       // ── SECURITY F-3 (sixth gate), THE app.js HALF ─────────────────────────
       // hideSessionExpiredBanner() does two things: it removes the node AND it
