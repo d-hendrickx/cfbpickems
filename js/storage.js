@@ -126,6 +126,14 @@ const KEYS = {
   // and the server's id dedupe (AD-11, `scribe_wagerdue_<wagerId>`) collapses
   // them to one row, so this records what THIS device tried, not league state.
   WAGER_RESURFACED: 'cfbp_wager_resurfaced',
+  // Security seam finding on f16d87c (2026-09-26) — checkPickRevealDue()'s device ledger of weeks
+  // this device has already posted the pick reveal for. It predates the rule and reached raw
+  // localStorage from app.js; it now goes through load()/save() like WHATS_NEW_POSTED, under the SAME
+  // key name so no device re-fires a reveal it already posted. SCOPING GAP, recorded not fixed: the
+  // key carries no league or user, so on a device used for two leagues a weekId collision would
+  // suppress the second league's post on this device (other devices still post it — AD-11). A
+  // league/user-scoped key is the follow-up; renaming it now would re-fire every recent reveal once.
+  REVEAL_EMITTED: 'cfbp_reveal_emitted',
   // ── N1 / FEAT-11 (UN-204, DI-N1 gate 3, 2026-09-12) ──────────────────────
   // The device ledger of lifecycle notices this device has already posted to
   // the Locker Room. Array of the DETERMINISTIC chat ids it emitted
@@ -264,6 +272,7 @@ const KEYS = {
 //        written by a config read that succeeded.
 //      'cfbp_device_data_owner'      js/auth.js DEVICE_DATA_OWNER_KEY (DI-180q) — the account id + active league id this handset's local data belongs to; device-local (a fact about this handset), never synced, opaque ids only.
 //      'cfbp_supabase_mirror'        js/supabase-backend.js SNAPSHOT_KEY (Phase III Step 4, DI §5.3) — the last-good league snapshot the adapter paints from while a hydrate is in flight (ACTIVE-STALE) or while offline (OFFLINE-READONLY). Device-local because it IS the device's copy; written only from server truth, never while dirty, and it replaces 'cfbp_sheet_mirror' in dataMode:'supabase' (which the first Supabase boot then wipes, §6.1). Under the `cfbp_` prefix on purpose, so auth.js's F-1 handover sweep clears it with no new list entry, and read back through the adapter's exported hasDeviceSnapshot() rather than a second key literal.
+//      'cfbp_recovery_pending'       js/auth.js RECOVERY_PENDING_KEY (DI-334 Finding 1 / Security F-3) — the device-local "a password recovery is mid-flight" marker that survives a reload; written/read ONLY by auth.js (guarded write-then-read-back), never via load()/save(), so not in the Set below.
 //    All five are read/written by their OWNING module directly (the first four
 //    by auth.js, the fifth by supabase-backend.js) rather than through this
 //    seam, for the reasons above; none is in the Set below because none is ever
@@ -294,6 +303,9 @@ const DEVICE_LOCAL_KEYS = new Set([
   // let a phone with push on silence the in-app toast on the same player's
   // laptop, which has no push at all.
   KEYS.PUSH_ACTIVE,
+  // Seam finding (2026-09-26) — see the KEYS comment. Device-local for the same reason as
+  // WHATS_NEW_POSTED: a shared ledger would let the first device to post suppress the other five.
+  KEYS.REVEAL_EMITTED,
   'cfbp_backend_config',
   // DI-210b — see the KEYS comment above. Device-local for the same reason
   // SESSION is: a shared write would let one handset's scroll position bounce
@@ -774,8 +786,16 @@ export function getChatNickFor(playerId) {
 // EVERYTHING ON (opt-out model), matching the existing chat-prefs precedent
 // (`toasts`/`systemEvents` also default true) so a fresh install behaves
 // exactly like an explicit "leave it on" choice.
+// `commissionerOps` (DI-342, 2026-09-25) — the sixth category, the four
+// commissioner-operational reminder categories (SLATE_NOT_BUILT etc.).
+// Declared explicitly here (not left to the generic "an unlisted category
+// key defaults on" behaviour every reader of this object already has) per
+// security-reviewer's fix-round instruction: `_shared/job-rules.mjs`'s own
+// copy of this object (job-rules.mjs:224-226) is pinned against this one by
+// a twin, so the two must always declare the same set of keys.
 export const DEFAULT_NOTIFY_CATEGORIES = Object.freeze({
   chat: true, pickReminders: true, leagueUpdates: true, results: true, obligations: true,
+  commissionerOps: true,
 });
 
 // Session-scoped (own prefs) — used by the Notification Center's settings card.
@@ -881,6 +901,25 @@ export function setTheme(themeKey) {
   // been removed (app.js renderThemeToggle), so in practice this path is not
   // reachable while signed out — this is defense in depth, not the only gate.
   _setPlayerPref('theme', themeKey);
+}
+
+/**
+ * DI-331c (UX Revamp Group E, T-31/UN-287) — "Team logos" Settings toggle.
+ * Per-player preference, follows the player across devices (Architecture
+ * bullet 4). Default false/absent (CONVENTIONS #10) — existing players see
+ * no change until they opt in. No device-level `settings.logoView`
+ * fallback for a signed-out viewer: matches the CURRENT getTheme()/
+ * getTimezone() precedent above (UN-127, 2026-08-27) rather than those two
+ * functions' own now-superseded doc comments — a shared device must not
+ * carry one anonymous visitor's toggle into the next, the same reasoning
+ * that retired the theme/timezone device fallback. The control-center row
+ * (js/control-center.js `logoViewToggleRow()`) already writes this same
+ * `preferences.logoView` field directly via `patchPlayer()`; this accessor
+ * is the read side new render call sites (`renderGameCard()`,
+ * `renderDashboardCompact()`) use, per CONVENTIONS #8's getX/setX pattern.
+ */
+export function getLogoView() {
+  return _playerPref('logoView') === true;
 }
 
 /**
@@ -1189,6 +1228,26 @@ export function getEffectiveWeekStatus(week){
  */
 export function arePicksPublic(week){
   if(!week)return false;
+  // RG-253 (2026-09-26) — IN SUPABASE DATA MODE THE REVEAL IS THE SERVER'S, NOT THIS DEVICE'S.
+  // The mirror can hold a status the server never reached (a leg inside its debounce, or one the
+  // server refused — a refused key stays dirty and keeps its value), and on game day v0.25.1 left
+  // a commissioner's mirror at LIVE over a server at OPEN: every surface that asks this function —
+  // the chat pick chips, the reveal ritual, the matrix — went public on that one device while the
+  // other five were blind. So the status read here is the one the server CONFIRMED (the adapter's
+  // base row, advanced only by a hydrate, a Realtime event or an acknowledged RPC; before the first
+  // hydrate lands, the device snapshot, which is written only from server truth).
+  //   WHY FALLING BACK TO THE MIRROR WHEN THERE IS NO CONFIRMED ROW IS SAFE: `null` means the server
+  //   has never held this week on this page (a week this device created and has not sent yet), or
+  //   nothing is loaded at all. The server therefore holds no other member's pick for it and RLS has
+  //   never served one, so the mirror can contain only this device's OWN unsent rows — there is
+  //   nobody else's pick to reveal. The one PERMANENT surface, the reveal post, is gated separately
+  //   on the adapter's picksReadWhilePublic(), which is false for any week a hydrate did not read as
+  //   public (app.js checkPickRevealDue(), RG-255).
+  if(_backendMode==='supabase'){
+    let confirmed=null;
+    try{ confirmed=sb.getConfirmedWeekStatus(week.weekId); }catch{ confirmed=null; }
+    if(confirmed) week={...week,status:confirmed};
+  }
   const eff=getEffectiveWeekStatus(week);
   return eff==='live'||eff==='final'||week.status==='live'||week.status==='final';
 }
@@ -1366,14 +1425,49 @@ export function clearReactionsForWeek(weekId) {
 
 // ─── FEEDBACK / FEATURE REQUESTS ─────────────────────────────────────────────
 // Player-submitted feedback (Priority 13). Lives at KEYS.FEEDBACK as a list.
-// Each entry: { id, name, body, submittedAt, appVersion, siteUrl }.
-// Goes through load()/save() so it auto-syncs to the Google Sheet when cloud
-// sync is enabled — that's the "separate sheet" the priority asked for.
+// Each entry: { id, memberId, name, body, submittedAt, appVersion, siteUrl }.
+// Goes through load()/save() so it auto-syncs to the backend.
 export function getFeedback() { return load(KEYS.FEEDBACK) || []; }
+/**
+ * ══ B-05 (2026-09-25) — A FEEDBACK ENTRY CARRIES ITS AUTHOR ══════════════════
+ *
+ * The entry built by app.js submitFeedback() has a `name` (free text, typed
+ * into the form) but no author ID, so the projection emitted
+ * `member_id: null` (`supabase-projection.js` FEEDBACK_DEFAULTS), and
+ * `feedback_insert`'s WITH CHECK —
+ *   `is_member(league_id) and member_id = my_member_id(league_id)`
+ *   (supabase/migrations/0002_rls.sql:313)
+ * — evaluated `null = 'p3'` to SQL NULL. Postgres refuses anything that is not
+ * TRUE, so every submission since the 2026-09-19 cutover came back 42501 and
+ * raised the red sync banner. The row the policy is written about simply never
+ * carried the column the policy compares.
+ *
+ * Stamped HERE, on the record, rather than server-side in the adapter, because
+ * the value has to survive the ROUND TRIP: `rowFromLegacy()` records every
+ * unset column in `extra.__absent` and `legacyFromRow()` deletes those fields
+ * again on hydrate. An author grafted on below this layer would be stripped
+ * back out on the next hydrate, re-project as null, and diff into a PATCH —
+ * which `feedback_update` (is_commissioner) refuses for a player. Same banner,
+ * for ever. On the entry, `memberId` is present, so it round-trips exactly.
+ *
+ * Only the entry being appended is stamped. Rows already in the list are left
+ * alone: a commissioner's mirror holds every player's feedback (feedback_select
+ * is own-or-commissioner), and backfilling an author onto those would
+ * misattribute somebody else's submission. Legacy/imported rows keep
+ * `member_id: null`, which is what that column's DDL comment already says they
+ * carry. An entry that arrives with a `memberId` already set keeps it, and one
+ * submitted with NO session keeps the legacy shape (no `memberId` key at all)
+ * rather than gaining a null — `present()` treats a null-valued key as present,
+ * so writing one would change the round-trip for no gain: that row is refused
+ * by `is_member()` either way, loudly, which is the correct outcome.
+ */
 export function appendFeedback(entry) {
   const all = getFeedback();
-  all.push(entry);
+  const me = (() => { try { return getSession()?.playerId || null; } catch { return null; } })();
+  const authored = (!entry || entry.memberId || !me) ? entry : { ...entry, memberId: me };
+  all.push(authored);
   save(KEYS.FEEDBACK, all);
+  return authored;
 }
 export function clearFeedback() { save(KEYS.FEEDBACK, []); }
 
@@ -1447,6 +1541,23 @@ export function setWhatsNewPosted(version) {
   if (list.includes(version)) return;
   list.push(version);
   save(KEYS.WHATS_NEW_POSTED, list.slice(-20));
+}
+
+// ─── PICK REVEAL — DEVICE LEDGER (checkPickRevealDue, seam finding 2026-09-26) ──
+// The accessor pair CONVENTIONS #8 requires, replacing app.js's raw localStorage read/write of the
+// same key. Absent or garbage reads as [] — a false EMPTY costs one extra queued event the server's
+// id dedupe discards (sys_reveal_<weekId>, AD-11); the post is further gated on the blind rule and on
+// picksReadWhilePublic(), never on this list. Last 20 kept, as before.
+export function getRevealEmitted() {
+  const v = load(KEYS.REVEAL_EMITTED);
+  return Array.isArray(v) ? v : [];
+}
+export function setRevealEmitted(weekId) {
+  if (!weekId) return;
+  const list = getRevealEmitted();
+  if (list.includes(weekId)) return;
+  list.push(weekId);
+  save(KEYS.REVEAL_EMITTED, list.slice(-20));
 }
 
 // ─── WAGER RESURFACE — DEVICE LEDGER (FEAT-5 / DI-202g, UN-202) ─────────────

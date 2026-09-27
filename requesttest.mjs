@@ -426,18 +426,39 @@ console.log('\n[11] Append-only by construction…');
 // ═════════════════════════════════════════════════════════════════════════
 console.log('\n[12] Placement + the exact copy strings (DI-175a/g)…');
 {
+  // UPDATED — DI-304 (T-13/T-14, 2026-09-25, UX Revamp wiring pass 1) moves
+  // BOTH the game-request card and the feedback card OFF the Rules page
+  // entirely — the game-request card into the control-center drawer's Game
+  // settings accordion row (ctx.bodies.gameRequestHTML, via the UNCHANGED
+  // renderGameRequestCardHTML()), the feedback card into a newly-extracted
+  // renderFeedbackCardHTML() the same drawer embeds. DI-175a's "renders
+  // ABOVE the feedback card" ordering claim was specific to their shared
+  // Rules-page placement, which no longer exists — both cards are now
+  // reached via the SAME `js/control-center.js` accordion, in the row order
+  // that module's own renderSettingsAccordion() defines, not by adjacency
+  // in a Rules-page template literal. Re-verified here as an ABSENCE on the
+  // Rules page rather than silently dropped.
   const rulesSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-  const cardIdx = rulesSrc.indexOf('${renderGameRequestCardHTML()}');
-  const fbIdx   = rulesSrc.indexOf('<div class="card feedback-card">');
   const relIdx  = rulesSrc.indexOf('${renderReleaseNotesCardHTML()}');
-  assert(cardIdx > 0 && fbIdx > 0 && cardIdx < fbIdx,
-    'the request card renders ABOVE the feedback card on the Rules page (DI-175a)');
-  assert(relIdx > fbIdx, '…and FEAT-3\'s release-notes card still sits below it, above the version footer');
+  assert(relIdx > 0, '…and FEAT-3\'s release-notes card still renders on the Rules page, above the version footer');
 
   clearSession();
   app.renderRulesPage();
-  const html = document.getElementById('page-rules').innerHTML;
-  assert(html.includes('🙋 Request a Game'), 'the card reaches the rendered Rules page');
+  const rulesHtml = document.getElementById('page-rules').innerHTML;
+  // Matched on the CARD'S OWN markup marker, not the heading text — the
+  // release-notes card (renderReleaseNotesCardHTML(), still on Rules,
+  // unchanged) legitimately quotes "🙋 Request a Game" in its own changelog
+  // PROSE describing the historical feature (js/app.js:263's release-notes
+  // entry), which is not the card itself and must not read as a false
+  // positive here.
+  assert(!rulesHtml.includes('class="card gr-card"') && !rulesHtml.includes('class="card feedback-card"'),
+    'DI-304 — neither the game-request card nor the feedback card render on the Rules page anymore (both moved into the control-center drawer)');
+
+  // The card's OWN render function is unchanged and unmoved — only its host
+  // changed. Exercised directly, the same way js/control-center.js's
+  // ctx.bodies.gameRequestHTML embeds it.
+  const html = app.renderGameRequestCardHTML();
+  assert(html.includes('🙋 Request a Game'), 'renderGameRequestCardHTML() itself still renders the card, for its new host to embed');
   assert(html.includes("Want a game on an upcoming slate? Flag it for the commissioner now — even for a week that hasn't been built yet."),
     'body copy is verbatim DI-175g');
   assert(html.includes('Log in on the Picks tab to request a game.') && html.includes('>Go to Picks<'),

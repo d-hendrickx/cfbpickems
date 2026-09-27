@@ -1181,6 +1181,161 @@ await section('\n[A5] a status diff can never be sent as a PATCH (§2.1, weeks_s
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+await section('\n[A5b] RG-251 — a status diff that SKIPS a leg is refused, and the server-confirmed status is readable…', async () => {
+  // RG-251 (game day 2026-09-26): tickAutoTransition() wrote open->live in ONE save. The refusal
+  // below is the guard that caught it, and it is KEPT — the fix is in the caller (one leg per tick)
+  // and in the caller's reading of `getConfirmedWeekStatus()`, never in widening this list.
+  const legsOf = (plan) => plan.filter((o) => o.kind === 'finalize'
+    || (o.kind === 'rpc' && (o.name === 'lock_week' || o.name === 'transition_week')));
+  const atServer = async (status) => {
+    initAdapter({ who: 'commissioner' });
+    ST.weeks.find((w) => w.id === 'w1').status = status;
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  };
+  const moveMirror = (status) => {
+    const weeks = sb.get('cfbp_weeks').map((w) => ({ ...w }));
+    weeks.find((w) => w.weekId === 'w1').status = status;
+    sb.set('cfbp_weeks', weeks);
+  };
+
+  // (1) THE GUARD, KEPT — every diff that is two or more legs from the server's status is refused
+  //     client-side, with the server's own error name, and sends nothing for the week.
+  for (const [from, to] of [['open', 'live'], ['draft', 'locked'], ['draft', 'live'], ['open', 'final'], ['locked', 'final'], ['draft', 'final']]) {
+    await atServer(from);
+    moveMirror(to);
+    const r = sb.planFlush();
+    assert(r.refusals.length === 1 && r.refusals[0].code === 'bad_transition' && !legsOf(r.plan).length,
+      `[A5b] ${from} -> ${to} skips a leg: refused CLIENT-SIDE as bad_transition, no status RPC planned (refusals ${JSON.stringify(r.refusals.map((e) => e.code))}, legs ${legsOf(r.plan).length})`);
+  }
+  // (2) CONTROL — the single legs a one-leg-per-tick caller produces are each ONE RPC, nothing refused.
+  for (const [from, to, name] of [['open', 'locked', 'lock_week'], ['locked', 'live', 'transition_week'], ['live', 'final', 'finalize']]) {
+    await atServer(from);
+    moveMirror(to);
+    const r = sb.planFlush();
+    const legs = legsOf(r.plan);
+    assert(!r.refusals.length && legs.length === 1 && (legs[0].name || legs[0].kind) === name,
+      `[A5b] ${from} -> ${to} (one leg) plans exactly one ${name} and refuses nothing (got ${JSON.stringify(legs.map((o) => o.name || o.kind))})`);
+  }
+
+  // (3) getConfirmedWeekStatus() — the status the SERVER last confirmed, never the mirror's.
+  assert(typeof sb.getConfirmedWeekStatus === 'function', '[A5b] the adapter exports getConfirmedWeekStatus()');
+  if (typeof sb.getConfirmedWeekStatus !== 'function') return;
+  await atServer('open');
+  assert(sb.getConfirmedWeekStatus('w1') === 'open', '[A5b] after a hydrate it reports the server\'s status (open)');
+  assert(sb.getConfirmedWeekStatus('no-such-week') === null, '[A5b] an unknown week is null — the caller falls back to the mirror');
+  moveMirror('live');
+  assert(sb.getConfirmedWeekStatus('w1') === 'open' && sb.get('cfbp_weeks').find((w) => w.weekId === 'w1').status === 'live',
+    '[A5b] with an unsent status in the mirror it still reports OPEN — the mirror says live, the server does not');
+  await captureConsoleAsync(() => sb.flush());
+  assert(sb.getConfirmedWeekStatus('w1') === 'open' && ST.weeks.find((w) => w.id === 'w1').status === 'open'
+    && sb.get('cfbp_weeks').find((w) => w.weekId === 'w1').status === 'live',
+    '[A5b] after the refusal: server OPEN, confirmed OPEN, and the mirror STILL says live (the polluted state RG-251 left on the commissioner\'s device — the caller must read around it)');
+  // Recovery in-app: re-save the ONE leg the server allows, then Retry (a re-hydrate) releases the
+  // block the refusal set, and lock_week lands.
+  moveMirror('locked');
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.weeks.find((w) => w.id === 'w1').status === 'locked' && sb.getConfirmedWeekStatus('w1') === 'locked',
+    `[A5b] re-saving LOCKED and a re-hydrate (Retry) sends lock_week from the real base, and the confirmed status advances (server ${ST.weeks.find((w) => w.id === 'w1').status}, confirmed ${sb.getConfirmedWeekStatus('w1')})`);
+  captureConsole(() => sb._resetForTest());
+  assert(sb.getConfirmedWeekStatus('w1') === null, '[A5b] with no hydrated mirror it is null, never a stale guess');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A5c] RG-253 (SEC-2) — a week-status change is COMPARE-AND-SET: a leg made against one server status is never replayed over another…', async () => {
+  // SECURITY SEC-2 on dac4891. A hydrate re-applies a pending status edit over the fresh base
+  // (hydrate()'s rebase), and so does a Realtime fold (RG-252). The planner diffed base against
+  // mirror, so a phone that pressed Go Live against LOCKED and slept while another device took the
+  // week live and then FINAL woke up to plan final->live — which transition_week() allows — and
+  // reopened a finalized week. Now each leg carries the status it was made against; a moved base
+  // is refused LOUDLY and the server's status is taken.
+  const w1 = () => ST.weeks.find((w) => w.id === 'w1');
+  const mirrorW1 = () => sb.get('cfbp_weeks').find((w) => w.weekId === 'w1');
+  const setW1 = (patch) => sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w1' ? { ...w, ...patch } : { ...w })));
+  const legs = (plan) => plan.filter((o) => o.kind === 'finalize' || (o.kind === 'rpc' && (o.name === 'lock_week' || o.name === 'transition_week')));
+  const atServer = async (status) => {
+    initAdapter({ who: 'commissioner' });
+    w1().status = status;
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  };
+
+  // (1) THE REPRODUCTION — pending live over LOCKED; the server goes live and then final elsewhere.
+  await atServer('locked');
+  setW1({ status: 'live' });                                             // Go Live, not yet flushed
+  w1().status = 'final'; w1().finalized_at = new Date(NOW).toISOString(); // another device: locked->live->final
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(mirrorW1().status === 'live' && sb.getConfirmedWeekStatus('w1') === 'final',
+    '[A5c] (1) fixture: the wake-up hydrate re-applied the pending LIVE over a FINAL base (this IS the replay SEC-2 names)');
+  const r1 = captureConsole(() => sb.planFlush());
+  assert(!legs(r1.plan).length && r1.refusals.some((e) => e.code === 'status_moved'),
+    `[A5c] (1) the planner sends NO final->live transition — the leg is refused as status_moved (legs ${JSON.stringify(legs(r1.plan).map((o) => o.name || o.kind))}, refusals ${JSON.stringify(r1.refusals.map((e) => e.code))})`);
+  const b1 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(w1().status === 'final', `[A5c] (1) the finalized week is NOT reopened (server ${w1().status})`);
+  assert(mirrorW1().status === 'final', `[A5c] (1) the mirror takes the server's FINAL (mirror ${mirrorW1().status})`);
+  assert(bannerSeen.length > b1 && /is now final/.test(bannerSeen[bannerSeen.length - 1]),
+    `[A5c] (1) …LOUDLY: the red banner says the week is now final and the change was not applied (${bannerSeen[bannerSeen.length - 1]})`);
+  assert(!CLIENT._calls.rpc.some((c) => c.name === 'transition_week'), '[A5c] (1) no transition_week RPC ever reached the server');
+
+  // (2) CONTROL — the same pending leg over an UNMOVED base is sent, through the same hydrate.
+  await atServer('locked');
+  setW1({ status: 'live' });
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  await captureConsoleAsync(() => sb.flush());
+  assert(w1().status === 'live' && !sb._refusedKeysForTest().length,
+    `[A5c] (2) control: a pending leg whose base did NOT move still goes out after a hydrate (server ${w1().status})`);
+
+  // (3) CONTROL — the user's OWN chain across an acknowledged leg is not a "move".
+  await atServer('open');
+  setW1({ status: 'locked' });
+  await captureConsoleAsync(() => sb.flush());
+  setW1({ status: 'live' });                                             // pressed after the lock landed
+  const r3 = captureConsole(() => sb.planFlush());
+  assert(!r3.refusals.length && legs(r3.plan).length === 1 && legs(r3.plan)[0].name === 'transition_week',
+    `[A5c] (3) control: Lock landed, then Go Live — one transition_week from the acknowledged LOCKED, nothing refused (refusals ${JSON.stringify(r3.refusals.map((e) => e.code))})`);
+
+  // (4) THE SNAPSHOT BOOT (reviewer F1 / SEC-3) — a leg written while ACTIVE-STALE is made against
+  //     the SNAPSHOT's status. Here: snapshot OPEN, a Lock written before the hydrate, and meanwhile
+  //     the server went LIVE. Replayed, that is live->locked (allowed) — a live week PAUSED by a
+  //     phone that never saw it go live.
+  await atServer('open');
+  const snap = localStorage.getItem(sb._snapshotKeyForTest());
+  assert(!!snap, '[A5c] (4) fixture: an OPEN snapshot exists');
+  initAdapter({ who: 'commissioner' });
+  localStorage.setItem(sb._snapshotKeyForTest(), snap);
+  captureConsole(() => sb.primeFromSnapshot(OWNER, LEAGUE_A));
+  assert(sb.getState() === 'ACTIVE-STALE' && mirrorW1().status === 'open', '[A5c] (4) fixture: ACTIVE-STALE, painting the OPEN snapshot');
+  setW1({ status: 'locked' });                                           // the boot tick's lock, held
+  w1().status = 'live'; w1().revealed_at = new Date(NOW).toISOString();   // the server, meanwhile
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  const r4 = captureConsole(() => sb.planFlush());
+  assert(!legs(r4.plan).length && r4.refusals.some((e) => e.code === 'status_moved'),
+    `[A5c] (4) the held lock is NOT replayed as live->locked over the server's LIVE (legs ${JSON.stringify(legs(r4.plan).map((o) => o.name))}, refusals ${JSON.stringify(r4.refusals.map((e) => e.code))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(w1().status === 'live' && mirrorW1().status === 'live', `[A5c] (4) the live week stays LIVE, on the server and on this device (server ${w1().status}, mirror ${mirrorW1().status})`);
+
+  // (5) REVIEWER F5 — the refusal aborts planning for the WHOLE cfbp_weeks key; the OTHER week's
+  //     queued edit must still go out (one follow-up run), and the emit must carry what the app needs
+  //     to repaint and to word the notice (code, key, the moved rows — never only the storage key).
+  await atServer('locked');
+  setW1({ status: 'live' });                                             // pending leg, made against LOCKED
+  sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w2' ? { ...w, blurb: 'queued with it' } : { ...w })));
+  w1().status = 'final';                                                 // the server moved w1 elsewhere
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  const d5 = detailSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  const ref5 = detailSeen.slice(d5).find(([s, d]) => s === 'refused' && d && d.code === 'status_moved');
+  assert(!!ref5 && ref5[1].key === 'cfbp_weeks' && Array.isArray(ref5[1].moved) && ref5[1].moved[0].id === 'w1'
+    && ref5[1].moved[0].server === 'final' && ref5[1].moved[0].local === 'live',
+    `[A5c] (5) the refused emit carries code status_moved, the key and the moved rows (${JSON.stringify(ref5 && { key: ref5[1].key, code: ref5[1].code, moved: ref5[1].moved })})`);
+  await captureConsoleAsync(() => new Promise((r) => setTimeout(r, 20)));
+  const w2s = ST.weeks.find((w) => w.id === 'w2');
+  assert(w2s.blurb === 'queued with it' && w1().status === 'final',
+    `[A5c] (5) one follow-up run sends the OTHER week's queued edit, and w1 stays FINAL (w2 blurb ${JSON.stringify(w2s.blurb)}, w1 ${w1().status})`);
+  assert(!sb._dirtyKeysForTest().includes('cfbp_weeks'), `[A5c] (5) …and the key is clean afterwards (dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 await section('\n[A6] WRITE-DURING-SWITCH — the hard gate, all three layers (§3.3)…', async () => {
   // LAYER 1 — at save() time. During SWITCHING the probe is false, which is
   // what makes storage.save() throw AuthModeMismatchError before the mirror is
@@ -1711,6 +1866,48 @@ await section('\n[A11] the OFFLINE rule — all four conditions (§5.3, D-1(a))�
 });
 
 // ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-PRIME] RG-257 — a re-hydrate on a SERVING device never re-primes the mirror from the snapshot over unsent edits…', async () => {
+  // Found while fixing security F1 on f16d87c (2026-09-26). app.js's ensureSupabaseDataHydrated() —
+  // the tick's re-hydrate (Realtime not live, or the base > 5 min old), visibilitychange, online and
+  // the banner's Retry — calls primeFromSnapshot() before every hydrate. primeFromSnapshot() had no
+  // state guard: on an ACTIVE device holding a snapshot it replaced the mirror with the LAST CLEAN
+  // snapshot and emptied the base. A pick still inside its ~800 ms debounce vanished from the
+  // mirror, hydrate()'s rebase then captured the snapshot's value as the "local edit", the plan
+  // diffed to [] and the key was marked clean — RG-252's silent pick loss through another door.
+  await hydrated({ who: 'player' });
+  assert(sb.hasDeviceSnapshot() === true, '[A-PRIME] fixture: a clean hydrate persisted the device snapshot');
+  const all = sb.get('cfbp_picks').map((p) => ({ ...p }));
+  all.find((p) => p.pickId === 'pk2').selectedTeam = 'Iowa State';        // was Kansas — still in its debounce
+  sb.set('cfbp_picks', all);
+  const primed = captureConsole(() => sb.primeFromSnapshot(OWNER, LEAGUE_A));
+  assert(primed === 0 && sb.getState() === 'ACTIVE',
+    `[A-PRIME] priming a SERVING (ACTIVE) mirror is refused — the snapshot is older than what is on screen (primed ${primed}, state ${sb.getState()})`);
+  assert(sb.get('cfbp_picks').find((p) => p.pickId === 'pk2').selectedTeam === 'Iowa State',
+    '[A-PRIME] …and the unsent pick is still in the mirror');
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.picks.find((p) => p.id === 'pk2').selected_team === 'Iowa State',
+    `[A-PRIME] …and after the re-hydrate the pick reaches the server (server ${ST.picks.find((p) => p.id === 'pk2').selected_team})`);
+  // Dirty edits are protected in EVERY state, not only ACTIVE (a held write in ACTIVE-STALE is still owed).
+  await hydrated({ who: 'player' });
+  const snap = localStorage.getItem(sb._snapshotKeyForTest());
+  initAdapter({ who: 'player' });
+  localStorage.setItem(sb._snapshotKeyForTest(), snap);
+  captureConsole(() => sb.primeFromSnapshot(OWNER, LEAGUE_A));
+  const all2 = sb.get('cfbp_picks').map((p) => ({ ...p }));
+  all2.find((p) => p.pickId === 'pk2').selectedTeam = 'Iowa State';
+  sb.set('cfbp_picks', all2);                                             // a held write in ACTIVE-STALE
+  const primed2 = captureConsole(() => sb.primeFromSnapshot(OWNER, LEAGUE_A));
+  assert(primed2 === 0 && sb.get('cfbp_picks').find((p) => p.pickId === 'pk2').selectedTeam === 'Iowa State',
+    `[A-PRIME] a second prime over a DIRTY ACTIVE-STALE mirror is refused too — the held pick survives (primed ${primed2})`);
+  // Control: the boot prime (nothing loaded) still works.
+  initAdapter({ who: 'player' });
+  localStorage.setItem(sb._snapshotKeyForTest(), snap);
+  assert(captureConsole(() => sb.primeFromSnapshot(OWNER, LEAGUE_A)) > 0 && sb.getState() === 'ACTIVE-STALE',
+    '[A-PRIME] control: the boot prime over an empty mirror still paints the snapshot');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
 await section('\n[A12] Realtime: JOINED is not LIVE, and every event is token-checked (§4.2)…', async () => {
   await hydrated();
   const ch = sb.subscribeRealtime();
@@ -1789,6 +1986,279 @@ await section('\n[A12] Realtime: JOINED is not LIVE, and every event is token-ch
   sb.subscribeRealtime();
   assert(sb.unsubscribeRealtime() === true && sb.getStatus().realtime === 'off', 'unsubscribeRealtime() drops the channel');
   assert(sb.unsubscribeRealtime() === false, 'and is idempotent');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-RT1] RG-252 — a Realtime fold NEVER discards an unsent (dirty) edit; the echo of my own write stays a clean no-op…', async () => {
+  // RG-252 (found by the RG-251 bugfixer, 2026-09-26). `_foldRealtimeRow()` used to RE-PROJECT the
+  // whole key from the base on every event. For a key with an edit still inside its ~800 ms
+  // debounce that REPLACED the edit with the server's value: the player set pick A (flushed), set
+  // pick B, the Realtime echo of A landed while B was still queued, the mirror went back to A, the
+  // plan diffed to [] and the key was marked clean — B silently gone, no banner. The rule now is
+  // hydrate()'s own rebase rule, taken at ROW granularity: the base advances to what the server
+  // said; the rows/columns THIS device changed are re-applied on top; every other row is the
+  // server's. So nothing unsent is discarded, and nothing another device wrote is reverted.
+  const pickOf = (id) => (sb.get('cfbp_picks') || []).find((p) => p.pickId === id);
+  const setPick = (id, team) => {
+    const all = sb.get('cfbp_picks').map((p) => ({ ...p }));
+    const p = all.find((x) => x.pickId === id);
+    p.selectedTeam = team; p.updatedAt = new Date(NOW + 1000).toISOString();
+    sb.set('cfbp_picks', all);
+  };
+  const serverPick = (id) => ST.picks.find((p) => p.id === id).selected_team;
+  const handlerFor = (ch, table) => ch.channel._handlers.find((h) => h.cfg.table === table).cb;
+  const writes = () => CLIENT._calls.inserts.length + CLIENT._calls.updates.length + CLIENT._calls.deletes.length
+    + CLIENT._calls.rpc.filter((c) => ['patch_kv', 'lock_week', 'transition_week', 'finalize_week'].includes(c.name)).length;
+
+  // ── (1) PICKS — the reported reproduction, on a PLAYER device ─────────────────────────────────
+  await hydrated({ who: 'player' });
+  const chP = sb.subscribeRealtime();
+  const onPicks = handlerFor(chP, 'picks');
+  setPick('pk2', 'Iowa State');                                          // pick A
+  await captureConsoleAsync(() => sb.flush());
+  assert(serverPick('pk2') === 'Iowa State' && !sb._dirtyKeysForTest().includes('cfbp_picks'),
+    '[A-RT1] (1) fixture: pick A flushed and landed; the key is clean');
+  setPick('pk2', 'Kansas');                                              // pick B — still in its debounce
+  const echoA = { ...ST.picks.find((p) => p.id === 'pk2') };            // the server's row: A
+  captureConsole(() => onPicks({ eventType: 'UPDATE', new: echoA }));
+  assert(pickOf('pk2').selectedTeam === 'Kansas',
+    `[A-RT1] (1) the Realtime echo of A does NOT revert the unsent pick B in the mirror (mirror ${pickOf('pk2').selectedTeam})`);
+  assert(sb._dirtyKeysForTest().includes('cfbp_picks'), '[A-RT1] (1) …and the key is still DIRTY (B is still owed to the server)');
+  const planP = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_picks');
+  assert(planP.length === 1 && planP[0].op === 'patch' && planP[0].rowId === 'pk2' && planP[0].changed.selected_team === 'Kansas',
+    `[A-RT1] (1) …and the plan still carries B as one patch of pk2 (got ${JSON.stringify(planP.map((o) => [o.op, o.rowId, o.changed]))})`);
+  const bannersBefore1 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(serverPick('pk2') === 'Kansas' && !sb._dirtyKeysForTest().includes('cfbp_picks') && bannerSeen.length === bannersBefore1,
+    `[A-RT1] (1) …and B reaches the server; the key is clean; no banner (server ${serverPick('pk2')})`);
+  assert(serverPick('pk3') === 'Purdue', '[A-RT1] (1) the player\'s OTHER pick was never touched');
+
+  // ── (2) THE ECHO OF MY OWN WRITE — a clean key stays clean and nothing is sent ────────────────
+  const beforeEcho = JSON.stringify(sb.get('cfbp_picks'));
+  const w0 = writes();
+  captureConsole(() => onPicks({ eventType: 'UPDATE', new: { ...ST.picks.find((p) => p.id === 'pk2') } }));
+  assert(JSON.stringify(sb.get('cfbp_picks')) === beforeEcho, '[A-RT1] (2) the echo of my own landed write leaves the mirror byte-identical');
+  assert(!sb._dirtyKeysForTest().length, `[A-RT1] (2) …marks nothing dirty (dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(writes() === w0, '[A-RT1] (2) …and a flush after it sends NOTHING');
+
+  // ── (3) A GENUINE SERVER-SIDE CONFLICT STILL SURFACES THROUGH THE BANNER ─────────────────────
+  // B' is queued; meanwhile the commissioner locks the week (the Realtime weeks event reaches this
+  // phone). The fold keeps B' (it is still the player's intent), and the server's refusal of it is
+  // loud — the fold is never where a conflict gets decided.
+  setPick('pk3', 'Ohio State');
+  const wk = ST.weeks.find((w) => w.id === 'w1');
+  wk.status = 'locked';
+  captureConsole(() => handlerFor(chP, 'weeks')({ eventType: 'UPDATE', new: { ...wk } }));
+  assert(pickOf('pk3').selectedTeam === 'Ohio State' && sb._dirtyKeysForTest().includes('cfbp_picks'),
+    '[A-RT1] (3) a Realtime event on ANOTHER table leaves the queued pick exactly as the player set it');
+  const b3 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(serverPick('pk3') === 'Purdue' && bannerSeen.length > b3 && /refused to save cfbp_picks/.test(bannerSeen[bannerSeen.length - 1]),
+    `[A-RT1] (3) …and the server's refusal of it is LOUD — the red banner names cfbp_picks (last banner: ${bannerSeen[bannerSeen.length - 1]})`);
+  assert(sb._dirtyKeysForTest().includes('cfbp_picks'), '[A-RT1] (3) …and the refused pick is still named as unsaved, never marked clean');
+
+  // ── (4) ANOTHER DEVICE'S ROW IS TAKEN, MY ROW IS KEPT — no widening, no revert ───────────────
+  await hydrated({ who: 'commissioner' });
+  const chW = sb.subscribeRealtime();
+  const onWeeks = handlerFor(chW, 'weeks');
+  const weeksNow = () => sb.get('cfbp_weeks');
+  const setWeek = (id, patch) => sb.set('cfbp_weeks', weeksNow().map((w) => (w.weekId === id ? { ...w, ...patch } : { ...w })));
+  setWeek('w2', { blurb: 'my unsent blurb' });                         // this device: w2, queued
+  const w1s = ST.weeks.find((w) => w.id === 'w1');
+  w1s.label = 'Week 1 (renamed elsewhere)';                            // another device: w1, landed
+  captureConsole(() => onWeeks({ eventType: 'UPDATE', new: { ...w1s } }));
+  const m1 = weeksNow().find((w) => w.weekId === 'w1');
+  const m2 = weeksNow().find((w) => w.weekId === 'w2');
+  assert(m2.blurb === 'my unsent blurb', `[A-RT1] (4) my unsent w2 blurb survives the w1 event (mirror ${JSON.stringify(m2.blurb)})`);
+  assert(m1.label === 'Week 1 (renamed elsewhere)', '[A-RT1] (4) …and the other device\'s w1 rename IS in the mirror');
+  const planW = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_weeks');
+  assert(planW.length === 1 && planW[0].op === 'patch' && planW[0].rowId === 'w2' && JSON.stringify(Object.keys(planW[0].changed)) === '["blurb"]',
+    `[A-RT1] (4) …and the plan is exactly my w2 blurb — nothing that would revert w1 (got ${JSON.stringify(planW.map((o) => [o.op, o.rowId, o.changed]))})`);
+
+  // ── (5) A PENDING STATUS LEG SURVIVES AN EVENT THAT DID NOT MOVE THE STATUS ───────────────────
+  await hydrated({ who: 'commissioner' });
+  const onWeeks5 = handlerFor(sb.subscribeRealtime(), 'weeks');
+  setWeek('w1', { status: 'locked' });                                  // Lock Week pressed, in debounce
+  const w1b = ST.weeks.find((w) => w.id === 'w1');
+  w1b.blurb = 'blurb from the other device';
+  captureConsole(() => onWeeks5({ eventType: 'UPDATE', new: { ...w1b } }));
+  assert(weeksNow().find((w) => w.weekId === 'w1').status === 'locked' && sb.getConfirmedWeekStatus('w1') === 'open',
+    '[A-RT1] (5) the queued Lock survives an unrelated w1 event (mirror locked, confirmed still open)');
+  const plan5 = captureConsole(() => sb.planFlush());
+  assert(plan5.plan.some((o) => o.name === 'lock_week') && !plan5.refusals.length,
+    `[A-RT1] (5) …and lock_week is still planned, nothing refused (refusals ${JSON.stringify(plan5.refusals.map((e) => e.code))})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.weeks.find((w) => w.id === 'w1').status === 'locked' && ST.weeks.find((w) => w.id === 'w1').blurb === 'blurb from the other device',
+    '[A-RT1] (5) …and it lands, without overwriting the other device\'s blurb');
+
+  // ── (6) RG-251 — a REFUSED leg is kept while the server's status is where it was refused… ─────
+  await hydrated({ who: 'commissioner' });
+  const onWeeks6 = handlerFor(sb.subscribeRealtime(), 'weeks');
+  setWeek('w1', { status: 'live' });                                    // open -> live: refused client-side
+  await captureConsoleAsync(() => sb.flush());
+  assert(sb._refusedKeysForTest().includes('cfbp_weeks') && ST.weeks.find((w) => w.id === 'w1').status === 'open',
+    '[A-RT1] (6) fixture: the open->live leg is REFUSED and the server is still OPEN');
+  const w1c = ST.weeks.find((w) => w.id === 'w1');
+  w1c.blurb = 'renamed while refused';
+  captureConsole(() => onWeeks6({ eventType: 'UPDATE', new: { ...w1c } }));
+  assert(sb.getConfirmedWeekStatus('w1') === 'open' && weeksNow().find((w) => w.weekId === 'w1').blurb === 'renamed while refused',
+    '[A-RT1] (6) a Realtime OPEN event advances the base (confirmed open) and brings the other device\'s change in');
+  assert(weeksNow().find((w) => w.weekId === 'w1').status === 'live',
+    '[A-RT1] (6) …the mirror still holds the refused LIVE, exactly as flush() left it (the fold neither drops it nor decides it)');
+  assert(sb._dirtyKeysForTest().includes('cfbp_weeks') && sb._refusedKeysForTest().includes('cfbp_weeks'),
+    '[A-RT1] (6) …and the refused key is NOT quietly marked clean by the fold — it stays dirty and named');
+  const b6 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(bannerSeen.length > b6 && /cfbp_weeks/.test(bannerSeen[bannerSeen.length - 1]) && /open to live/.test(String(sb.getStatus().lastError))
+    && ST.weeks.find((w) => w.id === 'w1').status === 'open',
+    `[A-RT1] (6) …so the next flush is still LOUD about it, and still sends nothing (last banner: ${bannerSeen[bannerSeen.length - 1]}; lastError: ${sb.getStatus().lastError})`);
+
+  // ── (7) …but NEVER RESURRECTED once the server's status moves under it ─────────────────────────
+  // Another commissioner device locks the week. OPEN->LIVE was refused; LOCKED->LIVE is allowed, so
+  // a 'live' re-applied over the new base would plan a leg nobody chose. The fold keeps the edit
+  // (RG-252 — it never decides a conflict); the planner's compare-and-set (RG-253) refuses the moved
+  // leg LOUDLY and takes the server's status.
+  const w1d = ST.weeks.find((w) => w.id === 'w1');
+  w1d.status = 'locked'; w1d.locked_at = new Date(NOW).toISOString();
+  captureConsole(() => onWeeks6({ eventType: 'UPDATE', new: { ...w1d } }));
+  assert(sb.getConfirmedWeekStatus('w1') === 'locked', '[A-RT1] (7) the Realtime LOCKED event advances the confirmed status');
+  const plan7 = captureConsole(() => sb.planFlush());
+  assert(!plan7.plan.some((o) => o.name === 'transition_week' || o.kind === 'finalize')
+    && plan7.refusals.some((e) => e.code === 'status_moved'),
+    `[A-RT1] (7) NO transition_week(live) is planned from the moved base — the leg is refused as status_moved (plan ${JSON.stringify(plan7.plan.map((o) => o.name || o.op))}, refusals ${JSON.stringify(plan7.refusals.map((e) => e.code))})`);
+  const b7 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  const m7 = weeksNow().find((w) => w.weekId === 'w1');
+  assert(ST.weeks.find((w) => w.id === 'w1').status === 'locked' && m7.status === 'locked',
+    `[A-RT1] (7) the server stays LOCKED and the mirror takes the server's LOCKED (mirror ${m7.status})`);
+  assert(bannerSeen.length > b7 && /is now locked/.test(bannerSeen[bannerSeen.length - 1]),
+    `[A-RT1] (7) …and it is LOUD: the banner says the week is now locked and the change was not applied (last banner: ${bannerSeen[bannerSeen.length - 1]})`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(!sb._dirtyKeysForTest().includes('cfbp_weeks') && !sb._refusedKeysForTest().includes('cfbp_weeks') && sb.getStatus().lastError === null,
+    `[A-RT1] (7) the next flush finds nothing left to save: the key is clean and its latch released (RG-254) (lastError ${sb.getStatus().lastError})`);
+
+  // ── (8) SETTINGS (league_kv) — a queued field-scoped write survives another field's event ─────
+  await hydrated({ who: 'commissioner' });
+  const onKv = handlerFor(sb.subscribeRealtime(), 'league_kv');
+  sb.set('cfbp_settings', { ...sb.get('cfbp_settings'), chatEnabled: false }, ['chatEnabled']);
+  const kvRow = ST.league_kv.find((r) => r.key === 'settings');
+  kvRow.value = { ...kvRow.value, autoRefreshInterval: 30 };            // another device, another field
+  captureConsole(() => onKv({ eventType: 'UPDATE', new: { ...kvRow } }));
+  const s8 = sb.get('cfbp_settings');
+  assert(s8.chatEnabled === false && s8.autoRefreshInterval === 30,
+    `[A-RT1] (8) settings: my queued chatEnabled=false survives, and the other device's autoRefreshInterval=30 arrives (got chatEnabled ${s8.chatEnabled}, interval ${s8.autoRefreshInterval})`);
+  const plan8 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_settings');
+  assert(plan8.length === 1 && JSON.stringify(Object.keys(plan8[0].args.p_value)) === '["chatEnabled"]' && plan8[0].args.p_mode === 'merge',
+    `[A-RT1] (8) …and the patch is exactly the field I changed, merged (got ${JSON.stringify(plan8.map((o) => o.args))})`);
+
+  // ── (9) COMMENTS — not on the Realtime channel today, but the fold is generic: prove it for rows
+  //        a player INSERTED (an unsent comment) against another member's INSERT. ───────────────
+  await hydrated({ who: 'player' });
+  const foldSeam = typeof sb._foldRealtimeRowForTest === 'function' ? sb._foldRealtimeRowForTest : null;
+  assert(!!foldSeam, '[A-RT1] (9) the fold is reachable for a table the channel does not bind (_foldRealtimeRowForTest)');
+  if (foldSeam) {
+    sb.set('cfbp_comments', [...sb.get('cfbp_comments'), {
+      commentId: 'c_mine', weekId: 'w1', gameId: 'g1', authorId: 'p2', authorKind: 'player',
+      botEventKey: null, body: 'my unsent comment', createdAt: new Date(NOW).toISOString(),
+    }]);
+    const theirs = row({ league_id: LEAGUE_A, id: 'c_theirs', week_id: 'w1', game_id: 'g1', author_id: 'p1', author_member_id: 'p1', author_kind: 'player', bot_event_key: null, body: 'from the commissioner', created_at: new Date(NOW + 5e3).toISOString() });
+    ST.comments.push(theirs);
+    captureConsole(() => foldSeam('comments', { eventType: 'INSERT', new: { ...theirs } }));
+    const ids = sb.get('cfbp_comments').map((c) => c.commentId).sort();
+    assert(ids.includes('c_mine') && ids.includes('c_theirs'),
+      `[A-RT1] (9) comments: my unsent comment AND the other member's new one are both in the mirror (got ${JSON.stringify(ids)})`);
+    const plan9 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_comments');
+    assert(plan9.length === 1 && plan9[0].op === 'insert' && plan9[0].rows.length === 1 && plan9[0].rows[0].id === 'c_mine',
+      `[A-RT1] (9) …and the plan inserts exactly mine — no delete of theirs, no second copy (got ${JSON.stringify(plan9.map((o) => [o.op, (o.rows || []).map((r) => r.id), o.rowId]))})`);
+  }
+
+  // ── (10) SECURITY F4 on f16d87c — a Realtime DELETE of a row with a pending PATCH drops the patch;
+  //         a pending INSERT survives. Never re-create a row the server just removed. ─────────────
+  await hydrated({ who: 'player' });
+  const onPicks10 = handlerFor(sb.subscribeRealtime(), 'picks');
+  setPick('pk3', 'Ohio State');                                          // pending PATCH of pk3
+  sb.set('cfbp_picks', [...sb.get('cfbp_picks').map((p) => ({ ...p })), {   // pending INSERT of a new pick
+    pickId: 'pk_new10', weekId: 'w1', gameId: 'g1', playerId: 'p2', selectedTeam: 'Kansas',
+    selectedAt: new Date(NOW).toISOString(), updatedAt: new Date(NOW).toISOString(), locked: false, result: 'pending',
+  }]);
+  ST.picks = ST.picks.filter((p) => p.id !== 'pk3');                     // the server deletes pk3 (its game went away)
+  captureConsole(() => onPicks10({ eventType: 'DELETE', old: { id: 'pk3', league_id: LEAGUE_A } }));
+  assert(!pickOf('pk3') && said(/deleted on the server/),
+    '[A-RT1] (10) the pending PATCH of a row the server DELETED is dropped (and said so), not re-created in the mirror');
+  assert(!!pickOf('pk_new10'), '[A-RT1] (10) …while a pending INSERT of a different row survives the DELETE');
+  const plan10 = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_picks');
+  assert(!plan10.some((o) => o.op === 'insert' && o.rows.some((r) => r.id === 'pk3'))
+    && plan10.some((o) => o.op === 'insert' && o.rows.some((r) => r.id === 'pk_new10')),
+    `[A-RT1] (10) …so the plan never INSERTs pk3 back, and still inserts the new pick (${JSON.stringify(plan10.map((o) => [o.op, (o.rows || []).map((r) => r.id), o.rowId]))})`);
+
+  // ── (11) SECURITY F5 on f16d87c — the fold re-applies only an edit captured under THIS mirror's
+  //         token, exactly as hydrate()'s rebase does; any other is left to planFlush()'s loud refusal.
+  await hydrated({ who: 'player' });
+  if (foldSeam) {
+    EPOCH = 8;                                                           // the edit is captured under another identity epoch
+    setPick('pk2', 'Iowa State');
+    EPOCH = 7;
+    captureConsole(() => foldSeam('picks', { eventType: 'UPDATE', new: { ...ST.picks.find((p) => p.id === 'pk3') } }));
+    assert(pickOf('pk2').selectedTeam === 'Kansas',
+      `[A-RT1] (11) an edit captured under another epoch is NOT grafted onto this mirror by the fold (mirror ${pickOf('pk2').selectedTeam})`);
+    const r11 = captureConsole(() => sb.planFlush());
+    assert(r11.stale.some((s) => s.key === 'cfbp_picks') && !r11.plan.some((o) => o.key === 'cfbp_picks'),
+      '[A-RT1] (11) …it stays dirty and planFlush() refuses it as write-during-switch (loud), sending nothing');
+  }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-RT2] RG-255 (SEC-1) — a week that goes public over Realtime is RE-READ, and the reveal read is tracked…', async () => {
+  // The reveal changes no picks row, so no picks event follows it: after a Realtime weeks event to
+  // LIVE this device holds only its own picks for a week every screen now treats as public. The
+  // adapter re-reads once (the post-join probe's own path), and `picksReadWhilePublic()` tells a
+  // caller building something permanent from the picks whether such a read has landed.
+  await hydrated({ who: 'player' });
+  // Reviewer F3 — a week counts only if it was ALREADY public when the read began (the selects run
+  // in parallel, so the FIRST read that sees it public may have read picks before the reveal).
+  assert(sb.picksReadWhilePublic('w2') === false,
+    '[A-RT2] the FIRST hydrate that sees w2 live does not count it — nothing proves its picks read came after the reveal');
+  await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  assert(sb.picksReadWhilePublic('w2') === true && sb.picksReadWhilePublic('w1') === false,
+    '[A-RT2] a hydrate that began with w2 already live counts it (w2 live: yes; w1 open: no)');
+  // THE STRADDLE — w1 goes live on the server while a hydrate is in flight (no Realtime event yet).
+  // The read sees weeks=live; its picks read may predate the commit. It must NOT count.
+  {
+    const w1s = ST.weeks.find((w) => w.id === 'w1');
+    const hydrating = sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH });     // requests issued: w1 still open in the base
+    w1s.status = 'live'; w1s.revealed_at = new Date(NOW).toISOString(); // the reveal commits mid-read
+    await captureConsoleAsync(() => hydrating);
+    assert(sb.getConfirmedWeekStatus('w1') === 'live' && sb.picksReadWhilePublic('w1') === false,
+      '[A-RT2] a hydrate that STRADDLES the reveal (w1 open when it began, live in its answer) does not count w1 as read while public');
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+    assert(sb.picksReadWhilePublic('w1') === true, '[A-RT2] …the next hydrate, begun with w1 already live, does');
+    w1s.status = 'open'; w1s.revealed_at = null;                   // back to the fixture for the Realtime half
+    await captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+  }
+  assert(!(sb.get('cfbp_picks') || []).some((p) => p.weekId === 'w1' && p.playerId !== 'p2'),
+    '[A-RT2] fixture: on OPEN w1 the player holds only his own picks (RLS)');
+  const ch = sb.subscribeRealtime();
+  const onWeeks = ch.channel._handlers.find((h) => h.cfg.table === 'weeks').cb;
+  const selects0 = CLIENT._calls.selects.length;
+  // An update to a week that was ALREADY public triggers nothing.
+  captureConsole(() => onWeeks({ eventType: 'UPDATE', new: { ...ST.weeks.find((w) => w.id === 'w2'), blurb: 'x' } }));
+  await new Promise((r) => setTimeout(r, 5));
+  assert(CLIENT._calls.selects.length === selects0, '[A-RT2] an event on an already-public week does NOT re-read');
+  // w1 goes LIVE on the server; the event reaches this phone.
+  const w1 = ST.weeks.find((w) => w.id === 'w1');
+  w1.status = 'live'; w1.revealed_at = new Date(NOW).toISOString();
+  captureConsole(() => onWeeks({ eventType: 'UPDATE', new: { ...w1 } }));
+  assert(sb.getConfirmedWeekStatus('w1') === 'live' && sb.picksReadWhilePublic('w1') === false,
+    '[A-RT2] the event makes w1 public in the base at once — and it is NOT yet counted as read while public');
+  await captureConsoleAsync(() => new Promise((r) => setTimeout(r, 10)));
+  assert(CLIENT._calls.selects.length > selects0, '[A-RT2] …and a re-read is scheduled by the event itself');
+  assert(sb.picksReadWhilePublic('w1') === true,
+    '[A-RT2] once that re-read lands, w1 counts as read while public');
+  assert((sb.get('cfbp_picks') || []).some((p) => p.weekId === 'w1' && p.playerId === 'p1'),
+    '[A-RT2] …and the other member\'s w1 pick is now on this device (the dashboard is no longer half-blank)');
+  captureConsole(() => sb._resetForTest());
+  assert(sb.picksReadWhilePublic('w2') === false, '[A-RT2] with no mirror it is false, never a stale yes');
 });
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -2319,6 +2789,8 @@ await section('\n[security F-3] the authorization tables are FROZEN…', async (
     'membership still reads correctly: homeScore is in the overlay list and spread is not');
   assert(t.PROBE_TRUE_STATES.includes('ACTIVE') && !t.PROBE_TRUE_STATES.includes('HELD'),
     'and the probe list still contains ACTIVE and not HELD');
+  assert(!t.TRANSITION_ALLOWED.includes('live>locked'),
+    '[F6] live>locked is NOT in the planner allow-list — unreachable server-side (transition_week raises use_lock_week for any p_to=locked; lock_week requires open)');
   assert(t.TRANSITION_ALLOWED.includes('locked>live') && !t.TRANSITION_ALLOWED.includes('final>open'),
     'and the transition list still contains locked>live and not final>open');
 
@@ -3930,6 +4402,58 @@ await section('\n[A-LATCH] the refusal latch may not outlive the thing it descri
     `[A-LATCH] …and no 'synced' is emitted while it is unsaved (reviewer F6 intact) (${JSON.stringify(statuses.map(([s]) => s))})`);
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-LATCH2] RG-254 — the refusal latch describes what is refused NOW, never an older refusal…', async () => {
+  // Found by the RG-251 bugfixer (2026-09-26). After a refused OPEN->LIVE leg the latch held the
+  // key until a hydrate landed, whatever it planned next — so the commissioner's valid re-save
+  // (Lock Week) was withheld too, and every later flush re-raised "Refusing to move … from open to
+  // live" about a leg nobody was asking for any more. The latch now records WHAT it refused.
+  const w1 = () => ST.weeks.find((w) => w.id === 'w1');
+  const setW1 = (patch) => sb.set('cfbp_weeks', sb.get('cfbp_weeks').map((w) => (w.weekId === 'w1' ? { ...w, ...patch } : { ...w })));
+  const lastBanner = () => bannerSeen[bannerSeen.length - 1] || '';
+  const lastStatus = () => statuses[statuses.length - 1] && statuses[statuses.length - 1][0];
+
+  // (1) THE REPORTED SYMPTOM — a refused leg, then a VALID re-save, with no hydrate in between.
+  await hydrated({ who: 'commissioner' });
+  setW1({ status: 'live' });
+  await captureConsoleAsync(() => sb.flush());
+  assert(/open to live/.test(String(sb.getStatus().lastError)) && sb._refusedKeysForTest().includes('cfbp_weeks'),
+    '[A-LATCH2] (1) fixture: OPEN->LIVE is refused and latched');
+  setW1({ status: 'locked' });                                            // the one leg the server allows
+  const b1 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(w1().status === 'locked', `[A-LATCH2] (1) the valid re-save is SENT at once — lock_week lands without waiting for a hydrate (server ${w1().status})`);
+  assert(sb.getStatus().lastError === null && !sb._refusedKeysForTest().length && lastStatus() === 'synced',
+    `[A-LATCH2] (1) …and the latch, the error text and the banner all come down ('synced'; lastError ${sb.getStatus().lastError})`);
+  assert(!bannerSeen.slice(b1).some((b) => /open to live/.test(b)),
+    '[A-LATCH2] (1) …and the stale "open to live" sentence is never raised again after the re-save');
+
+  // (2) TWO REFUSALS, ONE FIXED — the banner names the one still refused, in its own words.
+  await hydrated({ who: 'commissioner' });
+  setW1({ status: 'live' });                                              // planner refusal (weeks)
+  sb.set('cfbp_picks', sb.get('cfbp_picks').map((p) => (p.pickId === 'pk4' ? { ...p, selectedTeam: 'Nebraska' } : { ...p })));
+  await captureConsoleAsync(() => sb.flush());                          // pk4 is on a LIVE week: the server refuses it
+  assert(JSON.stringify(sb._refusedKeysForTest().sort()) === '["cfbp_picks","cfbp_weeks"]',
+    `[A-LATCH2] (2) fixture: both keys refused (${JSON.stringify(sb._refusedKeysForTest())})`);
+  setW1({ status: 'locked' });
+  const b2 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(w1().status === 'locked' && JSON.stringify(sb._refusedKeysForTest()) === '["cfbp_picks"]',
+    `[A-LATCH2] (2) the fixed key saves and is released; the other stays latched (${JSON.stringify(sb._refusedKeysForTest())})`);
+  assert(bannerSeen.length > b2 && !/open to live/.test(lastBanner()) && /policy matched no row/.test(lastBanner()),
+    `[A-LATCH2] (2) the banner now speaks for cfbp_picks, not for the saved week (${lastBanner()})`);
+  assert(!/open to live/.test(String(sb.getStatus().lastError)), `[A-LATCH2] (2) …and so does lastError (${sb.getStatus().lastError})`);
+
+  // (3) AN IDENTICAL PLAN IS STILL NOT RETRIED BLINDLY (§5.2) — the loud-fail half is unchanged.
+  const pickUpdates = () => CLIENT._calls.updates.filter((u) => u.table === 'picks').length;
+  const u3 = pickUpdates();
+  const b3 = bannerSeen.length;
+  await captureConsoleAsync(() => sb.flush());
+  assert(pickUpdates() === u3, '[A-LATCH2] (3) the refused pick is NOT re-sent while it plans the same thing');
+  assert(bannerSeen.length > b3 && lastStatus() === 'refused' && sb._dirtyKeysForTest().includes('cfbp_picks'),
+    '[A-LATCH2] (3) …and the banner stays up, the pick still named as unsaved');
+});
+
 await section('\n[A-RETRY] a transient write failure is retried automatically, bounded, before any red banner…', async () => {
   // ── 1. FAILS, THEN SUCCEEDS: no red banner, one successful write, no duplicate ──────────────
   const timers = makeFakeTimers();
@@ -4148,8 +4672,16 @@ await section('\n[A-RETRY] a transient write failure is retried automatically, b
     while (t10.count() && guard++ < 6) await captureConsoleAsync(() => t10.runNext());
     assert(bannersSince(m10).some((t) => /bad_transition|Nothing was saved|Refusing to finalize/i.test(t)),
       `[A-RETRY9] (b) a GENUINE bad transition still ends RED — the re-read is a check, not a silencer (${JSON.stringify(bannersSince(m10))})`);
-    assert(sb._dirtyKeysForTest().includes('cfbp_weeks'),
-      `[A-RETRY9] (b) …with the change still queued and still named as unsaved (${JSON.stringify(sb._dirtyKeysForTest())})`);
+    // AMENDED 2026-09-26 (RG-253 compare-and-set + reviewer F5): the finalize was made against LIVE and
+    // the server has since moved the week to LOCKED, so the re-read is where the compare-and-set sees
+    // the move — the leg is refused LOUDLY as status_moved (the red banner above), the mirror takes the
+    // server's LOCKED, and one follow-up run finds nothing left to send. It is no longer "queued":
+    // it was a leg from a status the week is no longer at. What must still hold is that it was NOT
+    // silently dropped (the banner) and NOT sent (the server is still LOCKED).
+    assert(ST.weeks.find((w) => w.id === 'w2').status === 'locked'
+      && sb.get('cfbp_weeks').find((w) => w.weekId === 'w2').status === 'locked'
+      && bannersSince(m10).some((t) => /status moved|now locked/i.test(t)),
+      `[A-RETRY9] (b) …the refused leg was never sent (server still LOCKED), the device shows the server's LOCKED, and the banner says the status moved (${JSON.stringify(bannersSince(m10))})`);
   }
 
   // ── 8. THE JITTER IS REAL AND BOUNDED ───────────────────────────────────────────────────────

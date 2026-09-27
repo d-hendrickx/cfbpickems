@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v25-1';
+const CACHE_NAME = 'cfb-pickems-v26-0';
 
 const STATIC_ASSETS = [
   './',
@@ -155,6 +155,23 @@ const STATIC_ASSETS = [
   // it does as of the v0.23.0 release cut (spawn [93], ratcheted floor), so this list is now covered
   // by the mandatory sweep.
   './js/push-selftest.js',
+  // UX Revamp wiring pass 1 (2026-09-25) — nine new modules, all statically
+  // imported by app.js as of this wiring window (control-center.js also by
+  // its own mount call site; nav-gestures.js/haptics.js also by chat-ui.js),
+  // boot-critical for exactly the same reason as every entry above: a shell
+  // cache one module short serves a graph that cannot resolve (RG-03's blank
+  // app, arriving through the cache instead of through a typo). Caught by
+  // notifytest [25e] this same window (its STATIC_ASSETS completeness scan
+  // was reporting four of these as missing before this edit).
+  './js/nav-gestures.js',
+  './js/haptics.js',
+  './js/icons.js',
+  './js/roles.js',
+  './js/leagues-home.js',
+  './js/week-wizard.js',
+  './js/control-center.js',
+  './js/admin-panel.js',
+  './js/comm-panel-layout.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',
@@ -254,10 +271,35 @@ self.addEventListener('fetch', event => {
   event.respondWith(networkFirst(event.request, true));
 });
 
+// ── DI-334 FINDING 6 (UX Revamp, Group F "Accounts") — A RESET/RECOVERY/OAUTH
+// NAVIGATION MUST NEVER BE CACHED. ───────────────────────────────────────────
+// Such a navigation carries a ONE-TIME CREDENTIAL in its own URL — `token_hash`
+// + `type=recovery` on the new email/password reset-landing path (DI-334), or
+// `code`/`access_token`/`refresh_token` on the existing OAuth paths this app
+// already used before this DI. Cache Storage keys on the FULL request URL with
+// NO `ignoreSearch` (same reasoning as the SEC S-6 block above — DO NOT ADD
+// `ignoreSearch` HERE EITHER, for the identical stale-read hazard), so a
+// cached copy of that exact URL is a cached copy of the credential's carrier:
+// anyone who later loads the same offline-cached page (a different session, a
+// shared/borrowed device reading from disk rather than the network) would
+// receive the ORIGINAL one-time token back. The network response is still
+// returned to the page NORMALLY either way — only the `cache.put()` below is
+// skipped. `boottest.mjs` gains an assertion beside its existing
+// service-worker caching test proving a URL carrying one of these params is
+// never cached.
+function _carriesOneTimeAuthCredential(requestUrl) {
+  let params;
+  try { params = new URL(requestUrl).searchParams; } catch (_) { return false; }
+  if (params.has('code') || params.has('token_hash') || params.has('access_token') || params.has('refresh_token')) return true;
+  if (params.get('type') === 'recovery') return true;
+  return false;
+}
+
 async function networkFirst(request, cacheOnSuccess) {
   try {
     const response = await fetch(request);
-    if (cacheOnSuccess && response && response.ok && response.type === 'basic') {
+    const skipCache = _carriesOneTimeAuthCredential(request.url);
+    if (cacheOnSuccess && !skipCache && response && response.ok && response.type === 'basic') {
       // Only cache same-origin successful responses; never cache opaque
       // (cross-origin no-cors) or error responses.
       try {

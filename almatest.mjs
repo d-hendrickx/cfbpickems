@@ -1956,7 +1956,11 @@ console.log('\n[17] BUG-1 — Alma Mater Watch / Rankings sort by CURRENT AP ran
   assert(lockedReads > 0, 'fixture check: lockedAlmaMaters IS referenced in app.js (not a vacuous scan)');
   const watchFnSrc = fnBodySrc(appSrcOrd, 'export function renderAlmaMaterWatch');
   const rankFnSrc  = fnBodySrc(appSrcOrd, 'export function renderAlmaMaterRankings');
-  assert(watchFnSrc.trimEnd().endsWith('}') && watchFnSrc.includes('⭐ Alma Mater Watch'),
+  // UPDATED — DI-330 (Group E, 2026-09-25, UX Revamp wiring pass 1) replaces
+  // the literal ⭐ with icon('almaMater') at this exact heading (AD-93 —
+  // chrome moves to the Munera icon family). The marker text this fixture
+  // check looks for moves with it.
+  assert(watchFnSrc.trimEnd().endsWith('}') && watchFnSrc.includes("icon('almaMater')") && watchFnSrc.includes('Alma Mater Watch'),
     "fixture check: the Watch window is brace-matched all the way to the function's closing } and contains its final return — a window that stops short is a silent hole");
   assert(rankFnSrc.trimEnd().endsWith('}') && rankFnSrc.includes('alma-rank-value'),
     "fixture check: the Rankings window reaches its closing } and contains its final return");

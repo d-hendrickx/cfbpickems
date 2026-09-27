@@ -344,6 +344,29 @@ export function isSupabaseDataMode() { return _cfg.dataMode === 'supabase'; }
 //    loadtest.mjs's DOM-stub environment, where window.supabase does not
 //    exist, never throws) ────────────────────────────────────────────────────
 const AUTH_STORAGE_KEY = 'cfbp_supabase_session';
+// DI-334 FINDING 12 — a MODULE CONSTANT, never `window.location.origin`.
+// `location.origin` is request-time; if this code is ever reached from an
+// unexpected host (a preview deploy, a misconfigured environment) it would
+// silently mint reset links pointing at that host. Mirrors
+// `js/auth-native.js:36`'s `NATIVE_CALLBACK_URL` precedent — one literal,
+// cited once, never derived. Used by requestPasswordReset() below; Drew's
+// dashboard Site URL / Redirect URLs allow-list must match this exact origin
+// (DI-334's "Drew's exact dashboard steps," step 3).
+export const PASSWORD_RESET_REDIRECT_URL = 'https://irbfootball.com';
+// SECURITY F-3 (Group F fix round 1) — DEVICE-LOCAL, namespaced beside
+// AUTH_STORAGE_KEY. `_recoverySession` (below) is in-memory only, and a
+// reload fires INITIAL_SESSION rather than PASSWORD_RECOVERY — nothing
+// re-populates the in-memory flag, so a gate keyed on it alone comes down on
+// the very next paint after a reload mid-recovery. This key is what survives
+// the reload; see _setRecoveryPendingOnDevice()/_isRecoveryPendingOnDevice()
+// below and the INITIAL_SESSION arm in _handleAuthStateChange.
+// REPORTED, NOT EDITED (Step 3 / N8, 2026-09-26) — same rule as
+// ACTIVE_LEAGUE_KEY/LAST_AUTH_MODE_KEY/DEVICE_DATA_OWNER_KEY below: this key
+// was never added to js/storage.js's DEVICE_LOCAL_KEYS comment block (the
+// one place a reader sees everything that stays on the handset), and
+// storage.js is ask-first for this thread. Reported to Drew rather than
+// written here.
+const RECOVERY_PENDING_KEY = 'cfbp_recovery_pending';
 // Device-local record of which league is "active" on THIS device, same
 // category as storage.js's own SESSION/SITE_UNLOCK device-local keys (see
 // storage.js's DEVICE_LOCAL_KEYS comment) but owned here, under its own key —
@@ -510,6 +533,24 @@ let _membershipsCache = null;   // null = never fetched; [] = fetched, zero memb
 // cache: [] means "asked, and the answer was zero leagues"; a non-null error
 // here means "could not ask," which must never look like zero leagues.
 let _membershipsError = null;
+// UX Revamp (2026-09-25) — DI-317/318's platform-admin flag + DI-344's
+// super-admin flag, fetched via the two SECURITY DEFINER RPCs
+// (is_platform_admin()/is_super_admin()), on demand, by the exported
+// refreshPlatformAdminFlags() (see its own header — NOT fired automatically
+// by every membership read). Fail-CLOSED defaults (REV F19: these two
+// flags only ever gate chrome visibility, never a write). Exposed via
+// getIsPlatformAdmin()/getIsSuperAdmin() below — deliberately NOT merged
+// into `_synthesizedSession` (getSession()'s exact-three-key shape is read
+// elsewhere in the app for narrower, unrelated purposes — authtest.mjs [2]'s
+// own structural pin: "no extra, no missing") and deliberately NOT named
+// with the literal `isPlatformAdmin`/`isSuperAdmin` identifiers outside this
+// declaration and refreshPlatformAdminFlags()'s own local variables —
+// those two identifiers are fenced to roles.js/admin-panel.js/the enumerated
+// call sites by DI-317 §2b.11's allow-list (rolestest.mjs F13), and a
+// caller composing the `viewer` bag (WIRING_CHECKLIST_B_092526.md §6) reads
+// `isPlatformAdmin: getIsPlatformAdmin()` at ITS OWN call site, not here.
+let _isPlatformAdminCache = false;
+let _isSuperAdminCache = false;
 let _synthesizedSession = { playerId: null, isAdmin: false, playerVerified: false };
 const _authListeners = new Set();
 
@@ -890,10 +931,80 @@ export function getSupabaseClient() { return ensureClient(); }
 
 let _accountEmail = '';
 let _accountUserId = '';
+// Reviewer round 3, N4 — getAccountHasPasswordIdentity() used to read
+// `user.app_metadata.providers` back out of localStorage[AUTH_STORAGE_KEY],
+// which is exactly the layout the WEB PKCE flow persists but NOT what the
+// native Keychain adapter (js/auth-storage-native.js) writes there — that
+// module's marker is `{access_token, refresh_token, expires_at}` only, no
+// `user` field at all (see its own K2 reader-inventory header), so the read
+// was always null on iOS and the Password row could never resolve to
+// Set/Change. Cached here instead, at the exact same points _accountEmail is
+// cached from the live session payload (SIGNED_IN/TOKEN_REFRESHED/
+// INITIAL_SESSION/USER_UPDATED, PASSWORD_RECOVERY) — those events carry the
+// real session object in memory on BOTH platforms; only the persisted-to-disk
+// shape differs. null = "unknown", matching getAccountHasPasswordIdentity()'s
+// existing null contract.
+let _accountProviders = null;
+// DI-334 FINDING 1/R-2 — true from the moment a PASSWORD_RECOVERY event lands
+// until updatePasswordForRecovery() succeeds or cancelRecovery() runs. See
+// isRecoverySession() below for the full contract.
+let _recoverySession = false;
+
+/**
+ * SECURITY F-3 — the device-local half of the recovery gate. `_recoverySession`
+ * alone survives only until the next reload; RECOVERY_PENDING_KEY is what a
+ * reload mid-recovery still reads. Same guarded-write discipline as
+ * _setDeviceDataOwner() below (proven by reading the value back — a write
+ * that fails OPEN is how a fail-closed rule becomes a no-op on exactly the
+ * devices that need it, iOS private browsing, a full quota, a partitioned
+ * in-app browser). Never read/written by bare localStorage anywhere else in
+ * this file.
+ */
+function _setRecoveryPendingOnDevice(pending) {
+  try {
+    if (pending) localStorage.setItem(RECOVERY_PENDING_KEY, '1');
+    else localStorage.removeItem(RECOVERY_PENDING_KEY);
+    return (localStorage.getItem(RECOVERY_PENDING_KEY) === '1') === !!pending;
+  } catch { return false; }
+}
+function _isRecoveryPendingOnDevice() {
+  try { return localStorage.getItem(RECOVERY_PENDING_KEY) === '1'; } catch { return false; }
+}
+
 /** DI-180d "Account sheet body — Signed in as `<email>`". Synchronous read
  *  of the last known session's email, cached at the same points the
  *  synthesized session is recomputed. '' when signed out. */
 export function getAccountEmail() { return _accountEmail; }
+
+/**
+ * STEP B(7) / N4 (3c fix window, third pass) — DI-335's "Change Password" vs
+ * "Set Password" distinction: does the signed-in account already have a
+ * PASSWORD (email) identity? Read synchronously off the persisted session's
+ * own `user.app_metadata.providers` (GoTrue lists every linked provider there,
+ * e.g. ['google','email']). `true`/`false` when the session says; `null` when
+ * it cannot tell (no session, an older session shape) — callers treat null as
+ * "unknown" and use neutral wording, never a guess. UX only: nothing about the
+ * nonce-gated update path depends on it.
+ *
+ * Reviewer round 3, N4 — reads the IN-MEMORY `_accountProviders` cache
+ * FIRST (populated from the live session at the same points `_accountEmail`
+ * is), and falls back to the persisted AUTH_STORAGE_KEY shape only when
+ * nothing has been cached yet (e.g. a very first synchronous call before any
+ * auth event has landed this page). The cache is what makes this resolve on
+ * native, where the Keychain marker never carries a `user` field to begin
+ * with (auth-storage-native.js K2 inventory) — the fallback below is
+ * unreachable there and exists only for the web shape / pre-cache window.
+ */
+export function getAccountHasPasswordIdentity() {
+  if (Array.isArray(_accountProviders)) return _accountProviders.includes('email');
+  try {
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (!raw) return null;
+    const providers = JSON.parse(raw)?.user?.app_metadata?.providers;
+    if (!Array.isArray(providers)) return null;
+    return providers.includes('email');
+  } catch { return null; }
+}
 /**
  * Reviewer F-1/F-2 — the FIRST term of the identity tuple app.js's
  * session-change chokepoint latches on. The Supabase account id, not the
@@ -907,7 +1018,62 @@ export function getAccountEmail() { return _accountEmail; }
  */
 export function getAccountUserId() { return _accountUserId; }
 
+/**
+ * ══ REVIEWER (c), Group F fix round 2 — AN EARLY-RETURNING ARM STILL HAS TO
+ *    TELL app.js SOMETHING, AND WHAT IT TELLS IT IS "NO SESSION". ═══════════
+ *
+ * Two arms below refuse a session rather than adopting it (a reload that lands
+ * mid-recovery; a PASSWORD_RECOVERY whose device marker could not be written).
+ * Both call the async `signOut()` and return BEFORE the trailing emit at the
+ * bottom of _handleAuthStateChange — so, as first written, app.js heard nothing
+ * at all until the SDK's own SIGNED_OUT arrived a round trip later, and in the
+ * meantime the last thing it had been told was whatever the previous event said.
+ *
+ * WHY THE PAYLOAD IS `null` AND NOT THE REAL SESSION. app.js's `signedIn`
+ * computation (app.js:21668-21690) is `!!payload && hasValidSupabaseSession()`,
+ * i.e. a live session on the payload TAKES THE GATE DOWN. Handing it the real
+ * recovery/rehydrated session here would do exactly what DI-334 Finding 1
+ * forbids — drop a visitor who has only clicked an email link (or reloaded
+ * mid-recovery) into the signed-in surface — one event earlier than before.
+ * `null` is not a fiction: these two arms exist precisely because this device
+ * has no session it is willing to act on, and it is already tearing the token
+ * down. app.js renders the gate immediately instead of waiting on the network.
+ *
+ * `_recordIdentityNotified()` runs first, exactly as the trailing emit does, so
+ * the coalescer counts this as the announcement and does not fire a second,
+ * duplicate IDENTITY_MAYBE_CHANGED for the same tuple.
+ */
+function _emitSessionRefused(event) {
+  _recordIdentityNotified();
+  _authListeners.forEach(fn => { try { fn(event, null); } catch (e) { console.warn('[auth] listener failed', e); } });
+}
+
 function _handleAuthStateChange(event, session) {
+  // ══ SECURITY F-3 — A RELOAD MID-RECOVERY FIRES INITIAL_SESSION, NOT
+  // PASSWORD_RECOVERY, AND MUST STILL END THE SESSION. ═══════════════════════
+  // `_recoverySession` is in-memory only and does not survive a reload;
+  // RECOVERY_PENDING_KEY (device-local) does. DI-334 Finding 1's literal rule
+  // — "any exit before completion — Back, close, reload — calls signOut()" —
+  // is not actually reachable from the in-memory flag alone, because the
+  // event a reload produces is INITIAL_SESSION, which the branch below would
+  // otherwise treat as an ordinary rehydrate: identity populated, memberships
+  // refreshed, auto-link attempted, and any gate keyed on isRecoverySession()
+  // reads false the instant the in-memory flag is gone. Checked FIRST, before
+  // the ordinary branch, and RETURNS — this event gets no other handling.
+  // signOut() itself clears the marker (one of the five clear sites), so a
+  // second INITIAL_SESSION after the sign-out completes falls through
+  // normally.
+  if (event === 'INITIAL_SESSION' && _isRecoveryPendingOnDevice()) {
+    // REVIEWER (c) — announced SYNCHRONOUSLY, with a null session, so app.js
+    // paints the gate now rather than waiting for signOut()'s own async
+    // SIGNED_OUT to come back. See _emitSessionRefused() for why the payload is
+    // null and why handing over the real session here would undo Finding 1.
+    // Emitted BEFORE signOut() is kicked off: signOut() emits events of its own,
+    // and "no session" has to reach the listener in the same order it happened.
+    _emitSessionRefused(event);
+    signOut().catch(e => console.warn('[auth] recovery-marker signOut failed', e));
+    return;
+  }
   if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
     // ── REVIEWER F2 — THE SECOND PROVEN-GOOD RELEASE ────────────────────────
     // SIGNED_IN and TOKEN_REFRESHED are the two events the SDK only fires after
@@ -945,6 +1111,10 @@ function _handleAuthStateChange(event, session) {
     // account id/email — i.e. announced a re-verification of the person who had
     // just been replaced.
     _accountEmail = session?.user?.email || _accountEmail;
+    // N4 — same fallback shape as the email line above: a session payload that
+    // doesn't carry app_metadata (an older shape, a partial USER_UPDATED)
+    // keeps whatever was already cached rather than clobbering it with null.
+    _accountProviders = session?.user?.app_metadata?.providers || _accountProviders;
     _setAccountUserId(session?.user?.id || _accountUserId, { notify: false, reason: `auth:${event}` });
     // SIGNED_IN and TOKEN_REFRESHED are the two events the SDK only fires after
     // the GoTrue server minted a token, so a session on either of them is proof
@@ -953,7 +1123,77 @@ function _handleAuthStateChange(event, session) {
         && !!session && (!!session.access_token || hasValidSupabaseSession())) {
       _releaseExpiryHoldOnProof(`auth:${event}`);
     }
-    refreshMembershipsAndSession().catch(e => console.warn('[auth] membership refresh failed', e));
+    // ══ B1 FIX (2026-09-25, 3c fix window) — THE VENDORED SDK CAN RE-EMIT
+    //    SIGNED_IN/TOKEN_REFRESHED CARRYING THE *SAME* RECOVERY SESSION. ══════
+    // `_onVisibilityChanged` -> `_recoverAndRefresh` re-fires SIGNED_IN on a
+    // visibility change, and the SDK's own hourly autoRefresh fires
+    // TOKEN_REFRESHED — either can land while `isRecoverySession()` is still
+    // true, i.e. while a password reset is still pending. R-2 (above) already
+    // excludes PASSWORD_RECOVERY's OWN arm from refreshMembershipsAndSession();
+    // this excludes every OTHER arm that can carry the identical token. Without
+    // this, a re-fired SIGNED_IN would call attemptAutoLink() against an
+    // account that has not yet proven the player is at the keyboard — Finding
+    // 1's whole point, reachable through a second door.
+    if (!isRecoverySession()) {
+      refreshMembershipsAndSession().catch(e => console.warn('[auth] membership refresh failed', e));
+    }
+  } else if (event === 'PASSWORD_RECOVERY') {
+    // ══ DI-334 FINDING 9 / R-2 — A NARROW ARM, DELIBERATELY SEPARATE FROM THE
+    // SIGNED_IN BRANCH ABOVE. ═══════════════════════════════════════════════
+    //
+    // FINDING 9: the identity latch needs this event too, or DI-334's landing
+    // screen would have no email to show — so the same two identity writes
+    // the branch above makes run here as well.
+    //
+    // R-2: it must NOT call refreshMembershipsAndSession(). That call is what
+    // emits MEMBERSHIPS_REFRESHED, which is the exact event app.js's in-page
+    // auto-link is gated on (attemptAutoLink() -> link_member_by_email()) —
+    // so folding PASSWORD_RECOVERY into the branch above would perform a
+    // league link before a password exists. Two different functions own two
+    // different concerns here on purpose: this file's job is the identity
+    // tuple; app.js's separate gate-removal exclusion (Finding 1, the
+    // `signedIn` computation) is what keeps #site-gate-overlay up for the
+    // whole of this session — this arm does not and cannot do that part.
+    _accountEmail = session?.user?.email || _accountEmail;
+    // N4 — same caching as the branch above, for the same reason: this arm is
+    // the only OTHER place a live session lands, and DI-335's Password row
+    // needs an answer during recovery too.
+    _accountProviders = session?.user?.app_metadata?.providers || _accountProviders;
+    _setAccountUserId(session?.user?.id || _accountUserId, { notify: false, reason: `auth:${event}` });
+    // SECURITY F-3 — the device-local half. Written HERE, the moment the
+    // in-memory flag would be set, so the two never disagree about whether a
+    // recovery is in progress.
+    //
+    // ── R-f (Group F fix round 2) — A RECOVERY THAT CANNOT BE MADE DURABLE IS
+    //    REFUSED, NOT ENTERED. ─────────────────────────────────────────────────
+    // _setRecoveryPendingOnDevice() REPORTS whether the value is genuinely on
+    // the device (it reads it back — a write that fails open is how a
+    // fail-closed rule becomes a no-op on exactly the devices that need it: iOS
+    // private browsing, a full quota, a partitioned in-app browser). That return
+    // value used to be discarded here, which left the worst of both states: the
+    // in-memory flag said "recovery in progress", so the player got the
+    // set-a-new-password screen, but nothing survived a reload — and the
+    // INITIAL_SESSION arm above, which is the ONLY thing that ends a dangling
+    // recovery session on a reload, reads the MARKER, not the flag. A reload
+    // mid-recovery on such a device would therefore have been treated as an
+    // ordinary rehydrate: memberships refreshed, auto-link attempted, gate down,
+    // before any password existed (DI-334 Finding 1's exact failure).
+    // So: no durable marker, no recovery screen. signOut() immediately and let
+    // the player start again from the email link, which is the one path that
+    // does not depend on this device being able to remember anything.
+    if (!_setRecoveryPendingOnDevice(true)) {
+      console.warn('[auth] the recovery marker could not be persisted on this device — refusing the recovery session and signing out '
+        + 'rather than entering a new-password screen a reload could silently turn back into an ordinary signed-in session (DI-334 Finding 1 / R-f)');
+      _recoverySession = false;
+      // REVIEWER (c)'s rule, same shape as the INITIAL_SESSION arm above: tell
+      // app.js "no session" NOW, with a null payload, so the gate stays up
+      // instead of this event's own live session taking it down while the
+      // async signOut() is still in flight.
+      _emitSessionRefused(event);
+      signOut().catch(e => console.warn('[auth] recovery-refusal signOut failed', e));
+      return;
+    }
+    _recoverySession = true;
   } else if (event === 'SIGNED_OUT') {
     // DI-180c's "Session expired" state fires ONLY for a background/
     // involuntary sign-out (refresh token revoked, long idle, cleared
@@ -964,7 +1204,28 @@ function _handleAuthStateChange(event, session) {
     _signingOut = false;   // consumed HERE, by the event — not in signOut()'s finally
     _membershipsCache = null;
     _membershipsError = null;
+    // UX Revamp wiring pass 2, security fix round (2026-09-25), FINDING 1 —
+    // the platform-admin/super-admin caches ARE now populated in normal use
+    // (refreshPlatformAdminFlags(), called from mountControlCenterDrawer()
+    // AND from applyIdentityDeltaIfChanged() below), so the old "nothing has
+    // populated them" justification for leaving them alone is false. Reset
+    // HERE, alongside every other identity-scoped cache, or a sign-out
+    // followed by a different member signing in on the same page session
+    // inherits the PREVIOUS account's admin/super-admin chrome until the next
+    // explicit refresh — REV F19 limits the blast radius to chrome
+    // visibility, not a write, but a stranger's admin chrome on screen is
+    // still the wrong answer.
+    _isPlatformAdminCache = false;
+    _isSuperAdminCache = false;
     _accountEmail = '';
+    _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
+    // DI-334 FINDING 1 — a SIGNED_OUT is exactly the "exit" case the
+    // recovery-session gate exists to clear, however it was reached: the
+    // deliberate cancelRecovery() path below already flips this before
+    // calling signOut(), but an involuntary SIGNED_OUT (a dead refresh
+    // token, a background sweep) must not leave a stale `true` behind either.
+    _recoverySession = false;
+    _setRecoveryPendingOnDevice(false);
     // Security F-1 — through the ONE setter, so the identity epoch moves and any
     // membership read still out for the departing account can no longer land.
     _setAccountUserId('', { notify: false, reason: 'auth:SIGNED_OUT' });
@@ -1526,6 +1787,11 @@ export function forceSignedOutSession() {
   // an identity that no longer applies. The bump voids both.
   _bumpIdentityEpoch('forceSignedOutSession');
   _synthesizedSession = { playerId: null, isAdmin: false, playerVerified: false };
+  // Security fix round (2026-09-25), FINDING 1 — reset alongside every other
+  // identity cache this function clears; see the SIGNED_OUT branch in
+  // _handleAuthStateChange() for the full reasoning (same fix, same reason).
+  _isPlatformAdminCache = false;
+  _isSuperAdminCache = false;
   _notifyIdentityMaybeChanged();   // instrumented write (term 3)
 }
 export function isSessionForcedOut() { return _sessionForcedOut; }
@@ -1572,6 +1838,60 @@ export function clearForcedSignOut() {
   return true;
 }
 
+/**
+ * UX Revamp (2026-09-25) — DI-317 §2b.10 / DI-344 §8. Reads `platform_admins`
+ * via TWO SECURITY DEFINER RPCs (`is_platform_admin()`/`is_super_admin()`,
+ * `B_roles_pilot.sql` sections 14 / `0002_rls.sql`) rather than a direct
+ * table read — that table's own SELECT policy requires `is_platform_admin()`
+ * to already be true, so a non-admin cannot read even their own row
+ * directly; the RPCs bypass RLS by design and are grant-open to every
+ * authenticated user (`grant execute ... to authenticated`).
+ *
+ * DELIBERATELY NOT WIRED to fire automatically inside
+ * `_refreshMembershipsAndSessionOnce()` (every OTHER identity-critical
+ * refresh in this module) — a `client.rpc(...)` call there would land on
+ * every scripted-client test fixture across this codebase's whole test
+ * suite that drives a membership refresh and asserts an exact RPC call
+ * sequence, none of which mock these two RPCs. Nothing in THIS build wave
+ * consumes the flags either (the `viewer`-bag composition / admin route
+ * mount is a later, held wiring pass) — so this is exported as a function
+ * the pass that DOES need the flags calls explicitly, once, when it needs
+ * them (e.g. right before composing the Admin-panel `viewer` bag), never
+ * implicitly riding along on every ordinary membership read.
+ *
+ * Same I6 epoch discipline as every other async write in this module — a
+ * reply that lands after this device has changed who it is (a sign-out or a
+ * switch mid-flight) is discarded, never applied. Fails CLOSED on any error
+ * (both flags false) — REV F19: these two flags only ever gate chrome
+ * VISIBILITY, never a write (the actual write authority lives entirely
+ * server-side, in SECURITY DEFINER RPCs that re-check these same
+ * predicates), so failing closed costs an admin one missed row until the
+ * next successful call; failing open would be the wrong direction for a
+ * permission check.
+ */
+export async function refreshPlatformAdminFlags() {
+  const epoch0 = _identityEpoch;
+  let isPlat = false, isSuper = false;
+  try {
+    const client = ensureClient();
+    if (client && typeof client.rpc === 'function') {
+      const [platRes, superRes] = await Promise.all([
+        client.rpc('is_platform_admin').catch((e) => ({ data: false, error: e })),
+        client.rpc('is_super_admin').catch((e) => ({ data: false, error: e })),
+      ]);
+      isPlat = platRes && platRes.error == null && platRes.data === true;
+      isSuper = superRes && superRes.error == null && superRes.data === true;
+    }
+  } catch (e) {
+    console.warn('[auth] platform-admin/super-admin flag fetch failed — failing closed', e);
+  }
+  // I6 — a reply for an identity this device has since left must never be applied.
+  if (epoch0 !== _identityEpoch) { _warnStaleIdentity('a platform-admin flag read'); return; }
+  _isPlatformAdminCache = isPlat;
+  _isSuperAdminCache = isSuper;
+  _recomputeSynthesizedSession();
+}
+
 /** Term 3's ONE write site. Every path that can change the synthesized session
  *  goes through here (or through the SIGNED_OUT branch above, which emits its
  *  own event), so the notify at the bottom covers all of them — including
@@ -1589,6 +1909,37 @@ function _recomputeSynthesizedSession() {
     : { playerId: null, isAdmin: false, playerVerified: false };
   _notifyIdentityMaybeChanged();
 }
+
+/**
+ * DI-317 §2b.10 / DI-344 §8 — the composed `viewer` bag's two other fields
+ * (WIRING_CHECKLIST_B_092526.md §6's own sample: `isPlatformAdmin,
+ * isSuperAdmin,` alongside `...getSession()`). Deliberately NOT part of
+ * `getSession()`/`getSupabaseSession()`'s returned object (that shape must
+ * stay EXACTLY `{playerId, isAdmin, playerVerified}` — authtest.mjs [2]'s
+ * own structural pin: "no extra, no missing" — because it is read elsewhere
+ * in the app for narrower, unrelated purposes). A caller composing the
+ * `viewer` bag reads `isPlatformAdmin: getIsPlatformAdmin()` /
+ * `isSuperAdmin: getIsSuperAdmin()` at ITS OWN call site, alongside
+ * `...getSession()`, never instead of it. isPlatformAdmin/isSuperAdmin are
+ * GLOBAL flags — true regardless of whether the device has an active-league
+ * membership row, so a platform admin viewing a league they do not belong
+ * to still sees admin-gated chrome — set by the exported
+ * `refreshPlatformAdminFlags()`, called explicitly by whoever needs them
+ * (see that function's own header for why it is not automatic), fail-closed
+ * (false) until the first call resolves.
+ */
+export function getIsPlatformAdmin() { return _isPlatformAdminCache; }
+/** Test-only seam (UX Revamp wiring pass 2, 2026-09-25) — drives the Admin
+ *  panel route through the REAL composed-viewer chokepoint (js/app.js's
+ *  composeAdminViewer()) instead of a fixture that bypasses it, the same
+ *  "test the real path" discipline `_setMembershipsForTest` already uses.
+ *  Production never calls this — refreshPlatformAdminFlags() is the only
+ *  writer outside tests. */
+export function _setPlatformAdminFlagsForTest(isPlat, isSuper = false) {
+  _isPlatformAdminCache = !!isPlat;
+  _isSuperAdminCache = !!isSuper;
+}
+export function getIsSuperAdmin() { return _isSuperAdminCache; }
 
 // ── Active league (DI-184d's invariant — ONE function, two consumers) ───────
 
@@ -1767,16 +2118,69 @@ export async function getMemberships(op = null) {
     // rather than guess. That refused EVERY membership read at the 2026-09-19 cutover ("Can't reach
     // sign-in right now"); the fake client in authtest does no relationship resolution, so only the
     // live API could see it. The response key is still `leagues`.
-    .select('league_id, id, role, display_name, active, leagues!league_members_league_id_fkey(name)')
+    //
+    // UX Revamp wiring pass 2 (coordinator addition, 2026-09-25) — `pilot` and
+    // `status` added to the embed. SECURITY GATE FINDING 2 (2026-09-25),
+    // CORRECTING THIS COMMENT'S PRIOR CLAIM: a missing column is NOT a
+    // per-row default — PostgREST rejects the WHOLE request with HTTP 400 /
+    // `42703 undefined_column` when a selected column does not exist yet on
+    // a device whose migration 0026 has not been pasted, and `throw error`
+    // below used to mean NOBODY reaches their league on that device, not a
+    // graceful per-row fallback. The retry below is the real degrade: on a
+    // 42703 specifically, re-issue the SAME read with the pre-0026 column
+    // list (no `pilot`/`status`), so the whole app does not go dark for a
+    // schema-lag reason a player did nothing to cause — loudly, never
+    // silently (AD-06), via the 'cfbp:migration-pending' window event
+    // (app.js's boot listener turns it into the red banner). Once 0026+ IS
+    // pasted, this branch never fires again; the map() below still defaults
+    // `pilot: false`/`status: 'active'` for a retried row that genuinely
+    // has neither column, exactly like `isPilotLeague()`/`isLeaguePaused()`
+    // (js/roles.js) document for an absent field. This is the SAME
+    // chokepoint `session.isPlatformAdmin`/`isSuperAdmin` use (DI-344 §8) —
+    // one read, one place, threaded into every consumer via the membership
+    // cache rather than re-queried per screen.
+    // STEP B(13) (third pass) — `sport_default` (migration 0001, `not null
+    // default 'cfb'`; table-level SELECT grant 0002_rls.sql:166) for League
+    // Page's sport cards (leagues-home.js deriveLeagueSports()). Deliberately
+    // NOT added to the pre-0026 retry below: that path exists for a database
+    // this build cannot fully trust, and it answers `sportDefault: null`.
+    .select('league_id, id, role, display_name, active, leagues!league_members_league_id_fkey(name, pilot, status, sport_default)')
     .eq('user_id', uid)
     .eq('active', true);
-  if (error) throw error;
+  if (error) {
+    if (error.code === '42703') {
+      console.error('[auth] league_members read failed on a missing column (migration 0026+ not pasted yet) — retrying with the pre-0026 column list. Database migration pending.', error);
+      if (typeof window !== 'undefined' && window?.dispatchEvent) {
+        window.dispatchEvent(new CustomEvent('cfbp:migration-pending', { detail: { message: 'Database migration pending' } }));
+      }
+      const retry = await client
+        .from('league_members')
+        .select('league_id, id, role, display_name, active, leagues!league_members_league_id_fkey(name)')
+        .eq('user_id', uid)
+        .eq('active', true);
+      if (retry.error) throw retry.error;
+      return (retry.data || []).map(row => ({
+        leagueId: row.league_id,
+        memberId: row.id,
+        role: row.role,
+        displayName: row.display_name,
+        leagueName: row.leagues?.name || '',
+        pilot: false,
+        status: 'active',
+        sportDefault: null,
+      }));
+    }
+    throw error;
+  }
   return (data || []).map(row => ({
     leagueId: row.league_id,
     memberId: row.id,
     role: row.role,
     displayName: row.display_name,
     leagueName: row.leagues?.name || '',
+    pilot: row.leagues?.pilot === true,
+    status: typeof row.leagues?.status === 'string' ? row.leagues.status : 'active',
+    sportDefault: typeof row.leagues?.sport_default === 'string' ? row.leagues.sport_default : null,
   }));
 }
 
@@ -1813,6 +2217,19 @@ export async function getMemberships(op = null) {
  */
 let _membershipRefreshInFlight = null;   // null | { epoch, promise }
 export async function refreshMembershipsAndSession({ preferMemberId = null, preferLeagueId = null, _afterVerifyReread = false } = {}) {
+  // ══ SECURITY N1 (3c fix window, third pass) — REFUSED DURING RECOVERY ═════
+  // The event arm above already skips this call while isRecoverySession() is
+  // true; app.js's boot / hold-recheck decision did not, and that was the
+  // third door onto the same finding (DI-334 Finding 1 / R-2: a membership
+  // read is what arms the auto-link, and nothing may link a league to a
+  // visitor who has not yet set a password). Enforced HERE, at the function
+  // every caller goes through, so a fourth caller cannot reopen it. `null`
+  // is this function's existing "no membership set resolved" answer (the
+  // stale-identity return below) — every caller already handles it.
+  if (isRecoverySession()) {
+    console.info('[auth] membership refresh refused — a password-recovery session is not a signed-in identity yet');
+    return null;
+  }
   const shareable = !preferMemberId && !preferLeagueId && !_afterVerifyReread;
   // ── SECURITY F-1 (sixth gate) — THE LATCH IS KEYED ON THE IDENTITY EPOCH ──
   // Coalescing is a promise that two callers are asking the SAME QUESTION. Two
@@ -1984,6 +2401,19 @@ async function _refreshMembershipsAndSessionOnce({ preferMemberId = null, prefer
   if (list === null) return null;
   _membershipsError = null;
   _membershipsCache = list;
+  // UX Revamp (2026-09-25) — isPlatformAdmin/isSuperAdmin are NOT fetched
+  // automatically on every membership read (a `client.rpc(...)` call here
+  // would land on every scripted-client fixture across authtest.mjs/
+  // boottest.mjs/adaptertest.mjs that asserts an exact RPC call sequence
+  // through this exact function — none of them expect or mock
+  // is_platform_admin()/is_super_admin(), so an auto-fire here breaks call-
+  // count/call-order assertions this pass does not own, e.g. authtest.mjs
+  // [43k]'s "the LAST call is link_member()"). Nothing in THIS build wave
+  // consumes these two flags either (the `viewer`-bag composition/admin
+  // route mount is a later, held wiring pass) — so the fetch is exposed as
+  // `refreshPlatformAdminFlags()` below, called EXPLICITLY by whoever
+  // actually needs the flags (the pass that mounts the control-center admin
+  // rows / the Admin panel), not implicitly by every membership refresh.
   // ── REVIEWER F2 — A SUCCESSFUL READ IS PROOF, SO IT RELEASES THE LOCK ──────
   // The server accepted this JWT and answered with rows. That is the strongest
   // evidence available in this build that the session is alive, so an 'unknown'
@@ -2432,6 +2862,404 @@ export async function issueClaimCode(leagueId, memberId) {
 }
 
 /**
+ * UX Revamp wiring pass 2 (2026-09-25), DI-344/345 (T-35 SUPER ADMIN) —
+ * `super_set_league_status(p_league, p_status)` — the ONLY client write path
+ * for `leagues.status`. Refused server-side with `not_super_admin` for any
+ * caller whose `platform_admins.is_super` is not true (REV F19 one tier up —
+ * this wrapper performs no client-side authorization of its own, the same
+ * "courtesy check is client, real authority is server" split every other RPC
+ * wrapper in this file already follows). `p_status` is the literal string
+ * `'active'`/`'paused'` — the RPC itself validates.
+ */
+export async function superSetLeagueStatus(leagueId, status) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.rpc('super_set_league_status', { p_league: leagueId, p_status: status });
+  if (error) throw error;
+}
+
+/**
+ * `super_set_platform_kv(p_key, p_value)` — the ONLY client write path for
+ * `platform_kv`. `p_value` is `jsonb` server-side (DI-345 §Layout, Platform
+ * Settings). SECURITY GATE FINDING 1 (2026-09-25): the caller hands this
+ * function an ALREADY-JSON-encodable value (a string or boolean) and it is
+ * sent RAW — PostgREST/postgrest-js encodes the outer RPC body itself, so a
+ * `jsonb` parameter's sub-value passes through unchanged (the SAME pattern
+ * `patch_kv` already uses at `js/supabase-backend.js:1527`, a raw object,
+ * no `JSON.stringify()`). The PRIOR version of this function called
+ * `JSON.stringify(value)` here, which double-encoded: `false` became the
+ * jsonb STRING `"false"` (not the jsonb boolean `false`). `create_league`/
+ * `join_league` compare `signups_open = 'true'::jsonb` server-side, so a
+ * string `"false"` is never `= 'true'::jsonb` OR `= 'false'::jsonb` in the
+ * way either branch expects — a toggle-off silently refused every future
+ * signup while `getPlatformKv()` (below) kept reading the truthy string
+ * back as "open" (no `JSON.parse()`), so the checkbox lied about the
+ * server's actual state. Never re-add a stringify here.
+ */
+export async function superSetPlatformKv(key, value) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.rpc('super_set_platform_kv', { p_key: key, p_value: value });
+  if (error) throw error;
+}
+
+/**
+ * DI-320/345 — every league the viewing admin/super-admin can see
+ * (`leagues_select`'s existing `is_platform_admin()`/`is_super_admin()` read
+ * bypass, already shipped — no new grant needed for this READ). Columns
+ * enumerated, never `select('*')` (this file's own established rule) —
+ * `id, name, pilot, status` is exactly what the Admin panel's Pilot League
+ * Flag card and the Super Admin panel's League Status card both need, and
+ * nothing else (no join_code, no created_by).
+ *
+ * @returns {Array<{id:string, name:string, pilot:boolean, status:string}>}
+ */
+/**
+ * DI-344 §3.1 — `platform_kv` carries a `using (true)` SELECT policy (every
+ * signed-in account can read it — the maintenance banner has to reach every
+ * viewer, not just admins). Two keys: `maintenance_banner` (string,
+ * empty/absent = no banner) and `signups_open` (boolean, absent = default
+ * open, per DI-344 §3.2's "on by default"). Both stored as `jsonb`; the
+ * postgrest-js client returns a `jsonb` column already decoded to its
+ * native JS type (a real boolean/string), so this read side takes the
+ * value AS-IS — no `JSON.parse()` (see `superSetPlatformKv()`'s header,
+ * security gate finding 1: a PRIOR write-side `JSON.stringify()` bug is why
+ * this comment used to (wrongly) describe a symmetric un-wrap step here).
+ *
+ * @returns {{maintenanceBanner: string, signupsOpen: boolean}}
+ */
+export async function getPlatformKv() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('platform_kv').select('key, value');
+  if (error) throw error;
+  const byKey = new Map((data || []).map(r => [r.key, r.value]));
+  const bannerRaw = byKey.get('maintenance_banner');
+  const signupsRaw = byKey.get('signups_open');
+  return {
+    maintenanceBanner: typeof bannerRaw === 'string' ? bannerRaw : '',
+    signupsOpen: signupsRaw === false ? false : true,
+  };
+}
+
+/**
+ * NOTE 6 / BLOCK 4 (pass-2 reviewer, 2026-09-25) — a small, module-level,
+ * SYNCHRONOUS-read cache for the player-facing maintenance banner text,
+ * shared by `js/app.js` (six nav destinations + the leagues-home/gate
+ * screen, DI-345 §Verification step 5) and `js/chat-ui.js` (Chat, which
+ * repaints outside app.js's own `navigateTo()` chokepoint — the same reason
+ * `PAUSED_LEAGUE_BANNER_TEXT` lives in `js/roles.js` rather than being
+ * duplicated). Lives here, not in `js/roles.js`, because that module is
+ * explicitly NO DOM / NO NETWORK (its own header comment) and this cache is
+ * fed by a real network read (`getPlatformKv()`, immediately above).
+ *
+ * DELIBERATELY SEPARATE from `js/app.js`'s own `_platformKvCache` (the Super
+ * Admin panel's write-form pre-fill, which also carries `loading`/`error`/
+ * `signupsOpen` for that form's own needs) — named here rather than merged,
+ * because unifying the two shapes would make a slow/failed admin-form read
+ * block or blank the player-facing banner, and vice versa. Two reads of a
+ * tiny, rarely-changing table is the accepted cost of that isolation.
+ *
+ * `using (true)` SELECT policy on `platform_kv` (DI-344 §3.1) — safe for any
+ * signed-in account to read, not just admins.
+ */
+let _maintenanceBannerCache = '';
+let _maintenanceBannerLoading = false;
+// FINDING 8 (pass-2 reviewer, 2026-09-25) — `signupsOpen` rides the SAME
+// fetch (`getPlatformKv()` already returns both fields in one read; a
+// second, independent `.from('platform_kv')` call for this one boolean
+// would double the read for no reason). Defaults to `true` — DI-344 §3.2's
+// "on by default" — so a device that has not read this yet, or whose read
+// failed, does not spuriously disable Join/Create.
+let _signupsOpenCache = true;
+
+/** Synchronous, cached — never a network call. Empty string = no banner,
+ *  which is also the correct answer before the first read ever lands
+ *  (default-when-missing: no banner, not a guessed one). */
+export function getCachedMaintenanceBanner() {
+  return _maintenanceBannerCache;
+}
+
+/** Synchronous, cached — never a network call. `true` (open) is the
+ *  default-when-missing answer, matching DI-344 §3.2 and the coalesce
+ *  direction `join_league`/`create_league` themselves use server-side. */
+export function getCachedSignupsOpen() {
+  return _signupsOpenCache;
+}
+
+/**
+ * Local-write mirror for the ONE writer of this value (the Super Admin
+ * panel's Save button, `superSetPlatformKv('maintenance_banner', val)` in
+ * `js/app.js`). Called after that write succeeds so the SAME device's own
+ * six nav destinations reflect the new banner immediately, without waiting
+ * for the next identity delta — a super admin is a signed-in account too
+ * (DI-344 §3.1) and sees their own banner exactly like everyone else.
+ * Never called from anywhere the value wasn't just written server-side.
+ */
+export function setCachedMaintenanceBannerLocally(val) {
+  _maintenanceBannerCache = typeof val === 'string' ? val : '';
+}
+
+/**
+ * REVIEWER BLOCK 1 (2026-09-25) — `_maintenanceBannerAttempted`, the SAME
+ * "never fetched" / "fetched at least once" latch `_allLeaguesCache.attempted`
+ * / `_usersAcrossLeaguesCache.attempted` already use in `js/app.js`'s
+ * `renderAdminPage()`. Runtime-proven bug this closes: the ONLY call site
+ * this function had (`mountControlCenterDrawer()`, `js/app.js` boot path)
+ * ran during `boot()`, ~198 lines BEFORE `applyAuthModeDecision()` resolves
+ * `authMode` — so `getAuthMode() !== 'supabase'` was true on every real page
+ * load (the module DEFAULT is `'pins'` until config is read) and this
+ * function returned immediately, every single time. The maintenance banner
+ * and the `signups_open` gate were both inert in production; every green
+ * assertion that ever exercised this function did so AFTER `resetAll()` had
+ * already forced supabase mode, which is why 1853 passing assertions never
+ * caught it.
+ *
+ * REWRITTEN (2026-09-25, SECURITY GATE NOTE B) — this header previously
+ * described the reviewer's alternative (b), a lazy render-path trigger
+ * (`js/app.js`'s `renderMaintenanceBannerIfNeeded()` calling this on every
+ * render, guarded by `hasAttemptedMaintenanceBannerFetch()`). That is NOT
+ * what shipped: `js/app.js`'s wiring pass 3b instead took alternative (a) —
+ * ONE call at the TAIL of `applyAuthModeDecision()`, immediately after
+ * `authMode` resolves (`configureAuth({ ...deployed, authMode })`, the line
+ * directly above that call site) — structurally pinned by `boottest.mjs`
+ * [32] (a boot-order assertion that the fetch call site appears AFTER the
+ * mode-resolution line in `applyAuthModeDecision()`'s own source, not merely
+ * that it eventually fires). `renderMaintenanceBannerIfNeeded()` still
+ * exists and still runs on every nav-destination render, but ONLY to REPAINT
+ * from whatever is already in `_maintenanceBannerCache` — it does not itself
+ * trigger a fetch; the boot-tail call is the one and only fetch trigger.
+ *
+ * `hasAttemptedMaintenanceBannerFetch()` now guards THAT boot-tail call site
+ * instead (security NOTE A) — `applyAuthModeDecision()` is re-run every
+ * ~20s while an active hold is up (DI-180l's background re-check), and
+ * without this guard the fetch would repeat unbounded for as long as the
+ * hold stayed up. `_maintenanceBannerAttempted` is set only INSIDE
+ * `refreshMaintenanceBannerCache()`'s own `authMode === 'supabase'` branch
+ * (below) — a call that no-ops on the mode check does not lock out a later,
+ * real attempt once config has actually loaded.
+ */
+let _maintenanceBannerAttempted = false;
+
+/** Exported so `js/app.js`'s boot-tail call site
+ *  (`applyAuthModeDecision()`) can guard its one-real-fetch trigger against
+ *  the 20-second hold re-check without reading this module's private state
+ *  directly — see this header's REWRITTEN paragraph, above, for why the
+ *  call site is the boot tail and not the render path. */
+export function hasAttemptedMaintenanceBannerFetch() { return _maintenanceBannerAttempted; }
+
+/**
+ * Fire-and-forget refresh. See `hasAttemptedMaintenanceBannerFetch()`'s
+ * header, immediately above, for why this is called from the BOOT-TAIL path
+ * (once, `attempted`-guarded against the 20s hold re-check) rather than the
+ * render path. Also re-armed at the identity-delta chokepoint
+ * (`clearMaintenanceBannerCacheOnIdentityChange()`, below) so a
+ * same-page-session account handover gets a fresh read on the boot-tail
+ * call's NEXT invocation (e.g. the hold re-check, or a future boot), not
+ * just its next reload. On failure the LAST-KNOWN value is kept, never
+ * cleared — a transient read failure must never read as "no maintenance,"
+ * which would be the wrong direction to fail loud in for a banner whose
+ * entire job is warning players about something.
+ */
+export async function refreshMaintenanceBannerCache() {
+  if (_maintenanceBannerLoading) return;
+  if (getAuthMode() !== 'supabase') return;   // NOT marked attempted — see header
+  // S2-1 (full-app review, 2026-09-26) — NOR is a call with no client. On a
+  // cold load the SDK is injected, not script-tagged, so before it lands
+  // ensureClient() is null and getPlatformKv() can only throw
+  // AuthUnavailableError. Latching `attempted` on that throw silenced the
+  // banner for the whole page load (the boot call site's guard read it as
+  // "already fetched"). The latch now means "a real request was made".
+  if (!ensureClient()) return;
+  _maintenanceBannerLoading = true;
+  _maintenanceBannerAttempted = true;
+  try {
+    const kv = await getPlatformKv();
+    _maintenanceBannerCache = kv.maintenanceBanner || '';
+    _signupsOpenCache = kv.signupsOpen !== false;
+  } catch (e) {
+    console.warn('[auth] maintenance banner read failed — keeping the last-known value', e);
+  } finally {
+    _maintenanceBannerLoading = false;
+  }
+}
+
+/** For authtest only — production never calls this. */
+export function _resetMaintenanceBannerCacheForTest() {
+  _maintenanceBannerCache = '';
+  _signupsOpenCache = true;
+  _maintenanceBannerLoading = false;
+  _maintenanceBannerAttempted = false;
+}
+
+/**
+ * SECURITY GATE, S-4 (2026-09-25) — a PRODUCTION-safe sibling of the
+ * test-only reset above, for `js/app.js`'s `applyIdentityDeltaIfChanged()`
+ * chokepoint. That chokepoint already resets FOUR other module-level caches
+ * (`_platformKvCache`/`_allLeaguesCache`/`_usersAcrossLeaguesCache`/
+ * `_joinCodeCache`, app.js's own SECURITY N1) to their never-fetched
+ * defaults on every identity change; this cache carried no such reset at
+ * all, so a signed-out device (or one mid-handover between two accounts)
+ * kept showing whatever banner string the PREVIOUS identity's read had left
+ * behind, indefinitely, rather than the safe "no banner" default a
+ * not-yet-read cache is supposed to mean.
+ *
+ * `attempted` IS reset here (unlike the S-4 comment's original draft) —
+ * REVIEWER BLOCK 1's own preferred shape: invalidate at the chokepoint
+ * (synchronous, zero network calls, so no `.from()` call-count mock anywhere
+ * can observe it), then let the NEXT render's lazy trigger do the real
+ * fetch. This is what makes a same-page-session identity handover see the
+ * new identity's banner without waiting for a reload.
+ */
+export function clearMaintenanceBannerCacheOnIdentityChange() {
+  _maintenanceBannerCache = '';
+  _signupsOpenCache = true;
+  _maintenanceBannerAttempted = false;
+}
+
+export async function listAllLeagues() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('leagues').select('id, name, pilot, status').order('name');
+  if (error) throw error;
+  return (data || []).map(row => ({
+    id: row.id,
+    name: row.name || '',
+    pilot: row.pilot === true,
+    status: typeof row.status === 'string' ? row.status : 'active',
+  }));
+}
+
+/**
+ * WIRING_CHECKLIST_B_092526.md §Window(b), "users/leagues data assembly" —
+ * feeds `js/admin-panel.js`'s `renderUsersAcrossLeaguesBody()`/
+ * `renderPlatformAdminsBody()` (both take ONE `users` array). Two plain
+ * reads, never `get_member_contacts()` (N6 — that RPC returns contact
+ * columns, which this surface must never carry per DI-317 §Security point
+ * 3 / the blind rule). `league_members_select`'s existing
+ * `is_member(league_id) OR is_platform_admin()` bypass (0002_rls.sql) is
+ * what makes the first read cross-league for an admin; `platform_admins`'s
+ * OWN select policy (`platform_admins_select`, `0002_rls.sql:227`) is
+ * `using (is_platform_admin())` — SECURITY N8 (pass-2, 2026-09-25) fixes
+ * this comment, which previously said "a bare select grant to
+ * `authenticated`" (wrong: an ordinary signed-in non-admin cannot read this
+ * table at all, gated identically to the first read, not more openly).
+ * Columns are
+ * exactly DI-320 §Players' list — role, display_name, active, linked_at —
+ * plus this module's own isPlatformAdmin/addedAt/addedBy so one array can
+ * serve both cards without a second param. Never calls `get_member_contacts`.
+ */
+export async function listUsersAcrossLeagues() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const [membersRes, adminsRes] = await Promise.all([
+    // REVIEWER BLOCK 1 (pass-2, 2026-09-25) — `id` (the `league_members` row's
+    // OWN primary key) is now selected and exposed as `memberId`, alongside
+    // `user_id` (exposed as `userId`, unchanged). The two are NOT
+    // interchangeable server-side: `admin_set_member_role(p_league, p_member,
+    // p_role)` matches `id = p_member` (`0026:644`), while
+    // `admin_set_platform_admin(p_user, p_on)` matches on the auth user id.
+    // Without `id` in this select there was no way for the commissioner/
+    // player toggle to send the right value at all — it was sending the
+    // auth uid into a column comparison expecting the member row id, which
+    // answered `not_found` every time.
+    client.from('league_members')
+      .select('id, user_id, league_id, role, display_name, active, linked_at, leagues!league_members_league_id_fkey(name)'),
+    client.from('platform_admins').select('user_id, added_at, added_by'),
+  ]);
+  if (membersRes.error) throw membersRes.error;
+  if (adminsRes.error) throw adminsRes.error;
+  const adminsByUser = new Map((adminsRes.data || []).map(r => [r.user_id, r]));
+  // REVIEWER FINDING 10 (pass-2, 2026-09-25) — an unlinked member (a
+  // commissioner-created player slot nobody has claimed yet — `user_id` is
+  // null, `linked_at` is null) used to be filtered OUT entirely, invisible
+  // on this cross-league roster. The RPCs both handle an unlinked row fine
+  // (`admin_set_member_role` only ever needs the member id, which every row
+  // has); the filter now keys on `id` (the row's own primary key, always
+  // present) instead of `user_id`, and `renderUsersAcrossLeaguesBody()`'s
+  // existing `linkedAt ? … : 'Not linked'` line already has the right copy
+  // for it — this filter change is what makes that copy reachable for a
+  // cross-league viewer, not just the single-league Members card.
+  return (membersRes.data || [])
+    .filter(row => row && row.id != null)
+    .map(row => {
+      const admin = row.user_id != null ? adminsByUser.get(row.user_id) : null;
+      return {
+        memberId: row.id,
+        userId: row.user_id,
+        displayName: row.display_name || row.user_id,
+        leagueId: row.league_id,
+        leagueName: row.leagues?.name || row.league_id,
+        role: row.role === 'commissioner' ? 'commissioner' : 'player',
+        active: row.active !== false,
+        linkedAt: row.linked_at || null,
+        isPlatformAdmin: !!admin,
+        platformAdminAddedAt: admin ? (admin.added_at || null) : null,
+        platformAdminAddedBy: admin ? (admin.added_by != null ? admin.added_by : null) : null,
+      };
+    });
+}
+
+/**
+ * DI-317 §2b points 1-4 — `admin_set_member_role(p_league, p_member, p_role)`
+ * SECURITY DEFINER RPC, the ONE code path for a role change (a commissioner
+ * acting on his own league, or a platform admin acting on any league — the
+ * RPC's own first-statement gate covers both). `p_role` is `'commissioner'`
+ * or `'player'`, matching the client-side enum already used by the League
+ * Members card.
+ */
+export async function adminSetMemberRole(leagueId, memberId, role) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.rpc('admin_set_member_role', { p_league: leagueId, p_member: memberId, p_role: role });
+  if (error) throw error;
+  return { ok: true };
+}
+
+/**
+ * DI-317 §2b point 5 — `admin_set_platform_admin(p_user, p_on)` SECURITY
+ * DEFINER RPC. Platform-admin-only (its own first-statement gate); no RLS
+ * write path exists on `platform_admins` at all (§2b.5 — this RPC is the
+ * only writer).
+ */
+export async function adminSetPlatformAdmin(userId, on) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.rpc('admin_set_platform_admin', { p_user: userId, p_on: on });
+  if (error) throw error;
+  return { ok: true };
+}
+
+/**
+ * DI-319 §Copy "Invite to League" — reads the active league's own
+ * `join_code`. Admin-panel-adjacent but lives on the Commissioner panel
+ * (Players tab); `leagues_select` already returns `join_code` to any member
+ * (F11 — "already readable by every league member today"), so this is a
+ * plain read, not a new grant.
+ */
+export async function getLeagueJoinCode(leagueId) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.from('leagues').select('join_code').eq('id', leagueId).single();
+  if (error) throw error;
+  return data?.join_code || '';
+}
+
+/**
+ * DI-319 §Copy "Rotate Code" — `rotate_join_code(p_league)` SECURITY DEFINER
+ * RPC (§2c point 1 of DESIGN_INPUTS_B): first-statement `is_commissioner`
+ * gate, then a fresh `gen_code(8)` written through the GUC-gated
+ * `leagues_guard()` escape hatch. Returns the new code.
+ */
+export async function rotateJoinCode(leagueId) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.rpc('rotate_join_code', { p_league: leagueId });
+  if (error) throw error;
+  return typeof data === 'string' ? data : (data?.join_code || '');
+}
+
+/**
  * DI-T7.3 — `get_member_contacts(p_league)`. The ONLY path to a member's email
  * after migration 0007: the contact columns left the member-readable grant, so
  * a commissioner reads them here and a plain member gets back exactly their own
@@ -2578,27 +3406,35 @@ export async function listLeagueMembers(leagueId) {
 }
 
 /**
- * DI-182e "Make Commissioner" / "Make Player" — a scoped UPDATE on
- * `league_members.role`, permitted by that table's UPDATE policy for a
- * commissioner of the league (DI-182g's own "Server proof" column names the
- * policy, not an RPC; there is no `set_member_role` in the approved contract).
- * The server refuses a non-commissioner and refuses demoting the last
- * commissioner (`last_commissioner`); the client never decides either.
+ * DI-182e "Make Commissioner" / "Make Player".
+ *
+ * SECURITY GATE F2 (pass-2 security-reviewer, 2026-09-25) — this used to be a
+ * scoped `UPDATE` directly on `league_members.role`, its own separate server
+ * authority (DI-182g's original "Server proof" column names the table's own
+ * UPDATE policy, written before `admin_set_member_role` existed). Migration
+ * `0026`'s SECTION 5 (its own comment, verbatim: "js/auth.js's existing
+ * setMemberRole() becomes a thin wrapper around it, or is retired in its
+ * favor; there is only ONE function body server-side") supersedes that: a
+ * direct table UPDATE bypasses `admin_set_member_role`'s
+ * `platform_audit_log` insert AND its F6/B-3 self-promotion refusals, which a
+ * commissioner-triggered role change must carry exactly like an admin-
+ * triggered one — two write paths for the same effect is exactly the "two
+ * tallies drift" shape CLAUDE.md's institutional memory warns about
+ * elsewhere. Now a THIN WRAPPER — the RPC's own first statement
+ * (`is_platform_admin() or is_commissioner(p_league)`) already covers the
+ * commissioner-acting-on-their-own-league case this function exists for, so
+ * nothing about the caller-facing contract (arguments, error shape,
+ * behavior) changes.
  *
  * DI-182i's "immediately, not after a refresh" is the refresh call below: it is
  * the only thing that re-derives `getSession().isAdmin`, so demoting the ACTIVE
  * commissioner flips renderCommPage()'s gate on the very next render.
  */
 export async function setMemberRole(leagueId, memberId, role) {
-  const client = ensureClient();
-  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
   if (role !== 'commissioner' && role !== 'player') {
     throw new Error(`Unknown role "${String(role)}" — the role column is a one-value CHECK enum plus 'player'; a co-commissioner role is deferred (UN-182 adjacent #4).`);
   }
-  const { error } = await client
-    .from('league_members').update({ role })
-    .eq('league_id', leagueId).eq('id', memberId);
-  if (error) throw error;
+  await adminSetMemberRole(leagueId, memberId, role);
   await refreshMembershipsAndSession();
 }
 
@@ -2633,6 +3469,401 @@ export async function signInWithGoogle() {
     options: { redirectTo: (typeof window !== 'undefined' ? window.location.origin : undefined) },
   });
   if (error) throw error;
+}
+
+// ── Email/password (DI-332…DI-340, Group F "Accounts") ─────────────────────
+//
+// UN-301 — a player with no Google account signs in, resets and changes a
+// password from their own profile. Lives here, not in a new js/auth-password.js:
+// unlike js/auth-native.js (a SEPARATE file because it is platform-exclusive
+// and dynamically imported only behind getAuthPath()==='native', so a web boot
+// never fetches its bytes), password auth runs IDENTICALLY on web and native
+// through the SAME client ensureClient() already owns — there is no isolation
+// benefit to splitting it out, only a second file re-importing
+// getSupabaseClient() for nothing. Every other auth verb in this codebase
+// (joinLeague, createLeague, linkMember, signInWithGoogle, signOut) already
+// lives directly in this one file, and these follow that precedent.
+
+/** DI-339's enumeration-safe reason vocabulary. A CLOSED set: a caller (the
+ *  gate/screen render, built by the coordinator's app.js wiring) branches on
+ *  one of these strings, never on a raw Supabase error — Interaction
+ *  Principles "Errors: never expose technical messages," and the specific
+ *  security property DI-339 exists for (wrong-password and no-such-account
+ *  must render byte-identically). UNKNOWN is the honest fallback, never a
+ *  guess dressed as one of the named reasons. */
+export const PASSWORD_AUTH_REASON = Object.freeze({
+  NO_MATCH: 'no_match',                 // DI-339: wrong password OR no such account — same string, on purpose
+  EMAIL_NOT_CONFIRMED: 'email_not_confirmed', // Finding 13 / R-5 — Supabase's OWN designed error code, honestly distinct
+  WEAK_PASSWORD: 'weak_password',        // DI-334/DI-335's "needs at least N characters" row
+  SAME_PASSWORD: 'same_password',        // DI-335: "That's already your password."
+  CODE_INVALID: 'code_invalid',          // DI-334/DI-335: reset link or reauth code expired/tampered/wrong-type
+  NETWORK: 'network',                    // DI-332/333/334/335's offline copy
+  RATE_LIMITED: 'rate_limited',          // Security boundary #5 — server-side throttle, rendered calmly, no retry loop
+  // F-8 (fix round 1) — `user_already_exists` (422) is GoTrue's OWN
+  // distinguishing signal for an already-registered CONFIRMED email,
+  // surfaced only when the project's "Confirm email" setting is OFF
+  // (Security Boundary #2). Mapped here rather than to UNKNOWN: a caller
+  // that somehow still receives this rejection (signUpWithPassword() below
+  // swallows it at the source in the normal path) must render the SAME
+  // uniform "check your email" notice DI-339's sign-up row specifies, never
+  // a generic/technical fallback — that would leak the exact distinction
+  // this whole mechanism exists to hide.
+  SIGNUP_NONCOMMITTAL: 'signup_noncommittal',
+  UNKNOWN: 'unknown',
+});
+
+/**
+ * DI-339 — classifies a thrown GoTrue error into the ONE closed vocabulary
+ * above. Matched against GoTrue's own documented error-code vocabulary
+ * (https://supabase.com/docs/guides/auth/debugging/error-codes) via
+ * `err.code`/`err.error_code` first, with a text fallback against
+ * `err.message`/`err.error_description` for older/edge responses that carry
+ * no machine code — the SAME two-tier shape `_isDeadRefreshTokenError()` and
+ * `isSessionExpiredError()` above already use for the SDK's session-expiry
+ * vocabulary, applied here to its password-auth vocabulary instead.
+ *
+ * THE ENUMERATION BOUNDARY LIVES HERE, NOT AT EACH CALL SITE: GoTrue's own
+ * `invalid_credentials` rejection already covers both "wrong password" and
+ * "no such account" with one generic code — this function does not attempt
+ * to split them back apart (DI-339's whole point), so every caller gets the
+ * same NO_MATCH for both without having to know that itself.
+ */
+export function classifyPasswordAuthError(err) {
+  if (!err) return PASSWORD_AUTH_REASON.UNKNOWN;
+  const status = Number(err.status ?? err.statusCode ?? NaN);
+  const code = String(err.code ?? err.error_code ?? '');
+  const raw = `${err.message ?? ''} ${err.error_description ?? ''}`;
+  if (status === 429 || code === 'over_request_rate_limit' || code === 'over_email_send_rate_limit'
+      || /rate.?limit/i.test(raw)) return PASSWORD_AUTH_REASON.RATE_LIMITED;
+  // F-8 — checked BEFORE email_not_confirmed's text fallback below: both can
+  // mention "email" in prose, and this is the one whose UNKNOWN fallback
+  // would otherwise leak a technical-sounding string for what DI-339 says
+  // must always read as the same calm, uniform notice. NOT a bare `status
+  // === 422` alone — weak_password validation can also answer 422, and that
+  // must stay WEAK_PASSWORD (checked below), never be swallowed into this
+  // reason. `code === 'user_already_exists'` is the real signal; the status
+  // check is a narrow fallback for a response that carries no code at all.
+  //
+  // REVIEWER (b), fix round 2 — THE FALLBACK IS NARROWED TO THE KNOWN MESSAGE.
+  // `status === 422 && !code` alone is "any codeless 422", and 422 is GoTrue's
+  // general unprocessable-entity status: a malformed email, a disabled signup
+  // endpoint, a provider validation failure all answer 422 and some of them
+  // carry no machine code. Mapping those to SIGNUP_NONCOMMITTAL rendered the
+  // calm "check your email to verify your account" notice for a sign-up that
+  // had NOT happened and never would — the one failure mode worse than a
+  // technical string, because the player waits for an email that is not coming.
+  // The text term (`/user already registered/i`, GoTrue's own wording for this
+  // rejection) keeps the enumeration boundary closed for the case it exists for
+  // and lets every OTHER codeless 422 fall through to the honest reasons below.
+  if (code === 'user_already_exists' || (status === 422 && !code && /user already registered/i.test(raw))) return PASSWORD_AUTH_REASON.SIGNUP_NONCOMMITTAL;
+  if (code === 'email_not_confirmed' || /email not confirmed/i.test(raw)) return PASSWORD_AUTH_REASON.EMAIL_NOT_CONFIRMED;
+  if (code === 'same_password' || /new password should be different/i.test(raw)) return PASSWORD_AUTH_REASON.SAME_PASSWORD;
+  if (code === 'weak_password' || /password.*(?:weak|at least|too short|should contain)/i.test(raw)) return PASSWORD_AUTH_REASON.WEAK_PASSWORD;
+  if (code === 'invalid_credentials' || /invalid login credentials/i.test(raw)) return PASSWORD_AUTH_REASON.NO_MATCH;
+  if (code === 'otp_expired' || code === 'otp_disabled' || /token.*(?:expired|invalid)|invalid.*(?:token|otp|code)/i.test(raw)) return PASSWORD_AUTH_REASON.CODE_INVALID;
+  if (String(err.name ?? '') === 'AuthRetryableFetchError' || /network|fetch failed|failed to fetch/i.test(raw)) return PASSWORD_AUTH_REASON.NETWORK;
+  return PASSWORD_AUTH_REASON.UNKNOWN;
+}
+
+/**
+ * DI-332 — email/password sign-up. FINDING 7 — the caller renders DI-339's
+ * ONE uniform "check your email" notice on success REGARDLESS of outcome;
+ * this function does not attempt to tell "genuinely new" apart from
+ * "already registered" because GoTrue's own `signUp()` returns an obfuscated
+ * user (empty `identities`) for an already-registered confirmed email
+ * SPECIFICALLY so nothing downstream can make that distinction either — a
+ * differentiated render here would reconstruct the exact oracle that
+ * behaviour exists to close.
+ */
+export async function signUpWithPassword(email, password) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.signUp({ email, password });
+  if (error) {
+    // F-8 — `user_already_exists` (422) is swallowed HERE, at the source,
+    // rather than left for a caller to classify: it is GoTrue's own
+    // distinguishing signal for an already-registered CONFIRMED email,
+    // surfaced only when "Confirm email" is OFF (Security Boundary #2), and
+    // sign-up must show the SAME outcome regardless of that dashboard
+    // setting. Swallowing it here means there is nothing left for any
+    // caller to render differently — the enumeration boundary holds even if
+    // a future call site forgets to classify. classifyPasswordAuthError()
+    // still maps it to SIGNUP_NONCOMMITTAL (not UNKNOWN) as a second,
+    // independent line of defense for any path that reaches the SDK
+    // directly. Every OTHER error (network, rate-limited, weak-password)
+    // still throws normally — only this one specific rejection is silent.
+    //
+    // REVIEWER (b), fix round 2 — the codeless-422 fallback is narrowed to
+    // GoTrue's own known wording, exactly as classifyPasswordAuthError()'s is
+    // (see its comment for why "any codeless 422" was too wide: it swallowed
+    // real sign-up failures into a "check your email" notice for an email that
+    // would never arrive). A codeless 422 that does NOT say "user already
+    // registered" throws like every other rejection.
+    const status = Number(error.status ?? error.statusCode ?? NaN);
+    const code = String(error.code ?? error.error_code ?? '');
+    const raw = `${error.message ?? ''} ${error.error_description ?? ''}`;
+    if (code === 'user_already_exists' || (status === 422 && !code && /user already registered/i.test(raw))) return;
+    throw error;
+  }
+}
+
+/** DI-332 — email/password sign-in. Also reused, UX-ONLY, by DI-335's Change
+ *  screen as an early pre-check (Finding 3) — explicitly NOT the security
+ *  control there (a client-side check is bypassable by calling updateUser()
+ *  directly); requestPasswordChangeCode()/updatePassword()'s nonce is. */
+export async function signInWithPassword(email, password) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+}
+
+/**
+ * STEP B(6) / N3 (3c fix window, third pass) — resend the sign-up
+ * verification email for an account Supabase has already told the visitor is
+ * unverified (`email_not_confirmed`). Same redirect constant as the reset
+ * request (never `window.location.origin`, Finding 12).
+ */
+export async function resendSignupVerification(email) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.resend({ type: 'signup', email, options: { emailRedirectTo: PASSWORD_RESET_REDIRECT_URL } });
+  if (error) throw error;
+}
+
+/**
+ * DI-333 — the REQUEST half of password reset. Supabase's own
+ * `resetPasswordForEmail()` already answers non-committally regardless of
+ * whether the email exists (DI-339's enumeration boundary) — nothing here
+ * weakens or strengthens that. `redirectTo` is the module constant above,
+ * NEVER `window.location.origin` (Finding 12).
+ */
+export async function requestPasswordReset(email) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.resetPasswordForEmail(email, { redirectTo: PASSWORD_RESET_REDIRECT_URL });
+  if (error) throw error;
+}
+
+/**
+ * DI-334 FINDING 1/R-2 — true from the moment a PASSWORD_RECOVERY event lands
+ * (`_handleAuthStateChange`'s narrow arm above) until updatePasswordForRecovery()
+ * succeeds or cancelRecovery() runs. The coordinator's app.js gate wiring
+ * consults this to keep `#site-gate-overlay` up for a recovery session even
+ * though it carries a full-privilege access token indistinguishable at the
+ * token level from an ordinary one — `#site-gate-overlay` must never be
+ * removed, and the app must not be un-withheld, while this reads true.
+ *
+ * SECURITY F-3 — reads TRUE if EITHER the in-memory flag OR the device-local
+ * marker is set. The in-memory flag is what a listener sees the instant the
+ * PASSWORD_RECOVERY event fires (no localStorage round trip on the hot
+ * path); the marker is what survives a reload the flag alone cannot (see
+ * _handleAuthStateChange's INITIAL_SESSION arm, which is the actual
+ * enforcement — this getter only has to tell the truth about both).
+ */
+export function isRecoverySession() { return _recoverySession || _isRecoveryPendingOnDevice(); }
+
+/**
+ * DI-334 FINDING 1 — "any exit before completion — Back, close, reload —
+ * calls signOut()." A dangling recovery session (tab closed mid-flow, app
+ * backgrounded and resumed hours later) must not persist as a live,
+ * narrow-but-real authenticated state; the player starts over from the email
+ * link. Flags cleared FIRST so a listener woken by the SIGNED_OUT emit below
+ * never reads a recovery session that is already being torn down.
+ */
+export async function cancelRecovery() {
+  _recoverySession = false;
+  _setRecoveryPendingOnDevice(false);
+  await signOut();
+}
+
+/**
+ * DI-334 FINDING 5 — the token-hash path, NOT an implicit PKCE redirect. The
+ * client is configured `flowType:'pkce'` (ensureClient() above), and a PKCE
+ * code-verifier is generated and stored ONLY on the device that INITIATED the
+ * reset request — `signOut()`/`_clearExpiredSessionFromDevice()` deliberately
+ * sweep it, and it essentially never survives to the device that actually
+ * clicks the email link (Mail.app, Gmail — not the tab that requested the
+ * reset, in the overwhelming common case). `verifyOtp({type:'recovery',
+ * token_hash})` is stateless and needs nothing stored on the requesting
+ * device; it is what PRODUCES the PASSWORD_RECOVERY session Finding 1's gate
+ * rules apply to the moment it fires. Drew's recovery email template must use
+ * Supabase's `{{ .TokenHash }}` placeholder, not the default PKCE-code link
+ * (dashboard step 4) — a PKCE-code link fails silently for a real cross-device
+ * reset.
+ */
+export async function verifyPasswordRecovery(tokenHash) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.verifyOtp({ type: 'recovery', token_hash: tokenHash });
+  if (error) throw error;
+}
+
+/**
+ * DI-334 — called AFTER verifyPasswordRecovery() has already produced the
+ * gated recovery session; that session IS the proof (no separate nonce — the
+ * whole of Finding 1's hard rules held the gate up for the entire time this
+ * session existed). Clears the recovery flags on success so the coordinator's
+ * gate wiring can un-withhold exactly the way `refreshAuthUI()` removes the
+ * gate on any other genuine SIGNED_IN-equivalent state.
+ *
+ * REVIEWER BLOCK item 3 — REQUIRES isRecoverySession() true on entry. Without
+ * this, calling updateUser({password}) with NO nonce outside a gated recovery
+ * session would be exactly Finding 3's original defect (an advisory-only
+ * password change with nothing server-side enforcing "recently
+ * authenticated") reintroduced through this function's own back door — the
+ * whole reason this call is allowed to omit a nonce at all is that the
+ * VERIFIED recovery session is the proof, and that is only true while one is
+ * actually active.
+ */
+export async function updatePasswordForRecovery(newPassword) {
+  if (!isRecoverySession()) {
+    throw new Error('updatePasswordForRecovery() requires an active recovery session (DI-334 Finding 1).');
+  }
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+  _recoverySession = false;
+  _setRecoveryPendingOnDevice(false);
+  // ══ B1 FIX (2026-09-25, 3c fix window) — A TIMING GAP THE OLD COMMENT AT THE
+  //    CALL SITE ASSUMED AWAY. ═══════════════════════════════════════════════
+  // The vendored SDK's `updateUser()` fires `USER_UPDATED` synchronously
+  // (inside the `await` above), i.e. BEFORE the two flag clears on the lines
+  // just above this comment run. At the instant that USER_UPDATED reaches
+  // `_handleAuthStateChange`, `isRecoverySession()` still read true — correct,
+  // the gate must stay up until the flags are actually cleared — but it also
+  // means NO further SDK event will fire announcing the moment the flags DO
+  // clear a few lines later. The coordinator's own call-site comment
+  // ("nothing to remove by hand") assumed the ordinary SIGNED_IN-equivalent
+  // path would still take the gate down; it cannot, because that path already
+  // ran and found the gate correctly held. So: fetch the SDK's own current
+  // session (updateUser() already refreshed it in place) and hand it to the
+  // SAME internal handler a genuine SIGNED_IN event would reach, now that the
+  // flags are clear — the gate comes down and memberships refresh through the
+  // one real code path, not a bespoke shortcut.
+  let freshSession = null;
+  try {
+    const { data } = await client.auth.getSession();
+    freshSession = data?.session || null;
+  } catch (e) { console.warn('[auth] could not read session after recovery completion', e); }
+  _handleAuthStateChange('SIGNED_IN', freshSession);
+}
+
+/**
+ * DI-335 FINDING 3 — the server-verified reauthentication step, used by BOTH
+ * the Set and Change variants. Emails a one-time nonce to the account's own
+ * verified email via Supabase's `reauthenticate()`. THIS is the real control
+ * (not signInWithPassword()'s UX-only pre-check above) — requires Authentication
+ * → "Secure password change (require recent authentication)" = ON in the
+ * project dashboard (DI-335's own MUST-VERIFY step) or the nonce this pair
+ * requires has nothing enforcing it server-side.
+ */
+export async function requestPasswordChangeCode() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.auth.reauthenticate();
+  if (error) throw error;
+}
+
+/**
+ * DI-335 FINDING 3 — nonce REQUIRED on every call, no path skips it. This is
+ * the single function both the Set and Change variants of DI-335 use —
+ * replacing the earlier draft's split (a bare `updatePassword(current, new)` /
+ * `setInitialPassword(new)`), since both variants now go through the identical
+ * reauthenticate-then-update flow. A caller that omits the nonce gets a loud,
+ * local failure rather than a silent, advisory-only password change.
+ *
+ * SECURITY GATE F3 (3c fix window, 2026-09-25) — A SERVER-SIDE RESIDUAL, NOT
+ * FULLY CLOSED BY THIS CLIENT CODE. Even with Authentication -> "Secure
+ * password change (require recent authentication)" = ON, GoTrue's own
+ * enforcement of that setting is CONDITIONAL: it only requires the nonce when
+ * the current session is OLDER than ~24 hours; a session under 24h old can
+ * still call `client.auth.updateUser({password})` with NO nonce and succeed
+ * server-side, regardless of what this client sends. This function's "no path
+ * skips it" guarantee is therefore a CLIENT-SIDE property only — it proves no
+ * code IN THIS APP constructs a nonce-less password-change call, not that the
+ * server would refuse one from elsewhere (devtools, a compromised client,
+ * curl). The nonce stays mandatory here regardless — removing it would weaken
+ * the common case for no benefit — but Drew must verify the residual
+ * end-to-end on `cfbp-test`: sign in with a FRESH (<24h) session and confirm
+ * whether `supabase.auth.updateUser({password})` (no nonce, called directly)
+ * succeeds. This check is also written into `MIGRATION_BATCH_092526.md`'s
+ * dashboard/verification list. If it succeeds, the mitigation is "the client
+ * never does this," not "the server refuses it" — a real, accepted, dated gap
+ * this comment states rather than hides.
+ */
+export async function updatePassword(newPassword, nonce) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  if (!nonce) throw new Error('updatePassword() requires a reauthentication nonce (DI-335 Finding 3) — there is no path that skips it.');
+  const { error } = await client.auth.updateUser({ password: newPassword, nonce });
+  if (error) throw error;
+}
+
+/** F-6 — a distinguishable refusal reason, so a caller can render DI-340's
+ *  specific "Hand your league to another commissioner first." copy instead
+ *  of the generic loud-fail string. `.reason` is the one machine-readable
+ *  field; the message is a reasonable default if a caller doesn't branch on
+ *  the reason at all. */
+export class AccountDeleteRefusedError extends Error {
+  constructor(reason, message) {
+    super(message || reason);
+    this.name = 'AccountDeleteRefusedError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * DI-340 — a thin wrapper around the server-side Edge Function, invoked with
+ * the caller's OWN session (never a service-role/admin path from the
+ * browser — CLAUDE.md's standing rule). The function's own internal design
+ * (the SECURITY DEFINER RPC, then — F-2, security-reviewer fix round 1 — the
+ * Admin API call; NO separate audit_log stamp, since `audit_row()`/
+ * `audit_league_members` (0004_audit.sql:110) already records the RPC's own
+ * UPDATE per membership, inside the same transaction, with `actor_user_id =
+ * auth.uid()`) is server-side and out of this wrapper's concern (Finding
+ * 4/8) — this function's shape is unchanged by any of that. On success, runs
+ * the existing signOut()/local-cleanup path exactly as DI-340's flow
+ * describes; a failure (including the safe partial-failure state where the
+ * RPC succeeded but the Admin API call did not) is thrown for the caller to
+ * render as DI-340's one loud "couldn't delete" copy — never a silent
+ * success.
+ */
+export async function deleteOwnAccount() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.functions.invoke('account-delete');
+  if (error) {
+    // F-6 — the Edge Function's own named refusal reasons (e.g.
+    // 'last_commissioner') arrive as a non-2xx JSON BODY the SDK does not
+    // parse for us: `FunctionsHttpError` (vendor/supabase-js-2.116.0.js)
+    // carries only the raw, unconsumed Response as `.context`. Read it here
+    // so the caller gets a NAMED reason rather than the generic string.
+    if (error && error.name === 'FunctionsHttpError' && error.context
+        && typeof error.context.json === 'function') {
+      let body = null;
+      try { body = await error.context.json(); } catch { body = null; }
+      if (body && body.error === 'last_commissioner') {
+        throw new AccountDeleteRefusedError('last_commissioner',
+          'You are the only commissioner of a league. Hand it to another commissioner before deleting your account.');
+      }
+    }
+    throw error;
+  }
+  // F-7 — a 200 response can still be `{ok:true, skipped:'not_configured', …}`
+  // (SKIPPED.NOT_CONFIGURED's own shape — see the Edge Function's own step 4
+  // comment on the safe partial-failure state). `data.ok !== true` alone
+  // would NOT catch that: envelopeSkipped() sets `ok:true` too. Success is
+  // ONLY `data.what === 'deleted'` — the one shape envelopeOk() produces on
+  // this handler's actual success path — so that is the real check, not
+  // merely the network-level `ok`.
+  if (!data || data.ok !== true || data.what !== 'deleted') {
+    const detail = data && (data.skipped || data.error);
+    throw new Error('account-delete did not confirm success' + (detail ? `: ${detail}` : ''));
+  }
+  await signOut();
+  return data;
 }
 
 /**
@@ -3361,7 +4592,17 @@ function _clearExpiredSessionFromDevice(err) {
     try { localStorage.removeItem(AUTH_STORAGE_KEY); } catch {}
     _removeLocalKeysWithPrefix(`${AUTH_STORAGE_KEY}-`);
     _membershipsCache = null;
+    // Security fix round (2026-09-25), FINDING 1 — reset alongside every
+    // other identity cache this function clears; see the SIGNED_OUT branch
+    // in _handleAuthStateChange() for the full reasoning.
+    _isPlatformAdminCache = false;
+    _isSuperAdminCache = false;
     _accountEmail = '';
+    _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
+    // DI-334 FINDING 1 — a destroyed session is an exit; a recovery flag left
+    // true on top of a cleared session would be a state nothing can complete.
+    _recoverySession = false;
+    _setRecoveryPendingOnDevice(false);
     // Through the ONE setter — a destroy voids the identity, so an in-flight
     // read issued for it may not land afterwards either (security F-1).
     _setAccountUserId('', { notify: false, reason: 'expired-session-cleared' });
@@ -3423,7 +4664,22 @@ export async function signOut() {
   _withIdentityBatch(() => {
     _membershipsCache = null;
     _membershipsError = null;
+    // Security fix round (2026-09-25), FINDING 1 — reset alongside every
+    // other identity cache this function clears; see the SIGNED_OUT branch
+    // in _handleAuthStateChange() for the full reasoning.
+    _isPlatformAdminCache = false;
+    _isSuperAdminCache = false;
     _accountEmail = '';
+    _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
+    // DI-334 FINDING 1 — cancelRecovery() already clears this before calling
+    // signOut(), but every OTHER caller of signOut() (the ordinary "Sign Out"
+    // tap, deleteOwnAccount()'s post-success cleanup) must not leave a stale
+    // recovery flag behind either. This is also the path the F-3 INITIAL_SESSION
+    // arm relies on: it calls signOut(), and signOut() clearing the marker HERE
+    // is what stops the very next INITIAL_SESSION (fired by the SDK's own
+    // SIGNED_OUT->cleared-storage sequence) from re-triggering the same branch.
+    _recoverySession = false;
+    _setRecoveryPendingOnDevice(false);
     // Through the ONE setter (the epoch has already moved at the top of this
     // function; this is the state write, and it keeps term 1 to a single writer).
     _setAccountUserId('', { notify: false, reason: 'signOut' });
@@ -3489,8 +4745,15 @@ export function _resetAuthForTest() {
   _hasSupabaseDataBackendOverrideForTest = null;
   _membershipsCache = null;
   _membershipsError = null;
+  _isPlatformAdminCache = false;
+  _isSuperAdminCache = false;
   _accountEmail = '';
   _accountUserId = '';
+  _accountProviders = null; // N4 — per-PAGE cache, same lifecycle as the pair above
+  // DI-334 FINDING 1 — per-PAGE state, same lifecycle as the identity pair
+  // right above it; a suite driving several sections must not have one
+  // section's recovery gate leak into the next.
+  _recoverySession = false;
   // Security F-1 — the epoch is per-PAGE state, and a suite driving several
   // sections is several pages. Leaving it advanced would be harmless; leaving
   // the two latches behind would not, which is why they are nulled above.
@@ -3505,6 +4768,18 @@ export function _resetAuthForTest() {
   try { localStorage.removeItem(LAST_AUTH_MODE_KEY); } catch {}
   // DI-180q — per-DEVICE state, and a suite's sections are different devices.
   try { localStorage.removeItem(DEVICE_DATA_OWNER_KEY); } catch {}
+  // SECURITY F-3 — RECOVERY_PENDING_KEY is DELIBERATELY NOT cleared here,
+  // unlike every other key above. The whole property this marker exists to
+  // prove is that it SURVIVES an in-memory reset (a reload fires
+  // INITIAL_SESSION against a fresh module instance, and this function's
+  // own in-memory clears are the closest offline stand-in for "a fresh
+  // module instance") — a test proving that has to reset() and then find
+  // the marker still there, exactly the way a real reload would. A section
+  // that wants a genuinely clean device (no dangling marker from a
+  // PREVIOUS section) clears it itself via
+  // `localStorage.removeItem(_RECOVERY_PENDING_KEY_FOR_TEST)` — an explicit
+  // per-section choice, not a blanket reset that would make the
+  // survives-a-reload property untestable from this file.
   // Step 3b — the last reconcile outcome is per-PAGE, same lifecycle as the
   // marker above. Left behind, it would make the next section's confirmation
   // card claim a re-download that belonged to the previous one.
@@ -3555,6 +4830,7 @@ export function _isMembershipRefreshInFlightForTest() { return _membershipRefres
 export function _setDeviceDataOwnerForTest(tuple) { return _setDeviceDataOwner(tuple); }
 export const _AUTH_STORAGE_KEY_FOR_TEST = AUTH_STORAGE_KEY;
 export const _DEVICE_DATA_OWNER_KEY_FOR_TEST = DEVICE_DATA_OWNER_KEY;
+export const _RECOVERY_PENDING_KEY_FOR_TEST = RECOVERY_PENDING_KEY;
 export const _ACTIVE_LEAGUE_KEY_FOR_TEST = ACTIVE_LEAGUE_KEY;
 export const _LAST_AUTH_MODE_KEY_FOR_TEST = LAST_AUTH_MODE_KEY;
 export const _SIGNOUT_LOCAL_KEYS_FOR_TEST = _SIGNOUT_LOCAL_KEYS;

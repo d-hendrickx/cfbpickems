@@ -70,12 +70,16 @@ const CORS_FALLBACKS = [
 // refreshtest.mjs:524 [5h-3] (…while the browser's fallback is unchanged).
 const FETCH_TIMEOUT_MS = 12000;
 
-/** SECURITY S1 — the server path's own ceilings, applied ONLY when a caller asks
- *  for them (`maxBytes: 0` is the browser default and takes the untouched
- *  `res.json()` branch below). A scoreboard page is ~1 MB at its largest; the
- *  cap is generous enough that a real payload can never trip it and small enough
- *  that a redirected/hostile endpoint cannot stream an Edge invocation to death. */
-export const SERVER_FETCH_DEFAULTS = Object.freeze({ allowProxy: false, timeoutMs: 10000, maxBytes: 8 * 1024 * 1024 });
+// SECURITY S1 — the server path's own ceilings (timeout, `maxBytes`, and since
+// RG-260 a `userAgent`) are applied ONLY when a caller asks for them (`maxBytes: 0`
+// is the browser default and takes the untouched `res.json()` branch below). A
+// scoreboard page is ~1 MB at its largest; the cap is generous enough that a real
+// payload can never trip it and small enough that a redirected/hostile endpoint
+// cannot stream an Edge invocation to death. The values live in ONE place:
+// supabase/functions/_shared/job-rules.mjs `SCORES_REFRESH_FETCH`, built only via
+// `scoresRefreshFetchOptions()`. (A mirror here, `SERVER_FETCH_DEFAULTS`, had no
+// readers and had drifted — no userAgent — so it was deleted 2026-09-26;
+// functions.check S6-R3 keeps a second copy from returning.)
 
 const _state = {
   lastFetchUrl:       null,
@@ -210,7 +214,7 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
   // SECURITY S1 — `fetchOptions` is forwarded to resilientFetch() UNCHANGED and
   // is empty for every browser call site (js/app.js's doRefreshScores()), so the
   // client behaviour is byte-identical. `scores-refresh/index.js` is the one
-  // caller that fills it: { allowProxy:false, timeoutMs, maxBytes }.
+  // caller that fills it: { allowProxy:false, timeoutMs, maxBytes, userAgent }.
   // Bucket games by sport (default cfb)
   const bySport = new Map();
   for (const g of storedGames) {
@@ -293,8 +297,11 @@ export function getLastFetchUrl()  { return _state.lastFetchUrl; }
 
 // ─── RESILIENT FETCH ──────────────────────────────────────────────────────────
 
-async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS, { allowProxy = true, timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0 } = {}) {
-  const directResult = await attemptFetch(espnUrl, 'direct', { timeoutMs, maxBytes });
+async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS, { allowProxy = true, timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0, userAgent = '' } = {}) {
+  // RG-260 candidate (2026-09-26) — `userAgent` reaches the DIRECT fetch only.
+  // The proxy loop below never receives it: the only caller that sets it
+  // (scores-refresh) also sets allowProxy:false, and a proxy is not ESPN's edge.
+  const directResult = await attemptFetch(espnUrl, 'direct', { timeoutMs, maxBytes, userAgent });
   if (directResult.ok) return finalise(directResult, espnUrl, 'direct', almaMaters);
 
   // SECURITY S1 — the ONE early return. A server caller's direct fetch failing
@@ -320,9 +327,21 @@ async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS, { allowProxy = 
   return { games: [], error: errorMsg, usingDemo: false, espnUrl };
 }
 
-async function attemptFetch(url, method, { timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0 } = {}) {
+async function attemptFetch(url, method, { timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0, userAgent = '' } = {}) {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json' } });
+    // RG-260 candidate (2026-09-26) — the User-Agent is OPT-IN, like maxBytes.
+    // ESPN's edge began answering 403 to Deno's default `Deno/<ver>`, so the
+    // server path (scores-refresh) passes an explicit one. A BROWSER MUST NEVER
+    // pass it: the Fetch spec no longer forbids User-Agent (Firefox honours a
+    // script-set value, Chromium ignores it), and a script-set value is not
+    // CORS-safelisted, so it would force a preflight ESPN does not answer and
+    // break the fetch. What protects the browser is that no browser call site
+    // passes the option — absent/empty ⇒ the headers object is exactly what it
+    // always was (CONVENTIONS #10). Pinned by refreshtest.mjs 5j-1 / 5j-2 /
+    // 5j-2b (browser) and 5j-3 / 5j-4, and scoresRefresh.twin.mjs [13] (server).
+    const headers = { Accept: 'application/json' };
+    if (typeof userAgent === 'string' && userAgent) headers['User-Agent'] = userAgent;
+    const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status} from ${method}` };
     // SECURITY S1 — the size cap is OPT-IN (`maxBytes: 0` = off) so the browser
     // keeps the exact `res.json()` call it has always made. The capped branch
@@ -435,6 +454,22 @@ function finalise(result, espnUrl, method, almaMaters = ALMA_MATERS) {
 // ─── PARSE + QUALITY REPORT ───────────────────────────────────────────────────
 
 /**
+ * DI-331b/AD-94, security review E-2 follow-up (2026-09-25, reviewer note) —
+ * coerces an ESPN logo URL to match `sql-drafts/E_logos.sql`'s CHECK
+ * constraint EXACTLY (`^https://`, length <= 300), so a malformed/unexpected
+ * value degrades to the name fallback (DI-331d) client-side rather than
+ * reaching a PATCH that Postgres would reject outright — a rejected PATCH
+ * fails the WHOLE games write (every changed field in that row, not just
+ * the logo), which is a strictly worse outcome than one game quietly
+ * rendering its name instead of its logo. Exported so this exact coercion
+ * is testable directly (`brandtokentest.mjs`), not just observed indirectly
+ * through a full ESPN fixture.
+ */
+export function logoOk(u) {
+  return (typeof u === 'string' && /^https:\/\//.test(u) && u.length <= 300) ? u : null;
+}
+
+/**
  * Parse ESPN events into game objects.
  * startDate/endDate: filter games outside requested range.
  */
@@ -473,6 +508,16 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
     const homeTeam = homeSchool;
     const awayTeam = awaySchool;
     if (!homeTeam || !awayTeam) { withUnknownTeam++; return null; }
+
+    // DI-331b (T-31, AD-94) — ESPN's competitor object also carries
+    // `team.logo`, a CDN URL, at the same depth as `team.location`/
+    // `team.name` read above. Captured directly, no curation of a local
+    // logo set (D-12's ruling). `logoOk()` (defined above, exported) coerces
+    // to the DB CHECK constraint's exact shape (https://, <=300 chars) — an
+    // absent or malformed logo reads as null, the createGame() default,
+    // never an empty string or a value the database would reject.
+    const homeLogo = logoOk(home.team?.logo);
+    const awayLogo = logoOk(away.team?.logo);
 
     // ── Kickoff time validation ──────────────────────────────────────────────
     // ESPN sends event.date for every event, but when the time is not yet
@@ -620,6 +665,7 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       dataQuality:    dq,
       dataSource:     method === 'direct' ? 'espn_live' : 'espn_historical',
       homeTeam, awayTeam,
+      homeLogo, awayLogo,
       homeMascot, awayMascot,
       homeConference: homeConf, awayConference: awayConf,
       homeRank, awayRank,

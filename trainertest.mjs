@@ -518,9 +518,16 @@ console.log('\n[10] RG-10 for both new cards — negative test across week/games
   const appMod = await import('./js/app.js');
   const storageMod = await import('./js/storage.js');
 
+  // UX Revamp wiring pass 3a (2026-09-25) — this card relocated whole to the
+  // Admin panel (DI-320 §Data, "SCRIBE Training"); js/admin-panel.js's
+  // cardShell() now supplies the ONE `.admin-section[data-admin-tab="data"]`
+  // wrapper (adminpaneltest.mjs owns that contract). This function returns
+  // BARE inner content — the double-wrap fix WIRING_CHECKLIST_B_092526.md
+  // named — so RG-10's "exactly one tag" guarantee is now enforced one
+  // layer up, not by this function carrying its own tag at all.
   const dataSection10 = appMod.renderScribeTrainerAdminSectionHTML();
-  assert(/^\s*<div class="admin-section" data-comm-tab="data">/.test(dataSection10), 'renderScribeTrainerAdminSectionHTML() returns markup wrapped in data-comm-tab="data"');
-  assert(!/data-comm-tab="(week|games|players|settings)"/.test(dataSection10), 'RG-10 negative: the card never ALSO tags itself onto week/games/players/settings');
+  assert(!/<div class="admin-section"/.test(dataSection10), 'renderScribeTrainerAdminSectionHTML() returns BARE content — no self-wrapping <div class="admin-section"> (double-wrap fix, UX Revamp wiring pass 3a)');
+  assert(!/data-comm-tab/.test(dataSection10), 'RG-10 negative: the card carries no data-comm-tab of its own at all — it is not a Commissioner-panel surface any more');
 
   const rulesCardEmpty10 = appMod.renderScribeTrainingCardHTML();
   assert(/Nothing yet/.test(rulesCardEmpty10), 'empty-state copy renders when no report exists yet');
@@ -1679,6 +1686,116 @@ console.log("\n[29] REVIEWER NOTE 5 (2026-09-20) — once serverJobs.trainer is 
     '29-3: js/scribeAgent.js imports NOTHING from js/backend.js — the four relays it wrapped (scribeAsk, runTrainer, scribeAutonomous, scribeClassify) are deleted, so the double-spend this section was written about is closed by construction rather than by a gate that could be edited');
 
   storageMod29.saveSetting('serverJobs', settings29.serverJobs === undefined ? {} : settings29.serverJobs);
+}
+
+console.log('\n[30] Reviewer BLOCK fix F1 (DI-318 pilot check, 2026-09-25) — `extractFunctionErrorMessage()` reads the Edge Function\'s OWN refusal body off a FunctionsHttpError…');
+{
+  const scribeAgent30 = await import('./js/scribeAgent.js');
+
+  // 30-1 — THE LIVE DEFECT'S EXACT SHAPE: a 403 with DI-318's copy in the body. The rendered
+  // message (what js/app.js's catch toasts as err.message) must equal the DI copy verbatim.
+  const pilotOnlyError = {
+    name: 'FunctionsHttpError',
+    message: 'Edge Function returned a non-2xx status code',
+    context: { json: async () => ({ ok: false, error: 'This feature is only available to the pilot league.', runId: 'trainer_x' }) },
+  };
+  const msg301 = await scribeAgent30.extractFunctionErrorMessage(pilotOnlyError);
+  assert(msg301 === 'This feature is only available to the pilot league.',
+    `30-1: the RENDERED message equals DI-318's exact copy for a 403 pilot_only body (got ${JSON.stringify(msg301)})`);
+
+  // 30-2 — runTrainerViaEdgeFunction()'s own catch shape: given no signed-in league it returns
+  // the ok:false envelope rather than throwing, so this suite cannot drive the network path
+  // directly (no injectable Supabase client) — 30-1 above is the load-bearing proof, and this
+  // pins that the function still exists and is exported for app.js/the caller's own catch to use.
+  assert(typeof scribeAgent30.runTrainerViaEdgeFunction === 'function',
+    '30-2: runTrainerViaEdgeFunction is still exported (the caller js/app.js\'s click handler depends on)');
+
+  // 30-3 — the F-6 precedent's OTHER named case (account-delete's last_commissioner) is a
+  // DIFFERENT function with its own reason-code mapping (js/auth.js, untouched by this fix) —
+  // this helper is intentionally generic (any body.error string, not a closed set), because the
+  // Trainer's refusal set is not enumerated the way account-delete's is. Confirms it is NOT
+  // narrowed to the one string this DI happens to need.
+  const genericError = {
+    name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
+    context: { json: async () => ({ ok: false, error: 'league_status_unreadable', runId: 'trainer_y' }) },
+  };
+  const msg303 = await scribeAgent30.extractFunctionErrorMessage(genericError);
+  assert(msg303 === 'league_status_unreadable',
+    `30-3: the helper is generic — ANY body.error string is read, not a hard-coded pilot-only check (got ${JSON.stringify(msg303)})`);
+
+  // 30-4/30-5 — the FALLBACK path: no context, or a context whose .json() rejects, both answer
+  // null so the caller falls back to the SDK's own generic message rather than throwing here.
+  const noContextError = { name: 'FunctionsHttpError', message: 'network down' };
+  const msg304 = await scribeAgent30.extractFunctionErrorMessage(noContextError);
+  assert(msg304 === null, `30-4: no \`.context\` at all -> null, the caller keeps the SDK's own message (got ${JSON.stringify(msg304)})`);
+  const badJsonError = { name: 'FunctionsHttpError', message: 'x', context: { json: async () => { throw new Error('not json'); } } };
+  const msg305 = await scribeAgent30.extractFunctionErrorMessage(badJsonError);
+  assert(msg305 === null, `30-5: a \`.context.json()\` that throws -> null, never an unhandled rejection (got ${JSON.stringify(msg305)})`);
+
+  // 30-6 — a non-HTTP error (e.g. FunctionsFetchError, a genuine network failure) is untouched.
+  const fetchError = { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' };
+  const msg306 = await scribeAgent30.extractFunctionErrorMessage(fetchError);
+  assert(msg306 === null, `30-6: a non-FunctionsHttpError (e.g. a network failure) -> null (got ${JSON.stringify(msg306)})`);
+}
+
+console.log('\n[31] Reviewer BLOCK coverage note (2026-09-25) — `functionInvokeError()` is the DECISION, and `runTrainerViaEdgeFunction()` is PINNED to actually call it…');
+{
+  // Without this section, reverting runTrainerViaEdgeFunction()'s catch to a bare `throw error;`
+  // left every §[30] assertion green — §[30] tests the EXTRACTION helper, never the caller. This
+  // section closes that gap: it asserts the DECISION function directly, and then asserts the
+  // caller's own SOURCE TEXT still invokes it, so the two cannot drift apart silently again.
+  const scribeAgent31 = await import('./js/scribeAgent.js');
+
+  // 31-1 — the live defect's shape, through the DECISION function this time (not the extractor):
+  // a 403 pilot-only body becomes `new Error('<DI copy>')`.
+  const pilotOnly403 = {
+    name: 'FunctionsHttpError', message: 'Edge Function returned a non-2xx status code',
+    context: { json: async () => ({ ok: false, error: 'This feature is only available to the pilot league.', runId: 'trainer_z' }) },
+  };
+  const decided311 = await scribeAgent31.functionInvokeError(pilotOnly403);
+  assert(decided311 instanceof Error && decided311.message === 'This feature is only available to the pilot league.',
+    `31-1: functionInvokeError() on a 403 pilot_only body returns an Error whose .message is DI-318's exact copy (got ${JSON.stringify(decided311 && decided311.message)})`);
+
+  // 31-2 — IDENTITY, not just message equality: when there is no function-supplied body to
+  // prefer, the ORIGINAL error object comes back untouched — never a copy, never a rewrap. A
+  // caller (or a future test) that checks `instanceof FunctionsFetchError`, a custom property a
+  // real supabase-js error carries, or reference equality for logging/dedup must still see the
+  // same object it handed in.
+  const fetchError31 = { name: 'FunctionsFetchError', message: 'Failed to send a request to the Edge Function' };
+  const decided312 = await scribeAgent31.functionInvokeError(fetchError31);
+  assert(decided312 === fetchError31,
+    `31-2: functionInvokeError() on a non-HTTP error returns the SAME object by reference, not a copy (got ${decided312 === fetchError31 ? 'same' : 'different'})`);
+
+  // 31-3 — SOURCE-SHAPE assertion, S6-R22 style: `runTrainerViaEdgeFunction()`'s own body must
+  // contain the literal call `throw await functionInvokeError(`, comment-stripped, so the
+  // extraction and the decision cannot silently drift apart — a revert to `throw error;` (the
+  // exact regression this section exists to catch) fails this assertion even though every
+  // §[30]/31-1/31-2 assertion above it would still be green in isolation.
+  const agentSrc31 = await readFile(fileURLToPath(new URL('./js/scribeAgent.js', import.meta.url)), 'utf8');
+  const agentLines31 = agentSrc31.split('\n').map((l) => (l.trim().startsWith('//') ? '' : l));
+  const fnStart31 = agentLines31.findIndex((l) => /export async function runTrainerViaEdgeFunction\s*\(/.test(l));
+  assert(fnStart31 > -1, '31-3: fixture check — runTrainerViaEdgeFunction()\'s declaration is found in js/scribeAgent.js');
+  // BRACE-DEPTH matched, not "the first line that is a bare `}`" — the function's own early
+  // return (`if (!client || !leagueId) { return {...}; }`) closes an INNER block with exactly
+  // that shape before the function itself ends, which a naive first-`}` search mistook for the
+  // function's own close and truncated the body before ever reaching the catch clause below.
+  let depth31 = 0, fnEnd31 = -1;
+  for (let i = fnStart31; i < agentLines31.length; i += 1) {
+    for (const ch of agentLines31[i]) {
+      if (ch === '{') depth31 += 1;
+      else if (ch === '}') { depth31 -= 1; if (depth31 === 0) { fnEnd31 = i; break; } }
+    }
+    if (fnEnd31 > -1) break;
+  }
+  const fnBody31 = agentLines31.slice(fnStart31, fnEnd31 + 1).join('\n');
+  assert(/throw await functionInvokeError\(/.test(fnBody31),
+    `31-3: runTrainerViaEdgeFunction()'s own body (comment-stripped) contains the literal call \`throw await functionInvokeError(\` — a bare \`throw error;\` revert fails this line even though it would leave §[30]/31-1/31-2 green (function body: ${JSON.stringify(fnBody31)})`);
+
+  // 31-3 mutation canary — proves the regex above is not vacuous: the pre-fix shape it exists to
+  // catch really does fail it.
+  const preFixBody31 = 'export async function runTrainerViaEdgeFunction() {\n  if (error) throw error;\n  return data;\n}';
+  assert(!/throw await functionInvokeError\(/.test(preFixBody31),
+    '31-3 canary: the PRE-FIX shape (`throw error;`, no functionInvokeError call) correctly fails the source-shape check — confirms it is capable of catching the exact regression it is written for');
 }
 
 console.log('\n══════════════════════════════════════════════════');

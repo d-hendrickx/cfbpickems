@@ -526,8 +526,37 @@ console.log('\n[12] THE CHANGELOG POST — announced, attributed, and one line�
     `12-4: crediting the player by display name — UN-252's own acceptance criterion (got ${JSON.stringify(post.body)})`);
   assert(post.body.length <= 1000,
     `12-5: inside \`messages.body\`'s 1000-char CHECK, which the service role does NOT bypass — an over-long insert fails 23514 and the announcement silently never appears (got ${post.body.length})`);
-  assert(post.id === changelog.changelogMessageId('sl_1') && post.id.includes('sl_1'),
-    '12-6: the id is derived from the learning id, so a retried run announces ONCE');
+  assert(post.id === `${changelog.changelogMessageId('sl_1')}__private` && post.id.includes('sl_1'),
+    `12-6: the id is derived from the learning id, so a retried run announces ONCE — and carries the DI-292 private suffix because this post has a credited playerId (got ${post.id})`);
+  assert(post.visible_to === 'p2',
+    `12-6a [DI-290]: a credited playerId makes the row private to exactly that member (got ${JSON.stringify(post.visible_to)})`);
+  assert(post.body.endsWith(changelog.CHANGELOG_PRIVATE_LINE),
+    `12-6b [DI-291]: the private tell is the LAST clause of the body (got ${JSON.stringify(post.body)})`);
+  {
+    const windowed = changelog.buildChangelogPost({
+      leagueId: 'L', learningId: 'sl_w1', playerDisplayName: '', playerId: '',
+      category: 'brevity', instruction: 'Trim the closer.', origin: 'trainer',
+    });
+    assert(!('visible_to' in windowed),
+      '12-6c [DI-290]: a windowed/aggregate learning (playerId \'\') has no single feedback-giver to make it private TO — the row stays public, no `visible_to` key at all');
+    assert(windowed.id === changelog.changelogMessageId('sl_w1') && !windowed.id.endsWith('__private'),
+      `12-6d [DI-292]: …and its id keeps the UNSUFFIXED shape — the id-suffix is the structural tell for PRIVATE rows only (got ${windowed.id})`);
+    assert(!windowed.body.includes(changelog.CHANGELOG_PRIVATE_LINE),
+      '12-6e [DI-291]: …and a public row never claims "only you can see this" — that would be false');
+  }
+  {
+    // Coordinator finding 1 (reviewer APPROVE WITH NOTES on F-1, 2026-09-24): a WINDOWED
+    // (public) row whose model-supplied learningId itself happens to end in the reserved
+    // suffix must NOT read as private downstream — `visible_to`/`meta.playerId` are the real
+    // answer, not the id. Proven here at the row-build level: the row this coordinance builds
+    // has no `visible_to` regardless of the learningId's own text.
+    const coincidence = changelog.buildChangelogPost({
+      leagueId: 'L', learningId: 'sl_w2__private', playerDisplayName: '', playerId: '',
+      category: 'brevity', instruction: 'Trim it more.', origin: 'trainer',
+    });
+    assert(!('visible_to' in coincidence) && coincidence.meta.playerId === '',
+      `12-6f [coordinator finding 1]: a windowed learningId that itself ends in the reserved suffix still produces a PUBLIC row — no visible_to, empty meta.playerId — because privacy is decided by playerId, never by the learningId's own text (got ${JSON.stringify({ visible_to: coincidence.visible_to, playerId: coincidence.meta.playerId, id: coincidence.id })})`);
+  }
   {
     const nasty = changelog.buildChangelogPost({
       leagueId: 'L', learningId: 'sl_2', playerDisplayName: 'Ko\nby', playerId: 'p2',
@@ -545,6 +574,8 @@ console.log('\n[12] THE CHANGELOG POST — announced, attributed, and one line�
     });
     assert(long.body.length <= changelog.CHANGELOG_BODY_MAX,
       `12-9: an unbounded instruction cannot produce an unbounded body (got ${long.body.length})`);
+    assert(long.body.endsWith(changelog.CHANGELOG_PRIVATE_LINE),
+      `12-9a [DI-291]: …and even at the cap, the private tell survives truncation — it is reserved BEFORE the sentence is clipped, never appended after (got ${JSON.stringify(long.body.slice(-40))})`);
   }
   assert(changelog.changelogFields({ category: 'roast_intensity' }).categoryLabel === 'how hard it roasts',
     '12-10: the category renders in English. "[roast_intensity]" in a chat post is an internal identifier leaking into the room');
@@ -616,10 +647,15 @@ console.log('\n[14] THE TRAINING CARD — RG-10, the Learnings list, and the exp
   storage.setScribeCanon([]);
   const html = app.renderScribeTrainerAdminSectionHTML();
 
-  assert(/^\s*<div class="admin-section" data-comm-tab="data">/.test(html),
-    '14-1 [RG-10]: the card ships its OWN data-comm-tab="data" wrapper. An untagged .admin-section renders on ALL FIVE commissioner tabs');
-  assert((html.match(/data-comm-tab=/g) || []).length === 1,
-    '14-2 [RG-10]: …exactly one, so a nested tag cannot put half the card on a second tab');
+  // UX Revamp wiring pass 3a (2026-09-25) — relocated whole to the Admin
+  // panel (DI-320 §Data); js/admin-panel.js's cardShell() now supplies the
+  // ONE `.admin-section[data-admin-tab="data"]` wrapper. This function
+  // returns BARE inner content (the double-wrap fix the wiring checklist
+  // named) — RG-10's guarantee is enforced one layer up now.
+  assert(!/<div class="admin-section"/.test(html),
+    '14-1 [double-wrap fix]: the card returns BARE content — no self-wrapping <div class="admin-section"> any more (relocated to Admin, UX Revamp wiring pass 3a)');
+  assert(!/data-comm-tab=/.test(html),
+    '14-2 [RG-10]: …and carries no data-comm-tab of its own — it is not a Commissioner-panel surface any more');
   assert(html.includes('What SCRIBE has learned'),
     '14-3: the Learnings list replaces "Nothing pending review" as the only view of the table — what is LIVE is a different question from what is WAITING');
   assert(html.includes('Keep it to one clause.') && html.includes('Human approved this one.') && html.includes('Switched off earlier.'),
@@ -851,8 +887,11 @@ console.log('\n[20] THE LEARNING-RATE CARD — RG-10, and copy rendered FROM the
 {
   storage.saveSetting('scribeLearningRate', 'normal');
   const html = app.renderScribeLearningRateCardHTML();
-  assert(/^\s*<div class="admin-section" data-comm-tab="settings">/.test(html),
-    '20-1 [RG-10]: the card ships its own data-comm-tab="settings" wrapper');
+  // UX Revamp wiring pass 3a (2026-09-25) — the Commissioner panel's four
+  // SCRIBE cards moved from the `settings` tab to the renamed `scribe` tab
+  // (DI-319 §SCRIBE) — same card, same wrapper, retagged value only.
+  assert(/^\s*<div class="admin-section" data-comm-tab="scribe">/.test(html),
+    '20-1 [RG-10]: the card ships its own data-comm-tab="scribe" wrapper (retagged from "settings", UX Revamp wiring pass 3a)');
   assert((html.match(/data-comm-tab=/g) || []).length === 1,
     '20-2 [RG-10]: …exactly one');
   assert(html.includes('data-scribe-learning-rate="fast"') && html.includes('data-scribe-learning-rate="locked"'),

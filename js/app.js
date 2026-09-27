@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.25.1';
-export const APP_VERSION_DATE = '2026-09-24';
+export const APP_VERSION = 'v0.26.0';
+export const APP_VERSION_DATE = '2026-09-26';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -72,7 +72,44 @@ export const APP_VERSION_DATE = '2026-09-24';
 // rather than a blank one. ONE player-facing line on purpose — the run-loop
 // narrowing and the outage break are the same defect from the player's side:
 // their rating, chips and note now reach the server whatever else is queued.
+// Release v0.25.2 (2026-09-24) — UN-266/DI-290…293: the SCRIBE changelog post
+// crediting ONE identifiable feedback-giver is now private to them (RLS-scoped
+// via `visible_to`; a windowed/aggregate learning with no single credited
+// player stays public, unchanged). `added: []`, same fallback-to-`fixed[0]`
+// shape as v0.25.1/v0.23.5/v0.23.4/v0.23.2 — one player-facing line.
+// Release v0.26.0 (2026-09-26) — the UX Revamp, ONE release: Munera look +
+// the one line-icon family (D-1/D-2), the control center + Settings tab
+// (D-3), native gestures (T-27 week swipe, pull-to-refresh), the leagues
+// home, email/password sign-in (DI-332…340) and team logos + chat bubbles.
+// Six bullets, Munera voice; the FIRST `added` item is SCRIBE's chat-post
+// headline and is kept under whatsNewHeadline()'s 90-character cut.
+// CAP (header rule 3, "keep at most the LAST 12 releases"): the list had
+// drifted to 17 before this entry; trimmed back to 12 here by dropping the
+// six oldest — v0.22.4, v0.22.3, v0.22.0, v0.21.2, v0.21.1, v0.21.0 (the
+// last carrying the retired `expanded` flag). Their copy is preserved in
+// git history; the Release notes card's own foot line names the new oldest.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.26.0',
+    date: '2026-09-26',
+    added: [
+      'Munera arrives: a new look in Ink, Marble, Gold and Oxblood, one set of line icons.',
+      'One menu for everything — open it from the header. Settings has its own tab.',
+      'It moves like an app now: swipe between weeks on Picks and Dashboard, pull down to refresh.',
+      'Every league you belong to, on one home screen. Switching takes a tap.',
+      'Sign in with an email and password if you prefer, and reset it yourself if it slips your mind.',
+      'Team logos on the game cards, and the Locker Room reads as a conversation.',
+    ],
+    fixed: [],
+  },
+  {
+    version: 'v0.25.2',
+    date: '2026-09-24',
+    added: [],
+    fixed: [
+      "SCRIBE's \"your feedback changed something\" confirmations are now private to you.",
+    ],
+  },
   {
     version: 'v0.25.1',
     date: '2026-09-24',
@@ -186,108 +223,6 @@ const WHATS_NEW_RELEASES = [
       'On phones with push notifications on, the in-app banner no longer doubles up the notification you already got.',
       'Your color scheme and time zone now come back when you reopen the app, and a change made just before closing it is no longer lost.',
       'Groundwork so push notifications can be sent by the server instead of whichever phone happens to be open. Switched off for now; nothing about notifications changes today.',
-    ],
-  },
-  {
-    // v0.22.4 — cutover hotfix 5 (2026-09-19). Fix-only, PREPENDED per step 1 above (reviewer: renaming the
-    // cutover entry again would have made SCRIBE post its headline a second time under a new per-version id).
-    // The FIRST `fixed` item is SCRIBE's chat-post headline.
-    version: 'v0.22.4',
-    date: '2026-09-19',
-    added: [],
-    fixed: [
-      'A red "sync is OFF" banner could appear right after signing in, on the first profile save. Fixed — nothing was lost; picks and chat were never affected.',
-      'On the live league the commissioner\'s Add Player and Full Factory Reset controls are gone: players add themselves by signing in, and a reset would have written demo data over the real season.',
-    ],
-  },
-  {
-    // v0.22.3 (was v0.22.2) — THE CUTOVER (Phase III Step 8, 2026-09-19 early; v0.22.1 shipped minutes earlier and
-    // could not read memberships — PGRST201, an ambiguous embed — so nobody ever saw its post). Fixes RG-163/RG-164 (the two
-    // pre-identity readiness deadlocks found at the first attempt) and flips authMode+dataMode.
-    // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
-    version: 'v0.22.3',
-    date: '2026-09-19',
-    added: [
-      'The league runs on its new home now. Sign in with Google once — if your Google email matches the one the commissioner has on file you are linked automatically; otherwise enter the code he gives you. Picks, records, standings and the whole chat history came across; live scores and sync are faster.',
-    ],
-    fixed: [
-      'The first cutover attempt tonight showed everyone a "We\'ll be right back" screen. Two start-up bugs, both fixed and both now covered by tests that start from a fresh phone with no sign-in.',
-      'Until the next release: @scribe answers from its stock lines, and the automatic "picks lock soon" reminders and the weekly SCRIBE trainer are paused; My SCRIBE File, wager buttons and the Data-tab snapshots are dark too. Push notifications, the reveal, results and the chat notices all work as before.',
-    ],
-  },
-  {
-    // v0.22.0 — Phase III groundwork, shipped DORMANT (docs/SESSION_LOG_091126_SUPABASE.md entry 31).
-    // Google sign-in, league linking, the Supabase data adapter and chat transport are all in this
-    // build behind config flags that are OFF; the only player-visible change is the two chat prefs
-    // rows (DI-182a). The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
-    version: 'v0.22.0',
-    date: '2026-09-19',
-    added: [
-      'Chat ⚙ has two new rows: your initials and your alma mater. Set them once and they follow you across devices. The commissioner can still set your alma mater from the Players tab.',
-    ],
-    fixed: [
-      'Groundwork for the new sign-in and data system is in this build, switched off. Nothing about picks, scoring, standings or chat changes today; when it switches on, everyone will be told first.',
-    ],
-  },
-  {
-    // v0.21.2 — security patch (Phase III session, docs/SESSION_LOG_091126_SUPABASE.md).
-    // Fix-only release; the FIRST `fixed` item doubles as SCRIBE's chat-post headline.
-    version: 'v0.21.2',
-    date: '2026-09-12',
-    added: [],
-    fixed: [
-      'Security patch. Nothing changes in how the app looks or plays. Under the hood, the league\'s data can no longer be read by anyone who finds the site address without the league\'s own key, and every place the app shows text it got from the shared data — scores, ranks, names, rules, reactions, chat links — now treats that text as text, never as code.',
-      'Tiebreaker and Extra Point guesses, the rules editor, chat reactions, avatar colors, and ESPN game ids are all rendered safely, and a reaction or accent color outside the app\'s own palette is refused rather than stored.',
-      'A structural test now checks every piece of markup in the app for unescaped text, so this class of problem is caught before it ships instead of after.',
-    ],
-  },
-  {
-    // v0.21.1 — the 2026-09-12 feedback batch (docs/SESSION_LOG_091226.md).
-    // The FIRST `added` item is SCRIBE's chat-post headline, verbatim.
-    version: 'v0.21.1',
-    date: '2026-09-12',
-    added: [
-      'Request a game. Rules → 🙋 Request a Game: pick a Saturday, find the matchup, and flag it for the commissioner — even for a week that hasn\'t been built yet. He sees every request when he builds that week. Post it to the Locker Room if you want the room to know; withdraw it any time; three open requests each.',
-      'League notices live in the Locker Room now. Picks opened, locking soon, locked, results, obligations — one place, posted by SCRIBE. If your phone has push set up you get a push instead of an in-app card; if it doesn\'t, the in-app card stays. The 🔔 now opens your notification settings.',
-      'Red zone on the dashboard. During live games a 🔴 RZ mark shows which team has the ball inside the 20 — on the All Picks matrix, the compact view, and your own picks cards — so you can see when a close spread is about to move. It clears itself when the drive ends.',
-      'Extra Point Ledger on Standings. A season tally of everyone\'s longest-field-goal blackjack results — weeks won, blackjacks, busts, entries — so it\'s all in one place for the end of the season. It never affects the standings. Commissioner: a season CSV under Comm → Data.',
-      'Edit your layout. On Dashboard and Standings, tap ⇅ Edit layout, move any section up or down with ▲/▼, then ✓ Done. Your layout is saved to your account and follows you to any device; ↺ resets it. Nothing moves while you scroll.',
-      'The Picks tab reads top-down. Week blurb, then What\'s New, then last week\'s recap, then the games — and the recap now shows for everyone, not just visitors and the commissioner.',
-      'Release notes in the room. SCRIBE posts a short note in the Locker Room whenever the app updates, with a 📋 button to the full list. Rules → 🆕 Release notes keeps every release from v0.21.0 on.',
-      'Log a wager. Tap 🤝 on any message in the Locker Room to put a bet on the record — the claim, who\'s on the other side, and when it settles. SCRIBE confirms it, the other side can accept or decline, and when the week arrives SCRIBE brings it back up and says who was in. It never rules on who won, and it never touches the standings. Your wagers appear in My SCRIBE File and can be deleted there.',
-    ],
-    fixed: [
-      'Tapping a push opens the chat with the message already there. The room only checked for new messages on its own schedule, so a tap could land before the message it announced; a push tap, a push arriving while the app is open, or coming back to the app now checks right away.',
-      '"Picks are in" no longer pops an in-app banner on a phone that has push — the push is the delivery. And lifecycle pushes actually go out now: the app was only relaying player messages, never its own notices. SCRIBE\'s pushes are titled SCRIBE.',
-      'Your submitted picks show which team you picked. The card only ever marked your pick on the buttons, and those aren\'t drawn once you\'ve submitted — at any status, not just live. Every card now carries a "✓ Your pick" on the team you took.',
-      'Alma Mater Watch and Alma Mater Rankings sort by the current AP rank, and re-sort as the polls change. Schools on a bye sit at the bottom of the Watch.',
-      'Alma Mater Rankings lists everyone who claims a school — Texas A&M now reads "Drew, Kihoon", not just Drew.',
-      'Demo-week ranks no longer leak into the alma mater badges (a fictional #8 and #7 were reaching the Standings page, and a rankless demo game was erasing a real #20).',
-    ],
-  },
-  {
-    // Moved VERBATIM from the single-slot WHATS_NEW constant this replaced —
-    // do NOT rewrite this copy. It shipped; it is the record of what shipped.
-    // `expanded: true` is the one-release catch-up flag described above: v0.21.0
-    // predates the release post, so v0.21.1 carried it along; the flag was removed at v0.21.2 as planned.
-    version: 'v0.21.0',
-    date: '2026-09-11',
-    added: [
-      'SCRIBE can speak up on its own. When something worth a line happens — a lead change, a lone-wolf cover, a broken streak, a unanimous slate, a bold claim in the room — it can post one message about it. The commissioner sets how often under Comm → Settings → SCRIBE Participation, from Quiet to Unhinged. Direct @scribe questions are answered regardless.',
-      'My SCRIBE File. Chat → prefs → 📁 My SCRIBE File shows what SCRIBE has recorded about you in plain language. Delete anything you told it, add hard-limit topics it will never bring up, and set your roast tolerance. Facts it works out from the standings refresh on their own.',
-      'The Locker Room opens instantly. The room now shows what you last saw on this device the moment the app opens, before the league data even loads, then catches up.',
-      'You can talk to SCRIBE. Type @scribe in the Locker Room with a real question — a standing, a matchup, a pick record, whether a starter is playing — and it answers with the actual numbers first, banter second. While it looks things up you\'ll see "SCRIBE is looking into it…"; if it\'s throttled or the budget is spent, it says so and falls back to a canned line instead of guessing. Six questions per person per hour.',
-      'SCRIBE is learning from you. Every week the Trainer reads your ⭐ ratings, rewrites, 📌 flags and 👁 weigh-ins, works out what landed and what didn\'t, and posts a short out-of-character report to the room, with the full write-up under Rules → SCRIBE Training. Strong patterns adjust how SCRIBE talks; anything shaky waits for the commissioner.',
-      'Commissioner: new controls under Comm → Settings (interactive SCRIBE, web search, learnings on/off) and a Trainer card under Comm → Data (run now, approve or reject what it learned, the human-messages-per-SCRIBE-line metric).',
-    ],
-    fixed: [
-      'Talking to SCRIBE works now. Your @scribe question was being sent to SCRIBE a split second before the message itself reached the room, so it could never find what you asked and fell back to a canned line every time. It now waits for your message to land first. Questions from before this fix keep their canned reply; ask a fresh one.',
-      'The Locker Room fills on open. Two fixes: a fresh open no longer waits up to a minute after a slow first connection, and the room now remembers what you last saw on this device and shows it instantly while it checks for anything new.',
-      'A 🔄 button in the chat header. Tap it to check for new messages right now instead of waiting for the next automatic check.',
-      'Sync and SCRIBE stopped answering the wrong question. The server could occasionally reply to a request with its health check instead of an answer; the app took that as success, which showed up as "Sync refused" on a perfectly healthy league, @scribe falling back to canned lines, and a Trainer run that never ran. Every reply is now checked against the request it belongs to, and the server refuses to answer an empty one.',
-      'The Locker Room no longer opens blank and stays blank. Two ways that could happen are gone: a long season\'s log is now read in pages until the room is caught up, and sending a message from an empty room no longer convinces the app it has already seen everything.',
-      'No push storm on a cold open. Reading history in pages could have pushed every old message to everyone; history is now told apart from live messages before any push goes out, with a hard cap underneath.',
-      'SCRIBE\'s answers about picks respect the blind rule harder than the app itself: while a week is open it won\'t repeat anyone\'s pick in the room — including your own.',
     ],
   },
 ];
@@ -479,6 +414,7 @@ import {
   verifyPlayerPin, hasPlayerPin, setPlayerPin, getPlayerPin,
   getCurrentWeek, getWeek, getWeeks, saveWeek, deleteWeek,
   getActiveWeekId, setActiveWeekId, getEffectiveWeekStatus, arePicksPublic,
+  getRevealEmitted, setRevealEmitted,
   getGames, getGame, saveGame, deleteGame, saveAllGamesForWeek, clearSlateForWeek,
   getAvailableGames, saveAvailableGames, clearAvailableGames,
   getPicks, getPick, saveAllPicks, hasPlayerSubmitted,
@@ -503,6 +439,9 @@ import {
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
   getTheme, setTheme,
+  // DI-331c (UX Revamp Group E) — read side for renderGameCard()/
+  // renderDashboardCompact()'s logo-view branch below.
+  getLogoView,
   // DI-267 (SCRIBE v3, Package A, 2026-09-23) — the one-time hard-line nudge's
   // per-player flag, read and written through the seam like every other
   // preference (AD-02).
@@ -546,6 +485,10 @@ import {
   getProviderState, getLastFetchUrl,
   getTimeWindow,
   fetchEspnTeamsList,
+  // DI-331d — re-validated at render time too (defense in depth against any
+  // value already in storage from before this https-only/length constraint
+  // existed, per data-provider.js's own comment on this function).
+  logoOk,
 } from './data-provider.js';
 
 import {
@@ -645,6 +588,17 @@ import {
   getDataMode, isSupabaseDataMode, registerSupabaseDataBackend, getSupabaseClient,
   getIdentityEpoch, getDeviceDataOwnerTuple, getDeviceDataOwner, hasSheetMirrorOnDevice,
   LeagueSwitchFailedError, _leagueNameById, _switchBannerLeagueName,
+  // UX Revamp Group F (DI-332…340 accounts, wiring pass 3c, 2026-09-25) —
+  // the logic layer (email/password sign-in, recovery, reauth-gated change,
+  // account deletion) shipped in 3df7d49; this wires the UI against it.
+  signUpWithPassword, signInWithPassword, requestPasswordReset, resendSignupVerification, getAccountHasPasswordIdentity,
+  isRecoverySession, cancelRecovery, verifyPasswordRecovery, updatePasswordForRecovery,
+  requestPasswordChangeCode, updatePassword, deleteOwnAccount,
+  classifyPasswordAuthError, PASSWORD_AUTH_REASON,
+  // B6 (3c fix window, 2026-09-25) — the sole-commissioner refusal needs its
+  // OWN copy, not the generic "check your connection" catch-all; see
+  // showDeleteAccountSheet()'s catch block below.
+  AccountDeleteRefusedError,
 } from './auth.js';
 
 // Phase III Step 4 Part B — THE THIRD STORAGE MODE (DI §1.1).
@@ -682,6 +636,14 @@ import {
   // FEAT-5 / DI-202b — the wager modal quotes the source message with the SAME
   // markup chat's own reply quote uses, not a second copy of it.
   staticQuoteHTML,
+  // UX Revamp wiring pass 1 (DI-303, 2026-09-25) — the chat prefs panel body,
+  // embedded in the control-center drawer's Chat settings accordion row and
+  // the Settings page host. Already host-agnostic (see chat-ui.js's own note
+  // on these two exports).
+  prefsPanelHTML, bindPrefsPanel,
+  // F5 (3c fix window, third pass) — the identity-change sweep's state reset
+  // for the game-thread sheet it removes.
+  resetGameChatSheetForTeardown,
 } from './chat-ui.js';
 import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox } from './chat.js';
 // RG-176 — the ONE generic answer to the repaint hazard RG-174 fixed in one
@@ -799,6 +761,53 @@ import { getAuthPath } from './platform.js';
 // line rather than a merge that would shift that pin.
 import { isNativeOrigin } from './platform.js';
 import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js';
+// UX Revamp wiring pass 1 (2026-09-25) — the new nav-shell/leagues-journey/
+// icon-family modules this pass wires in. Group A1/A2/D/E's own file
+// headers each state ZERO top-level side effects — safe imports.
+import { icon } from './icons.js';
+import { haptic } from './haptics.js';
+import {
+  bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe,
+  bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
+} from './nav-gestures.js';
+import {
+  mountControlCenter, renderStarredPanels, renderSettingsAccordion,
+  renderFeedbackRulesGroup, renderHelpFooter,
+} from './control-center.js';
+import {
+  resolvePostSignInRoute, renderLeaguesHome, leagueCardHTML, renderLeaguePage,
+  renderLeagueStandingsView, renderCreateLeagueStubCard, renderAddSportStubCard,
+  makeShowComingSoonToast, comingSoonCopy, leaguePageBackAffordances,
+  deriveLeagueSports,
+} from './leagues-home.js';
+import {
+  createWeekWizard, WIZARD_STEPS, WIZARD_STEP_COUNT, WIZARD_COPY, countMissingSpreads,
+  narrowedWeekStatusButtons,
+} from './week-wizard.js';
+import {
+  getIsPlatformAdmin, getIsSuperAdmin, refreshPlatformAdminFlags,
+  superSetLeagueStatus, superSetPlatformKv, getPlatformKv, listAllLeagues,
+  listUsersAcrossLeagues, adminSetMemberRole, adminSetPlatformAdmin,
+  getLeagueJoinCode, rotateJoinCode,
+  getCachedMaintenanceBanner, refreshMaintenanceBannerCache, setCachedMaintenanceBannerLocally,
+  clearMaintenanceBannerCacheOnIdentityChange,
+  getCachedSignupsOpen,
+  // SECURITY GATE NOTE A (2026-09-25) — wired as the boot-tail call's own
+  // guard, below (applyAuthModeDecision()). Was exported and never read.
+  hasAttemptedMaintenanceBannerFetch,
+} from './auth.js';
+// UX Revamp wiring pass 2 (2026-09-25) — DI-320/344/345 (T-12/T-35). Pure
+// render modules (js/roles.js/js/admin-panel.js's own header: NO DOM, NO
+// NETWORK) — safe to import from app.js, the DOM-side wiring layer.
+import { renderAdminPanel } from './admin-panel.js';
+import { renderCommTabBar } from './comm-panel-layout.js';
+// `isLeaguePaused` carries NO allow-list fence (DI-317 §2b.11/DI-344's own
+// extension is specific to `isPlatformAdmin`/`isSuperAdmin` — REV F19's
+// "read-and-support role, never a write bypass" concern; league-paused is
+// an ordinary league-state read, not a role check) — free to import and call
+// anywhere it's needed, per DI-344/345 §Render paths' "ONE function every
+// paused-state render checks."
+import { isLeaguePaused, isPilotLeague, PAUSED_LEAGUE_BANNER_TEXT } from './roles.js';
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
 // this module can reach `document.body` without touching index.html's inline
@@ -835,6 +844,9 @@ export const state = {
   layoutAnnounce: null,
   // Active tab within the Commissioner panel (week / games / players / settings / data)
   commTab: 'week',
+  // UX Revamp wiring pass 2 (2026-09-25), DI-320/345 — active tab within the
+  // Admin panel (week / games / players / settings / data / super-admin).
+  adminTab: 'week',
   lastFetchResult: null,
   recalcAllResult: null, // DI-H — set by #recalc-all-weeks-btn, read by renderRecalculateFinalizedWeeksAdminSectionHTML()
   // FEAT-2 / UN-175 — the Rules-page request card's TRANSIENT search state.
@@ -1028,6 +1040,31 @@ async function applyAuthModeDecision() {
   // this device; both keys are gone from config.json and nothing reads them.
   const authMode = resolveEffectiveAuthMode(deployed);
   configureAuth({ ...deployed, authMode });
+  // S2-1 (full-app review, 2026-09-26) — the maintenance-banner boot fetch
+  // USED TO sit here, right after configureAuth(). That fixed the authMode
+  // half of REVIEWER BLOCK 1 but not the SDK half: this line runs ~180 lines
+  // before `await ensureSupabaseSdkLoaded()`, the SDK is injected (not
+  // script-tagged), so on every real cold load ensureClient() was null, the
+  // fetch threw, and the one-shot latch was already set — the banner never
+  // reached a player. Third boot-order miss of the Testing Protocol 165
+  // class. It now sits below, after the SDK load and wireAuthUIEvents(),
+  // beside the recovery-link verify (boottest [32], authtest [56]).
+
+  // DI-334 FINDING 5 (UX Revamp Group F) — the token-hash password-reset
+  // link. B2 FIX (2026-09-25, 3c fix window) — this call used to live HERE,
+  // before `ensureSupabaseSdkLoaded()` (below) and before `wireAuthUIEvents()`
+  // ever ran: `verifyPasswordRecovery()` -> `ensureClient()` returned null on
+  // a cold load (no vendored SDK on the page yet), the resulting
+  // `AuthUnavailableError` was only `console.warn`ed, and the URL was ALREADY
+  // scrubbed by this point — so the one-time token was gone and the reset
+  // link was simply dead, every time, on the single case that matters most
+  // (someone who has never opened this app before, following the email link
+  // cold). Moved below, after the SDK is loaded and `wireAuthUIEvents()` has
+  // registered `refreshAuthUI()` as a listener (Testing Protocol 165's own
+  // shape: a boot-time fetch sits after the state it depends on is resolved,
+  // not before). The URL is now scrubbed only after a DEFINITIVE answer
+  // (success or a real rejection), never before the call — see that call
+  // site's own comment for why scrubbing first was itself part of the bug.
 
   // ── DI-249 (2026-09-21) — THE ONE NATIVE-ONLY BOOT HOOK, CONDITION 9 ────────
   // Reached ONLY on a genuine native origin (isNativeOrigin(), not
@@ -1211,6 +1248,15 @@ async function applyAuthModeDecision() {
       showAuthHoldGate('sdk-unavailable');
       return { deployed, authMode, hold: 'sdk-unavailable' };
     }
+    // Security N1 (3c fix window, third pass) — "a saved session" above means
+    // a signed-in one (isSignedInForApp()). A RECOVERY session is not: it has
+    // proven nothing yet, and with no SDK its screen could not complete
+    // anyway. Same pre-identity hold. (A separate clause rather than folding
+    // it into the line above, which authstoragenativetest [11d] pins by text.)
+    if (!sdkReady && isRecoverySession()) {
+      showAuthHoldGate('sdk-unavailable');
+      return { deployed, authMode, hold: 'sdk-unavailable' };
+    }
     // ── SECURITY S-1 — THE HOLD STATE IS CLEARED *BEFORE* THE NEXT GATE PAINTS ─
     // Past all three hold branches: whatever was being held is resolved, and
     // the gate decision below owns #site-gate-overlay from here. Clearing the
@@ -1255,6 +1301,77 @@ async function applyAuthModeDecision() {
       // sign-in/out/refresh/membership-refresh; app.js re-derives every
       // affected render from it rather than each caller re-wiring its own.
       wireAuthUIEvents();
+      // S2-1 (2026-09-26) — THE MAINTENANCE-BANNER BOOT FETCH, moved here
+      // from just after configureAuth() (see the note there). Preconditions,
+      // each resolved ABOVE this line in source order: authMode is known
+      // (configureAuth), the SDK is on the page (`sdkReady`, so ensureClient()
+      // can build a client), and the listener chain is wired. SECURITY GATE
+      // NOTE A's `!hasAttemptedMaintenanceBannerFetch()` still bounds the 20s
+      // hold re-check to one fetch per identity; js/auth.js now latches that
+      // only when a client exists, so a no-SDK pass cannot silence a later
+      // real one. Fire-and-forget; repaints whatever page is on screen.
+      if (authMode === 'supabase' && sdkReady && !hasAttemptedMaintenanceBannerFetch()) {
+        refreshMaintenanceBannerCache()
+          .then(() => _repaintMaintenanceBannerSurface())
+          .catch((e) => console.warn('[auth] maintenance banner boot fetch failed', e));
+      }
+      // DI-334 FINDING 5 / B2 FIX (2026-09-25, 3c fix window) — THE MOVED
+      // RECOVERY-LINK CHECK. Placed here, not earlier: `sdkReady` is known,
+      // `wireAuthUIEvents()` has just registered `refreshAuthUI()` as an
+      // `onAuthEvent()` listener two lines up, so the `PASSWORD_RECOVERY`
+      // event `verifyPasswordRecovery()` produces has somewhere to land the
+      // instant it fires — same reasoning `ensureSupabaseSdkLoaded()` being
+      // ABOVE this whole block already established. `verifyOtp()` is what
+      // PRODUCES the event Finding 1's gate rules apply to; this call does
+      // not render anything itself. The URL is scrubbed only AFTER a
+      // definitive answer (success or a real rejection) — never before the
+      // call, which is what silently discarded the token on a cold load
+      // before this fix (see this block's prior call site, now deleted).
+      // Not awaited (fire-and-forget, matching the maintenance-banner fetch's
+      // own shape above) — the gate decision a few lines below must not
+      // block on a network round trip, and a `PASSWORD_RECOVERY` arriving
+      // after that decision has already painted the ordinary Google gate is
+      // handled normally: `refreshAuthUI()`'s own branch replaces it (unless
+      // a hold gate now owns the overlay — B4's own guard).
+      if (authMode === 'supabase' && typeof location !== 'undefined') {
+        try {
+          const params = new URLSearchParams(location.search);
+          const tokenHash = params.get('token_hash');
+          const recoveryType = params.get('type');
+          if (tokenHash && recoveryType === 'recovery') {
+            const scrubRecoveryParams = () => {
+              try {
+                const p = new URLSearchParams(location.search);
+                p.delete('token_hash'); p.delete('type');
+                const rest = p.toString();
+                history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : ''));
+              } catch {}
+            };
+            // R2-2 (3c fix window, third pass) — a REJECTED link (expired,
+            // already used, malformed: `otp_expired` and friends) used to be
+            // a console.warn and nothing else, leaving the visitor on the
+            // ordinary sign-in gate with no idea why the link they clicked
+            // did nothing. onRecoveryVerifyRejected() paints DI-334's
+            // expired/used-link state instead — except for
+            // AuthUnavailableError (no client: a transport problem, not a
+            // verdict on the link) and never over a hold gate (A7).
+            //
+            // Reviewer round 3, item 2 — the scrub used to run HERE,
+            // unconditionally, before onRecoveryVerifyRejected() even looked
+            // at what kind of rejection this was. A NETWORK-classified
+            // failure (classifyPasswordAuthError) is not a verdict on the
+            // token at all — the link can be perfectly valid — so scrubbing
+            // it destroyed the one thing a retry needs (the intact URL) and
+            // then painted "expired or already used," which is a flat lie
+            // about a link nobody actually judged. The scrub decision now
+            // lives inside onRecoveryVerifyRejected(), which only runs it
+            // once it has that definitive verdict — never before.
+            verifyPasswordRecovery(tokenHash)
+              .then(scrubRecoveryParams)
+              .catch((e) => { console.warn('[auth] password recovery token verify failed', e); onRecoveryVerifyRejected(e, scrubRecoveryParams); });
+          }
+        } catch (e) { console.warn('[auth] recovery link parse failed', e); }
+      }
       // ── RG-194 — "NOT RESOLVED YET" IS NOT "SIGNED OUT" ───────────────────
       // This line used to be `if (!hasValidSupabaseSession()) showGoogleSignInGate();`
       // and that predicate asks whether the ACCESS token is still fresh. A
@@ -1292,7 +1409,24 @@ async function applyAuthModeDecision() {
       // `_nativeAuthStorageModuleForGate` stays null on every web boot, so
       // this optional-chained read is always `undefined` there — both calls
       // below are byte-identical to their pre-native form on web.
-      if (!hasValidSupabaseSession()) {
+      // ══ SECURITY N1 (3c fix window, third pass) — A RECOVERY SESSION IS
+      //    NOT SIGNED IN. ════════════════════════════════════════════════════
+      // This decision asked `hasValidSupabaseSession()` — the TOKEN question —
+      // and a recovery session has a perfectly valid token. So with one stored
+      // (a page reloaded mid-recovery; a hold gate re-checked after a
+      // PASSWORD_RECOVERY landed under it) no gate was painted, and the block
+      // below ran refreshMembershipsAndSession() + attemptAutoLink() for a
+      // visitor who has not yet proven a password exists — DI-334 Finding 1,
+      // third door. isSignedInForApp() is the app's question; a recovery
+      // session gets the recovery screen and NOTHING below it runs.
+      // `overResolvedHold` — on the hold re-check path the hold STATE is
+      // already cleared (line above the try) but its overlay is still on
+      // screen until runAuthHoldCheck() takes it down; that stale hold is the
+      // one overlay this decision is entitled to replace, exactly as
+      // showGoogleSignInGate() two lines down already does.
+      if (isRecoverySession()) {
+        showPasswordRecoveryScreen({ overResolvedHold: true });
+      } else if (!isSignedInForApp()) {
         if (hasPersistedSupabaseSession()) armSignInGateDeadline();
         else showGoogleSignInGate(getNativeAuthStorageNoticeForGate());
       }
@@ -1300,7 +1434,7 @@ async function applyAuthModeDecision() {
       // it does not by itself populate memberships. Kick that off now so the
       // active league / isAdmin resolve as soon as possible after a warm
       // return, without blocking the gate decision above on a network call.
-      if (hasValidSupabaseSession()) {
+      if (isSignedInForApp()) {
         // Deliberately NOT awaited — the gate decision above must not block on a
         // network call — but written as async/await inside its own try/catch
         // rather than a .then() chain (CONVENTIONS #: no promise chains).
@@ -1581,6 +1715,40 @@ function wireSupabaseAdapter() {
  * untrusted, and "it happens to be safe today" is not a rendering rule
  * (CONVENTIONS; xsstest is the guard).
  */
+/** B-05 (2026-09-25) — per-key overrides for showBackendErrorBanner()'s
+ *  title/hint, keyed by `detail.key` (the storage key the refused write was
+ *  for). Absent key -> `{}` -> the function's own default copy (the picks
+ *  wording), unchanged for every OTHER refusal. */
+const REFUSAL_COPY = {
+  cfbp_feedback: {
+    title: 'Your feedback was not saved.',
+    hint: 'Nothing else on this device is affected. Try again, and if it keeps failing tell the commissioner.',
+  },
+  // RG-253 follow-up (reviewer F2, 2026-09-26) — a week-status leg refused because the server moved
+  // the week first (the adapter's `status_moved`). Used ONLY for that code: the default copy ("Cross-
+  // device sync is OFF … Tell the commissioner") is false here — sync is working, and the person
+  // reading it IS the commissioner. Any other cfbp_weeks refusal keeps the default wording.
+  cfbp_weeks: {
+    title: 'The week’s status changed on another device.',
+    hint: 'The server’s status stands — check the Week tab before changing it again.',
+  },
+};
+
+/** RG-253 follow-up (reviewer F2) — the body of a `status_moved` banner, in the week's own words:
+ *  its label (never its id), where the server has it now, and what this device had asked for. No
+ *  storage key, no raw id. Falls back to the adapter's sentence only if it carried no rows. */
+const STATUS_WORD = { draft: 'Draft', open: 'Open', locked: 'Locked', live: 'Live', final: 'Final' };
+function statusMovedBody(moved) {
+  if (!Array.isArray(moved) || !moved.length) return '';
+  return moved.map((m) => {
+    const w = getWeek(m.id);
+    const label = w ? formatWeekLabel(w) : 'This week';
+    const now = STATUS_WORD[m.server] || 'a different status';
+    const asked = STATUS_WORD[m.local] || 'a new status';
+    return `${label} is now ${now}. Your change to ${asked} was not applied.`;
+  }).join(' ');
+}
+
 function onSupabaseDataStatus(status, detail = {}) {
   updateSyncBadge(status === 'refused' ? 'refused' : status);
   const state = detail.state || sb.getState();
@@ -1589,7 +1757,29 @@ function onSupabaseDataStatus(status, detail = {}) {
       || (detail.serverMessage
         ? `The server refused to save ${detail.key || 'that change'}: ${detail.serverMessage}. Nothing was saved.`
         : `The server refused to save ${detail.key || 'that change'}. Nothing was saved.`);
-    showBackendErrorBanner(String(banner));
+    // B-05 (2026-09-25) — a `cfbp_feedback` refusal is not a pick, and the
+    // default "picks made on THIS device may NOT reach other players'
+    // devices" hint is false for it. REFUSAL_COPY supplies the
+    // feedback-specific title/hint; every other key keeps today's wording
+    // (showBackendErrorBanner()'s own defaults, unchanged).
+    // Reviewer re-gate on 6178906 — KEY-SPECIFIC COPY ONLY WHEN THAT KEY IS THE WHOLE REFUSAL. The
+    // adapter names the FIRST refusal's key; if feedback and picks were refused in one run, the
+    // feedback hint ("Nothing else on this device is affected") would be false and would hide the
+    // picks warning. `detail.keys` is every key refused this run; anything but exactly [detail.key]
+    // gets the default copy, which is the one that is true for all of them.
+    const soleKey = Array.isArray(detail.keys) && detail.keys.length === 1 && detail.keys[0] === detail.key;
+    if (detail.code === 'status_moved' && !soleKey) _repaintForSupabaseData('status-moved');
+    if (detail.code === 'status_moved' && soleKey) {
+      // Reviewer F5 — a NOTICE about a correction that has already happened (the mirror took the
+      // server's status), so it must survive the 'synced' of the follow-up run that sends the
+      // key's other queued edits — otherwise it would come down in the same second it went up.
+      // It stays until dismissed, until Retry succeeds, or until another banner replaces it.
+      showBackendErrorBanner(statusMovedBody(detail.moved) || String(banner), { ...REFUSAL_COPY.cfbp_weeks, notice: 'status-moved' });
+      // …and the screens repaint from the corrected status (the Week tab's buttons, the header).
+      _repaintForSupabaseData('status-moved');
+      return;
+    }
+    showBackendErrorBanner(String(banner), (soleKey && detail.key !== 'cfbp_weeks' && REFUSAL_COPY[detail.key]) || {});
     return;
   }
   if (state === 'OFFLINE-READONLY') { showSupabaseOfflineBanner(sb.getStatus().lastSyncAt); return; }
@@ -1681,7 +1871,11 @@ function onSupabaseDataStatus(status, detail = {}) {
     }
     return;
   }
-  if (status === 'synced') { hideBackendErrorBanner(); }
+  if (status === 'synced') {
+    // Reviewer F5 — a status-moved NOTICE is not a sync failure that 'synced' resolves; see above.
+    const up = document.getElementById('backend-error-banner');
+    if (up?.getAttribute?.('data-notice') !== 'status-moved') hideBackendErrorBanner();
+  }
 }
 
 /**
@@ -2012,6 +2206,16 @@ function _repaintForSupabaseData(reason) {
   catch (e) { console.warn(`[sb] could not re-apply player preferences after ${reason}`, e); }
   try { navigateTo(state.currentTab || 'dashboard'); }
   catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
+  // RG-245 — THE UN-WITHHOLD MOMENT, #1 of 2. This is where the adapter starts
+  // SERVING, i.e. where isContentWithheld() flips false on the path B-04 is
+  // about: boot's hydrate deferred under an unproven identity, the tail ran and
+  // banked the tap's destination, and the membership/session event that
+  // resolved the identity re-entered ensureSupabaseDataHydrated() and landed
+  // here. AFTER the navigateTo() above, deliberately — that call restores the
+  // tab the player was on, and the tap is a genuine navigation away from it.
+  // A no-op on every repaint that owes nothing, which is all of them.
+  try { flushPendingDeepLink(reason); }
+  catch (e) { console.warn(`[notifications] the held tap could not be replayed after ${reason}`, e); }
 }
 
 /** Test seam — the three page-lifetime latches above have to be droppable
@@ -2055,6 +2259,7 @@ async function boot() {
   // object), which matters because once a real predicate is installed a
   // THROWING predicate fails CLOSED and would take chat off every device.
   setSupabaseDataModePredicate(isSupabaseDataMode);
+  wireMigrationPendingBanner();
   // ── PHASE III STEP 5 (DI-T5.1) — the chat context, beside the predicate and for the same
   //    reason. The predicate says whether THIS LEAGUE's data has moved; this says whether this
   //    build can serve chat from there. Both installed, or the transport fails CLOSED with
@@ -2152,14 +2357,55 @@ async function boot() {
   // frame is already right; the player record re-applies after the hydrate and
   // agrees, which is why there is no second paint. bootThemeKey() validates the
   // value against the seven real keys — it is spliced into a class name.
-  setupNav(); setupHeaderIdentity(); setupHeaderFeedbackButton(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(bootThemeKey()); setupAutoRefresh();
+  // DI-307 (UX Revamp Group A1, 2026-09-25) — setupHeaderFeedbackButton() is
+  // no longer called at boot: the header's "Feedback" shortcut is retired
+  // along with #notif-bell-btn/#tz-toggle/#theme-toggle (Feedback moved into
+  // the control-center drawer's own Feedback accordion row, DI-304). The
+  // function itself is UNCHANGED and kept, not deleted, same precedent as
+  // renderTzToggle()/renderThemeToggle() below — headermetatest.mjs's own
+  // idempotency/DOM-injection coverage calls it directly and is unaffected
+  // by this boot-time removal.
+  setupNav(); setupHeaderIdentity(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(bootThemeKey()); setupAutoRefresh();
+  // UX Revamp wiring pass 1 (2026-09-25) — the control-center drawer mounts
+  // once, at boot, same as every other one-time chrome setup on this line.
+  // bindKeyboardAvoid() is GLOBAL (DI-323's feature half), not per-tab —
+  // called once here, unlike bindScrollDirection/bindPullToRefresh/
+  // bindBottomBounce/bindWeekSwipe, which are rebound per tab in navigateTo().
+  try { mountControlCenterDrawer(); } catch (e) { console.warn('[control-center] mount failed', e); }
+  try { bindKeyboardAvoid(); } catch (e) { console.warn('[nav-gestures] bindKeyboardAvoid failed', e); }
+  try { bindComingSoonDispatcher(); } catch (e) { console.warn('[leagues-home] coming-soon dispatcher bind failed', e); }
   // Item A — independent of the score auto-refresh interval (which the
   // commissioner can set to "Off"), so the mid-session chat-off watch always
   // runs regardless of that other setting.
   setupChatEnabledWatch();
-  if (!getSettings().dashboardLayout && typeof window !== 'undefined' && window.innerWidth && window.innerWidth < 600) {
-    saveSetting('dashboardLayout', 'compact');
+  // DI-311 (T-32) — live, resize-driven dashboard layout switch. Debounced;
+  // only acts while Dashboard is the active tab, and only when the RESOLVED
+  // layout actually changed (an explicit per-player override never gets
+  // silently overridden by a resize — resolveDashboardLayout() itself
+  // already gives that override precedence). Cross-fades over the CSS
+  // token's own 300ms range (css/styles.css's .dash-layout-fading rule),
+  // honoring prefers-reduced-motion (instant swap, no fade).
+  if (typeof window !== 'undefined') {
+    let _dashLayoutResizeTimer = null;
+    window.addEventListener('resize', () => {
+      if (state.currentTab !== 'dashboard') return;
+      clearTimeout(_dashLayoutResizeTimer);
+      _dashLayoutResizeTimer = setTimeout(() => {
+        const el = document.querySelector('.dashboard-scroll, .dashboard-compact');
+        if (!el) return;
+        const wantsCompact = resolveDashboardLayout() === 'compact';
+        const isCompact = el.classList.contains('dashboard-compact');
+        if (wantsCompact === isCompact) return;
+        if (prefersReducedMotion()) { renderDashboard(); return; }
+        el.classList.add('dash-layout-fading');
+        setTimeout(() => renderDashboard(), 300);
+      }, 150);
+    }, { passive: true });
   }
+  // DI-311 (T-32) — the one-time boot-time seed is RETIRED: resolveDashboardLayout()
+  // (below) computes the default LIVE on every render, so there is nothing left
+  // to seed once at boot. See that function's own header for the full
+  // native/override/width-driven precedence.
 
   // ── BUG-G (2026-09-11) — CHAT STARTS HERE, NOT AFTER HYDRATE ──────────────
   // Second half of Drew's "chat stays blank" report (RG-98 fixed the
@@ -2588,7 +2834,14 @@ async function runPostHydrateTail() {
       // visibilitychange listener already lived. Fire-and-forget here — nothing
       // on this path is waiting on a verdict, and wakeChat() never throws.
       wireForegroundSuppression(destinationFor, () => { wakeChat(); });   // §3 step 3 — client-side-only foreground suppression, + BUG-12's foreground fetch
-      wireNotificationClicks(() => { wakeChat(); });                      // BUG-12 — a tap with the app already running (no fresh boot, no ?ntab re-parse)
+      // RG-245 — …AND IT NOW ROUTES. `wireNotificationClicks(() => { wakeChat(); })`
+      // stood here: on the WARM path there is no fresh boot and therefore no
+      // ?ntab to re-parse, so this hook was the only signal the tap produced —
+      // and it produced a chat FETCH and no navigation. Drew's report is the
+      // same one from the other side: the tap lands on whatever page you were
+      // already on. See routeNotificationTap() for what it will and will not
+      // route.
+      wireNotificationClicks((event, data) => { wakeChat(); routeNotificationTap(event, data); });
       // N1 / DI-N3 (R10) — compute the device's push-active flag AFTER init, so
       // OneSignal's opted-in report is meaningful rather than a guess against an
       // SDK that has not drained its queue yet. Fire-and-forget: showToast()
@@ -2615,6 +2868,16 @@ async function runPostHydrateTail() {
   // F10 remediation (2026-09-10) — the scrub used to replace the ENTIRE
   // query string with nothing, silently dropping any OTHER param a link
   // might carry (e.g. "?access=scribe"). Strip ONLY the notification params.
+  //
+  // RG-245 (2026-09-25) — THE SCRUB IS STILL UNCONDITIONAL, AND THAT IS NOW
+  // SAFE. This tail runs even when the boot hydrate DEFERRED (RG-216: no
+  // identity proven yet), so the destination below regularly reached a
+  // deepLinkTo() that was withheld — and because the URL had already been
+  // scrubbed and this tail is latched page-lifetime, nothing could replay it.
+  // deepLinkTo() now BANKS a withheld destination and the un-withhold
+  // transition replays it, so the URL is no longer the only copy. Do not
+  // "fix" this by deferring the scrub: a URL that still carries ?ntab is one
+  // a player can bookmark, share, or re-trigger on every reload.
   try {
     const params = new URLSearchParams(location.search);
     const ntab = params.get('ntab');
@@ -2694,27 +2957,78 @@ async function runPostHydrateTail() {
  * dismisses it. Idempotent — calling it twice with the same message is a
  * no-op (we update the message in place rather than stacking banners).
  */
-function showBackendErrorBanner(message) {
+/**
+ * B-05 (2026-09-25) — `title`/`hint` are overridable. This banner used to
+ * hardcode "Picks made on THIS device may NOT reach other players' devices…"
+ * for EVERY refusal, which is false for a feedback-submission refusal (no
+ * pick was involved at all) — a player reading it after a failed Rules-tab
+ * bug report would be told something that never happened. Defaults are
+ * UNCHANGED (every existing caller, which passes no `opts`, sees the exact
+ * same copy as before); `REFUSAL_COPY` below supplies the feedback-specific
+ * override at its one call site.
+ */
+function showBackendErrorBanner(message, opts = {}) {
   let el = document.getElementById('backend-error-banner');
+  // ══ R2-4 / SECURITY B8 (3c fix window, third pass) — A NON-APP OWNER NEVER
+  //    REPLACES A VISIBLE APP BANNER. ══════════════════════════════════════
+  // B8 scoped the HIDE. The SHOW was still unscoped: with a real sync banner
+  // up, a failed wizard fetch rewrote the one shared node (copy, owner tag and
+  // Retry action) into the wizard's; the wizard's own later hide then matched
+  // its own tag and took the node down — and the sync failure AD-06 requires
+  // to stay on screen was gone. A scoped show now REFUSES and reports it
+  // (`false`), and the caller routes its failure somewhere else
+  // (reportWizardFetchFailure(): the wizard's own inline status line). An
+  // 'app' show still always wins, over anything.
+  const owner = opts.owner || 'app';
+  if (el && owner !== 'app') {
+    const currentOwner = el.getAttribute?.('data-owner') || 'app';
+    if (currentOwner !== owner && el.style?.display !== 'none') return false;
+  }
   if (!el) {
     el = document.createElement('div');
     el.id = 'backend-error-banner';
     el.className = 'backend-error-banner';
     document.body.appendChild(el);
   }
+  // B8 (3c fix window, 2026-09-25, AD-06) — WHO put this banner up, so
+  // `hideBackendErrorBanner(owner)` below can tell "my own banner" from
+  // "somebody else's real sync failure" before taking it down. Defaults to
+  // 'app' (every pre-existing caller, which passes no `opts.owner`) — an
+  // unscoped `hideBackendErrorBanner()` call still hides whatever is up,
+  // byte-identical to today, for every one of those callers.
+  // `setAttribute`, not `.dataset` — this file's own test fixtures (several
+  // independent fake-DOM element constructors across boottest.mjs) do not
+  // all provision a `.dataset` object on every `document.createElement()`
+  // result, and `setAttribute`/`getAttribute` are the one DOM surface every
+  // one of them already implements (the same reason `data-gate-state` is
+  // set via `setAttribute` elsewhere in this file, never `.dataset`).
+  el.setAttribute('data-owner', owner);
+  // Reviewer F5 — which banners 'synced' must leave up (only the status-moved notice). Reset on
+  // every show, so a later ordinary banner in the same node is never sticky.
+  el.setAttribute('data-notice', String(opts.notice || ''));
   el.innerHTML = `
     <div class="beb-inner">
-      <span class="beb-icon" aria-hidden="true">⚠️</span>
+      <span class="beb-icon" aria-hidden="true">${icon('warning')}</span>
       <div class="beb-text">
-        <strong>Cross-device sync is OFF on this device.</strong>
+        <strong>${escHtml(String(opts.title || 'Cross-device sync is OFF on this device.'))}</strong>
         <div class="beb-detail">${escHtml(String(message))}</div>
-        <div class="beb-hint">Picks made on THIS device may NOT reach other players' devices until this is fixed. Tell the commissioner.</div>
+        <div class="beb-hint">${escHtml(String(opts.hint || "Picks made on THIS device may NOT reach other players' devices until this is fixed. Tell the commissioner."))}</div>
       </div>
       <button type="button" class="beb-retry" id="beb-retry-btn">Retry</button>
-      <button type="button" class="beb-close" id="beb-close-btn" aria-label="Dismiss">✕</button>
+      <button type="button" class="beb-close" id="beb-close-btn" aria-label="Dismiss">${icon('close')}</button>
     </div>`;
   el.style.display = 'block';
   document.getElementById('beb-retry-btn')?.addEventListener('click', async () => {
+    // REVIEWER BLOCK item 6 (916bdb7 review, 2026-09-25) — `opts.onRetry` is
+    // NEW: an optional caller-supplied retry action. Every EXISTING call
+    // site omits it and gets the exact Supabase-hydrate-retry behavior
+    // below, unchanged. It exists because this banner is now ALSO reused
+    // for the week wizard's Step 2 ESPN-fetch failure (DI-C1 §2.5) — a
+    // fetch failure there has nothing to do with backend connectivity
+    // (retrying `ensureSupabaseDataHydrated()` would not re-run the ESPN
+    // call at all), so that caller needs its OWN retry action, not this
+    // function's default one.
+    if (typeof opts.onRetry === 'function') { await opts.onRetry(); return; }
     // DI §5.1 — in Supabase data mode Retry re-runs the ADAPTER hydrate. The
     // Sheets path below is not merely wrong here, it is the one thing §0.3
     // item 3 forbids: it would hydrate the six players' production Sheet on a
@@ -2733,11 +3047,75 @@ function showBackendErrorBanner(message) {
     showToast('This device is running on its own local data — there is no shared backend to reconnect to.', 'warning');
   });
   document.getElementById('beb-close-btn')?.addEventListener('click', () => { el.style.display = 'none'; });
+  return true;
 }
 
-function hideBackendErrorBanner() {
+/**
+ * R2-4 (3c fix window, third pass) — the week wizard's ONE failure reporter
+ * (both shapes: a thrown fetch and a `{ok:false}` result). Tries the shared
+ * loud banner first (DI-C1 §2.5 / AD-06: never a silent 0-games state); if
+ * that banner is currently carrying somebody else's failure (a real sync
+ * banner — showBackendErrorBanner() refuses), the wizard's failure goes to
+ * its OWN inline status line instead, in the error tone, with the fetch
+ * button itself as the retry. Returns where it landed ('banner'|'inline').
+ * Lives beside the banner functions so loadtest [1d] exercises the real
+ * source, not a copy.
+ */
+function reportWizardFetchFailure({ message, statusEl, onRetry }) {
+  const title = "Couldn't populate this week's games.";
+  const hint = 'Retry, or use "Skip to slate" below to build it manually from the Games tab after this wizard.';
+  const shown = showBackendErrorBanner(message, { owner: 'wizard', title, hint, onRetry });
+  if (shown) {
+    if (statusEl) { statusEl.textContent = ''; statusEl.classList?.remove?.('wiz-fetch-status-error'); }
+    return 'banner';
+  }
+  if (statusEl) {
+    statusEl.textContent = `${title} ${message} Tap Fetch again to retry, or skip to the slate.`;
+    statusEl.classList?.add?.('wiz-fetch-status-error');
+    statusEl.setAttribute?.('role', 'alert');
+  }
+  return 'inline';
+}
+
+/**
+ * B8 (3c fix window, 2026-09-25, AD-06) — `owner`, when given, only hides
+ * the banner if IT put the banner up (`data-owner`, set via `setAttribute`
+ * by `showBackendErrorBanner()`'s own `opts.owner`, above). ONE shared DOM
+ * node serves every caller — a real sync/migration-pending banner and the
+ * week wizard's own ESPN-fetch-failure banner are the SAME element — so an
+ * unconditional hide from one caller silently took down whatever the other
+ * had put up. The wizard's success path is the one caller that now passes
+ * `'wizard'`; every pre-existing caller omits `owner` and keeps today's
+ * unconditional-hide behavior exactly.
+ */
+function hideBackendErrorBanner(owner) {
   const el = document.getElementById('backend-error-banner');
-  if (el) el.style.display = 'none';
+  if (!el) return;
+  const currentOwner = el.getAttribute?.('data-owner');
+  if (owner && currentOwner && currentOwner !== owner) return;
+  el.style.display = 'none';
+}
+
+/**
+ * SECURITY GATE FINDING 2 (2026-09-25) — js/auth.js's getMemberships()
+ * dispatches 'cfbp:migration-pending' the moment a `42703 undefined_column`
+ * retry fires (the membership read hit a device whose migration 0026+ has
+ * not been pasted yet). Loud-fail (AD-06): the same red banner every other
+ * backend refusal uses, never a silent per-row default the player has no
+ * way to notice.
+ *
+ * REGISTERED FROM boot(), NOT AT MODULE TOP LEVEL — nativeguardtest.mjs
+ * [8c] asserts importing js/app.js with no Capacitor schedules/registers
+ * NOTHING beyond the one pre-existing DOMContentLoaded hook; a bare
+ * `window.addEventListener()` at module scope would have registered a
+ * second listener on import alone, before boot() ever runs.
+ */
+function wireMigrationPendingBanner() {
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('cfbp:migration-pending', (e) => {
+      showBackendErrorBanner(e?.detail?.message || 'Database migration pending');
+    });
+  }
 }
 
 /** Remove the boot-time visibility lock once the first screen has rendered.
@@ -2974,6 +3352,325 @@ function setupNav() {
   document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.tab)));
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// UX Revamp wiring pass 1 (2026-09-25) — Control Center drawer (DI-301…306),
+// the Settings page (DI-308), and the shared coming-soon stub dispatcher
+// (DI-313/316). See js/control-center.js's own header for the ctx contract
+// this section composes.
+// ═══════════════════════════════════════════════════════════════════════
+
+let controlCenterApi = null;
+/** cached -> skeleton -> loaded (Interaction Principles' Loading hierarchy):
+ *  the last successfully RESOLVED notif-settings body, so a re-open of the
+ *  drawer paints the cached string instead of a blank/skeleton every time. */
+let _lastNotifSettingsHTML = null;
+/** DI-308's OWN accordion open/closed state — a SEPARATE object from the
+ *  drawer's own (js/control-center.js's `initialControlCenterState()`),
+ *  per that DI's explicit "only the underlying VALUES must stay in sync,
+ *  never the accordion's own UI state." */
+const _ccSettingsPageState = { settingsOpenRow: null, feedbackGroupOpenRow: null };
+/** Idempotency guard for the bind functions the drawer/Settings page inject
+ *  (bindGameRequestCard/bindFeedbackKindToggle/bindPrefsPanel/
+ *  bindScribeFileBody) — none of them carry their own WeakMap/WeakSet guard
+ *  (unlike js/nav-gestures.js's binders), and js/control-center.js's
+ *  onAfterPaint fires on EVERY dispatch, including attribute-only ones
+ *  (drag-move, phase transitions) that do NOT replace the DOM. Keyed on the
+ *  accordion row's own body container element (`#cc-body-<rowId>`, or the
+ *  Settings page's copy of it) — a FRESH element only exists the moment
+ *  that content was actually (re)painted, so this fires exactly once per
+ *  real repaint and never on an attribute-only one. */
+const _ccBoundContainers = new WeakSet();
+function bindOnceIn(scopeEl, containerId, bindFn) {
+  const el = scopeEl?.querySelector?.(`#${containerId}`);
+  if (!el || _ccBoundContainers.has(el)) return;
+  _ccBoundContainers.add(el);
+  bindFn(el);
+}
+
+/**
+ * DI-301's ctx contract, composed fresh on every mount/update. NEVER passes
+ * `getSession()`'s raw return value where a richer shape is needed —
+ * `session.player` is built here from `getPlayer()`, the same "compose a
+ * viewer bag, never mutate what getSession() returns" discipline
+ * WIRING_CHECKLIST_B_092526.md's own §6 describes for the Admin panel.
+ */
+function buildControlCenterCtx() {
+  const session = getSession();
+  const player = session?.playerId ? getPlayer(session.playerId) : null;
+  const activeLeagueId = getActiveLeagueId();
+  const memberships = getCachedMemberships();
+  const activeMembership = memberships.find(m => m.leagueId === activeLeagueId) || null;
+  const isCommissioner = !!session?.isAdmin;
+  return {
+    session: {
+      player: {
+        id: session?.playerId || null,
+        displayName: player?.displayName || '',
+        initials: player?.initials || '',
+        almaMater: player?.almaMater || '',
+        preferences: player?.preferences || {},
+      },
+      isAdmin: isCommissioner,
+    },
+    memberships,
+    // UX Revamp wiring pass 2 (coordinator addition, 2026-09-25) — T-23's
+    // `leagues.pilot` and T-35's `leagues.status` are now threaded through
+    // getCachedMemberships() (js/auth.js's getMemberships(), one chokepoint,
+    // same shape DI-344 §8 uses for isPlatformAdmin/isSuperAdmin). Both
+    // default fail-closed on the membership row itself (`pilot: false`,
+    // `status: 'active'`, js/auth.js's own map()) — read straight through
+    // here rather than re-derived, so isPilotLeague(league)/isLeaguePaused(league)
+    // (js/roles.js) see real values instead of an honest-but-permanent false.
+    league: activeMembership
+      ? { id: activeMembership.leagueId, name: activeMembership.leagueName,
+          pilot: activeMembership.pilot === true,
+          status: activeMembership.status || 'active' }
+      : null,
+    escHtml, icon, isNativeShell,
+    flags: {
+      isCommissioner,
+      isPlatformAdmin: getIsPlatformAdmin(),
+      isSuperAdmin: getIsSuperAdmin(),
+      isPilotLeague: activeMembership ? activeMembership.pilot === true : false,
+    },
+    version: { APP_VERSION, APP_VERSION_DATE },
+    bodies: {
+      notifSettingsHTML: _lastNotifSettingsHTML || '<p class="text-muted text-sm">Checking…</p>',
+      chatPrefsHTML: prefsPanelHTML(),
+      scribeFileHTML: renderScribeFileBodyHTML({
+        profile: session?.playerId ? getPlayerProfile(session.playerId) : null,
+        loading: scribeMemoryCache.loading,
+        error: scribeMemoryCache.error,
+        rowError: scribeFileRowError,
+      }),
+      feedbackCardHTML: renderFeedbackCardHTML(),
+      gameRequestHTML: renderGameRequestCardHTML(),
+      releaseNotesHTML: renderReleaseNotesCardHTML(),
+    },
+    timeZones: TIME_ZONES, currentTimeZone: getTimezone() || DEFAULT_TZ,
+    themes: THEMES, currentTheme: getTheme() || 'neutral',
+    logoView: player?.preferences?.logoView === true,
+    // STEP B(7) / N4 (third pass) — the Password / Delete Account rows act on
+    // a Supabase account; in any other auth mode they could only fail.
+    accountRows: getAuthMode() === 'supabase',
+    // DI-335 — "Change Password" vs "Set Password"; null = cannot tell.
+    hasPasswordIdentity: getAccountHasPasswordIdentity(),
+    callbacks: {
+      onSignOut: async () => {
+        // Reuses showAccountSheet()'s #account-signout-btn handler body
+        // verbatim (js/app.js, ~line 21945) — one signOut() call site, never
+        // a hand-written copy of it.
+        await signOut();
+        applyIdentityDeltaIfChanged('control-center-signout', { discard: true });
+      },
+      onSwitchLeague: () => showLeagueSelectorSheet(),
+      // SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — the identity
+      // header's league-name tap (js/control-center.js, `data-action="cc-
+      // open-league-page"`). `showLeaguePageOverlay()` already refuses to
+      // open while content is withheld (its own `isContentWithheld()`
+      // guard, Security Gate Finding 1) — no second guard needed here.
+      onOpenLeaguePage: () => showLeaguePageOverlay(),
+      // DI-335/DI-340 (2026-09-25) — Profile's "Password"/"Delete Account" rows.
+      onOpenPasswordChange: () => showPasswordChangeSheet(),
+      onOpenDeleteAccount: () => showDeleteAccountSheet(),
+      onSaveDisplayName: (v) => { if (session?.playerId) patchPlayer(session.playerId, { displayName: v }); },
+      onSaveInitials: (v) => { if (session?.playerId) patchPlayer(session.playerId, { initials: v }); },
+      onSaveAlmaMater: (v) => { if (session?.playerId) patchPlayer(session.playerId, { almaMater: v }); },
+      onSetTimeZone: (v) => { setTimezone(v); refreshControlCenterAndSettingsPage(); },
+      onSetTheme: (v) => { applyThemeChoice(v); refreshControlCenterAndSettingsPage(); },
+      onSetLogoView: (v) => {
+        if (!session?.playerId) return;
+        const p = getPlayer(session.playerId);
+        patchPlayer(session.playerId, { preferences: { ...(p?.preferences || {}), logoView: v } });
+        refreshControlCenterAndSettingsPage();
+      },
+      onNavigate: (target) => navigateTo(target),
+      onDrawerVisibilityChange: (open) => {
+        document.querySelector('.page-wrapper')?.toggleAttribute('inert', open);
+      },
+    },
+  };
+}
+
+function refreshControlCenterAndSettingsPage() {
+  if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx());
+  if (state.currentTab === 'settings') renderSettingsPage();
+}
+
+/**
+ * DI-303's cached->skeleton->loaded flow for the async notifications body.
+ * `renderNotifSettingsBodyHTML()` is ASYNC — this resolves it exactly the
+ * way `refreshNotifSettingsBody()` (the old modal's own equivalent) does,
+ * then patches the resolved string back in via `update()`.
+ */
+async function maybeRefreshNotifSettingsRow() {
+  try {
+    const playerId = getSession()?.playerId || null;
+    // resolvePushSettingsState() — declared below, hoisted — is the SAME
+    // resolver refreshNotifSettingsBody() (the old modal's own equivalent)
+    // uses, so this file keeps exactly one dynamic push-native module
+    // import call site for this logic (nativeguardtest.mjs [13a]).
+    const { st, device } = await resolvePushSettingsState();
+    _lastNotifSettingsHTML = await renderNotifSettingsBodyHTML(playerId, st, device);
+    refreshControlCenterAndSettingsPage();
+  } catch (e) {
+    console.warn('[control-center] notif settings body failed to resolve', e);
+    // Leave the skeleton/cached value on screen — the embedded body's OWN
+    // error copy is its business (DI-303: "errors are a property of the
+    // body, not the shell").
+  }
+}
+
+/** DI-313/316's shared dispatcher — ONE document-level delegated handler for
+ *  every `[data-action="coming-soon"]` stub in the app (Leagues Home's
+ *  Create-League card, League Page's Add-Sport card, the drawer's Help
+ *  Center row). `const` at module scope (no top-level side effect — it is
+ *  never called until bindComingSoonDispatcher() below runs); the
+ *  document.addEventListener() itself is deferred INTO boot(), same
+ *  "ZERO top-level side effects" discipline js/control-center.js/
+ *  js/nav-gestures.js/js/leagues-home.js already hold themselves to —
+ *  nativeguardtest.mjs [8c] asserts importing app.js registers no listener
+ *  before boot() runs. */
+const showComingSoonToast = makeShowComingSoonToast((msg, type) => showToast(msg, type));
+function bindComingSoonDispatcher() {
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest?.('[data-action="coming-soon"]');
+    if (el) showComingSoonToast(el.dataset.comingSoonCopy || '');
+  });
+}
+
+/** Binds whatever's actually present in the given scope — every bind
+ *  function here no-ops safely (via bindOnceIn's own null-check) when its
+ *  row isn't the one currently open. Shared by the drawer's onAfterPaint
+ *  and renderSettingsPage() (DI-308's "one render function, two hosts"
+ *  extended to binding, not just rendering). */
+function bindControlCenterBodies(scopeEl, rowState) {
+  bindOnceIn(scopeEl, 'cc-body-game-settings', () => bindGameRequestCard());
+  bindOnceIn(scopeEl, 'cc-body-feedback', (el) => {
+    // Reviewer BLOCK (2026-09-25), F6 — same shape as the security fix
+    // round's NOTE 4 (bindPrefsPanel): this body is now painted in TWO
+    // hosts (the Settings page AND the drawer's Feedback accordion row),
+    // and bindFeedbackKindToggle()/submitFeedback() used to query
+    // `document.getElementById`/`document.querySelectorAll` unscoped, so
+    // whichever host's copy came FIRST in document order silently won both
+    // bindings — the second host's own textarea/buttons never reached
+    // submitFeedback() at all. Both now take `el`, this SAME freshly-
+    // resolved container, exactly like `el.querySelector('#fb-submit-btn')`
+    // immediately below already did.
+    bindFeedbackKindToggle(el);
+    el.querySelector('#fb-submit-btn')?.addEventListener('click', () => submitFeedback(el));
+  });
+  // Security fix round (2026-09-25), NOTE 4 — pass the ACTUAL body container
+  // (`el`, the freshly-painted `#cc-body-chat` node bindOnceIn() already
+  // resolved) rather than calling with no argument, which used to fall back
+  // to `document` inside bindPrefsPanel() and silently bind to whichever
+  // `#pref-nick`/etc. happened to be first in document order — wrong when
+  // the Chat tab's own copy is also mounted.
+  bindOnceIn(scopeEl, 'cc-body-chat', (el) => bindPrefsPanel(el));
+  bindOnceIn(scopeEl, 'cc-body-scribe', (el) => bindScribeFileBody(el));
+  if (rowState?.settingsOpenRow === 'notifications' && !_lastNotifSettingsHTML) {
+    maybeRefreshNotifSettingsRow();
+  }
+}
+
+function mountControlCenterDrawer() {
+  const root = document.getElementById('control-center-root');
+  if (!root) return;
+  controlCenterApi = mountControlCenter(root, buildControlCenterCtx(), {
+    onAfterPaint: (rootEl, ccState) => bindControlCenterBodies(rootEl, ccState),
+  });
+  // TOUCHED-SCREEN AUDIT FINDING (2026-09-25, alongside SECURITY GATE F1/
+  // reviewer item 3) — `inert` on `.app-header` (_setAppContentInert()/
+  // _setLeaguePageOverlayInert(), above) already removes this button from
+  // hit-testing while a hold or the League Page overlay is up; this is
+  // defense in depth, the same "belt and suspenders" the two guards on
+  // showLeaguePageOverlay()/openWeekWizardSheet() already use — a second,
+  // independent reason this can never open the drawer over withheld content
+  // even if the `inert` attribute were ever silently lost on a repaint.
+  document.getElementById('control-center-trigger')?.addEventListener('click', () => { if (isContentWithheld()) return; controlCenterApi.open(); });
+  // DI-301 — the drawer is visually present (open, mid-transition, or
+  // mid-drag) whenever js/nav-gestures.js's gesturesSuspended() must treat
+  // it as a suspending surface. That hook reads this exact selector.
+
+  // S2-1 companion (full-app review, 2026-09-26) — an early
+  // `refreshPlatformAdminFlags()` call stood here (DI-317/344 §8). It was
+  // dead: this function runs at boot() line ~2406, before
+  // applyAuthModeDecision() (~2604) has injected the SDK, so ensureClient()
+  // was always null and the call always resolved both flags to false. The
+  // live fetch is the identity-delta chokepoint (applyIdentityDeltaIfChanged(),
+  // which a signed-in boot's session resolution passes through). Deleted
+  // rather than left as a misleading "fetched explicitly here" comment.
+  // REVIEWER BLOCK 1 (2026-09-25) — the "read once at boot" call that used
+  // to live here is GONE, not moved. `mountControlCenterDrawer()` runs
+  // inside `boot()`, ~198 lines BEFORE `applyAuthModeDecision()` resolves
+  // `authMode` — so `refreshMaintenanceBannerCache()`'s own `authMode !==
+  // 'supabase'` guard was true on every real page load and this call
+  // no-opped every single time in production (runtime-proven; every green
+  // test that ever exercised it had already forced supabase mode via
+  // `resetAll()`).
+  // REWRITTEN (SECURITY GATE NOTE B, 2026-09-25) — this comment previously
+  // said the fix moved the fetch trigger to `renderMaintenanceBannerIfNeeded()`
+  // (a lazy, per-render trigger). That is NOT what shipped: the trigger is
+  // ONE call at the TAIL of `applyAuthModeDecision()`, immediately after
+  // `authMode` resolves there — correctly ordered by construction, not by a
+  // guard on every render — pinned structurally by `boottest.mjs` [32].
+  // `renderMaintenanceBannerIfNeeded()` still runs on every nav-destination
+  // render, but only to REPAINT from whatever is already cached; it does not
+  // trigger a fetch. See `js/auth.js`'s `hasAttemptedMaintenanceBannerFetch()`
+  // header for the full account of the bug, the fix, and NOTE A's guard
+  // (the 20-second hold re-check that made this fetch need a ceiling at all).
+}
+
+/**
+ * DI-308 (T-16) — the Settings TAB's own page host. A THIN WRAPPER reusing
+ * js/control-center.js's SAME accordion-row render functions the drawer
+ * uses ("one render function, two hosts") — never a second, independently-
+ * written settings implementation. Accordion open/closed state is
+ * `_ccSettingsPageState`, a SEPARATE object from the drawer's own.
+ */
+function renderSettingsPage() {
+  const c = document.getElementById('page-settings');
+  if (!c) return;
+  const ctx = buildControlCenterCtx();
+  c.innerHTML = `
+    <div class="section-header"><h2>Settings</h2></div>
+    ${renderStarredPanels(ctx)}
+    ${renderSettingsAccordion(ctx, _ccSettingsPageState)}
+    ${renderFeedbackRulesGroup(ctx, _ccSettingsPageState)}
+    ${renderHelpFooter(ctx)}`;
+  c.querySelectorAll('[data-action="cc-toggle-row"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const group = btn.dataset.group, rowId = btn.dataset.row;
+      if (group === 'settings') {
+        _ccSettingsPageState.settingsOpenRow = _ccSettingsPageState.settingsOpenRow === rowId ? null : rowId;
+      } else if (group === 'feedback') {
+        _ccSettingsPageState.feedbackGroupOpenRow = _ccSettingsPageState.feedbackGroupOpenRow === rowId ? null : rowId;
+      }
+      haptic('selection');
+      renderSettingsPage();
+    });
+  });
+  c.querySelectorAll('[data-action="cc-toggle-logo-view"]').forEach(btn => {
+    btn.addEventListener('click', () => { ctx.callbacks.onSetLogoView(!(ctx.logoView === true)); haptic('selection'); });
+  });
+  c.querySelectorAll('[data-field]').forEach(el => {
+    el.addEventListener('change', (e) => {
+      if (el.dataset.field === 'timezone') ctx.callbacks.onSetTimeZone(e.target.value);
+      else if (el.dataset.field === 'theme') ctx.callbacks.onSetTheme(e.target.value);
+    });
+  });
+  c.querySelectorAll('[data-action="cc-navigate"]').forEach(btn => {
+    btn.addEventListener('click', () => ctx.callbacks.onNavigate(btn.dataset.target));
+  });
+  bindControlCenterBodies(c, _ccSettingsPageState);
+  // SECURITY GATE, S-5 (2026-09-25) — the maintenance banner is platform-
+  // wide, not league-scoped (unlike the paused-league banner, which Settings
+  // deliberately never gets). `MAINTENANCE_BANNER_PAGE_IDS` now carries
+  // `settings`; this is the ordinary (non-league-flow) render path's own
+  // call, matching the other five page renderers' end-of-render pattern.
+  renderMaintenanceBannerIfNeeded('settings');
+}
+
 /** v0.17.0 — THE PICK REVEAL RITUAL. One system event posts everyone's picks
  *  to the room simultaneously. Local ledger prevents outbox spam; the
  *  deterministic id (sys_reveal_<weekId>) makes it exactly-once across all six
@@ -3016,14 +3713,27 @@ function setupNav() {
 const REVEAL_LOOKBACK_DAYS = 3;
 
 export function checkPickRevealDue() {
-  const key = 'cfbp_reveal_emitted';
-  let done = [];
-  try { done = JSON.parse(localStorage.getItem(key) || '[]'); } catch {}
+  // Seam finding (security, f16d87c) — the ledger goes through the storage seam (getRevealEmitted /
+  // setRevealEmitted, same key name `cfbp_reveal_emitted`); this function no longer touches
+  // localStorage. The key is still not scoped by league or user — see KEYS.REVEAL_EMITTED.
+  const done = getRevealEmitted();
   const cutoff = Date.now() - REVEAL_LOOKBACK_DAYS * 86400000;
   const due = getWeeks().filter(w => {
     if (!w || w.dataSourceMode === 'demo') return false;
     if (done.includes(w.weekId)) return false;
     if (!arePicksPublic(w)) return false;                 // the blind rule still gates the ritual
+    // RG-255 (SEC-1, 2026-09-26) — …AND NOT FROM A MIRROR THAT CANNOT SEE THE PICKS YET. In supabase
+    // data mode a week goes public on this device the moment a Realtime weeks event lands, but the
+    // other members' picks only arrive with the next hydrate (picks_select serves them only once the
+    // week is live/final, and the reveal changes no picks row). The post is permanent and the first
+    // device to write it wins, so a device holding only its own picks would publish "no picks on
+    // file" for five people for good. Fail closed until a LANDED hydrate read the week as public;
+    // the ledger is not written, so the next navigation after that hydrate posts it.
+    if (isSupabaseDataMode()) {
+      let seen = false;
+      try { seen = sb.picksReadWhilePublic(w.weekId) === true; } catch { seen = false; }
+      if (!seen) return false;
+    }
     // Same endDate parse the SCRIBE digest uses (`week.endDate + 'T23:59:59'`).
     // A missing or unparseable date yields NaN, which fails this test — closed.
     const ends = w.endDate ? new Date(w.endDate + 'T23:59:59').getTime() : NaN;
@@ -3038,8 +3748,7 @@ export function checkPickRevealDue() {
   // reaches this line at all, which is fine — the DI asks for a haptic when
   // the reveal happens on THIS device, not a guarantee every device feels it.
   nativeHapticImpact('LIGHT');
-  done.push(week.weekId);
-  try { localStorage.setItem(key, JSON.stringify(done.slice(-20))); } catch {}
+  setRevealEmitted(week.weekId);
 }
 
 /**
@@ -3813,8 +4522,33 @@ function setupChatEnabledWatch() {
  * the consequence of failing open is the locked app RG-199 is about.
  */
 function noIdentityEverProven() {
-  try { return !hasValidSupabaseSession() && !getAccountUserId(); }
+  // Security N1 (3c fix window, third pass) — a password-recovery session
+  // carries an account id and a full-privilege token, but it has not proven
+  // a password exists yet: for the app it is NOT an identity (DI-334 Finding 1).
+  try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }
   catch { return true; }
+}
+
+/**
+ * ══ SECURITY N1 (3c fix window, third pass, 2026-09-26) — THE ONE
+ *    "SIGNED IN, AS FAR AS THE APP IS CONCERNED" PREDICATE ═══════════════════
+ *
+ * Third occurrence of one class: a sign-in-gate or content-release decision
+ * that asked `hasValidSupabaseSession()` — "is there a live token on this
+ * device?" — when the question it meant was "has this person signed in?".
+ * A recovery session (a visitor who has only clicked a reset-email link, or a
+ * page reloaded mid-recovery) answers YES to the first and NO to the second.
+ * The two earlier fixes patched `refreshAuthUI()`'s `signedIn` term and
+ * auth.js's event arm; the boot / hold-recheck decision in
+ * applyAuthModeDecision() still asked the token question and painted no gate.
+ *
+ * Every sign-in-gate / content-release decision in this file now asks THIS.
+ * `hasValidSupabaseSession()` survives only where the token question is the
+ * real one (the expiry classification in refreshAuthUI()).
+ */
+export function isSignedInForApp() {
+  try { return hasValidSupabaseSession() && !isRecoverySession(); }
+  catch { return false; }
 }
 
 export function isContentWithheld() {
@@ -3847,7 +4581,10 @@ export function isContentWithheld() {
   try {
     if (currentAuthHoldReason()) return true;
     // Case 2, scoped: no identity has EVER been proven on this page.
-    if (!hasValidSupabaseSession() && !getAccountUserId()) return true;
+    // Security N1 (third pass) — a recovery session is NOT an identity, even
+    // though it carries an account id and a live token (DI-334 Finding 1).
+    if (isRecoverySession()) return true;
+    if (!isSignedInForApp() && !getAccountUserId()) return true;
     // ── CASE 3 (Phase III Step 4 Part B, DI §5.1) — THE ADAPTER IS NOT SERVING ─
     //
     // Only in `dataMode:'supabase'`. Case 2 asks whether anyone is PROVEN; this
@@ -3926,6 +4663,33 @@ function navigateTo(tab) {
     showToast('Chat has been turned off by the commissioner.', 'warning');
     tab = 'dashboard';
   }
+  // DI-345 §Placement — the control center's Super Admin row targets
+  // 'super-admin', which is a TAB within the Admin panel (its own sixth
+  // tab, DI-320's shell extended by one), not a separate route. Force the
+  // Admin panel's own tab state to 'super-admin' and resolve the actual
+  // navigation target to 'admin', so the six-tab dispatch map below only
+  // ever needs to know about the Admin panel once.
+  // REVIEWER FINDING 6 (2026-09-25) — a non-super-admin viewer reaching this
+  // branch (identity handover mid-session; a stale deep link) used to set
+  // `state.adminTab = 'super-admin'` unconditionally. renderAdminPanel()
+  // never emits a sixth tab for that viewer, but renderAdminPage() still
+  // wrote `data-admin-active="super-admin"` and css/styles.css's tab-
+  // visibility rule hides every `[data-admin-tab]` section that doesn't
+  // match — a blank page, not the "Super admin access only" denial DI-345
+  // requires. Clamp here: only route to the super-admin tab when the
+  // session actually carries the flag; otherwise land on the Admin panel's
+  // ordinary first tab, same as any other admin.
+  if (tab === 'super-admin') { state.adminTab = getIsSuperAdmin() ? 'super-admin' : 'week'; tab = 'admin'; }
+  // DI-320 §Entry point 2 — an admin-only viewer (platform admin, NOT this-
+  // league's commissioner) who taps the bottom-nav Comm icon opens the
+  // Admin panel directly rather than the Commissioner panel they cannot
+  // use. Drew's own case (both roles) is UNCHANGED — the icon keeps opening
+  // the Commissioner panel for him (checked via getIsPlatformAdmin() +
+  // session.isAdmin, exactly the "one flag pair, checked identically"
+  // DI-320/321 both require — never a third derivation).
+  if (tab === 'commissioner' && getIsPlatformAdmin() && !getSession()?.isAdmin) {
+    tab = 'admin';
+  }
   // DI-181a + reviewer N10 — decided HERE, before the tab is committed, because
   // the league-flow screen cannot render into #page-chat (chat-ui.js owns that
   // subtree). A signed-in account with no league context that taps Chat gets
@@ -3976,7 +4740,11 @@ function navigateTo(tab) {
   // above — otherwise a bounce to dashboard would leave the attribute reading
   // "chat" and the header would stay hidden on the wrong page.
   document.body.dataset.tab = tab;
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+  // DI-320 §Entry point 2 — the bottom-nav Comm icon (data-tab="commissioner")
+  // is the one that actually opened 'admin' for an admin-only viewer (the
+  // redirect above); it must still read as the active nav item, not neither.
+  const navActiveTab = tab === 'admin' ? 'commissioner' : tab;
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === navActiveTab));
   document.querySelectorAll('.page-section').forEach(el => el.classList.toggle('active', el.id === `page-${tab}`));
   applyChatNavVisibility();
   // DI-181a — a signed-in supabase account with zero (or unresolved,
@@ -3993,8 +4761,29 @@ function navigateTo(tab) {
   } else if (leagueFlow) {
     renderLeagueFlowScreen(tab);
   } else {
-    ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, rules: renderRulesPage, chat: renderChatPage })[tab]?.();
+    ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, admin: renderAdminPage, rules: renderRulesPage, chat: renderChatPage, settings: renderSettingsPage })[tab]?.();
   }
+  // DI-344/345 §Render paths — "isLeaguePaused(league) gates the banner
+  // identically across all six nav destinations — one function, six call
+  // sites, never six independent status==='paused' checks." Chat is handled
+  // separately (js/chat-ui.js's renderChatPage() reaches this page from
+  // several places, not just here — see its own header note); Settings
+  // carries no league-scoped content and is intentionally not one of the
+  // six.
+  //
+  // BLOCK 3 (2026-09-25, pass-2 reviewer) — each of the six render functions
+  // now calls renderPausedLeagueBannerIfNeeded() itself, at the end of its
+  // own render (structural fix: the banner used to be painted from this
+  // chokepoint ONLY and was destroyed by every in-page repaint that bypasses
+  // navigateTo() — auto-refresh, live-score, week swipe, pull-to-refresh, the
+  // week selector, refresh-scores). This call stays as a belt-and-suspenders
+  // catch-all for any render path not yet enumerated; it is safe to call
+  // twice in one pass because the function is idempotent (removes its own
+  // prior banner before deciding whether to repaint one).
+  try { renderPausedLeagueBannerIfNeeded(tab); } catch (e) { console.warn('[paused-league] banner render failed', e); }
+  // NOTE 6 / BLOCK 4 — same belt-and-suspenders shape, for the platform-wide
+  // maintenance banner (independent of league-pause state).
+  try { renderMaintenanceBannerIfNeeded(tab); } catch (e) { console.warn('[maintenance-banner] render failed', e); }
   // RG-176 — put the in-progress edits back, immediately after the render that
   // destroyed them and before anything else can steal focus. The identity key
   // is re-read rather than reused: the guard is checked on BOTH sides, so a
@@ -4034,6 +4823,68 @@ function navigateTo(tab) {
   // only. Kept on navigation because the bell's visibility is still session-
   // dependent and this is the cheapest honest place to refresh it.
   try { renderNotifBell(); } catch {}
+
+  // ── UX Revamp wiring pass 1 (DI-322/324/325/327, 2026-09-25) — per-tab
+  // gesture rebinding. bindScrollDirection/bindPullToRefresh/bindBottomBounce
+  // are all WeakMap-idempotent per scroll element (js/nav-gestures.js's own
+  // guard), so calling them again here on every navigateTo() is safe — a
+  // second call for the SAME element returns the already-bound unbind
+  // function rather than attaching a second listener set. ──────────────────
+  try {
+    const getScrollEl = tab === 'chat' ? () => document.getElementById('chat-scroll') : () => window;
+    bindScrollDirection(getScrollEl);
+    bindPullToRefresh(getScrollEl, async () => {
+      await ensureSupabaseDataHydrated('pull-to-refresh');
+      const week = getCurrentWeek();
+      // Matches the existing "↻ Refresh" manual button's own precedent
+      // (app.js's #manual-refresh-btn handler) exactly — doRefreshScores()
+      // is soft-fail by design (per-game ESPN errors are data, not a
+      // rejection), so onFail below is the hydrate step's loud-fail
+      // guarantee (AD-06's actual subject, cross-device sync), not a claim
+      // that every ESPN fetch inside this call is individually guaranteed.
+      if (week) { try { await doRefreshScores(week, getGames(week.weekId)); } catch {} }
+      // Reviewer BLOCK (2026-09-25), F12 — `bindPullToRefresh()` is WeakMap-
+      // idempotent, keyed on the RESOLVED scroll element (`window`, for
+      // every non-chat tab). The FIRST non-chat tab visited wins the bind
+      // forever; every later re-navigation's fresh closure — including this
+      // one's `tab` parameter — is discarded, never re-attached. Reading
+      // `tab` here (closed over at BIND time) meant Dashboard's own refresh
+      // branch fired only if Dashboard happened to be the first non-chat tab
+      // visited this page-load. `state.currentTab` is read LIVE, at FIRE
+      // time (this callback runs on a real pull gesture, well after bind),
+      // so it always reflects whichever tab is actually on screen right now.
+      if (state.currentTab === 'dashboard') renderDashboard();
+    }, {
+      onFail: () => showBackendErrorBanner("Pull-to-refresh couldn't reach the server."),
+    });
+    bindBottomBounce(getScrollEl, document.querySelector('.page-wrapper') || document.body);
+    // T-27 (DI-325) — B-02 (Picks week-arrows bug) is closed by ruling, so
+    // this IS wired to the real prev/next-week state, not merely built and
+    // tested in isolation. Mirrors bindPicksWeekNav()'s/the week-selector's
+    // OWN semantics exactly (positive dx = "back in time" = previous week,
+    // matching the '‹' arrow; the current-week sentinel `null` is preserved
+    // for Picks, same as bindPicksWeekNav() itself uses).
+    if (tab === 'picks') {
+      bindWeekSwipe(document.getElementById('page-picks'), () => {
+        const weeks = picksNavWeeks();
+        const cur = getCurrentWeek();
+        return { weekIds: weeks.map(w => w.weekId), currentWeekId: state.picksWeekId || cur?.weekId || null };
+      }, (targetId) => {
+        const cur = getCurrentWeek();
+        state.picksWeekId = (targetId === cur?.weekId) ? null : targetId;
+        renderPicksPage();
+        window.scrollTo({ top: 0 });
+      });
+    } else if (tab === 'dashboard') {
+      bindWeekSwipe(document.getElementById('page-dashboard'), () => {
+        const weeks = selectableDashboardWeeks(getWeeks(), !!getSession()?.isAdmin);
+        return { weekIds: weeks.map(w => w.weekId), currentWeekId: state.dashboardWeekId || weeks[0]?.weekId || null };
+      }, (targetId) => {
+        state.dashboardWeekId = targetId;
+        renderDashboard();
+      });
+    }
+  } catch (e) { console.warn('[nav-gestures] per-tab gesture rebind failed', e); }
 }
 
 function refreshHeader() {
@@ -4188,7 +5039,7 @@ export function renderLeaguePill() {
   // DI-184c "loading" — hold the slot empty rather than guess, the same rule
   // renderHeaderIdentity() already applies to the identity chip while a
   // session is set but the underlying record hasn't hydrated yet.
-  if (!hasValidSupabaseSession() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }
+  if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }
   const name = getActiveLeagueName();
   // REVIEWER N-a — an EMPTY name is an unknown name, and the answer to an
   // unknown name is no pill. The lookup above resolves to '' whenever the
@@ -4223,9 +5074,16 @@ export function renderLeaguePill() {
 
 /**
  * DI-213k (PASS 1b, Drew: "Add a header wordmark (Recommended)") — a
- * NATIVE-ONLY text wordmark ("MUNERA") beside the existing #league-pill.
- * `renderLeaguePill()` above is untouched, verbatim — this function only
- * ever inserts a SIBLING element in front of it.
+ * NATIVE-ONLY text wordmark ("MUNERA") in `.header-right`.
+ *
+ * REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — this used to anchor
+ * on `#league-pill` (`league.parentNode.insertBefore(wm, league)`), which
+ * F4's own header declutter just removed from the DOM entirely. Re-anchored
+ * on `#sync-badge` — the one element `.header-right` is guaranteed to still
+ * have (per mockups/control-center.html:96-102's `trigger | #header-meta |
+ * #sync-badge` shape) — same "insert as a sibling, right before the anchor"
+ * shape, just a different anchor. Still inserts BEFORE its anchor, so the
+ * wordmark keeps the same left-of-badge position it always had.
  *
  * "On web the element must not exist in the DOM at all" (per the approved
  * DI, not merely hidden) — so this never runs on web: created exactly once,
@@ -4235,13 +5093,13 @@ export function renderLeaguePill() {
 function initNativeWordmark() {
   if (!isNativeShell()) return;
   if (document.getElementById('brand-wordmark')) return;
-  const league = document.getElementById('league-pill');
-  if (!league || !league.parentNode) return;
+  const anchor = document.getElementById('sync-badge');
+  if (!anchor || !anchor.parentNode) return;
   const wm = document.createElement('span');
   wm.id = 'brand-wordmark';
   wm.className = 'brand-wordmark';
   wm.innerHTML = escHtml(getShellWordmark() || '');
-  league.parentNode.insertBefore(wm, league);
+  anchor.parentNode.insertBefore(wm, anchor);
 }
 
 let _nativeAppLifecycleWired = false;
@@ -4496,6 +5354,22 @@ export const _bootThemeKeyForTest = bootThemeKey;
 export const _applyThemeForTest = applyTheme;
 
 // Applies a theme by replacing the `theme-*` class on <body>. Idempotent.
+/**
+ * UX Revamp wiring pass 1 (2026-09-25) — the `setTheme(key); applyTheme(key);`
+ * pair, factored out so the header dropdown's own change handler (below) and
+ * js/control-center.js's onSetTheme callback (buildControlCenterCtx()) share
+ * ONE call site for it, rather than two independent copies of the same
+ * write-then-repaint sequence — boottest.mjs [25] pins applyTheme()'s own
+ * CALL-SITE count at exactly four (boot, resyncPlayerPreferences, this
+ * shared function, and the adapter repaint); a second inline `applyTheme(key)`
+ * anywhere else would be exactly the "somebody added a second re-apply path"
+ * that guard exists to catch.
+ */
+function applyThemeChoice(key) {
+  setTheme(key);
+  applyTheme(key);
+}
+
 function applyTheme(themeKey) {
   const key = themeKey || getTheme() || 'neutral';
   const body = document.body;
@@ -4587,6 +5461,56 @@ function syncNativeStatusBar(color) {
 }
 
 /**
+ * RG-246 (2026-09-25) — THE PALETTE THE SESSION CHOKEPOINT PAINTS.
+ *
+ * THE DEFECT THIS EXISTS FOR. resyncPlayerPreferences() painted
+ * `applyTheme(getTheme())`, and getTheme() is `_playerPref('theme') ||
+ * 'neutral'` — on a Supabase device it can only answer the league DEFAULT
+ * until the member row is readable. The chokepoint runs on EVERY auth event
+ * (onAuthEvent -> refreshAuthUI -> applyIdentityDeltaIfChanged), and the first
+ * one of a cold open lands before the hydrate. So the screen went
+ * hint(maroon) -> neutral -> maroon: the third paint Drew kept reporting after
+ * RG-215 and RG-217, from the FOURTH reader neither of them touched.
+ *
+ * SIGNED IN — bootThemeKey() IS THE ANSWER, and it is the same reader the
+ * other three sites already use (boot's first frame, index.html's inline
+ * bootstrap, _repaintForSupabaseData). The player record wins the moment it is
+ * readable; this device's hint covers the gap before that. Nothing new is
+ * invented here, which is the point: a fourth rule would be a fourth bug.
+ *
+ * SIGNED OUT — DREW'S RULING, 2026-09-25, verbatim: "keep". After a sign-out
+ * the screen keeps the last palette until the NEXT SIGN-IN rather than dropping
+ * to neutral. It cannot be kept from storage: the sign-out sweep has already
+ * removed the hint by the time this runs (auth.js's `cfbp_` prefix rule —
+ * THEME_HINT is deliberately not in _CLEAR_KEEP_KEYS, so player B never boots
+ * in player A's colours). So the last term is WHAT IS ON SCREEN, read off the
+ * one `theme-*` class applyTheme() itself maintains — not a second stored
+ * source of truth, and nothing a later boot can inherit.
+ *
+ * AND IT STOPS AT THE NEXT SIGN-IN, exactly as ruled: the moment a session has
+ * a playerId the answer is bootThemeKey()'s alone, so an incoming player whose
+ * record says neutral gets neutral rather than the departed player's colours.
+ *
+ * THE RECORDING RULE IS UNTOUCHED (RG-218). applyTheme() still refuses to write
+ * a hint unless a resolved player record supplied that exact palette, so
+ * keeping the PIXEL never records the previous player's palette as this
+ * device's default. boottest [31-D] asserts both halves.
+ *
+ * VALIDATED AGAINST THE SEVEN REAL KEYS for the same reason bootThemeKey() is:
+ * the value is spliced back into a CSS class name.
+ */
+function resyncThemeKey() {
+  const key = bootThemeKey();
+  let signedIn = false;
+  try { signedIn = !!getSession()?.playerId; } catch { signedIn = false; }
+  if (signedIn || key !== 'neutral') return key;
+  let painted = '';
+  try {
+    painted = ([...document.body.classList].find(c => c.startsWith('theme-')) || '').slice('theme-'.length);
+  } catch { painted = ''; }
+  return THEMES.some(t => t.key === painted) ? painted : key;
+}
+/**
  * Re-apply the player's (or device-fallback) theme + timezone + re-render the
  * toggle pills in the header. Call whenever session changes (login/logout/
  * player switch) so a player's chosen color scheme and TZ follow them across
@@ -4610,7 +5534,11 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // passes nothing and clears it, exactly as before.
   if (!preserveLayoutEditing) state.layoutEditing = null;
   state.layoutAnnounce = null;
-  applyTheme(getTheme());
+  // RG-246 — the hint-aware reader, never the raw getTheme(): this line ran on
+  // every auth event before the hydrate and repainted the league default over
+  // a correct first frame. See resyncThemeKey() directly above for the
+  // signed-out half (Drew's "keep" ruling, 2026-09-25).
+  applyTheme(resyncThemeKey());
   renderTzToggle();
   renderThemeToggle();
   renderHeaderIdentity();
@@ -4724,9 +5652,7 @@ export function renderThemeToggle() {
       ${THEMES.map(t => `<option value="${t.key}"${t.key===current?' selected':''}>${escHtml(t.label)}</option>`).join('')}
     </select>`;
   container.querySelector('#theme-select')?.addEventListener('change', e => {
-    const key = e.target.value;
-    setTheme(key);
-    applyTheme(key);
+    applyThemeChoice(e.target.value);
   });
 }
 
@@ -5127,6 +6053,173 @@ function renderNotifCenterSkeletonHTML() {
   return `<div class="card" style="height:52px;opacity:.5"></div><div class="card" style="height:52px;opacity:.35"></div><div class="card" style="height:52px;opacity:.2"></div>`;
 }
 
+/**
+ * ══ RG-245 (2026-09-25) — A WITHHELD TAP IS DEFERRED, NEVER DISCARDED ═══════
+ *
+ * THE BUG (B-04, ledger §6 item 27(c), introduced v0.23.4 (a469b28), first reported by Drew at v0.23.2): "a test-push
+ * tap lands on the Picks page instead of Chat." On a cold push-tap launch the
+ * SDK's worker opens "?ntab=chat&nparams=…"; boot() awaits
+ * ensureSupabaseDataHydrated('boot'), which DEFERS whenever
+ * noIdentityEverProven() (RG-216) — the normal state of a home-screen PWA whose
+ * access token died overnight. runPostHydrateTail() runs anyway, parses ?ntab,
+ * scrubs it off the URL, and hands the destination to deepLinkTo() — which was
+ * withheld and returned. The tail is latched page-lifetime and the URL is now
+ * clean, so when the identity landed a second later there was nothing left
+ * anywhere to replay. `state.currentTab` stayed on its 'picks' initializer.
+ *
+ * IT IS NOT THE GUARD THAT IS WRONG. A withheld page must not paint chat
+ * content — SECURITY S-2, and the blind rule behind it. What was wrong is that
+ * "not now" was implemented as "never": the guard was the only thing holding
+ * the destination, and it dropped it.
+ *
+ * THE PATTERN IS THE ONE push-native.js ALREADY USES for the same class of
+ * problem one layer out (`_pendingNavigations`, flushed by
+ * markNativeBootReady()): buffer the destination, replay it on the transition.
+ * Here the transition is the UN-WITHHOLD, and it has exactly two moments, both
+ * of which already exist as named functions and both of which call the flush:
+ *
+ *   • _repaintForSupabaseData()    — the adapter started serving (the deferred
+ *                                    boot hydrate finally landing is THIS one)
+ *   • releaseWithholdIfResolved()  — the hold-gate / identity-arrived transition
+ *
+ * ONE SLOT, LAST-WRITER-WINS, CONSUMED ONCE, AND SCOPED TO THE ACCOUNT THAT
+ * RECEIVED THE TAP. It only ever holds a tap that could not be delivered, and
+ * it is nulled the instant it is delivered — so two taps inside one withheld
+ * window resolve to the one the player tapped last, and a delivered tap cannot
+ * replay later in the session.
+ *
+ * The window "consumed once" does not close is a tap banked while the page is
+ * withheld, followed by a SIGN-OUT or a handover before it is ever delivered. A
+ * sign-out withholds the page, so the slot would otherwise survive it and be
+ * replayed by the NEXT account's first un-withhold — player B landing on player
+ * A's notification, the shape of every device-local leak DI-180q's sweep exists
+ * to stop. The slot therefore carries the account it was banked under and
+ * flushPendingDeepLink() refuses to deliver across a change of it. That check
+ * lives on the slot rather than in applyIdentityDeltaIfChanged(), because that
+ * chokepoint fires on an identity ARRIVING too — which is the transition this
+ * whole mechanism is waiting for. See the note there.
+ */
+let _pendingDeepLink = null;
+/** The account the slot was banked under — `getAccountUserId()` at bank time,
+ *  `''` when nobody was proven yet. See flushPendingDeepLink() for the rule. */
+let _pendingDeepLinkAccount = '';
+/** Fails CLOSED to `''` ("nobody"), the same direction noIdentityEverProven()
+ *  takes, so an unreadable auth layer can only ever make the slot MORE
+ *  permissive about a boot-time tap and never lets one cross a known account. */
+function _deepLinkAccountNow() {
+  try { return getAccountUserId() || ''; } catch { return ''; }
+}
+/** Buffer a destination that arrived while the page was withheld. `null`/no-tab
+ *  destinations are not stored: deepLinkTo()'s own fallback for those is
+ *  "dashboard", and a deferred navigation to the default tab is a page yank
+ *  with no information in it. */
+function stashPendingDeepLink(destination) {
+  if (!destination?.tab) return;
+  _pendingDeepLink = destination;
+  _pendingDeepLinkAccount = _deepLinkAccountNow();
+  console.info(`[notifications] the tap's destination (${destination.tab}) arrived while content was withheld — held until the page is released, not dropped`);
+}
+/**
+ * Replay a buffered tap, if there is one and if the page really is released.
+ * Guarded on isContentWithheld() HERE rather than at the two call sites, for
+ * releaseWithholdIfResolved()'s stated reason: a transition that can be
+ * re-entered from several places must ask the predicate itself.
+ *
+ * Idempotent: the slot is cleared BEFORE deepLinkTo() runs, so a re-entrant
+ * repaint cannot deliver the same tap twice, and a deepLinkTo() that finds
+ * itself withheld again simply re-stashes.
+ */
+function flushPendingDeepLink(reason) {
+  if (!_pendingDeepLink) return false;
+  if (isContentWithheld()) return false;
+  // ── THE ACCOUNT BOUNDARY (reviewer BLOCK, 2026-09-25) ───────────────────
+  // A tap banked under a PROVEN account is that account's. If a different one
+  // now holds the page — a sign-out and a fresh sign-in, a handover, a claim
+  // — the tap is DROPPED, never delivered: player B must not land on player
+  // A's notification. Dropped rather than held, so it cannot sit waiting for
+  // A to come back either.
+  //
+  // `_pendingDeepLinkAccount === ''` is the ONE case that crosses, and it is
+  // not a crossing: the slot was banked before any account existed on this
+  // page, i.e. by this boot's own ?ntab or by a tap the OS delivered to THIS
+  // device while it was signed out. It belongs to whoever the page then
+  // resolves to. That case is also the whole of B-04 — the RG-216 deferral
+  // window is by definition "no identity proven yet" — so a rule that refused
+  // it would be the bug again.
+  const accountNow = _deepLinkAccountNow();
+  if (_pendingDeepLinkAccount && _pendingDeepLinkAccount !== accountNow) {
+    _pendingDeepLink = null;
+    _pendingDeepLinkAccount = '';
+    console.info(`[notifications] a held notification tap was DISCARDED at ${reason}: the account changed while it was waiting, and a tap belongs to the account that received it`);
+    return false;
+  }
+  const dest = _pendingDeepLink;
+  _pendingDeepLink = null;
+  _pendingDeepLinkAccount = '';
+  try { deepLinkTo(dest); } catch (e) { console.warn(`[notifications] the held tap could not be replayed after ${reason}`, e); }
+  return true;
+}
+/** Test seam — the slot is page state, like every other latch in this file. */
+export function _resetPendingDeepLinkForTest() { _pendingDeepLink = null; _pendingDeepLinkAccount = ''; }
+export function _pendingDeepLinkForTest() { return _pendingDeepLink; }
+
+/**
+ * ══ RG-245 — THE WARM TAP'S ROUTER ══════════════════════════════════════════
+ *
+ * The COLD tap is routed by the URL (`?ntab`/`?nparams`, parsed in the
+ * post-hydrate tail). The WARM tap — the app is already open, the SDK focuses
+ * the existing page — produces no fresh boot and therefore no URL to read, so
+ * push-onesignal.js's click hook is the only signal it makes. That hook
+ * deliberately routed NOTHING ("the SDK's URL open already owns navigation"),
+ * which is true on the cold path and vacuous on the warm one: there is no open
+ * to own it. A warm tap simply left the player where they were.
+ *
+ * WHAT IT WILL NOT DO, and this clause is the whole of the risk in adding a
+ * router here. `destinationFor()` answers `{tab:'dashboard'}` for an event it
+ * does not recognise — a sensible default for a resolver, and a page YANK if it
+ * is fed straight into navigation. So only an event that is actually in the
+ * lifecycle vocabulary routes; anything else (no event, an empty string, a
+ * payload shape we have never seen) moves the player nowhere at all, which is
+ * byte-for-byte today's behaviour on those payloads.
+ *
+ * `data` IS UNTRUSTED PAYLOAD, and it is treated exactly as the cold path
+ * treats `?nparams`: it is never read as a route. The tab comes from
+ * DEEP_LINK_TABLE keyed on an allow-listed event name — the same
+ * "resolve, never accept" rule push-native.js's `NATIVE_ROUTE_ALLOW_LIST`
+ * states for its own boundary (DI-241 condition C2) — and the params go to
+ * deepLinkTo() as DATA, which escapes them at the one place it builds a
+ * selector out of them. `route` is read by NOBODY here: it is present in the
+ * payload, and the tab is still resolved only from the event.
+ *
+ * ══ THE SHAPE IS NESTED, NOT FLAT (reviewer BLOCK, 2026-09-25) ═════════════
+ *
+ * `additionalData` is `{ event, route, params:{…} }` — see
+ * supabase/functions/_shared/onesignal.mjs's sendOneSignalNotification(), which
+ * puts the destination's params under `data.params` (DI-242). `destinationFor()`
+ * reads a FLAT ctx (`ctx.messageId`, `ctx.playerId`). Handing it the payload
+ * whole therefore resolved `messageId: null` on every chat tap — the tab would
+ * have been right and the scroll-and-flash to the actual message, which is the
+ * other half of what Drew reported, would silently never happen. The nested
+ * object is flattened over the payload (nested wins) so both the real shape and
+ * any flat legacy one resolve.
+ */
+function routeNotificationTap(event, data) {
+  try {
+    if (typeof event !== 'string' || !event) return;
+    if (!Object.prototype.hasOwnProperty.call(LIFECYCLE_EVENTS, event)) {
+      console.warn('[notifications] ignored a tap whose event is not in the lifecycle vocabulary:', event);
+      return;
+    }
+    const payload = (data && typeof data === 'object') ? data : {};
+    const nested = (payload.params && typeof payload.params === 'object' && !Array.isArray(payload.params))
+      ? payload.params : {};
+    deepLinkTo(destinationFor(event, { ...payload, ...nested }));
+  } catch (e) { console.warn('[notifications] the warm tap could not be routed', e); }
+}
+/** Test seam — the REAL router push-onesignal.js's click hook is handed, so
+ *  deeplinktest drives the production function rather than a copy of it. */
+export const _routeNotificationTapForTest = routeNotificationTap;
+
 /** DI-A5 — resolve a stored/pushed destination into real navigation +
  *  best-effort scroll. Every entry in notifications.js's DEEP_LINK_TABLE maps
  *  to an EXISTING navigateTo() tab; a message no longer in retention (chat)
@@ -5138,7 +6231,11 @@ function deepLinkTo(destination) {
   // refuses, but the message lookup, the forced chat fetch and the scroll-into-
   // view would still run against a page that is being withheld — so the whole
   // path stops here rather than half-running.
-  if (isContentWithheld()) return;
+  //
+  // RG-245 — …and the destination is HELD rather than lost. Nothing below this
+  // line runs, so the withheld page still paints nothing; see
+  // stashPendingDeepLink() above for why "not now" stopped meaning "never".
+  if (isContentWithheld()) { stashPendingDeepLink(destination); return; }
   if (!destination?.tab) { navigateTo('dashboard'); return; }
   navigateTo(destination.tab);
   const params = destination.params || {};
@@ -5423,9 +6520,15 @@ function bindNotifSettingsBody(ov, playerId) {
   });
 }
 
-async function refreshNotifSettingsBody(ov, playerId) {
-  const body = ov.querySelector('#notif-center-body');
-  if (!body) return;
+/**
+ * The {st, device} resolution DI-240's ladder needs, factored out so
+ * refreshNotifSettingsBody() (the old modal's own repaint) and
+ * maybeRefreshNotifSettingsRow() (the control-center drawer/Settings page's
+ * equivalent, UX Revamp wiring pass 1) share the ONE dynamic push-native
+ * module import call site this logic needs, rather than two —
+ * nativeguardtest.mjs [13a] pins app.js's dynamic-import call-site count.
+ */
+async function resolvePushSettingsState() {
   let st, device = null;
   // DI-240 (native push, 2026-09-23) — native reads its OWN four-state truth
   // (js/push-native.js's nativePushState(), prefixed 'native-' so it can
@@ -5448,6 +6551,13 @@ async function refreshNotifSettingsBody(ov, playerId) {
       catch (e) { console.warn('[push] could not resolve this device\'s push status', e); }
     }
   }
+  return { st, device };
+}
+
+async function refreshNotifSettingsBody(ov, playerId) {
+  const body = ov.querySelector('#notif-center-body');
+  if (!body) return;
+  const { st, device } = await resolvePushSettingsState();
   body.innerHTML = await renderNotifSettingsBodyHTML(playerId, st, device);
   bindNotifSettingsBody(ov, playerId);
 }
@@ -6845,6 +7955,10 @@ function renderPicksPage() {
     // Branch A shows THAT week's own recap (it is the week being read), not the
     // previous week's — and it moves from the bottom of the page into the slot.
     fillPicksHeadSlot(c, viewWeek.status === 'final' ? renderWeekRecapCardHTML(viewWeek) : '');
+    // BLOCK 3 (2026-09-25) — every renderPicksPage() exit paints the banner
+    // itself now; see the function's own doc comment.
+    renderPausedLeagueBannerIfNeeded('picks');
+    renderMaintenanceBannerIfNeeded('picks');
     return;
   }
   state.picksWeekId = null;
@@ -6887,6 +8001,13 @@ function renderPicksPage() {
   if (!recapHtml && !playerActivelyInPicks) {
     c.insertAdjacentHTML('beforeend', renderSeasonSummaryHTML(currentWeek));
   }
+  // BLOCK 3 (2026-09-25) — see the function's own doc comment above
+  // renderPausedLeagueBannerIfNeeded(). This covers every direct
+  // renderPicksPage() call site that bypasses navigateTo() (week nav,
+  // login/logout, submit, live-score repaint, etc.), not just the initial
+  // navigation.
+  renderPausedLeagueBannerIfNeeded('picks');
+  renderMaintenanceBannerIfNeeded('picks');
 }
 
 /** Weeks a player may browse on the Picks tab: current week + anything locked/live/final. Demo weeks are commissioner-only. */
@@ -7171,6 +8292,11 @@ function renderPicksPageCurrent() {
   });
   renderGamesList(games, week);
   bindPickButtons(games, week);
+  // DI-331g — idempotent (see bindLogoImageEvents' own header); safe to call
+  // on every render, `#page-picks` is the persistent container this page's
+  // markup is always mounted inside (index.html), so ONE bind covers every
+  // future re-render's images too.
+  bindLogoImageEvents(document.getElementById('page-picks'));
   document.getElementById('submit-picks-btn')?.addEventListener('click', () => submitPicks(week, games));
   updateSubmitEnabled(games, week);
 }
@@ -7632,7 +8758,80 @@ export function updatePicksLiveStatusInPlace(games) {
   }
 }
 
+/**
+ * DI-331d/f/g (UX Revamp Group E, T-31/UN-287) — the Picks-page pick-button
+ * label, converted when `player.preferences.logoView` is on. ONE shared
+ * function so the "missing logo" / "manual game" / "toggle off" fallback
+ * behavior can never drift between the away and home buttons.
+ *
+ * States (DI-331d table, byte-for-byte):
+ *  - toggle OFF, or `isManual`, or no usable URL (`logoOk()` false) — plain
+ *    name at full size, IDENTICAL to pre-feature output. No `<img>` tag is
+ *    emitted at all in this branch — not merely hidden — so opting out (or
+ *    a manual game, or an ESPN game missing a logo for an FCS/obscure
+ *    program) costs zero network requests, per DI-331d's explicit
+ *    "opting out costs nothing" requirement.
+ *  - toggle ON + usable URL — logo (fixed 40x40 box, no layout shift) with
+ *    the team name smaller underneath at reduced opacity. A runtime image
+ *    load failure (bindLogoImageEvents() below) falls back to the SAME
+ *    full-size name via a CSS class, never a broken-image icon.
+ *
+ * This is provider-only data (AD-94) — never a manual-entry field, matching
+ * AD-03's own spirit for the spread field (CONVENTIONS #21's render-path
+ * table names `showGameModal()` as an explicit non-touch for this reason).
+ */
+// STEP B(9) / N6 (third pass) — the logo is DECORATIVE here: the team name is
+// visible right beside it (.pick-btn-logo-name), so a non-empty alt made a
+// screen reader announce the team twice. alt="" (not a missing alt, which
+// makes VoiceOver read the filename).
+function pickButtonContentHTML(displayName, logoUrl, logoViewOn, isManual) {
+  const url = (!isManual && logoViewOn) ? logoOk(logoUrl) : null;
+  if (!url) return escHtml(displayName);
+  return `<span class="pick-btn-logo-wrap">
+    <span class="pick-btn-logo-box"><img class="pick-btn-logo" src="${escHtml(url)}" alt="" referrerpolicy="no-referrer"></span>
+    <span class="pick-btn-logo-name">${escHtml(displayName)}</span>
+  </span>`;
+}
+
+/**
+ * DI-331g — 'load'/'error' do not bubble, so a delegated listener needs the
+ * CAPTURE phase on a stable ancestor. Bound ONCE per container (idempotent,
+ * same `_wired` flag idiom `chat-ui.js`'s long-press binder uses) so
+ * re-rendering the page's innerHTML — which replaces every `<img>` — never
+ * needs a rebind. `load` adds `.is-loaded` (CSS fades the image in over
+ * `--motion-fast`, `prefers-reduced-motion` skips it — styles.css); `error`
+ * adds `.logo-broken` to the nearest fallback wrapper, which is pure CSS
+ * from there (swap to the always-present name/abbreviation sibling — never
+ * a DOM text-injection, so a flaky network can't leave a half-built node).
+ * Shared by both DI-331f render paths (Picks' `.pick-btn-logo`, the compact
+ * dashboard's `.dc-chip-logo`) — one mechanism, not two near-identical ones.
+ */
+function bindLogoImageEvents(container) {
+  if (!container || container._logoEventsWired) return;
+  container._logoEventsWired = true;
+  container.addEventListener('load', e => {
+    const img = e.target;
+    if (img?.classList?.contains('pick-btn-logo') || img?.classList?.contains('dc-chip-logo')) {
+      img.classList.add('is-loaded');
+    }
+  }, true);
+  container.addEventListener('error', e => {
+    const img = e.target;
+    if (img?.classList?.contains('pick-btn-logo')) {
+      img.closest('.pick-btn-logo-wrap')?.classList.add('logo-broken');
+    } else if (img?.classList?.contains('dc-chip-logo')) {
+      img.closest('.dc-chip-pick')?.classList.add('logo-broken');
+    }
+  }, true);
+}
+/** Test-only alias (same convention as every other `_xForTest` seam). */
+export const _bindLogoImageEventsForTest = bindLogoImageEvents;
+export const _pickButtonContentHTMLForTest = pickButtonContentHTML;
+
 export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
+  // DI-331d — read once per card; both pick buttons share the same toggle
+  // state (there is no per-button variant).
+  const logoViewOn = getLogoView();
   const sv = game.lockedSpread!==null ? game.lockedSpread : game.spread;
   // For final games with no spread: show "Final" label; TBD only for future unset games.
   // The provenance ("ESPN · DraftKings" vs "Manual") was confusing players on the
@@ -7725,7 +8924,7 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
     <div class="game-card-header">
       <div class="flex gap-sm flex-center">
         <span class="game-time">${timeStr}</span>
-        ${game.isAlmaMaterGame?'<span class="alma-mater-badge">⭐ Alma Mater</span>':''}
+        ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater')} Alma Mater</span>`:''}
         ${renderGameBadges(game)}
         ${dqBadge}
       </div>
@@ -7756,8 +8955,8 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
       ${venueStr}
       <div class="spread-row"><span class="text-muted text-xs">Spread:</span>${spreadDisplay}</div>
       ${!showResult?`<div class="pick-buttons">
-        <button class="${awayCls}" data-team="${escHtml(game.awayTeam)}" data-game-id="${game.gameId}" ${dis}>${escHtml(awayDisplay)}</button>
-        <button class="${homeCls}" data-team="${escHtml(game.homeTeam)}" data-game-id="${game.gameId}" ${dis}>${escHtml(homeDisplay)}</button>
+        <button class="${awayCls}" data-team="${escHtml(game.awayTeam)}" data-game-id="${game.gameId}" ${dis}>${pickButtonContentHTML(awayDisplay, game.awayLogo, logoViewOn, game.isManual)}</button>
+        <button class="${homeCls}" data-team="${escHtml(game.homeTeam)}" data-game-id="${game.gameId}" ${dis}>${pickButtonContentHTML(homeDisplay, game.homeLogo, logoViewOn, game.isManual)}</button>
       </div>`:''}
       ${game.espnEventId?`<div class="text-muted text-xs mt-sm text-right">ESPN: ${escHtml(game.espnEventId)}</div>`:''}
     </div>
@@ -7767,11 +8966,22 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
 function renderSourceBadge(game) {
   const ds = game.dataSource || game.dataQuality;
   return {
-    espn_live:       '<span class="dq-badge dq-espn-live">📡 ESPN Live</span>',
-    espn_historical: '<span class="dq-badge dq-espn-hist">📅 ESPN Hist</span>',
-    demo:            '<span class="dq-badge dq-demo">📋 Demo</span>',
-    proposed:        '<span class="dq-badge dq-proposed">📌 Proposed</span>',
-    partial:         '<span class="dq-badge dq-partial">⚠️ Partial</span>',
+    // UX Revamp Group E (2026-09-25) — the ESPN Live badge is removed
+    // outright, not merely re-iconified. Sourced: Drew's brief T-09b / UN-286
+    // ("9b remove the 📡 ESPN Live badge"), reviewer BLOCK F13 (2026-09-25) —
+    // cited here so this deletion reads as an instruction, not a guess.
+    // `espn_live` is the ordinary,
+    // default case for the vast majority of games, and a badge announcing
+    // "yes, this is normal" on every card was chrome noise the other four
+    // (genuinely exceptional) states below don't have. No badge renders for
+    // this source now — `{}[ds]` falls through to the `|| ''` default.
+    // REVIEWER BLOCK 4 (pass-2, 2026-09-25) — F8 was marked closed with these
+    // four still emoji; the matching glyphs (`icons.js`'s own F8 inventory
+    // section) now actually get used here.
+    espn_historical: `<span class="dq-badge dq-espn-hist">${icon('calendarWeek', { label: 'ESPN Historical' })} ESPN Hist</span>`,
+    demo:            `<span class="dq-badge dq-demo">${icon('clipboard', { label: 'Demo' })} Demo</span>`,
+    proposed:        `<span class="dq-badge dq-proposed">${icon('pin', { label: 'Proposed' })} Proposed</span>`,
+    partial:         `<span class="dq-badge dq-partial">${icon('warning', { label: 'Partial' })} Partial</span>`,
   }[ds] || '';
 }
 
@@ -7835,6 +9045,15 @@ function updateSubmitEnabled(games, week) {
   const count = Object.keys(state.draftPicks).filter(gid=>games.some(g=>g.gameId===gid)).length;
   const el=document.getElementById('pick-count'); if(el)el.textContent=count;
   const btn=document.getElementById('submit-picks-btn'); if(!btn)return;
+  // REVIEWER BLOCK 3 (2026-09-25) — a paused league's submit button was
+  // being unconditionally RE-ENABLED on the very next pick tap, because
+  // this is the ONE function every pick handler calls after updating
+  // `state.draftPicks` (line 8603 above), and it never consulted pause
+  // state at all. `renderPausedLeagueBannerIfNeeded()` disables the button
+  // once, on the page's initial paint — a tap on any pick button undid
+  // that disablement immediately, on a league the server was already
+  // refusing writes for.
+  if (isActiveLeaguePaused()) { btn.disabled = true; btn.title = PAUSED_LEAGUE_BANNER_TEXT; return; }
   const tbReq = !!(week?.tiebreakerQuestion);
   const tbOk  = !tbReq||(state.draftTiebreaker!==null&&!isNaN(state.draftTiebreaker));
   btn.disabled = count<games.length||!tbOk;
@@ -8249,7 +9468,7 @@ export function renderAlmaMaterWatch(weekId, games) {
   });
 
   return `<div class="card mb-md">
-    <div class="card-header"><span class="card-title">⭐ Alma Mater Watch</span></div>
+    <div class="card-header"><span class="card-title">${icon('almaMater')} Alma Mater Watch</span></div>
     ${rows.join('')}
   </div>`;
 }
@@ -8614,6 +9833,34 @@ export function selectableDashboardWeeks(weeks, isCommissioner) {
   ).sort((a, b) => b.weekNumber - a.weekNumber);
 }
 
+/**
+ * DI-311 (T-32) — the Dashboard's Standard/Compact layout default, computed
+ * LIVE on every call rather than seeded once at boot. Precedence:
+ *   1. Native ALWAYS 'compact' — a native device never inherits a web-set
+ *      matrix default, unconditional, ahead of everything else.
+ *   2. An explicit PER-PLAYER override (player.preferences.dashboardLayout —
+ *      Architecture bullet 4: follows the player across devices), once set
+ *      via the Standard/Compact toggle, always wins.
+ *   3. Absent an override, WIDTH-DRIVEN at the dashboard-only 1024px
+ *      breakpoint (matches css/styles.css's own
+ *      `.main-content:has(#page-dashboard.active)` rule) — live, not only
+ *      at boot, so resizing (or rotating) across the breakpoint changes the
+ *      default without a reload.
+ *   4. settings.dashboardLayout (device-local) is the anonymous-viewer
+ *      fallback only, for the rare environment with no window.innerWidth.
+ */
+function resolveDashboardLayout() {
+  if (isNativeShell()) return 'compact';
+  const session = getSession();
+  const player = session?.playerId ? getPlayer(session.playerId) : null;
+  const override = player?.preferences?.dashboardLayout;
+  if (override === 'compact' || override === 'standard') return override;
+  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number' && window.innerWidth > 0) {
+    return window.innerWidth >= 1024 ? 'standard' : 'compact';
+  }
+  return getSettings().dashboardLayout || 'standard';
+}
+
 function renderDashboard() {
   renderDashboardInner();
   // The chat teaser card (v0.16.0, DI-93) was inserted here — `afterbegin` on
@@ -8623,6 +9870,11 @@ function renderDashboard() {
   // comment in js/chat-ui.js where dashboardChatTeaserHTML() was defined.
   // `host` stays — the prelink banner below shares it.
   const host = document.getElementById('page-dashboard');
+  // DI-331g — idempotent; see bindLogoImageEvents()'s own header. Covers the
+  // compact layout's `.dc-chip-logo` images (renderDashboardCompact()) —
+  // the matrix (renderDashboardTable()) never emits logo `<img>`s, DI-331f's
+  // explicit non-conversion.
+  bindLogoImageEvents(host);
   // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
   // Inserted the way the chat teaser was: `afterbegin` on the page host,
   // AFTER renderDashboardInner() has painted. That makes it a banner ABOVE the
@@ -8645,6 +9897,13 @@ function renderDashboard() {
     const banner = prelinkBannerHTML();
     if (banner) { host.insertAdjacentHTML('afterbegin', banner); bindPrelinkBanner(host); }
   }
+  // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
+  // comment. renderDashboard() is called directly (not through navigateTo())
+  // from the auto-refresh tick, the live-score repaint, week swipe, pull-to-
+  // refresh and the week selector — every one of those needs the banner to
+  // survive, not just the initial navigation.
+  renderPausedLeagueBannerIfNeeded('dashboard');
+  renderMaintenanceBannerIfNeeded('dashboard');
 }
 
 function renderDashboardInner() {
@@ -8709,15 +9968,28 @@ function renderDashboardInner() {
   // own order below. The markup inside each is byte-identical to v0.21.0; the
   // numbered comments are kept because they are how UN-22's default order has
   // been documented in this file since v0.11.
+  // DI-311 (T-32) — computed ONCE per render, live (never a boot-time seed) —
+  // see resolveDashboardLayout()'s own header for the native/override/width
+  // precedence.
+  const currentDashLayout = resolveDashboardLayout();
+  // Reviewer BLOCK (2026-09-25), F9 — resolveDashboardLayout() forces
+  // 'compact' on native UNCONDITIONALLY, ahead of even a player's own saved
+  // override (see its own header, precedence 1). The Standard/Compact toggle
+  // below is therefore hidden on native (isNativeShell()) rather than
+  // rendered at full emphasis and tappable — Interaction Principles §"Button
+  // Behavior": "Disabled buttons — clearly reduced emphasis," and a control
+  // that visibly writes a preference the app then structurally ignores is a
+  // worse experience than no control at all, not merely a disabled one.
   const dashSections = {
     // 1. ALL PICKS BY GAME — primary section per requirements (DI-22)
     'dash-picks': `<div class="card mb-md">
       <div class="card-header card-header-row">
         <span class="card-title">📋 All Picks by Game</span>
+        ${isNativeShell() ? '' : `
         <div class="layout-toggle" role="group" aria-label="View density">
-          <button class="layout-toggle-btn${(getSettings().dashboardLayout||'standard')==='standard'?' active':''}" data-layout="standard" title="Wide matrix">Standard</button>
-          <button class="layout-toggle-btn${getSettings().dashboardLayout==='compact'?' active':''}" data-layout="compact" title="Mobile-friendly stacked view">Compact</button>
-        </div>
+          <button class="layout-toggle-btn${currentDashLayout==='standard'?' active':''}" data-layout="standard" title="Wide matrix">Standard</button>
+          <button class="layout-toggle-btn${currentDashLayout==='compact'?' active':''}" data-layout="compact" title="Mobile-friendly stacked view">Compact</button>
+        </div>`}
       </div>
       ${/* DI-116f — players are used to seeing everyone's picks the moment they
             submitted. Without a word of explanation the new blind cells read as
@@ -8743,7 +10015,7 @@ function renderDashboardInner() {
             dash or skeleton chip" and leaves the wording to it; this is the
             factual placeholder, not a UX decision taken here. */''}
       ${supabaseProgressUnknownNoteHTML(week)}
-      ${(getSettings().dashboardLayout==='compact')
+      ${(currentDashLayout==='compact')
         ? `<div class="dashboard-compact">${renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`
         : `<div class="dashboard-scroll">${renderDashboardTable(players,games,allPicks,weeklyResults,week.weekId,actualTB)}</div>`}
       ${/* FEAT-7 / DI-174e — the legend is the touch-accessible replacement for
@@ -8819,11 +10091,20 @@ ${dashComposed.html}
 
   bindLayoutEditHandlers(c, 'dashboard', dashComposed.visible, renderDashboard);
   document.getElementById('week-selector')?.addEventListener('change',e=>{state.dashboardWeekId=e.target.value;renderDashboard();});
-  // Standard / Compact view toggle for the All-Picks-by-Game card. Persists
-  // in settings.dashboardLayout so a user's mobile preference sticks across reloads.
+  // DI-311 (T-32) — Standard / Compact view toggle for the All-Picks-by-Game
+  // card. The EXPLICIT override now writes to player.preferences.dashboardLayout
+  // (Architecture bullet 4 — follows the player across devices) when signed
+  // in; settings.dashboardLayout (device-local) is the anonymous-viewer
+  // fallback only.
   document.querySelectorAll('.layout-toggle-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      saveSetting('dashboardLayout', btn.dataset.layout);
+      const session = getSession();
+      if (session?.playerId) {
+        const p = getPlayer(session.playerId);
+        patchPlayer(session.playerId, { preferences: { ...(p?.preferences || {}), dashboardLayout: btn.dataset.layout } });
+      } else {
+        saveSetting('dashboardLayout', btn.dataset.layout);
+      }
       renderDashboard();
     });
   });
@@ -9575,6 +10856,8 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
   // own chip. Once the week is live/final, everything is visible to everyone.
   const week = getWeeks().find(w => w.weekId === weekId);
   const canSeeOthers = week ? canViewOtherPicks(week) : false;
+  // DI-331f — read once for the whole dashboard render, same as renderGameCard().
+  const logoViewOn = getLogoView();
 
   const gameCards = sortedGames.map(game => {
     const sv = game.lockedSpread !== null ? game.lockedSpread : game.spread;
@@ -9629,7 +10912,19 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       } else if (result === PICK_RESULT.WIN) { cls = 'dc-chip-win'; icon = '✓'; }
       else if (result === PICK_RESULT.LOSS) { cls = 'dc-chip-loss'; icon = '✗'; }
       else if (result === PICK_RESULT.NO_DECISION) { cls = 'dc-chip-nd'; icon = '—'; }
-      return `<div class="dc-chip ${cls}" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)} picked ${escHtml(pick.selectedTeam)}"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">${escHtml(pickShort)}${icon?` ${icon}`:''}</span></div>`;
+      // DI-331f — "converts" per the render-path table: the compact dashboard
+      // shows a logo in place of the abbrMap chip shorthand when logo view is
+      // on. Reached ONLY past the blind-rule branches above (the "no pick"
+      // and "blind" returns happen earlier in this map callback), so a
+      // hidden pick can never resolve a team here — same non-negotiable as
+      // renderGameCard's pick buttons. Manual games have no homeLogo/
+      // awayLogo (data-model.js factory default), so `logoOk(null)` already
+      // falls through to the text chip with no extra `isManual` check needed.
+      const pickLogoUrl = (logoViewOn && pickedSide) ? logoOk(pickedSide === 'home' ? game.homeLogo : game.awayLogo) : null;
+      const pickContent = pickLogoUrl
+        ? `<span class="dc-chip-pick-logo"><img class="dc-chip-logo" src="${escHtml(pickLogoUrl)}" alt="${escHtml(pick.selectedTeam)}" referrerpolicy="no-referrer"><span class="dc-chip-pick-fallback">${escHtml(pickShort)}</span></span>`
+        : escHtml(pickShort);
+      return `<div class="dc-chip ${cls}" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)} picked ${escHtml(pick.selectedTeam)}"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">${pickContent}${icon?` ${icon}`:''}</span></div>`;
     }).join('');
 
     const espn = game.espnEventId
@@ -9846,7 +11141,7 @@ export function renderLeaderboard() {
        player and makes it movable for everyone else. */
     'stand-extrapoint': renderExtraPointLedgerHTML(),
 
-    'stand-alma': `<div class="admin-section-title">⭐ Alma Mater Rankings</div>
+    'stand-alma': `<div class="admin-section-title">${icon('almaMater')} Alma Mater Rankings</div>
     <div class="card mb-md">
       <p class="text-muted text-xs mb-sm">Rankings sourced from ESPN when available. Fetch ESPN data in the Commissioner panel to update.</p>
       ${renderAlmaMaterRankings()}
@@ -9926,6 +11221,10 @@ ${standComposed.html}
       renderLeaderboard();
     });
   });
+  // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
+  // comment; structural repaint coverage for Standings.
+  renderPausedLeagueBannerIfNeeded('leaderboard');
+  renderMaintenanceBannerIfNeeded('leaderboard');
 }
 
 export function renderAlmaMaterRankings() {
@@ -9991,8 +11290,10 @@ export function renderAlmaMaterRankings() {
  * Extracted as its own exported function (2026-09-04, alongside the
  * two-list fix) so it's directly testable without invoking the whole
  * renderCommPage() dependency closure, matching renderAlmaMaterWatch()/
- * renderAlmaMaterRankings() above. `data-comm-tab="settings"` preserved
- * (RG-10 — a card missing that attribute renders on all five tabs).
+ * renderAlmaMaterRankings() above. `data-comm-tab="rules"` (UX Revamp
+ * wiring pass 3a, DI-319 amendment 3 — renamed "Alma maters & home teams,"
+ * retagged from `settings` to `rules`; RG-10 — a card missing that
+ * attribute renders on all five tabs).
  */
 export function renderAlmaMaterSettingsCard() {
   const almaMaters = claimedAlmaMaters();
@@ -10003,10 +11304,10 @@ export function renderAlmaMaterSettingsCard() {
   const allPlayers = getPlayers();
   const claimantsOf = am => almaMaterClaimants(am, allPlayers);
   return `
-      <div class="admin-section" data-comm-tab="settings">
-        <div class="admin-section-title">⭐ Alma Maters</div>
+      <div class="admin-section" data-comm-tab="rules">
+        <div class="admin-section-title">${icon('almaMater')} Alma maters &amp; home teams</div>
         <div class="card">
-          <p class="text-muted text-xs mb-md">Derived from what each active player has set as their alma mater — not a separately-editable list. Drives Alma Mater Watch, Alma Mater Rankings, the ⭐ flag, guaranteed slate inclusion, the Rules tab list, and the tiebreaker's Auto-Calc, all from the same roster below. To add, remove, or change a school, edit the claiming player under Players → Edit — the change re-checks every game already on an open/upcoming week's slate immediately (no re-import needed). Weeks that are LOCKED, LIVE, or already FINAL are left untouched, so a tiebreaker answer players already submitted against — or an already-final Auto-Calc — never quietly changes.</p>
+          <p class="text-muted text-xs mb-md">Derived from what each active player has set as their alma mater and home team — not a separately-editable list. Drives Alma Mater Watch, Alma Mater Rankings, the ⭐ flag, guaranteed slate inclusion, the Rules tab list, and the tiebreaker's Auto-Calc, all from the same roster below. To add, remove, or change a school, edit the claiming player under Players → Edit — the change re-checks every game already on an open/upcoming week's slate immediately (no re-import needed). Weeks that are LOCKED, LIVE, or already FINAL are left untouched, so a tiebreaker answer players already submitted against — or an already-final Auto-Calc — never quietly changes.</p>
           <div id="alma-mater-list">
             ${almaMaters.length ? almaMaters.map(am => `
             <div class="flex gap-sm mb-sm" style="align-items:center">
@@ -10170,6 +11471,53 @@ export const _dataActionsRowHTMLForTest = dataActionsRowHTML;
  *  is the function that produces both trees. Same seam renderLeagueFlowScreen()
  *  already exposes for the same reason; nothing in production calls it by any
  *  name but this one. */
+// DI-319 §Copy "Invite to League" — cache-then-fetch-then-repaint, same
+// shape as `_platformKvCache`/`_bgJobsCache`. Keyed by leagueId so switching
+// the active league re-fetches rather than showing a stale code.
+let _joinCodeCache = { leagueId: null, code: '', loading: false, error: null };
+
+async function refreshJoinCodeCache(leagueId) {
+  if (!leagueId) return;
+  _joinCodeCache = { leagueId, code: '', loading: true, error: null };
+  try {
+    const code = await getLeagueJoinCode(leagueId);
+    _joinCodeCache = { leagueId, code, loading: false, error: null };
+  } catch (e) {
+    console.warn('[comm] getLeagueJoinCode failed', e);
+    // REVIEWER BLOCK 2 (pass-2, 2026-09-25) — the failure branch used to
+    // null OUT `leagueId`, which made the render-time guard
+    // (`_joinCodeCache.leagueId !== activeLeagueIdForInvite`) true again on
+    // the very next render — an unbounded refetch/repaint loop, one failed
+    // network call per render, forever. KEEP the same `leagueId` on
+    // failure (a terminal error state the guard respects); `error` is the
+    // only way back in, via the Retry button inviteCodeChipHTML() renders
+    // for it (bound in renderCommPage's listeners, `invite-code-retry-btn`),
+    // which calls this function directly rather than re-arming the guard.
+    _joinCodeCache = { leagueId, code: '', loading: false, error: e?.message || 'failed' };
+  }
+  if (state.currentTab === 'commissioner') renderCommPage();
+}
+
+/**
+ * STEP B(1) (3c fix window, third pass) — the join-code chip's three states.
+ * The failure state used to render a bare "—" (indistinguishable from "this
+ * league has no code") with a comment pointing at a Retry button that did not
+ * exist, so the terminal error state had no way out short of a league switch.
+ * Now: calm copy + Retry, the same shape the two cross-league admin cards use
+ * (`super-leagues-retry-btn`, `users-across-leagues-retry-btn`) — never the
+ * raw server string (Interaction Principles, Error States).
+ */
+function inviteCodeChipHTML(cache) {
+  if (cache.code) return `<code class="api-url-code" id="invite-code-display">${escHtml(cache.code)}</code>`;
+  if (cache.loading) return `<code class="api-url-code" id="invite-code-display">${escHtml('Loading…')}</code>`;
+  if (cache.error) {
+    return `<p class="text-xs mb-sm" id="invite-code-display" style="color:var(--loss)">${escHtml("Couldn't load the join code.")}</p>
+              <button type="button" class="btn btn-ghost btn-sm mb-sm" id="invite-code-retry-btn">${escHtml('Retry')}</button>`;
+  }
+  return `<code class="api-url-code" id="invite-code-display">${escHtml('Loading…')}</code>`;
+}
+export const _inviteCodeChipHTMLForTest = inviteCodeChipHTML;
+
 export function renderCommPage() {
   const c=document.getElementById('page-commissioner'); if(!c)return;
   const session=getSession();
@@ -10256,24 +11604,15 @@ export function renderCommPage() {
     // Tab bar — groups the 18 admin sections into 5 buckets so the panel
     // doesn't require infinite scrolling. The active tab is held in
     // state.commTab; CSS hides any .admin-section whose data-comm-tab
-    // doesn't match the body's data-comm-active attribute.
-    const tabs = [
-      {key:'week',     label:'Week',     icon:'📅'},
-      {key:'games',    label:'Games',    icon:'🏈'},
-      {key:'players',  label:'Players',  icon:'👥'},
-      {key:'settings', label:'Settings', icon:'⚙️'},
-      {key:'data',     label:'Data',     icon:'☁️'},
-    ];
-    sections.push(`
-      <div class="comm-tabbar" role="tablist">
-        ${tabs.map(t => `
-          <button type="button" class="comm-tab${state.commTab===t.key?' active':''}"
-            data-comm-tab-btn="${t.key}" role="tab" aria-selected="${state.commTab===t.key}">
-            <span class="comm-tab-icon">${t.icon}</span>
-            <span class="comm-tab-label">${t.label}</span>
-          </button>
-        `).join('')}
-      </div>`);
+    // doesn't match the body's data-comm-active attribute. DI-319 (UX
+    // Revamp wiring pass 3a) — Week/Games/Players/Rules/SCRIBE, via
+    // js/comm-panel-layout.js's COMM_TABS/renderCommTabBar(), so this map
+    // is defined in exactly one place.
+    sections.push(renderCommTabBar({ activeTab: state.commTab, icon }));
+
+    // DI-C1 §2.1 — the Week Setup Wizard's entry point, the FIRST card in
+    // the Week tab (above Week Manager / Week Settings / Available Games).
+    sections.push(weekWizardEntryCardHTML(week));
 
     // Week Manager
     sections.push(`
@@ -10321,15 +11660,6 @@ export function renderCommPage() {
           <div class="card">
             ${week.dataSourceMode==='demo'?'<div class="warning-box mb-md">📋 This is the Demo Week with fictional games. Do not use for real picks.</div>':''}
             <div class="flex gap-sm flex-wrap mb-sm">${renderWeekStatusButtons(week)}</div>
-            <div class="form-group">
-              <label class="form-label">Data Source Mode</label>
-              <select class="form-select" id="data-source-mode">
-                <option value="espn_live"      ${week.dataSourceMode==='espn_live'?'selected':''}>📡 ESPN Live</option>
-                <option value="espn_historical" ${week.dataSourceMode==='espn_historical'?'selected':''}>📅 ESPN Historical</option>
-                <option value="manual"          ${week.dataSourceMode==='manual'?'selected':''}>✏️ Manual</option>
-                <option value="demo"            ${week.dataSourceMode==='demo'?'selected':''}>📋 Demo</option>
-              </select>
-            </div>
             <div class="flex gap-sm flex-wrap mb-md">
               <div class="form-group" style="flex:1;min-width:120px;margin:0">
                 <label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" → "Week 1, Part 2")</span></label>
@@ -10462,34 +11792,21 @@ export function renderCommPage() {
         </div>`);
     }
 
-    // ESPN Fetch
+    // Populate Games — DI-319 §Games: "should only be able to press one
+    // button to populate the available games." Split from the old "ESPN
+    // Data Fetch" card (UX Revamp wiring pass 3a) — the URL preview/copy/
+    // open controls moved to Admin → Games ('espn-source'); Data Proof
+    // moved there too. This card keeps only the fetch action + timestamp.
     sections.push(`
       <div class="admin-section" data-comm-tab="games">
-        <div class="admin-section-title">📡 ESPN Data Fetch</div>
+        <div class="admin-section-title">Populate Games</div>
         <div class="card">
-          <p class="text-muted text-sm mb-md">Uses the Week start/end dates above. Set them first, then fetch.</p>
-          <div class="api-url-box mb-md" id="api-url-box">
-            <span class="api-url-label">ESPN URL:</span>
-            <code class="api-url-code" id="api-url-display">Click Preview to generate</code>
-            <div class="flex gap-sm mt-sm flex-wrap">
-              <button class="btn btn-ghost btn-sm" id="preview-url-btn">🔍 Preview URL</button>
-              <button class="btn btn-ghost btn-sm" id="copy-url-btn">📋 Copy</button>
-              <button class="btn btn-ghost btn-sm" id="open-url-btn">🔗 Open in Tab</button>
-            </div>
-          </div>
           <div class="flex gap-sm flex-wrap">
             <button class="btn btn-primary btn-sm" id="fetch-espn-btn">📥 Fetch ESPN Data</button>
             <button class="btn btn-ghost btn-sm" id="load-hist-demo-btn">📅 Load Historical Demo Week</button>
           </div>
           ${ps.lastFetchTimestamp?`<p class="text-muted text-xs mt-sm">Last fetch: ${new Date(ps.lastFetchTimestamp).toLocaleString()} · ${ps.lastRawEventCount} events</p>`:''}
         </div>
-      </div>`);
-
-    // Data Proof
-    sections.push(`
-      <div class="admin-section" data-comm-tab="games">
-        <div class="admin-section-title">🔍 Data Proof</div>
-        <div class="card">${renderDataProofPanel(proof,ps,week,games)}</div>
       </div>`);
 
     // Priority 14: Weekly Summary email helper. Shows up once every game on
@@ -10559,69 +11876,17 @@ export function renderCommPage() {
         <div id="admin-games-list">${renderAdminGamesList(games,week,getGameLockOverrides())}</div>
       </div>`);
 
-    // ── EXPORT (expanded — multiple formats and scopes) ──
-    sections.push(`
-      <div class="admin-section" data-comm-tab="data">
-        <div class="admin-section-title">📤 Export Data</div>
-        <div class="card">
-          <p class="text-muted text-xs mb-md">CSV format opens in Excel / Google Sheets. JSON format preserves full state for backup/restore.</p>
-          <div class="card-title mb-sm">Current Week (${week?escHtml(formatWeekLabel(week)):'no active week'})</div>
-          <div class="flex gap-sm mb-md flex-wrap">
-            <button class="btn btn-secondary btn-sm" id="export-week-picks-csv-btn" ${week?'':'disabled'}>📋 Week Picks CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-week-slate-csv-btn" ${week?'':'disabled'}>🏈 Week Slate CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-week-results-csv-btn" ${week?'':'disabled'}>🏆 Week Results CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-week-dashboard-csv-btn" ${week?'':'disabled'}>📊 Week Dashboard Matrix CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-week-bundle-btn" ${week?'':'disabled'}>📦 Week Bundle (all of above)</button>
-          </div>
-          <div class="divider"></div>
-          <div class="card-title mb-sm">League-wide</div>
-          <div class="flex gap-sm mb-md flex-wrap">
-            <button class="btn btn-secondary btn-sm" id="export-players-csv-btn">👥 Players CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-standings-csv-btn">🏆 Season Standings CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-weekly-results-csv-btn">📅 All Weekly Results CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-obligations-csv-btn">💵 Obligations CSV</button>
-            <button class="btn btn-secondary btn-sm" id="export-extra-point-csv-btn">🎯 Extra Point Season CSV</button>
-          </div>
-          <div class="divider"></div>
-          <div class="card-title mb-sm">Full Backup</div>
-          <div class="flex gap-sm flex-wrap">
-            <button class="btn btn-primary btn-sm" id="export-full-json-btn">💾 Full Backup (JSON)</button>
-            <button class="btn btn-secondary btn-sm" id="export-full-csv-bundle-btn">📦 Full CSV Bundle (all data)</button>
-          </div>
-          <p class="text-muted text-xs mt-sm">Full backup preserves every week, pick, result, and player. CSV bundle exports each table as its own download.</p>
-        </div>
-      </div>`);
+    // Export Data moved whole to Admin → Data (DI-320, UX Revamp wiring pass
+    // 3a) — see renderExportDataCardBody() and js/admin-panel.js's
+    // renderExportDataBody() loud-refusal wrapper. No longer rendered here.
 
-    // Background jobs (DI-T6.13, UN-194, Phase 2) — directly after Export
-    // Data, same tab (RG-10). Supabase-only (renders '' under the legacy
-    // Sheets backend, where there is no serverJobs switch and no job_runs
-    // table to read).
-    sections.push(renderBackgroundJobsAdminSectionHTML());
-    if (isSupabaseDataMode() && !_bgJobsCache.loading &&
-        (_bgJobsCache.rows === null || _bgJobsCache.leagueId !== getActiveLeagueId())) {
-      refreshBackgroundJobsCard();
-    }
-
-    // Feedback review + CSV (UN-122/123) — directly after Export Data, same
-    // tab (RG-10). NOT part of exportFullCsvBundle — Drew was offered that
-    // and did not select it.
-    sections.push(renderFeedbackAdminSectionHTML());
-
-    // SCRIBE Trainer (Build 2b, E5b, UN-163) — directly after Feedback, same
-    // tab (RG-10): both are "review what players told us" surfaces.
-    sections.push(renderScribeTrainerAdminSectionHTML());
-
-    // DI-H (2026-09-02) — the one-time (though PERMANENTLY available)
-    // retroactive recompute. Placed directly ABOVE Obligation Corrections so
-    // anything it flags via DI-D's finalizeWeek() → reconcileWeeklyObligation()
-    // path appears in the very next card.
-    sections.push(renderRecalculateFinalizedWeeksAdminSectionHTML());
-
-    // Obligation Corrections (UN-126, Part 2) — merge / void, directly after
-    // Feedback, same tab (RG-10). The Players-tab Obligations card (above)
-    // stays the day-to-day paid/unpaid ledger; this is the audit/correction
-    // tool for duplicate or disputed records.
-    sections.push(renderObligationCorrectionsAdminSectionHTML());
+    // UX Revamp wiring pass 2 (2026-09-25), DI-320 — Background Jobs,
+    // Feedback & Bug Reports, SCRIBE Training, Recalculate Finalized Weeks
+    // and Obligation Corrections all MOVE to the Admin panel's Data tab
+    // (card-by-card placement table). Removed from renderCommPage() entirely
+    // — not hidden, not left with a stale tag (RG-10) — and now rendered
+    // from renderAdminPage() instead, which also owns refreshBackgroundJobsCard()'s
+    // cache-population call.
 
     // Tiebreaker
     if (week) {
@@ -10644,58 +11909,6 @@ export function renderCommPage() {
         </div>`);
     }
 
-    // Demo Simulation
-    sections.push(`
-      <div class="admin-section" data-comm-tab="week">
-        <div class="admin-section-title">🎮 Demo Simulation</div>
-        <div class="card">
-          <p class="text-secondary text-sm mb-md">Simulate scheduled → live → final without real games.</p>
-          ${games.length===0?'<div class="info-box">Add games to the slate first.</div>':`
-            <div class="form-group">
-              <label class="form-label">Quick edit a single game</label>
-              <select class="form-select" id="demo-game-select">
-                <option value="">— Choose a game —</option>
-                ${games.map(g=>`<option value="${g.gameId}">${escHtml(matchup(g))} [${g.status}]</option>`).join('')}
-              </select>
-            </div>
-            <div id="demo-game-controls" style="display:none">
-              <div class="flex gap-sm flex-wrap mb-md">
-                <button class="btn btn-secondary btn-sm" id="demo-set-live">▶️ Set Live</button>
-                <button class="btn btn-secondary btn-sm" id="demo-set-final">✅ Set Final</button>
-                <button class="btn btn-ghost btn-sm" id="demo-set-scheduled">↩ Reset Scheduled</button>
-              </div>
-              <div class="flex gap-sm mb-md">
-                <div class="form-group" style="flex:1;margin:0">
-                  <label class="form-label" id="demo-home-label">Home Score</label>
-                  <input class="form-input" id="demo-home-score" type="number" min="0" value="0" />
-                </div>
-                <div class="form-group" style="flex:1;margin:0">
-                  <label class="form-label" id="demo-away-label">Away Score</label>
-                  <input class="form-input" id="demo-away-score" type="number" min="0" value="0" />
-                </div>
-                <button class="btn btn-primary btn-sm" style="align-self:flex-end" id="demo-update-score">Update</button>
-              </div>
-            </div>
-
-            <div class="divider"></div>
-
-            <!-- BATCH GRID — edit every game's score + status at once -->
-            <div class="card-title mb-sm">⚡ Batch update all games</div>
-            <p class="text-muted text-xs mb-sm">Set scores and statuses for every game, then apply in one click. Useful for setting up a whole-week demo scenario fast.</p>
-            ${renderDemoBatchGrid(games)}
-            <div class="flex gap-sm flex-wrap mt-md">
-              <button class="btn btn-primary btn-sm" id="demo-batch-apply">💾 Apply All Changes</button>
-              <button class="btn btn-secondary btn-sm" id="demo-batch-randomize">🎲 Randomize Scores</button>
-            </div>
-
-            <div class="divider"></div>
-            <div class="flex gap-sm flex-wrap">
-              <button class="btn btn-primary btn-sm" id="demo-finalize-all">🏁 Finalize All & Calculate</button>
-              <button class="btn btn-ghost btn-sm" id="demo-reset-all-scheduled">↩ Reset All Scheduled</button>
-            </div>`}
-        </div>
-      </div>`);
-
     // Nicknames
     if (week) {
       sections.push(`
@@ -10715,23 +11928,44 @@ export function renderCommPage() {
         </div>`);
     }
 
-    // ── DI-183c + DI-182b (STEP 3b) — LINK STATUS, THEN LEAGUE MEMBERS ──────
-    // In supabase mode these two cards render INSTEAD of "Players, PINs &
-    // Contact" below, in that order (status first, then actions — DI-183c's own
-    // ordering, so linking status and member management sit together and there
-    // are not two places doing the same thing).
+    // ── DI-319 §Copy — INVITE TO LEAGUE (new card) ────────────────────────
+    // Cache-then-fetch-then-repaint, same shape as `_platformKvCache`. The
+    // join code is already readable by every league member (`leagues_select`
+    // — F11), so this is a plain read, not a new grant; presentation is the
+    // chip+Copy pattern only, never a shareable URL/deep-link (F11).
+    if (getAuthMode() === 'supabase') {
+      const activeLeagueIdForInvite = getActiveLeagueId();
+      if (_joinCodeCache.leagueId !== activeLeagueIdForInvite && !_joinCodeCache.loading) {
+        refreshJoinCodeCache(activeLeagueIdForInvite);
+      }
+      sections.push(`
+        <div class="admin-section" data-comm-tab="players">
+          <div class="admin-section-title">✉️ Invite to League</div>
+          <div class="card">
+            <p class="text-muted text-xs mb-sm">Share this code with anyone joining IRB Football.</p>
+            <div class="api-url-box mb-md" id="invite-code-box">
+              <span class="api-url-label">Join Code:</span>
+              ${inviteCodeChipHTML(_joinCodeCache)}
+              <div class="flex gap-sm mt-sm flex-wrap">
+                <button class="btn btn-ghost btn-sm" id="copy-invite-code-btn">${icon('clipboard')} Copy</button>
+                <button class="btn btn-ghost btn-sm" id="rotate-invite-code-btn">${icon('refresh')} Rotate Code</button>
+              </div>
+            </div>
+          </div>
+        </div>`);
+    }
+
+    // ── DI-182b (STEP 3b) — LEAGUE MEMBERS ───────────────────────────────
+    // Account Linking MOVED to the Admin panel (UX Revamp wiring pass 2,
+    // 2026-09-25 — coordinator ruling: "Account Linking and SCRIBE Model
+    // cards move to Admin"). League Members stays here, unchanged.
     //
     // In 'pins'/'prelink' NOTHING here emits and the PIN card below is
     // byte-identical to what it has always been — DI-180f's flag contract, which
     // boottest's byte-diff assertion already pins.
     //
-    // RG-10: `data-comm-tab="players"` on both, or they render on all five tabs.
+    // RG-10: `data-comm-tab="players"`, or it renders on all five tabs.
     if (getAuthMode() === 'supabase') {
-      sections.push(`
-        <div class="admin-section" data-comm-tab="players">
-          <div class="admin-section-title">Account Linking</div>
-          <div class="card" id="comm-link-status-card"><p class="text-muted">Loading members…</p></div>
-        </div>`);
       sections.push(`
         <div class="admin-section" data-comm-tab="players">
           <div class="admin-section-title">League Members</div>
@@ -10827,49 +12061,14 @@ export function renderCommPage() {
         </div>
       </div>`);
 
-    // Auto-refresh
-    sections.push(`
-      <div class="admin-section" data-comm-tab="settings">
-        <div class="admin-section-title">⏱ Auto-Refresh</div>
-        <div class="card">
-          <div class="form-group">
-            <label class="form-label">Score Refresh Interval</label>
-            <select class="form-select" id="auto-refresh-select">
-              <option value="0"   ${(settings.autoRefreshInterval||60)===0?'selected':''}>Off</option>
-              <option value="30"  ${settings.autoRefreshInterval===30?'selected':''}>30 seconds</option>
-              <option value="60"  ${(settings.autoRefreshInterval||60)===60?'selected':''}>60 seconds</option>
-              <option value="300" ${settings.autoRefreshInterval===300?'selected':''}>5 minutes</option>
-            </select>
-          </div>
-          <button class="btn btn-secondary btn-sm" id="save-refresh-btn">Save</button>
-        </div>
-      </div>`);
-
     // Alma Maters — READ-ONLY summary card. See renderAlmaMaterSettingsCard()'s
-    // docstring above (2026-09-04) for the model this reflects.
+    // docstring above (2026-09-04) for the model this reflects. Rules tab
+    // (retagged 'rules', UX Revamp wiring pass 3a — DI-319 §Rules).
     sections.push(renderAlmaMaterSettingsCard());
-
-    // Randomize Picks shortcut (UN-107) — default OFF (CONVENTIONS #10:
-    // existing settings blobs lack this field and must read as false, not
-    // truthy-by-accident). Same toggle-card pattern as Chat & S.C.R.I.B.E.
-    // above: title, checkbox row, state-dependent copy underneath.
-    sections.push(`
-      <div class="admin-section" data-comm-tab="settings">
-        <div class="card" id="comm-randomize-card">
-          <h3 style="color:var(--maroon)">🎲 Randomize Picks Shortcut</h3>
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
-            <input type="checkbox" id="randomize-enabled-toggle" ${settings.randomizePicksEnabled ? 'checked' : ''} />
-            <span class="form-label" style="margin:0">Allow players to randomize their picks</span>
-          </label>
-          <p class="text-muted text-xs">${settings.randomizePicksEnabled
-            ? 'Players see a 🎲 Randomize My Picks shortcut on the Picks page.'
-            : 'The randomize shortcut is hidden. Players make every pick by hand.'}</p>
-        </div>
-      </div>`);
 
     // Rules
     sections.push(`
-      <div class="admin-section" data-comm-tab="settings">
+      <div class="admin-section" data-comm-tab="rules">
         <div class="admin-section-title">League Rules</div>
         <div class="card">
           ${rulesEditorHTML()}
@@ -10918,85 +12117,11 @@ export function renderCommPage() {
     // AMENDMENT 1 finding F1). That whole consideration goes with it.
     // ══════════════════════════════════════════════════════════════════════
 
-    // ── Security & Settings (password change, site PIN) ──
-    sections.push(`
-      <div class="admin-section" data-comm-tab="settings">
-        <div class="admin-section-title">🔐 Security &amp; Settings</div>
-        <div class="card">` + commPasswordCardHTML() + `
-          <div class="card-title mb-sm">Site PIN (front-door gate)</div>
-          <p class="text-muted text-xs mb-sm">The PIN required to open the app. Current: <strong class="font-display">${escHtml(getEffectiveSitePin())}</strong>. Players will need the new PIN on their next visit (existing unlocked devices stay unlocked).</p>
-          <div class="form-group">
-            <label class="form-label">New site PIN</label>
-            <input class="form-input" id="sec-site-pin-new" type="text" inputmode="numeric" maxlength="12" placeholder="4–12 characters" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Confirm new site PIN</label>
-            <input class="form-input" id="sec-site-pin-confirm" type="text" inputmode="numeric" maxlength="12" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-change-site-pin-btn">🚪 Change Site PIN</button>
-
-          <div class="divider"></div>
-          <div class="card-title mb-sm">Welcome Screen Text</div>
-          <p class="text-muted text-xs mb-sm">Shown above the PIN entry on the front gate. Title renders as two lines (small "welcome to" eyebrow + larger league name).</p>
-          <div class="form-group">
-            <label class="form-label">Title — top line</label>
-            <input class="form-input" id="sec-welcome-title-top" type="text" maxlength="40" placeholder="welcome to" value="${escHtml(settings.welcomeTitleTop||'')}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Title — main line</label>
-            <input class="form-input" id="sec-welcome-title-main" type="text" maxlength="60" placeholder="irb pick 'ems" value="${escHtml(settings.welcomeTitleMain||'')}" />
-          </div>
-          <div class="form-group">
-            <label class="form-label">Welcome subtitle</label>
-            <input class="form-input" id="sec-welcome-subtitle" type="text" maxlength="80" placeholder="enter access pin" value="${escHtml(settings.welcomeSubtitle||'')}" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-save-welcome-btn">💾 Save Welcome Text</button>
-
-          <div class="divider"></div>
-          <div class="card-title mb-sm">Commissioner Contact Email</div>
-          <p class="text-muted text-xs mb-sm">Used by the Feedback form on the Rules tab and by the Weekly Summary helper. Leave blank to disable mailto-based features.</p>
-          <div class="form-group">
-            <label class="form-label">Email</label>
-            <input class="form-input" id="sec-comm-email" type="email" placeholder="commissioner@example.com" value="${escHtml(settings.commissionerEmail||'')}" />
-          </div>
-          <button class="btn btn-primary btn-sm" id="sec-save-comm-email-btn">💾 Save Email</button>
-        </div>
-      </div>`);
-
-    // Data management
-    sections.push(`
-      <div class="admin-section" data-comm-tab="data">
-        <div class="admin-section-title">⚙️ Data Management</div>
-        <div class="card">
-          <div class="form-group">
-            <p class="text-muted text-xs mb-sm">Clears games, picks, and results for the selected week only.</p>
-            <button class="btn btn-secondary btn-sm" id="reset-week-btn">🗑 Clear Current Week Data</button>
-          </div>
-          <div class="divider"></div>
-          <div class="form-group">
-            ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">Full Factory Reset is not available on the live league — it would write demo data over everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>`}
-            ` + dataActionsRowHTML() + `
-          </div>
-        </div>
-      </div>`);
-
-    // Chat retention (UN-88) — directly below Data Management, same tab (RG-10).
-    sections.push(`
-      <div class="admin-section" data-comm-tab="data">
-        <div class="admin-section-title">🙈 Chat Retention</div>
-        <div class="card">${renderChatRetentionAdmin()}</div>
-      </div>`);
-
-    // Chat epoch clear (UN-112, LAUNCH BLOCKER) — its own repeatable control,
-    // same tab (RG-10), directly below retention. Separate from the Full
-    // Factory Reset button above (which also wires this in) so a failed
-    // clear has a retry path and testing chatter can be cleared again later
-    // without re-wiping players/weeks.
-    sections.push(`
-      <div class="admin-section" data-comm-tab="data">
-        <div class="admin-section-title">🧹 Chat History</div>
-        <div class="card">${renderChatEpochAdmin()}</div>
-      </div>`);
+    // Security & Settings, Data Management, Chat Retention, Chat History all
+    // moved to Admin → Settings/Data (DI-320, UX Revamp wiring pass 3a) —
+    // see renderSecuritySettingsBody()/renderDataManagementBody() and the
+    // reused renderChatRetentionAdmin()/renderChatEpochAdmin() in
+    // renderAdminPage()'s `bodies` map. No longer rendered here.
 
     c.innerHTML = sections.join('\n');
     // ── DI-182b/DI-183c (Step 3b) — THE THREE COMMISSIONER READS, AFTER PAINT.
@@ -11021,10 +12146,12 @@ export function renderCommPage() {
           b.classList.toggle('active', active);
           b.setAttribute('aria-selected', active);
         });
-        // UN-105a — the batch-grid-scroll (Demo Simulation, Week tab) was
+        // UN-105a — a scroll-fade wrapper elsewhere on this panel was
         // display:none (0×0) if the panel opened on a different tab; a tab
         // switch doesn't rebuild the DOM, so re-measure now that it may have
-        // just become visible.
+        // just become visible. Demo Simulation's own .batch-grid-scroll
+        // moved to the Admin panel (DI-320, UX Revamp wiring pass 3a) — this
+        // call is general, not specific to that one wrapper.
         initScrollFades(c);
         // Scroll the panel to the top so users see the first section of the
         // new tab rather than a mid-scroll fragment.
@@ -11034,7 +12161,7 @@ export function renderCommPage() {
     wireCollapsibleSections(c);
     bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist);
     renderCommExtrasV16(week, games);   // v0.16.0 — Extra Point + Chat/SCRIBE admin
-    initScrollFades(c);   // UN-105a — batch-grid-scroll wrapper (Demo Simulation)
+    initScrollFades(c);   // UN-105a — this panel's own scroll-fade wrappers
 
   } catch(err) {
     console.error('[renderCommPage] crash:', err);
@@ -11045,8 +12172,792 @@ export function renderCommPage() {
       <button class="btn btn-ghost btn-sm mt-md" onclick="window.location.reload()">Reload App</button>
     </div>`;
   }
+  // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
+  // comment. Outside the try/catch's own braces so it runs on either exit
+  // (rendered panel or the crash-fallback card).
+  renderPausedLeagueBannerIfNeeded('commissioner');
+  renderMaintenanceBannerIfNeeded('commissioner');
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// PAUSED-LEAGUE BANNER — DI-344/345 (T-35). One function decides, six call
+// sites read it (CONVENTIONS #21) — see navigateTo()'s own call and
+// js/chat-ui.js's renderChatPage() for the two places this is reached from.
+// ═══════════════════════════════════════════════════════════════════════
+
+// PAUSED_LEAGUE_BANNER_TEXT now lives in js/roles.js (REVIEWER NOTE 8,
+// 2026-09-25 — was duplicated as a second literal in js/chat-ui.js; moved
+// to the one shared module both files already import from for exactly this
+// reason).
+
+/** DI-344/345 §Render paths — the ONE function every paused-state render
+ *  checks. Reads the ACTIVE league's status off the already-cached
+ *  membership row (isLeaguePaused()'s own default-when-missing story:
+ *  false/'active' until the row hydrates) — no extra network round trip. */
+function isActiveLeaguePaused() {
+  const activeLeagueId = getActiveLeagueId();
+  const m = getCachedMemberships().find(x => x.leagueId === activeLeagueId);
+  return isLeaguePaused(m ? { status: m.status } : null);
+}
+
+/** Static template literal, no user-authored interpolation (DI-345 §XSS/
+ *  escaping's own distinction) — still routed through escHtml() per
+ *  CLAUDE.md's blanket rule ("every piece of user data, every time"),
+ *  belt-and-suspenders since this string is commissioner/player-invisible. */
+function renderPausedLeagueBannerHTML() {
+  return `<div class="warning-box paused-league-banner" role="status" id="paused-league-banner">${escHtml(PAUSED_LEAGUE_BANNER_TEXT)}</div>`;
+}
+
+const PAUSED_BANNER_PAGE_IDS = {
+  picks: 'page-picks', dashboard: 'page-dashboard', leaderboard: 'page-leaderboard',
+  rules: 'page-rules', commissioner: 'page-commissioner', admin: 'page-admin',
+};
+
+/**
+ * DI-345 §Interaction spec — "a brief (120-180ms) fade-in on first render of
+ * a paused league's page, no pulse, no repeated animation." The `.warning-
+ * box` class already exists (unchanged look/feel — no new visual treatment,
+ * per DI-345's own "reuse each control's EXISTING disabled-state CSS"
+ * instruction extended to the banner itself); `.paused-league-banner`
+ * (css/styles.css) adds ONLY the one-time fade-in, nothing else.
+ *
+ * PASS-2 REVIEWER BLOCK 3 (2026-09-25) — this used to be painted from
+ * `navigateTo()` ONLY, so any in-page repaint that bypasses `navigateTo()`
+ * (auto-refresh tick, the live-score path, week swipe, pull-to-refresh, the
+ * week selector, refresh-scores — all of which call `renderDashboard()` /
+ * `renderPicksPage()` etc. directly) silently erased the banner and
+ * re-enabled the disabled controls. Fixed structurally: every one of the six
+ * page renderers this function covers now calls it itself, at the end of its
+ * own render, so the banner survives EVERY repaint of that page, not just a
+ * `navigateTo()`-driven one. `navigateTo()` still calls it too (belt-and-
+ * suspenders for any render path not yet enumerated) — safe because this
+ * function is now idempotent: it removes any banner IT previously painted
+ * into this container before deciding whether to repaint one, so calling it
+ * twice in one pass (renderer's own call, then navigateTo()'s) never
+ * duplicates the banner.
+ */
+function renderPausedLeagueBannerIfNeeded(tab) {
+  const containerId = PAUSED_BANNER_PAGE_IDS[tab];
+  if (!containerId) return;
+  const c = document.getElementById(containerId);
+  if (!c) return;
+  // Idempotent: a fresh full-innerHTML render already wiped any prior banner
+  // along with the rest of the container, but a caller that only patches part
+  // of the DOM (none of ours do today, but the contract should hold anyway)
+  // could still leave a stale one behind — remove-then-decide, every time.
+  c.querySelector('#paused-league-banner')?.remove();
+  if (!isActiveLeaguePaused()) return;
+  c.insertAdjacentHTML('afterbegin', renderPausedLeagueBannerHTML());
+  // DI-345 §Every state — "the pick-submission button, tiebreaker/extra-
+  // point inputs... render in their existing disabled-state styling."
+  // Applied here (courtesy client check; RLS/R-4 are the real authority)
+  // rather than threading a paused flag through every one of Picks' own
+  // render branches — the SAME "one place, after the render" shape the
+  // banner itself uses.
+  if (tab === 'picks') {
+    const submitBtn = document.getElementById('submit-picks-btn');
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.title = PAUSED_LEAGUE_BANNER_TEXT; }
+    document.getElementById('tb-input')?.setAttribute('disabled', '');
+    document.getElementById('ep-input')?.setAttribute('disabled', '');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MAINTENANCE BANNER — NOTE 6 / BLOCK 4 (pass-2 reviewer, 2026-09-25).
+// Platform-wide (not league-scoped), so it renders BESIDE the paused-league
+// banner above, on the same containers, from the same call sites — but is a
+// SEPARATE function/element (different id, different text, different
+// condition) because the two are independent: a league can be paused with no
+// maintenance banner set, or vice versa, or both at once. See
+// `js/auth.js`'s `getCachedMaintenanceBanner()`/`refreshMaintenanceBannerCache()`
+// for the shared cache both this file and `js/chat-ui.js` read.
+// ═══════════════════════════════════════════════════════════════════════
+
+// SECURITY GATE, S-5 (2026-09-25) — the maintenance banner is platform-wide,
+// independent of league-pause state (this section's own header above), and
+// DI-345's own verification step 5 requires it visible for a zero-league
+// account — which can land on Settings while needsLeagueFlowScreen() is true
+// (renderLeagueFlowScreen('settings')), the one page PAUSED_BANNER_PAGE_IDS
+// deliberately omits (Settings carries no league-scoped content, so a PAUSE
+// state has nothing to say there — see that map's own comment). Aliasing the
+// two maps meant the narrower paused-league scoping silently applied to the
+// broader maintenance banner too; no longer aliased, `settings` added to
+// this map ONLY.
+// STEP B(3) (third pass) — banner-persistence test seams (authtest [66]).
+export const _renderPausedLeagueBannerIfNeededForTest = renderPausedLeagueBannerIfNeeded;
+export const _updateSubmitEnabledForTest = updateSubmitEnabled;
+
+const MAINTENANCE_BANNER_PAGE_IDS = { ...PAUSED_BANNER_PAGE_IDS, settings: 'page-settings' };
+
+/** Static container, user-authored TEXT interpolated — routed through
+ *  escHtml() (CLAUDE.md's blanket rule; this is a genuinely new render site,
+ *  DI-345 §XSS/escaping's own point about `js/admin-panel.js`'s write side —
+ *  this is the read side, in `js/app.js`, and xsstest.mjs's hostile-value
+ *  assertion covers this call site specifically, see xsstest.mjs).
+ *
+ *  REVIEWER note (2026-09-25) — `id="maintenance-banner"` is intentionally
+ *  NOT unique document-wide: it is painted into at most ONE page container
+ *  at a time (only the currently-active tab's `.page-section` is ever
+ *  populated with this markup — every OTHER container's copy was already
+ *  removed by `renderMaintenanceBannerIfNeeded()`'s own idempotent
+ *  remove-then-decide step before this string is inserted). Every read of
+ *  this id (`c.querySelector('#maintenance-banner')`) is scoped to a
+ *  specific container, never `document.getElementById()` — a duplicate id
+ *  is tolerated exactly because nothing ever queries it globally. Keep it
+ *  that way: if a future caller ever needs a global lookup, this id stops
+ *  being safe to reuse across containers. */
+export function renderMaintenanceBannerHTML(text) {
+  return `<div class="warning-box maintenance-banner" role="status" id="maintenance-banner">${escHtml(text)}</div>`;
+}
+
+/**
+ * Same idempotent remove-then-decide shape as `renderPausedLeagueBannerIfNeeded()`
+ * immediately above, for the same reason: called from all seven page
+ * renderers' own repaints (not just `navigateTo()`), so a stale banner from
+ * a value that has since been cleared (or a duplicate from a second call in
+ * one pass) never lingers.
+ *
+ * REVIEWER BLOCK 1 (2026-09-25) — the single prior boot-time call site
+ * (`mountControlCenterDrawer()`) ran ~198 lines BEFORE `applyAuthModeDecision()`
+ * resolved `authMode`, so it never actually fetched in production — see
+ * `js/auth.js`'s `hasAttemptedMaintenanceBannerFetch()` for the full
+ * account. The reviewer's PREFERRED fix (triggering the fetch from THIS
+ * render path, guarded by `attempted`) was tried and reverted: this
+ * function runs on every repaint across the whole app, including inside
+ * tight per-test-section fixtures that assert an EXACT, unscoped `.from()`
+ * call count — an extra network call landing here crashed a wide swath of
+ * authtest.mjs (an uncaught rejection from a strict call-count mock's
+ * synchronous throw), which is precisely the failure mode this file's OWN
+ * prior deferral comment (removed) had already warned about for the
+ * identity-delta chokepoint. Fixed instead via the reviewer's named
+ * ALTERNATIVE (a): ONE call, at the tail of `applyAuthModeDecision()`,
+ * after `authMode` is known — see that function. This still closes BLOCK
+ * 1's actual bug (the banner is now reachable at all, correctly ordered
+ * after config loads, instead of unconditionally never firing); the
+ * narrower gap this leaves — a same-page-session identity handover does
+ * not get a second fetch — is the SAME pre-existing, already-named
+ * limitation `clearMaintenanceBannerCacheOnIdentityChange()`'s own header
+ * describes (a stale value is cleared to the safe default, not refetched,
+ * until the next reload).
+ */
+function renderMaintenanceBannerIfNeeded(tab) {
+  const containerId = MAINTENANCE_BANNER_PAGE_IDS[tab];
+  if (!containerId) return;
+  const c = document.getElementById(containerId);
+  if (!c) return;
+  c.querySelector('#maintenance-banner')?.remove();
+  const text = getCachedMaintenanceBanner();
+  if (!text) return;
+  c.insertAdjacentHTML('afterbegin', renderMaintenanceBannerHTML(text));
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// ADMIN PANEL — DI-320/344/345 (T-12/T-35). UX Revamp wiring pass 2
+// (2026-09-25). js/admin-panel.js/js/roles.js own the PURE render/permission
+// logic; this section is the DOM-side mount (composing the `viewer` bag,
+// fetching cross-league data, binding events) — the same split every other
+// module in this file (control-center.js, leagues-home.js) already has.
+// ═══════════════════════════════════════════════════════════════════════
+
+/**
+ * DI-320 §6 / DI-344 §8 — the composed `viewer` bag. NEVER `getSession()`'s
+ * raw return value passed straight through (that stays EXACTLY
+ * `{playerId, isAdmin, playerVerified}` — authtest.mjs [2]'s structural pin).
+ * ONLY reads of getIsPlatformAdmin()/getIsSuperAdmin() beyond the two
+ * enumerated buildControlCenterCtx() lines (rolestest F13 allow-list) — this
+ * is the second, explicitly-enumerated call site those tests' own comments
+ * anticipate ("an enumerated array of chrome-gating call sites").
+ */
+function composeAdminViewer() {
+  const session = getSession();
+  return {
+    ...session,
+    userId: getAccountUserId() || null,
+    isPlatformAdmin: getIsPlatformAdmin(),
+    isSuperAdmin: getIsSuperAdmin(),
+    activeLeagueId: getActiveLeagueId(),
+    memberships: getCachedMemberships(),
+  };
+}
+
+// Cache-then-fetch-then-repaint, same shape as `_bgJobsCache`/
+// `loadLeagueMembersCard()` elsewhere in this file — render synchronously
+// from whatever is cached (possibly empty/default), fetch in the
+// background, repaint once when it lands.
+// REVIEWER BLOCK 2 (pass-2, 2026-09-25) — every one of these three caches
+// carries `attempted` now. The render-time guards below used to key off
+// `loaded`/`rows == null`, which a FAILED read never sets — so a refusal
+// re-fired the fetch on every single repaint, forever (an unbounded
+// refetch/repaint loop). `attempted` is set true on BOTH success and
+// failure, so the guard only fires ONCE per cache lifetime; the only way
+// back in after a failure is the card's own Retry button, which calls the
+// refresh function directly (bypassing the render-time guard entirely, same
+// as it always has).
+let _platformKvCache = { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: false, error: null, attempted: false };
+let _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+// WIRING_CHECKLIST_B_092526.md §Window(b) — the cross-league Users Across
+// Leagues / Platform Admins read. `rows: null` = never fetched (renders the
+// honest "No members found." empty state, never a fabricated roster);
+// `error` set = the read was refused/failed — surfaced inline, never
+// silently swallowed into an empty-looking list (AD-06 loud-fail).
+let _usersAcrossLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+
+// REVIEWER FINDING 7 (2026-09-25) — a silent `console.warn`-only degrade
+// left the Super Admin tab rendering GUESSED defaults
+// (`{maintenanceBanner:'', signupsOpen:true}`) as if they were real data,
+// with the Save button and the signups-open toggle both still live — a
+// commissioner could write one of those guesses BACK to `platform_kv`,
+// permanently overwriting a real value the read never actually saw. Both
+// caches now carry `error`; `renderSuperAdminPlaceholder()`
+// (js/admin-panel.js) disables the write controls and shows an inline
+// Retry when `error` is set and the read has never actually landed
+// (`loaded`/`rows` still at their never-fetched default) — AD-06 loud-fail,
+// and "never write a value that was never read."
+async function refreshPlatformKvCache() {
+  if (_platformKvCache.loading) return;
+  _platformKvCache = { ..._platformKvCache, loading: true, error: null };
+  try {
+    const kv = await getPlatformKv();
+    _platformKvCache = { ...kv, loading: false, loaded: true, error: null, attempted: true };
+  } catch (e) {
+    console.error('[admin] platform_kv read failed', e);
+    _platformKvCache = { ..._platformKvCache, loading: false, error: e?.message || 'failed', attempted: true };
+  }
+  if (state.currentTab === 'admin') renderAdminPage();
+}
+
+async function refreshAllLeaguesCache() {
+  if (_allLeaguesCache.loading) return;
+  _allLeaguesCache = { ..._allLeaguesCache, loading: true, error: null };
+  try {
+    const rows = await listAllLeagues();
+    _allLeaguesCache = { rows, loading: false, error: null, attempted: true };
+  } catch (e) {
+    console.error('[admin] listAllLeagues failed', e);
+    _allLeaguesCache = { ..._allLeaguesCache, loading: false, error: e?.message || 'failed', attempted: true };
+  }
+  if (state.currentTab === 'admin') renderAdminPage();
+}
+
+/**
+ * WIRING_CHECKLIST_B_092526.md §Window(b) — feeds `renderAdminPage()`'s
+ * `users` array (Users Across Leagues + Platform Admins cards). Cache-then-
+ * fetch-then-repaint, same shape as `refreshAllLeaguesCache()`. A refusal
+ * (non-admin, or RLS scoping the read down) is NOT papered over — `error`
+ * is kept and `renderAdminPanel()`'s two cards fall back to their own
+ * documented empty state, which stays honest because `rows` is `[]`
+ * (whatever RLS actually returned), never a guessed roster.
+ */
+async function refreshUsersAcrossLeaguesCache() {
+  if (_usersAcrossLeaguesCache.loading) return;
+  _usersAcrossLeaguesCache = { ..._usersAcrossLeaguesCache, loading: true, error: null };
+  try {
+    const rows = await listUsersAcrossLeagues();
+    _usersAcrossLeaguesCache = { rows, loading: false, error: null, attempted: true };
+  } catch (e) {
+    console.warn('[admin] listUsersAcrossLeagues failed', e);
+    _usersAcrossLeaguesCache = { rows: _usersAcrossLeaguesCache.rows, loading: false, error: e?.message || 'failed', attempted: true };
+  }
+  if (state.currentTab === 'admin') renderAdminPage();
+}
+
+/**
+ * DI-282's SCRIBE Model card MOVED here (was inside renderCommExtrasV16(),
+ * which re-rendered #page-commissioner — wrong page now that the card lives
+ * in Admin). Same write/toast shape, unchanged.
+ */
+function bindScribeModelControl() {
+  document.querySelectorAll('[data-scribe-model]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.dataset.scribeModel;
+      if (!setScribeModel(id).ok) return;
+      const opt = SCRIBE_MODEL_OPTIONS.find(o => o.value === id);
+      showToast(`🧠 SCRIBE model: ${opt ? opt.label : id}`, 'success');
+      renderAdminPage();
+    });
+  });
+}
+
+/**
+ * DI-345 — Pause/Resume, the two-tap inline confirm (no modal), and the
+ * Platform Settings save. RPC-then-refresh, never a local flip — same
+ * discipline every other admin-panel write already follows
+ * (WIRING_CHECKLIST_B_092526.md §4's promote/demote note).
+ */
+/**
+ * Two-tap inline confirm, no modal (DI-345 §Interaction spec). REVIEWER
+ * NOTE (2026-09-25): this is a NEW confirm pattern for this codebase, not a
+ * reuse of the app's existing destructive-action confirm — every other
+ * destructive action here uses the native `confirm()` dialog (see
+ * `renderExportDataCardBody`'s Rotate Code handler, `resetScribeLearnings`,
+ * etc.); this control's own two-tap-inline shape was approved specifically
+ * for this surface (design-matrix-pm records it).
+ */
+/**
+ * REVIEWER N4 / SECURITY N4 (pass-2, 2026-09-25) — exported ONLY so
+ * authtest.mjs can drive the two-tap confirm + 350ms floor through REAL
+ * `addEventListener`/`.click()` dispatch (`document.querySelectorAll()` in
+ * this codebase's test harness is a per-selector map a test fills in, not a
+ * real DOM query over innerHTML — see authtest.mjs's own FakeEl header
+ * comment) rather than re-deriving the timing logic from source text. Not
+ * called directly by anything else outside `renderAdminPage()`.
+ */
+export function bindSuperAdminControls() {
+  document.querySelectorAll('.super-league-pause-btn').forEach(btn => {
+    btn.addEventListener('click', function onClick() {
+      const leagueId = btn.dataset.leagueId;
+      const nextStatus = btn.dataset.nextStatus;
+      if (btn.dataset.confirmArmed !== '1') {
+        // DEVICE-ONLY, NAMED: the original arm label ("Pause this league?
+        // Tap again to confirm.", 43 chars) was flagged as likely to
+        // overflow a .btn-sm at 375pt — shortened here, unverified on
+        // device.
+        btn.dataset.confirmArmed = '1';
+        btn.dataset.armedAt = String(Date.now());
+        const original = btn.textContent;
+        btn.textContent = nextStatus === 'paused' ? 'Tap again to pause' : 'Tap again to resume';
+        setTimeout(() => { if (btn.isConnected) { btn.dataset.confirmArmed = '0'; btn.textContent = original; } }, 3000);
+        return;
+      }
+      // SECURITY GATE FINDING 3 (2026-09-25) — a two-tap confirm with no
+      // minimum delay is an iOS double-tap away from firing both taps as
+      // ONE gesture, pausing a real league by accident. 350ms floor between
+      // "armed" and "confirmed" — comfortably above any double-tap gap,
+      // comfortably below the 3s arm window, so a deliberate second tap is
+      // unaffected.
+      const armedAt = Number(btn.dataset.armedAt) || 0;
+      if (Date.now() - armedAt < 350) return;
+      // Reviewer note (2026-09-25): the haptic belongs on the CONFIRM tap —
+      // the tap that actually commits the write — not on the arm tap, which
+      // merely opens a 3s window and commits nothing.
+      haptic('medium');
+      btn.disabled = true;
+      superSetLeagueStatus(leagueId, nextStatus)
+        .then(() => {
+          showToast(nextStatus === 'paused' ? 'League paused.' : 'League resumed.', 'success');
+          // BLOCK 2 — `attempted: false` deliberately re-arms the render-time
+          // guard for the very next renderAdminPage() call.
+          _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+          // SECURITY GATE, S-1 (2026-09-25) — same async-race guard as
+          // refreshBackgroundJobsCard()'s own fix, above: this RPC round trip
+          // can settle after the commissioner has already tapped away to the
+          // Comm tab, so never repaint a page they've navigated off of.
+          if (state.currentTab === 'admin') renderAdminPage();
+        })
+        .catch((e) => {
+          showToast(e?.message === 'not_super_admin' ? 'Super admin access required.' : 'Unable to save. Try again.', 'error');
+          btn.disabled = false; btn.dataset.confirmArmed = '0';
+        });
+    });
+  });
+  document.getElementById('super-save-banner-btn')?.addEventListener('click', () => {
+    const val = document.getElementById('super-maintenance-banner')?.value || '';
+    superSetPlatformKv('maintenance_banner', val)
+      .then(() => {
+        showToast('Saved.', 'success');
+        _platformKvCache = { ..._platformKvCache, maintenanceBanner: val };
+        // NOTE 6 / BLOCK 4 — mirror the write into the shared player-facing
+        // cache (js/auth.js) immediately, so THIS device's own six nav
+        // destinations show the new banner without waiting for the next
+        // identity delta. See setCachedMaintenanceBannerLocally()'s header.
+        setCachedMaintenanceBannerLocally(val);
+        renderMaintenanceBannerIfNeeded('admin');
+      })
+      .catch((e) => showToast(e?.message === 'not_super_admin' ? 'Super admin access required.' : 'Unable to save. Try again.', 'error'));
+  });
+  document.getElementById('super-signups-open-toggle')?.addEventListener('change', (e) => {
+    const val = !!e.target.checked;
+    superSetPlatformKv('signups_open', val)
+      .then(() => { showToast(val ? 'Signups open.' : 'Signups closed.', 'success'); _platformKvCache = { ..._platformKvCache, signupsOpen: val }; })
+      .catch((e2) => { showToast(e2?.message === 'not_super_admin' ? 'Super admin access required.' : 'Unable to save. Try again.', 'error'); e.target.checked = !val; });
+  });
+  // REVIEWER FINDING 7 (2026-09-25) — retry for a failed platform_kv read;
+  // renderSuperAdminPlaceholder() only renders this button when the read
+  // has an error and has never actually landed.
+  document.getElementById('super-kv-retry-btn')?.addEventListener('click', () => {
+    refreshPlatformKvCache();
+  });
+  // REVIEWER BLOCK 2 (pass-2, 2026-09-25) — same shape, for a failed
+  // listAllLeagues() read (League Status card). Calls the refresh function
+  // directly, bypassing the `attempted` render-time guard entirely — the
+  // guard exists to stop an AUTOMATIC retry loop, not a deliberate one.
+  document.getElementById('super-leagues-retry-btn')?.addEventListener('click', () => {
+    refreshAllLeaguesCache();
+  });
+}
+
+/**
+ * SECURITY N5 (pass-2, 2026-09-25) — calm, non-retry copy for every error
+ * code `admin_set_member_role`/`admin_set_platform_admin` (migration `0026`
+ * §Section 5/6) can raise, never a raw server string
+ * (Interaction Principles §"Error States": "never expose technical
+ * messages"). Two families, worded distinctly (role change vs. admin
+ * grant) since the SAME code can mean a different thing depending which RPC
+ * raised it.
+ *
+ * SECURITY GATE, S-3 (2026-09-25) — this used to `switch (e?.message)` on an
+ * EXACT match, but PostgREST can (and does, per authtest.mjs [10b-4]'s own
+ * `signups_closed` fixture) prefix a raised code with its SQLSTATE, e.g.
+ * `'P0001: not_found'` — which never equals the bare `'not_found'` literal
+ * and silently fell through to the generic default copy instead of the
+ * specific one. Matched by SUBSTRING against a fixed table now, the exact
+ * shape `leagueRpcErrorCopy()` (this file) already uses for the same class
+ * of problem, so a decorated server string can never defeat the match.
+ */
+const ADMIN_ROLE_ACTION_ERROR_COPY = [
+  ['not_authorized',        "You don't have permission to make this change."],
+  ['self_promotion_refused', "You can't change your own role this way."],
+  ['last_commissioner',     'That is the only commissioner — promote someone else first.'],
+  ['last_admin',             'That is the only platform admin — add another first.'],
+  ['seed_admin_irrevocable', "The seed admin's access can only be changed by direct database access."],
+  ['not_platform_admin',    'That account is not a platform admin.'],
+  ['bad_user',               "We couldn't find that account."],
+  ['not_found',              "We couldn't find that member."],
+];
+function adminRoleActionErrorCopy(e, { grantFamily = false } = {}) {
+  const raw = `${e?.message || ''}`;
+  for (const [code, copy] of ADMIN_ROLE_ACTION_ERROR_COPY) if (raw.includes(code)) return copy;
+  return grantFamily ? 'Unable to update admin access. Try again.' : "Unable to update this member's role. Try again.";
+}
+export const _ADMIN_ROLE_ACTION_ERROR_COPY_FOR_TEST = { map: ADMIN_ROLE_ACTION_ERROR_COPY, resolve: adminRoleActionErrorCopy };
+
+/**
+ * DI-317 §Reuse call — RPC-then-refresh, never a local flip (same discipline
+ * `loadLeagueMembersCard()`/`bindSuperAdminControls()` already follow).
+ * Binds the four action classes `renderUsersAcrossLeaguesBody()`/
+ * `renderPlatformAdminsBody()` emit (js/admin-panel.js).
+ *
+ * REVIEWER BLOCK 1 (pass-2, 2026-09-25) — the role-change buttons read
+ * `btn.dataset.memberId` now, not `btn.dataset.userId`: `admin_set_member_role`
+ * matches on `league_members.id`, a different value from the auth user id
+ * the admin-grant buttons below correctly use (see
+ * `js/admin-panel.js`'s `renderUsersAcrossLeaguesBody()` for where each
+ * attribute is written).
+ *
+ * REVIEWER BLOCK 3 (pass-2, 2026-09-25) — every one of the four actions now
+ * routes through the SAME confirm → busy-label → run → re-render → report
+ * shape `bindLeagueMembersCard()`'s own `runMemberAction()` already
+ * established (DI-317's shipped pattern), rather than committing on one
+ * bare tap. "Make Admin" grants a platform-wide privilege, so it confirms
+ * too (security N6) — not just the three destructive-shaped actions.
+ */
+/** STEP B(12) (third pass) — the changed row's 150ms cross-fade (motion-fast,
+ *  the Principles' small-feedback band). Reduced motion: the CSS disables the
+ *  animation. Attribute values are matched, never interpolated into a
+ *  selector string. */
+function crossfadeAdminRow({ memberId, leagueId } = {}) {
+  try {
+    document.querySelectorAll('.player-admin-row[data-member-row]').forEach((row) => {
+      if (row.getAttribute('data-member-row') === String(memberId) && row.getAttribute('data-league-row') === String(leagueId)) {
+        row.classList.remove('admin-row-crossfade');
+        void row.offsetWidth;
+        row.classList.add('admin-row-crossfade');
+      }
+    });
+  } catch {}
+}
+export const _crossfadeAdminRowForTest = crossfadeAdminRow;
+export function _setUsersAcrossLeaguesCacheForTest(v) { _usersAcrossLeaguesCache = v; }
+export function _getUsersAcrossLeaguesCacheForTest() { return _usersAcrossLeaguesCache; }
+export const _bindUsersAcrossLeaguesControlsForTest = () => bindUsersAcrossLeaguesControls();
+
+function bindUsersAcrossLeaguesControls() {
+  /** One shape for all four writes — see this function's own header. */
+  const runAction = async (btn, { confirmCopy, run, busyCopy, okCopy, grantFamily = false, patchCache = null }) => {
+    if (confirmCopy && !confirm(confirmCopy)) return;
+    // Reviewer note (2026-09-25), same reasoning as bindSuperAdminControls()'s
+    // pause/resume confirm: the haptic belongs on the tap that actually
+    // commits the write, native only (isNativeShell()-gated inside haptic()
+    // itself — no extra gating needed here).
+    haptic('medium');
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = busyCopy;
+    try {
+      await run();
+      showToast(okCopy, 'success');
+      // STEP B(12) (third pass) — a ROLE change patches the cached row in
+      // place and repaints from the cache: no refetch, no skeleton flash, no
+      // layout jump — and the one changed row cross-fades (150ms) so the eye
+      // lands on what changed. Siblings re-derive correctly because the whole
+      // body re-renders from the patched rows (the "only active commissioner"
+      // guard on the other rows depends on this one). Platform-admin grants
+      // keep the refetch below: the Platform Admins card reads added-by/
+      // added-at fields this client cannot know.
+      if (typeof patchCache === 'function' && Array.isArray(_usersAcrossLeaguesCache.rows)) {
+        const rowSel = patchCache();
+        if (state.currentTab === 'admin') { renderAdminPage(); crossfadeAdminRow(rowSel); }
+        return;
+      }
+      // BLOCK 2 — `attempted: false` forces the render-time guard to refetch
+      // on the very next renderAdminPage() call (a DELIBERATE re-arm, not the
+      // automatic-retry-loop shape that guard exists to prevent).
+      _usersAcrossLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+      // SECURITY GATE, S-1 (2026-09-25) — same async-race guard as the two
+      // fixes above: `await run()` is a real network round trip, so never
+      // repaint a page the commissioner has already navigated off of.
+      if (state.currentTab === 'admin') renderAdminPage();
+    } catch (e) {
+      btn.disabled = false; btn.textContent = label;
+      showToast(adminRoleActionErrorCopy(e, { grantFamily }), 'error');
+    }
+  };
+
+  document.querySelectorAll('.admin-make-commissioner-btn, .admin-make-player-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const leagueId = btn.dataset.leagueId;
+      const memberId = btn.dataset.memberId;
+      const name = btn.dataset.name || 'this member';
+      const role = btn.classList.contains('admin-make-commissioner-btn') ? 'commissioner' : 'player';
+      runAction(btn, {
+        confirmCopy: role === 'commissioner'
+          ? `Make ${name} a commissioner of this league?`
+          : `Make ${name} a player? They'll lose commissioner access immediately.`,
+        busyCopy: role === 'commissioner' ? 'Promoting…' : 'Updating…',
+        okCopy: `${name}: ${role === 'commissioner' ? 'now Commissioner' : 'now Player'}`,
+        run: () => adminSetMemberRole(leagueId, memberId, role),
+        patchCache: () => {
+          _usersAcrossLeaguesCache = {
+            ..._usersAcrossLeaguesCache,
+            rows: _usersAcrossLeaguesCache.rows.map(r => (r.memberId === memberId && r.leagueId === leagueId ? { ...r, role } : r)),
+          };
+          return { memberId, leagueId };
+        },
+      });
+    });
+  });
+  document.querySelectorAll('.admin-make-admin-btn, .admin-remove-admin-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const userId = btn.dataset.userId;
+      const name = btn.dataset.name || 'this user';
+      const on = btn.classList.contains('admin-make-admin-btn');
+      runAction(btn, {
+        confirmCopy: on
+          ? `Make ${name} a platform admin? They'll have admin access across every league.`
+          : `Remove ${name} as a platform admin?`,
+        busyCopy: on ? 'Granting…' : 'Removing…',
+        okCopy: `${name}: ${on ? 'now a platform admin' : 'admin removed'}`,
+        run: () => adminSetPlatformAdmin(userId, on),
+        grantFamily: true,
+      });
+    });
+  });
+  // REVIEWER FINDING 6 (pass-2, 2026-09-25) — calm copy + Retry for a failed
+  // cross-league users read, see renderAdminPage()'s own inline error note.
+  document.getElementById('users-across-leagues-retry-btn')?.addEventListener('click', () => {
+    refreshUsersAcrossLeaguesCache();
+  });
+}
+
+export function renderAdminPage() {
+  const c = document.getElementById('page-admin'); if (!c) return;
+  const viewer = composeAdminViewer();
+
+  const activeLeagueId = getActiveLeagueId();
+  const memberships = getCachedMemberships();
+  const activeMembership = memberships.find(m => m.leagueId === activeLeagueId) || null;
+  const league = activeMembership
+    ? { id: activeMembership.leagueId, name: activeMembership.leagueName,
+        pilot: activeMembership.pilot === true, status: activeMembership.status || 'active' }
+    : null;
+
+  let leagues;
+  if (viewer.isSuperAdmin) {
+    // REVIEWER BLOCK 2 — `attempted`, not `rows == null`: a failed read
+    // leaves `rows` at `null` forever, and the OLD guard re-fired the fetch
+    // on every single repaint of this page (an unbounded refetch/repaint
+    // loop). `attempted` is set on both success and failure, so this fires
+    // at most once per cache lifetime; only the Retry button calls the
+    // refresh function again after that.
+    if (!_allLeaguesCache.attempted && !_allLeaguesCache.loading) refreshAllLeaguesCache();
+    leagues = _allLeaguesCache.rows || memberships.map(m => ({ id: m.leagueId, name: m.leagueName, pilot: m.pilot === true, status: m.status || 'active' }));
+  } else {
+    leagues = memberships
+      .map(m => ({ id: m.leagueId, name: m.leagueName, pilot: m.pilot === true, status: m.status || 'active' }))
+      .filter((l, i, arr) => arr.findIndex(x => x.id === l.id) === i);
+  }
+
+  if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();
+
+  // Cross-league Users Across Leagues / Platform Admins read
+  // (WIRING_CHECKLIST_B_092526.md §Window(b), UX Revamp wiring pass 3a).
+  // Cache-then-fetch-then-repaint, same shape as `_allLeaguesCache` above —
+  // `rows: null` renders each card's own documented empty state honestly on
+  // first paint, the real data lands on repaint. REVIEWER BLOCK 2 — guarded
+  // on `attempted`, same reasoning as `_allLeaguesCache` immediately above.
+  if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {
+    refreshUsersAcrossLeaguesCache();
+  }
+  const users = _usersAcrossLeaguesCache.rows || [];
+
+  const week = getCurrentWeek();
+  const games = week ? getGames(week.weekId) : [];
+  const availGames = week ? getAvailableGames(week.weekId) : [];
+  const suggested = [], shortlist = [];
+  const settings = getSettings();
+  const allWeeks = getWeeks().sort((a, b) => b.weekNumber - a.weekNumber);
+  const proof = getFetchProof();
+  const ps = getProviderState();
+
+  // Cards whose render logic still lives in app.js's own standalone
+  // functions (relocated whole, per DI-320's card-by-card table), injected
+  // through the CARD SHELL CONTRACT (js/admin-panel.js's own doc header).
+  // REVIEWER FINDING 11 (pass-2, 2026-09-25) — this comment previously
+  // named a "KNOWN, NAMED DEVIATION" (six functions double-wrapped in their
+  // own `.admin-section`/`.card` markup, nested a second time inside
+  // cardShell()). That was true of an EARLIER state of this pass; the
+  // double-wraps were stripped (each function below now returns bare inner
+  // content, e.g. `renderDataProofPanel()` returns a plain `.proof-grid`
+  // div, not a `.admin-section`) before this comment's claim was checked
+  // against the current file — stale, deleted rather than left to mislead
+  // the next reader.
+  const bodies = {
+    'data-proof': () => renderDataProofPanel(proof, ps, week, games),
+    'account-linking': () => `<div id="comm-link-status-card"><p class="text-muted">Loading members…</p></div>`,
+    'scribe-model': () => renderScribeModelCardHTML(),
+    'recalculate-finalized-weeks': () => renderRecalculateFinalizedWeeksAdminSectionHTML(),
+    'obligation-corrections': () => renderObligationCorrectionsAdminSectionHTML(),
+    'background-jobs': () => renderBackgroundJobsAdminSectionHTML({ pilot: isPilotLeague(league) }),
+    'feedback-bug-reports': () => renderFeedbackAdminSectionHTML(),
+    'scribe-training': () => renderScribeTrainerAdminSectionHTML(),
+    'espn-source': () => renderEspnSourceBody({ ps }),
+    'data-source-mode': () => renderDataSourceModeBody({ week }),
+    'demo-simulation': () => renderDemoSimulationBody({ week, games }),
+    'auto-refresh': () => renderAutoRefreshBody({ settings }),
+    'randomize-picks-shortcut': () => renderRandomizePicksBody({ settings }),
+    'security-settings': () => renderSecuritySettingsBody(),
+    'export-data': (ctx) => renderExportDataCardBody({ week, isMember: ctx.isMember }),
+    'data-management': () => renderDataManagementBody(),
+    'chat-retention': () => renderChatRetentionAdmin(),
+    'chat-history': () => renderChatEpochAdmin(),
+  };
+
+  c.innerHTML = renderAdminPanel({
+    viewer, league, leagues, users, escHtml, icon, bodies,
+    // Item 6 (pass-2, wiring pass 3a-bis, 2026-09-25) — the skeleton variant
+    // for the two cross-league cards while their own fetch is in flight
+    // (Interaction Principles' Loading hierarchy). `usersLoading`/
+    // `allLeaguesLoading` are the SAME `.loading` flags the guards two lines
+    // above already read to decide whether to fire the fetch — no new state.
+    usersLoading: _usersAcrossLeaguesCache.loading,
+    allLeaguesLoading: _allLeaguesCache.loading,
+    activeTab: state.adminTab || 'week', platformKv: _platformKvCache,
+    allLeaguesError: _allLeaguesCache.error,
+  });
+  c.setAttribute('data-admin-active', state.adminTab || 'week');
+
+  // AD-06 loud-fail — a refused/failed cross-league users read is surfaced,
+  // never silently presented as "no members found." Appended after the
+  // Users Across Leagues card rather than threaded through
+  // js/admin-panel.js's pure render signature (out of this pass's edit
+  // window for that file).
+  //
+  // REVIEWER FINDING 6 (pass-2, 2026-09-25) — this used to interpolate the
+  // RAW server error string (`Interaction Principles.md` §"Error States":
+  // "never expose technical messages"). Calm copy + Retry now, same shape
+  // `renderSuperAdminPlaceholder()`'s own kvErrorNote/allLeaguesErrorNote
+  // already use.
+  if (_usersAcrossLeaguesCache.error) {
+    const uErrCard = c.querySelector('[data-admin-card="users-across-leagues"] .card');
+    if (uErrCard) {
+      uErrCard.insertAdjacentHTML('afterbegin',
+        `<p class="text-xs mb-sm" style="color:var(--loss)">${escHtml('Unable to load members across leagues.')}</p>
+         <button type="button" class="btn btn-ghost btn-sm mb-sm" id="users-across-leagues-retry-btn">${escHtml('Retry')}</button>`);
+    }
+  }
+
+  c.querySelectorAll('[data-admin-tab-btn]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.adminTab = btn.dataset.adminTabBtn;
+      c.setAttribute('data-admin-active', state.adminTab);
+      c.querySelectorAll('[data-admin-tab-btn]').forEach(b => {
+        const active = b.dataset.adminTabBtn === state.adminTab;
+        b.classList.toggle('active', active);
+        b.setAttribute('aria-selected', active);
+      });
+      // UN-105a — Demo Simulation's .batch-grid-scroll wrapper (relocated
+      // to Admin → Week, DI-320) was display:none (0×0) if the panel
+      // opened on a different tab; re-measure now that it may have just
+      // become visible. Same discipline renderCommPage()'s own tab click
+      // handler already follows.
+      initScrollFades(c);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+  });
+  c.querySelectorAll('[data-action="open-league-selector"]').forEach(btn => {
+    btn.addEventListener('click', () => showLeagueSelectorSheet());
+  });
+
+  // Reuses the SAME binding logic the Commissioner panel calls
+  // (bindCommEventListeners()) rather than duplicating ~1400 lines of
+  // existing, already-tested bind logic.
+  //
+  // REVIEWER FINDING 13 / SECURITY N7 (pass-2, 2026-09-25) — the PRIOR
+  // version of this comment claimed every id `bindCommEventListeners()`
+  // targets "now exists in AT MOST ONE currently-painted page." That is
+  // FALSE: `navigateTo()` only toggles the `.active` CLASS between page
+  // sections (`document.querySelectorAll('.page-section').forEach(el =>
+  // el.classList.toggle('active', …))`) — it never empties or removes an
+  // inactive page's DOM. `#page-commissioner` stays fully populated,
+  // hidden-not-gone, with every control `bindCommEventListeners()` still
+  // binds that was NOT one of the ten cards actually relocated (the week
+  // selector, the slate builder, game rows, etc. — the vast majority of
+  // that 1400-line function's own targets never moved). Calling this
+  // function again from here, unscoped, therefore attached a SECOND set of
+  // listeners onto those still-live `#page-commissioner` nodes on every
+  // single `renderAdminPage()` call — accumulating, never cleaned up,
+  // until the commissioner next visited the Comm tab and got a fresh
+  // `c.innerHTML` rebuild there (which is the only thing that actually
+  // drops the old listeners, by discarding the DOM nodes they were on).
+  //
+  // FIXED by emptying `#page-commissioner` immediately before this call and
+  // restoring nothing after — there is nothing to restore, because
+  // `renderCommPage()` ALWAYS fully rebuilds that page's `c.innerHTML` from
+  // scratch on its own next render (never reads or depends on carried-over
+  // markup), so there is no state this loses. This is safe to do here
+  // specifically because `renderAdminPage()` only runs while `state.currentTab
+  // === 'admin'`, i.e. `#page-commissioner` is definitionally NOT the
+  // outgoing page of the navigation that led here — `navigateTo()`'s own
+  // RG-176 dirty-field capture of the OUTGOING tab (if it was Commissioner)
+  // already ran, earlier in the SAME navigateTo() call, before this function
+  // was ever reached (captureDirtyFields() is called before
+  // `state.currentTab = tab`). A real full DOM-scoping refactor of
+  // `bindCommEventListeners()` (a `root` parameter threaded through every one
+  // of its ~1400 lines' `document.getElementById()` calls) is out of this
+  // window's budget — named here rather than silently left unfixed, and
+  // reported to design-matrix-pm as a candidate follow-up.
+  // SECURITY GATE, S-1 (2026-09-25) — this shield's own justifying comment
+  // above claimed "renderAdminPage() only runs while state.currentTab ===
+  // 'admin'." That was false: three deferred async re-renders
+  // (refreshBackgroundJobsCard()'s `rerender` branch, bindUsersAcrossLeaguesControls()'s
+  // runAction() post-await re-render, and the Super Admin pause/resume
+  // `.then()`) call this function with no tab check at all, so a commissioner
+  // who navigates AWAY to the Comm tab before one of those in-flight promises
+  // settles gets `#page-commissioner` wiped out from under them with nothing
+  // left to repaint it (repro: Admin -> Send Test Push -> tap Comm within the
+  // poll window). Gated here (belt) AND at all three call sites (suspenders,
+  // below) — the shield must never fire for a page this function did not
+  // actually just navigate to.
+  if (state.currentTab === 'admin') {
+    const _commPageForShield = document.getElementById('page-commissioner');
+    if (_commPageForShield) _commPageForShield.innerHTML = '';
+  }
+  bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist);
+  bindScribeModelControl();
+  bindUsersAcrossLeaguesControls();
+  if (viewer.isSuperAdmin) bindSuperAdminControls();
+  if (getAuthMode() === 'supabase') {
+    loadLeagueMembersCard().catch(e => console.warn('[auth] the League Members card could not load', e));
+  }
+  if (isSupabaseDataMode() && !_bgJobsCache.loading &&
+      (_bgJobsCache.rows === null || _bgJobsCache.leagueId !== getActiveLeagueId())) {
+    refreshBackgroundJobsCard();
+  }
+  initScrollFades(c);   // UN-105a — this panel's own scroll-fade wrappers (Demo Simulation's batch grid, relocated here)
+  // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
+  // comment; structural repaint coverage for Admin.
+  renderPausedLeagueBannerIfNeeded('admin');
+  renderMaintenanceBannerIfNeeded('admin');
+}
 
 // ─── SLATE UI COMPONENTS ──────────────────────────────────────────────────────
 
@@ -11286,11 +13197,11 @@ export function renderAvailFilterBar(availGames) {
       </label>
       <label class="avail-chip-label">
         <input type="checkbox" id="avail-alma-only" ${f.almaOnly?'checked':''} />
-        ⭐ Alma mater games only
+        ${icon('almaMater')} Alma mater games only
       </label>
       <label class="avail-chip-label">
         <input type="checkbox" id="avail-national-tv" ${f.nationalTV?'checked':''} />
-        📺 On National TV
+        ${icon('tv')} On National TV
       </label>
       <label class="avail-chip-label">
         <input type="checkbox" id="avail-tight-only" ${f.tightOnly?'checked':''} />
@@ -11416,8 +13327,8 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
           ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?'<span class="alma-mater-badge ml-sm">⭐</span>':''}
-          ${game.nationalTV?`<span class="national-tv-badge ml-sm">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
+          ${game.isAlmaMaterGame?`<span class="alma-mater-badge ml-sm">${icon('almaMater')}</span>`:''}
+          ${game.nationalTV?`<span class="national-tv-badge ml-sm">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grFolded)}
         </div>
         ${onSlate
@@ -11461,8 +13372,8 @@ export function renderAdminGamesList(games, week, overrides) {
           ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?'<span class="alma-mater-badge">⭐</span>':''}
-          ${game.nationalTV?`<span class="national-tv-badge">📺 ${escHtml(game.broadcastNetwork||'')}</span>`:''}
+          ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater')}</span>`:''}
+          ${game.nationalTV?`<span class="national-tv-badge">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grSlateFolded)}
           ${renderSourceBadge(game)}
         </div>
@@ -11633,6 +13544,8 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     setActiveWeekId(e.target.value); refreshHeader(); renderCommPage();
   });
   document.getElementById('create-week-btn')?.addEventListener('click', ()=>showCreateWeekModal());
+  // DI-C1 §2.1 — the Week Setup Wizard's entry point.
+  document.getElementById('week-wizard-entry-btn')?.addEventListener('click', () => openWeekWizardSheet());
   // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcement send control.
   // States: empty -> disabled; sending -> brief loading label; sent -> toast
   // + textarea clears (matches DI's exact states table).
@@ -11731,7 +13644,12 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // Week settings save
   document.getElementById('save-week-settings-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    const mode=document.getElementById('data-source-mode')?.value||week.dataSourceMode;
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    const cur=getWeek(week.weekId)||week;
+    const mode=document.getElementById('data-source-mode')?.value||cur.dataSourceMode;
     const startDate=document.getElementById('week-start')?.value||'';
     const endDate=document.getElementById('week-end')?.value||'';
     const openRaw=document.getElementById('picks-open-at')?.value;
@@ -11748,7 +13666,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     // ── UN-118/UN-125 — multi-part week grouping (DI-126a/b) ────────────────
     const partnerId = document.getElementById('week-group-partner')?.value || '';
     const wantsTiebreaker = document.getElementById('week-group-tiebreaker')?.checked === true;
-    let groupId = week.groupId || null;
+    let groupId = cur.groupId || null;
     if (!partnerId) {
       // DI-126a — clearing one member's field removes only THAT member; any
       // other existing members stay grouped with each other, untouched.
@@ -11775,7 +13693,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     }
     const isGroupTiebreaker = !!groupId && wantsTiebreaker;
 
-    const upd = {...week,dataSourceMode:mode,startDate,endDate,roundLabel,espnWeekNumber,showInHistory,
+    const upd = {...cur,dataSourceMode:mode,startDate,endDate,roundLabel,espnWeekNumber,showInHistory,
       picksOpenAt:openRaw?new Date(openRaw).toISOString():null,
       picksLockAt:lockRaw?new Date(lockRaw).toISOString():null,
       autoLockOffsetMinutes, autoLiveEnabled, autoFinalizeEnabled,
@@ -11803,10 +13721,35 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     refreshHeader(); showToast('Week settings saved ✅','success'); renderCommPage();
   });
 
+  // Admin → Week "Data Source Mode" card (DI-320 §Week) — extracted from
+  // Week Settings, its own small save action (UX Revamp wiring pass 3a).
+  // Reuses bindCommEventListeners (renderAdminPage() calls it too), so this
+  // binds whenever the Admin page's #admin-save-data-source-mode-btn is in
+  // the currently-painted DOM.
+  document.getElementById('admin-save-data-source-mode-btn')?.addEventListener('click', () => {
+    if (!week) return;
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    const cur = getWeek(week.weekId) || week;
+    const mode = document.getElementById('admin-data-source-mode')?.value || cur.dataSourceMode;
+    saveWeek({ ...cur, dataSourceMode: mode });
+    showToast('Data Source Mode saved ✅', 'success');
+    // REVIEWER BLOCK 2 / SECURITY GATE S-1 (2026-09-25) — same belt-and-
+    // suspenders gate as the other renderAdminPage() call sites, above.
+    if (state.currentTab === 'admin') renderAdminPage();
+  });
+
   // Pending-finalization prompt handlers (auto-transition ready → commissioner confirms)
   document.getElementById('confirm-finalize-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    const upd = { ...week, status: WEEK_STATUS.FINAL, finalizedAt: new Date().toISOString(), pendingFinalization: false };
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    const cur = getWeek(week.weekId) || week;
+    const upd = { ...cur, status: WEEK_STATUS.FINAL, finalizedAt: new Date().toISOString(), pendingFinalization: false };
     saveWeek(upd);
     // Hand finalizeWeek the PERSISTED week, not the pre-transition snapshot —
     // same invariant as applyWeekStatusChange(). The save already came first
@@ -11819,12 +13762,20 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   });
   document.getElementById('dismiss-pending-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    saveWeek({ ...week, pendingFinalization: false });
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    saveWeek({ ...(getWeek(week.weekId) || week), pendingFinalization: false });
     renderCommPage();
   });
   document.getElementById('save-blurb-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    saveWeek({...week,blurb:document.getElementById('blurb-input')?.value||''});
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    saveWeek({...(getWeek(week.weekId)||week),blurb:document.getElementById('blurb-input')?.value||''});
     showToast('Blurb saved','success');
   });
 
@@ -11841,6 +13792,44 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     navigator.clipboard.writeText(buildUrl()).then(()=>showToast('URL copied!','success')).catch(()=>showToast('Copy failed','error'));
   });
   document.getElementById('open-url-btn')?.addEventListener('click', ()=>window.open(buildUrl(),'_blank'));
+
+  // DI-319 §Copy — Invite to League (join code chip + Copy + Rotate).
+  // STEP B(1) — the terminal error state's Retry: a DELIBERATE refetch, so it
+  // calls the refresh directly (the render-time guard exists to stop an
+  // automatic loop, not this).
+  document.getElementById('invite-code-retry-btn')?.addEventListener('click', () => {
+    const leagueId = getActiveLeagueId();
+    if (!leagueId) return;
+    refreshJoinCodeCache(leagueId);
+    // Reviewer round 3, item 4 — refreshJoinCodeCache() sets `loading:true`
+    // SYNCHRONOUSLY (its first line, before its own `await`), so by the time
+    // this call returns control here the cache already says loading — but
+    // nothing had repainted to show it: the tap sat on the stale error chip
+    // + a still-clickable Retry until the fetch resolved, which for a slow
+    // network could be seconds of dead air after a tap the Interaction
+    // Principles say must give instant feedback. Repainting HERE, not inside
+    // refreshJoinCodeCache() itself, keeps that function's own repaint (its
+    // last line) as the ONE place that paints the settled outcome — this is
+    // only the immediate loading/disabled affordance for the tap itself.
+    renderCommPage();
+  });
+  document.getElementById('copy-invite-code-btn')?.addEventListener('click', () => {
+    const code = _joinCodeCache.code;
+    if (!code) { showToast(_joinCodeCache.error ? "Couldn't load the join code — tap Retry." : 'Still loading — try again in a moment', 'error'); return; }
+    navigator.clipboard.writeText(code).then(() => showToast('Copied', 'success')).catch(() => showToast('Copy failed', 'error'));
+  });
+  document.getElementById('rotate-invite-code-btn')?.addEventListener('click', () => {
+    const leagueId = getActiveLeagueId();
+    if (!leagueId) return;
+    if (!confirm('Generate a new invite code? The old one stops working right away.')) return;
+    rotateJoinCode(leagueId)
+      .then((code) => {
+        _joinCodeCache = { leagueId, code, loading: false, error: null };
+        showToast('New invite code generated.', 'success');
+        renderCommPage();
+      })
+      .catch(() => showToast('Unable to save. Try again.', 'error'));
+  });
 
   // ESPN Fetch — uses week start/end date as the source of truth
   document.getElementById('fetch-espn-btn')?.addEventListener('click', async()=>{
@@ -12053,8 +14042,12 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('push-selftest-btn')?.addEventListener('click', () => { handleSendTestPush(); });
   document.getElementById('push-reach-btn')?.addEventListener('click', () => { handlePushReachCheck(); });
   document.getElementById('push-breakdown-toggle')?.addEventListener('click', () => {
+    // REVIEWER Minor (2026-09-25) — this button only exists on the Admin
+    // panel's card now (the card moved, DI-320); `renderCommPage()` here
+    // repainted a page the click didn't come from and left the actual
+    // on-screen card un-updated.
     _pushSelfTest = { ..._pushSelfTest, breakdownOpen: !_pushSelfTest.breakdownOpen };
-    renderCommPage();
+    renderAdminPage();
   });
   document.querySelectorAll('.server-job-toggle').forEach((el) => {
     el.addEventListener('change', () => {
@@ -12572,7 +14565,11 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     const q=document.getElementById('tb-question')?.value||'';
     const aRaw=document.getElementById('tb-actual')?.value;
     const actual=aRaw!==''&&aRaw!==undefined?parseFloat(aRaw):null;
-    const upd={...week,tiebreakerQuestion:q,actualTiebreakerValue:actual,tiebreakerFinalized:actual!==null};
+    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
+    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
+    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
+    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+    const upd={...(getWeek(week.weekId)||week),tiebreakerQuestion:q,actualTiebreakerValue:actual,tiebreakerFinalized:actual!==null};
     saveWeek(upd);
     // DI-D (2026-09-02) — THE LOAD-BEARING INPUT. A tiebreaker entered or
     // edited AFTER the week already finalized must actually take effect
@@ -13138,6 +15135,254 @@ export function buildWeeklySummary(week) {
 
 // ─── DATA PROOF PANEL ─────────────────────────────────────────────────────────
 
+/**
+ * Admin → Data "Export Data" card (DI-320 §Data, §Per-card operability "the
+ * loud-refusal requirement," F5) — relocated whole (UX Revamp wiring pass
+ * 3a). `isMember` (composed by js/admin-panel.js's renderExportDataBody()
+ * wrapper, which reads `ctx.isMember`) suppresses the picks/tiebreaker/
+ * Extra-Point-shaped export buttons for an admin viewing a league he does
+ * not belong to — CSVs whose source table (`picks`/`tiebreaker_guesses`,
+ * both read through `getPicks()`) has no admin RLS bypass, so a silently-
+ * empty file is exactly the CLAUDE.md-prohibited silent-fallback shape this
+ * suppression exists to prevent. Standings/obligations/weeks/games scopes
+ * are unaffected — those tables' SELECT policies already return real data
+ * to any admin. Bare content — the wrapper comes from cardShell().
+ */
+function renderExportDataCardBody({ week, isMember = true }) {
+  const pickShapedScope = isMember ? `
+          <div class="flex gap-sm mb-md flex-wrap">
+            <button class="btn btn-secondary btn-sm" id="export-week-picks-csv-btn" ${week?'':'disabled'}>📋 Week Picks CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-week-results-csv-btn" ${week?'':'disabled'}>🏆 Week Results CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-week-dashboard-csv-btn" ${week?'':'disabled'}>📊 Week Dashboard Matrix CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-week-bundle-btn" ${week?'':'disabled'}>📦 Week Bundle (all of above)</button>
+          </div>` : `
+          <p class="text-xs mb-sm" style="color:var(--text-muted)">You are not a member of this league, so pick-level data can't be exported from here — ask the league's commissioner.</p>`;
+  const fullBackup = isMember ? `
+          <div class="divider"></div>
+          <div class="card-title mb-sm">Full Backup</div>
+          <div class="flex gap-sm flex-wrap">
+            <button class="btn btn-primary btn-sm" id="export-full-json-btn">💾 Full Backup (JSON)</button>
+            <button class="btn btn-secondary btn-sm" id="export-full-csv-bundle-btn">📦 Full CSV Bundle (all data)</button>
+          </div>
+          <p class="text-muted text-xs mt-sm">Full backup preserves every week, pick, result, and player. CSV bundle exports each table as its own download.</p>` : '';
+  return `
+          <p class="text-muted text-xs mb-md">CSV format opens in Excel / Google Sheets. JSON format preserves full state for backup/restore.</p>
+          <div class="card-title mb-sm">Current Week (${week?escHtml(formatWeekLabel(week)):'no active week'})</div>
+          <div class="flex gap-sm mb-md flex-wrap">
+            <button class="btn btn-secondary btn-sm" id="export-week-slate-csv-btn" ${week?'':'disabled'}>🏈 Week Slate CSV</button>
+          </div>
+          ${pickShapedScope}
+          <div class="divider"></div>
+          <div class="card-title mb-sm">League-wide</div>
+          <div class="flex gap-sm mb-md flex-wrap">
+            <button class="btn btn-secondary btn-sm" id="export-players-csv-btn">👥 Players CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-standings-csv-btn">🏆 Season Standings CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-weekly-results-csv-btn">📅 All Weekly Results CSV</button>
+            <button class="btn btn-secondary btn-sm" id="export-obligations-csv-btn">💵 Obligations CSV</button>
+            ${isMember ? '<button class="btn btn-secondary btn-sm" id="export-extra-point-csv-btn">🎯 Extra Point Season CSV</button>' : ''}
+          </div>
+          ${fullBackup}`;
+}
+
+/**
+ * Admin → Settings "Auto-Refresh" card (DI-320 §Settings) — relocated whole
+ * (UX Revamp wiring pass 3a), unchanged body. Bare content.
+ */
+function renderAutoRefreshBody({ settings }) {
+  return `
+          <div class="form-group">
+            <label class="form-label">Score Refresh Interval</label>
+            <select class="form-select" id="auto-refresh-select">
+              <option value="0"   ${(settings.autoRefreshInterval||60)===0?'selected':''}>Off</option>
+              <option value="30"  ${settings.autoRefreshInterval===30?'selected':''}>30 seconds</option>
+              <option value="60"  ${(settings.autoRefreshInterval||60)===60?'selected':''}>60 seconds</option>
+              <option value="300" ${settings.autoRefreshInterval===300?'selected':''}>5 minutes</option>
+            </select>
+          </div>
+          <button class="btn btn-secondary btn-sm" id="save-refresh-btn">Save</button>`;
+}
+
+/**
+ * Admin → Settings "Randomize Picks Shortcut" card (DI-320 §Settings, UN-107)
+ * — relocated whole (UX Revamp wiring pass 3a), unchanged body. Bare content.
+ */
+function renderRandomizePicksBody({ settings }) {
+  return `
+        <div id="comm-randomize-card">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+            <input type="checkbox" id="randomize-enabled-toggle" ${settings.randomizePicksEnabled ? 'checked' : ''} />
+            <span class="form-label" style="margin:0">Allow players to randomize their picks</span>
+          </label>
+          <p class="text-muted text-xs">${settings.randomizePicksEnabled
+            ? 'Players see a 🎲 Randomize My Picks shortcut on the Picks page.'
+            : 'The randomize shortcut is hidden. Players make every pick by hand.'}</p>
+        </div>`;
+}
+
+/**
+ * Admin → Settings "Security & Settings" card (DI-320 §Settings) — relocated
+ * whole (UX Revamp wiring pass 3a), unchanged body. Reads `getSettings()`
+ * directly (not a param) — same pattern `commPasswordCardHTML()` already
+ * follows, since this card mixes several independent settings blobs. Bare
+ * content.
+ */
+function renderSecuritySettingsBody() {
+  const settings = getSettings();
+  return commPasswordCardHTML() + `
+          <div class="card-title mb-sm">Site PIN (front-door gate)</div>
+          <p class="text-muted text-xs mb-sm">The PIN required to open the app. Current: <strong class="font-display">${escHtml(getEffectiveSitePin())}</strong>. Players will need the new PIN on their next visit (existing unlocked devices stay unlocked).</p>
+          <div class="form-group">
+            <label class="form-label">New site PIN</label>
+            <input class="form-input" id="sec-site-pin-new" type="text" inputmode="numeric" maxlength="12" placeholder="4–12 characters" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Confirm new site PIN</label>
+            <input class="form-input" id="sec-site-pin-confirm" type="text" inputmode="numeric" maxlength="12" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="sec-change-site-pin-btn">🚪 Change Site PIN</button>
+
+          <div class="divider"></div>
+          <div class="card-title mb-sm">Welcome Screen Text</div>
+          <p class="text-muted text-xs mb-sm">Shown above the PIN entry on the front gate. Title renders as two lines (small "welcome to" eyebrow + larger league name).</p>
+          <div class="form-group">
+            <label class="form-label">Title — top line</label>
+            <input class="form-input" id="sec-welcome-title-top" type="text" maxlength="40" placeholder="welcome to" value="${escHtml(settings.welcomeTitleTop||'')}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Title — main line</label>
+            <input class="form-input" id="sec-welcome-title-main" type="text" maxlength="60" placeholder="irb pick 'ems" value="${escHtml(settings.welcomeTitleMain||'')}" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Welcome subtitle</label>
+            <input class="form-input" id="sec-welcome-subtitle" type="text" maxlength="80" placeholder="enter access pin" value="${escHtml(settings.welcomeSubtitle||'')}" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="sec-save-welcome-btn">💾 Save Welcome Text</button>
+
+          <div class="divider"></div>
+          <div class="card-title mb-sm">Commissioner Contact Email</div>
+          <p class="text-muted text-xs mb-sm">Used by the Feedback form on the Rules tab and by the Weekly Summary helper. Leave blank to disable mailto-based features.</p>
+          <div class="form-group">
+            <label class="form-label">Email</label>
+            <input class="form-input" id="sec-comm-email" type="email" placeholder="commissioner@example.com" value="${escHtml(settings.commissionerEmail||'')}" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="sec-save-comm-email-btn">💾 Save Email</button>`;
+}
+
+/**
+ * Admin → Data "Data Management" card (DI-320 §Data) — relocated whole (UX
+ * Revamp wiring pass 3a), unchanged body. Bare content.
+ */
+function renderDataManagementBody() {
+  return `
+          <div class="form-group">
+            <p class="text-muted text-xs mb-sm">Clears games, picks, and results for the selected week only.</p>
+            <button class="btn btn-secondary btn-sm" id="reset-week-btn">🗑 Clear Current Week Data</button>
+          </div>
+          <div class="divider"></div>
+          <div class="form-group">
+            ${isSupabaseDataMode() ? `<p class="text-muted text-xs mb-sm" id="reset-demo-note">Full Factory Reset is not available on the live league — it would write demo data over everyone's real season.</p>` : `<p class="text-muted text-xs mb-sm">Full reset requires Commissioner password. Deletes ALL data.</p>`}
+            ` + dataActionsRowHTML() + `
+          </div>`;
+}
+
+/**
+ * Admin → Week "Data Source Mode" card (DI-320 §Week) — extracted from the
+ * Commissioner's Week Settings card (UX Revamp wiring pass 3a); its own
+ * small save action, see bindCommEventListeners()'s
+ * `admin-save-data-source-mode-btn` handler. Bare content — the wrapper
+ * comes from js/admin-panel.js's cardShell().
+ */
+function renderDataSourceModeBody({ week }) {
+  if (!week) return `<p class="text-muted text-xs">Create a week from the Commissioner panel first.</p>`;
+  return `
+    <div class="form-group">
+      <label class="form-label">Data Source Mode</label>
+      <select class="form-select" id="admin-data-source-mode">
+        <option value="espn_live"       ${week.dataSourceMode==='espn_live'?'selected':''}>ESPN Live</option>
+        <option value="espn_historical" ${week.dataSourceMode==='espn_historical'?'selected':''}>ESPN Historical</option>
+        <option value="manual"          ${week.dataSourceMode==='manual'?'selected':''}>Manual</option>
+        <option value="demo"            ${week.dataSourceMode==='demo'?'selected':''}>Demo</option>
+      </select>
+    </div>
+    <button class="btn btn-primary btn-sm" id="admin-save-data-source-mode-btn">Save</button>`;
+}
+
+/**
+ * Admin → Week "Demo Simulation" card (DI-320 §Week) — relocated whole from
+ * the Commissioner panel (UX Revamp wiring pass 3a, DI-319/320: "moves to
+ * Admin → Week"), unchanged body. Bare content — the wrapper comes from
+ * js/admin-panel.js's cardShell().
+ */
+function renderDemoSimulationBody({ week, games }) {
+  if (!week) return `<p class="text-muted text-xs">Create a week from the Commissioner panel first.</p>`;
+  return `
+          <p class="text-secondary text-sm mb-md">Simulate scheduled → live → final without real games.</p>
+          ${games.length===0?'<div class="info-box">Add games to the slate first.</div>':`
+            <div class="form-group">
+              <label class="form-label">Quick edit a single game</label>
+              <select class="form-select" id="demo-game-select">
+                <option value="">— Choose a game —</option>
+                ${games.map(g=>`<option value="${g.gameId}">${escHtml(matchup(g))} [${g.status}]</option>`).join('')}
+              </select>
+            </div>
+            <div id="demo-game-controls" style="display:none">
+              <div class="flex gap-sm flex-wrap mb-md">
+                <button class="btn btn-secondary btn-sm" id="demo-set-live">▶️ Set Live</button>
+                <button class="btn btn-secondary btn-sm" id="demo-set-final">✅ Set Final</button>
+                <button class="btn btn-ghost btn-sm" id="demo-set-scheduled">↩ Reset Scheduled</button>
+              </div>
+              <div class="flex gap-sm mb-md">
+                <div class="form-group" style="flex:1;margin:0">
+                  <label class="form-label" id="demo-home-label">Home Score</label>
+                  <input class="form-input" id="demo-home-score" type="number" min="0" value="0" />
+                </div>
+                <div class="form-group" style="flex:1;margin:0">
+                  <label class="form-label" id="demo-away-label">Away Score</label>
+                  <input class="form-input" id="demo-away-score" type="number" min="0" value="0" />
+                </div>
+                <button class="btn btn-primary btn-sm" style="align-self:flex-end" id="demo-update-score">Update</button>
+              </div>
+            </div>
+
+            <div class="divider"></div>
+
+            <!-- BATCH GRID — edit every game's score + status at once -->
+            <div class="card-title mb-sm">⚡ Batch update all games</div>
+            <p class="text-muted text-xs mb-sm">Set scores and statuses for every game, then apply in one click. Useful for setting up a whole-week demo scenario fast.</p>
+            ${renderDemoBatchGrid(games)}
+            <div class="flex gap-sm flex-wrap mt-md">
+              <button class="btn btn-primary btn-sm" id="demo-batch-apply">💾 Apply All Changes</button>
+              <button class="btn btn-secondary btn-sm" id="demo-batch-randomize">🎲 Randomize Scores</button>
+            </div>
+
+            <div class="divider"></div>
+            <div class="flex gap-sm flex-wrap">
+              <button class="btn btn-primary btn-sm" id="demo-finalize-all">🏁 Finalize All & Calculate</button>
+              <button class="btn btn-ghost btn-sm" id="demo-reset-all-scheduled">↩ Reset All Scheduled</button>
+            </div>`}`;
+}
+
+/**
+ * Admin → Games "ESPN Source" card (DI-320 §Games) — the URL preview/Copy/
+ * Open half of the old "ESPN Data Fetch" card, split out (UX Revamp wiring
+ * pass 3a). Read-only display; the fetch action itself stays on
+ * Commissioner → Games ("Populate Games"). Bare content — the wrapper
+ * `.admin-section`/title/`.card` comes from js/admin-panel.js's cardShell().
+ */
+function renderEspnSourceBody({ ps }) {
+  return `
+    <p class="text-muted text-sm mb-md">Preview, copy, or open the ESPN URL this week's fetch uses.</p>
+    <div class="api-url-box" id="api-url-box">
+      <span class="api-url-label">ESPN URL:</span>
+      <code class="api-url-code" id="api-url-display">Click Preview to generate</code>
+      <div class="flex gap-sm mt-sm flex-wrap">
+        <button class="btn btn-ghost btn-sm" id="preview-url-btn">🔍 Preview URL</button>
+        <button class="btn btn-ghost btn-sm" id="copy-url-btn">📋 Copy</button>
+        <button class="btn btn-ghost btn-sm" id="open-url-btn">🔗 Open in Tab</button>
+      </div>
+    </div>`;
+}
+
 function renderDataProofPanel(proof, ps, week, games) {
   const mode=week?.dataSourceMode||'—';
   const slateGames=games||[];
@@ -13674,9 +15919,6 @@ export function renderObligationCorrectionsAdmin(entries = currentSeasonObligati
 export function renderRecalculateFinalizedWeeksAdminSectionHTML() {
   const r = state.recalcAllResult;
   return `
-    <div class="admin-section" data-comm-tab="data">
-      <div class="admin-section-title">🔁 Recalculate Finalized Weeks</div>
-      <div class="card">
         <p class="text-muted text-xs mb-sm">Re-runs finalize on every already-final week using the currently saved tiebreaker values. Use this to correct any week that finalized before its tiebreaker was entered — including weeks that may already have gotten it wrong.</p>
         <button class="btn btn-primary btn-block" id="recalc-all-weeks-btn">🔁 Recalculate All Finalized Weeks</button>
         ${r ? `
@@ -13685,9 +15927,7 @@ export function renderRecalculateFinalizedWeeksAdminSectionHTML() {
               ? 'No results changed.'
               : r.changes.map(c=>`<div>${escHtml(c)}</div>`).join('')}
           </div>
-        ` : ''}
-      </div>
-    </div>`;
+        ` : ''}`;
 }
 
 /**
@@ -13698,15 +15938,10 @@ export function renderRecalculateFinalizedWeeksAdminSectionHTML() {
  */
 export function renderObligationCorrectionsAdminSectionHTML() {
   return `
-    <div class="admin-section" data-comm-tab="data">
-      <div class="admin-section-title">🔀 Obligation Corrections</div>
-      <div class="card">
         <p class="text-muted text-xs mb-sm">Merge duplicate prizes into one, or void one outright. Nothing is ever deleted — voided and merged records stay visible here and in the Obligations CSV.</p>
         <div class="obcorr-list">${renderObligationCorrectionsAdmin()}</div>
         <div class="divider"></div>
-        <button class="btn btn-secondary btn-sm" id="obcorr-merge-btn" disabled>🔗 Merge Selected (0)</button>
-      </div>
-    </div>`;
+        <button class="btn btn-secondary btn-sm" id="obcorr-merge-btn" disabled>🔗 Merge Selected (0)</button>`;
 }
 
 /** v0.17.0 — the 2K25 carryover ledger. Paid-state lives in settings.ob2025
@@ -13808,23 +16043,67 @@ function renderCommLogin(c) {
   document.getElementById('comm-password-input')?.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('comm-login-btn')?.click();});
 }
 
+/**
+ * RG-251 (2026-09-26) — the status a week is ACTUALLY at, for deciding the next leg. In supabase
+ * data mode that is the status the SERVER last confirmed (sb.getConfirmedWeekStatus()): the mirror
+ * can hold one the server never reached — a leg inside its debounce, or one refused, which stays
+ * dirty and keeps its value. On game day v0.25.1 left a commissioner's mirror at LIVE over a server
+ * at OPEN, and both the auto-transition tick and these buttons went on acting from LIVE. Anywhere
+ * else (local mode, a week not yet on the server) it is the mirror's own status, unchanged.
+ */
+/**
+ * RG-253 (reviewer F1 / SEC-3, 2026-09-26) — has the SERVER confirmed this week on this page? In
+ * supabase data mode: the adapter is ACTIVE (a hydrate has landed — not a warm-boot snapshot paint,
+ * not offline, not held) AND its base holds the week's row. Always true in local mode. The auto-
+ * transition tick acts only when this is true: before the hydrate lands, a tick that locks from the
+ * snapshot and a second that goes live re-create the open>live leg of game day.
+ */
+export function serverHasConfirmedWeek(week) {
+  if (!week) return false;
+  if (!isSupabaseDataMode()) return true;
+  try { return sb.getState() === 'ACTIVE' && sb.getConfirmedWeekStatus(week.weekId) !== null; }
+  catch { return false; }
+}
+export function serverConfirmedWeekStatus(week) {
+  if (!week) return null;
+  if (!isSupabaseDataMode()) return week.status;
+  let confirmed = null;
+  try { confirmed = sb.getConfirmedWeekStatus(week.weekId); } catch { confirmed = null; }
+  return confirmed || week.status;
+}
+// Reviewer round 3, item 5 (2026-09-26) — D-1: chrome icons come from the
+// Munera SVG family, not emoji. `icon`/`text` mirror js/week-wizard.js's own
+// FULL_STATUS_BUTTONS table EXACTLY (that table was copied verbatim from
+// THIS one — see its own header comment on the drift check); this is the
+// other half of that same pair, converted together so the two never drift
+// on which glyph a given transition uses.
 function renderWeekStatusButtons(week) {
   // All status transitions — Commissioner can go in any direction for corrections
   const t={
-    draft:  [{to:'open',  label:'📢 Open for Picks', cls:'btn-primary'}],
-    open:   [{to:'locked',label:'🔒 Lock Week',       cls:'btn-secondary'},
-             {to:'draft', label:'↩ Back to Draft',    cls:'btn-ghost'}],
-    locked: [{to:'live',  label:'▶️ Go Live',         cls:'btn-secondary'},
-             {to:'open',  label:'🔓 Re-open Picks',   cls:'btn-ghost'},
-             {to:'draft', label:'↩ Back to Draft',    cls:'btn-ghost'}],
-    live:   [{to:'final', label:'✅ Finalize',        cls:'btn-primary'},
-             {to:'locked',label:'⏸ Pause (Re-lock)',  cls:'btn-secondary'},
-             {to:'open',  label:'🔓 Re-open Picks',   cls:'btn-ghost'}],
-    final:  [{to:'live',  label:'↩ Reopen to Live',   cls:'btn-ghost'},
-             {to:'open',  label:'↩ Reopen to Open',   cls:'btn-ghost'}],
+    draft:  [{to:'open',  icon:'megaphone', text:'Open for Picks',  cls:'btn-primary'}],
+    open:   [{to:'locked',icon:'lock',      text:'Lock Week',       cls:'btn-secondary'},
+             {to:'draft', icon:'undo',      text:'Back to Draft',   cls:'btn-ghost'}],
+    locked: [{to:'live',  icon:'play',      text:'Go Live',         cls:'btn-secondary'},
+             {to:'open',  icon:'unlock',    text:'Re-open Picks',   cls:'btn-ghost'},
+             {to:'draft', icon:'undo',      text:'Back to Draft',   cls:'btn-ghost'}],
+    live:   [{to:'final', icon:'check',     text:'Finalize',        cls:'btn-primary'},
+             {to:'locked',icon:'pause',     text:'Pause (Re-lock)', cls:'btn-secondary'},
+             {to:'open',  icon:'unlock',    text:'Re-open Picks',   cls:'btn-ghost'}],
+    final:  [{to:'live',  icon:'undo',      text:'Reopen to Live',  cls:'btn-ghost'},
+             {to:'open',  icon:'undo',      text:'Reopen to Open',  cls:'btn-ghost'}],
   };
-  return(t[week.status]||[]).map(x=>`<button class="btn ${x.cls} btn-sm week-status-btn" data-to="${x.to}">${x.label}</button>`).join('');
+  // RG-251 — offered from the status the SERVER confirmed, never from a leg it refused; and in
+  // supabase data mode only the legs lock_week/transition_week/finalize_week accept (the three
+  // reversals transition_week() refuses — locked>draft, live>open, final>open — are dropped, the
+  // same narrowing the wizard's Manage screen already applies, DI-C1 §2.6). Local mode keeps the
+  // full correction table.
+  const from=serverConfirmedWeekStatus(week);
+  let rows=t[from]||[];
+  if(isSupabaseDataMode()){const ok=new Set(narrowedWeekStatusButtons(from).map(b=>b.to));rows=rows.filter(x=>ok.has(x.to));}
+  return rows.map(x=>`<button class="btn ${x.cls} btn-sm week-status-btn" data-to="${x.to}">${icon(x.icon)}${escHtml(x.text)}</button>`).join('');
 }
+/** RG-251 test-only seam — same `_xForTest` convention (authtest [44k2] phase 5). */
+export const _renderWeekStatusButtonsForTest = renderWeekStatusButtons;
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
 
@@ -13841,10 +16120,10 @@ function showCreateWeekModal() {
     <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="cw-end" type="date" /></div>
     <div class="form-group"><label class="form-label">Data Source</label>
       <select class="form-select" id="cw-mode">
-        <option value="espn_live">📡 ESPN Live</option>
-        <option value="espn_historical">📅 ESPN Historical</option>
-        <option value="manual">✏️ Manual</option>
-        <option value="demo">📋 Demo</option>
+        <option value="espn_live">ESPN Live</option>
+        <option value="espn_historical">ESPN Historical</option>
+        <option value="manual">Manual</option>
+        <option value="demo">Demo</option>
       </select></div>
     <button class="btn btn-primary btn-block" id="cw-save">Create Week</button>
   </div>`;
@@ -14825,6 +17104,52 @@ export function renderGameRequestsAdminSectionHTML(week, availGames = [], slateG
       </div>`;
 }
 
+/**
+ * UX Revamp Group A1 (DI-304, wiring pass 1, 2026-09-25) — extracted out of
+ * renderRulesPage()'s own inline markup (it used to be a `.feedback-card`
+ * div built directly inside that function's template literal, unlike
+ * renderGameRequestCardHTML() above, which was already its own function).
+ * Every id below is preserved VERBATIM — bindFeedbackKindToggle() (queries
+ * `#fb-kind-group .pick-btn`) and the `#fb-submit-btn`/submitFeedback()
+ * click handler both look these ids up by document.getElementById/
+ * querySelector, which works identically regardless of which page's DOM
+ * subtree this card is actually painted into (the control-center drawer's
+ * Feedback accordion row, or the Settings page's own host — DI-303's "one
+ * render function, two hosts"). Mirrors renderGameRequestCardHTML()'s own
+ * shape exactly: a plain function returning markup, no DOM access itself.
+ */
+export function renderFeedbackCardHTML() {
+  return `<div class="card feedback-card">
+      <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
+      <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
+      <div class="form-group" style="margin-bottom:8px">
+        <label class="form-label" style="font-size:.7rem">Your name</label>
+        <input class="form-input" id="fb-name" type="text" value="${escHtml(getCurrentPlayerName())}" />
+      </div>
+      <div class="form-group" style="margin-bottom:8px">
+        <label class="form-label" style="font-size:.7rem">Description</label>
+        <textarea class="form-input" id="fb-body" rows="3" placeholder="What's the request, bug, or idea?"></textarea>
+      </div>
+      <div class="form-group" style="margin-bottom:8px">
+        <label class="form-label" style="font-size:.7rem">Type</label>
+        <div class="pick-buttons" id="fb-kind-group" style="margin-top:6px">
+          <button type="button" class="pick-btn" data-fb-kind="bug">🐛 Something's broken</button>
+          <button type="button" class="pick-btn" data-fb-kind="feature">💡 New idea</button>
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="flex gap-sm" style="align-items:center;cursor:pointer;font-size:.78rem;color:var(--text-secondary)">
+          <input type="checkbox" id="fb-also-email" />
+          <span>📧 Also email this to the Commissioner <span class="text-muted">— for urgent issues only</span></span>
+        </label>
+      </div>
+      <div class="flex gap-sm flex-wrap">
+        <button class="btn btn-primary btn-sm" id="fb-submit-btn">📨 Submit Feedback</button>
+        <span class="text-muted text-xs" id="fb-status"></span>
+      </div>
+    </div>`;
+}
+
 export function renderRulesPage() {
   const c=document.getElementById('page-rules'); if(!c)return;
   const rules=getSettings().customRules||DEFAULT_RULES;
@@ -14899,7 +17224,7 @@ export function renderRulesPage() {
       ${rules.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
         <ul class="rules-list">${s.items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>
       </div><div class="divider"></div>`).join('')}
-      <div class="rules-section"><h3>⭐ Alma Maters</h3>
+      <div class="rules-section"><h3>${icon('almaMater')} Alma Maters</h3>
         <ul class="rules-list">${claimedAlmaMaters().map(am=>`<li>${escHtml(am)}</li>`).join('')}</ul>
       </div>
       <div class="divider"></div>
@@ -14928,43 +17253,6 @@ export function renderRulesPage() {
          collide with the locked Chat/Locker-Room split otherwise). -->
     ${renderScribeTrainingCardHTML()}
 
-    ${/* FEAT-2 / DI-175a (UN-175) — the game-request card sits immediately
-         ABOVE the feedback card: the same KIND of act (a player sending the
-         commissioner something to act on), in the place that already holds
-         that vocabulary. The release-notes card stays below, above the
-         version footer. */''}
-    ${renderGameRequestCardHTML()}
-
-    <div class="card feedback-card">
-      <h3 style="color:var(--maroon);margin-bottom:6px;font-size:.95rem">💡 Suggest a feature / report an issue</h3>
-      <p class="text-muted text-xs mb-sm">Quick way to log an idea or a bug — it's recorded and the Commissioner reviews it. Auto-fills your name, the date, and the app version.</p>
-      <div class="form-group" style="margin-bottom:8px">
-        <label class="form-label" style="font-size:.7rem">Your name</label>
-        <input class="form-input" id="fb-name" type="text" value="${escHtml(getCurrentPlayerName())}" />
-      </div>
-      <div class="form-group" style="margin-bottom:8px">
-        <label class="form-label" style="font-size:.7rem">Description</label>
-        <textarea class="form-input" id="fb-body" rows="3" placeholder="What's the request, bug, or idea?"></textarea>
-      </div>
-      <div class="form-group" style="margin-bottom:8px">
-        <label class="form-label" style="font-size:.7rem">Type</label>
-        <div class="pick-buttons" id="fb-kind-group" style="margin-top:6px">
-          <button type="button" class="pick-btn" data-fb-kind="bug">🐛 Something's broken</button>
-          <button type="button" class="pick-btn" data-fb-kind="feature">💡 New idea</button>
-        </div>
-      </div>
-      <div class="form-group" style="margin-bottom:10px">
-        <label class="flex gap-sm" style="align-items:center;cursor:pointer;font-size:.78rem;color:var(--text-secondary)">
-          <input type="checkbox" id="fb-also-email" />
-          <span>📧 Also email this to the Commissioner <span class="text-muted">— for urgent issues only</span></span>
-        </label>
-      </div>
-      <div class="flex gap-sm flex-wrap">
-        <button class="btn btn-primary btn-sm" id="fb-submit-btn">📨 Submit Feedback</button>
-        <span class="text-muted text-xs" id="fb-status"></span>
-      </div>
-    </div>
-
     ${/* FEAT-3 / DI-201a (UN-201) — the release history, immediately above the
          version/date footer: the number and its history belong within a thumb's
          reach of each other, at the bottom of a tab players reach deliberately.
@@ -14977,11 +17265,11 @@ export function renderRulesPage() {
       ${escHtml(getShellBrandName())} ${escHtml(APP_VERSION)} · ${escHtml(APP_VERSION_DATE)}
     </div>`;
 
-  // Wire feedback handler (Priority 13)
-  document.getElementById('fb-submit-btn')?.addEventListener('click', submitFeedback);
-  bindFeedbackKindToggle();
   bindScribeReportRowHandlers();   // Build 2b, E5a
-  bindGameRequestCard();           // FEAT-2 / UN-175
+  // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
+  // comment; structural repaint coverage for Rules.
+  renderPausedLeagueBannerIfNeeded('rules');
+  renderMaintenanceBannerIfNeeded('rules');
 }
 
 /**
@@ -14990,10 +17278,28 @@ export function renderRulesPage() {
  * two buttons carries .selected at a time, never both, never zero once
  * clicked (radio behavior, per Drew's ruling — not independent checkboxes).
  */
-function bindFeedbackKindToggle() {
-  document.querySelectorAll('#fb-kind-group .pick-btn').forEach(btn => {
+/**
+ * Reviewer BLOCK (2026-09-25), F6 — `scopeEl` defaults to `document` so
+ * every existing call/test (unscoped, one host at a time) is unaffected;
+ * the drawer/Settings-page dual-host call site (bindControlCenterBodies())
+ * passes its own resolved container instead. `_fbField`/`_fbFields` below
+ * mirror `_prefsField`'s own document-vs-container split exactly (chat-ui.js,
+ * NOTE 4) — `document.getElementById`/`document.querySelectorAll` when
+ * scoped to the whole document (matches every test fixture in this repo,
+ * none of which implement a working `Element.querySelector`), real
+ * `Element.querySelector`/`querySelectorAll` scoping otherwise.
+ */
+function _fbField(root, id) {
+  return root === document ? document.getElementById(id) : (root?.querySelector?.(`#${id}`) || null);
+}
+function _fbFields(root, sel) {
+  return root === document ? [...document.querySelectorAll(sel)] : [...(root?.querySelectorAll?.(sel) || [])];
+}
+function bindFeedbackKindToggle(scopeEl = document) {
+  const root = scopeEl && (typeof scopeEl.querySelectorAll === 'function') ? scopeEl : document;
+  _fbFields(root, '#fb-kind-group .pick-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      document.querySelectorAll('#fb-kind-group .pick-btn').forEach(b => b.classList.toggle('selected', b === btn));
+      _fbFields(root, '#fb-kind-group .pick-btn').forEach(b => b.classList.toggle('selected', b === btn));
     });
   });
 }
@@ -15021,20 +17327,30 @@ function getCurrentPlayerName() {
  *   defaulted OFF — every previous revision fired mailto: unconditionally,
  *   which is exactly what Drew's feedback asked to stop). Email is not
  *   removed as a capability, only made opt-in for the urgent case.
+ *
+ * Reviewer BLOCK (2026-09-25), F6 — `scopeEl` defaults to `document`
+ * (unscoped, matching every existing call/test), same pattern as
+ * `bindFeedbackKindToggle()` immediately above and `bindPrefsPanel()`
+ * (chat-ui.js, security fix round NOTE 4). The drawer/Settings-page dual-
+ * host call site (bindControlCenterBodies()) passes its own container.
  */
-export function submitFeedback() {
-  const name = (document.getElementById('fb-name')?.value || '').trim();
-  const body = (document.getElementById('fb-body')?.value || '').trim();
-  const status = document.getElementById('fb-status');
+export function submitFeedback(scopeEl = document) {
+  const root = scopeEl && typeof scopeEl.querySelector === 'function' ? scopeEl : document;
+  const fld = (id) => _fbField(root, id);
+  const name = (fld('fb-name')?.value || '').trim();
+  const body = (fld('fb-body')?.value || '').trim();
+  const status = fld('fb-status');
   if (!body) { showToast('Please describe the request or issue first','error'); return; }
   // UN-122 (Drew's ruling) — submission is BLOCKED until Bug/New idea is
   // chosen; never silently default to 'unspecified' at entry time. That
   // label is reserved for LEGACY rows that predate this field existing
   // (CONVENTIONS #10 — default-when-missing on READ, not a write-time guess).
-  const kindBtn = document.querySelector('#fb-kind-group .pick-btn.selected');
+  const kindBtn = root === document
+    ? document.querySelector('#fb-kind-group .pick-btn.selected')
+    : (root?.querySelector?.('#fb-kind-group .pick-btn.selected') || null);
   const kind = kindBtn?.dataset.fbKind || null;
   if (!kind) { showToast('Please choose Bug or New idea first','error'); return; }
-  const alsoEmail = !!document.getElementById('fb-also-email')?.checked;
+  const alsoEmail = !!fld('fb-also-email')?.checked;
   const entry = {
     id: 'fb_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
     name: name || '(anonymous)',
@@ -15065,9 +17381,10 @@ export function submitFeedback() {
     : commEmail
       ? '✅ Saved + opening mail client'
       : '✅ Saved. (No Commissioner email set yet — ask them to add one in Comm → Security.)';
-  document.getElementById('fb-body').value = '';
-  document.querySelectorAll('#fb-kind-group .pick-btn').forEach(b => b.classList.remove('selected'));
-  const emailBox = document.getElementById('fb-also-email');
+  const bodyField = fld('fb-body');
+  if (bodyField) bodyField.value = '';
+  _fbFields(root, '#fb-kind-group .pick-btn').forEach(b => b.classList.remove('selected'));
+  const emailBox = fld('fb-also-email');
   if (emailBox) emailBox.checked = false;   // reset to the default-OFF state for the next submission
   showToast('Thanks! Feedback recorded.','success');
 }
@@ -15542,7 +17859,7 @@ export function renderScribeParticipationCardHTML() {
   const unlimited = pacing.hourlyLimit === 0;
   const serverOn = isServerScribeAutonomousOn();
   return `
-    <div class="admin-section" data-comm-tab="settings">
+    <div class="admin-section" data-comm-tab="scribe">
       <div class="admin-section-title">🎚 SCRIBE Participation</div>
       <div class="card mb-md" id="comm-scribe-participation-card">
         <p class="text-muted text-xs mb-sm">How often SCRIBE jumps into the conversation on its own. Direct @SCRIBE questions always get answered regardless of this setting.</p>
@@ -15612,7 +17929,7 @@ export function renderScribeHeatCardHTML() {
         </button>`).join('');
   const copy = HEAT_COPY.find(o => o.level === level) || {};
   return `
-    <div class="admin-section" data-comm-tab="settings">
+    <div class="admin-section" data-comm-tab="scribe">
       <div class="admin-section-title">🌶 SCRIBE Heat</div>
       <div class="card mb-md" id="comm-scribe-heat-card">
         <p class="text-muted text-xs mb-sm">How hard SCRIBE is allowed to hit. This is separate from how OFTEN it talks — raising the heat never makes it post more.</p>
@@ -15725,14 +18042,11 @@ export function renderScribeModelCardHTML() {
         </button>`).join('');
   const label = (SCRIBE_MODEL_OPTIONS.find(o => o.value === current) || {}).label || current;
   return `
-    <div class="admin-section" data-comm-tab="settings">
-      <div class="admin-section-title">🧠 SCRIBE Model</div>
-      <div class="card mb-md" id="comm-scribe-model-card">
+      <div id="comm-scribe-model-card">
         <p class="text-muted text-xs mb-sm">Which model writes SCRIBE's lines. Opus is sharper and costs about 2.5× as much per reply; it is used by @SCRIBE replies, unprompted posts and the Trainer alike.</p>
         <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE model">${options}</div>
         <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $25/month budget still stops SCRIBE either way — on Opus it is reached about 2.5× sooner.</p>
-      </div>
-    </div>`;
+      </div>`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -15785,7 +18099,7 @@ export function renderScribeLearningRateCardHTML() {
     : `A lesson needs ${cfg.instantAgreeThreshold === 1 ? 'one signal' : `${cfg.instantAgreeThreshold} people to agree`}; `
       + `the full review runs ${cfg.trainerCadence} and needs at least ${cfg.minRated} rated post${cfg.minRated === 1 ? '' : 's'} to have anything to look at.`;
   return `
-    <div class="admin-section" data-comm-tab="settings">
+    <div class="admin-section" data-comm-tab="scribe">
       <div class="admin-section-title">🎓 SCRIBE Learning Rate</div>
       <div class="card mb-md" id="comm-scribe-learning-rate-card">
         <p class="text-muted text-xs mb-sm">How fast feedback changes SCRIBE. This is separate from how hard it hits and how often it talks — turning it up does not make SCRIBE meaner, it makes it change its mind sooner.</p>
@@ -16041,9 +18355,6 @@ export function renderScribeTrainerAdminSectionHTML() {
     : '<p class="text-muted text-xs">💵 Monthly SCRIBE spend loads with the Background Jobs card below.</p>';
 
   return `
-    <div class="admin-section" data-comm-tab="data">
-      <div class="admin-section-title">🧠 SCRIBE Training</div>
-      <div class="card">
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
           <p class="text-muted text-xs" style="margin:0">Periodic snapshot, not live — see the "as of" stamp below.</p>
           <button class="btn btn-primary btn-sm" id="scribe-run-trainer-btn">▶ Run Trainer now</button>
@@ -16058,9 +18369,7 @@ export function renderScribeTrainerAdminSectionHTML() {
           <button class="btn btn-secondary btn-sm" id="scribe-export-learnings-btn">📤 Export for SCRIBE.md</button>
           <button class="btn btn-ghost btn-sm" id="scribe-reset-learnings-btn">♻️ Reset everything SCRIBE has learned</button>
         </div>
-        <p class="text-muted text-xs">Reset shows you the export first, then switches every learning and Canon entry off. Nothing is deleted — the rows stay for the record.</p>
-      </div>
-    </div>`;
+        <p class="text-muted text-xs">Reset shows you the export first, then switches every learning and Canon entry off. Nothing is deleted — the rows stay for the record.</p>`;
 }
 
 /** The commissioner's own monthly cap, read through the seam. Same default and
@@ -16321,6 +18630,52 @@ const SERVER_JOB_BUILT = Object.freeze({ notifyFanout: true, keepalive: true, re
  *  it is a way to notice a dead cron job around Thanksgiving having been
  *  broken since Week 1. */
 const SERVER_JOB_CADENCE_MIN = Object.freeze({ reminders: 5, keepalive: 360 });
+/**
+ * RG-253 (live, game day 2026-09-26) — JOBS WHOSE RUNS THIS CARD CANNOT SEE.
+ *
+ * Drew's card read "Keep-alive heartbeat — Switched on 2d ago, still no run — expected every 360
+ * min. This job may be dead." The heartbeat writes its `job_runs` rows with `league_id` NULL on
+ * purpose (supabase/functions/keepalive/index.js step 4 — it is a property of the PROJECT, not of
+ * the league whose switch turned it on), and this card's only read, `getJobRuns()` (js/auth.js),
+ * asks for `.eq('league_id', leagueId)`. `NULL = x` is never true in SQL, so no viewer at all —
+ * commissioner OR platform admin, whatever `job_runs_select` (0012) would allow — can receive a
+ * keepalive row through this card. The "never ran" branch below then escalated a job the card is
+ * structurally blind to. Being a platform admin does not change that, so the copy does not branch
+ * on the viewer's role: it says what is true for everybody who can open this card.
+ *
+ * FORWARD-COMPATIBLE BY CONSTRUCTION: only the "no row" branch is replaced. If a platform-scoped
+ * read is ever added and a keepalive row DOES arrive, every ordinary branch — including the
+ * staleness escalation — applies to it unchanged (bgjobscardtest.mjs [2]).
+ */
+const SERVER_JOB_PLATFORM_SCOPED = Object.freeze({ keepalive: true });
+const PLATFORM_SCOPED_COPY = "runs project-wide, so its heartbeat isn't logged under this league and can't be shown here. Check it in Supabase (job_runs, job = 'keepalive').";
+/**
+ * ESPN-CLASS (DI note) (live, game day 2026-09-26) — WHICH ESPN FAILURE, in this file's own words.
+ *
+ * `scores-refresh` now records the failure CLASS as fixed-name integer counts plus the bare HTTP
+ * status (supabase/functions/_shared/job-rules.mjs `espnFetchFailureCounts()`), because
+ * "FAILED — espn_fetch_failed" could not tell a refusal from an outage from a timeout. Every phrase
+ * here is ours; the only value read out of the row is `failHttpStatus`, and only when it is an
+ * INTEGER in [100,599] — anything else is dropped, never rendered. A row without the keys returns
+ * '' and renders exactly the line it always did.
+ */
+const ESPN_FAILURE_PHRASES = Object.freeze([
+  ['failHttp4xx', 'ESPN refused the request'],
+  ['failHttp5xx', 'ESPN had a server error'],
+  ['failTimeout', 'ESPN did not answer in time'],
+  ['failNetwork', 'could not reach ESPN'],
+  ['failParse', "ESPN's reply was not readable"],
+  ['failTooLarge', "ESPN's reply was over the size cap"],
+  ['failNoEvents', 'ESPN returned no games'],
+]);
+function espnFailureDetail(payload) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const parts = ESPN_FAILURE_PHRASES.filter(([k]) => Number.isInteger(p[k]) && p[k] > 0).map(([, phrase]) => phrase);
+  if (!parts.length) return '';
+  const status = p.failHttpStatus;
+  const statusOk = Number.isInteger(status) && status >= 100 && status <= 599;
+  return `${parts.join('; ')}${statusOk ? ` (HTTP ${status})` : ''}`;
+}
 // ═══ BEGIN STEP 6 PHASE 4 (trainer) — LOW-FREQUENCY JOBS NEED A DIFFERENT RULE ═══
 /**
  * `SERVER_JOB_CADENCE_MIN`'s "3x cadence" rule is right for anything that fires at least daily —
@@ -16556,7 +18911,7 @@ function _bgJobTimeAgo(iso, now = Date.now()) {
  * Exported for the same reason `renderFeedbackAdminSectionHTML` is: a test
  * seam that does not require the DOM.
  */
-export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) {
+export function renderBackgroundJobsAdminSectionHTML({ now = Date.now(), pilot = false } = {}) {
   // `now` IS A TEST SEAM AND NOTHING ELSE — production calls this with no
   // argument and gets the wall clock it always had. It exists because the
   // staleness sentences below are the only thing on this card that depends on
@@ -16575,9 +18930,18 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
     (rowsByJob[r.job] = rowsByJob[r.job] || []).push(r);
   }
 
+  // N-4 (WIRING_CHECKLIST_B_092526.md) — the `trainer` job is pilot-gated
+  // server-side (DI-318 §2c.4/N5, SCRIBE v3's function bodies); this card's
+  // toggle must not offer a control that would only be refused after the
+  // tap. Disabled state per the Interaction Principles' "disabled controls"
+  // pattern, static copy — not a live isPilotLeague() read every row (only
+  // `trainer` cares), and never a silent no-op.
+  const PILOT_ONLY_COPY = 'This feature is only available to the pilot league.';
+
   const rowsHtml = SERVER_JOB_NAMES.map((job) => {
+    const pilotLocked = job === 'trainer' && !pilot;
     const on = bag[job] === true;
-    const built = !!SERVER_JOB_BUILT[job];
+    const built = !!SERVER_JOB_BUILT[job] && !pilotLocked;
     const label = SERVER_JOB_LABELS[job] || job;
     const last = (rowsByJob[SERVER_JOB_RUN_NAME[job] || job] || [])[0] || null;
     // Step 6 Phase 4 (trainer) — `jobOverdueMs()`/`jobCadenceLabel()` unify the short-cadence
@@ -16589,10 +18953,17 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
 
     let statusLine;
     let failed = false;
-    if (!built) {
+    if (pilotLocked) {
+      statusLine = PILOT_ONLY_COPY;
+    } else if (!built) {
       statusLine = 'Not built yet — a later phase adds this.';
     } else if (!on) {
       statusLine = "Off — the app's own path is handling this.";
+    } else if (!last && SERVER_JOB_PLATFORM_SCOPED[job]) {
+      // RG-253 — no row is what this card ALWAYS gets for a platform-scoped job, so silence here
+      // is not evidence of anything. Say so, keep the flip time, and never paint it as a failure.
+      const flippedAtPs = flippedAtBag[job];
+      statusLine = `Switched on${flippedAtPs ? ` ${_bgJobTimeAgo(flippedAtPs, now)}` : ''} · ${PLATFORM_SCOPED_COPY}`;
     } else if (!last) {
       // REVIEWER R1 — a job that has NEVER run could otherwise say "has not run
       // yet" forever, which is exactly Phase 2's likeliest failure (cron/Vault
@@ -16620,7 +18991,9 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
       statusLine = `Last ran ${_bgJobTimeAgo(last.startedAt, now)} · FAILED — no result recorded`;
     } else if (!last.ok) {
       failed = true;
-      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)} · FAILED — ${String(last.error || 'unknown error').slice(0, 140)}`;
+      // ESPN-CLASS (DI note) — the ESPN failure class, when the row carries it; '' (unchanged line) otherwise.
+      const failDetail = espnFailureDetail(last.payload);
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)} · FAILED — ${String(last.error || 'unknown error').slice(0, 140)}${failDetail ? ` · ${failDetail}` : ''}`;
     } else if (last.skipped) {
       statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)} · nothing to do`;
     } else {
@@ -16643,8 +19016,15 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
       // did, drops the structures that used to come out as "[object Object]",
       // and spells out the push outcome that `pushed: N` on its own could not:
       // that number meant "OneSignal returned HTTP 200" for two days.
-      const counts = jobCountsSummary(last.payload || {});
-      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)}${actorName ? ` · by ${actorName}` : ''}${counts ? ` · ${counts}` : ''}`;
+      // ESPN-CLASS (DI note), hardening pass — an OK run can still carry fail* keys (one sport
+      // bucket failed, another updated). jobCountsSummary() would print them as raw key names,
+      // so they are held back from the counts and rendered once, in words, after them.
+      const countsPayload = { ...(last.payload || {}) };
+      for (const [k] of ESPN_FAILURE_PHRASES) delete countsPayload[k];
+      delete countsPayload.failHttpStatus;
+      const counts = jobCountsSummary(countsPayload);
+      const okFailDetail = espnFailureDetail(last.payload);
+      statusLine = `Last ran ${_bgJobTimeAgo(last.finishedAt, now)}${actorName ? ` · by ${actorName}` : ''}${counts ? ` · ${counts}` : ''}${okFailDetail ? ` · ${okFailDetail}` : ''}`;
     }
     // Staleness — the failure mode `job_runs` exists to make visible at all:
     // a scheduled job that has quietly stopped running looks, to every OTHER
@@ -16664,7 +19044,7 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
           <div>${escHtml(label)}</div>
           <div class="text-xs" style="${failed ? 'color:var(--loss)' : 'color:var(--text-muted)'}">${escHtml(statusLine)}</div>
         </div>
-        <label style="min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;flex-shrink:0" title="${built ? '' : escHtml('Not built yet')}">
+        <label style="min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;flex-shrink:0" title="${pilotLocked ? escHtml(PILOT_ONLY_COPY) : (built ? '' : escHtml('Not built yet'))}">
           <input type="checkbox" class="server-job-toggle" data-job="${escHtml(job)}" ${on ? 'checked' : ''} ${built ? '' : 'disabled'} style="width:22px;height:22px">
         </label>
       </div>`;
@@ -16675,18 +19055,13 @@ export function renderBackgroundJobsAdminSectionHTML({ now = Date.now() } = {}) 
     : '';
 
   return `
-    <div class="admin-section" data-comm-tab="data">
-      <div class="admin-section-title">🛠 Background jobs</div>
-      <div class="card">
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
           <p class="text-muted text-xs" style="margin:0">Server-side jobs on Supabase, replacing the old Google Sheet triggers one at a time. Off means the app's own client-side path is still doing the work.</p>
           <button class="btn btn-secondary btn-sm" id="background-jobs-refresh-btn">🔄 Refresh</button>
         </div>
         ${rowsHtml}
         ${errorHtml}
-        ${renderPushSelfTestHTML()}
-      </div>
-    </div>`;
+        ${renderPushSelfTestHTML()}`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -16856,18 +19231,23 @@ async function handleSendTestPush() {
   //
   // Nothing is inserted: we do not call `sendTestPush()` at all, so no private message is written
   // to the Locker Room for a push that provably cannot follow it.
+  // REVIEWER Minor (2026-09-25) — this card (Background Jobs / Send Test
+  // Push) moved to the Admin panel (DI-320); every repaint in this function
+  // must target #page-admin now, gated the same way as every other
+  // renderAdminPage() call site this window (SECURITY GATE S-1) — never
+  // repaint a page the commissioner has navigated away from.
   if (!isServerJobEnabled('notifyFanout')) {
     _pushSelfTest = { ..._pushSelfTest, busy: '', result: serverPushOffCopy() };
-    renderCommPage();
+    if (state.currentTab === 'admin') renderAdminPage();
     return;
   }
   _pushSelfTest = { ..._pushSelfTest, busy: 'test', result: null, breakdown: null, breakdownOpen: false };
-  renderCommPage();
+  if (state.currentTab === 'admin') renderAdminPage();
   const sentAtIso = new Date().toISOString();
   const sent = await sendTestPush();
   if (!sent.ok) {
     _pushSelfTest = { ..._pushSelfTest, busy: '', result: testPushRefusalCopy(sent) };
-    renderCommPage();
+    if (state.currentTab === 'admin') renderAdminPage();
     return;
   }
   const run = await pollTestPushResult(getActiveLeagueId(), sent.id);
@@ -16886,7 +19266,12 @@ async function handleSendTestPush() {
   // The run we just found is also the freshest eligibility data DI-206's merge
   // reads, so pull the card's job history forward rather than leaving it a
   // minute stale.
-  renderCommPage();
+  //
+  // UX Revamp wiring pass 2 (2026-09-25) — this card (and the Send Test Push
+  // control that reaches this handler) moved to the Admin panel (DI-320);
+  // refreshBackgroundJobsCard() itself now re-paints #page-admin, so the
+  // explicit renderCommPage() immediately before it (which would repaint a
+  // page that no longer carries this card at all) is removed.
   refreshBackgroundJobsCard();
 }
 
@@ -16894,11 +19279,13 @@ async function handleSendTestPush() {
  *  is nothing to poll for, because nothing happens out of band. */
 async function handlePushReachCheck() {
   if (_pushSelfTest.busy) return;
+  // REVIEWER Minor (2026-09-25) — same card-moved-to-Admin fix as
+  // handleSendTestPush(), immediately above.
   _pushSelfTest = { ..._pushSelfTest, busy: 'reach', reach: null };
-  renderCommPage();
+  if (state.currentTab === 'admin') renderAdminPage();
   const res = await checkPushReach();
   _pushSelfTest = { ..._pushSelfTest, busy: '', reach: res };
-  renderCommPage();
+  if (state.currentTab === 'admin') renderAdminPage();
 }
 
 /** DI-218's read. Fire-and-forget from the card's own refresh; a failure leaves
@@ -16907,7 +19294,9 @@ export async function refreshMemberAppVersions() {
   if (!isSupabaseDataMode() || !getActiveLeagueId()) return;
   const rows = await fetchMemberAppVersions();
   _pushSelfTest = { ..._pushSelfTest, versions: rows };
-  renderCommPage();
+  // REVIEWER Minor (2026-09-25) — same card-moved-to-Admin fix as the other
+  // push-self-test handlers above.
+  if (state.currentTab === 'admin') renderAdminPage();
 }
 
 /**
@@ -16940,7 +19329,15 @@ export async function refreshBackgroundJobsCard({ rerender = true } = {}) {
   if (_pushSelfTest.versions === null) {
     refreshMemberAppVersions().catch(() => { _pushSelfTest = { ..._pushSelfTest, versions: [] }; });
   }
-  if (rerender) renderCommPage();
+  // UX Revamp wiring pass 2 (2026-09-25) — Background Jobs moved to the
+  // Admin panel (DI-320); this re-paint must land on #page-admin now, never
+  // #page-commissioner (which no longer renders this card at all).
+  // SECURITY GATE, S-1 (2026-09-25) — this call can land up to ~30s after a
+  // test push poll started; a commissioner who navigated to the Comm tab in
+  // that window must not have #page-commissioner wiped by a repaint of a
+  // page they can no longer see (renderAdminPage()'s own shield fix, above,
+  // is the belt; this is the suspenders — never even call it off-tab).
+  if (rerender && state.currentTab === 'admin') renderAdminPage();
 }
 
 /**
@@ -16953,16 +19350,11 @@ export async function refreshBackgroundJobsCard({ rerender = true } = {}) {
  */
 export function renderFeedbackAdminSectionHTML() {
   return `
-    <div class="admin-section" data-comm-tab="data">
-      <div class="admin-section-title">🗣 Feedback &amp; Bug Reports</div>
-      <div class="card">
         <div class="flex-between mb-sm" style="align-items:flex-start;gap:8px">
           <p class="text-muted text-xs" style="margin:0">Everything submitted from the Rules tab's feedback box, newest first.</p>
           <button class="btn btn-secondary btn-sm" id="export-feedback-csv-btn">📥 Feedback CSV</button>
         </div>
-        <div class="feedback-admin-list">${renderFeedbackAdmin()}</div>
-      </div>
-    </div>`;
+        <div class="feedback-admin-list">${renderFeedbackAdmin()}</div>`;
 }
 
 // ─── v0.16.0 COMMISSIONER EXTRAS (Extra Point + Chat / SCRIBE) ────────────────
@@ -17059,12 +19451,11 @@ function renderCommExtrasV16(week, games) {
   if (!session.isAdmin) return;
 
   const epHTML = renderCommExtraPointCardHTML(week);
-  // Insert the Extra Point card BEFORE the Demo Simulation section so the demo
-  // panel remains the LAST item in the Week tab.
-  const demoSection = [...c.querySelectorAll('.admin-section[data-comm-tab="week"]')]
-    .find(s => s.textContent.includes('Demo Simulation'));
-  if (demoSection) demoSection.insertAdjacentHTML('beforebegin', epHTML);
-  else c.insertAdjacentHTML('beforeend', epHTML);
+  // Demo Simulation moved to Admin → Week (DI-320, UX Revamp wiring pass
+  // 3a) — it no longer renders on #page-commissioner at all, so there is no
+  // section left to insert the Extra Point card before. Append; its own
+  // `data-comm-tab="week"` wrapper still confines it to the Week tab.
+  c.insertAdjacentHTML('beforeend', epHTML);
 
   {
     // Item A — commissioner chat on/off toggle. Placement: TOP of this
@@ -17097,7 +19488,7 @@ function renderCommExtrasV16(week, games) {
     // directly (scribeLearningsEnabled_()), no Script Property involved.
     const scribeLearningsOn = isScribeLearningsEnabled();
     c.insertAdjacentHTML('beforeend', `
-    <div class="admin-section" data-comm-tab="settings">
+    <div class="admin-section" data-comm-tab="scribe">
     <div class="card mb-md" id="comm-chat-card">
       <h3 style="color:var(--maroon)">📋 Chat &amp; S.C.R.I.B.E.</h3>
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
@@ -17187,12 +19578,10 @@ function renderCommExtrasV16(week, games) {
     // commissioner who wants SCRIBE to shut up occasionally must never reach for
     // the heat control to do it (docs/SCRIBE.md §8).
     c.insertAdjacentHTML('beforeend', renderScribeHeatCardHTML());
-    // DI-282 (2026-09-23) — the MODEL toggle, third and last of the SCRIBE
-    // dials on this tab: how often (Participation), how hard (Heat), which
-    // brain (Model). Its own card for the reason its docstring gives — it is
-    // the only one of the three that costs money, and a cost sentence under the
-    // heat copy would read as a warning about heat.
-    c.insertAdjacentHTML('beforeend', renderScribeModelCardHTML());
+    // DI-282's SCRIBE Model card MOVED to the Admin panel (UX Revamp wiring
+    // pass 2, 2026-09-25 — coordinator ruling: "Account Linking and SCRIBE
+    // Model cards move to Admin"). renderScribeModelCardHTML() is now called
+    // from renderAdminPage() instead; NOT inserted here.
     // DI-274 (2026-09-23) — the LEARNING RATE dial, fourth and last. How often
     // (Participation), how hard (Heat), which brain (Model), how fast it changes
     // its mind (Learning Rate). Its own card for the same reason the other three
@@ -17278,20 +19667,10 @@ function renderCommExtrasV16(week, games) {
       renderCommPage();
     });
   });
-  // ── DI-282 — the MODEL toggle (SCRIBE v3, 2026-09-23) ──
-  // Wired exactly like the two dials above: the write refuses an unknown id
-  // (`setScribeModel`), the toast names what landed, and the page re-renders so
-  // the selected state comes from the STORED value rather than from the click —
-  // which is what makes a failed write visible instead of merely unacknowledged.
-  document.querySelectorAll('[data-scribe-model]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const id = btn.dataset.scribeModel;
-      if (!setScribeModel(id).ok) return;
-      const opt = SCRIBE_MODEL_OPTIONS.find(o => o.value === id);
-      showToast(`🧠 SCRIBE model: ${opt ? opt.label : id}`, 'success');
-      renderCommPage();
-    });
-  });
+  // DI-282's MODEL-toggle binding MOVED to bindScribeModelControl() (UX
+  // Revamp wiring pass 2, 2026-09-25) — the SCRIBE Model card itself moved
+  // to the Admin panel (Account Linking/SCRIBE Model, coordinator ruling),
+  // so its own save-refresh must re-render #page-admin, not #page-commissioner.
   // ── DI-274 — the LEARNING RATE dial (SCRIBE v3, Package C, 2026-09-23) ──
   // Wired exactly like the three dials above: the write refuses an unknown
   // level (`setScribeLearningRate`), the toast names what landed, and the page
@@ -18028,6 +20407,12 @@ export function setupAutoRefresh() {
  * interval. So this function keeps the data fresh but intentionally does NOT
  * re-render Picks; it re-renders only the dashboard, which is safe to rebuild.
  */
+// Security N2 on 6178906 (2026-09-26) — ONE ROUND AT A TIME. setInterval fires on schedule whether or
+// not the previous round finished; a round still awaiting ESPN (bounded: resilientFetch aborts at
+// FETCH_TIMEOUT_MS per attempt) makes the next one return at once rather than stacking behind it and
+// bursting when the link settles. The status tick is never held by this: it runs off the hydrate's
+// own promise (below), not off the round.
+let _autoRefreshInFlight = false;
 export async function runAutoRefreshTick() {
   // ── SECURITY S-2 — A HELD DEVICE DOES NOT TICK ────────────────────────────
   // This is the timer that undid A6's teardown ~60 seconds after the gate went
@@ -18040,6 +20425,9 @@ export async function runAutoRefreshTick() {
   // belt to that braces, and it is the half that covers the no-session case
   // where no hold gate exists.)
   if (isContentWithheld()) return;
+  if (_autoRefreshInFlight) { console.info('[autoRefresh] the previous round is still running — this one is skipped, not queued.'); return; }
+  _autoRefreshInFlight = true;
+  try {
   // ══ DI §7.1 / §5.3 — THE TICK IN SUPABASE DATA MODE ═══════════════════════
   //
   // Two jobs, in this order, and the ORDER matters.
@@ -18055,6 +20443,7 @@ export async function runAutoRefreshTick() {
   //     is not LIVE, or the last hydrate is stale, the tick re-selects. A LIVE
   //     channel with a recent hydrate skips it, so six phones do not each run a
   //     league select every minute for nothing.
+  let statusTickRidesHydrate = false;
   if (isSupabaseDataMode()) {
     const st = sb.getStatus();
     if (st.state === 'OFFLINE-READONLY' || st.state === 'HELD') {
@@ -18064,7 +20453,21 @@ export async function runAutoRefreshTick() {
     const lastAt = st.lastSyncAt ? Date.parse(st.lastSyncAt) : 0;
     const stale = !lastAt || (Date.now() - lastAt) > SUPABASE_TICK_REHYDRATE_MS;
     if (st.realtime !== 'live' || stale) {
-      ensureSupabaseDataHydrated('tick').catch(e => console.warn('[sb] tick hydrate failed', e));
+      // SECURITY F1 on f16d87c (RG-253 class, 2026-09-26) — the STATUS TICK rides this hydrate: it
+      // runs from the base THIS hydrate returns, never from the stale one it is replacing. The state
+      // stays ACTIVE while a re-hydrate runs over a non-empty mirror, so the tick used to save `live`
+      // from a stale base `locked`; if the debounced flush beat the hydrate, transition_week(live)
+      // reached a server that had since FINALIZED the week — and final->live is allowed server-side
+      // (0027:136). A hydrate that fails leaves the adapter not ACTIVE, and the tick stands down.
+      //
+      // Reviewer re-gate on 6178906 — NOT AWAITED by the round. The hydrate has no timeout, and on a
+      // lossy link with Realtime down this device's ESPN poll is the ONLY score source: awaiting it
+      // here froze the scores behind it. So only the status tick waits; the score refresh below runs
+      // now, exactly as before f16d87c.
+      statusTickRidesHydrate = true;
+      ensureSupabaseDataHydrated('tick')
+        .catch(e => console.warn('[sb] tick hydrate failed', e))
+        .then(() => { try { tickAutoTransition(); } catch (e) { console.warn('[tickAutoTransition] after the tick hydrate', e); } });
     }
   }
   // N1 / DI-N5 (UN-204, 2026-09-12) — THE pollNotifyLog() TICK IS GONE. It
@@ -18078,8 +20481,9 @@ export async function runAutoRefreshTick() {
   // Auto-transition check runs EVERY tick regardless of active tab or week
   // mode (demo weeks are skipped inside the helper). Transitions affect all
   // users so whichever device ticks first writes the new status to the
-  // shared backend and everyone else picks it up on next hydrate.
-  tickAutoTransition();
+  // shared backend and everyone else picks it up on next hydrate. (Reviewer re-gate on 6178906: in a
+  // round that started a re-hydrate the tick runs off that hydrate instead — see above.)
+  if (!statusTickRidesHydrate) tickAutoTransition();
 
   const week=getCurrentWeek();
   if(!week) return;
@@ -18144,6 +20548,7 @@ export async function runAutoRefreshTick() {
   // instead, touching only the score/status region.
   if(state.currentTab==='dashboard') renderDashboard();
   else if(state.currentTab==='picks') updatePicksLiveStatusInPlace(getGames(week.weekId));
+  } finally { _autoRefreshInFlight = false; }
 }
 
 /**
@@ -18210,6 +20615,33 @@ export function tickAutoTransition() {
     if (!week) return;
     if (week.dataSourceMode === 'demo') return;
 
+    // ══ RG-251 (2026-09-26) — NEVER ACT FROM A STATUS THE SERVER NEVER CONFIRMED ══
+    // If the mirror's status differs from the server-confirmed one, a status leg is still in
+    // flight or was refused (a refused key stays dirty and keeps its value). Advancing FROM it
+    // writes a status two legs from the server's — the open>live refusal of game day, reached
+    // through the other door. Stand down until the mirror and the server agree again, which
+    // happens when: the pending leg LANDS (the base advances to it); the server's status MOVES and
+    // the planner's compare-and-set refuses the stale leg and takes the server's value (RG-253 —
+    // learned through a Realtime weeks event or any hydrate); the commissioner re-saves a leg the
+    // server accepts from the Week tab (RG-254: no longer withheld behind the old refusal); or a
+    // reload. A Retry ALONE does not end it — a hydrate over an UNMOVED base re-applies the edit.
+    //
+    // RG-253 (reviewer F1 / SEC-3, 2026-09-26) — and never from a status the server has not
+    // confirmed AT ALL on this page: before the hydrate lands (a warm boot painting the device
+    // snapshot, ACTIVE-STALE) a tick that locks and a second tick that goes live, both before the
+    // server answers, re-create open>live; and a week absent from a hydrated base is one the server
+    // does not hold. In supabase data mode the tick acts only from an ACTIVE adapter with a
+    // confirmed row (serverHasConfirmedWeek). Local mode is unchanged.
+    if (!serverHasConfirmedWeek(week)) {
+      console.info(`[tickAutoTransition] ${week.weekId}: the server has not confirmed this week's status on this page yet — not auto-transitioning until the hydrate lands.`);
+      return;
+    }
+    const confirmedStatus = serverConfirmedWeekStatus(week);
+    if (confirmedStatus !== week.status) {
+      console.info(`[tickAutoTransition] ${week.weekId}: this device shows ${week.status} but the server confirmed ${confirmedStatus} — a status change is still pending or was refused; not auto-transitioning from it.`);
+      return;
+    }
+
     const games = getGames(week.weekId);
     if (!games?.length) return;
 
@@ -18256,8 +20688,19 @@ export function tickAutoTransition() {
       }
     }
 
+    // RG-251 (2026-09-26) — ONE STATUS LEG PER TICK. These two used to test
+    // `(changed ? next.status : week.status)`, so a device that first ticked after BOTH the lock
+    // time and the first kickoff (closed or asleep across the boundary) wrote OPEN->LIVE in ONE
+    // saveWeek(). The server has no such transition (transition_week's allow-list; the planner
+    // refuses it client-side), so nothing was saved and the mirror kept LIVE. Each leg is its own
+    // RPC; the next tick — one autoRefreshInterval later, the cadence of the refresh loop that calls this —
+    // takes the next leg from the then-current status (in local mode there is no server cron behind it:
+    // a device that is closed takes no leg at all until it next ticks). The same
+    // rule keeps pendingFinalization out of the save that carries the live leg, so no run ever
+    // pairs a transition_week RPC with a weeks PATCH on the same row.
+
     // LOCKED → LIVE
-    if ((changed ? next.status : week.status) === WEEK_STATUS.LOCKED && getAutoLiveEnabled(week)) {
+    if (!changed && week.status === WEEK_STATUS.LOCKED && getAutoLiveEnabled(week)) {
       const liveAt = computeEffectiveLiveAt(week, games);
       if (liveAt && now >= liveAt.getTime()) {
         next.status = WEEK_STATUS.LIVE;
@@ -18266,7 +20709,7 @@ export function tickAutoTransition() {
     }
 
     // LIVE → pending finalization when every game is final (commissioner confirms)
-    if ((changed ? next.status : week.status) === WEEK_STATUS.LIVE && getAutoFinalizeEnabled(week) && !week.pendingFinalization) {
+    if (!changed && week.status === WEEK_STATUS.LIVE && getAutoFinalizeEnabled(week) && !week.pendingFinalization) {
       const allFinal = games.every(g => g.status === GAME_STATUS.FINAL);
       if (allFinal) {
         next.pendingFinalization = true;
@@ -19792,7 +22235,11 @@ export const _AUTH_HOLD_RECOVERY_FOR_TEST = AUTH_HOLD_RECOVERY;
 
 /** Every page container the app paints league data into. A6's teardown list,
  *  in ONE place (CONVENTIONS #21) so a seventh tab cannot be forgotten by it. */
-const APP_PAGE_CONTAINER_IDS = ['page-picks', 'page-dashboard', 'page-leaderboard', 'page-commissioner', 'page-rules', 'page-chat'];
+// UX Revamp wiring pass 2 (2026-09-25), DI-320/344/345 — `page-admin` added.
+// It paints league data too (a selected league's Week/Games cards, cross-
+// league membership rows) and must be torn down at the same security
+// chokepoint (A6) as every other page container.
+const APP_PAGE_CONTAINER_IDS = ['page-picks', 'page-dashboard', 'page-leaderboard', 'page-commissioner', 'page-admin', 'page-rules', 'page-chat', 'page-settings'];
 export const _APP_PAGE_CONTAINER_IDS_FOR_TEST = APP_PAGE_CONTAINER_IDS;
 
 const AUTH_HOLD_RECHECK_MS = 20000;
@@ -19878,16 +22325,41 @@ function tearDownRenderedContentForHold() {
   try { if (document.body?.dataset) delete document.body.dataset.tab; } catch {}
   const week = document.getElementById('header-meta-week');
   if (week) week.innerHTML = '';
-  const pill = document.getElementById('league-pill');
-  if (pill) _clearLeaguePill(pill);
-  const ident = document.getElementById('header-identity');
-  if (ident) { ident.innerHTML = ''; ident.hidden = true; }
+  // SECURITY GATE, S-6 (2026-09-25) — dead teardown removed. `#league-pill`/
+  // `#header-identity` were REMOVED from index.html entirely in the header
+  // declutter (pass 3a-bis, REVIEWER F4) — `document.getElementById()` for
+  // either always returns null here, so these two branches were provably
+  // unreachable no-ops. `renderLeaguePill()`/`renderHeaderIdentity()`
+  // themselves already carry the same `if (!el) return;` guard, so removing
+  // this from the teardown changes no observable behavior.
   // The chat unread COUNT is league data too (it is a number of messages six
   // named people wrote), on two surfaces — the nav pill and the tab title.
   try { document.querySelectorAll('.nav-unread').forEach(b => b.remove()); } catch {}
   try { document.title = String(document.title || '').replace(/^\(\d+\+?\)\s*/, ''); } catch {}
   // Anything painted IN FRONT of the overlay (security 8 / reviewer F9).
   try { document.querySelectorAll('.modal-overlay').forEach(m => m.remove()); } catch {}
+  // SECURITY GATE FINDING 1 (916bdb7 review, 2026-09-25) — `.modal-overlay`
+  // does not catch every body-appended overlay this app now has. The League
+  // Page overlay (`#league-page-overlay`), the week-wizard sheet
+  // (`#week-wizard-sheet-wrap`) and the chat game-thread sheet
+  // (`#chat-sheet-wrap`, js/chat-ui.js) all `document.body.appendChild()`
+  // their own root OUTSIDE `.main-content` (so `_setAppContentInert()` never
+  // reaches them), and none of them carried `.modal-overlay` — so a hold
+  // firing while any of the three was open left it alive under the gate:
+  // focusable and screen-reader-reachable behind it, and back on screen the
+  // moment the hold cleared. (Z-INDEX CORRECTED 2026-09-26, full-app review:
+  // this comment used to say all three sit ABOVE `#site-gate-overlay`; they
+  // do not — League Page is 150, both sheets 8000, the gate 9000.) A shared
+  // marker attribute is the fix (rather than teaching this function three
+  // more specific ids, which is exactly the kind of list a fourth future
+  // overlay would silently fail to join): every body-appended overlay this
+  // app opens now carries `data-hold-teardown` and is swept here, generically.
+  try { document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove()); } catch {}
+  // S2-3 (full-app review, 2026-09-26) — the control-center drawer is a
+  // persistent mount (#control-center-root), so it cannot be removed like the
+  // overlays above; it is CLOSED instead, instantly, so it is neither left
+  // open under the hold gate nor back on screen once the hold clears.
+  try { controlCenterApi?.close?.({ immediate: true }); } catch {}
   const toasts = document.getElementById('toast-container');
   if (toasts) toasts.innerHTML = '';
   // The home-screen badge. `clearAppBadge` is Badging-API-only, so it is
@@ -19912,7 +22384,19 @@ function tearDownRenderedContentForHold() {
  */
 function _setAppContentInert(on) {
   _appContentInert = !!on;
-  for (const sel of ['.main-content', '.bottom-nav']) {
+  // TOUCHED-SCREEN AUDIT FINDING (916bdb7 review's Finding 1/reviewer item 3
+  // review pass, 2026-09-25, feature-builder-caught extension) — `.app-header`
+  // added to this loop too, not just `_setLeaguePageOverlayInert()`'s copy
+  // (css/styles.css / this function's own sibling, above). SAME gap, SAME
+  // root cause: `#control-center-trigger` lives inside `.app-header` with
+  // no `isContentWithheld()` guard of its own (added below as defense in
+  // depth), so a device under an ACTIVE HOLD — not merely a closed League
+  // Page overlay — could still tap it and open the control-center drawer
+  // (Sign Out / Switch League / Profile) over withheld content. Fixing only
+  // the overlay's copy and leaving the hold gate's own function with the
+  // identical gap would have been inconsistent given they are the same bug
+  // class in the same file on the same day.
+  for (const sel of ['.main-content', '.bottom-nav', '.app-header']) {
     try {
       document.querySelectorAll(sel).forEach(el => {
         if (on) { el.setAttribute?.('inert', ''); el.setAttribute?.('aria-hidden', 'true'); }
@@ -20380,6 +22864,15 @@ async function releaseWithholdIfResolved(reason) {
     // AFTER all three attempts, never before any — see the header note.
     _timersParkedForHold = false;
   }
+  // ── (1b) RG-245 — THE UN-WITHHOLD MOMENT, #2 of 2 ─────────────────────────
+  // ABOVE section (2)'s two early returns, deliberately. Those returns are
+  // scoped to "only a boot that STOPPED AT A HOLD owes a hydrate and a tail";
+  // a tap held through a withheld window is owed by every path out of one,
+  // including the ordinary boot that never raised a gate. Its own catch, for
+  // the same reason each re-arm above has one: a replay that throws must not
+  // take section (2) with it.
+  try { flushPendingDeepLink(reason); }
+  catch (e) { console.error(`[notifications] the held tap could not be replayed after ${reason}`, e); }
   // ── (2) THE HALF THAT ONLY A HELD BOOT IS MISSING ─────────────────────────
   if (!_bootStoppedAtHold) return false;
   if (_withholdReleased) return false;
@@ -20483,7 +22976,7 @@ export function _resetAuthHoldForTest() {
 let _bootIdentityCover = false;
 function armBootIdentityCover() {
   if (_bootIdentityCover) return;
-  try { if (hasValidSupabaseSession()) return; } catch { /* treat as unknown */ }
+  try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }
   _bootIdentityCover = true;
   _setAppContentInert(true);
 }
@@ -20547,7 +23040,9 @@ function releaseBootIdentityCover() {
     // "Positively established" — the same pair isContentWithheld()'s case 2
     // asks: a live token on this device, or an account id actually proven on
     // this page. Neither is a guess.
-    if (!hasValidSupabaseSession() && !getAccountUserId()) return false;
+    // Security N1 (third pass) — a recovery session is not an identity.
+    if (isRecoverySession()) return false;
+    if (!isSignedInForApp() && !getAccountUserId()) return false;
   } catch { return false; }
   _bootIdentityCover = false;
   _setAppContentInert(false);
@@ -20598,9 +23093,13 @@ function fireSignInGateDeadline() {
     if (getAuthMode() !== 'supabase') return;
     // SECURITY A-1 — a session that resolved late still resolved: lift the
     // cover on the way past rather than leaving the page inert behind no gate.
-    if (hasValidSupabaseSession()) { releaseBootIdentityCover(); return; }
+    if (isSignedInForApp()) { releaseBootIdentityCover(); return; }
     if (currentAuthHoldReason()) return;
     if (document.getElementById('site-gate-overlay')) return;
+    // Security N1 (third pass) — a recovery session that is still unanswered
+    // at the deadline gets the recovery screen, never the ordinary gate (the
+    // token-hash context would be lost) and never no gate at all.
+    if (isRecoverySession()) { showPasswordRecoveryScreen(); return; }
     console.warn('[auth] a session is persisted on this device but nothing resolved it in time — gating the page rather than leaving an unresolved identity in front of the app');
     // DI-249/DI-247 K3 — same notice source as the immediate paint above; this
     // is the deadline's own paint of the SAME boot decision, so it carries
@@ -20669,7 +23168,7 @@ export const _NATIVE_SIGNIN_WATCHDOG_MS_FOR_TEST = NATIVE_SIGNIN_WATCHDOG_MS;
  *  WHY (we genuinely do not know which await is wedged) and everything about
  *  what to do next. */
 export const NATIVE_SIGNIN_WATCHDOG_MESSAGE = 'Sign-in is taking too long — try again.';
-export function showGoogleSignInGate(initialNotice) {
+export function showGoogleSignInGate(initialNotice, { prefillEmail = '', swap = false } = {}) {
   const s = getSettings();
   const titleTop  = s.welcomeTitleTop  || 'welcome to';
   const titleMain = s.welcomeTitleMain || (s.welcomeTitle ? s.welcomeTitle.replace(/^welcome to\s*/i,'') : "irb pick 'ems");
@@ -20682,30 +23181,40 @@ export function showGoogleSignInGate(initialNotice) {
       <div class="site-gate-inner">
         <div class="site-gate-wordmark">${escHtml(getShellWordmark() || '')}</div>
         <div class="site-gate-tagline">${escHtml(getShellTagline() || '')}</div>
-        <div class="site-gate-subtitle">Sign in to make your picks.</div>
         <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
           <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
           <span id="google-gate-btn-label">Continue with Google</span>
         </button>
         <div id="google-gate-message" style="display:none"></div>
+        ${passwordGateBlockHTML()}
       </div>
     </div>` : `
     <div class="site-gate">
       <div class="site-gate-inner">
         <div class="site-gate-title-top">${escHtml(titleTop)}</div>
         <div class="site-gate-title">${escHtml(titleMain)}</div>
-        <div class="site-gate-subtitle">sign in to make your picks</div>
         <div id="google-gate-message" style="display:none"></div>
         <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
           <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
           <span id="google-gate-btn-label">Continue with Google</span>
         </button>
+        ${passwordGateBlockHTML()}
       </div>
     </div>`;
   document.body.appendChild(wrap);
   const btn = document.getElementById('google-gate-submit');
   const label = document.getElementById('google-gate-btn-label');
   const msgEl = document.getElementById('google-gate-message');
+  // DI-332 (UX Revamp Group F) — the email/password block appended below,
+  // in the SAME overlay/function (DI-332's own "Placement" — no second
+  // gate). Bound once per gate paint, same lifecycle as the Google button's
+  // own binding two lines down.
+  bindPasswordGateBlock();
+  // STEP B(4) / N1 (third pass) — coming BACK from the forgot-password screen:
+  // the email the player already typed survives the trip (set as a value, never
+  // interpolated into markup), and the content cross-fades rather than cuts.
+  if (prefillEmail) { const em = document.getElementById('pwacct-email'); if (em) em.value = String(prefillEmail); }
+  if (swap) playGateSwap(wrap.querySelector?.('.site-gate-inner'));
   // RG-233 (2026-09-23) — resolve these THREE nodes live at use time. This gate
   // can repaint while a sign-in is in flight (fireSignInGateDeadline() calls
   // showGoogleSignInGate() again), which replaces the nodes captured above with
@@ -20854,6 +23363,896 @@ export function showGoogleSignInGate(initialNotice) {
     }
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UX Revamp Group F (DI-332…340, wiring pass 3c, 2026-09-25) — ACCOUNTS UI.
+// The logic layer (js/auth.js: signUpWithPassword/signInWithPassword/
+// requestPasswordReset/verifyPasswordRecovery/updatePasswordForRecovery/
+// requestPasswordChangeCode/updatePassword/deleteOwnAccount/
+// classifyPasswordAuthError/PASSWORD_AUTH_REASON) shipped in 3df7d49. This
+// section is the UI wiring against it: the gate's email/password block
+// (DI-332), forgot password (DI-333), the reset-recovery landing (DI-334),
+// and the Profile "Change/Set Password" + "Delete Account" screens
+// (DI-335/DI-340). Fresh `#pwacct-*` element ids throughout, per DI-332's
+// own instruction — never the dead `#sec-pw-*` ids `commPasswordCardHTML()`
+// still carries (absent in authMode:'supabase', so the two can never both
+// be on screen, but sharing ids across a live and a dead component is
+// exactly what a future edit could accidentally wire together).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * DI-339 — maps the closed PASSWORD_AUTH_REASON vocabulary to calm,
+ * non-technical copy. ONE function, every screen below calls it, so the
+ * enumeration-safe strings (NO_MATCH covering both wrong-password and
+ * no-such-account) can never drift between call sites — the exact property
+ * DI-339 names as "must not drift between the four places it applies."
+ */
+function passwordAuthErrorCopy(reason) {
+  switch (reason) {
+    case PASSWORD_AUTH_REASON.NO_MATCH:
+      return "That email and password don't match. Check them and try again.";
+    case PASSWORD_AUTH_REASON.EMAIL_NOT_CONFIRMED:
+      return "That account hasn't been verified yet.";
+    case PASSWORD_AUTH_REASON.SIGNUP_NONCOMMITTAL:
+      return 'Check your email to verify your account, then come back and sign in.';
+    case PASSWORD_AUTH_REASON.WEAK_PASSWORD:
+      return 'That password needs to be longer — try a few more characters.';
+    case PASSWORD_AUTH_REASON.SAME_PASSWORD:
+      return "That's already your password.";
+    case PASSWORD_AUTH_REASON.CODE_INVALID:
+      return "That code didn't work. Check it or request a new one.";
+    case PASSWORD_AUTH_REASON.NETWORK:
+      return "Couldn't reach sign-in — check your connection and try again.";
+    case PASSWORD_AUTH_REASON.RATE_LIMITED:
+      return 'Too many attempts. Wait a few minutes and try again.';
+    default:
+      return "That didn't go through. Try again, and tell your commissioner if it keeps failing.";
+  }
+}
+export const _passwordAuthErrorCopyForTest = passwordAuthErrorCopy;
+
+/** DI-328e's shared divider token — a plain `.divider` has no text slot
+ *  (styles.css:741, `height:1px;background:var(--border)` only); this is a
+ *  small, additive sibling for the ONE new "or" divider this screen needs,
+ *  not a change to the existing class every other card already relies on. */
+function dividerOrHTML() {
+  return `<div class="divider-or" aria-hidden="true"><span>or</span></div>`;
+}
+
+/**
+ * DI-332 — the email/password block, appended inside `.site-gate-inner`
+ * below the Google button in BOTH platform templates. `data-mode` on the
+ * submit button is the ONE thing that changes between sign-in/sign-up
+ * (DI-332's own "Motion" note: "swaps only the button label and a `mode`
+ * data-attribute — no field re-layout, so no jump").
+ */
+function passwordGateBlockHTML() {
+  // STEP B(5) / N2, closed by reviewer round 3 item 6 (2026-09-26) — the
+  // <form> wrapper + `required`/`name` attributes (for iOS AutoFill /
+  // password-manager save prompts) are now built, on BOTH platform templates
+  // (this function is the single shared source both branches of
+  // showGoogleSignInGate() call — see its own header comment). The submit
+  // button is `type="submit"` (was `type="button"`) so it actually
+  // participates in the form; its own click handler (bindPasswordGateBlock()
+  // below) is UNCHANGED and still does the real work, so nothing runs twice.
+  // Only the FIELDS are inside the form — the Forgot-password/mode-toggle
+  // links are secondary navigation, not part of submission, and stay outside
+  // it exactly as before. brandtest.mjs [9a]'s byte-pinned fixture is updated
+  // in the SAME edit (dated comment, DI-310 [10d] precedent).
+  // 2026-09-26 (full-app review) — `novalidate`: the gate's own plausibility
+  // check and copy own validation, never the browser's native bubble (a
+  // "web app smell"); `method="post"` (security audit): if the
+  // preventDefault listener were ever unbound, a native submit would POST,
+  // never GET `?email=…&password=…` into the URL, history and SW cache.
+  return `
+    ${dividerOrHTML()}
+    <form id="pwacct-gate-form" method="post" novalidate>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-email">Email</label>
+      <input class="form-input" id="pwacct-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example.com" required />
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-password">Password</label>
+      <input class="form-input" id="pwacct-password" name="password" type="password" autocomplete="current-password" required />
+    </div>
+    <button class="site-gate-btn" id="pwacct-gate-submit" type="submit" data-mode="signin">Sign In</button>
+    </form>
+    <div class="site-gate-link-row">
+      <button type="button" class="site-gate-link" id="pwacct-forgot-link">Forgot password?</button>
+      <button type="button" class="site-gate-link" id="pwacct-mode-toggle">New here? Create an account</button>
+    </div>
+    <div id="pwacct-gate-message" style="display:none"></div>`;
+}
+
+/**
+ * DI-332 — wires the block above. Called once per `showGoogleSignInGate()`
+ * paint (mirrors that function's own Google-button binding, two lines
+ * away) — mode always starts 'signin' on a fresh gate paint, per DI-332.
+ *
+ * Security boundary (DI-332 §"Security boundaries," item 1/8) — the client
+ * NEVER decides whether a credential pair is correct; `signInWithPassword()`
+ * is the only path, and a rejection renders the ONE generic NO_MATCH string
+ * regardless of which of "wrong password"/"no such account" it actually
+ * was. Finding 7 — sign-up renders the SAME uniform notice for every
+ * outcome except a genuine validation/transport failure (weak password,
+ * offline, rate-limited) — never a differentiated "already registered" row.
+ */
+function bindPasswordGateBlock() {
+  const emailEl = () => document.getElementById('pwacct-email');
+  const pwEl = () => document.getElementById('pwacct-password');
+  const submitBtn = () => document.getElementById('pwacct-gate-submit');
+  const gateForm = () => document.getElementById('pwacct-gate-form');
+  const forgotLink = () => document.getElementById('pwacct-forgot-link');
+  const modeToggle = () => document.getElementById('pwacct-mode-toggle');
+  const msgSlot = () => document.getElementById('pwacct-gate-message');
+  // Reviewer round 3, item 6 (2026-09-26) — the ONLY job of this listener is
+  // preventDefault: the button's OWN click handler (bound further below,
+  // unchanged) still does the real sign-in/sign-up work, exactly as it did
+  // when the button was `type="button"` with no form at all. Without this,
+  // a `type="submit"` button inside a `<form>` would navigate/reload the
+  // page on any path that reaches native form submission WITHOUT going
+  // through the keydown handlers below (e.g. a mobile keyboard's "Go" action
+  // on some browsers, which does not always dispatch an observable Enter
+  // keydown first).
+  gateForm()?.addEventListener('submit', (e) => { e.preventDefault(); });
+  // DI-332 — cloned closure, NOT coupled to #google-gate-message: only one
+  // of the two message slots is ever visible for the flow the player is
+  // actually in.
+  const showMsg = (text, tone) => {
+    const el = msgSlot(); if (!el) return;
+    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    el.textContent = text;
+    el.style.display = 'block';
+  };
+  const hideMsg = () => { const el = msgSlot(); if (el) el.style.display = 'none'; };
+
+  const applyMode = (mode) => {
+    const btn = submitBtn(); const toggle = modeToggle(); const forgot = forgotLink(); const pw = pwEl();
+    if (btn) { btn.dataset.mode = mode; btn.textContent = mode === 'signup' ? 'Create Account' : 'Sign In'; }
+    if (toggle) toggle.textContent = mode === 'signup' ? 'Already have an account? Sign in' : 'New here? Create an account';
+    if (forgot) forgot.style.display = mode === 'signup' ? 'none' : '';
+    // Native First — real Password AutoFill/Keychain suggestions, per mode.
+    if (pw) pw.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
+  };
+  applyMode('signin');
+
+  modeToggle()?.addEventListener('click', () => {
+    applyMode((submitBtn()?.dataset.mode || 'signin') === 'signin' ? 'signup' : 'signin');
+    hideMsg();
+  });
+
+  // Forms — "Tapping return on Email advances focus to Password; return/go
+  // on Password submits the form" (standard iOS keyboard behavior).
+  emailEl()?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pwEl()?.focus(); } });
+  pwEl()?.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); doSubmit(); } });
+  // STEP B(5) / N2 — on-blur email check (Forms: validate on blur, not per keystroke); only a NON-EMPTY
+  // malformed value is flagged, and it clears once plausible. B-1 (2026-09-26): the empty-field copy
+  // doSubmit() shows ("Enter your …") is cleared on input — it never lingers over a filled field.
+  const BAD_EMAIL_COPY = 'Enter a valid email address.';
+  emailEl()?.addEventListener('blur', () => {
+    const v = (emailEl()?.value || '').trim();
+    if (v && !isPlausibleEmail(v)) showMsg(BAD_EMAIL_COPY, 'error');
+    else if (msgSlot()?.textContent === BAD_EMAIL_COPY) hideMsg();
+  });
+  for (const el of [emailEl(), pwEl()]) el?.addEventListener('input', () => { if (/^Enter your /.test(msgSlot()?.textContent || '')) hideMsg(); });
+
+  async function doSubmit() {
+    const btn = submitBtn(); if (!btn || btn.disabled) return;
+    const email = (emailEl()?.value || '').trim();
+    const password = pwEl()?.value || '';
+    // Empty form: no round trip. B-1 (2026-09-26) — the form is `novalidate` (no native bubble), so the slot names what is missing and focus moves there.
+    if (!email || !password) { showMsg(!email && !password ? 'Enter your email and password.' : !email ? 'Enter your email.' : 'Enter your password.', 'error'); (!email ? emailEl() : pwEl())?.focus?.(); return; }
+    // N2 — a malformed email is caught here too (a submit that never blurred).
+    if (!isPlausibleEmail(email)) { showMsg(BAD_EMAIL_COPY, 'error'); return; }
+    const mode = btn.dataset.mode || 'signin';
+    hideMsg();
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = mode === 'signup' ? 'Creating account…' : 'Signing in…';
+    try {
+      if (mode === 'signup') {
+        await signUpWithPassword(email, password);
+        showMsg('Check your email to verify your account, then come back and sign in.', 'notice');
+        applyMode('signin');
+        if (pwEl()) pwEl().value = '';
+      } else {
+        await signInWithPassword(email, password);
+        // Native only, haptic('medium') gates internally on isNativeShell().
+        haptic('medium');
+        // The gate comes down via the SDK's own SIGNED_IN event ->
+        // refreshAuthUI()'s existing `signedIn` path — nothing else here.
+      }
+    } catch (err) {
+      const reason = classifyPasswordAuthError(err);
+      if (mode === 'signup') {
+        if (reason === PASSWORD_AUTH_REASON.WEAK_PASSWORD || reason === PASSWORD_AUTH_REASON.NETWORK || reason === PASSWORD_AUTH_REASON.RATE_LIMITED) {
+          showMsg(passwordAuthErrorCopy(reason), 'error');
+        } else {
+          // Finding 7 — every OTHER outcome (including the already-
+          // registered case, which never even reaches here as a throw —
+          // signUpWithPassword() swallows it at the source) renders the
+          // SAME uniform notice.
+          showMsg('Check your email to verify your account, then come back and sign in.', 'notice');
+          applyMode('signin');
+          if (pwEl()) pwEl().value = '';
+        }
+      } else if (reason === PASSWORD_AUTH_REASON.EMAIL_NOT_CONFIRMED) {
+        // Finding 13 — honestly discloses an account exists, but this is
+        // Supabase's OWN designed error code, not a distinction this UI
+        // is choosing to add.
+        showMsg(passwordAuthErrorCopy(reason), 'notice');
+        // STEP B(6) / N3 (third pass) — the way out of that notice: resend
+        // the verification email to the address just typed.
+        appendResendVerificationLink(msgSlot(), email);
+      } else if (reason === PASSWORD_AUTH_REASON.NETWORK || reason === PASSWORD_AUTH_REASON.RATE_LIMITED) {
+        showMsg(passwordAuthErrorCopy(reason), 'error');
+      } else {
+        // NO_MATCH and UNKNOWN both render the SAME generic row —
+        // DI-339's enumeration boundary: UNKNOWN must never accidentally
+        // read as more informative than NO_MATCH.
+        showMsg("That email and password don't match. Check them and try again.", 'error');
+      }
+    } finally {
+      const liveBtn = submitBtn();
+      if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+    }
+  }
+  submitBtn()?.addEventListener('click', doSubmit);
+
+  forgotLink()?.addEventListener('click', () => {
+    showForgotPasswordScreen(emailEl()?.value || '');
+  });
+}
+
+/**
+ * STEP B(6) / N3 (third pass) — "Resend verification email" under the
+ * unverified-account notice. The account's existence was already disclosed by
+ * Supabase's own `email_not_confirmed` answer (Finding 13), so a rate-limit
+ * refusal here gets the HONEST copy — there is nothing left to enumerate.
+ * Idempotent: one link per notice.
+ */
+function appendResendVerificationLink(slot, email) {
+  if (!slot || !email) return;
+  if (document.getElementById('pwacct-resend-verify')) return;
+  slot.insertAdjacentHTML?.('beforeend', ` <button type="button" class="site-gate-link" id="pwacct-resend-verify">Resend verification email</button>`);
+  document.getElementById('pwacct-resend-verify')?.addEventListener('click', async (e) => {
+    const b = e?.target || document.getElementById('pwacct-resend-verify');
+    if (!b || b.disabled) return;
+    b.disabled = true;
+    const label = b.textContent; b.textContent = 'Sending…';
+    try {
+      await resendSignupVerification(email);
+      b.textContent = 'Verification email sent — check your inbox.';
+    } catch (err) {
+      const reason = classifyPasswordAuthError(err);
+      b.textContent = reason === PASSWORD_AUTH_REASON.RATE_LIMITED
+        ? passwordAuthErrorCopy(reason)
+        : "Couldn't send that — check your connection and try again.";
+      b.disabled = false;
+      void label;
+    }
+  });
+}
+export const _appendResendVerificationLinkForTest = appendResendVerificationLink;
+
+/** N2 (third pass) — deliberately loose: one "@", something either side, a
+ *  dot in the domain, no spaces. The server is the real validator; this only
+ *  catches typos before a round trip. */
+function isPlausibleEmail(v) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v || '').trim());
+}
+export const _isPlausibleEmailForTest = isPlausibleEmail;
+
+/** STEP B(4) / N1 (third pass) — the gate's in-place screen swap (sign-in <->
+ *  forgot-password) cross-fades over --motion-nav (260ms, inside the 250-300
+ *  band) instead of cutting. Restarting the CSS animation needs the class
+ *  removed, a reflow, and the class re-added. Reduced motion: the CSS disables
+ *  the animation, so this is a no-op there. */
+function playGateSwap(inner) {
+  if (!inner?.classList) return;
+  try {
+    inner.classList.remove('gate-swap-in');
+    void inner.offsetWidth;
+    inner.classList.add('gate-swap-in');
+  } catch {}
+}
+export const _bindPasswordGateBlockForTest = bindPasswordGateBlock;
+
+/**
+ * DI-333 — forgot-password request screen. Swaps `.site-gate-inner`'s
+ * content in place (SAME container DI-332 reuses, not a second overlay).
+ * `prefillEmail` carries over whatever the player had already typed in
+ * DI-332's email field, per DI-333's own "Placement" note.
+ */
+function forgotPasswordScreenHTML(prefillEmail) {
+  return `
+    <div class="site-gate-title">Reset your password</div>
+    <p class="text-muted text-sm">We'll email you a link to set a new one.</p>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-reset-email">Email</label>
+      <input class="form-input" id="pwacct-reset-email" type="email" inputmode="email" autocomplete="email" value="${escHtml(prefillEmail || '')}" />
+    </div>
+    <button class="site-gate-btn" id="pwacct-reset-send-btn" type="button">Send Reset Link</button>
+    <div class="site-gate-link-row">
+      <button type="button" class="site-gate-link" id="pwacct-reset-back-btn">Back</button>
+    </div>
+    <div id="pwacct-reset-message" style="display:none"></div>`;
+}
+/**
+ * DI-333 / F4 / Security F1 (third pass) — the ONE non-committal notice the
+ * forgot-password screen shows for BOTH a genuine send and a RATE_LIMITED
+ * refusal. Built in one place so the two can never drift apart again: any
+ * difference between them — including the native-only web-fallback sentence
+ * (DI-334: native has no universal links, the link always completes in the
+ * system browser) — tells an anonymous visitor which typed addresses are real
+ * accounts being throttled.
+ */
+function forgotPasswordSentNotice() {
+  return "If that email has an account, we've sent a reset link. Check your inbox."
+    // Reviewer B3 (third pass) — DI-334 §247's own copy, verbatim, plus the
+    // "come back and sign in" close the previous line carried.
+    + (isNativeShell() ? " Open the link on your phone or computer's browser to finish — it'll open irbfootball.com, not the app. Then come back and sign in." : '');
+}
+function showForgotPasswordScreen(prefillEmail) {
+  const inner = document.querySelector('#site-gate-overlay .site-gate-inner');
+  if (!inner) return;
+  inner.innerHTML = forgotPasswordScreenHTML(prefillEmail);
+  playGateSwap(inner);
+  const emailEl = () => document.getElementById('pwacct-reset-email');
+  const sendBtn = () => document.getElementById('pwacct-reset-send-btn');
+  const msgSlot = () => document.getElementById('pwacct-reset-message');
+  const showMsg = (text, tone) => {
+    const el = msgSlot(); if (!el) return;
+    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    el.textContent = text; el.style.display = 'block';
+  };
+  // STEP B(4) / N1 — Back keeps what the player typed (either here or on the
+  // sign-in screen before they tapped "Forgot password?") and cross-fades.
+  document.getElementById('pwacct-reset-back-btn')?.addEventListener('click', () => {
+    showGoogleSignInGate(undefined, { prefillEmail: (emailEl()?.value || '').trim(), swap: true });
+  });
+  sendBtn()?.addEventListener('click', async () => {
+    const btn = sendBtn(); if (!btn || btn.disabled) return;
+    const email = (emailEl()?.value || '').trim();
+    if (!email) return;
+    btn.disabled = true;
+    const label = btn.textContent; btn.textContent = 'Sending…';
+    try {
+      await requestPasswordReset(email);
+      // DI-333 — deliberately non-committal, matching resetPasswordForEmail()'s
+      // own default behavior (does not reveal whether the email exists).
+      // DI-334's scoped web fallback (native has no universal links, so the
+      // reset link always completes in the system browser, never the app):
+      // one additional line, native-only, appended to the same non-committal
+      // notice rather than a second message slot.
+      showMsg(forgotPasswordSentNotice(), 'notice');
+    } catch (err) {
+      const reason = classifyPasswordAuthError(err);
+      // F4 (security gate, 3c fix window, 2026-09-25) — RATE_LIMITED here
+      // covers GoTrue's `over_email_send_rate_limit` (a per-ADDRESS throttle),
+      // not a generic per-IP one. Showing a DISTINCT "too many requests" copy
+      // only for addresses that trip THAT specific throttle would itself be
+      // an oracle: it discloses that the typed email is a REAL, registered
+      // account being emailed repeatedly (an unregistered address never
+      // reaches this throttle at all) — exactly the enumeration boundary
+      // DI-339 already established for every other row on this screen. Folds
+      // into the SAME non-committal success notice; a genuine transport
+      // failure (NETWORK, or the honest UNKNOWN fallback) still gets its own
+      // calm "couldn't send" copy, unaffected — this is a RATE_LIMITED-only
+      // fold, not a blanket "always claim success."
+      if (reason === PASSWORD_AUTH_REASON.RATE_LIMITED) {
+        // Security F1 (third pass) — the SAME string the success branch shows,
+        // built once (forgotPasswordSentNotice()): on native the success copy
+        // gained a web-fallback sentence and this branch had not, which made
+        // the two outcomes distinguishable again — F4's oracle, reopened.
+        showMsg(forgotPasswordSentNotice(), 'notice');
+      } else {
+        showMsg("Couldn't send that — check your connection and try again.", 'error');
+      }
+    } finally {
+      const liveBtn = sendBtn();
+      if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+    }
+  });
+}
+
+/**
+ * DI-334 — the reset-recovery landing, rendered INSIDE the still-present
+ * gate (FINDING 1's hard rule — see the `refreshAuthUI()` branch that calls
+ * this). Success calls `updatePasswordForRecovery()`, which needs NO
+ * separate nonce — the gated recovery session itself, held the entire time
+ * by Finding 1's rules, IS the proof.
+ */
+function passwordRecoveryScreenHTML() {
+  return `
+    <div class="site-gate-title">Set a new password</div>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-recovery-new">New password</label>
+      <input class="form-input" id="pwacct-recovery-new" type="password" autocomplete="new-password" />
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-recovery-confirm">Confirm new password</label>
+      <input class="form-input" id="pwacct-recovery-confirm" type="password" autocomplete="new-password" />
+    </div>
+    <button class="site-gate-btn" id="pwacct-recovery-submit" type="button">Set New Password</button>
+    <div class="site-gate-link-row">
+      <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
+    </div>
+    <div id="pwacct-recovery-message" style="display:none"></div>`;
+}
+/** DI-334 — the refused/expired-link state (B3): a device whose recovery
+ *  marker could not be made durable, or a token_hash `verifyOtp()` rejected
+ *  outright, gets this instead of a form it could type a password into
+ *  against a session that no longer exists. Same copy DI-334 already
+ *  specifies for `CODE_INVALID` inside the form's own catch block below —
+ *  one string, reused, not a second invention. */
+function passwordRecoveryExpiredScreenHTML() {
+  return `
+    <div class="site-gate-title">Set a new password</div>
+    <div id="pwacct-recovery-message" class="site-gate-error" style="display:block">This reset link has expired or was already used. Request a new one.</div>
+    <button class="site-gate-btn" id="pwacct-recovery-expired-reset-btn" type="button">Request a New Link</button>
+    <div class="site-gate-link-row">
+      <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
+    </div>`;
+}
+/**
+ * B4 (2026-09-25, 3c fix window) — `{ expired }` selects the B3 refused-link
+ * state instead of the new-password form. Both variants:
+ *   • NEVER remove a live hold gate (A7) — `currentGateIsHold()` guards the
+ *     overlay replacement, matching `authSignInAffordance()`'s own rule. A
+ *     hold gate is a fail-closed lock for a device whose config/data layer
+ *     cannot be trusted at all; a PASSWORD_RECOVERY event reaching this
+ *     function must never paint over it. Recovery only ever owns the
+ *     overlay when it is NOT currently a hold — nothing, the Google gate, or
+ *     a stale copy of this very screen.
+ *   • Get a Back/close control that calls `cancelRecovery()` (which itself
+ *     calls `signOut()` — DI-334 Finding 1: "any exit before completion...
+ *     calls signOut()"). The SIGNED_OUT event that follows repaints the
+ *     ordinary Google gate through the normal `refreshAuthUI()` path; this
+ *     handler does not remove the overlay itself.
+ */
+function showPasswordRecoveryScreen({ expired = false, overResolvedHold = false } = {}) {
+  // `overResolvedHold` (Security N1, third pass) — ONLY applyAuthModeDecision()
+  // passes it, past every hold branch, where the hold STATE is already cleared
+  // and the overlay still on screen is that stale hold. A live hold (a reason
+  // is set) is never replaced, whoever asks.
+  if (currentGateIsHold() && !(overResolvedHold && !currentAuthHoldReason())) return;
+  document.getElementById('site-gate-overlay')?.remove();
+  const wrap = document.createElement('div');
+  wrap.id = 'site-gate-overlay';
+  // R2-1 — the variant is recorded ON THE WRAPPER (a real attribute, not only
+  // the inner markup) so refreshAuthUI()'s signed-out branch can tell a live
+  // new-password form — which a sign-out orphans — from the expired state.
+  wrap.setAttribute('data-recovery-variant', expired ? 'expired' : 'form');
+  wrap.innerHTML = `<div class="site-gate" data-gate-state="recovery"><div class="site-gate-inner">${expired ? passwordRecoveryExpiredScreenHTML() : passwordRecoveryScreenHTML()}</div></div>`;
+  document.body.appendChild(wrap);
+
+  const backBtn = () => document.getElementById('pwacct-recovery-back-btn');
+  backBtn()?.addEventListener('click', async () => {
+    const btn = backBtn(); if (!btn || btn.disabled) return;
+    btn.disabled = true;
+    try { await cancelRecovery(); } catch (e) { console.warn('[auth] cancelRecovery failed', e); }
+    // ══ R2-1 (3c fix window, third pass) — BACK MUST LAND SOMEWHERE ══════════
+    // The previous comment here said "the SIGNED_OUT that follows repaints the
+    // Google gate". It did not: refreshAuthUI()'s signed-out branch repaints
+    // only when NO overlay exists, and this screen IS the overlay — so Back
+    // left the player signed out, on a dead form, with Back itself disabled.
+    // Repainted explicitly here (the signed-out branch now also recognises an
+    // orphaned recovery form — belt and braces), unless a hold gate owns the
+    // overlay (A7) or something other than this screen already replaced it.
+    if (currentGateIsHold()) return;
+    const ov = document.getElementById('site-gate-overlay');
+    if (!ov || ov.getAttribute?.('data-recovery-variant')) showGoogleSignInGate();
+  });
+
+  if (expired) {
+    document.getElementById('pwacct-recovery-expired-reset-btn')?.addEventListener('click', async () => {
+      // DI-333 — routes to the SAME forgot-password screen a "Forgot
+      // password?" tap reaches, prefilled with nothing (this device never
+      // proved which email the expired link belonged to). Cancels the dead
+      // recovery session first so the device is not left mid-recovery while
+      // the player requests a fresh link.
+      try { await cancelRecovery(); } catch (e) { console.warn('[auth] cancelRecovery failed', e); }
+      showForgotPasswordScreen('');
+    });
+    return;
+  }
+
+  const newEl = () => document.getElementById('pwacct-recovery-new');
+  const confirmEl = () => document.getElementById('pwacct-recovery-confirm');
+  const submitBtn = () => document.getElementById('pwacct-recovery-submit');
+  const msgSlot = () => document.getElementById('pwacct-recovery-message');
+  const showMsg = (text, tone) => {
+    const el = msgSlot(); if (!el) return;
+    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    el.textContent = text; el.style.display = 'block';
+  };
+  submitBtn()?.addEventListener('click', async () => {
+    const btn = submitBtn(); if (!btn || btn.disabled) return;
+    const pw1 = newEl()?.value || '';
+    const pw2 = confirmEl()?.value || '';
+    if (!pw1 || !pw2) return;
+    if (pw1 !== pw2) { showMsg("Those passwords don't match.", 'error'); return; }
+    btn.disabled = true;
+    const label = btn.textContent; btn.textContent = 'Saving…';
+    try {
+      await updatePasswordForRecovery(pw1);
+      showMsg('Password updated. Signing you in…', 'notice');
+      haptic('success');
+      // B1 fix — updatePasswordForRecovery() (js/auth.js) now explicitly
+      // re-runs the SDK's own SIGNED_IN handling after it clears the
+      // recovery flags (the USER_UPDATED event `updateUser()` fires
+      // internally lands BEFORE those flags clear, so nothing else would
+      // announce this exact moment) — the gate comes down and memberships
+      // refresh through that one real path; nothing to remove by hand here.
+    } catch (err) {
+      const reason = classifyPasswordAuthError(err);
+      if (reason === PASSWORD_AUTH_REASON.WEAK_PASSWORD) showMsg(passwordAuthErrorCopy(reason), 'error');
+      else if (reason === PASSWORD_AUTH_REASON.CODE_INVALID) showMsg('This reset link has expired or was already used. Request a new one.', 'error');
+      else if (reason === PASSWORD_AUTH_REASON.NETWORK || reason === PASSWORD_AUTH_REASON.RATE_LIMITED) showMsg(passwordAuthErrorCopy(reason), 'error');
+      else showMsg("Couldn't update your password. Try again.", 'error');
+    } finally {
+      const liveBtn = submitBtn();
+      if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+    }
+  });
+}
+export const _showPasswordRecoveryScreenForTest = showPasswordRecoveryScreen;
+
+/**
+ * R2-2 (3c fix window, third pass) — what a REJECTED reset link shows.
+ * `verifyOtp()` refusing the token_hash (`otp_expired`, already used, or any
+ * other server verdict) was a console.warn and nothing on screen. Now:
+ *   • AuthUnavailableError — no client on this page, a transport problem and
+ *     not a verdict on the link: nothing (the auth-unavailable banner owns it);
+ *   • a hold gate is up — nothing (A7: a fail-closed lock is never painted over);
+ *   • the visitor is ALREADY signed in for the app (an old link clicked by a
+ *     player who never signed out) — a toast, not a gate: a full-screen gate
+ *     over a working session, whose only exits sign them out, is the wrong
+ *     answer to "that link was stale";
+ *   • a NETWORK-classified failure (reviewer round 3, item 2) — not a verdict
+ *     on the token at all, just a transport hiccup: calm, retryable copy,
+ *     and the URL is left alone so opening the link again re-runs the real
+ *     verify against the still-intact token;
+ *   • otherwise — DI-334's expired/used-link state, the same copy the form's
+ *     own CODE_INVALID branch already uses.
+ *
+ * `scrubFn`, when given, removes the spent token_hash/type from the URL —
+ * called ONLY once `reason` says this was a definitive verdict (anything but
+ * NETWORK), never before it. AuthUnavailableError classifies to UNKNOWN, not
+ * NETWORK (no matching code/message), so it keeps the original "scrub the
+ * unusable link either way" behavior — only the genuinely undecided NETWORK
+ * case is new. `_onRecoveryVerifyRejectedForTest` callers that pass no
+ * `scrubFn` simply skip that step, same as before this fix (there was
+ * nothing to scrub from a unit test's fake location either).
+ */
+// S1-B (full-app review, 2026-09-26) — a toast (z 1000) sits UNDER the
+// sign-in gate (z 9000), so a message emitted while `#site-gate-overlay` is up
+// was invisible to exactly the signed-out visitor it was written for. While a
+// gate is present the text goes into the gate's own message slot (the most
+// specific one on screen, password-flow slots first); the toast is used only
+// when no gate is up. Text is set with textContent, never markup.
+// Each slot as [id, the exact `id="…"` its gate markup carries] — literal
+// strings, so this lookup builds no markup-shaped template of its own.
+const GATE_MESSAGE_SLOTS = [
+  ['pwacct-recovery-message', 'id="pwacct-recovery-message"'],
+  ['pwacct-reset-message', 'id="pwacct-reset-message"'],
+  ['pwacct-gate-message', 'id="pwacct-gate-message"'],
+  ['google-gate-message', 'id="google-gate-message"'],
+];
+function showNoticeOnGateOrToast(text, tone = 'warning') {
+  const gate = document.getElementById('site-gate-overlay');
+  if (!gate) { showToast(text, tone); return 'toast'; }
+  let slot = null;
+  const markup = String(gate.innerHTML || '');
+  for (const [id, needle] of GATE_MESSAGE_SLOTS) {
+    if (!markup.includes(needle)) continue; // only a slot this gate actually renders
+    const el = gate.querySelector?.('#' + id);
+    if (el) { slot = el; break; }
+  }
+  if (!slot && !(slot = gate.querySelector?.('#site-gate-notice-slot') || null)) {
+    // A gate with no message slot of its own (e.g. the league-flow screen): add one inside it rather than
+    // a hidden toast — once; later calls reuse it above (no duplicate ids, 2026-09-26 note 1).
+    slot = document.createElement('div');
+    slot.id = 'site-gate-notice-slot';
+    (gate.querySelector?.('.site-gate-inner') || gate).appendChild(slot);
+  }
+  slot.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+  slot.textContent = text;
+  slot.style.display = 'block';
+  return 'gate';
+}
+export const _showNoticeOnGateOrToastForTest = showNoticeOnGateOrToast;
+
+function onRecoveryVerifyRejected(e, scrubFn) {
+  try {
+    const reason = classifyPasswordAuthError(e);
+    // S1-B (low) — a 5xx from GoTrue is the server failing, not a verdict on
+    // the link: retryable like NETWORK, and the token is NOT scrubbed.
+    const status = Number(e?.status ?? e?.statusCode ?? NaN);
+    const serverError = status >= 500 && status <= 599;
+    // AuthUnavailableError (no client) is likewise not a verdict — keep the token.
+    const definitive = reason !== PASSWORD_AUTH_REASON.NETWORK && !serverError && !(e instanceof AuthUnavailableError);
+    if (definitive) scrubFn?.();
+    if (e instanceof AuthUnavailableError) return;
+    if (currentGateIsHold() || currentAuthHoldReason()) return;
+    if (reason === PASSWORD_AUTH_REASON.NETWORK) {
+      showNoticeOnGateOrToast("We couldn't verify the link — check your connection and open it again.", 'warning');
+      return;
+    }
+    if (serverError) {
+      showNoticeOnGateOrToast("We couldn't verify the link just now — open it again in a minute.", 'warning');
+      return;
+    }
+    if (isSignedInForApp()) {
+      // Item 7 (coordinator, optional next-action copy) — the visitor has a
+      // working session; say what to do next, not just that the link died.
+      // S1-C (2026-09-26) — there is no "Settings → Profile"; the Password
+      // row lives in the control-center drawer under the player's name.
+      showNoticeOnGateOrToast("This reset link is old — you're already signed in. To change your password, open the menu, tap your name, then Password.", 'warning');
+      return;
+    }
+    showPasswordRecoveryScreen({ expired: true });
+  } catch (err) { console.warn('[auth] could not show the expired-link state', err); }
+}
+export const _onRecoveryVerifyRejectedForTest = onRecoveryVerifyRejected;
+
+/**
+ * DI-335 — Profile's "Password" row. SAME `.modal-overlay.centered`/`.modal`
+ * idiom `showAccountSheet()` already uses (DI-335's own Reuse call), a NEW
+ * sheet, not a drawer pane. Two screens, one sheet: (1) "send a code" (2)
+ * "enter the code + new password" — REWRITTEN by security-reviewer FINDING
+ * 3 to require the server-verified `reauthenticate()` nonce on EVERY
+ * `updatePassword()` call, no path skips it (see js/auth.js's own header on
+ * `updatePassword()`/`requestPasswordChangeCode()`).
+ */
+/** DI-335 — the sheet's title follows the row: "Change Password" for an
+ *  account with a password identity, "Set Password" for a Google-only one,
+ *  neutral "Password" when the session cannot say (N4, third pass). */
+function passwordSheetTitle(hasPw) {
+  return hasPw === true ? 'Change Password' : hasPw === false ? 'Set Password' : 'Password';
+}
+function passwordChangeStep1HTML(hasPw = null) {
+  return `<div class="modal">
+    <div class="modal-header"><h3>${escHtml(passwordSheetTitle(hasPw))}</h3><button class="modal-close" id="pwacct-change-close">✕</button></div>
+    <p class="text-sm">For your security, we'll email a code to confirm it's you.</p>
+    <button type="button" class="btn btn-primary btn-block" id="pwacct-change-send-code">Send Code</button>
+    <div id="pwacct-change-message" style="display:none" class="text-sm mt-sm"></div>
+  </div>`;
+}
+function passwordChangeStep2HTML(hasPw = null) {
+  // DI-335 — Change variant ONLY: the current password, a UX-only early check
+  // (signInWithPassword() against the account's own email). NOT the security
+  // control — the reauthentication nonce is, on every path (Finding 3).
+  const currentField = hasPw === true ? `
+    <div class="form-group">
+      <label class="form-label" for="pwacct-change-current">Current password</label>
+      <input class="form-input" id="pwacct-change-current" type="password" autocomplete="current-password" />
+    </div>` : '';
+  return `<div class="modal">
+    <div class="modal-header"><h3>${escHtml(passwordSheetTitle(hasPw))}</h3><button class="modal-close" id="pwacct-change-close">✕</button></div>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-change-code">Confirmation code</label>
+      <input class="form-input" id="pwacct-change-code" inputmode="numeric" autocomplete="one-time-code" />
+    </div>${currentField}
+    <div class="form-group">
+      <label class="form-label" for="pwacct-change-new">New password</label>
+      <input class="form-input" id="pwacct-change-new" type="password" autocomplete="new-password" />
+    </div>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-change-confirm">Confirm new password</label>
+      <input class="form-input" id="pwacct-change-confirm" type="password" autocomplete="new-password" />
+    </div>
+    <button type="button" class="btn btn-primary btn-block" id="pwacct-change-submit">Update Password</button>
+    <button type="button" class="btn btn-ghost btn-block mt-sm" id="pwacct-change-resend">Resend code</button>
+    <div id="pwacct-change-message" style="display:none" class="text-sm mt-sm"></div>
+  </div>`;
+}
+function showPasswordChangeSheet() {
+  document.getElementById('pwacct-change-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'pwacct-change-overlay';
+  ov.className = 'modal-overlay centered';
+  // F5 (security gate, 3c fix window, 2026-09-25) — swept by
+  // applyIdentityDeltaIfChanged()'s data-hold-teardown pass (below) on an
+  // ordinary identity change (sign-out mid-flow, a different account
+  // signing in), not only by the hold-gate teardown this marker already
+  // covers via `.modal-overlay`.
+  ov.setAttribute('data-hold-teardown', '');
+  const hasPw = getAccountHasPasswordIdentity();
+  ov.innerHTML = passwordChangeStep1HTML(hasPw);
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  const bindClose = () => document.getElementById('pwacct-change-close')?.addEventListener('click', close);
+  bindClose();
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+
+  const showMsg = (text, tone) => {
+    const el = document.getElementById('pwacct-change-message');
+    if (!el) return;
+    el.style.color = tone === 'error' ? 'var(--loss)' : 'var(--text-muted)';
+    el.textContent = text; el.style.display = 'block';
+  };
+
+  function bindStep1() {
+    const btn = document.getElementById('pwacct-change-send-code');
+    btn?.addEventListener('click', async () => {
+      if (!btn || btn.disabled) return;
+      btn.disabled = true; const label = btn.textContent; btn.textContent = 'Sending…';
+      try {
+        await requestPasswordChangeCode();
+        ov.innerHTML = passwordChangeStep2HTML(hasPw);
+        bindClose();
+        bindStep2();
+        showMsg('Code sent — check your email.', 'notice');
+      } catch (err) {
+        const reason = classifyPasswordAuthError(err);
+        // Coordinator ruling 2026-09-26 (recorded in the register): enumeration
+        // folds apply only to surfaces an anonymous visitor can reach; this
+        // sheet is signed-in only and emails the owner's own address, so honest
+        // rate-limit copy. The rate-limit fold is REVERTED here and on
+        // bindStep2()'s resend. (The signed-out forgot-password screen keeps
+        // its F4 fold — that address is typed by an anonymous visitor.)
+        if (reason === PASSWORD_AUTH_REASON.RATE_LIMITED) showMsg(passwordAuthErrorCopy(reason), 'error');
+        // R-5 (DI-335, N4 third pass) — reauthenticate() refused because the
+        // account's email is not confirmed yet: DI-336's verify-your-email
+        // copy + a resend link, same as the gate's email_not_confirmed row.
+        else if (reason === PASSWORD_AUTH_REASON.EMAIL_NOT_CONFIRMED) {
+          const em = getAccountEmail();
+          showMsg(em ? `Verify your email first — we sent a link to ${em}.` : 'Verify your email first — check your inbox for the link.', 'notice');
+          appendResendVerificationLink(document.getElementById('pwacct-change-message'), em);
+        }
+        else showMsg("Couldn't send that — check your connection and try again.", 'error');
+        const liveBtn = document.getElementById('pwacct-change-send-code');
+        if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+      }
+    });
+  }
+  function bindStep2() {
+    document.getElementById('pwacct-change-resend')?.addEventListener('click', async () => {
+      try { await requestPasswordChangeCode(); showMsg('Code sent — check your email.', 'notice'); }
+      catch (err) {
+        // Drew's ruling (third pass) — honest rate-limit copy: the address
+        // is the signed-in owner's own, nothing to enumerate (see bindStep1).
+        const reason = classifyPasswordAuthError(err);
+        if (reason === PASSWORD_AUTH_REASON.RATE_LIMITED) showMsg(passwordAuthErrorCopy(reason), 'error');
+        else showMsg("Couldn't send that — check your connection and try again.", 'error');
+      }
+    });
+    document.getElementById('pwacct-change-submit')?.addEventListener('click', async () => {
+      const btn = document.getElementById('pwacct-change-submit');
+      if (!btn || btn.disabled) return;
+      const code = document.getElementById('pwacct-change-code')?.value.trim() || '';
+      const pw1 = document.getElementById('pwacct-change-new')?.value || '';
+      const pw2 = document.getElementById('pwacct-change-confirm')?.value || '';
+      const currentEl = document.getElementById('pwacct-change-current');
+      const current = currentEl ? (currentEl.value || '') : null;
+      if (!code || !pw1 || !pw2) return;
+      if (currentEl && !current) return;
+      if (pw1 !== pw2) { showMsg("Those passwords don't match.", 'error'); return; }
+      btn.disabled = true; const label = btn.textContent; btn.textContent = 'Updating…';
+      // DI-335 Change variant — the UX-ONLY current-password pre-check. Safe
+      // to answer "incorrect" inline: the player is signed in and looking at
+      // their own account (no enumeration boundary). The nonce below remains
+      // the actual control whether or not this check ran.
+      if (currentEl) {
+        try { await signInWithPassword(getAccountEmail(), current); }
+        catch (err) {
+          const r = classifyPasswordAuthError(err);
+          showMsg(r === PASSWORD_AUTH_REASON.NO_MATCH || r === PASSWORD_AUTH_REASON.UNKNOWN ? 'Current password is incorrect.' : passwordAuthErrorCopy(r), 'error');
+          btn.disabled = false; btn.textContent = label;
+          return;
+        }
+      }
+      try {
+        // FINDING 3 — the nonce is REQUIRED here, no path skips it.
+        await updatePassword(pw1, code);
+        showMsg('Password updated.', 'notice');
+        haptic('success');
+        setTimeout(() => { showToast('Password updated.', 'success'); close(); }, 1200);
+      } catch (err) {
+        const reason = classifyPasswordAuthError(err);
+        if (reason === PASSWORD_AUTH_REASON.CODE_INVALID) showMsg("That code didn't work. Check it or request a new one.", 'error');
+        else showMsg(passwordAuthErrorCopy(reason), 'error');
+        const liveBtn = document.getElementById('pwacct-change-submit');
+        if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+      }
+    });
+  }
+  bindStep1();
+}
+export const _showPasswordChangeSheetForTest = showPasswordChangeSheet;
+
+/**
+ * DI-340 — "Delete Account." SAME `.modal-overlay.centered`/`.modal` idiom,
+ * NEVER `confirm()`/`prompt()` (the "named deviation" this DI states: a
+ * typed "DELETE" confirmation, the industry-standard pattern for
+ * irreversible account actions, is a familiar pattern being reused, not a
+ * novel one being invented). Retention list (DI-340 FINDING 11): only the
+ * caller's OWN account-linked identity is scrubbed server-side
+ * (`anonymize_own_account()`); picks, results, chat and display name all
+ * survive as league history (AD-28).
+ */
+function deleteAccountSheetHTML() {
+  return `<div class="modal">
+    <div class="modal-header"><h3>Delete your account?</h3><button class="modal-close" id="pwacct-delete-close">✕</button></div>
+    <p class="text-sm">This removes your sign-in and profile. Your name, picks, and results stay part of your leagues' history — they won't be deleted, just no longer linked to your account. This can't be undone.</p>
+    <p class="text-sm text-muted">A record of this change is kept in your league's audit history, visible only to your commissioner.</p>
+    <div class="form-group">
+      <label class="form-label" for="pwacct-delete-confirm">Type DELETE to confirm</label>
+      <input class="form-input" id="pwacct-delete-confirm" autocomplete="off" placeholder="Type DELETE" />
+    </div>
+    <button type="button" class="btn btn-danger btn-block" id="pwacct-delete-submit" disabled>Delete My Account</button>
+    <div id="pwacct-delete-message" style="display:none" class="text-sm mt-sm"></div>
+  </div>`;
+}
+function showDeleteAccountSheet() {
+  document.getElementById('pwacct-delete-overlay')?.remove();
+  const ov = document.createElement('div');
+  ov.id = 'pwacct-delete-overlay';
+  ov.className = 'modal-overlay centered';
+  // F5 (security gate, 3c fix window, 2026-09-25) — same reasoning as
+  // showPasswordChangeSheet()'s own comment: swept on an ordinary identity
+  // change, not only a hold.
+  ov.setAttribute('data-hold-teardown', '');
+  ov.innerHTML = deleteAccountSheetHTML();
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  document.getElementById('pwacct-delete-close')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  const showMsg = (text) => {
+    const el = document.getElementById('pwacct-delete-message');
+    if (!el) return;
+    el.style.color = 'var(--loss)';
+    el.textContent = text; el.style.display = 'block';
+  };
+  const input = document.getElementById('pwacct-delete-confirm');
+  const submitBtn = document.getElementById('pwacct-delete-submit');
+  // Set explicitly, not left to the static `disabled` HTML attribute alone
+  // — belt and suspenders (the markup already carries it too), and it is
+  // what makes the STARTING state a real, observable JS property rather
+  // than something only a browser's own attribute-reflection provides.
+  if (submitBtn) submitBtn.disabled = true;
+  input?.addEventListener('input', () => {
+    if (submitBtn) submitBtn.disabled = (input.value !== 'DELETE');
+  });
+  submitBtn?.addEventListener('click', async () => {
+    const btn = document.getElementById('pwacct-delete-submit');
+    if (!btn || btn.disabled) return;
+    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Deleting…';
+    try {
+      await deleteOwnAccount();
+      close();
+      showToast('Your account has been deleted.', 'success');
+      // deleteOwnAccount() already signs out / clears local session data
+      // (js/auth.js's own header) — the sign-in gate shows via the SDK's
+      // own SIGNED_OUT event, the same path every other sign-out already
+      // uses, no manual gate call needed here.
+    } catch (e) {
+      console.warn('[account] delete failed', e);
+      // B6 (3c fix window, 2026-09-25) — a sole-commissioner refusal is a
+      // NAMED, non-retryable reason (js/auth.js's AccountDeleteRefusedError,
+      // F-6), not a transport failure. It gets its OWN copy — "check your
+      // connection" is actively wrong here (retrying changes nothing until
+      // the player hands off the league) — and its own message is already
+      // rendering-ready (auth.js constructs it), so it's shown verbatim.
+      if (e instanceof AccountDeleteRefusedError && e.reason === 'last_commissioner') {
+        showMsg(e.message);
+      } else {
+        // LOUD-FAIL (AD-06) — including the safe partial-failure state where
+        // the anonymize RPC succeeded but the Admin API step failed; the
+        // player does not need to distinguish "fully deleted" from
+        // "anonymized, auth row pending" — the account is unusable to them
+        // either way, and DI-340's audit_log row already carries the timing
+        // for anyone who does need to distinguish it.
+        showMsg("Couldn't delete your account — check your connection and try again, or tell your commissioner.");
+      }
+      const liveBtn = document.getElementById('pwacct-delete-submit');
+      if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
+    }
+  });
+}
+export const _showDeleteAccountSheetForTest = showDeleteAccountSheet;
 
 /** DI-180c "Session expired" — a NEW banner, distinct DOM node from
  *  showBackendErrorBanner() (never merged — see that function's own
@@ -21164,6 +24563,57 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   if (key === _lastIdentityKey) return false;
   const prevKey = _lastIdentityKey;
   _lastIdentityKey = key;
+  // SECURITY N1 (pass-2, 2026-09-25) — the four admin-panel caches
+  // (`_platformKvCache`/`_allLeaguesCache`/`_usersAcrossLeaguesCache`/
+  // `_joinCodeCache`) are all module-level and keyed by NOTHING — an
+  // account handover on the same page session (sign-out, a different
+  // Google account signing in, a league switch) used to leave the PREVIOUS
+  // identity's cross-league roster, platform settings and join code
+  // painted for the new one until an unrelated repaint happened to
+  // refetch. Reset to each cache's own never-fetched default here, at the
+  // one chokepoint every identity change passes through — the SAME
+  // discipline `refreshPlatformAdminFlags()`/`refreshMaintenanceBannerCache()`
+  // immediately below already follow for the flags/banner themselves.
+  _platformKvCache = { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: false, error: null, attempted: false };
+  _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+  _usersAcrossLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
+  _joinCodeCache = { leagueId: null, code: '', loading: false, error: null };
+  // SECURITY GATE, S-4 (2026-09-25) — the FIFTH cache this chokepoint resets.
+  // Synchronous, zero network calls (js/auth.js's own header on this
+  // function explains why it is not a re-fetch) — never leave a departed
+  // identity's maintenance-banner string on screen for the next one.
+  clearMaintenanceBannerCacheOnIdentityChange();
+  // F5 (security gate, 3c fix window, 2026-09-25) — the delete-account and
+  // password-change sheets (`#pwacct-delete-overlay`/`#pwacct-change-overlay`,
+  // DI-335/340) are body-appended overlays, the same shape `data-hold-
+  // teardown` already exists to sweep generically — but this chokepoint
+  // (an ordinary identity change: sign-out, a different Google account
+  // signing in, a league switch) is NOT a hold and never called that sweep.
+  // Left open, a stale "Delete your account?" or "Confirmation code" sheet —
+  // scoped to the PREVIOUS identity's own reauthentication flow — stayed
+  // painted in front of whatever the new identity's content becomes. Both
+  // overlays already carry `data-hold-teardown` (their own creation sites,
+  // below); reused here rather than a second, overlay-specific sweep.
+  //
+  // F5 (third pass) — removing the NODE is not the whole close. Two of the
+  // swept roots carry state outside themselves: the League Page overlay
+  // inerted `.main-content`/`.bottom-nav`/`.app-header` when it opened, and
+  // the chat game-thread sheet left `U.sheetGameId` set. Swept by DOM removal
+  // alone, the new identity inherited an app it could not touch and a chat
+  // module still pointed at the old identity's thread. Each is closed through
+  // its OWN close path (hideLeaguePageOverlay() — which also defers to a live
+  // hold's inert lock — and chat-ui's resetGameChatSheetForTeardown()).
+  try {
+    const hadLeaguePage = !!document.getElementById('league-page-overlay');
+    const hadChatSheet = !!document.getElementById('chat-sheet-wrap');
+    document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove());
+    if (hadLeaguePage) hideLeaguePageOverlay();
+    if (hadChatSheet) resetGameChatSheetForTeardown();
+    // S2-3 (2026-09-26) — every sign-out (drawer, Settings, session expiry,
+    // forced) passes through here: close the drawer so it is not left open
+    // under the sign-in gate and does not reappear after the next sign-in.
+    controlCenterApi?.close?.({ immediate: true });
+  } catch (e) { console.warn('[auth] identity-change overlay sweep failed', e); }
   console.info(`[auth] identity changed (${reason}) — clearing the pick draft and re-resolving player preferences`);
   // Read the draft BEFORE it is cleared — the suspension box is the same four
   // values, moved rather than copied-and-kept.
@@ -21174,6 +24624,31 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
     layoutEditing: state.layoutEditing,
   };
   clearPickDraft();
+  // ══ RG-245 (reviewer BLOCK, 2026-09-25) — THE UNDELIVERED TAP ═════════════
+  //
+  // A notification banked while the page was withheld belongs to the account
+  // that was signed in when it arrived, and must never be replayed into the
+  // next one (the shape of every device-local leak DI-180q's sweep exists to
+  // stop). It is NOT cleared here, and this comment is the record of why: this
+  // chokepoint fires on an identity ARRIVING as well as on one changing, and
+  // the arrival is the very transition the banked tap is waiting for. Clearing
+  // on that edge wipes the tap one instant before the flush that was about to
+  // deliver it — measured, not guessed: deeplinktest went 42/0 -> 38/6 with a
+  // clear here, failing §1, §2 and §4, i.e. reinstating B-04 itself.
+  //
+  // Narrowing it to `if (prevKey)` does not help either, because the ordinary
+  // cold boot makes TWO deltas for ONE account as the memberships land:
+  //   null -> "u-drew\0L-IRB\0null"  (INITIAL_SESSION)
+  //        -> "u-drew\0L-IRB\0p_drew" (MEMBERSHIPS_REFRESHED)
+  // The second has a truthy prevKey and is not an account change at all.
+  //
+  // So the rule lives on the SLOT instead: it is stamped with getAccountUserId()
+  // at bank time and refused at delivery if the account has changed under it.
+  // One check, at the one place the tap can actually reach a player — rather
+  // than an obligation on a list of transitions somebody has to keep in step,
+  // which is the failure mode releaseWithholdIfResolved()'s header is about.
+  // See stashPendingDeepLink()/flushPendingDeepLink().
+  //
   // resyncPlayerPreferences() RUNS AT EXPIRY, deliberately, and each of the
   // things it does was decided rather than inherited:
   //   • OneSignal logout — YES, at the expiry itself. A device nobody is signed
@@ -21248,7 +24723,90 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // `preserveLayoutEditing` only on the one path that just put it back — see
   // resyncPlayerPreferences()'s own comment. Everything else clears it.
   resyncPlayerPreferences({ preserveLayoutEditing: outcome === 'restored' });
+  // Security fix round (2026-09-25), FINDINGS 1 & 2 — this is the ONE
+  // chokepoint every identity change (sign-out, sign-in, account handover,
+  // league switch) passes through. `refreshPlatformAdminFlags()` used to be
+  // called only once, from mountControlCenterDrawer() at boot (that call was
+  // dead — it ran before the SDK — and was deleted 2026-09-26, S2-1) — an admin who
+  // signed in AFTER boot never got admin chrome, and a sign-out followed by a
+  // different member signing in inherited the PREVIOUS account's cached
+  // isPlatformAdmin/isSuperAdmin flags until the next full reload (the caches
+  // are now also reset at every sign-out site in js/auth.js — FINDING 1's
+  // other half). Fire-and-forget: the drawer/Settings page render fine with both flags false
+  // until this resolves, then repaint once.
+  //
+  // FINDING 2 — `refreshControlCenterAndSettingsPage()` was never called from
+  // an identity path at all, so after an A->B handover on the same page
+  // session the drawer kept showing A's displayName/initials/league/alma
+  // mater (buildControlCenterCtx() reads getSession()/getPlayer() fresh, but
+  // nothing told the drawer to re-render). Called unconditionally, immediately
+  // — this is synchronous local state, not a network read, so there is
+  // nothing to await.
+  refreshControlCenterAndSettingsPage();
+  // Security round 3, N-2 (2026-09-26) — a PASSWORD_RECOVERY event runs
+  // through this SAME chokepoint (it is an identity change), so without this
+  // guard a recovery token — one that has not yet proven the player knows
+  // the account's password, DI-334 Finding 1's whole point — was already
+  // being asked "is this account a platform/super admin" before the reset
+  // even completes. Read-only today, and refreshControlCenterAndSettingsPage()
+  // just above still repaints with both flags at their safe (false) default,
+  // so nothing regresses visually; there is simply no reason to spend the
+  // read on an identity that has not been proven yet.
+  if (!isRecoverySession()) {
+    refreshPlatformAdminFlags()
+      .then(() => refreshControlCenterAndSettingsPage())
+      .catch((e) => console.warn('[auth] platform-admin flag refresh failed on an identity change', e));
+  }
+  // NOTE 6 / BLOCK 4 (2026-09-25) — the maintenance-banner cache's "on
+  // identity delta" half is DELIBERATELY NOT hung off this chokepoint.
+  // Tried three narrowings here (every key diff; `accountBefore !==
+  // accountAfter`; a literal SIGNED_IN/SIGNED_OUT `reason` only) and every
+  // one of them still broke a real authtest.mjs section: `getPlatformKv()`
+  // reads `client.from('platform_kv')`, and this exact chokepoint is what a
+  // large fraction of this suite's single-flight/epoch/401-retry/discard
+  // sections drive directly with fake clients that count and sequence
+  // `.from()` calls exactly, unscoped by table name, to prove a specific
+  // number of network calls happen (often asserting EXACTLY ZERO further
+  // calls after a voided/discarded identity) — an extra, legitimate call
+  // from here is indistinguishable, to those mocks, from a bug. "Read once
+  // at boot" is covered instead (the boot fetch in applyAuthModeDecision(),
+  // after the SDK load — S2-1, 2026-09-26) — a real
+  // signed-in session will see the current banner on its next full page
+  // load, which is DI-345's own actual verification step (§Verification 5:
+  // "confirm it appears for a signed-in test account"), not "instantly,
+  // mid-session, with no reload." Named here rather than silently dropped —
+  // a same-page-session identity handover will not refresh this ONE value
+  // until the next reload; every other identity-delta side effect in this
+  // function (draft clear, preferences, admin flags, control-center repaint)
+  // is unaffected.
   return true;
+}
+
+/**
+ * NOTE 6 / BLOCK 4 — repaints whichever screen is actually on-screen after
+ * `refreshMaintenanceBannerCache()` resolves. Narrow, per-tab dispatch (same
+ * shape `refreshPlatformAdminFlags()` uses via `refreshControlCenterAndSettingsPage()`
+ * immediately above) rather than re-running the whole `navigateTo()`
+ * pipeline, which would re-derive `leagueFlow`/`linkFlow` from scratch and
+ * risk a redundant navigation side effect on every ordinary token refresh.
+ */
+function _repaintMaintenanceBannerSurface() {
+  if (getAuthMode() !== 'supabase') return;
+  // SECURITY (found via authtest.mjs's A6/R1 hold-gate suite, 2026-09-25) —
+  // the auth-hold gate empties all six page containers and must STAY empty
+  // through any session event that arrives while it is up (security 7/8's
+  // own "the withheld page is unreachable... not merely covered"). This
+  // function used to repaint straight into whichever container matched
+  // `state.currentTab`, bypassing that gate entirely — the same class of
+  // bug the gate exists to prevent, just via a new door. Checked first,
+  // same as every other render chokepoint in this file guards on it.
+  if (isContentWithheld()) return;
+  if (linkFlowScreen()) return;   // DI-183b's confirmation card carries no banner slot
+  const tab = state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard');
+  if (needsLeagueFlowScreen()) { renderLeagueFlowScreen(tab); return; }
+  ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard,
+     commissioner: renderCommPage, admin: renderAdminPage, rules: renderRulesPage,
+     chat: renderChatPage })[state.currentTab]?.();
 }
 /** Exported for authtest — drives the chokepoint's OBSERVABLE result rather
  *  than re-deriving it. Production never calls this. */
@@ -21402,7 +24960,7 @@ export function refreshAuthUI(event, payload) {
   // data flag would make the link flow unreachable on any build that has not cut
   // the data layer over.
   if (event === 'MEMBERSHIPS_REFRESHED'
-      && hasValidSupabaseSession() && !getMembershipsError()
+      && isSignedInForApp() && !getMembershipsError()
       && hasResolvedMemberships() && getCachedMemberships().length === 0) {
     (async () => {
       try {
@@ -21442,7 +25000,29 @@ export function refreshAuthUI(event, payload) {
     // isNativeShell() alone).
     const payloadSessionFresh = !!payload && typeof payload.access_token === 'string' && !!payload.access_token
       && (Number(payload.expires_at) || 0) * 1000 > Date.now();
-    const signedIn = !!payload && (hasValidSupabaseSession() || (isNativeOrigin() && payloadSessionFresh));
+    // DI-334 FINDING 1 (HIGH, security-reviewer) — `PASSWORD_RECOVERY` carries
+    // a full-privilege access token, indistinguishable at the token level
+    // from an ordinary session. Excluded from `signedIn` EXPLICITLY — this
+    // is the one line that decides whether a visitor who has done nothing
+    // but click a password-reset email link gets dropped into the app's
+    // normal signed-in surface before they have set a new password (or
+    // proven they're at the keyboard right now, not just an inbox). The
+    // gate stays up; the new-password screen renders INSIDE it — see the
+    // dedicated `else if (event === 'PASSWORD_RECOVERY')` branch below.
+    //
+    // ══ B1 FIX (2026-09-25, 3c fix window) — KEYED ON THE EVENT NAME ALONE,
+    //    THIS WAS BYPASSABLE. ═══════════════════════════════════════════════
+    // The vendored SDK can re-emit `SIGNED_IN` (on a visibility change,
+    // `_onVisibilityChanged` -> `_recoverAndRefresh`) or `TOKEN_REFRESHED`
+    // (hourly) carrying the SAME recovery session while a password reset is
+    // still pending — neither of those event names is `'PASSWORD_RECOVERY'`,
+    // so the event-name term alone let a recovery session through as an
+    // ordinary sign-in. `isRecoverySession()` (js/auth.js) is the actual
+    // STATE, not the event name that happened to announce it, and is what
+    // must gate this — the event-name term stays too (belt and suspenders:
+    // it is what routes the `PASSWORD_RECOVERY` event itself into the
+    // dedicated branch below rather than this one).
+    const signedIn = event !== 'PASSWORD_RECOVERY' && !isRecoverySession() && !!payload && (isSignedInForApp() || (isNativeOrigin() && payloadSessionFresh));
     if (signedIn) {
       // ── SECURITY F-3 (sixth gate), THE app.js HALF ─────────────────────────
       // hideSessionExpiredBanner() does two things: it removes the node AND it
@@ -21481,6 +25061,29 @@ export function refreshAuthUI(event, payload) {
       // a reader (and a console) that it happened.
       releaseWithholdIfResolved(`auth-event:${event}`)
         .catch(e => console.error(`[auth] the un-withhold transition rejected (auth-event:${event})`, e));
+    } else if (event === 'PASSWORD_RECOVERY') {
+      // DI-334 FINDING 1 — the recovery screen renders INSIDE the still-
+      // present gate (never a fresh showGoogleSignInGate(), which would
+      // drop the player back to the ordinary sign-in form and lose the
+      // token-hash context). The app is NOT un-withheld here — no
+      // releaseWithholdIfResolved() call — until updatePasswordForRecovery()
+      // succeeds, which is this screen's own job, not this handler's.
+      //
+      // B3 FIX (2026-09-25, 3c fix window) — auth.js's R-f arm (a device
+      // that could not persist the recovery marker) emits THIS SAME event
+      // name with a null payload after already flipping `_recoverySession`
+      // back to false and kicking off signOut() (see `_emitSessionRefused()`
+      // in js/auth.js). Painting the new-password form unconditionally here
+      // showed the "Set New Password" screen for a recovery that had already
+      // been refused — a form a player could type into and submit against a
+      // session that no longer exists. `isRecoverySession()` is the real
+      // question: only a LIVE recovery gets the form; a refused one gets the
+      // DI-334 expired/used-link state instead.
+      if (isRecoverySession()) {
+        showPasswordRecoveryScreen();
+      } else {
+        showPasswordRecoveryScreen({ expired: true });
+      }
     } else {
       if (isSessionExpired()) showSessionExpiredBanner(); else hideSessionExpiredBanner();
       // Re-show the gate ONLY if it is not already up. showGoogleSignInGate()
@@ -21489,6 +25092,14 @@ export function refreshAuthUI(event, payload) {
       // A7 again: if a hold gate is up, it stays up — a Google gate is not an
       // acceptable replacement for a lock this build cannot lift.
       if (!document.getElementById('site-gate-overlay') && !currentAuthHoldReason()) showGoogleSignInGate();
+      // R2-1 / Security N1 (third pass) — …EXCEPT an orphaned new-password
+      // form. A recovery that has ended (Back -> cancelRecovery(), a reload
+      // mid-recovery refused by auth.js's INITIAL_SESSION arm, an involuntary
+      // sign-out) leaves a form that can only fail if submitted; it is not a
+      // screen the player is reading copy on, it is a dead end. The EXPIRED
+      // variant is deliberately kept — that IS copy the player needs to read.
+      else if (!currentAuthHoldReason() && !currentGateIsHold() && !isRecoverySession()
+               && document.getElementById('site-gate-overlay')?.getAttribute?.('data-recovery-variant') === 'form') showGoogleSignInGate();
     }
   }
 
@@ -21556,6 +25167,14 @@ export function showAccountSheet() {
   // Only when there IS an active membership to dispute. On a signed-in account
   // with no league there is nothing to be wrong about.
   const active = memberships.find(m => m.leagueId === getActiveLeagueId());
+  // DI-314 §Placement — "View League" is the minimal, already-shipped
+  // extension point that reaches League Page today (League Page's automatic
+  // entry from DI-312 only fires once a league has >1 live sport, which is
+  // unreachable until Multi-Sport ships a second sport). Only when there IS
+  // an active league to view — same gate as notMeRow above.
+  const viewLeagueRow = active
+    ? `<button type="button" class="btn btn-ghost btn-block mt-sm" id="account-view-league-btn">View League</button>`
+    : '';
   const notMeRow = active
     ? `<button type="button" class="btn btn-ghost btn-block mt-sm" id="account-not-me-btn">This isn't me</button>`
     : '';
@@ -21571,6 +25190,7 @@ export function showAccountSheet() {
     <p>Signed in as ${escHtml(getAccountEmail())}</p>
     ${active ? `<p class="text-muted" style="font-size:.85rem">Playing as ${escHtml(active.displayName || active.memberId)} in ${escHtml(active.leagueName || 'this league')}.</p>` : ''}
     ${switchRow}
+    ${viewLeagueRow}
     ${joinRow}
     ${notMeRow}
     <button type="button" class="btn btn-danger btn-block mt-sm" id="account-signout-btn">Sign Out</button>
@@ -21580,6 +25200,7 @@ export function showAccountSheet() {
   ov.querySelector('#account-sheet-close')?.addEventListener('click', close);
   ov.addEventListener('click', e => { if (e.target === ov) close(); });
   ov.querySelector('#account-switch-btn')?.addEventListener('click', () => { close(); showLeagueSelectorSheet(); });
+  ov.querySelector('#account-view-league-btn')?.addEventListener('click', () => { close(); showLeaguePageOverlay(); });
   ov.querySelector('#account-join-btn')?.addEventListener('click', () => {
     close();
     // Reset the link flow so linkFlowScreen() stops claiming the slot and
@@ -21645,7 +25266,7 @@ export function showAccountSheet() {
  *  membership resolves. */
 export function needsLeagueFlowScreen() {
   if (getAuthMode() !== 'supabase') return false;
-  if (!hasValidSupabaseSession()) return false;      // the sign-in gate owns this state
+  if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)
   // SEC F2 / reviewer N4 — a FAILED membership read must never render the
   // join/create landing. "We couldn't ask" and "the answer is zero leagues"
   // look identical from here unless this line exists, and the first one being
@@ -21696,7 +25317,22 @@ function leagueRoleBadgeHTML(role, { leagueId = null } = {}) {
     : `<span class="badge badge-draft">Player</span>`;
 }
 
+// FINDING 8 (pass-2 reviewer, 2026-09-25) — exact copy from DI-345 §Copy
+// ("Signups-closed refusal (create_league/join_league)"), reused for BOTH
+// the client-side disabled state below and LEAGUE_RPC_ERROR_COPY's
+// server-refusal mapping — one string, never a second, independently-typed
+// copy of it.
+const SIGNUPS_CLOSED_COPY = "New leagues aren't being created right now — check back soon.";
+
 function leagueFlowLandingHTML() {
+  // Courtesy client check — DI-344's own "real authority is server" split,
+  // the same shape the paused-league banner and every other signups_open
+  // consumer in this thread uses. `getCachedSignupsOpen()` defaults to
+  // `true` until the first read lands, so a not-yet-loaded cache never
+  // falsely disables these controls.
+  const signupsOpen = getCachedSignupsOpen();
+  const disabledAttr = signupsOpen ? '' : 'disabled';
+  const closedNotice = signupsOpen ? '' : `<div class="text-xs mb-sm" style="color:var(--text-muted)">${escHtml(SIGNUPS_CLOSED_COPY)}</div>`;
   return `
     <div class="card text-center">
       <h2>You're not in a league yet</h2>
@@ -21705,49 +25341,94 @@ function leagueFlowLandingHTML() {
     <div class="league-flow-row">
       <div class="card">
         <h3>Join a League</h3>
+        ${closedNotice}
         <div class="form-group">
           <label for="league-join-code">Invitation code</label>
-          <input type="text" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" />
+          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" ${disabledAttr} />
           <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
         </div>
         <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
-        <button type="button" class="btn btn-primary btn-block" id="league-join-btn">Join League</button>
+        <button type="button" class="btn btn-primary btn-block" id="league-join-btn" ${disabledAttr}>Join League</button>
       </div>
       <div class="card">
         <h3>Create a League</h3>
+        ${closedNotice}
         <div class="form-group">
           <label for="league-create-name">League name</label>
-          <input type="text" id="league-create-name" placeholder="e.g. IRB Pick 'Ems" autocomplete="off" maxlength="80" />
+          <input type="text" class="form-input" id="league-create-name" placeholder="e.g. IRB Pick 'Ems" autocomplete="off" maxlength="80" ${disabledAttr} />
         </div>
         <div class="site-gate-error" id="league-create-error" style="display:none;color:var(--loss)"></div>
-        <button type="button" class="btn btn-primary btn-block" id="league-create-btn">Create League</button>
+        <button type="button" class="btn btn-primary btn-block" id="league-create-btn" ${disabledAttr}>Create League</button>
       </div>
     </div>`;
 }
 
+// DI-312 — "never a placeholder" pilot predicate: a membership carries its
+// own `pilot` boolean (auth.js's getCachedMemberships(), same field
+// buildControlCenterCtx() already reads as `activeMembership.pilot === true`)
+// once T-23's `leagues.pilot` ships; until then every membership's `pilot` is
+// simply absent/false and the badge degrades to "doesn't render" (leagues-
+// home.js's own default, `isPilotLeague:() => false`) rather than a fork of
+// this predicate.
+const isMembershipPilot = (m) => m?.pilot === true;
+
 /** The row list is the ONE piece shared by both selector surfaces — DI-181's
  *  automatic full-page selector (no active league resolved yet) and DI-184's
  *  voluntary reopen (tapping the header pill / Account sheet's "Switch
- *  League") — DI-184f "no second selector implementation." */
+ *  League") — DI-184f "no second selector implementation," extended by
+ *  DI-312 to "no second card markup": both now render `leagueCardHTML()`
+ *  (js/leagues-home.js), never the old bare `.league-selector-row` markup. */
 function leagueSelectorListHTML() {
   const memberships = getCachedMemberships();
-  return `<div id="league-selector-list">
-      ${memberships.map(m => `
-        <button type="button" class="card league-selector-row" style="display:flex;align-items:center;justify-content:space-between;width:100%;text-align:left;cursor:pointer;min-height:44px" data-league-id="${escHtml(m.leagueId)}">
-          <span>${escHtml(m.leagueName || m.leagueId)}</span>
-          ${leagueRoleBadgeHTML(m.role, { leagueId: m.leagueId })}
-        </button>`).join('')}
+  const activeLeagueId = getActiveLeagueId();
+  return `<div id="league-selector-list" class="league-card-list">
+      ${memberships.map(m => leagueCardHTML(m, {
+        activeLeagueId, isPilotLeague: isMembershipPilot, escHtml, icon,
+        roleBadgeHTML: leagueRoleBadgeHTML,
+      })).join('')}
     </div>`;
 }
+/** DI-312's full-page "Leagues Home" — the multi-membership branch of
+ *  `renderLeagueFlowScreen()`. "The sheet becomes the page": the richer
+ *  `renderLeaguesHome()` card list (name, Pilot badge, role badge, chevron,
+ *  plus DI-313's "+ Create new league" stub) replaces the old bare
+ *  `leagueSelectorListHTML()`/"Choose a League" heading pair — same render
+ *  seam, same trigger (`needsLeagueFlowScreen()`), same DOM mechanism. */
 function leagueSelectorHTML() {
-  return `<div class="card text-center"><h2>Choose a League</h2></div>${leagueSelectorListHTML()}`;
+  return renderLeaguesHome({
+    memberships: getCachedMemberships(),
+    activeLeagueId: getActiveLeagueId(),
+    isPilotLeague: isMembershipPilot,
+    escHtml, icon,
+    roleBadgeHTML: leagueRoleBadgeHTML,
+  });
 }
-/** Binds every `.league-selector-row` inside `container` to switch leagues,
- *  then calls `afterPick()` (e.g. closing a modal) once the switch settles —
- *  shared by the full-page selector and the sheet below. */
+/** Binds every `[data-action="switch-league"]` card inside `container` to
+ *  switch leagues, then calls `afterPick()` (e.g. closing a modal) once the
+ *  switch settles — shared by the full-page selector and the sheet below.
+ *  DI-313's stub card ("+ Create new league") is NOT bound here — it routes
+ *  through the document-level `bindComingSoonDispatcher()` delegated
+ *  listener instead, matching `data-action="coming-soon"` app-wide.
+ *
+ * SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — tapping the card
+ * for the league you are ALREADY active in used to run `doSwitchActiveLeague()`
+ * anyway — a real network round trip that "switches" a player to the league
+ * they're already in, a no-op with a spinner. That tap is repointed to
+ * League Page instead (the same destination the control-center identity
+ * header's league name now opens, below) — this is DI-314's own named entry
+ * point ("the Leagues Home league card") for League Page, not a new,
+ * unrelated feature. A DIFFERENT league's card still switches, unchanged. */
 function bindLeagueSelectorRows(container, afterPick) {
-  container.querySelectorAll('.league-selector-row').forEach(row => {
+  container.querySelectorAll('[data-action="switch-league"]').forEach(row => {
     row.addEventListener('click', async () => {
+      // DI-312 §Interaction spec — "Haptic: selection weight, native only,
+      // on card tap." (native-only gating lives inside haptic() itself).
+      haptic('selection');
+      if (row.dataset.leagueId && row.dataset.leagueId === getActiveLeagueId()) {
+        if (afterPick) afterPick();
+        showLeaguePageOverlay();
+        return;
+      }
       await doSwitchActiveLeague(row.dataset.leagueId);
       if (afterPick) afterPick();
     });
@@ -21777,6 +25458,18 @@ const LEAGUE_RPC_ERROR_COPY = [
   ['already_member',    "You're already in that league — switch to it from your account instead."],
   ['bad_name',          'That league name needs to be between 1 and 80 characters.'],
   ['not_authenticated', 'Your sign-in expired before that went through. Sign in again and retry.'],
+  // FINDING 8 (pass-2 reviewer, 2026-09-25) — `create_league`/`join_league`
+  // both raise this when `platform_kv.signups_open` is false (0026's
+  // fail-closed coalesce). Same copy, both RPCs (DI-345's own "Copy"
+  // section: "Signups-closed refusal (create_league/join_league)") — the
+  // client-side disabled state below is a courtesy; this is what actually
+  // stops a request that slips past a stale/not-yet-loaded client cache.
+  // SECURITY GATE comment-drift fix (2026-09-25) — this used to RE-TYPE the
+  // literal string, contradicting SIGNUPS_CLOSED_COPY's OWN comment above
+  // ("one string, never a second, independently-typed copy of it"). Now the
+  // same constant, imported by reference — a future copy edit can no longer
+  // update one call site and silently leave the other quoting stale text.
+  ['signups_closed',    SIGNUPS_CLOSED_COPY],
 ];
 const LEAGUE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
 const LEAGUE_UNKNOWN_COPY      = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
@@ -21842,8 +25535,25 @@ export function renderLeagueFlowScreen(tab) {
   const c = document.getElementById(`page-${tab}`);
   if (!c) return;
   const memberships = getCachedMemberships();
-  c.innerHTML = memberships.length === 0 ? leagueFlowLandingHTML() : leagueSelectorHTML();
+  // DI-312's ONE ROUTER — `resolvePostSignInRoute()` delegates to
+  // `resolveLeagueEntryPath()` (js/leagues-home.js) rather than this file
+  // re-deriving the same §0 table, so the two can never disagree
+  // (leagueshometest.mjs's agreement sweep). `needsLeagueFlowScreen()` only
+  // ever calls this function for 0 or >1 memberships (its own body returns
+  // false for exactly one, `SINGLE_LEAGUE_ROUTE:'skip'`'s single-membership
+  // fast path — Drew's ruling, 2026-09-25) — so `screen` here is always
+  // `'landing'` or `'leagues-home'`; the single-membership branches
+  // (`'six-tab'`/`'league-page'`) are handled upstream, unchanged.
+  const { screen } = resolvePostSignInRoute({ memberships, lastLeagueId: getActiveLeagueId() });
+  c.innerHTML = screen === 'landing' ? leagueFlowLandingHTML() : leagueSelectorHTML();
   bindLeagueFlowScreen(c);
+  // NOTE 6 / BLOCK 4 (2026-09-25) — DI-345 §Verification step 5: "a signed-in
+  // account with zero leagues must see it." This is that landing (and the
+  // league-selector sibling branch, which is the same gate for an account
+  // that HAS leagues but hasn't picked one this session) — no league is
+  // active yet, so only the platform-wide maintenance banner applies here,
+  // never the paused-league one (which needs an active league's status).
+  renderMaintenanceBannerIfNeeded(tab);
 }
 
 /**
@@ -22160,7 +25870,7 @@ export const _MEMBER_ACTION_ERROR_COPY_FOR_TEST = { refused: MEMBER_ACTION_REFUS
 export function linkFlowScreen() {
   if (getAuthMode() !== 'supabase') return '';
   if (isContentWithheld()) return '';
-  if (!hasValidSupabaseSession()) return '';
+  if (!isSignedInForApp()) return '';
   if (getMembershipsError()) return '';
   if (!hasResolvedMemberships()) return '';
   // A resolved link owes the confirmation card ONCE, whatever the membership
@@ -22190,7 +25900,7 @@ export function linkFlowScreen() {
 export async function attemptAutoLink() {
   if (_autoLinkAttempted) return _linkFlow.state;
   if (getAuthMode() !== 'supabase') return 'idle';
-  if (!hasValidSupabaseSession()) return 'idle';
+  if (!isSignedInForApp()) return 'idle';
   if (isContentWithheld()) return 'idle';
   _autoLinkAttempted = true;
   _linkFlow = { ..._linkFlow, state: 'attempting' };
@@ -22596,7 +26306,15 @@ export async function loadLeagueMembersCard() {
   const leagueId = getActiveLeagueId();
   const statusEl = document.getElementById('comm-link-status-card');
   const cardEl = document.getElementById('comm-members-card');
-  if (!leagueId || !cardEl) return;
+  // REVIEWER BLOCK 5 (2026-09-25) — `#comm-members-card` (League Members)
+  // stays on the Commissioner panel; `#comm-link-status-card` (Account
+  // Linking) moved to the Admin panel (UX Revamp wiring pass 2). An
+  // admin-only viewer (redirected to #page-admin, never sees Commissioner)
+  // only ever paints `statusEl`, never `cardEl` — the old `!cardEl` early
+  // return left THAT viewer's Account Linking card reading "Loading
+  // members…" forever, since neither element ever got filled in. Each
+  // target is now filled in INDEPENDENTLY; only bail when NEITHER exists.
+  if (!leagueId || (!cardEl && !statusEl)) return;
   try {
     const members = await listLeagueMembers(leagueId);
     let codes = [], contacts = [];
@@ -22612,8 +26330,10 @@ export async function loadLeagueMembersCard() {
     _memberCardData = { members: [], codes: [], contacts: [], error: `We couldn't load this league's members. ${memberActionErrorCopy(err)}` };
   }
   if (statusEl) statusEl.innerHTML = linkStatusCardHTML();
-  cardEl.innerHTML = leagueMembersCardHTML();
-  bindLeagueMembersCard(cardEl);
+  if (cardEl) {
+    cardEl.innerHTML = leagueMembersCardHTML();
+    bindLeagueMembersCard(cardEl);
+  }
 }
 
 /**
@@ -22881,6 +26601,1041 @@ export async function doSwitchActiveLeague(leagueId) {
     refreshHeader();
     navigateTo(state.currentTab || 'dashboard');
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-314/DI-315 — LEAGUE PAGE + LEAGUE STANDINGS (pushed overlay)
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Reached today only via `showAccountSheet()`'s "View League" row (DI-314
+ * §Placement's route (b) — the automatic route (a), from Leagues Home when a
+ * league has >1 live sport, is a future cell: `sports.length` is always 1
+ * until Multi-Sport ships a second sport, so `needsLeagueFlowScreen()` never
+ * has a reason to open this overlay itself this release; §8 of the DI names
+ * this boundary explicitly). Always the ACTIVE league — DI-312's own
+ * "uncovered" note names browsing a NON-active league's page as out of scope
+ * ("the concurrent-league-hydrate limitation... is out of scope because
+ * UN-298 never asked for it").
+ *
+ * NATIVE SWIPE-BACK (DI-314 §Interaction spec, PARITY-BY-DESIGN): the visible
+ * back chevron (`[data-action="league-page-back"]`) is wired below and is the
+ * ONLY affordance both platforms get this pass. `leaguePageBackAffordances()`
+ * (imported, unused below) names that iOS should ALSO get an edge-swipe
+ * gesture; `js/nav-gestures.js` — where such a gesture would have to live —
+ * is outside this pass's file-claim window (a different group's file), so
+ * the swipe is NOT wired this release. Named explicitly rather than silently
+ * dropped: "implemented per spec (back button), unverified on device
+ * (swipe-back gesture, deferred to nav-gestures.js's own claim window)."
+ *
+ * `_leaguePageOverlayView` tracks which of the overlay's two pushed screens
+ * (DI-314's League Page, DI-315's League Standings) is currently painted
+ * into the ONE `#league-page-overlay` element — a second push inside the
+ * same overlay, not a second overlay, matching "one level deeper, same
+ * mechanism" (DI-315 §Placement).
+ */
+let _leaguePageOverlayView = 'league'; // 'league' | 'standings'
+
+/** Deliberately NOT `_setAppContentInert()` (the sixth-gate hold-teardown
+ *  function above). That function also flips `_appContentInert`, which the
+ *  hold-recovery check reads to mean "a hold gate tore this page down" — an
+ *  ordinary League Page open/close is not a hold, and sharing the flag would
+ *  make hold-recovery logic misinterpret it. Same two attributes
+ *  (`inert`/`aria-hidden`), same two selectors (`.main-content`/
+ *  `.bottom-nav`) as that function's own routine — deliberately separate
+ *  state, per DI-314's "reuses the app's existing full-screen overlay +
+ *  inert pattern" instruction read as "same mechanism," not "same flag." */
+function _setLeaguePageOverlayInert(on) {
+  // SECURITY GATE FINDING 1 (2026-09-25) — a hold's own teardown
+  // (`tearDownRenderedContentForHold()` → `_setAppContentInert(true)`)
+  // already made `.main-content`/`.bottom-nav` inert, and that is a
+  // stronger, longer-lived lock than this overlay's own. If the League
+  // Page overlay happens to be closing (`hideLeaguePageOverlay()` calling
+  // this with `on=false`) WHILE a hold is active — the overlay itself is
+  // swept by the `[data-hold-teardown]` sweep above, but this function
+  // could still run first/independently and strip the very attributes the
+  // hold is relying on. `_appContentInert` (module-scope, this file) is
+  // the hold's own flag; while it's true, restoring focusability is the
+  // hold gate's job alone, never this overlay's.
+  if (!on && _appContentInert) return;
+  // REVIEWER BLOCK item 3 (916bdb7 review, 2026-09-25) — `.app-header` is now
+  // included here too. `#control-center-trigger` lives inside `.app-header`
+  // (index.html) with NO `isContentWithheld()` guard of its own (fixed
+  // separately, below, as defense in depth); without inerting the header,
+  // that button stayed tappable — reachable by touch, keyboard AND scripted
+  // click — while this overlay sat over everything else, opening the
+  // control-center drawer (Sign Out, Switch League, Profile) over a League
+  // Page the player should not even be able to reach without a working
+  // active league. Belt-and-suspenders with the z-index fix directly above
+  // this function's own CSS rule (css/styles.css).
+  for (const sel of ['.main-content', '.bottom-nav', '.app-header']) {
+    document.querySelectorAll(sel).forEach(el => {
+      if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+      else { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+    });
+  }
+}
+
+/**
+ * DI-315's "not a reimplementation" rule: `weeks` here MUST be the SAME
+ * filtered list `renderLeaderboard()`/`seasonStandingsRows()` build their
+ * rows from (`showInHistory !== false && dataSourceMode !== 'demo'`),
+ * further narrowed to weeks that actually have a `getWeeklyResults()` row —
+ * never the raw `getWeeks()` output. This performs NO ranking or scoring of
+ * its own; `seasonStandingsRows()` (the same function the Standings tab and
+ * DI-D3's player profile both call, CONVENTIONS #21) supplies the rows.
+ */
+function leaguePageVisibleResultWeeks() {
+  const allWeeksRaw = getWeeks();
+  const visibleWeekIds = new Set(
+    allWeeksRaw.filter(w => w.showInHistory !== false && w.dataSourceMode !== 'demo').map(w => w.weekId));
+  const resultWeekIds = new Set(
+    getWeeklyResults().filter(r => visibleWeekIds.has(r.weekId)).map(r => r.weekId));
+  return allWeeksRaw.filter(w => resultWeekIds.has(w.weekId));
+}
+
+function renderLeaguePageOverlayBody() {
+  const ov = document.getElementById('league-page-overlay');
+  if (!ov) return;
+  if (_leaguePageOverlayView === 'standings') {
+    const weeks = leaguePageVisibleResultWeeks();
+    ov.innerHTML = renderLeagueStandingsView({ standingsRows: seasonStandingsRows(), weeks, escHtml, icon });
+    ov.querySelector('[data-action="league-standings-back"]')?.addEventListener('click', () => {
+      _leaguePageOverlayView = 'league';
+      renderLeaguePageOverlayBody();
+    });
+    return;
+  }
+  const activeLeagueId = getActiveLeagueId();
+  const active = getCachedMemberships().find(m => m.leagueId === activeLeagueId);
+  ov.innerHTML = renderLeaguePage(
+    { leagueId: activeLeagueId, leagueName: active?.leagueName || '' },
+    // STEP B(13) (third pass) — the league's own sport_default (membership
+    // read) plus every sport its weeks actually use (this league's mirror).
+    { isCommissioner: !!getSession()?.isAdmin,
+      sports: deriveLeagueSports({
+        sportDefault: active?.sportDefault || undefined,
+        weekSports: getWeeks().map(w => w?.sport).filter(Boolean),
+      }),
+      escHtml, icon },
+  );
+  ov.querySelector('[data-action="league-page-back"]')?.addEventListener('click', hideLeaguePageOverlay);
+  // Sport-card tap: "the current CFB pickems page" the sport card names IS
+  // the six-tab shell this overlay sits above — closing the overlay reveals
+  // it directly, no separate navigation target to compute (single-sport
+  // league, today, always).
+  ov.querySelectorAll('[data-action="open-sport"]').forEach(btn => {
+    // DI-314 §Interaction spec — "Sport-card tap: touch-down compress
+    // (~97%), selection haptic (native only), then the push into the
+    // six-tab shell."
+    btn.addEventListener('click', () => { haptic('selection'); hideLeaguePageOverlay(); });
+  });
+  ov.querySelector('[data-action="open-league-standings"]')?.addEventListener('click', () => {
+    // DI-315 §Interaction spec — "haptic belongs to the entry-row tap on
+    // League Page (selection weight, same as the sport card)."
+    haptic('selection');
+    _leaguePageOverlayView = 'standings';
+    renderLeaguePageOverlayBody();
+  });
+  // The "Add new sport" stub ([data-action="coming-soon"]) is NOT bound
+  // here — it routes through the document-level `bindComingSoonDispatcher()`
+  // delegated listener, same as every other stub card in the app.
+}
+
+// STEP 2(b) (UX Revamp deferrals, 2026-09-26) — native swipe-back on the
+// League Page overlay + drag-to-dismiss on the wizard sheet, via
+// js/nav-gestures.js's shared `bindSwipeToDismiss()`. Both use this SAME
+// duplicate-not-import blocking check, the identical shape/reasoning
+// control-center.js's own `isBlockedByOtherSurface()` already uses (see
+// that function's comment): consulting `gesturesSuspended()` here would
+// self-block on touchstart, since each of these overlays' own presence is
+// one of THAT function's suspending conditions. A short, occasionally-
+// duplicated list, not a cycle.
+function _dismissBlockingSurfaceUp({ excludeWizard = false } = {}) {
+  if (document.getElementById('site-gate-overlay')) return true;
+  if (document.querySelector('.modal-overlay')) return true;
+  if (document.getElementById('chat-sheet-wrap')) return true;
+  if (!excludeWizard && document.getElementById('week-wizard-sheet-wrap')) return true;
+  if (document.querySelector('#control-center[data-open="true"]')) return true;
+  return false;
+}
+/** The League Page's swipe-back: blocked by any other surface on top,
+ *  including the week wizard's sheet. */
+function isDismissGestureBlockedByOtherSurface() {
+  return _dismissBlockingSurfaceUp();
+}
+/** Security gate F2 (3c fix window, third pass) — the WIZARD's own drag-to-
+ *  dismiss. It used the predicate above, which answers true whenever
+ *  `#week-wizard-sheet-wrap` exists — i.e. always, while the wizard is open:
+ *  the binder blocked itself and the gesture could never fire. Same list,
+ *  minus the wizard's own wrap ("OTHER surface" means other than itself). */
+function isWizardDismissGestureBlocked() {
+  return _dismissBlockingSurfaceUp({ excludeWizard: true });
+}
+
+/** League Page overlay's own swipe-back: standings -> league one level, or
+ *  closes the overlay from the league view — the SAME transition each of
+ *  the two existing `[data-action="league-page-back"/"league-standings-back"]`
+ *  tap handlers already perform (renderLeaguePageOverlayBody() above), never
+ *  a second, divergent close path. */
+function leaguePageOverlayGoBack() {
+  if (_leaguePageOverlayView === 'standings') {
+    _leaguePageOverlayView = 'league';
+    renderLeaguePageOverlayBody();
+    return;
+  }
+  hideLeaguePageOverlay();
+}
+
+let _unbindLeaguePageSwipeBack = null;
+
+function showLeaguePageOverlay() {
+  // SECURITY GATE FINDING 1 (2026-09-25) — a hold gate fail-closed for a
+  // reason; opening ANOTHER body-appended overlay in front of it (even one
+  // that would immediately be swept on the NEXT teardown pass) is a window
+  // this must never have. Mirrors the same guard the wizard opener gets below.
+  if (isContentWithheld()) return;
+  document.getElementById('league-page-overlay')?.remove();
+  _leaguePageOverlayView = 'league';
+  const el = document.createElement('div');
+  el.id = 'league-page-overlay';
+  // SECURITY GATE FINDING 1 — swept by tearDownRenderedContentForHold() if a
+  // hold fires while this overlay is open (see that function's own comment).
+  el.setAttribute('data-hold-teardown', '');
+  document.body.appendChild(el);
+  renderLeaguePageOverlayBody();
+  _setLeaguePageOverlayInert(true);
+  // Bound ONCE on the persistent `el` node — renderLeaguePageOverlayBody()
+  // only ever replaces `el.innerHTML` (the two pushed screens), never `el`
+  // itself, so this survives both views without rebinding on every repaint.
+  // No-ops on web (bindSwipeToDismiss() is native-only).
+  _unbindLeaguePageSwipeBack?.();
+  _unbindLeaguePageSwipeBack = bindSwipeToDismiss(el, {
+    axis: 'x',
+    getBlocked: isDismissGestureBlockedByOtherSurface,
+    getDistancePx: () => el.getBoundingClientRect().width || window.innerWidth || 1,
+    onProgress: (progress) => {
+      el.setAttribute('data-dragging', 'true');
+      el.style.setProperty('--league-page-drag-x', String(progress));
+    },
+    onSettle: (result) => settleLeaguePageSwipe(el, result),
+  });
+}
+
+/**
+ * Reviewer R2 (3c fix window, third pass) — a COMPLETED dismiss plays the rest
+ * of the slide and only then removes the surface; it never pops. `apply()`
+ * drives the custom property to 1 (the element's own CSS transition animates
+ * it), `done()` runs on that transition's `transitionend` — immediately under
+ * reduced motion (the transition is disabled there, so no event would come),
+ * with a bounded fallback in case the event never arrives (a backgrounded tab,
+ * a transition interrupted by a re-render). `done` runs at most once.
+ */
+const DISMISS_SLIDE_FALLBACK_MS = 420;   // comfortably past --motion-nav (260ms)
+function finishSlideThenRemove({ listenEl, apply, reducedMotion, done }) {
+  if (reducedMotion) { apply(); done(); return; }
+  let finished = false;
+  let timer = null;
+  const onEnd = (e) => { if (!e || !e.target || e.target === listenEl) finish(); };
+  function finish() {
+    if (finished) return;
+    finished = true;
+    try { listenEl?.removeEventListener?.('transitionend', onEnd); } catch {}
+    if (timer !== null) { try { clearTimeout(timer); } catch {} }
+    done();
+  }
+  listenEl?.addEventListener?.('transitionend', onEnd);
+  if (typeof setTimeout === 'function') timer = setTimeout(finish, DISMISS_SLIDE_FALLBACK_MS);
+  apply();
+}
+
+/**
+ * The League Page swipe's settle, named so it is testable (authtest [63]).
+ *
+ *   • CANCELLED — spring back: the offset returns to 0 WITH the transition.
+ *   • DISMISSED from Standings (one level back, SAME node) — Security gate F3
+ *     (third pass): the offset used to be left at its release value, parking
+ *     the re-rendered League view off to the side. It is now snapped to 0 with
+ *     the transition suppressed (`data-no-transition`) BEFORE the re-render,
+ *     and the transition is restored on the next frame.
+ *   • DISMISSED from the League view (a CLOSE) — Reviewer R2: the overlay
+ *     slides the rest of the way out (offset -> 1) and is removed on
+ *     `transitionend`, never popped mid-slide; immediately under reduced
+ *     motion.
+ */
+function settleLeaguePageSwipe(el, { dismissed, reducedMotion } = {}) {
+  el.removeAttribute('data-dragging');
+  if (!dismissed) {
+    // Cancelled — spring back; the CSS transition animates it (disabled under
+    // prefers-reduced-motion, css/styles.css).
+    el.style.setProperty('--league-page-drag-x', '0');
+    return;
+  }
+  // No haptic in either dismissed branch — this is the CLOSE direction
+  // (control-center's own precedent: a haptic on open/reveal only).
+  if (_leaguePageOverlayView === 'standings') {
+    el.setAttribute('data-no-transition', '');
+    el.style.setProperty('--league-page-drag-x', '0');
+    leaguePageOverlayGoBack();
+    const restore = () => { try { el.removeAttribute('data-no-transition'); } catch {} };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(restore); else restore();
+    return;
+  }
+  finishSlideThenRemove({
+    listenEl: el,
+    apply: () => el.style.setProperty('--league-page-drag-x', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => leaguePageOverlayGoBack(),
+  });
+}
+export const _settleLeaguePageSwipeForTest = settleLeaguePageSwipe;
+export function _setLeaguePageOverlayViewForTest(view) { _leaguePageOverlayView = view === 'standings' ? 'standings' : 'league'; }
+export function _getLeaguePageOverlayViewForTest() { return _leaguePageOverlayView; }
+
+function hideLeaguePageOverlay() {
+  _unbindLeaguePageSwipeBack?.();
+  _unbindLeaguePageSwipeBack = null;
+  document.getElementById('league-page-overlay')?.remove();
+  _setLeaguePageOverlayInert(false);
+  _leaguePageOverlayView = 'league';
+}
+// SECURITY GATE FINDING 1 (2026-09-25) test-only seams — same `_xForTest`
+// convention as every other seam in this file. `tearDownRenderedContentForHold`/
+// `_setAppContentInert` are the hold gate's own mechanism; `showLeaguePageOverlay`/
+// `hideLeaguePageOverlay` are exercised directly rather than through the full
+// boot rig, which has no fixture for "an overlay is open, then a hold fires".
+export const _tearDownRenderedContentForHoldForTest = tearDownRenderedContentForHold;
+/** S2-3 (2026-09-26) — authtest [72] swaps in a spy drawer API to prove the
+ *  hold sweep and the identity chokepoint close it. Production never calls this. */
+export function _setControlCenterApiForTest(api) { const prev = controlCenterApi; controlCenterApi = api; return prev; }
+export const _setAppContentInertForTest = _setAppContentInert;
+export const _showLeaguePageOverlayForTest = showLeaguePageOverlay;
+export const _hideLeaguePageOverlayForTest = hideLeaguePageOverlay;
+// STEP 2(b) test-only seams (same `_xForTest` convention as the pair above).
+export const _leaguePageOverlayGoBackForTest = leaguePageOverlayGoBack;
+export const _isDismissGestureBlockedByOtherSurfaceForTest = isDismissGestureBlockedByOtherSurface;
+export const _isWizardDismissGestureBlockedForTest = isWizardDismissGestureBlocked;
+export function _appContentInertForTest() { return _appContentInert; }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-341/342/343 — WEEK SETUP WIZARD + COMMISSIONER REMINDERS (group C)
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * js/week-wizard.js's own header is explicit that it owns ONLY the pure
+ * decision logic (step selection, the gating checklist, the narrowed status
+ * set, the orchestration wrappers) — "the DOM shell and the actual wiring of
+ * these functions into renderCommPage() is the coordinator's next pass."
+ * This section IS that pass.
+ *
+ * SCOPE, STATED HONESTLY (per the DI's own "reuses existing markup" language
+ * for steps 1/3/4/5): step 1's fields are NOT the literal
+ * `showCreateWeekModal()` DOM nodes (that function still builds its own
+ * `.modal-overlay`, unchanged, untouched, for its existing callers) — this
+ * is a SEPARATE, small form with the identical field set and defaults,
+ * submitting through the SAME orchestration function
+ * (`createWeekFromWizard()`, via `weekWizardApi().createWeek()`). Step 3
+ * DOES reuse `showGameModal()` literally — no second spread-entry UI exists
+ * anywhere (AD-03 unchanged). Steps 4/5's fields are, likewise, a second
+ * small UI over the SAME underlying save calls (`saveWeek()` for timing,
+ * `postCommissionerAnnouncement()` for the announcement) rather than a
+ * second implementation of what happens when they're submitted — the
+ * business logic is not duplicated, only the field markup is. This is a
+ * narrower reading of "reuse" than literal DOM-node sharing, chosen because
+ * refactoring the standalone Week Settings/Announcement cards (each
+ * hundreds of lines deep inside `renderCommPage()`'s own giant template) to
+ * accept an alternate host was judged too invasive for this pass's risk
+ * budget; named here rather than silently presented as byte-identical.
+ */
+let _weekWizardApi = null;
+function weekWizardApi() {
+  if (_weekWizardApi) return _weekWizardApi;
+  _weekWizardApi = createWeekWizard({
+    createWeek, saveWeek, setActiveWeekId,
+    applyWeekStatusChange, showGameModal, buildSuggestedSlate,
+    scoreCandidateGames, fetchByDateRange, saveAvailableGames,
+    clearAvailableGames, getAvailableGames, getGames, saveGame, createGame,
+    claimedAlmaMaters, saveFetchProof, isSuggestionRejected, showToast,
+    nativeHapticImpact, isNativeShell,
+  });
+  return _weekWizardApi;
+}
+
+let _weekWizardStep = 1;
+/** Manual-reminder "last sent" stamp — THIS DEVICE, THIS SESSION ONLY.
+ *  §4.3's own copy ("Last reminded 2h ago") describes a value read from
+ *  `scribe_rate.last_post_at` server-side; that table carries NO grant to
+ *  `authenticated` by design (§4.4's security correction — a commissioner-
+ *  writable table would let a commissioner clear their own cooldown), and
+ *  the manual invoke's response envelope does not currently return a
+ *  timestamp either. Rather than fabricate a persisted, cross-device value
+ *  this pass cannot honestly read, this is scoped to what IS observable: a
+ *  local memory of this browser's own last successful send. Named
+ *  explicitly, not silently presented as the full DI-343 stamp. */
+let _lastManualReminderAt = null;
+
+function weekWizardEntryLabel(week) {
+  return week && week.status !== 'draft' ? 'Manage This Week' : (week ? 'Continue Set Up' : 'Set Up Week');
+}
+
+/** DI-C1 §2.1 — a single primary button at the TOP of the Week tab, above
+ *  the existing Week Manager / Week Settings / Available Games cards. */
+function weekWizardEntryCardHTML(week) {
+  return `<div class="admin-section" data-comm-tab="week">
+    <div class="card" id="week-wizard-entry-card">
+      <button type="button" class="btn btn-primary btn-block" id="week-wizard-entry-btn">${escHtml(weekWizardEntryLabel(week))}</button>
+    </div>
+  </div>`;
+}
+
+// REVIEWER minor finding (916bdb7 review, 2026-09-25) — the parameter was
+// named `step`, a common-enough generic identifier that xsstest.mjs's
+// EXEMPTIONS entry for its bare `${step}` interpolation (below) matches on
+// EXACT expression text, file-wide — nothing today collides with it (only
+// one bare `${step}` exists in js/app.js), but a future, wholly unrelated
+// feature adding its own local `${step}` interpolation would silently
+// inherit this exemption's "safe" verdict with no review. Renamed to
+// `activeStep` so the exemption text is inherently specific to this one
+// concept, not a word likely to be reused by coincidence.
+function renderWeekWizardTrackerHTML(activeStep) {
+  const dots = WIZARD_STEPS.map((s) => `<span class="week-wizard-step-dot${s.step === activeStep ? ' active' : ''}${s.step < activeStep ? ' done' : ''}"></span>`).join('');
+  return `<div class="week-wizard-tracker">${dots}<span class="week-wizard-tracker-label">Step ${activeStep} of ${WIZARD_STEP_COUNT}</span></div>`;
+}
+
+/** Step 1's fields — same field set/defaults as `showCreateWeekModal()`
+ *  (see this section's own header for why this is a second, small form
+ *  rather than the literal same DOM nodes). `idPrefix` keeps this markup's
+ *  ids distinct from that modal's, defensively, even though the two never
+ *  render at the same time. */
+function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {} } = {}) {
+  const season = defaults.season ?? (getSettings().season || '2026');
+  const weekNumber = defaults.weekNumber ?? nextNum;
+  const mode = defaults.dataSourceMode || 'espn_live';
+  return `
+    <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="${idPrefix}cw-season" value="${escHtml(String(season))}" /></div>
+    <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="${idPrefix}cw-num" type="number" value="${escHtml(String(weekNumber))}" /></div>
+    <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="${idPrefix}cw-round" placeholder="e.g. Part 2" value="${escHtml(defaults.roundLabel || '')}" /></div>
+    <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" id="${idPrefix}cw-start" type="date" value="${escHtml(defaults.startDate || '')}" /></div>
+    <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="${idPrefix}cw-end" type="date" value="${escHtml(defaults.endDate || '')}" /></div>
+    <div class="form-group"><label class="form-label">Data Source</label>
+      <select class="form-select" id="${idPrefix}cw-mode">
+        <option value="espn_live"${mode === 'espn_live' ? ' selected' : ''}>ESPN Live</option>
+        <option value="espn_historical"${mode === 'espn_historical' ? ' selected' : ''}>ESPN Historical</option>
+        <option value="manual"${mode === 'manual' ? ' selected' : ''}>Manual</option>
+        <option value="demo"${mode === 'demo' ? ' selected' : ''}>Demo</option>
+      </select></div>`;
+}
+
+function renderWeekWizardStep1HTML(week) {
+  const allWeeks = getWeeks();
+  const nextNum = allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
+  const defaults = week ? {
+    season: week.season, weekNumber: week.weekNumber, roundLabel: week.roundLabel,
+    startDate: week.startDate, endDate: week.endDate, dataSourceMode: week.dataSourceMode,
+  } : {};
+  return `<div class="admin-section-title">Create</div>
+    ${weekCreateFormFieldsHTML(nextNum, { defaults })}
+    <button type="button" class="btn btn-primary btn-block mt-md" id="wiz-step1-create">${week ? 'Save & Continue' : 'Create Week'}</button>`;
+}
+/** REVIEWER BLOCK item 2 (2026-09-25) — `week` is NEW: the current draft
+ *  week (if any), so re-entering Step 1 on it saves onto that SAME week
+ *  instead of `weekWizardApi().createWeek()` minting a second one every
+ *  time this handler fires. `undefined` on a genuine first-time create
+ *  (no current week yet) — `createWeekFromWizard()`'s own `existingWeek`
+ *  default (`null`) takes the mint-a-new-week branch exactly as before. */
+function bindWeekWizardStep1(bodyEl, week) {
+  bodyEl.querySelector('#wiz-step1-create')?.addEventListener('click', () => {
+    const fields = {
+      season: bodyEl.querySelector('#wiz-cw-season')?.value || '2026',
+      weekNumber: parseInt(bodyEl.querySelector('#wiz-cw-num')?.value, 10) || 1,
+      roundLabel: bodyEl.querySelector('#wiz-cw-round')?.value.trim() || '',
+      startDate: bodyEl.querySelector('#wiz-cw-start')?.value || '',
+      endDate: bodyEl.querySelector('#wiz-cw-end')?.value || '',
+      dataSourceMode: bodyEl.querySelector('#wiz-cw-mode')?.value || 'manual',
+    };
+    weekWizardApi().createWeek(fields, week);
+    refreshHeader();
+    _weekWizardStep = 2;
+    renderWeekWizardSheetBody();
+  });
+}
+
+function renderWeekWizardStep2HTML(week) {
+  if (!week) {
+    return `<p class="text-muted text-sm">Create the week first (Step 1).</p>
+      <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button></div>`;
+  }
+  return `<div class="admin-section-title">Populate games</div>
+    <button type="button" class="btn btn-primary btn-block" id="wiz-fetch-apply-btn">Fetch ESPN + Apply Suggested 10</button>
+    <div id="wiz-fetch-status" class="text-sm mt-sm text-muted"></div>
+    <div id="wiz-fetch-skeleton" class="week-wizard-skeleton-rows" style="display:none" aria-busy="true">${Array.from({ length: 10 }, () => '<div class="week-wizard-skeleton-row"></div>').join('')}</div>
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button><button type="button" class="btn btn-ghost" id="wiz-step2-skip">Skip to slate</button></div>`;
+}
+function bindWeekWizardStep2(bodyEl, week) {
+  bodyEl.querySelector('#wiz-step2-back')?.addEventListener('click', () => { _weekWizardStep = 1; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-step2-skip')?.addEventListener('click', () => { _weekWizardStep = 3; renderWeekWizardSheetBody(); });
+  const fetchBtn = bodyEl.querySelector('#wiz-fetch-apply-btn');
+  fetchBtn?.addEventListener('click', async () => {
+    if (!week) return;
+    const status = bodyEl.querySelector('#wiz-fetch-status');
+    const skeleton = bodyEl.querySelector('#wiz-fetch-skeleton');
+    fetchBtn.disabled = true;
+    if (status) status.textContent = WIZARD_COPY.FETCH_LOADING;
+    if (skeleton) skeleton.style.display = '';
+    try {
+      const result = await weekWizardApi().fetchAndApplySuggestedSlate(week);
+      if (skeleton) skeleton.style.display = 'none';
+      if (!result.ok) {
+        // REVIEWER BLOCK item 6 (916bdb7 review, 2026-09-25) — was a plain
+        // grey `.text-muted` line (status.textContent), which DI-C1 §2.5
+        // names explicitly as the wrong treatment: "never a silent 0-games
+        // state." Both failure shapes (a genuine fetch error AND ESPN
+        // legitimately returning zero games for these dates) now use the
+        // SAME loud, dismissible, red banner every other backend refusal in
+        // this app uses (AD-06's loud-fail rule) — the grey status line
+        // stays empty so the same information isn't shown twice in two
+        // registers. `onRetry` re-fires this exact button's own handler
+        // (not a generic backend reconnect — see showBackendErrorBanner()'s
+        // own header comment on why that distinction matters here).
+        // B8 (3c fix window) — `owner:'wizard'` so this banner is only ever
+        // taken down by a WIZARD hide. R2-4 (third pass) — and it is never
+        // SHOWN over a real sync banner either: reportWizardFetchFailure()
+        // falls back to this step's own inline status line when the shared
+        // banner is already carrying somebody else's failure.
+        reportWizardFetchFailure({
+          message: result.reason === 'no_games' ? WIZARD_COPY.FETCH_ZERO : WIZARD_COPY.FETCH_FAILED,
+          statusEl: status,
+          onRetry: () => { hideBackendErrorBanner('wizard'); fetchBtn.click(); },
+        });
+        fetchBtn.disabled = false;
+        return;
+      }
+      // B8 — scoped to 'wizard': a successful ESPN fetch must never silently
+      // hide a REAL sync/migration-pending banner (a different owner) that
+      // was already showing for an unrelated reason.
+      hideBackendErrorBanner('wizard');
+      status?.classList?.remove?.('wiz-fetch-status-error');
+      if (status) status.textContent = result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added);
+      _weekWizardStep = 3;
+      renderWeekWizardSheetBody();
+    } catch (e) {
+      console.warn('[week-wizard] fetch+apply failed', e);
+      if (skeleton) skeleton.style.display = 'none';
+      reportWizardFetchFailure({
+        message: WIZARD_COPY.FETCH_FAILED,
+        statusEl: status,
+        onRetry: () => { hideBackendErrorBanner('wizard'); fetchBtn.click(); },
+      });
+      fetchBtn.disabled = false;
+    }
+  });
+}
+
+function renderWeekWizardStep3HTML(games) {
+  const missing = countMissingSpreads(games);
+  const banner = games.length && missing > 0 ? `<div class="warning-box mb-sm">${escHtml(WIZARD_COPY.MISSING_SPREADS(missing))}</div>` : '';
+  const rows = games.map((g) => {
+    const hasSpread = typeof g.spread === 'number' && Number.isFinite(g.spread);
+    return `<button type="button" class="card week-wizard-game-row" data-game-id="${escHtml(g.gameId)}">
+      <span>${escHtml(g.awayTeam)} @ ${escHtml(g.homeTeam)}</span>
+      <span class="${hasSpread ? 'text-muted' : 'week-wizard-spread-missing'}">${hasSpread ? escHtml(formatSpread(g.spread, g.favorite, g) || 'Spread set') : 'Set spread'}</span>
+    </button>`;
+  }).join('');
+  return `<div class="admin-section-title">Confirm slate + spreads</div>
+    ${banner}<div class="week-wizard-game-list">${rows || '<p class="text-muted text-sm">No games on the slate yet.</p>'}</div>
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step3-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step3-next">Next</button></div>`;
+}
+function bindWeekWizardStep3(bodyEl, week, games) {
+  bodyEl.querySelector('#wiz-step3-back')?.addEventListener('click', () => { _weekWizardStep = 2; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-step3-next')?.addEventListener('click', () => { _weekWizardStep = 4; renderWeekWizardSheetBody(); });
+  bodyEl.querySelectorAll('[data-game-id]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const game = games.find((g) => g.gameId === row.dataset.gameId);
+      if (!game) return;
+      // DI-C1 §2.3 Step 3 — reuse, never a second spread-entry UI (AD-03).
+      showGameModal(game, week, () => renderWeekWizardSheetBody());
+    });
+  });
+}
+
+/** Shared by Step 4 and the Manage screen — same fields, same defaults,
+ *  same underlying `saveWeek()` write (`saveWizardTiming()`, below) as the
+ *  standalone Week Settings card's own timing block. */
+function renderWeekWizardTimingFieldsHTML(week, games) {
+  const lockAt = computeEffectiveLockAt(week, games);
+  const liveAt = computeEffectiveLiveAt(week, games);
+  const tz = getTimezone();
+  const fmt = (d) => (d ? formatGameTime(d.toISOString(), tz) : '—');
+  return `
+    <div class="form-group">
+      <label class="form-label">Auto-Open At</label>
+      <input class="form-input" type="datetime-local" id="wiz-picks-open-at" value="${week.picksOpenAt ? new Date(week.picksOpenAt).toISOString().slice(0, 16) : ''}" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Lock N minutes before first kickoff <span class="text-muted text-xs">— default 30</span></label>
+      <input class="form-input" type="number" min="0" max="720" id="wiz-auto-lock-offset" value="${getAutoLockOffsetMinutes(week)}" />
+    </div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="wiz-auto-live-enabled" ${getAutoLiveEnabled(week) ? 'checked' : ''} />
+      <span class="form-label" style="margin:0">Auto-transition LOCKED → LIVE at first kickoff</span>
+    </label></div>
+    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+      <input type="checkbox" id="wiz-auto-final-enabled" ${getAutoFinalizeEnabled(week) ? 'checked' : ''} />
+      <span class="form-label" style="margin:0">Prompt for finalization when all games are final</span>
+    </label></div>
+    <div class="effective-times-preview">
+      <div><strong>Effective lock:</strong> ${escHtml(fmt(lockAt))}</div>
+      <div><strong>Effective live:</strong> ${escHtml(fmt(liveAt))}</div>
+    </div>`;
+}
+function saveWizardTiming(bodyEl, week) {
+  const openRaw = bodyEl.querySelector('#wiz-picks-open-at')?.value;
+  const offsetRaw = parseInt(bodyEl.querySelector('#wiz-auto-lock-offset')?.value, 10);
+  const autoLockOffsetMinutes = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 30;
+  const autoLiveEnabled = bodyEl.querySelector('#wiz-auto-live-enabled')?.checked !== false;
+  const autoFinalizeEnabled = bodyEl.querySelector('#wiz-auto-final-enabled')?.checked !== false;
+  // SECURITY GATE FINDING 2 (916bdb7 review, 2026-09-25) — re-read the week
+  // at SAVE time, not the one captured when the sheet opened. The wizard
+  // sheet deliberately does not repaint on Realtime (DI-C1's own design —
+  // renderWeekWizardSheetBody() re-derives `week`/`games` on ITS OWN calls,
+  // but the closure param handed to this function is whatever was current
+  // when THIS render happened), so a commissioner who leaves Step 4/Manage
+  // open while tickAutoTransition() moves the week open->locked elsewhere
+  // would otherwise have this function spread the STALE `status:'open'`
+  // back into saveWeek() — the write-plan diff then reads as locked->open
+  // and issues transition_week('open'), silently reopening a week that
+  // just locked. Falls back to the captured `week` only if it has since
+  // been deleted (should not happen in practice; keeps this from throwing).
+  const liveWeek = getWeeks().find(w => w.weekId === week.weekId) || week;
+  saveWeek({
+    ...liveWeek,
+    picksOpenAt: openRaw ? new Date(openRaw).toISOString() : null,
+    autoLockOffsetMinutes, autoLiveEnabled, autoFinalizeEnabled,
+  });
+  refreshHeader();
+}
+/** SECURITY GATE FINDING 2 test-only seam — same `_xForTest` convention. */
+export const _saveWizardTimingForTest = saveWizardTiming;
+
+function renderWeekWizardStep4HTML(week, games) {
+  return `<div class="admin-section-title">Timing & auto-transitions</div>
+    ${renderWeekWizardTimingFieldsHTML(week, games)}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step4-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step4-next">Next</button></div>`;
+}
+function bindWeekWizardStep4(bodyEl, week) {
+  bodyEl.querySelector('#wiz-step4-back')?.addEventListener('click', () => { _weekWizardStep = 3; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-step4-next')?.addEventListener('click', () => {
+    saveWizardTiming(bodyEl, week);
+    // REVIEWER BLOCK item 5 (916bdb7 review, 2026-09-25) — UN-295's ≤6-tap
+    // budget. Step 5 (announce) is OPTIONAL and, on a fresh forward pass,
+    // ALWAYS blank — landing on it still cost a real tap (Skip) to move
+    // past nothing, making the no-announcement path 7 taps instead of 6.
+    // Forward navigation now skips straight to Step 6; Step 5 stays fully
+    // reachable — Step 6's own "Add an announcement" row (below) and its
+    // existing Back button both still land on it — for the commissioner who
+    // actually wants to type something, which is real, opt-in extra work
+    // and correctly costs an extra tap.
+    _weekWizardStep = 6;
+    renderWeekWizardSheetBody();
+  });
+}
+
+function renderWeekWizardAnnounceFieldsHTML() {
+  return `<div class="form-group">
+      <textarea class="form-input" id="wiz-announce-body" rows="3" placeholder="Message the league…" maxlength="500"></textarea>
+    </div>`;
+}
+/** Reuses `postCommissionerAnnouncement()` verbatim — the SAME send path
+ *  the standalone Commissioner Announcement card's `#comm-announce-send-btn`
+ *  handler calls (`bindCommEventListeners()`, this file). */
+function sendWizardAnnouncement(text) {
+  const sess = getSession();
+  postCommissionerAnnouncement(text, sess?.playerId || null);
+}
+
+function renderWeekWizardStep5HTML() {
+  return `<div class="admin-section-title">Announce (optional)</div>
+    ${renderWeekWizardAnnounceFieldsHTML()}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-skip">Skip</button><button type="button" class="btn btn-primary" id="wiz-step5-send" disabled>Send announcement</button></div>`;
+}
+function bindWeekWizardStep5(bodyEl) {
+  const body = bodyEl.querySelector('#wiz-announce-body');
+  const sendBtn = bodyEl.querySelector('#wiz-step5-send');
+  body?.addEventListener('input', () => { if (sendBtn) sendBtn.disabled = !body.value.trim(); });
+  bodyEl.querySelector('#wiz-step5-skip')?.addEventListener('click', () => {
+    if (body && body.value.trim() && !confirm(WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM)) return;
+    _weekWizardStep = 6;
+    renderWeekWizardSheetBody();
+  });
+  sendBtn?.addEventListener('click', () => {
+    const text = (body?.value || '').trim();
+    if (!text) return;
+    try {
+      sendWizardAnnouncement(text);
+      showToast('✅ Announcement sent', 'success');
+    } catch (e) {
+      console.warn('[week-wizard] announcement send failed', e);
+      showToast('Could not send announcement', 'error');
+    }
+    _weekWizardStep = 6;
+    renderWeekWizardSheetBody();
+  });
+}
+
+function renderWeekWizardStep6HTML(week, games) {
+  const missing = countMissingSpreads(games);
+  const timingConfigured = !!computeEffectiveLockAt(week, games);
+  const gate = weekWizardApi().gatingChecklist({ gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
+  const row = (ok, label) => `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(label)}</div>`;
+  return `<div class="admin-section-title">Open for picks</div>
+    ${row(gate.gamesOk, gate.gamesLabel)}${row(gate.spreadsOk, gate.spreadsLabel)}${row(gate.timingOk, gate.timingLabel)}
+    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-announce">Add an announcement</button>
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step6-back">Back</button>
+    <button type="button" class="btn btn-primary" id="wiz-open-btn" ${gate.canOpen ? '' : 'disabled'}>Open for Picks</button></div>`;
+}
+function bindWeekWizardStep6(bodyEl, week, games) {
+  bodyEl.querySelector('#wiz-step6-back')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
+  // REVIEWER BLOCK item 5 — the discoverable, intent-labeled path to Step 5
+  // now that forward navigation (Step 4's "Next") skips it by default. Same
+  // destination "Back" already goes to; this one names what it's for.
+  bodyEl.querySelector('#wiz-step6-announce')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-open-btn')?.addEventListener('click', () => {
+    const missing = countMissingSpreads(games);
+    const timingConfigured = !!computeEffectiveLockAt(week, games);
+    const result = weekWizardApi().openForPicks({ week, gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
+    if (!result.ok) return;
+    closeWeekWizardSheet();
+    refreshHeader();
+    renderCommPage();
+  });
+}
+
+/** DI-C3 §4.2/§4.3 — the cadence select, cooldown input, "last reminded"
+ *  stamp and the "SCRIBE: remind the stragglers" button. Only rendered
+ *  while `week.status === 'open'` (§4.2 — "hidden, not disabled, for every
+ *  other status"), inside the Manage screen. */
+function renderScribeReminderControlsHTML(week) {
+  const activeReminderPlayers = getPlayers().filter((p) => p.active);
+  // REVIEWER minor finding (916bdb7 review, 2026-09-25) — Array.prototype
+  // .every() on an EMPTY array is vacuously true, so a roster with zero
+  // active players (real, if rare — everyone deactivated) read as "everyone
+  // picked," which is a false, misleading claim rather than the honest "no
+  // one to remind" — checked explicitly, before the .every() call.
+  if (activeReminderPlayers.length === 0) {
+    return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
+      <p class="text-muted text-sm">No active players to remind.</p>`;
+  }
+  const everyoneSubmitted = activeReminderPlayers
+    .every((p) => hasPlayerSubmitted(week.weekId, p.playerId));
+  if (everyoneSubmitted) {
+    return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
+      <p class="text-muted text-sm">${escHtml(WIZARD_COPY.EVERYONE_PICKED)}</p>`;
+  }
+  const cadence = getSettings().reminderCadence || 'daily';
+  const cooldown = getSettings().reminderCooldownHours ?? 3;
+  const lastLabel = _lastManualReminderAt
+    ? `Last reminded ${Math.max(0, Math.round((Date.now() - _lastManualReminderAt) / 60000))}m ago (this device, this session)`
+    : 'Not reminded from this device this session';
+  return `<div class="admin-section-title mt-md">SCRIBE Reminders</div>
+    <div class="form-group">
+      <label class="form-label">Cadence while open</label>
+      <select class="form-select" id="wiz-reminder-cadence">
+        <option value="daily"${cadence === 'daily' ? ' selected' : ''}>Daily</option>
+        <option value="twice-daily"${cadence === 'twice-daily' ? ' selected' : ''}>Twice daily</option>
+        <option value="hourly-final-day"${cadence === 'hourly-final-day' ? ' selected' : ''}>Hourly on lock day</option>
+        <option value="thresholds-only"${cadence === 'thresholds-only' ? ' selected' : ''}>Thresholds only</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Manual cooldown (hours)</label>
+      <input class="form-input" type="number" min="1" id="wiz-reminder-cooldown" value="${escHtml(String(cooldown))}" />
+    </div>
+    <button type="button" class="btn btn-secondary btn-block" id="wiz-scribe-remind-btn">SCRIBE: remind the stragglers</button>
+    <p class="text-muted text-xs mt-xs">${escHtml(lastLabel)}</p>`;
+}
+/**
+ * REVIEWER BLOCK item 4 (916bdb7 review, 2026-09-25) — extracted into a pure
+ * function, same pattern as `leagueRpcErrorCopy()` above: the server
+ * envelope decides copy/tone, ONE place makes that decision, and — unlike
+ * the inline branch this replaces — it is unit-testable without a DOM
+ * (loadtest.mjs) against the REAL `SKIPPED` constants imported from
+ * `supabase/functions/_shared/job-rules.mjs`, rather than a hand-typed
+ * string ('cooldown') that had silently drifted from the server's actual
+ * shape (`skipped:'throttled', what:'cooldown'`) — the exact defect this
+ * item fixes. Returns `null` for the SUCCESS case (caller shows the
+ * success toast + haptic + timestamp itself, none of which belongs in a
+ * pure copy-mapping function).
+ */
+function reminderSkipToastCopy(data) {
+  if (!data) return null;
+  if (data.skipped === 'throttled' && data.what === 'cooldown') {
+    const cooldownHours = Math.max(1, parseInt(getSettings().reminderCooldownHours, 10) || 3);
+    return { text: `Already reminded within the last ${cooldownHours}h — try again after that.`, tone: 'warning' };
+  }
+  if (data.skipped === 'no_work') return { text: WIZARD_COPY.EVERYONE_PICKED, tone: 'info' };
+  if (data.skipped) return { text: 'Reminders are turned off for this league — enable them in Settings to use this button.', tone: 'warning' };
+  if (data.ok === false) return { text: "Couldn't send the reminder — check your connection and try again.", tone: 'error' };
+  return null;
+}
+export const _reminderSkipToastCopyForTest = reminderSkipToastCopy;
+
+function bindScribeReminderControls(bodyEl, week) {
+  bodyEl.querySelector('#wiz-reminder-cadence')?.addEventListener('change', (e) => saveSetting('reminderCadence', e.target.value));
+  bodyEl.querySelector('#wiz-reminder-cooldown')?.addEventListener('change', (e) => {
+    const n = Math.max(1, parseInt(e.target.value, 10) || 3);
+    saveSetting('reminderCooldownHours', n);
+  });
+  const btn = bodyEl.querySelector('#wiz-scribe-remind-btn');
+  btn?.addEventListener('click', async () => {
+    if (!week || week.status !== 'open') return;
+    if (!isServerJobEnabled('reminders')) {
+      showToast('Reminders are turned off for this league — enable them in Settings to use this button.', 'warning');
+      return;
+    }
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Posting…';
+    try {
+      const client = getSupabaseClient();
+      const leagueId = getActiveLeagueId();
+      if (!client || !leagueId) throw new Error('not_signed_in');
+      // DI-C3 §4.5 — the client's whole job is one line: `supabase-js`
+      // attaches the current session's access token automatically, and the
+      // manual branch is a SECOND, header-selected entry point on the SAME
+      // `reminders` Edge Function (no RPC, no job secret reachable here).
+      const { data, error } = await client.functions.invoke('reminders', { body: { league_id: leagueId } });
+      if (error) throw error;
+      // REVIEWER BLOCK item 4 (916bdb7 review, 2026-09-25) — was an inline
+      // comparison against `'cooldown'`, a string that never appears
+      // anywhere in the server's envelope (real shape: `skipped:'throttled',
+      // what:'cooldown'` — see reminderSkipToastCopy()'s own header). The
+      // dead comparison meant a second tap inside the cooldown window fell
+      // through every branch to the generic "turned off" warning — by-design
+      // behavior telling the commissioner the wrong story.
+      const mapped = reminderSkipToastCopy(data);
+      if (mapped) {
+        showToast(mapped.text, mapped.tone);
+      } else {
+        showToast('SCRIBE posted a reminder.', 'success');
+        nativeHapticImpact('MEDIUM');
+        _lastManualReminderAt = Date.now();
+      }
+    } catch (e) {
+      console.warn('[week-wizard] manual reminder failed', e);
+      showToast("Couldn't send the reminder — check your connection and try again.", 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+      renderWeekWizardSheetBody();
+    }
+  });
+}
+
+/** DI-C1 §2.5's "Manage" screen — a week that already exists and is not
+ *  `draft`. Status buttons (narrowed, §2.6), the SAME timing fields as
+ *  Step 4 (editable), the SAME announce field as Step 5, and (open weeks
+ *  only) the DI-C3 reminder controls. */
+function renderWeekWizardManageHTML(week, games) {
+  // RG-251 — offered from the SERVER-confirmed status, never a leg it refused.
+  const buttons = weekWizardApi().narrowedStatusButtons(serverConfirmedWeekStatus(week))
+    // STEP B(14) (third pass) — D-1: the Munera glyph + text, never the emoji
+    // label (kept on the entry only for the drift check vs the Comm panel).
+    .map((b) => `<button type="button" class="btn ${b.cls} btn-sm week-wizard-status-btn" data-to="${b.to}">${wizardStatusIconHTML(b)}${escHtml(b.text)}</button>`).join('');
+  return `<div class="text-sm text-muted mb-sm">Status: ${escHtml(week.status.toUpperCase())}</div>
+    <div class="flex gap-sm flex-wrap mb-md">${buttons}</div>
+    <div class="admin-section-title">Timing</div>
+    ${renderWeekWizardTimingFieldsHTML(week, games)}
+    <button type="button" class="btn btn-secondary btn-block mt-sm" id="wiz-manage-save-timing">Save Timing</button>
+    <div class="admin-section-title mt-md">Announce</div>
+    ${renderWeekWizardAnnounceFieldsHTML()}
+    <button type="button" class="btn btn-primary btn-block" id="wiz-manage-send-announce" disabled>Send announcement</button>
+    ${week.status === 'open' ? renderScribeReminderControlsHTML(week) : ''}`;
+}
+/** RG-251 reviewer note 2 (2026-09-26) — test-only seam, so authtest [44k3] can drive the Manage
+ *  screen from a POLLUTED mirror (the phase-5a twin); same `_xForTest` convention. */
+export const _renderWeekWizardManageHTMLForTest = renderWeekWizardManageHTML;
+function bindWeekWizardManage(bodyEl, week) {
+  bodyEl.querySelector('#wiz-manage-save-timing')?.addEventListener('click', () => {
+    saveWizardTiming(bodyEl, week);
+    showToast('Timing saved ✅', 'success');
+    renderWeekWizardSheetBody();
+  });
+  const body = bodyEl.querySelector('#wiz-announce-body');
+  const sendBtn = bodyEl.querySelector('#wiz-manage-send-announce');
+  body?.addEventListener('input', () => { if (sendBtn) sendBtn.disabled = !body.value.trim(); });
+  sendBtn?.addEventListener('click', () => {
+    const text = (body?.value || '').trim();
+    if (!text) return;
+    try {
+      sendWizardAnnouncement(text);
+      showToast('✅ Announcement sent', 'success');
+    } catch (e) {
+      console.warn('[week-wizard] announcement send failed', e);
+      showToast('Could not send announcement', 'error');
+    }
+    renderWeekWizardSheetBody();
+  });
+  bodyEl.querySelectorAll('.week-wizard-status-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const to = btn.dataset.to;
+      if (!week) return;
+      // SECURITY GATE FINDING 2 (2026-09-25) — same staleness risk, same
+      // fix, as saveWizardTiming() just above: this sheet does not repaint
+      // on Realtime, so the `week` this handler closed over can be stale by
+      // the time a commissioner actually taps a status button.
+      // applyWeekStatusChange() spreads whatever object it's handed
+      // (`{...week, status: to}`) — handing it a stale row risks the SAME
+      // silent-reopen shape Finding 2 describes, just via a status button
+      // instead of the timing form. Re-read immediately before use.
+      const liveWeekForStatus = getWeeks().find(w => w.weekId === week.weekId) || week;
+      if (to === 'final' && arePicksPublic(liveWeekForStatus) && weekHasUnresolvedTie(liveWeekForStatus, getPlayers().filter((p) => p.active), getPicks(liveWeekForStatus.weekId), getGames(liveWeekForStatus.weekId))) {
+        if (!confirm("This week has a tie in correct picks and no tiebreaker value entered — the winner/loser will be assigned arbitrarily. Enter the tiebreaker first (Cancel), or finalize anyway and fix it later (OK).")) return;
+      }
+      const statusResult = applyWeekStatusChange(liveWeekForStatus, to);
+      refreshHeader();
+      showToast(`Week: ${to}`, 'success');
+      if (statusResult?.spreadLockRefusals?.length) {
+        const names = statusResult.spreadLockRefusals.map((g) => `${g.awayTeam} @ ${g.homeTeam}`).join(', ');
+        showToast(`⚠️ Spread NOT locked for ${statusResult.spreadLockRefusals.length} game${statusResult.spreadLockRefusals.length > 1 ? 's' : ''} — sign contradicts recorded favorite: ${names}. Fix the spread/favorite in Games, then lock again.`, 'error');
+      }
+      renderWeekWizardSheetBody();
+      renderCommPage();
+    });
+  });
+  if (week.status === 'open') bindScribeReminderControls(bodyEl, week);
+}
+
+/** DI-C1 §2.5's state-selection table, painted: dispatches to the six
+ *  create-flow steps (a `draft` week) or the Manage screen (any other
+ *  status), reusing `selectWizardEntry()`'s own decision (via
+ *  `weekWizardApi().selectEntry()`) ONLY to choose the initial step on
+ *  open — subsequent steps are driven by `_weekWizardStep`, set by each
+ *  step's own Next/Back handlers, never re-derived on every repaint (which
+ *  would strand a commissioner mid-step every time a Realtime event
+ *  repaints the page). */
+function renderWeekWizardSheetBody() {
+  const wrap = document.getElementById('week-wizard-sheet-wrap');
+  if (!wrap) return;
+  const week = getCurrentWeek();
+  const games = week ? getGames(week.weekId) : [];
+  const titleEl = wrap.querySelector('#week-wizard-title');
+  const trackerEl = wrap.querySelector('#week-wizard-step-tracker');
+  const bodyEl = wrap.querySelector('#week-wizard-body');
+  if (!bodyEl) return;
+
+  if (week && week.status !== 'draft') {
+    if (titleEl) titleEl.textContent = `Manage ${formatWeekLabel(week)}`;
+    if (trackerEl) trackerEl.innerHTML = '';
+    bodyEl.innerHTML = renderWeekWizardManageHTML(week, games);
+    bindWeekWizardManage(bodyEl, week);
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = 'Set Up Week';
+  if (trackerEl) trackerEl.innerHTML = renderWeekWizardTrackerHTML(_weekWizardStep);
+  if (_weekWizardStep === 1) { bodyEl.innerHTML = renderWeekWizardStep1HTML(week); bindWeekWizardStep1(bodyEl, week); }
+  else if (_weekWizardStep === 2) { bodyEl.innerHTML = renderWeekWizardStep2HTML(week); bindWeekWizardStep2(bodyEl, week); }
+  else if (_weekWizardStep === 3) { bodyEl.innerHTML = renderWeekWizardStep3HTML(games); bindWeekWizardStep3(bodyEl, week, games); }
+  else if (_weekWizardStep === 4) { bodyEl.innerHTML = renderWeekWizardStep4HTML(week, games); bindWeekWizardStep4(bodyEl, week); }
+  else if (_weekWizardStep === 5) { bodyEl.innerHTML = renderWeekWizardStep5HTML(); bindWeekWizardStep5(bodyEl); }
+  else { bodyEl.innerHTML = renderWeekWizardStep6HTML(week, games); bindWeekWizardStep6(bodyEl, week, games); }
+}
+
+/** DI-C1 §2.2 — a native-feeling bottom sheet, reusing `.chat-sheet`
+ *  markup/CSS verbatim (own id, `#week-wizard-sheet`, so it never collides
+ *  with the chat sheet). Web gets the visible `✕` close button
+ *  (`.chat-sheet-close`); native ALSO gets swipe-down-to-dismiss.
+ *  CORRECTED (Step 2(b), 2026-09-26): this comment previously claimed
+ *  drag-to-dismiss came free from "the SAME CSS the chat sheet already
+ *  ships" — false, no such gesture CSS/JS existed anywhere in the app (a
+ *  DOM sheet inside a WKWebView gets no native dismiss gesture for free).
+ *  Built for real below, via `bindSwipeToDismiss()` (js/nav-gestures.js),
+ *  bound to the header/handle area only — not the whole sheet — so it never
+ *  competes with `#week-wizard-body`'s own vertical scroll (Interaction
+ *  Principles' Gestures: "avoid creating competing gestures"). */
+let _unbindWizardSheetDismiss = null;
+function openWeekWizardSheet() {
+  // SECURITY GATE FINDING 1 (2026-09-25) — same reasoning as
+  // showLeaguePageOverlay()'s identical guard, just above.
+  if (isContentWithheld()) return;
+  document.getElementById('week-wizard-sheet-wrap')?.remove();
+  const week = getCurrentWeek();
+  const games = week ? getGames(week.weekId) : [];
+  const entry = weekWizardApi().selectEntry({ week, games, timingConfigured: true });
+  _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
+  const wrap = document.createElement('div');
+  wrap.id = 'week-wizard-sheet-wrap';
+  // SECURITY GATE FINDING 1 — swept by tearDownRenderedContentForHold() if a
+  // hold fires while this sheet is open.
+  wrap.setAttribute('data-hold-teardown', '');
+  wrap.innerHTML = `
+    <div class="chat-sheet-backdrop"></div>
+    <div class="chat-sheet" id="week-wizard-sheet">
+      <div class="chat-sheet-header">${isNativeShell() ? '<span class="sheet-grabber" aria-hidden="true"></span>' : ''}
+        <div class="chat-sheet-title" id="week-wizard-title">Set Up Week</div>
+        <button class="chat-sheet-close" id="week-wizard-close" aria-label="Close">✕</button>
+      </div>
+      <div id="week-wizard-step-tracker"></div>
+      <div id="week-wizard-body" class="chat-sheet-scroll"></div>
+    </div>`;
+  document.body.appendChild(wrap);
+  wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', closeWeekWizardSheet);
+  wrap.querySelector('#week-wizard-close')?.addEventListener('click', closeWeekWizardSheet);
+  renderWeekWizardSheetBody();
+  // Drag-to-dismiss, header/handle only — see the file comment just above.
+  // No-ops on web (bindSwipeToDismiss() is native-only). Bound ONCE per
+  // open; renderWeekWizardSheetBody() only ever repaints #week-wizard-body,
+  // never the header, so this never needs rebinding mid-flow.
+  const sheetEl = wrap.querySelector('#week-wizard-sheet');
+  const headerEl = wrap.querySelector('.chat-sheet-header');
+  _unbindWizardSheetDismiss?.();
+  _unbindWizardSheetDismiss = (sheetEl && headerEl) ? bindSwipeToDismiss(headerEl, {
+    axis: 'y',
+    // Security gate F2 (third pass) — its OWN predicate: the shared one counts
+    // this very sheet as a blocking surface, so the gesture never armed.
+    getBlocked: isWizardDismissGestureBlocked,
+    getDistancePx: () => sheetEl.getBoundingClientRect().height || window.innerHeight || 1,
+    onProgress: (progress) => wizardSheetDragProgress(wrap, sheetEl, progress),
+    onSettle: (result) => settleWizardSheetDrag(wrap, sheetEl, result),
+  }) : null;
+}
+
+/**
+ * The wizard sheet's drag, named so it is testable. `--wizard-drag-y` lives on
+ * the WRAP (custom properties inherit): the sheet's transform and — Reviewer
+ * R2 (third pass) — the backdrop's opacity both read it, so the dimming fades
+ * with the drag the way a native sheet's does. `data-dragging` goes on both so
+ * both drop their transitions for the live drag.
+ */
+function wizardSheetDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--wizard-drag-y', String(progress));
+}
+function settleWizardSheetDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  if (!dismissed) {
+    // Cancelled — spring back; the CSS transition animates it (disabled under
+    // prefers-reduced-motion).
+    wrap.style.setProperty('--wizard-drag-y', '0');
+    return;
+  }
+  // Reviewer R2 — play the rest of the slide, then close; never pop.
+  finishSlideThenRemove({
+    listenEl: sheetEl,
+    apply: () => wrap.style.setProperty('--wizard-drag-y', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => closeWeekWizardSheet(),
+  });
+}
+export const _openWeekWizardSheetForTest = openWeekWizardSheet;
+/** STEP B(14) — the status button's glyph. `b.icon` is a name from a frozen
+ *  module-constant table (js/week-wizard.js FULL_STATUS_BUTTONS), never data;
+ *  icon() returns '' for an unknown name, so a typo degrades to text-only. */
+function wizardStatusIconHTML(b) {
+  return b && typeof b.icon === 'string' ? icon(b.icon) : '';
+}
+function closeWeekWizardSheet() {
+  _unbindWizardSheetDismiss?.();
+  _unbindWizardSheetDismiss = null;
+  document.getElementById('week-wizard-sheet-wrap')?.remove();
 }
 
 window.navigateTo=navigateTo;

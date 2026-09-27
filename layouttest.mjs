@@ -793,6 +793,11 @@ console.log('\n[A1] effectiveOrder() — the merge rule (DI-179e), as a pure fun
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// UPDATED — DI-330 (Group E, 2026-09-25, UX Revamp wiring pass 1) replaces
+// the literal ⭐ with icon('almaMater') at both "Alma Mater Watch" and
+// "Alma Mater Rankings" headings (AD-93). Every `at(..., 'Alma Mater …')`
+// text-position lookup below is matched on the school-name text alone now,
+// not the removed emoji prefix.
 console.log('\n[A2] RENDERED ORDER — both pages, default and customized…');
 // ═════════════════════════════════════════════════════════════════════════════
 {
@@ -805,14 +810,14 @@ console.log('\n[A2] RENDERED ORDER — both pages, default and customized…');
   assert(sameArr(sectionIds(d), [...DASH_DEF]),
     `A2a: the Dashboard's emitted DOM is in default order (got ${sectionIds(d).join(' > ')})`);
   assert(at(d, 'data-section-id="dash-picks"') < at(d, '📋 All Picks by Game') &&
-         at(d, 'data-section-id="dash-alma"') < at(d, '⭐ Alma Mater Watch'),
+         at(d, 'data-section-id="dash-alma"') < at(d, 'Alma Mater Watch'),
     'A2b: each wrapper really contains the card it claims — the ids are not decorative');
 
   const s = renderStand({ playerId: 'p1', verified: true });
   assert(sameArr(sectionIds(s), [...STAND_DEF]),
     `A2c: Standings is in default order, with FEAT-9's ledger at index 2 exactly where pass F1 hard-coded it (got ${sectionIds(s).join(' > ')})`);
   assert(at(s, 'data-section-id="stand-extrapoint"') < at(s, '🎯 Extra Point Ledger') &&
-         at(s, '🎯 Extra Point Ledger') < at(s, '⭐ Alma Mater Rankings'),
+         at(s, '🎯 Extra Point Ledger') < at(s, 'Alma Mater Rankings'),
     'A2d: …and it still renders BETWEEN Season Summary and Alma Mater Rankings for an uncustomized player — registering it changed its address, not its position');
 
   // Customized.
@@ -873,8 +878,8 @@ console.log('\n[A3] VT-22 PRESERVATION — the default order is still UN-22/RG-0
     'A3a: VT-22 — All Picks by Game is FIRST on the Dashboard for a player who has never customized (UN-22 / RG-01, unchanged since v0.11)');
   assert(ids.indexOf('dash-picks') < ids.indexOf('dash-alma') && ids.indexOf('dash-alma') < ids.indexOf('dash-summary'),
     'A3b: VT-22 — picks > alma > summary, in that order, for an uncustomized player');
-  assert(at(d, '📋 All Picks by Game') < at(d, '⭐ Alma Mater Watch') &&
-         at(d, '⭐ Alma Mater Watch') < at(d, 'This Week Score Summary'),
+  assert(at(d, '📋 All Picks by Game') < at(d, 'Alma Mater Watch') &&
+         at(d, 'Alma Mater Watch') < at(d, 'This Week Score Summary'),
     'A3c: VT-22 read off the CARDS rather than the ids — the wrappers cannot pass this while the content disagrees');
   assert(sameArr([...DASH_DEF], ['dash-picks', 'dash-alma', 'dash-summary', 'dash-tiebreaker']),
     'A3d: the registry itself still literally spells UN-22 — this line is the tripwire if someone "tidies" DEFAULT_SECTIONS');

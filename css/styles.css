@@ -1,10 +1,68 @@
-/* CFB Pickems — Aggie Maroon v5 · Oswald + Inter */
-@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+/* CFB Pickems — Munera default v6 · Cinzel + Inter
+   ─────────────────────────────────────────────────────────────────────────
+   UX Revamp Group E (DI-328, AD-92, 2026-09-25): the bare :root and the
+   `theme-neutral` key are repointed from the old Aggie-Maroon/slate palettes
+   to the Munera brand (Ink/Marble/Gold/Oxblood) — see the contrast table
+   below. The literal Aggie-maroon values that USED to live here moved,
+   unchanged, into `body.theme-aggie` (below) so existing aggie-theme players
+   see zero visual change — the value moved, not the visual result.
 
+   COORDINATOR RULING (fix round 1, 2026-09-25, reviewer BLOCK): the five
+   non-Aggie school themes (sooner/trojan/irish/boilermaker/razorback) are
+   BY DESIGN affected here, not an oversight. Their own blocks below are
+   byte-unchanged — they still only override the maroon/gold cluster — but
+   because they never override `--bg`/`--text-primary`/`--border` etc.,
+   those five themes read those values from bare `:root`, which this DI
+   just repointed. So: a sooner/trojan/irish/boilermaker/razorback player's
+   own school COLORS (their maroon, their gold) are exactly what they were
+   before — untouched — but the SUBSTRATE those colors sit on (page/card
+   background, body text, borders) is now the Munera Marble/Ink substrate
+   instead of the old warm-cream Aggie substrate every theme silently
+   inherited pre-v0.26. Contrast is unaffected — every school theme's own
+   maroon/gold pairs were already computed against a light neutral surface,
+   and Marble (`#E8E4DC`) is close enough in lightness to the old default
+   (`#F7F4EF`) that no school theme's own ratios move below AA. This is the
+   intended shape of "Munera becomes the default brand, school themes stay
+   opt-in COLOR overlays" (D-2) — not a second, undocumented rebrand of the
+   five school themes. */
+/* DI-328d ADDS Cinzel for display/heading use; Oswald and Inter both stay
+   loaded (see the deviation note at the h1,h2,h3,.font-display rule below —
+   Oswald remains the UI-label face at ~80 unreviewed call sites). */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* ── DI-328b — Munera token table + computed WCAG contrast (reproduced) ─────
+   All ratios via the standard WCAG relative-luminance formula.
+
+   Token      Hex       Role
+   Ink        #14110E   Text, structure (--text-primary etc.)
+   Marble     #E8E4DC   Light chrome surface (--bg, --bg-card-alt, --bg-input,
+                         --border/--border-strong, tinted)
+   Gold       #C9A24B   Decorative accent ONLY — never body/small text without
+                         a variant (--gold, --gold-light, --gold-pale)
+   Oxblood    #7A1F2B   PRIMARY BRAND — the one saturated action color
+                         (--maroon, --maroon-mid, --maroon-light)
+
+   Pairing                                  Ratio     Verdict
+   Ink text on Marble bg                    14.84:1   AAA
+   Oxblood text on Marble bg                8.05:1    AAA
+   Oxblood text on white (--bg-card)        10.20:1   AAA
+   White text on Oxblood bg (buttons/etc.)  10.20:1   AAA  (existing
+                                                             background:var(--maroon);color:#fff
+                                                             sites need zero further change)
+   Gold text on Ink bg                      7.84:1    AAA
+   Gold text on Marble bg                   1.89:1    FAIL — use --gold-text (#6E5419), 5.62:1 AA
+   Gold text on Oxblood bg                  4.25:1    FAIL for body text (passes AA-Large only)
+                                                       — use --gold-light (#E8C96A) instead, 6.31:1 AA
+   Ink text on Oxblood bg                   1.84:1    FAIL — a pairing to AVOID, not built anywhere
+
+   Rule, stated once: Gold as TEXT requires its darkened variant on light
+   surfaces (--gold-text, existing) and its lightened variant on Oxblood/dark
+   surfaces (--gold-light, existing token, new role here) — plain --gold is
+   decoration-only (borders, washes, dividers), never text color directly. */
 :root {
-  --maroon:#500000;--maroon-mid:#6B0000;--maroon-light:#8C1515;
-  --maroon-pale:#FAF0F0;--maroon-tint:#F3E0E0;
-  --gold:#C09B3A;--gold-light:#E8C96A;--gold-pale:#FDF8EC;
+  --maroon:#7A1F2B;--maroon-mid:#922536;--maroon-light:#A83B4A;
+  --maroon-pale:#F7EEF0;--maroon-tint:#F0DFE1;
+  --gold:#C9A24B;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
   /* v0.17.8 (RG-42/UN-127): --gold is a decorative accent (borders, badges,
      background washes) and in several themes is too light to read as TEXT
      against --gold-pale — in Sooner/Razorback it is functionally invisible
@@ -12,11 +70,23 @@
      for text that sits on a --gold-pale surface. Every theme below defines
      its own so contrast stays >=4.5:1 (WCAG AA) without hardcoding a color
      at any call site. Do not use --gold-text for borders/backgrounds — use
-     --gold for those, same as before. */
-  --gold-text:#896F29;
-  --bg:#F7F4EF;--bg-card:#FFFFFF;--bg-card-alt:#FAFAF8;--bg-input:#F5F2EE;
-  --border:#E4DDD5;--border-strong:#CCC0B0;
-  --text-primary:#1C1410;--text-secondary:#5C4E43;--text-muted:#9A8A7A;
+     --gold for those, same as before. DI-328b extends this same split to
+     Gold-on-Oxblood text: use --gold-light there, never plain --gold. */
+  --gold-text:#6E5419;
+  /* UX Revamp Group B (WIRING_CHECKLIST_B_092526.md §2, 2026-09-25) — a
+     token that stays CONSTANT regardless of the viewer's chosen theme,
+     unlike --maroon (which every school-theme block below repoints). Its
+     one job today: the Admin panel's single visual distinction from the
+     Commissioner panel (header underline + "ADMIN" pill background) — a
+     dual-role viewer must always recognize which panel's write-scope they
+     are in, even under a school overlay. Repeated byte-identical in every
+     theme block below — NEVER overridden. --oxblood-on is its paired
+     high-contrast foreground (white text on Oxblood = 10.20:1 AAA, per the
+     contrast table above), for text/icons painted on an --oxblood surface. */
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
+  --bg:#E8E4DC;--bg-card:#FFFFFF;--bg-card-alt:#F2EFE9;--bg-input:#F2EFE9;
+  --border:#DAD3C5;--border-strong:#C3BAA5;
+  --text-primary:#14110E;--text-secondary:#5C4E43;--text-muted:#9A8A7A;
   --win:#1A7A3F;--win-bg:#EBF7F0;
   --loss:#B91C1C;--loss-bg:#FEF2F2;
   --nd:#7A6A5A;--nd-bg:#F5F0EA;
@@ -24,23 +94,63 @@
   --live:#DC2626;--live-bg:#FEF2F2;
   --nav-height:60px;--card-radius:14px;--btn-radius:10px;
   --gap:12px;--page-pad:16px;--max-width:740px;
+  --shadow-card:0 1px 4px rgba(122,31,43,.05),0 4px 16px rgba(122,31,43,.07);
+  --shadow-btn:0 2px 8px rgba(122,31,43,.18);--transition:.16s ease;
+  /* DI-328e — shared motion/loading tokens (new vocabulary; every group
+     building motion this arc reads these instead of inventing a per-feature
+     duration). Ranges per Interaction Principles' Animation Standards. */
+  --motion-fast:150ms;    /* small feedback, 120-180ms */
+  --motion-nav:260ms;     /* navigation transitions, 220-300ms */
+  --motion-modal:300ms;   /* modal presentation, 250-350ms */
+  --motion-large:350ms;   /* large layout transitions, 300-400ms */
+  --ease-native:cubic-bezier(.32,.72,0,1);   /* iOS-style sheet/nav easing */
+  --ease-entrance:cubic-bezier(.16,1,.3,1);  /* content fade/slide-in */
+  --skeleton-shimmer:1400ms;                 /* loading shimmer loop duration */
+  /* B5 (3c fix window, 2026-09-25, CONVENTIONS #13) — `.site-gate` is a
+     bespoke black full-bleed overlay (PIN/hold/Google gates), never a
+     `--bg-card` surface, so it does not reuse the light-card `--text-*`/
+     `--border` tokens (see the comment at `.site-gate .form-*` below for
+     why). These four are THAT gate subsystem's own tokens — reused across
+     every `.site-gate .form-*` rule, never a hardcoded hex at the call
+     site — scoped narrowly to the four values this fix window touches,
+     not a rename of every other pre-existing hardcoded gate color. */
+  --gate-text:#fff;--gate-text-dim:#aaa;--gate-border:#444;--gate-placeholder:#555;
+}
+
+/* DI-328a/AD-92 — the literal Aggie-maroon palette that used to live in bare
+   :root, unchanged, so existing aggie-theme players see zero visual result
+   from the default repointing above (the value moved, the pixels didn't). */
+body.theme-aggie {
+  --maroon:#500000;--maroon-mid:#6B0000;--maroon-light:#8C1515;
+  --maroon-pale:#FAF0F0;--maroon-tint:#F3E0E0;
+  --gold:#C09B3A;--gold-light:#E8C96A;--gold-pale:#FDF8EC;
+  --gold-text:#896F29;
+  /* --oxblood/--oxblood-on held CONSTANT across every theme — see :root's
+     own comment. Never repointed to this theme's own --maroon. */
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
+  --bg:#F7F4EF;--bg-card:#FFFFFF;--bg-card-alt:#FAFAF8;--bg-input:#F5F2EE;
+  --border:#E4DDD5;--border-strong:#CCC0B0;
+  --text-primary:#1C1410;--text-secondary:#5C4E43;--text-muted:#9A8A7A;
   --shadow-card:0 1px 4px rgba(80,0,0,.05),0 4px 16px rgba(80,0,0,.06);
-  --shadow-btn:0 2px 8px rgba(80,0,0,.18);--transition:.16s ease;
+  --shadow-btn:0 2px 8px rgba(80,0,0,.18);
 }
 
 /* ── v13: Per-player THEMES ──────────────────────────────────────────────────
    Each theme overrides only the brand color variables. Fonts, layout,
    win/loss/live semantics stay constant so the app reads the same everywhere.
    Themes are applied by adding `theme-<key>` to <body>. Default (no class) =
-   the Aggie Maroon palette above. */
-
-body.theme-aggie { /* explicit no-op — same as default */ }
+   the Munera palette above (v6, DI-328/AD-92 — was Aggie Maroon through v5).
+   `theme-aggie` is no longer a no-op: it now carries the literal values that
+   used to live in bare :root (see the `body.theme-aggie` block above), so an
+   aggie-themed player's rendered result is unchanged even though the DEFAULT
+   moved out from under it. */
 
 body.theme-sooner {
   --maroon:#841617;--maroon-mid:#9C1F20;--maroon-light:#B83A3B;
   --maroon-pale:#FDF1F1;--maroon-tint:#F5DCDC;
   --gold:#FDF9D8;--gold-light:#FFFCE6;--gold-pale:#FFFEF5;
   --gold-text:#837507;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --shadow-card:0 1px 4px rgba(132,22,23,.05),0 4px 16px rgba(132,22,23,.06);
   --shadow-btn:0 2px 8px rgba(132,22,23,.18);
 }
@@ -49,6 +159,7 @@ body.theme-trojan {
   --maroon-pale:#FDEFEF;--maroon-tint:#F8D8D8;
   --gold:#FFCC00;--gold-light:#FFDB4D;--gold-pale:#FFF7D6;
   --gold-text:#8A6E00;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --shadow-card:0 1px 4px rgba(153,0,0,.05),0 4px 16px rgba(153,0,0,.06);
   --shadow-btn:0 2px 8px rgba(153,0,0,.18);
 }
@@ -57,6 +168,7 @@ body.theme-irish {
   --maroon-pale:#EEF2F8;--maroon-tint:#D8E2F0;
   --gold:#C99700;--gold-light:#E0B12E;--gold-pale:#FBF3D8;
   --gold-text:#8C6900;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --shadow-card:0 1px 4px rgba(12,35,64,.06),0 4px 16px rgba(12,35,64,.08);
   --shadow-btn:0 2px 8px rgba(12,35,64,.22);
 }
@@ -65,6 +177,7 @@ body.theme-boilermaker {
   --maroon-pale:#F3EFEA;--maroon-tint:#E0D6CB;
   --gold:#CEB888;--gold-light:#E0CFA8;--gold-pale:#F8F2E2;
   --gold-text:#826A36;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --shadow-card:0 1px 4px rgba(28,20,16,.07),0 4px 16px rgba(28,20,16,.09);
   --shadow-btn:0 2px 8px rgba(28,20,16,.22);
 }
@@ -73,20 +186,33 @@ body.theme-razorback {
   --maroon-pale:#FDEFF1;--maroon-tint:#F6D6DC;
   --gold:#FFFFFF;--gold-light:#F5F5F5;--gold-pale:#FAFAFA;
   --gold-text:#A85E5E;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --shadow-card:0 1px 4px rgba(157,34,53,.05),0 4px 16px rgba(157,34,53,.07);
   --shadow-btn:0 2px 8px rgba(157,34,53,.2);
 }
+/* DI-328a/AD-92 — Munera default. Repointed from cool slate (v5) to the same
+   Ink/Marble/Gold/Oxblood values as bare :root, so a no-class fallback and an
+   explicit `theme-neutral` selection render identically. Key name `neutral`
+   is unchanged (no `theme-munera` added — AD-71 preserved in spirit). */
 body.theme-neutral {
-  --maroon:#334155;--maroon-mid:#475569;--maroon-light:#64748B;
-  --maroon-pale:#F1F5F9;--maroon-tint:#E2E8F0;
-  --gold:#0891B2;--gold-light:#22D3EE;--gold-pale:#ECFEFF;
-  --gold-text:#077D9A;
-  --bg:#F8FAFC;--bg-card:#FFFFFF;--bg-card-alt:#F1F5F9;--bg-input:#F1F5F9;
-  --border:#E2E8F0;--border-strong:#CBD5E1;
-  --shadow-card:0 1px 4px rgba(51,65,85,.05),0 4px 16px rgba(51,65,85,.07);
-  --shadow-btn:0 2px 8px rgba(51,65,85,.2);
+  --maroon:#7A1F2B;--maroon-mid:#922536;--maroon-light:#A83B4A;
+  --maroon-pale:#F7EEF0;--maroon-tint:#F0DFE1;
+  --gold:#C9A24B;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
+  --gold-text:#6E5419;
+  --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
+  --bg:#E8E4DC;--bg-card:#FFFFFF;--bg-card-alt:#F2EFE9;--bg-input:#F2EFE9;
+  --border:#DAD3C5;--border-strong:#C3BAA5;
+  --shadow-card:0 1px 4px rgba(122,31,43,.05),0 4px 16px rgba(122,31,43,.07);
+  --shadow-btn:0 2px 8px rgba(122,31,43,.18);
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+/* DI-327 (T-29 SCROLL-BOUNCE) — defensive assertion-of-intent: neither html
+   nor body may ever set overscroll-behavior:none|contain, which would kill
+   native rubber-band bounce app-wide (the Design Philosophy's "never lock
+   the scroll"). Verified this pass by grep: no such rule existed anywhere in
+   this file before this line. Explicit `auto` (the default) so a future
+   edit reads as a deliberate change, not a silent omission. */
+html,body{overscroll-behavior:auto}
 html{height:100%;font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:smooth}
 /* RG-188 (B-c, 2026-09-19): `overflow-x:hidden` then `overflow-x:clip`, and the
    pair must stay in that order. hidden CLIPS sideways overflow (what v14 wanted)
@@ -98,8 +224,32 @@ html{height:100%;font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:sm
    project's floor is iOS 16.4, so every real device takes the clip. Same change
    on .page-wrapper and .main-content — all three are in the chain. */
 body{min-height:100%;background:var(--bg);color:var(--text-primary);font-family:'Inter',system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden;overflow-x:clip}
-h1,h2,h3,h4,.font-display{font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.02em;line-height:1.2}
+/* DI-328d — display face becomes Cinzel (inscriptional serif), matching the
+   native launch-screen wordmark's own family (DI-214d), for h1/h2/h3 ONLY —
+   confined to real headings (fix round 1, 2026-09-25, reviewer BLOCK).
+   DEVIATION FROM THE DI, NAMED EXPLICITLY: the DI's own text ("Oswald
+   dropped entirely") would also drop it from the ~80 OTHER
+   `font-family:'Oswald'` sites in this file that were never part of the
+   4-level heading hierarchy — badges, buttons, table headers, stat numbers,
+   chips, form labels (grep this file for 'Oswald' to see the full list).
+   Those sites are the app's UI-LABEL face, a separate typographic role the
+   DI's grounding section never enumerated or reviewed. Dropping Oswald from
+   the @import above would silently fall every one of them back to system
+   sans-serif — an unreviewed, sitewide visual regression, not the narrow
+   "font and overall vibe" fix Drew asked for. So: Cinzel is ADDED for
+   real-heading use only; Oswald stays loaded and stays the UI-label face.
+   `.font-display` was INITIALLY grouped into the Cinzel rule alongside h1-h3
+   in this DI's first pass — corrected here: it is a label class used at 11
+   small inline sites (player names, PIN display, member-list rows —
+   `js/app.js` — never a page heading), so it moved to the Oswald rule below,
+   alongside `h4` and every sibling label class (.card-title/.form-label/
+   .badge), which is what it actually is. Flagged to the coordinator/
+   user-experience as a follow-up DI: either retire Oswald from every label
+   site too (deliberate, reviewed) or formally record the 3-face system
+   (Cinzel heading / Oswald label / Inter body) as what's actually shipped. */
+h1,h2,h3{font-family:'Cinzel',serif;font-weight:600;letter-spacing:.02em;line-height:1.2}
 h1{font-size:2rem}h2{font-size:1.4rem}h3{font-size:1.1rem}
+h4,.font-display{font-family:'Oswald',sans-serif;font-weight:600;line-height:1.2}
 h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .text-maroon{color:var(--maroon)}.text-muted{color:var(--text-muted);font-size:.85rem}
 .text-secondary{color:var(--text-secondary)}.text-sm{font-size:.875rem}
@@ -189,7 +339,32 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .header-meta #header-meta-week{flex-shrink:0}
 .header-meta strong{color:#fff;display:block;font-size:.82rem;font-family:'Oswald',sans-serif}
 /* Nav */
-.bottom-nav{position:fixed;bottom:0;left:0;right:0;height:var(--nav-height);background:#fff;border-top:1px solid var(--border);display:flex;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom,0px)}
+.bottom-nav{position:fixed;bottom:0;left:0;right:0;height:var(--nav-height);background:#fff;border-top:1px solid var(--border);display:flex;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom,0px);
+  /* DI-322 (T-24 NAV-HIDE-ON-SCROLL), UX Revamp group A2 — transform lives on
+     the element ITSELF (not the .nav-hidden selector alone) so the SAME
+     transition timing applies both directions (hide on scroll-down, show on
+     scroll-up). NAV_HIDE_SHOW_MS (js/nav-gestures.js) = 240ms, inside the
+     Interaction Principles' 220-300ms Navigation range. */
+  transform:translateY(0);transition:transform 240ms ease-out}
+.bottom-nav.nav-hidden{transform:translateY(100%);transition:transform 240ms ease-in}
+/* DI-323 (T-25 NAV-KEYBOARD-AVOID) — the composer must never sit under a
+   still-visible nav while the on-screen keyboard is up. This rule OUT-
+   SPECIFIES the JS-driven .nav-hidden toggle unconditionally (higher
+   specificity: an attribute selector + a class beats two classes) so it
+   holds even under prefers-reduced-motion, where js/nav-gestures.js's own
+   reducer folds keyboard-up into `suspended` (which SHOWS the nav) rather
+   than animating a hide. */
+body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
+/* Reviewer BLOCK (2026-09-25), F10 — `.bottom-nav`'s hide/show transform had
+   no `prefers-reduced-motion` override (every OTHER motion rule in this file
+   does — see the other `@media (prefers-reduced-motion:reduce)` blocks). The
+   keyboard-avoid rule directly above still applies (it is a position, not an
+   animation — Accessibility §"Support Reduce Motion" asks that state changes
+   remain instant, not that they stop happening), only the 240ms transitions
+   are removed. */
+@media (prefers-reduced-motion:reduce){
+  .bottom-nav,.bottom-nav.nav-hidden{transition:none}
+}
 .nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;color:var(--text-muted);font-size:.62rem;font-family:'Inter',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase;transition:color var(--transition);border:none;background:none;padding:6px 4px;min-height:44px;-webkit-tap-highlight-color:transparent}
 .nav-item .nav-icon{font-size:1.25rem;line-height:1}
 /* UN-97: inline SVG sized to the ~20px footprint the emoji it replaced had
@@ -197,6 +372,28 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    here — currentColor inherits `color` from .nav-item / .nav-item.active. */
 .nav-icon svg{width:20px;height:20px;display:block}
 .nav-item.active,.nav-item:active{color:var(--maroon)}
+/* F2 (WIRING_CHECKLIST_B_092526.md) — Munera icon-family sizing for inline
+   chrome icons that sit beside text (alma-mater badges, card titles,
+   admin-section titles, the game-filter chip labels, the Rules-tab section
+   headings). Follows .nav-icon svg / .cc-row-icon svg's own precedent —
+   one rule per host class, never a global `svg{}` selector (CONVENTIONS
+   #13's spirit extended to sizing: scoped, not blanket). Without an
+   explicit width/height these inline <svg>s fall back to the UA default
+   (~300×150) wherever they sit inline with text, which is what every one
+   of these call sites did before this rule existed. */
+.alma-mater-badge svg,
+.card-title svg,
+.admin-section-title svg,
+.avail-chip-label svg,
+.rules-section h3 svg {
+  width: 14px; height: 14px; display: inline-block; vertical-align: -2px;
+}
+/* Tab-bar icons (Commissioner/Admin panel five/six-tab strips) — same fix,
+   sized to match the strip's existing footprint rather than the smaller
+   text-inline icons above. */
+.comm-tab-icon svg {
+  width: 18px; height: 18px; display: block;
+}
 /* Cards */
 .card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:16px;box-shadow:var(--shadow-card)}
 .card+.card{margin-top:var(--gap)}
@@ -275,6 +472,28 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .pick-btn.locked-loss{border-color:var(--loss);background:var(--loss-bg);color:var(--loss)}
 .pick-btn.locked-nd{border-color:var(--nd);background:var(--nd-bg);color:var(--nd)}
 .pick-btn:disabled{cursor:not-allowed;opacity:.55}
+/* DI-331d/g (UX Revamp Group E, T-31/UN-287) — Team logos on the Picks page
+   pick buttons. Fixed box, reserved BEFORE the image loads (DI-331g "no
+   layout shift" — the Philosophy's explicit "content shifting after load"
+   web-app smell), skeleton-colored via --bg-input until the image paints
+   over it. Team name renders smaller/reduced-opacity underneath — never
+   removed, so the "smaller underneath" treatment still identifies the team
+   the instant it's read, before or after the image resolves. */
+.pick-btn-logo-wrap{display:flex;flex-direction:column;align-items:center;gap:3px}
+.pick-btn-logo-box{width:40px;height:40px;border-radius:8px;background:var(--bg-input);
+  display:flex;align-items:center;justify-content:center;overflow:hidden}
+.pick-btn-logo{width:100%;height:100%;object-fit:contain;opacity:0;
+  transition:opacity var(--motion-fast,150ms) ease-out}
+.pick-btn-logo.is-loaded{opacity:1}
+.pick-btn-logo-name{font-size:.72rem;opacity:.65;line-height:1.2}
+/* A runtime load failure (404/CORS on an otherwise-well-formed URL — the
+   "missing logo" case at RENDER time never reaches this markup at all, see
+   pickButtonContentHTML()'s own header) hides the box and restores the name
+   to full size/opacity — DI-331d's "never a broken-image icon" — via one
+   class the capture-phase 'error' listener adds, no DOM text-injection. */
+.pick-btn-logo-wrap.logo-broken .pick-btn-logo-box{display:none}
+.pick-btn-logo-wrap.logo-broken .pick-btn-logo-name{font-size:.92rem;opacity:1}
+@media (prefers-reduced-motion:reduce){.pick-btn-logo{transition:none}}
 /* Buttons */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:11px 20px;border-radius:var(--btn-radius);border:none;font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;letter-spacing:.03em;cursor:pointer;transition:all var(--transition);min-height:46px;-webkit-tap-highlight-color:transparent;text-transform:uppercase}
 .btn:active:not(:disabled){transform:scale(.97)}.btn:disabled{opacity:.5;cursor:not-allowed}
@@ -307,6 +526,11 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .form-label{display:block;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:6px;font-family:'Oswald',sans-serif}
 .form-input,.form-select,.form-textarea{width:100%;background:var(--bg-input);border:1.5px solid var(--border);border-radius:var(--btn-radius);color:var(--text-primary);font-family:'Inter',sans-serif;font-size:.95rem;padding:11px 14px;transition:border-color var(--transition);-webkit-appearance:none;min-height:46px}
 .form-input:focus,.form-select:focus,.form-textarea:focus{outline:none;border-color:var(--maroon);box-shadow:0 0 0 3px rgba(80,0,0,.08)}
+/* DI-344/345 (T-35), UX Revamp wiring pass 2 (2026-09-25) — same reduced-
+   opacity shape `.btn:disabled`/`.pick-btn:disabled` already use; no
+   disabled-input rule existed before this pass (Tiebreaker/Extra Point had
+   never been disablable). */
+.form-input:disabled,.form-select:disabled,.form-textarea:disabled{opacity:.55;cursor:not-allowed}
 .form-textarea{min-height:100px;resize:vertical}
 .form-select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239A8A7A' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;cursor:pointer}
 .form-select option{background:var(--bg-card)}
@@ -339,6 +563,22 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .info-box{background:var(--bg-card-alt);border:1px solid var(--border);border-radius:var(--btn-radius);padding:12px 16px;font-size:.875rem;color:var(--text-secondary);line-height:1.5}
 .error-box{background:var(--loss-bg);border:1px solid rgba(185,28,28,.3);border-radius:var(--btn-radius);padding:12px 14px;font-size:.875rem;color:var(--loss);line-height:1.5}
 .warning-box{background:var(--push-bg);border:1px solid rgba(192,155,58,.3);border-radius:var(--btn-radius);padding:10px 14px;font-size:.85rem;color:#7A6000;line-height:1.4}
+/* DI-344/345 (T-35), UX Revamp wiring pass 2 (2026-09-25) — the paused-
+   league banner. Reuses .warning-box verbatim (no new visual treatment,
+   per the DI's own "reuse each control's EXISTING disabled-state CSS"
+   instruction extended to the banner itself); the ONLY addition is the
+   one-time 150ms fade-in DI-345 §Interaction spec asks for ("a brief
+   120-180ms fade-in on first render... no pulse, no repeated animation" —
+   a static/persistent condition, not a live one, so this never repeats). */
+.paused-league-banner{margin-bottom:12px;animation:paused-banner-fade-in .15s ease-out}
+@keyframes paused-banner-fade-in{from{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion:reduce){.paused-league-banner{animation:none}}
+/* NOTE 6 / BLOCK 4 (2026-09-25) — the platform-wide maintenance banner.
+   Reuses the SAME .warning-box shape and the SAME one-time fade-in as
+   .paused-league-banner immediately above (independent condition, identical
+   visual/motion treatment — no new look invented for this one). */
+.maintenance-banner{margin-bottom:12px;animation:paused-banner-fade-in .15s ease-out}
+@media (prefers-reduced-motion:reduce){.maintenance-banner{animation:none}}
 /* ESPN URL box */
 .api-url-box{background:var(--bg-input);border:1px solid var(--border);border-radius:var(--btn-radius);padding:12px 14px}
 .api-url-label{font-size:.75rem;font-weight:600;color:var(--text-muted);font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px}
@@ -515,6 +755,30 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .mb-sm{margin-bottom:8px}.mb-md{margin-bottom:16px}.mb-lg{margin-bottom:24px}
 @media(min-width:600px){.main-content{padding-top:8px}.player-grid{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}h1{font-size:2.2rem}}
 @media(min-width:768px){:root{--page-pad:24px}}
+/* DI-311 (T-32) — the Dashboard-ONLY width-driven layout breakpoint. The
+   shared `--max-width` token (740px, :root) stays untouched — this override
+   is scoped to widen `.main-content` ONLY while its active child is
+   #page-dashboard, never globally, per the DI's own explicit "scoped, never
+   global" instruction (the CONVENTIONS #21-style hazard of a rule leaking
+   onto Picks/Standings/Rules/Chat/Settings). `:has()` is used rather than a
+   body-level class toggle because `.main-content` has exactly one child
+   `.active` at a time (the existing .page-section mechanism) and this reads
+   directly off that DOM fact — no new JS-driven class needed. Supported
+   from Safari/WKWebView 16.4 (this project's stated floor). Deliberately
+   NOT the shared 600px breakpoint above — the dashboard's own matrix table
+   needs meaningfully more room than a 600px tablet-portrait width offers
+   before the switch pays off, so DI-311 picks 1024px specifically. Placed
+   here (grouped with the other width breakpoints, well after the header
+   meta block and the page-content block are both already declared) rather
+   than immediately beside the page-content rule's own base declaration —
+   headermetatest.mjs's own CSS-text scan treats every
+   `@media(min-width...)` block as extending to end-of-file (a known
+   fragility in that scan, not touched here since it is not this pass's
+   file — and this very sentence avoids spelling the header block's own
+   selector literally, for the same reason). */
+@media (min-width:1024px){
+  .main-content:has(#page-dashboard.active){max-width:1400px}
+}
 @supports(padding-bottom:env(safe-area-inset-bottom)){
   .bottom-nav{padding-bottom:env(safe-area-inset-bottom);height:calc(var(--nav-height) + env(safe-area-inset-bottom))}
   .main-content{padding-bottom:calc(var(--nav-height) + env(safe-area-inset-bottom) + 20px)}
@@ -532,23 +796,17 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    real left/right split instead of lopsided/tall vs. flat/wide. */
 .header-right{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px}
 
-/* UN-111: tz/theme are global settings, not something every screen needs.
-   Hidden everywhere by default; shown only on the tabs where they're either
-   actionable (picks/dashboard, the default landing surfaces) or load-bearing
-   (commissioner — kickoff times render in Comm -> Games, app.js:3017,3239,3286,
-   and there is no admin-scoped tz control there, so dropping tz on that tab
-   would strand a commissioner mid-slate-review; theme has no page-content
-   dependency, so it stays literal to Drew's words and skips Comm). Tab keys
-   MUST match the nav's real data-tab values (index.html) — "leaderboard", not
-   "standings", is the one naming trap here. Visibility only; both controls
-   stay reachable from Dashboard, the default landing tab, so neither is
-   orphaned. */
-#tz-toggle,#theme-toggle{display:none}
-body[data-tab="picks"] #tz-toggle,
-body[data-tab="dashboard"] #tz-toggle,
-body[data-tab="commissioner"] #tz-toggle{display:flex}
-body[data-tab="picks"] #theme-toggle,
-body[data-tab="dashboard"] #theme-toggle{display:inline-flex}
+/* UN-111's tab-gated visibility rules for the header's OWN #tz-toggle/
+   #theme-toggle containers are RETIRED — DI-307 (UX Revamp Group A1,
+   2026-09-25) removes those two elements from index.html entirely (moved
+   into the control-center drawer's Settings accordion, DI-303). These
+   selectors can never match anything again; pruned rather than left
+   orphaned, per the wiring checklist's own "no dead/orphaned rule survives"
+   instruction. renderTzToggle()/renderThemeToggle() (js/app.js) are
+   unchanged pending that rewiring; their OWN pill/dropdown class rules
+   below (.tz-toggle/.tz-btn/.theme-select) stay for now, since removing
+   the drawer's own Timezone/Theme rows is a separate DI-303/307 wiring
+   step. */
 
 /* UN-110: chat owns the screen — REVERSES UN-104's same-day "keep the header,
    make it unobtrusive" answer. See the #page-chat.active flex-column block
@@ -766,6 +1024,53 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 /* Phase III Step 3a — Google sign-in gate (DI-180). Same .site-gate shell;
    only the inner content differs (DI-180e). */
 .site-gate-notice{color:#888;font-size:.78rem;margin-bottom:12px;letter-spacing:.06em}
+/* UX Revamp Group F (DI-332, 2026-09-25) — the ONE new divider-with-text
+   this screen needs. The existing `.divider` (styles.css, this file,
+   `height:1px;background:var(--border)`) has no text slot; this is a small,
+   additive sibling, not a change to that shared class. */
+.divider-or{display:flex;align-items:center;gap:10px;margin:14px 0;color:var(--text-muted);
+  font-size:.7rem;text-transform:uppercase;letter-spacing:.08em}
+.divider-or::before,.divider-or::after{content:'';flex:1;height:1px;background:var(--border)}
+/* DI-332/333/334 — the gate's own understated text-link row (Forgot
+   password? / mode toggle / Back).
+   B5 (3c fix window, 2026-09-25) — was `color:var(--maroon)`, Oxblood text
+   directly on `.site-gate`'s black/Ink background: measured 1.84:1 on
+   black, 2.06:1 on native Ink — both well under WCAG AA's 4.5:1 floor
+   (Oxblood is a DARK color; DI-328b's own table names "Ink text on
+   Oxblood bg — FAIL, a pairing to avoid" as the same-shaped mistake in the
+   other direction). `--gold` is the correct existing token for light text
+   on this gate's dark surface — matches the native Google-gate's own
+   established accent (`#C9A24B` button/wordmark, this file's own DI-216
+   block) and measures ~8.8:1 on pure black / 7.84:1 on Ink (DI-328b), both
+   comfortably AAA. Tap height corrected 36px -> 44px (Interaction
+   Principles: "Large tap targets"; the established floor at 46px on
+   `.form-input` a few lines below is the actual precedent this row should
+   have matched from the start). No new plain-text-link class exists in
+   this codebase to reuse (only full `.btn-ghost` buttons, wrong weight for
+   a secondary in-form link). */
+.site-gate-link-row{display:flex;flex-direction:column;gap:6px;align-items:center;margin-top:8px}
+.site-gate-link{background:none;border:none;color:var(--gold);font-size:.82rem;
+  cursor:pointer;padding:8px;min-height:44px;text-decoration:underline;font-family:inherit;
+  transition:transform var(--motion-fast,150ms) ease-out}
+.site-gate-link:active{transform:scale(.97)}
+/* DI-332/333/334 (Design Pass) — `.form-group`/`.form-label`/`.form-input`
+   are reused for structure/sizing (8pt spacing, 46px min-height, the
+   established touch-target floor) per DI-332's own Reuse call, but their
+   DEFAULT colors are tuned for the app's light card surfaces
+   (`var(--bg-input)`/`var(--text-primary)`), not `.site-gate`'s pure-black
+   full-bleed background (`.site-gate{background:#000}`, above) — using them
+   unscoped here would look assembled, not intentional (Design Philosophy's
+   own audit question). Color-only override, scoped to `.site-gate`, that
+   matches the SAME dark/minimal look `.site-gate-input`/`.site-gate-title`
+   already use one screen away.  */
+/* B5 (3c fix window, 2026-09-25, CONVENTIONS #13) — was four hardcoded
+   hex literals (#aaa/#444/#fff/#555); now the `--gate-*` tokens defined
+   in `:root` above (same literal values, so this is a token-only edit —
+   zero visual change on its own). */
+.site-gate .form-label{color:var(--gate-text-dim)}
+.site-gate .form-input{background:transparent;border:1.5px solid var(--gate-border);color:var(--gate-text)}
+.site-gate .form-input::placeholder{color:var(--gate-placeholder)}
+.site-gate .form-input:focus{border-color:var(--gate-text);outline:none}
 .google-signin-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px}
 .google-signin-btn:disabled{opacity:.6;cursor:default}
 /* D-1 (approved 2026-09-16) — the Google "G" mark: a SECOND, narrowly-scoped
@@ -1188,6 +1493,21 @@ label[for="week-show-history"],label:has(#week-show-history){
 .layout-toggle-btn.active{background:var(--maroon);color:#fff}
 .layout-toggle-btn:hover:not(.active){color:var(--maroon)}
 
+/* DI-311 (T-32) — cross-fade for the LIVE width-driven matrix/compact
+   switch (a resize crossing the 1024px breakpoint with no explicit player
+   override set). Today's boot-time-only default never had to animate a
+   live switch; this DI is what makes it live. app.js's resize listener
+   toggles `.dash-layout-fading` briefly on whichever of the two wrappers is
+   about to be replaced, in the 300ms Interaction Principles Modal/Large-
+   layout range. Reduced-motion gets an instant swap (no cross-fade) —
+   `prefers-reduced-motion:reduce` zeroes the transition rather than
+   skipping the opacity change outright, so the class toggle itself stays
+   harmless either way. */
+.dashboard-scroll,.dashboard-compact{transition:opacity 300ms ease}
+.dashboard-scroll.dash-layout-fading,.dashboard-compact.dash-layout-fading{opacity:0}
+@media (prefers-reduced-motion:reduce){
+  .dashboard-scroll,.dashboard-compact{transition:none}
+}
 /* Compact dashboard — one stacked card per game, player picks in initial-chips */
 .dashboard-compact{display:flex;flex-direction:column;gap:8px}
 .dc-game{background:var(--bg-card);border:1px solid var(--border);border-radius:10px;padding:10px 12px}
@@ -1233,6 +1553,20 @@ label[for="week-show-history"],label:has(#week-show-history){
 .dc-chip-init{background:var(--maroon);color:#fff;width:18px;height:18px;border-radius:50%;display:inline-flex;
   align-items:center;justify-content:center;font-size:.62rem;letter-spacing:.02em}
 .dc-chip-pick{letter-spacing:.02em}
+/* DI-331f/g — compact dashboard logo chip. Small fixed box at this
+   density (14px — the chip row is already the densest surface this DI
+   touches; renderDashboardTable()'s matrix is the explicit NON-conversion,
+   DI-331f's own table, for exactly this reason). Fallback text is ALWAYS
+   present in the DOM (never injected on error) so a load failure is a pure
+   CSS class swap, same mechanism as the Picks page. */
+.dc-chip-pick-logo{display:inline-flex;align-items:center}
+.dc-chip-logo{width:14px;height:14px;object-fit:contain;vertical-align:middle;
+  opacity:0;transition:opacity var(--motion-fast,150ms) ease-out}
+.dc-chip-logo.is-loaded{opacity:1}
+.dc-chip-pick-fallback{display:none}
+.dc-chip-pick.logo-broken .dc-chip-logo{display:none}
+.dc-chip-pick.logo-broken .dc-chip-pick-fallback{display:inline}
+@media (prefers-reduced-motion:reduce){.dc-chip-logo{transition:none}}
 /* Decided states — bold colours, mirror the matrix */
 .dc-chip-win{background:var(--win-bg);border-color:rgba(26,122,63,.35);color:var(--win)}
 .dc-chip-win .dc-chip-init{background:var(--win)}
@@ -1429,6 +1763,12 @@ label[for="week-show-history"],label:has(#week-show-history){
 .beb-inner{max-width:var(--max-width);margin:0 auto;display:flex;align-items:flex-start;gap:10px;
   padding:10px 14px}
 .beb-icon{font-size:1.3rem;line-height:1;flex-shrink:0;margin-top:1px}
+/* Reviewer round 3, item 5 (2026-09-26) — D-1: the banner's ⚠️ is now
+   icon('warning') (Munera SVG family), not emoji. One rule per host class,
+   never a global svg{} selector (CONVENTIONS #16's own precedent, see
+   .nav-icon svg / .cc-row-icon svg). ~20px reads at the same visual weight
+   the 1.3rem emoji did. */
+.beb-icon svg{width:20px;height:20px;display:block}
 .beb-text{flex:1;min-width:0;font-size:.82rem;line-height:1.4}
 .beb-text strong{display:block;font-size:.88rem;letter-spacing:.02em}
 .beb-detail{font-family:'Courier New',monospace;font-size:.72rem;opacity:.92;margin-top:2px;word-break:break-word}
@@ -1437,7 +1777,9 @@ label[for="week-show-history"],label:has(#week-show-history){
   padding:5px 11px;border-radius:6px;cursor:pointer;font-size:.74rem;font-family:'Oswald',sans-serif;
   font-weight:600;letter-spacing:.04em;flex-shrink:0;align-self:flex-start}
 .beb-retry:hover, .beb-close:hover{background:rgba(255,255,255,.28)}
-.beb-close{padding:5px 9px}
+.beb-close{padding:5px 9px;display:inline-flex;align-items:center;justify-content:center}
+/* Full-app review Step 6 (2026-09-26) — Dismiss is icon('close') now. */
+.beb-close svg{width:14px;height:14px;display:block}
 @media (max-width:480px){
   .beb-inner{flex-wrap:wrap;padding:9px 12px;gap:8px}
   .beb-retry, .beb-close{font-size:.68rem;padding:4px 8px}
@@ -1652,9 +1994,55 @@ label[for="week-show-history"],label:has(#week-show-history){
 #page-commissioner[data-comm-active="week"]     .admin-section[data-comm-tab="week"],
 #page-commissioner[data-comm-active="games"]    .admin-section[data-comm-tab="games"],
 #page-commissioner[data-comm-active="players"]  .admin-section[data-comm-tab="players"],
-#page-commissioner[data-comm-active="settings"] .admin-section[data-comm-tab="settings"],
-#page-commissioner[data-comm-active="data"]     .admin-section[data-comm-tab="data"] {
+#page-commissioner[data-comm-active="rules"]    .admin-section[data-comm-tab="rules"],
+#page-commissioner[data-comm-active="scribe"]   .admin-section[data-comm-tab="scribe"] {
   display: block;
+  /* Item 6 (pass-2, wiring pass 3a-bis, 2026-09-25) — this was an abrupt
+     display:none->block SWAP, one of the "web app smells" the Design
+     Philosophy names outright ("flashing pages"). `display` cannot itself be
+     transitioned (not an interpolable property), and a true cross-DISSOLVE
+     between two differently-sized panels would leave BOTH in the layout
+     simultaneously (a tall blank gap under whichever is shorter) — so this
+     is a fade-IN on the newly-shown panel only, the SAME shape DI-345's own
+     paused-league-banner fade-in already established for this codebase
+     ("a brief fade-in on first render... no pulse, no repeated animation").
+     The animation restarts every time this rule starts matching, because the
+     element is freshly entering the render tree (display:none->block) each
+     time — a genuine "just appeared" moment, not a decorative repeat. */
+  animation: cc-tab-panel-in var(--motion-fast) ease-out;
+}
+@keyframes cc-tab-panel-in { from { opacity: 0 } to { opacity: 1 } }
+
+/* DI-320/344/345 (T-12/T-35), UX Revamp wiring pass 2 (2026-09-25) — the
+   Admin panel's own tab visibility, same shape as the Commissioner panel's
+   rule immediately above (WIRING_CHECKLIST_B_092526.md §2's own spec).
+   `.comm-tabbar`/`.comm-tab`/`.comm-tab-icon`/`.comm-tab-label` are REUSED
+   as-is (renderAdminTabBar() emits `comm-tabbar admin-tabbar` / `comm-tab`
+   on purpose) — no new tab styling needed here, only this visibility block.
+   The sixth ("super-admin") value only ever matches when that section
+   actually rendered (viewer.isSuperAdmin); for everyone else the selector
+   simply never matches anything, same "absent, not disabled" shape DI-320
+   already established. */
+#page-admin[data-admin-active] .admin-section[data-admin-tab] { display: none; }
+#page-admin[data-admin-active="week"]        .admin-section[data-admin-tab="week"],
+#page-admin[data-admin-active="games"]       .admin-section[data-admin-tab="games"],
+#page-admin[data-admin-active="players"]     .admin-section[data-admin-tab="players"],
+#page-admin[data-admin-active="settings"]    .admin-section[data-admin-tab="settings"],
+#page-admin[data-admin-active="data"]        .admin-section[data-admin-tab="data"],
+#page-admin[data-admin-active="super-admin"] .admin-section[data-admin-tab="super-admin"] {
+  display: block;
+  /* Item 6 — same fade-in as the Commissioner panel's own rule above; see
+     that rule's comment for the full reasoning. Same keyframe, same token. */
+  animation: cc-tab-panel-in var(--motion-fast) ease-out;
+}
+/* REVIEWER FINDING 5 (2026-09-25) — moved AFTER both animating rules above
+   (Commissioner's and Admin's). Same specificity, so a reduce-motion block
+   textually BEFORE an un-conditioned `animation:` rule loses the cascade —
+   the un-conditioned rule wins and reduced motion is silently ignored. This
+   is now the LAST word on `animation` for both selectors. */
+@media (prefers-reduced-motion: reduce) {
+  #page-commissioner[data-comm-active] .admin-section[data-comm-tab],
+  #page-admin[data-admin-active] .admin-section[data-admin-tab] { animation: none; }
 }
 
 @media (max-width: 480px) {
@@ -1832,6 +2220,13 @@ label[for="week-show-history"],label:has(#week-show-history){
 /* ── Picks week navigation ── */
 .picks-week-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;background:var(--bg-card);border-radius:var(--card-radius);padding:6px 8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
 .picks-week-nav-label{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon);font-size:.95rem;text-align:center}
+/* T-27 (DI-325, 2026-09-25) — PARITY-BY-DESIGN: native gets the in-tab
+   left/right swipe (js/nav-gestures.js's bindWeekSwipe(), wired in
+   navigateTo()) INSTEAD OF the tap arrows, so the same gesture is never
+   offered twice (Interaction Principles: "avoid creating competing
+   gestures"). Web keeps the arrows — no swipe binder is armed there. */
+body.native-shell .picks-week-nav button{display:none}
+body.native-shell .picks-week-nav{justify-content:center}
 .picks-week-current{color:var(--text-muted);font-size:.7rem;font-weight:400}
 .picks-week-past{color:#B8860B;font-size:.7rem;font-weight:500}
 
@@ -1974,6 +2369,17 @@ label[for="week-show-history"],label:has(#week-show-history){
   padding-top:env(safe-area-inset-top,0px);
   overflow:hidden}
 @supports not (height:100dvh){#page-chat.active{height:calc(100vh - var(--nav-height) - env(safe-area-inset-bottom,0px))}}
+/* DI-323 (T-25 NAV-KEYBOARD-AVOID) — the nav is hidden (transform, above)
+   while the keyboard is up, but this page's own height calc still reserved
+   --nav-height worth of dead space beneath the composer unless the token
+   itself is zeroed for the duration. `data-keyboard-up` is set on `body`
+   (js/nav-gestures.js's `bindKeyboardAvoid()`), never on #page-chat itself,
+   so this is a descendant selector, not an attribute-on-self one. Scoped to
+   #page-chat.active only — every OTHER var(--nav-height) consumer
+   (.main-content, .submit-bar, the two chat-sheet bottom offsets,
+   .chat-jump-latest) is a DIFFERENT page's layout and must not shrink just
+   because the keyboard happens to be up on Chat. */
+body[data-keyboard-up] #page-chat.active{--nav-height:0}
 /* Consequence of the above, not itself spelled out in the design input
    (flagged here, same as the --chat-composer-h "jump to latest" fix was
    flagged in UN-104's handoff): .main-content's generic padding-bottom
@@ -2011,12 +2417,47 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 /* UN-120: position:relative anchors .chat-actions (now position:absolute,
    out of document flow) to THIS message's column, not the page. */
 .chat-bubble-col{flex:1;min-width:0;position:relative}
+/* DI-346 (UN-304, T-36) — own messages push right, Messages/WhatsApp/Slack
+   convention: side alone (not just the name label) carries authorship.
+   max-width:78% is the invocation's own figure — leaves the far (left) side
+   free so a long own-message still reads as a bubble, not a full-width
+   paragraph. .chat-avatar keeps flex:0 0 30px; hiding it below removes it
+   from the row entirely, so .chat-bubble-col is the row's only remaining
+   flex child and margin-left:auto pushes it to the right edge. */
+.chat-msg.chat-mine .chat-bubble-col{margin-left:auto;max-width:78%;display:flex;flex-direction:column;align-items:flex-end}
+/* Reviewer B5 (3c fix window, third pass) — the column above is flex:1, so it
+   always grew to the 78% cap and its children (a block .chat-bubble, the meta
+   row) filled it: every own bubble was the same fixed-width slab with the meta
+   row sitting 22% in. As a column flex container with align-items:flex-end,
+   bubble / quote / meta / reactions each fit their own content and hug the
+   right edge — Messages' shape.
+   DI-346 AMENDMENT (coordinator-approved inline, scoped to UN-304) — other
+   players' bubbles fit their content too, left-anchored under the same 78%
+   cap (Messages-style on both sides). SCRIBE and system posts keep their
+   existing full-width treatment (:not(.chat-scribe); system posts use their
+   own template with no .chat-bubble-col). */
+.chat-msg:not(.chat-mine):not(.chat-scribe):not(.chat-system) .chat-bubble-col{flex:0 1 auto;max-width:78%;display:flex;flex-direction:column;align-items:flex-start}
 .chat-meta{display:flex;gap:6px;align-items:center;font-size:.68rem;color:var(--text-muted);flex-wrap:wrap}
 .chat-author{font-weight:700;color:var(--text-secondary)}
 .chat-scribe .chat-author{color:#1C1410;letter-spacing:.04em}
+/* DI-346 — a signed-in player never needs a picture of, or name label for,
+   their own words (Messages' own convention); the rest of .chat-meta (time,
+   edited/pin/pending/failed state) is unchanged, just inside a right-pushed
+   column now. SCRIBE/system posts never reach this branch (messageHTML()
+   returns its own template for m.type==='system' before `mine` is even
+   computed, and m.author==='scribe' cannot equal `self`) so neither loses
+   its avatar or label. */
+.chat-msg.chat-mine .chat-avatar{display:none}
+.chat-msg.chat-mine .chat-author{display:none}
 .chat-edited{font-style:italic}
 .chat-bubble{background:var(--bg-input);border-radius:4px 12px 12px 12px;padding:7px 10px;font-size:.86rem;margin-top:2px;word-wrap:break-word;white-space:pre-wrap}
 .chat-mine .chat-bubble{background:var(--maroon-pale)}
+/* DI-346 — corner radius mirrors: the square corner stays nearest the
+   (now-hidden) avatar side, just flipped to the right for own messages —
+   same "where did this come from" cue Motion System principles ask every
+   change to answer, pointed the other way. Reuses the existing token
+   (var(--maroon-pale)); no new color. */
+.chat-msg.chat-mine .chat-bubble{border-radius:12px 12px 4px 12px}
 .chat-scribe .chat-bubble{background:#F3EFEA;border-left:3px solid #1C1410;font-family:ui-monospace,Menlo,monospace;font-size:.8rem}
 .chat-tombstone{color:var(--text-muted)}
 .chat-mention{color:var(--maroon);font-weight:600}
@@ -2025,7 +2466,10 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-system .chat-time{font-size:.6rem;color:var(--text-muted)}
 .chat-pending{font-size:.7rem}
 .chat-failed{color:#B02A37;font-weight:700;font-size:.65rem}
-.chat-retry{background:#B02A37;color:#fff;border:none;border-radius:6px;padding:1px 6px;font-size:.6rem;cursor:pointer;margin-left:4px}
+.chat-retry{background:#B02A37;color:#fff;border:none;border-radius:6px;padding:1px 6px;font-size:.6rem;cursor:pointer;margin-left:4px;position:relative}
+/* Reviewer R1 (third pass) — a 40px hit area without growing the meta row:
+   the same out-of-flow ::before technique .dc-meta .chat-bubble-btn uses. */
+.chat-retry::before{content:'';position:absolute;top:50%;left:50%;width:max(100%,40px);height:40px;transform:translate(-50%,-50%)}
 .chat-reply-quote{display:block;width:100%;text-align:left;background:var(--bg-card-alt);border:none;border-left:3px solid var(--maroon-light);border-radius:6px;padding:4px 8px;font-size:.7rem;color:var(--text-secondary);margin-top:3px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* position:relative (2026-09-10, reviewer BLOCK finding #1) — the containing
    block for toggleFeedbackPicker()'s absolutely-positioned popover when it is
@@ -2036,6 +2480,10 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    containing block: the popover is out of flow, so this row's flex layout,
    height and density are untouched. */
 .chat-reactions{display:flex;gap:4px;margin-top:3px;flex-wrap:wrap;align-items:center;position:relative}
+/* DI-346 — reaction pills line up under the right-aligned bubble instead of
+   stranding at the (now empty) left edge; others keep the flex default
+   (flex-start). No position change, this row stays in-flow. */
+.chat-msg.chat-mine .chat-reactions{justify-content:flex-end}
 /* CONVENTIONS #17 / UN-114: was padding:1px 7px at .7rem, ~17px tall — worse
    than either prior named tap-target offender in this file. min-height (not
    a fixed height) + box-sizing:border-box raises the hit box to the 40px
@@ -2063,6 +2511,8 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    itself (escaped, no truncation, no `title` tooltip — tooltips don't fire
    on touch) is UNCHANGED from UN-114; only visibility is gated now. */
 .chat-reaction-names{display:none;font-size:.66rem;color:var(--text-muted);margin-top:2px}
+/* DI-346 — same side flip as .chat-reactions above; in-flow, no position change. */
+.chat-msg.chat-mine .chat-reaction-names{text-align:right}
 /* UN-120 — replaces hover (jumpy: brushing the cursor toward the menu swept
    over every message on the way and reacted to each one, Drew's report)
    with a deliberate right-click (desktop, contextmenu in chat-ui.js) /
@@ -2082,6 +2532,11 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-actions{display:none;gap:4px;position:absolute;left:0;bottom:calc(100% + 4px);
   background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
   padding:3px;box-shadow:var(--shadow-card);z-index:20}
+/* DI-346 — own-message actions open anchored to the bubble's near (right)
+   edge instead of overshooting past the hidden avatar toward mid-screen.
+   Pure left→right flip, scoped under .chat-mine; no change to
+   revealMessageActions(), the long-press timer, or the reveal mechanism. */
+.chat-msg.chat-mine .chat-actions{left:auto;right:0}
 /* ONE reveal mechanism drives BOTH .chat-actions and .chat-reaction-names —
    desktop right-click and touch long-press both add this one class
    (revealMessageActions(), chat-ui.js) to the message. No hover, no
@@ -2089,6 +2544,37 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    gate on, and gating would recreate two mechanisms that can drift again. */
 .chat-msg.chat-actions-revealed .chat-actions{display:flex}
 .chat-msg.chat-actions-revealed .chat-reaction-names{display:block}
+/* DI-326 amendment (2026-09-25, coordinator VERDICT) — Tapback-style
+   curated-6 quick-react row, revealed by the SAME class/gesture as
+   .chat-actions above, rendered ABOVE it (iMessage layout: reactions
+   first, actions beneath — "press and hold the message for the
+   reactions" is now true on the first frame). display:none base state,
+   same RG-21 "reserves zero layout height while hidden" discipline
+   .chat-actions/.chat-reaction-names already use (loadtest [37i]) — a NEW
+   element, so it carries its own base/reveal pair rather than being folded
+   into the pinned `.chat-actions{display:flex}` rule above (kept byte-
+   identical, loadtest [37a]/[37i]).
+   Positioned via a fixed offset coupled to .chat-actions' own height (46px
+   = .chat-act's 40px min-height + .chat-actions' 3px top+bottom padding)
+   plus a 4px gap on each side — .chat-actions is a guaranteed single,
+   non-wrapping row (no flex-wrap declared on it anywhere in this file), so
+   this offset is exact, not a guess. If .chat-act's min-height or
+   .chat-actions' padding ever changes, this offset must change with it. */
+.chat-quick-react-row{display:none;gap:4px;position:absolute;left:0;
+  bottom:calc(100% + 54px);
+  background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+  padding:3px;box-shadow:var(--shadow-card);z-index:20;
+  animation:chatQuickReactPop var(--motion-fast,150ms) ease-out both}
+/* DI-346 — same left→right flip as .chat-actions above, same edge, keeps
+   rendering ABOVE .chat-actions on both sides (DI-326's Tapback ordering is
+   the vertical `bottom` offset, untouched here — only the horizontal edge
+   moves). */
+.chat-msg.chat-mine .chat-quick-react-row{left:auto;right:0}
+.chat-msg.chat-actions-revealed .chat-quick-react-row{display:flex}
+@keyframes chatQuickReactPop{from{opacity:0;transform:translateY(4px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media (prefers-reduced-motion:reduce){.chat-quick-react-row{animation:none}}
+.chat-quick-react-btn{font-size:1rem;transition:transform var(--motion-fast,150ms) ease-out}
+.chat-quick-react-btn:active{transform:scale(.97)}
 /* CONVENTIONS #17 — was padding:2px 4px, well under the 40px tap-target
    floor. Bumped now that this row is reachable by touch at all. */
 .chat-act{background:none;border:none;font-size:.85rem;cursor:pointer;border-radius:8px;padding:0;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
@@ -2117,6 +2603,10 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    needed, because `.chat-scroll` is the only child that scrolls. */
 .chat-composer-row{display:flex;gap:8px;align-items:flex-end}
 .chat-input{flex:1;border:1px solid var(--bg-input);background:var(--bg-input);border-radius:12px;padding:9px 12px;font-size:.9rem;font-family:inherit;resize:none;max-height:120px}
+/* DI-344/345 (T-35) — the SAME reduced-emphasis shape `.btn:disabled`/
+   `.pick-btn:disabled` already use, applied here since no disabled-textarea
+   rule existed before this pass (the composer had never been disablable). */
+.chat-input:disabled,.chat-send-btn:disabled{opacity:.5;cursor:not-allowed}
 .chat-input:focus{outline:2px solid var(--maroon-light)}
 .chat-send-btn{flex:0 0 40px;width:40px;height:40px;border-radius:50%;border:none;background:var(--maroon);color:#fff;font-size:1rem;cursor:pointer}
 /* UN-103: the emoji row (insert buttons + "more emoji" picker) is gone from
@@ -2146,6 +2636,60 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 
 /* bottom sheet */
 #chat-sheet-wrap{position:fixed;inset:0;z-index:8000}
+/* REVIEWER BLOCK item 1 (916bdb7 review, 2026-09-25) — #week-wizard-sheet-wrap
+   gets the IDENTICAL rule (same properties, same values) as #chat-sheet-wrap
+   just above — a SEPARATE rule rather than a combined comma-selector, so
+   loadtest.mjs [47h]'s existing exact-anchored regex extraction of
+   `#chat-sheet-wrap{...}` (RG-17a/d's stacking-context proof) keeps matching
+   byte-for-byte; the shared VALUES are what "same rule" means here, not a
+   shared selector string. Before this fix `#week-wizard-sheet-wrap` had NO
+   shell rule of its own at all: `.chat-sheet-backdrop`/`.chat-sheet` are
+   `position:absolute`, which only becomes a real bottom sheet once an
+   ANCESTOR establishes `position:fixed;inset:0` — `#chat-sheet-wrap` was
+   the only element that did, so the wizard sheet anchored to the document's
+   first viewport (scrolled away under the header/nav) instead of covering
+   the screen. The "no new sheet-shell CSS needed" claim below (this DI's
+   own wiring-pass comment) was wrong — this rule is the missing shell. */
+#week-wizard-sheet-wrap{position:fixed;inset:0;z-index:8000}
+/* Step 2(b) (2026-09-26) — native drag-to-dismiss, scoped to THIS sheet's
+   own id (NOT the shared `.chat-sheet` class, which the real chat sheet
+   also carries — this DI never touches that surface). Same
+   custom-property-driven recipe as #league-page-overlay's swipe-back above:
+   `--wizard-drag-y` (0..1) set by js/nav-gestures.js's bindSwipeToDismiss()
+   via the header-drag handler in js/app.js; [data-dragging="true"] disables
+   the transition for the live-drag duration, same as everywhere else this
+   pattern is used (#control-center, #league-page-overlay). ID specificity
+   wins over `.chat-sheet`'s own `animation:sheetUp` once that animation
+   finishes (animations with no fill-mode stop affecting the property at
+   their end, per spec — the cascade's normal value, this rule, then
+   applies), so the two never fight mid-open. */
+#week-wizard-sheet{transform:translateY(calc(100% * var(--wizard-drag-y,0)));
+  transition:transform var(--motion-nav) ease-out}
+#week-wizard-sheet[data-dragging="true"]{transition:none}
+@media (prefers-reduced-motion:reduce){#week-wizard-sheet{transition:none}}
+/* Reviewer R2 (3c fix window, third pass) — the backdrop dims out WITH the
+   drag (the var is set on the wrap, so the sheet and the backdrop both
+   inherit it), and a completed dismiss slides/fades the rest of the way
+   before the sheet is removed (js/app.js finishSlideThenRemove()). */
+#week-wizard-sheet-wrap .chat-sheet-backdrop{opacity:calc(1 - var(--wizard-drag-y,0));
+  transition:opacity var(--motion-nav) ease-out}
+#week-wizard-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
+@media (prefers-reduced-motion:reduce){#week-wizard-sheet-wrap .chat-sheet-backdrop{transition:none}}
+/* DI-C1 §2.2 — the native grabber, and the header (the drag handle) owns its
+   vertical touches so the WebView does not scroll/bounce under the drag. */
+body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
+.sheet-grabber{position:absolute;top:5px;left:50%;transform:translateX(-50%);
+  width:36px;height:5px;border-radius:3px;background:var(--border-strong);pointer-events:none}
+/* REVIEWER BLOCK item 1 — keyboard behavior for the wizard's own text
+   inputs (Step 1's week-number field, Step 5's announce textarea): this
+   sheet now shares the EXACT `.chat-sheet-backdrop`/`.chat-sheet` shell the
+   chat sheet's own composer already ships inside (same fixed-shell rule
+   just above, same `.chat-sheet{max-height:82vh}` clamp, same
+   `env(safe-area-inset-bottom)` padding for the home-indicator area) — no
+   separate, wizard-specific keyboard handling is introduced, deliberately:
+   a second mechanism would be a second thing to keep in sync with the
+   first. This is "same as the chat sheet," not a new, verified guarantee —
+   named on the Polish Pass device checklist (report), not asserted here. */
 .chat-sheet-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.45)}
 .chat-sheet{position:absolute;left:0;right:0;bottom:0;background:var(--bg);border-radius:18px 18px 0 0;padding:12px 12px calc(12px + env(safe-area-inset-bottom));max-height:82vh;display:flex;flex-direction:column;animation:sheetUp .22s ease-out}
 @keyframes sheetUp{from{transform:translateY(40%)}to{transform:translateY(0)}}
@@ -3136,28 +3680,47 @@ body.native-shell .pick-chip{-webkit-touch-callout:none}
    viewport is too short for that to leave reasonable room, which is the
    correct tradeoff (matches every other gate's fixed 24px on all four
    sides) rather than letting it crowd the bottom edge. */
+/* DI-310 (T-01, 2026-09-25) — "wordmark higher, tagline larger, sub-line
+   removed." The subtitle DOM node is deleted (js/app.js, both native and web
+   branches) — this does NOT change the BLOCK height below (the block is
+   wordmark+tagline only; the subtitle/button/message TAIL flows after it,
+   unaffected either way) — but the target fraction moves from 50vh to
+   ~38vh (DI-310's own proposed starting point) to read as "higher," and the
+   half-block-height constant is RECOMPUTED (not reused) because the tagline
+   grows from .7rem to 1rem below:
+     wordmark: 2.2rem * 16px/rem * line-height 1.15 + margin-bottom 8px
+             = 35.2px * 1.15 + 8 = 40.48 + 8 = 48.48px (unchanged — DI-310
+               does not ask for a wordmark size change, only position)
+     tagline:  1rem * 16px/rem * line-height 1.15 + margin-bottom 28px
+             = 16px * 1.15 + 28 = 18.4 + 28 = 46.4px (was 40.88px at .7rem)
+     block B = 48.48 + 46.4 = 94.88px; half = 47.44px
+   padding-top:calc(38vh - 47.44px) centers the wordmark+tagline block's
+   OWN center at 38% of viewport height, same method as the original A1
+   amendment this comment used to justify 50vh/44.68px. */
 body.native-shell .site-gate[data-gate-state="google"]{
   background:#14110E;align-items:flex-start;
-  padding-top:max(24px, calc(50vh - 44.68px));
+  padding-top:max(24px, calc(38vh - 47.44px));
   overflow-y:auto;-webkit-overflow-scrolling:touch;
 }
-/* Reviewer round 2 — landscape safety. A flat min(calc(50vh - 44.68px),30vh)
-   clamp was checked and REJECTED: at the 402x874pt portrait reference,
-   50vh-44.68px = 392.32px but 30vh = 262.2px, so that clamp would ALSO fire
-   in portrait and pull the block ~130px higher than today — failing the
-   "portrait must be pixel-identical" requirement. A height media query does
-   not have that problem: it only overrides padding-top below the threshold,
-   so portrait (874px tall, or any height above 500px) is completely
-   unaffected by this rule and still resolves via the calc() above.
+/* Reviewer round 2 — landscape safety, RE-VERIFIED against DI-310's 38vh/
+   47.44px values (not assumed unaffected). At the shortest enabled iOS
+   landscape height (~375pt, iPhone SE/mini), 38vh - 47.44px = 142.5 - 47.44
+   = 95.06px — LESS than the old 50vh formula's 142.8px at the same height,
+   so the tail below (button + message) has MORE room than it did before
+   DI-310, not less; this breakpoint's job (fall back to a flat top-anchored
+   24px on very short viewports) is still the correct, conservative floor,
+   just no longer load-bearing in quite the way it was for the 50vh version.
+   A height media query is used rather than a `min()`/`max()` clamp because
+   at the 402x874pt portrait reference, 38vh-47.44px = 284.68px — comfortably
+   positive and requiring no clamp — while a flat vh-fraction clamp risks
+   firing in portrait too on an unusual aspect ratio; a height threshold
+   only overrides padding-top below max-height:500px, so ordinary portrait
+   is completely unaffected and still resolves via the calc() above.
    max-height:500px covers every enabled iOS landscape orientation on every
-   current device (the shortest, iPhone SE/mini families, is ~375pt tall in
-   landscape) while sitting comfortably below the shortest portrait height
-   in the supported device set, so it can never misfire in portrait. Below
-   that threshold this reverts to the shared gate's plain top-anchored 24px
-   (matching the PIN/hold gates' own default) instead of attempting a 50vh
-   centering that has too little room to work with; overflow-y:auto above
-   is the actual clipping guarantee for a still-too-long multi-line error,
-   in either orientation. */
+   current device while sitting comfortably below the shortest portrait
+   height in the supported device set, so it can never misfire in portrait.
+   overflow-y:auto above is the actual clipping guarantee for a
+   still-too-long multi-line error, in either orientation. */
 @media (max-height:500px){
   body.native-shell .site-gate[data-gate-state="google"]{
     padding-top:24px;align-items:flex-start;
@@ -3168,9 +3731,14 @@ body.native-shell .site-gate[data-gate-state="google"] .site-gate-wordmark{
   color:#C9A24B;font-size:2.2rem;font-weight:400;letter-spacing:.159em;
   line-height:1.15;text-transform:uppercase;margin-bottom:8px;
 }
+/* DI-310 — tagline grows from .7rem to 1rem (roughly matching the removed
+   subtitle's own size), deliberately breaking DI-216's original 22:7
+   wordmark:tagline size ratio, per DI-310's explicit instruction. See the
+   `padding-top` comment above (`[data-gate-state="google"]`) for the
+   recomputed 47.44px half-block-height this size change feeds into. */
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-tagline{
   font-family:Georgia,'Times New Roman',serif;
-  color:#C9A24B;font-size:.7rem;font-weight:400;letter-spacing:.071em;
+  color:#C9A24B;font-size:1rem;font-weight:400;letter-spacing:.071em;
   line-height:1.15;margin-bottom:28px;
 }
 /* Drew, after the simulator screenshot (2026-09-20): "The font needs to all
@@ -3186,10 +3754,12 @@ body.native-shell .site-gate[data-gate-state="google"] .site-gate-tagline{
    — #888 muted sub-line/notice, #C9A24B Gold button, and critically
    .site-gate-error stays exactly #f44 (loud-fail must always look like an
    error; only its FACE changes here, never its color, size or margin). */
-body.native-shell .site-gate[data-gate-state="google"] .site-gate-subtitle{
-  font-family:Georgia,'Times New Roman',serif;
-  font-size:1rem;letter-spacing:.03em;text-transform:none;
-}
+/* DI-310 — the native subtitle DOM node (js/app.js) is DELETED this pass;
+   this rule is now dead code and is removed in the same edit rather than
+   left orphaned. The base `.site-gate-subtitle` rule (:903) and the hold-
+   state variant (:947) are UNCHANGED and still apply to the PIN-mode/
+   hold-mode gates' own, different subtitle nodes — neither touched by
+   DI-310. */
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-btn{
   border-color:#C9A24B;color:#C9A24B;
   font-family:Georgia,'Times New Roman',serif;
@@ -3202,5 +3772,470 @@ body.native-shell .site-gate[data-gate-state="google"] .site-gate-error,
 body.native-shell .site-gate[data-gate-state="google"] .site-gate-notice{
   font-family:Georgia,'Times New Roman',serif;letter-spacing:.03em;
 }
+/* B5 (3c fix window, 2026-09-25) — "everything on the gate follows Munera...
+   Cinzel/Georgia serif for display, one body face, no Courier" (Drew,
+   2026-09-20, re-applied here). DI-332's email/password block (added
+   2026-09-25, after DI-310's pass above) never got this same normalization:
+   `.form-label` was still falling through to the app-wide Oswald rule,
+   `.form-input` to the app-wide Inter rule, and `.site-gate-link` (Back /
+   Forgot password? / mode toggle) set no font-family of its own at all, so
+   it inherited `.site-gate-inner`'s base Courier New — FOUR families on one
+   screen (Georgia + Oswald + Inter + Courier) where DI-310 had already
+   reduced everything else to one. Fixed the same way DI-310 fixed the
+   sub-line/button/message: display-weight elements (the field label, the
+   text-link row) take the SAME Georgia serif the wordmark/tagline/button
+   already use; `.form-input` — the one place the player TYPES — takes
+   Inter, the app's actual body face (DI-328d), never the display serif and
+   never the inherited Courier. Colors are UNCHANGED (still the `--gate-*`
+   tokens above); only font-family/letter-spacing are scoped here. */
+body.native-shell .site-gate[data-gate-state="google"] .form-label,
+body.native-shell .site-gate[data-gate-state="google"] .site-gate-link{
+  font-family:Georgia,'Times New Roman',serif;letter-spacing:.03em;
+}
+body.native-shell .site-gate[data-gate-state="google"] .form-input{
+  font-family:'Inter',system-ui,sans-serif;letter-spacing:normal;
+}
 /* .google-g-mark is NOT scoped or overridden here — Google's OAuth branding
    guidelines govern that chip on every platform (DI-216e/g). */
+
+/* STEP B(8) / N5 (3c fix window, third pass) — the gate must never clip on a
+   short screen (iPhone SE/8: 667pt, minus the status bar and home indicator).
+   With the password block, the stack is taller than that viewport on the
+   smallest phones, and a flex container that centres an overflowing child
+   clips its TOP out of reach. So the overlay scrolls (momentum, contained),
+   the inner block centres with auto margins — which centre when there is room
+   and fall back to the top when there is not (auto margins never go negative)
+   — and the padding respects the safe areas. */
+.site-gate{overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:max(24px, env(safe-area-inset-top,0px)) 24px max(24px, env(safe-area-inset-bottom,0px))}
+.site-gate > .site-gate-inner{margin:auto;min-height:auto;flex-shrink:0}
+/* STEP B(4) / N1 — the in-place screen swap (sign-in <-> forgot password)
+   cross-fades over --motion-nav (260ms, inside the Principles' 250-300ms
+   band for a screen-level change), entrance easing; off under reduced motion. */
+@keyframes gateSwapIn{from{opacity:0}to{opacity:1}}
+.site-gate-inner.gate-swap-in{animation:gateSwapIn var(--motion-nav,260ms) var(--ease-entrance) both}
+@media (prefers-reduced-motion:reduce){.site-gate-inner.gate-swap-in{animation:none}}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   UX REVAMP WIRING PASS 1 (2026-09-25) — Group D: Leagues Journey
+   (DI-312 Leagues Home, DI-313 Create-League stub, DI-314 League Page +
+   sport cards, DI-316 Add-Sport stub, DI-315 League Standings). Markup
+   shapes verified against js/leagues-home.js's own render functions.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* DI-312 — the card list wrapper + one card. A plain <button class="card
+   league-card">, so it inherits .card's border/radius/shadow and only adds
+   its own internal layout — "looks like every other card in the app." */
+.league-card-list{display:flex;flex-direction:column;gap:var(--gap)}
+.league-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
+  transition:transform var(--motion-fast,150ms) ease-out}
+.league-card:active{transform:scale(.98)}
+.league-card-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.league-card-name{font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;color:var(--text-primary)}
+.league-card-bottom{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.league-card-chevron{color:var(--text-muted);display:flex;align-items:center}
+.league-card-chevron svg{width:18px;height:18px}
+/* Skeleton loading state (cached -> SKELETON -> progressive -> spinner-last;
+   Interaction Principles' Loading hierarchy) — opacity:.35 placeholder-row
+   pattern, matching the existing League Members card precedent. */
+.league-card-skeleton{pointer-events:none}
+.league-card-skeleton-line{height:14px;border-radius:6px;background:var(--bg-input);
+  opacity:.35;animation:skeleton-shimmer var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+.league-card-skeleton-line-wide{width:60%;margin-bottom:10px}
+.league-card-skeleton-line-narrow{width:35%}
+@keyframes skeleton-shimmer{0%,100%{opacity:.25}50%{opacity:.45}}
+@media (prefers-reduced-motion:reduce){.league-card-skeleton-line{animation:none;opacity:.35}}
+
+/* DI-313/DI-316 — the shared "coming soon" stub card. Reads like any other
+   tappable card (never grayed out) — "a real, tappable card that explains
+   itself on tap, not a dead control." */
+.coming-soon-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
+  display:flex;flex-direction:column;gap:2px;transition:transform var(--motion-fast,150ms) ease-out}
+.coming-soon-card:active{transform:scale(.98)}
+.coming-soon-card-title{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;color:var(--maroon)}
+.coming-soon-card-subtitle{font-size:.8rem}
+
+/* DI-314 — League Page: header (back + title), sport cards, League
+   Standings entry row. */
+.league-page-header{display:flex;align-items:center;gap:10px;padding:4px 0 16px}
+.league-page-back{background:none;border:none;cursor:pointer;color:var(--text-primary);
+  display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;
+  border-radius:50%;transition:transform var(--motion-fast,150ms) ease-out,background var(--transition)}
+.league-page-back:active{transform:scale(.97);background:var(--bg-input)}
+.league-page-back svg{width:22px;height:22px}
+.league-page-title{font-family:'Cinzel',serif;font-weight:600;font-size:1.3rem;line-height:1.2}
+.league-page-body{display:flex;flex-direction:column;gap:var(--gap)}
+.sport-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  transition:transform var(--motion-fast,150ms) ease-out}
+.sport-card:active{transform:scale(.98)}
+.sport-card-label{display:flex;align-items:center;gap:8px;font-family:'Oswald',sans-serif;
+  font-size:.95rem;font-weight:600;color:var(--text-primary)}
+.sport-card-icon{display:flex;align-items:center;color:var(--maroon)}
+.sport-card-icon svg{width:20px;height:20px}
+.sport-card-chevron{color:var(--text-muted);display:flex;align-items:center}
+.sport-card-chevron svg{width:18px;height:18px}
+/* League Standings entry row — a plain full-width row, not a .card (it
+   sits BELOW the sport cards inside the same .league-page-body list),
+   min-height:44px per the tap-target floor. */
+.league-standings-row{width:100%;min-height:44px;text-align:left;cursor:pointer;font:inherit;
+  color:var(--text-primary);background:var(--bg-card);border:1px solid var(--border);
+  border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;
+  justify-content:space-between;gap:10px;transition:transform var(--motion-fast,150ms) ease-out}
+.league-standings-row:active{transform:scale(.98)}
+.league-standings-row svg{width:18px;height:18px;color:var(--text-muted)}
+
+/* DI-315 — League Standings (single-sport) view. */
+.league-standings-scope{margin-bottom:10px}
+.league-standings-list{display:flex;flex-direction:column}
+.league-standings-row-item{display:grid;grid-template-columns:28px 1fr auto auto;gap:10px;
+  align-items:center;padding:10px 4px;border-bottom:1px solid var(--border)}
+.league-standings-row-item:last-child{border-bottom:none}
+/* DI-315 reviewer gate 5 — the header row, printed ONCE (not per-row):
+   labels the two DIFFERENT tallies (weighted record vs. raw win%) so
+   neither is misread as derived from the other. */
+.league-standings-header{color:var(--text-muted);font-size:.7rem;font-family:'Oswald',sans-serif;
+  text-transform:uppercase;letter-spacing:.06em;border-bottom:2px solid var(--maroon-tint)}
+.league-standings-rank{color:var(--text-muted);font-weight:600;text-align:right}
+.league-standings-name{font-weight:600}
+.league-standings-record{color:var(--text-secondary);font-variant-numeric:tabular-nums}
+.league-standings-pct{color:var(--text-secondary);font-variant-numeric:tabular-nums}
+
+/* DI-312/314/315 — the inert-background overlay pattern (Leagues Home ->
+   League Page -> League Standings are pushed as overlays above the
+   six-tab shell, the SAME `inert`-on-background mechanism app.js's
+   existing overlay+inert code already uses at :19928 — never a second
+   navigation-stack implementation). Sits above ordinary chrome
+   (.app-header/.bottom-nav, z-index 100) but below the control-center
+   drawer (500/501), toasts, chat sheet (8000) and the site gate
+   (9000+) — a full-screen page-level overlay never needs to compete
+   with a transient sheet/gate. */
+/* REVIEWER BLOCK item 3 (916bdb7 review, 2026-09-25) — was z-index:60, UNDER
+   `.app-header`'s z-index:100 (styles.css `.app-header` rule, above). The
+   header painted on top of this overlay's own `‹ Back` chevron and title,
+   making League Standings (reached via this overlay) a dead end — nothing
+   to tap back with. 150 clears the header/nav band (100) the exact same
+   way the native status-bar strip's own z-index:150 comment (this file,
+   "…It sits ABOVE .app-header/.bottom-nav (z-index 100)…") documents,
+   while staying below `.modal-overlay` (200) — this overlay is a full-page
+   takeover, not a modal, and must never compete with one. `.app-header` is
+   ALSO now included in `_setLeaguePageOverlayInert()`'s inert scope
+   (js/app.js) — belt AND suspenders: raised z-index fixes the VISUAL
+   coverage, `inert` fixes reachability by keyboard/screen-reader/scripted
+   click, matching the exact reasoning `_setAppContentInert()`'s own header
+   comment already gives for the hold gate. */
+#league-page-overlay{position:fixed;inset:0;z-index:150;background:var(--bg);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;padding:var(--page-pad);
+  padding-top:calc(var(--page-pad) + env(safe-area-inset-top,0px));
+  padding-bottom:calc(var(--page-pad) + env(safe-area-inset-bottom,0px));
+  transform:translateX(calc(100% * var(--league-page-drag-x,0)));
+  transition:transform var(--motion-nav) ease-out}
+/* Step 2(b) (2026-09-26) — native swipe-back, same recipe as
+   #control-center's own drag-progress custom property (css/styles.css,
+   Group A1 section): `--league-page-drag-x` (0..1) is set directly by
+   js/nav-gestures.js's bindSwipeToDismiss() via js/app.js's onProgress
+   callback; [data-dragging="true"] (set for the SAME duration) disables the
+   transition so a live drag never fights it — the transition only plays on
+   release, either finishing the dismiss or springing back to 0. */
+#league-page-overlay[data-dragging="true"]{transition:none}
+/* Security gate F3 (third pass) — the Standings -> League back-swipe snaps
+   the offset to 0 with the transition suppressed for one frame, so the
+   re-rendered League view lands in place instead of sliding in from where
+   the Standings view was released. */
+#league-page-overlay[data-no-transition]{transition:none}
+@media (prefers-reduced-motion:reduce){#league-page-overlay{transition:none}}
+
+/* DI-318 — Pilot League badge, reused wherever a league/card needs it
+   (league cards, Admin panel's Pilot League Flag card, the control-center
+   role-chip row). Gold accent, distinct from the status badges above. */
+.badge-pilot{background:var(--gold-pale);color:var(--gold-text);border:1px solid var(--gold)}
+
+/* DI-313/316 stub toast — a fourth semantic alongside .toast.success/
+   .toast.error/.toast.warning. Neutral/informational, never alarming
+   (Interaction Principles' Success Feedback: "small confirmation banner,
+   subtle animation" — this is the SAME shape for a non-error notice). */
+.toast.info{border-color:var(--text-muted)}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   UX REVAMP WIRING PASS 3b (2026-09-25) — Group C: the Week Setup Wizard
+   (DI-C1/DI-341…343). `#week-wizard-sheet-wrap`/`#week-wizard-sheet` reuse
+   the EXISTING `.chat-sheet-backdrop`/`.chat-sheet`/`.chat-sheet-header`/
+   `.chat-sheet-close`/`.chat-sheet-scroll` classes verbatim (own ids only,
+   so this never collides with the chat sheet).
+   REVIEWER BLOCK item 1 (916bdb7 review, 2026-09-25) — CORRECTED: this
+   claimed "no new sheet-shell CSS needed," which was FALSE. Those reused
+   classes are all `position:absolute` and only become a real bottom sheet
+   under an ancestor that establishes `position:fixed;inset:0` — the ONE id
+   that did that was `#chat-sheet-wrap` (above), which `#week-wizard-sheet-
+   wrap` did not share, so the wizard sheet anchored to the document's
+   first viewport (scrollable away under the header/nav) instead of
+   covering the screen. `#week-wizard-sheet-wrap` now has its OWN rule with
+   the identical values (a separate rule, NOT a shared selector — see the
+   comment on `#week-wizard-sheet-wrap{...}` near `#chat-sheet-wrap`;
+   corrected N9, third pass). What follows below is the ADDITIONAL new markup this DI
+   introduces on top of the now-shared shell: the step tracker, the
+   slate-confirm rows, the checklist and the fetch skeleton.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* DI-C1 §2.2 — the horizontal step tracker under the sheet header. */
+.week-wizard-tracker{display:flex;align-items:center;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+.week-wizard-step-dot{width:8px;height:8px;border-radius:50%;background:var(--border);
+  transition:background var(--transition)}
+.week-wizard-step-dot.done{background:var(--maroon-tint)}
+.week-wizard-step-dot.active{background:var(--maroon)}
+.week-wizard-tracker-label{margin-left:6px;font-size:.72rem;color:var(--text-muted);
+  font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em}
+
+/* DI-C1 §2.3 Step 2 — skeleton game rows while ESPN fetch + suggest is in
+   flight (Loading hierarchy: cached -> skeleton -> progressive -> spinner-
+   last — never a blank sheet mid-fetch). Same shimmer token the Leagues
+   Home skeleton (DI-312) already uses. */
+.week-wizard-skeleton-rows{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.week-wizard-skeleton-row{height:44px;border-radius:var(--card-radius);background:var(--bg-input);
+  opacity:.35;animation:skeleton-shimmer var(--skeleton-shimmer,1400ms) ease-in-out infinite}
+@media (prefers-reduced-motion:reduce){.week-wizard-skeleton-row{animation:none;opacity:.35}}
+
+/* DI-C1 §2.3 Step 3 — the slate-confirm game rows. Tapping one reuses
+   showGameModal() verbatim (AD-03) — no spread value is ever entered here. */
+.week-wizard-game-list{display:flex;flex-direction:column;gap:var(--gap)}
+.week-wizard-game-row{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:44px;
+  transition:transform var(--motion-fast,150ms) ease-out}
+.week-wizard-game-row:active{transform:scale(.98)}
+.week-wizard-spread-missing{color:var(--loss);font-weight:600;font-size:.85rem}
+/* R2-4 (3c fix window, third pass) — the wizard's own inline failure line, used
+   when the shared red banner is already carrying a real sync failure (AD-06). */
+#wiz-fetch-status.wiz-fetch-status-error{color:var(--loss);font-weight:600}
+
+/* DI-C1 §2.3 Step 6 — the three-line summary checklist gating "Open for
+   Picks". Unmet rows read as an outlined circle; met rows as a filled
+   check in the success color — spacing/typography carry the hierarchy, no
+   new icon family dependency for this pass. */
+.week-wizard-check-row{display:flex;align-items:center;gap:8px;padding:8px 0;
+  border-bottom:1px solid var(--border);font-size:.9rem;color:var(--text-muted)}
+.week-wizard-check-row:last-of-type{border-bottom:none}
+.week-wizard-check-row.ok{color:var(--text-primary)}
+.week-wizard-check-row span:first-child{width:18px;text-align:center;color:var(--win)}
+.week-wizard-check-row:not(.ok) span:first-child{color:var(--text-muted)}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   UX REVAMP WIRING PASS 1 (2026-09-25) — Group A1: the Control Center
+   drawer (DI-301…306, T-13/T-14). Every selector below matches
+   js/control-center.js's own render functions exactly — see that file's
+   header for the ctx/state contract and controlcentertest.mjs for the
+   class-name assertions this CSS satisfies.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* Structure/positioning. Sits above ordinary chrome (header/nav z-index
+   100, the league-page overlay at 150, .modal-overlay sheets at 200) but
+   below the chat/wizard sheets (8000) and the site gate (9000; .site-gate
+   and the gate-level banners 9999) — a modal drawer never needs to compete
+   with a transient sheet or a hard security gate. Because a .modal-overlay
+   sheet (200) sits UNDER the drawer, every drawer row that opens one closes
+   the drawer first (control-center.js, S2-2). (Values corrected 2026-09-26,
+   full-app review: this said the league-page overlay was at 60.) */
+#control-center-backdrop{position:fixed;inset:0;z-index:500;
+  background:rgba(20,17,14,.55);opacity:0;pointer-events:none;
+  transition:opacity var(--motion-nav) ease-out}
+#control-center-backdrop[data-open="true"]{opacity:1;pointer-events:auto}
+@media (prefers-reduced-motion:reduce){#control-center-backdrop{transition:none}}
+
+/* DRAWER_WIDTH_VW=85 / DRAWER_MAX_WIDTH_PX=340 (js/control-center.js).
+   The transform is keyed on the LIVE `--cc-drag-progress` custom property
+   (0..1, set directly by the JS drag binder) rather than on `data-open`
+   alone, so a native edge-swipe/drag-to-close tracks the finger 1:1 —
+   `data-open`/`data-phase` only drive the SETTLED states (fully open =
+   progress 1, fully closed = progress 0), never a competing transform
+   source. */
+#control-center{position:fixed;top:0;bottom:0;left:0;z-index:501;
+  width:85vw;max-width:340px;background:var(--bg);
+  box-shadow:4px 0 24px rgba(0,0,0,.18);
+  padding-top:env(safe-area-inset-top,0px);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+  display:flex;flex-direction:column;
+  transform:translateX(calc(-100% + (100% * var(--cc-drag-progress,0))));
+  transition:transform var(--motion-nav) ease-out}
+/* Fix round 1, finding 8 — a live drag must never fight a CSS transition;
+   the JS drag binder sets [data-dragging="true"] for the duration. */
+#control-center[data-dragging="true"]{transition:none}
+@media (prefers-reduced-motion:reduce){
+  #control-center{transition:none}
+}
+
+/* Two panes stack in the SAME box — DI-302's pushed Profile screen. */
+.control-center-pane{display:none;flex:1;min-height:0;flex-direction:column}
+.control-center-pane[data-active="true"]{display:flex}
+.control-center-pane-content{flex:1;min-height:0;overflow-y:auto;
+  -webkit-overflow-scrolling:touch;padding:16px}
+
+/* Rows — Interaction Principles' Button Behavior (~97% compress) and the
+   44px tap-target floor (CONVENTIONS #17), uniformly. */
+.control-center-row{width:100%;min-height:44px;display:flex;align-items:center;
+  justify-content:space-between;gap:10px;padding:0 16px;background:none;
+  border:none;text-align:left;color:var(--text-primary);font:inherit;cursor:pointer;
+  transition:transform var(--motion-fast) ease-out}
+.control-center-row:active{transform:scale(.97)}
+/* A disabled/read-only row (Interaction Principles: "Disabled buttons — no
+   animation, clearly reduced emphasis") — no current caller as of DI-335's
+   Password row replacing the ONE placeholder that used to use this
+   (2026-09-25); kept for the next row that needs it. */
+.control-center-row--inert{color:var(--text-muted);cursor:default}
+.control-center-row--inert:active{transform:none}
+.cc-row-label{flex:1;font-size:.92rem}
+.cc-row-icon{display:flex;align-items:center;color:var(--text-muted)}
+/* DI-340 (2026-09-25) — "Delete Account," visually separated from the
+   ordinary preference rows above it (DI-340's own "Danger Zone" placement
+   note) via a thin top border + the destructive token, reusing `--loss`
+   (the SAME token `.btn-danger` already uses — CLAUDE.md's rule: reuse the
+   token, not a new red) rather than inventing a second danger color. */
+.control-center-danger-zone{border-top:1px solid var(--border);margin-top:8px;padding-top:4px}
+.control-center-row--danger .cc-row-label{color:var(--loss)}
+.cc-row-icon svg{width:18px;height:18px}
+.cc-row-chevron{display:flex;align-items:center;color:var(--text-muted);
+  transition:transform var(--motion-fast) ease-out}
+.cc-row-chevron[data-expanded="true"]{transform:rotate(90deg)}
+@media (prefers-reduced-motion:reduce){
+  .control-center-row,.cc-row-chevron{transition:none}
+}
+
+/* The accordion body — height animates in over ACCORDION_ROW_MOTION_MS
+   (220ms, js/control-center.js). grid-template-rows 0fr->1fr avoids the
+   abrupt "pop" the Design Philosophy names as a web-app smell; the inner
+   wrapper is what actually clips, since a grid track cannot itself. */
+.control-center-row-body{display:grid;grid-template-rows:1fr;
+  animation:cc-row-body-in 220ms ease-out}
+@keyframes cc-row-body-in{from{grid-template-rows:0fr;opacity:0}to{grid-template-rows:1fr;opacity:1}}
+@media (prefers-reduced-motion:reduce){.control-center-row-body{animation:none}}
+/* F11 (pass-2 reviewer, 2026-09-25) — the inner clipping wrapper the comment
+   above already claimed existed but never did: a CSS grid TRACK cannot itself
+   clip (a `1fr`-sized track with tall content still reports its content's
+   full height to layout, so `grid-template-rows:0fr` alone does not actually
+   hide anything mid-transition — the row's content flashes/pops instead of
+   smoothly collapsing). `overflow:hidden` + `min-height:0` on this CHILD is
+   what makes the 0fr state genuinely clip its content, which is the whole
+   point of avoiding the "abrupt pop" the Design Philosophy calls out. The
+   padding moved here from `.control-center-row-body` itself — padding on the
+   OUTER grid item adds to the track's minimum content size and defeats
+   `min-height:0` on a `1fr` track (the classic CSS grid min-content trap). */
+.control-center-row-body-inner{overflow:hidden;min-height:0;padding:4px 16px 14px}
+
+/* The Team-logos toggle's own visual switch — `<button role="switch">`,
+   not a real checkbox (this codebase has no other on/off switch to reuse
+   verbatim). */
+.cc-row-switch{position:relative;width:40px;height:24px;border-radius:12px;
+  background:var(--border-strong);transition:background var(--motion-fast) ease-out;
+  flex-shrink:0}
+.cc-row-switch::after{content:'';position:absolute;top:2px;left:2px;width:20px;height:20px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);
+  transition:transform var(--motion-fast) ease-out}
+.cc-row-switch[data-on="true"]{background:var(--maroon)}
+.cc-row-switch[data-on="true"]::after{transform:translateX(16px)}
+@media (prefers-reduced-motion:reduce){.cc-row-switch,.cc-row-switch::after{transition:none}}
+/* The Team-logos toggle row's own helper line (js/control-center.js's
+   logoViewToggleRow()), aligned under the row rather than indented to the
+   switch's own column. */
+.cc-row-helper{padding:0 16px 10px;font-size:.72rem}
+
+/* Groups. */
+.control-center-group{margin-bottom:24px}
+.control-center-group-label{font-family:'Oswald',sans-serif;font-size:.72rem;
+  font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);
+  padding:0 16px 6px}
+.control-center-group-label--gold{color:var(--gold-text)}
+
+/* Identity block — DI-302. */
+.control-center-identity{padding:20px 16px 10px}
+.control-center-identity-tap{width:100%;display:flex;align-items:center;gap:12px;
+  background:none;border:none;text-align:left;cursor:pointer;padding:6px 0;
+  min-height:44px;transition:transform var(--motion-fast) ease-out}
+.control-center-identity-tap:active{transform:scale(.98)}
+.cc-avatar{width:44px;height:44px;border-radius:50%;background:var(--gold);
+  color:var(--maroon);display:flex;align-items:center;justify-content:center;
+  font-family:'Oswald',sans-serif;font-weight:700;font-size:.95rem;flex-shrink:0}
+.cc-identity-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.cc-identity-name{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  font-family:'Oswald',sans-serif;font-weight:600;font-size:.98rem}
+/* SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — was a plain,
+   non-interactive `<span>` inside the profile-tap button; now its OWN
+   sibling tap target (League Page's only reachable entry from the drawer —
+   see control-center.js's own header comment on this element). Indented to
+   the avatar's own right edge (44px avatar + 12px gap) so it still reads as
+   "part of" the identity block above it, not a new, disconnected row. */
+/* B5 (3c fix window, 2026-09-25, Interaction Principles "large tap targets")
+   — min-height corrected 36px -> 44px, matching every other tappable row in
+   this file. */
+.cc-identity-league-tap{display:inline-flex;align-items:center;margin:0 0 0 56px;
+  padding:4px 0;min-height:44px;background:none;border:none;text-align:left;
+  font:inherit;font-size:.78rem;cursor:pointer;
+  transition:transform var(--motion-fast) ease-out}
+.cc-identity-league-tap:active{transform:scale(.97)}
+.cc-version-stamp{font-size:.68rem;color:var(--text-muted);padding:2px 0 4px}
+/* DI-306's role chips — reuses .badge/.badge-open/.badge-pilot as a base
+   (identical visual treatment leagues-home.js's own role badges use), with
+   its own small size correction — a badge sized for a standings row read
+   too large inline beside a name. */
+.cc-role-chip{font-size:.6rem;padding:2px 7px}
+.control-center-identity-actions{display:flex;flex-direction:column;margin-top:4px}
+
+/* Profile pane. */
+.control-center-profile{display:flex;flex-direction:column;gap:14px}
+.control-center-back{display:flex;align-items:center;gap:8px;min-height:44px;
+  background:none;border:none;text-align:left;color:var(--text-secondary);font:inherit;
+  cursor:pointer;padding:0;transition:transform var(--motion-fast) ease-out}
+.control-center-back:active{transform:scale(.97)}
+.control-center-back .cc-row-icon svg{width:18px;height:18px}
+
+/* Footer. */
+.control-center-footer{padding:20px 16px calc(16px + env(safe-area-inset-bottom,0px));
+  display:flex;flex-direction:column;gap:6px;font-size:.72rem}
+.control-center-footer a{color:var(--maroon);text-decoration:none}
+.control-center-footer a:hover{text-decoration:underline}
+
+/* Close control. */
+.control-center-close{position:absolute;top:calc(10px + env(safe-area-inset-top,0px));
+  right:10px;min-width:44px;min-height:44px;display:flex;align-items:center;
+  justify-content:center;background:none;border:none;color:var(--text-muted);
+  font-size:1.1rem;cursor:pointer;border-radius:50%;
+  transition:transform var(--motion-fast) ease-out,background var(--transition)}
+.control-center-close:active{transform:scale(.97);background:var(--bg-input)}
+/* Full-app review Step 6 (2026-09-26) — the close glyph is icon('close'). */
+.control-center-close svg{width:18px;height:18px;display:block}
+
+/* DI-301 trigger — the header logo/mark that opens the drawer. */
+.control-center-trigger{background:none;border:none;cursor:pointer;color:#fff;
+  display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;
+  margin-left:-10px;border-radius:50%;transition:transform var(--motion-fast) ease-out}
+.control-center-trigger:active{transform:scale(.97)}
+
+/* Reviewer R4 (3c fix window, third pass) — the visually-hidden utility.
+   Content stays in the accessibility tree (never display:none) but takes no
+   space and paints nothing. First user: the "You" author label on own chat
+   messages, whose visible name label DI-346 hides. */
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;
+  overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
+
+/* STEP B(12) (3c fix window, third pass) — a role change on the Admin panel's
+   Users Across Leagues card cross-fades ONLY the changed row (150ms,
+   --motion-fast), instead of dropping the card to a skeleton and refetching. */
+@keyframes adminRowCrossfade{from{opacity:.35}to{opacity:1}}
+.player-admin-row.admin-row-crossfade{animation:adminRowCrossfade var(--motion-fast,150ms) ease-out}
+@media (prefers-reduced-motion:reduce){.player-admin-row.admin-row-crossfade{animation:none}}
+
+/* STEP B(14) (3c fix window, third pass) — the wizard's status buttons carry a
+   Munera glyph beside their text (D-1 phase 2). */
+.week-wizard-status-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.week-wizard-status-btn svg{width:16px;height:16px;flex:0 0 auto}
+/* S1-A (full-app review, 2026-09-26) — the D-1 leftovers' hosts had no svg
+   size, so the viewBox-only glyph fell back to the UA default: the Week-tab
+   status buttons rendered it 41×41 and grew the button; the invite Copy /
+   Rotate buttons collapsed it to 0×0. Same 16px as the wizard's own status
+   buttons (.btn already supplies the 6px gap). iconstest [8] now derives
+   every icon() host in app.js and fails any host without a rule like this. */
+.week-status-btn svg,
+#copy-invite-code-btn svg,
+#rotate-invite-code-btn svg{width:16px;height:16px;flex:0 0 auto}
+/* Same class of gap, found by iconstest [8]'s host derivation: the game-card
+   source badges and the National TV badge. Sized to their ~11px type. */
+.dq-badge svg,
+.national-tv-badge svg{width:12px;height:12px;flex:0 0 auto;display:inline-block;vertical-align:-2px}
+.dq-badge svg{margin-right:3px}

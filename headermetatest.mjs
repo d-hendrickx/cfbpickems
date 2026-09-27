@@ -147,6 +147,29 @@ console.log('\n[css] #header-meta is flex-direction:column, with no min-width ov
   assert(minWidthBlocksWithHeaderMeta.length === 0, 'no @media (min-width…) block references .header-meta');
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[index.html] REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — the header');
+console.log('   is trigger | #header-meta | #sync-badge, and NOTHING else — #league-pill and');
+console.log('   #header-identity are ABSENT, not merely hidden…');
+{
+  const htmlPath = new URL('./index.html', import.meta.url);
+  const html = readFileSync(htmlPath, 'utf8');
+  assert(!html.includes('id="league-pill"'),
+    '[hdr-a] index.html carries NO id="league-pill" anywhere — removed entirely, not hidden (F4 found renderLeaguePill() still un-hiding a merely-hidden element)');
+  assert(!html.includes('id="header-identity"'),
+    '[hdr-b] index.html carries NO id="header-identity" anywhere — same reason, renderHeaderIdentity() still un-hides on every session resolve');
+  assert(html.includes('id="control-center-trigger"') && html.includes('id="header-meta"') && html.includes('id="sync-badge"'),
+    '[hdr-c] the three elements the declutter actually keeps are all still present — trigger, #header-meta, #sync-badge');
+  // Positional check: the three survivors appear in the ORDER the mockup
+  // specifies (mockups/control-center.html:96-102) — trigger, then meta,
+  // then (inside .header-right) sync-badge.
+  const triggerAt = html.indexOf('id="control-center-trigger"');
+  const metaAt = html.indexOf('id="header-meta"');
+  const syncAt = html.indexOf('id="sync-badge"');
+  assert(triggerAt !== -1 && metaAt !== -1 && syncAt !== -1 && triggerAt < metaAt && metaAt < syncAt,
+    '[hdr-d] the three survivors appear in header order: trigger, then #header-meta, then #sync-badge');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

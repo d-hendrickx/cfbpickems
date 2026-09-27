@@ -488,7 +488,10 @@ function standingsHtml() {
 
   const iSummary = html.indexOf('Season Summary');
   const iLedger  = html.indexOf('🎯 Extra Point Ledger');
-  const iAlma    = html.indexOf('⭐ Alma Mater Rankings');
+  // UPDATED — DI-330 (Group E, 2026-09-25) replaces the literal ⭐ with
+  // icon('almaMater') at this heading; the text this positional check
+  // searches for moves with it.
+  const iAlma    = html.indexOf('Alma Mater Rankings');
   assert(iSummary >= 0 && iLedger > iSummary && iAlma > iLedger,
     `the card sits BETWEEN Season Summary and Alma Mater Rankings (${iSummary} < ${iLedger} < ${iAlma})`);
 

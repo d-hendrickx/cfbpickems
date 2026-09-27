@@ -191,6 +191,14 @@ console.log('\n[2] Blind-rule — negative case (full event/body matrix) + posit
     // go vacuous again.
     OBLIGATION_CREATED: { weekN: 3, debtorName: 'Koby', creditorName: 'Kihoon', obligationLabel: '1 drink' },
     OBLIGATION_SETTLED: { weekN: 3, debtorName: 'Koby', creditorName: 'Kihoon', obligationLabel: '1 drink' },
+    // DI-342 (UX Revamp group C, 2026-09-25) — the four commissioner-ops
+    // categories + the manual reminder's chat-post pair.
+    SLATE_NOT_BUILT: { weekN: 5, n: 2 },
+    DRAFT_PAST_OPEN: { weekN: 5 },
+    OPEN_NO_LOCK_TIME: { weekN: 5 },
+    LIVE_NOT_FINALIZED: { weekN: 4 },
+    PICKS_REMINDER_MANUAL: { weekN: 3, namedNonSubmitters: 'Kevin', submittedCount: 5, totalPlayers: 6 },
+    PICKS_REMINDER_MANUAL_COUNT_ONLY: { weekN: 3, submittedCount: 5, totalPlayers: 6 },
   };
   // RESULTS_FINALIZED_YOU_WON is deliberately ABSENT — retired by ruling O3
   // (see below). A league-wide room cannot carry a second-person line.
@@ -3482,6 +3490,322 @@ console.log('\n[30] DI-T6.2/DI-T6.14(b) — js/reminder-rules.js is a PARALLEL e
     `30d: the non-submitter's NAME does not leak into the count-only body on either side (A=${JSON.stringify(restFalse30.body)}, B=${JSON.stringify(restFalse30b.body)})`);
   assert(typeof titleFalse30 === 'string' && titleFalse30.length > 0,
     '30d: js/reminder-rules.js still carries its additive `title` in the count-only branch too');
+}
+
+console.log('\n[31] DI-293 — a PRIVATE SCRIBE CHANGELOG ROW never reaches fanoutPlan()\'s direct branch…');
+{
+  // js/scribeChangelog.js's buildChangelogPost() ships `notify:false` UNCHANGED by this DI
+  // (its own header comment: "Don't flip notify as part of this change") — so `shouldFanout()`
+  // refuses the row on `record.notify !== true` BEFORE fanoutPlan() ever inspects `visible_to`
+  // at all. Proven behaviourally against the real row shape, not asserted in prose.
+  const rules31 = await import('./supabase/functions/_shared/job-rules.mjs');
+  const changelog31 = await import('./js/scribeChangelog.js');
+  const privateRow = changelog31.buildChangelogPost({
+    leagueId: 'L', learningId: 'sl_notify_1', playerDisplayName: 'Drew', playerId: 'p1',
+    category: 'humor', instruction: 'Be funnier.', origin: 'instant',
+  });
+  assert(privateRow.visible_to === 'p1' && privateRow.notify === false && /^sys_scribe_changelog_.+__private$/.test(privateRow.id),
+    `31-1 [fixture check]: the row under test is really the DI-290/291/292 shape — private, unnotified, id-suffixed (got ${JSON.stringify({ visible_to: privateRow.visible_to, notify: privateRow.notify, id: privateRow.id })})`);
+  assert(rules31.shouldFanout({ ...privateRow, league_id: 'L' }) === false,
+    '31-2: shouldFanout() refuses it on notify alone — the SAME gate every other ambient/system row is refused by, no changelog-specific carve-out needed');
+  const plan31 = rules31.fanoutPlan({
+    record: { ...privateRow, league_id: 'L' },
+    members: [{ id: 'p1', active: true, display_name: 'Drew', preferences: {} },
+              { id: 'p2', active: true, display_name: 'Brayden', preferences: {} }],
+    senderDisplayName: 'system',
+  });
+  assert(plan31.fanout === false && plan31.reason === rules31.SKIPPED.NO_WORK && plan31.recipients.length === 0,
+    `31-3: fanoutPlan() stops at shouldFanout() and never reaches DI-204e's own \`visible_to\` recipient-narrowing branch for this row — no push to the ONE recipient, no push to anyone else, because a changelog entry is not a page (got ${JSON.stringify(plan31)})`);
+}
+
+console.log('\n[32] DI-342 (UX Revamp group C) — the four commissioner-ops categories…');
+{
+  const rules32 = await import('./js/reminder-rules.js');
+  const NOW32 = Date.now();
+  // SLATE_NOT_BUILT — cold start (no prior weeks with opened_at): the N-day
+  // anchor IS the usual-open estimate, so a week created 5 days ago is due.
+  const draftEmpty = { weekId: 'w1', status: 'draft', dataSourceMode: 'manual', weekNumber: 6,
+    createdAt: new Date(NOW32 - 5 * 24 * 3600000).toISOString(), gamesCount: 0 };
+  assert(!!rules32.slateNotBuiltDue({ week: draftEmpty, now: NOW32, weeksHistory: [draftEmpty] }),
+    '32-1: SLATE_NOT_BUILT fires for a draft week, zero games, past the cold-start N-day window');
+  assert(rules32.slateNotBuiltDue({ week: { ...draftEmpty, gamesCount: 3 }, now: NOW32, weeksHistory: [] }) === null,
+    '32-2: …and does NOT fire once the slate has games');
+  // DRAFT_PAST_OPEN — an explicit picksOpenAt in the past.
+  const draftPastOpen = { weekId: 'w2', status: 'draft', dataSourceMode: 'manual', weekNumber: 7,
+    createdAt: new Date(NOW32 - 3 * 24 * 3600000).toISOString(), picksOpenAt: new Date(NOW32 - 3600000).toISOString() };
+  assert(!!rules32.draftPastOpenDue({ week: draftPastOpen, now: NOW32 }),
+    '32-3: DRAFT_PAST_OPEN fires once an explicit Auto-Open time has passed while still draft');
+  assert(rules32.draftPastOpenDue({ week: { ...draftPastOpen, picksOpenAt: new Date(NOW32 + 3600000).toISOString() }, now: NOW32 }) === null,
+    '32-4: …and does NOT fire while the Auto-Open time is still in the future');
+  // OPEN_NO_LOCK_TIME — open, has a game, no picksLockAt and no usable kickoff.
+  const openNoLock = { weekId: 'w3', status: 'open', dataSourceMode: 'manual', weekNumber: 4, picksLockAt: null };
+  assert(!!rules32.openNoLockTimeDue({ week: openNoLock, games: [{ weekId: 'w3', kickoff: null }], now: NOW32 }),
+    '32-5: OPEN_NO_LOCK_TIME fires when no game has a usable kickoff and no override is set');
+  assert(rules32.openNoLockTimeDue({ week: openNoLock, games: [{ weekId: 'w3', kickoff: new Date(NOW32 + 3600000).toISOString() }], now: NOW32 }) === null,
+    '32-6: …and does NOT fire once a real kickoff resolves a lock time');
+  // LIVE_NOT_FINALIZED — 24h past the pending-finalization anchor.
+  const liveStale = { weekId: 'w4', status: 'live', dataSourceMode: 'manual', weekNumber: 5,
+    pendingFinalization: true, pendingFinalizationSinceMs: NOW32 - 30 * 3600000 };
+  assert(!!rules32.liveNotFinalizedDue({ week: liveStale, now: NOW32 }),
+    '32-7: LIVE_NOT_FINALIZED fires 30h past the anchor (24h threshold)');
+  assert(rules32.liveNotFinalizedDue({ week: { ...liveStale, pendingFinalizationSinceMs: NOW32 - 3600000 }, now: NOW32 }) === null,
+    '32-8: …and does NOT fire only 1h past the anchor');
+  // The assembler — copy/dedup shape, one row per (category, week).
+  const opsPlan = rules32.computeCommissionerOpsPlan({ weeks: [draftEmpty], games: [], now: NOW32 });
+  // A zero-games draft week 5 days old is due for BOTH SLATE_NOT_BUILT (the
+  // early N-day warning) and DRAFT_PAST_OPEN (the "should be open by now"
+  // escalation) at once — 32-3 above proves DRAFT_PAST_OPEN's own trigger
+  // independently; this checks the ASSEMBLER wires SLATE_NOT_BUILT's shape
+  // correctly among whatever else also fires for the same fixture.
+  const slateItem = opsPlan.find((x) => x.category === 'SLATE_NOT_BUILT');
+  assert(!!slateItem && slateItem.dedupKey === `SLATE_NOT_BUILT|w1|${rules32.utcDateKey(NOW32)}`,
+    `32-9: the assembler's dedup key is {category}|{weekId}|{dayBucket} (got ${JSON.stringify(opsPlan)})`);
+  assert(typeof slateItem.body === 'string' && slateItem.body.includes('Week 6'),
+    '32-10: …and carries real copy, sourced through buildCopy()/notify-copy.js, not a placeholder');
+
+  // reviewer BLOCK fix round 1 (2026-09-25) — the 24h grace period.
+  const justCreated = { weekId: 'wJust', status: 'draft', dataSourceMode: 'manual', weekNumber: 9,
+    createdAt: new Date(NOW32 - 2 * 60000).toISOString(), gamesCount: 0 };
+  assert(rules32.slateNotBuiltDue({ week: justCreated, now: NOW32, weeksHistory: [justCreated] }) === null,
+    '32-11: a week created 2 minutes ago fires NOTHING — the 24h grace floor, cold start');
+  const justUnderGrace = { ...justCreated, createdAt: new Date(NOW32 - 23 * 3600000).toISOString() };
+  assert(rules32.slateNotBuiltDue({ week: justUnderGrace, now: NOW32, weeksHistory: [justUnderGrace] }) === null,
+    '32-12: 23h old ⇒ still inside the 24h grace, still silent');
+  const justOverGrace = { ...justCreated, createdAt: new Date(NOW32 - 25 * 3600000).toISOString() };
+  assert(!!rules32.slateNotBuiltDue({ week: justOverGrace, now: NOW32, weeksHistory: [justOverGrace] }),
+    '32-13: 25h old ⇒ past the 24h grace, fires (cold start)');
+  assert(rules32.slateNotBuiltDue({ week: justOverGrace, now: NOW32, weeksHistory: [justOverGrace] }).n === null,
+    '32-14: …and carries n:null (cold start — no median to report), so notify-copy.js drops "in about N days" per its own null-safety');
+
+  // With real history, the warn instant is max(usualOpen-24h, created+24h) —
+  // never earlier than a day after creation even if the median is short.
+  const shortHistoryWeek = { weekId: 'hist1', dataSourceMode: 'manual',
+    createdAt: new Date(NOW32 - 10 * 24 * 3600000).toISOString(), openedAt: new Date(NOW32 - 9.5 * 24 * 3600000).toISOString() }; // ~12h gap
+  const freshDraft = { weekId: 'wFresh', status: 'draft', dataSourceMode: 'manual', weekNumber: 10,
+    createdAt: new Date(NOW32 - 10 * 3600000).toISOString(), gamesCount: 0 }; // 10h old
+  assert(rules32.deriveUsualOpenGapHours([shortHistoryWeek, shortHistoryWeek]) < 24,
+    '32-15: [fixture check] a real median under 24h exists for this history');
+  assert(rules32.slateNotBuiltDue({ week: freshDraft, now: NOW32, weeksHistory: [shortHistoryWeek, shortHistoryWeek] }) === null,
+    '32-16: even with a SHORT real median (usualOpen well under 24h out), a 10h-old week still does not fire — the 24h-after-creation floor wins over usualOpen-24h');
+
+  // ── RECENCY BOUND ────────────────────────────────────────────────────────
+  const week3Abandoned = { weekId: 'w3', status: 'draft', dataSourceMode: 'manual', weekNumber: 3,
+    createdAt: new Date(NOW32 - 30 * 24 * 3600000).toISOString(), gamesCount: 0 };
+  const week6Active = { weekId: 'w6', status: 'open', dataSourceMode: 'manual', weekNumber: 6,
+    createdAt: new Date(NOW32 - 3 * 24 * 3600000).toISOString(), picksLockAt: new Date(NOW32 + 3600000).toISOString() };
+  const boundedPlan = rules32.computeCommissionerOpsPlan({
+    weeks: [week3Abandoned, week6Active], games: [{ weekId: 'w6', kickoff: new Date(NOW32 + 3600000).toISOString() }],
+    now: NOW32, activeWeekId: 'w6',
+  });
+  assert(!boundedPlan.some((x) => x.weekId === 'w3'),
+    `32-17: an abandoned week-3 draft fires NOTHING while week 6 is active — weekNumber 3 < active's 6 (got ${JSON.stringify(boundedPlan)})`);
+
+  const week7OnDeck = { weekId: 'w7', status: 'draft', dataSourceMode: 'manual', weekNumber: 7,
+    createdAt: new Date(NOW32 - 30 * 24 * 3600000).toISOString(), gamesCount: 0 };
+  const week9FarFuture = { weekId: 'w9', status: 'draft', dataSourceMode: 'manual', weekNumber: 9,
+    createdAt: new Date(NOW32 - 30 * 24 * 3600000).toISOString(), gamesCount: 0 };
+  const boundedPlan2 = rules32.computeCommissionerOpsPlan({
+    weeks: [week6Active, week7OnDeck, week9FarFuture],
+    games: [{ weekId: 'w6', kickoff: new Date(NOW32 + 3600000).toISOString() }],
+    now: NOW32, activeWeekId: 'w6',
+  });
+  assert(boundedPlan2.some((x) => x.weekId === 'w7') && !boundedPlan2.some((x) => x.weekId === 'w9'),
+    `32-18: the SINGLE next week (7, not 9) is eligible alongside the active week — "on deck," not every future week (got ${JSON.stringify(boundedPlan2.map((x) => x.weekId))})`);
+
+  const noActiveWeek = rules32.computeCommissionerOpsPlan({
+    weeks: [week3Abandoned, week7OnDeck], games: [], now: NOW32, activeWeekId: null,
+  });
+  assert(noActiveWeek.every((x) => x.weekId === 'w7'),
+    `32-19: no active week resolvable ⇒ only the SINGLE newest draft (week 7, not week 3) is scanned (got ${JSON.stringify(noActiveWeek.map((x) => x.weekId))})`);
+
+  // ── THE BOUND'S OWN BLIND SPOT (reviewer BLOCK, fix round 2, 2026-09-25) ──
+  // LIVE_NOT_FINALIZED's subject is NECESSARILY OLDER than the active week:
+  // `createWeekFromWizard()` calls `setActiveWeekId()` the moment week N+1 is
+  // created (`js/week-wizard.js`), so the instant Drew starts week 6, week 5
+  // — live, every game final, waiting to be finalized — falls BELOW the
+  // recency bound and its nudge goes silent permanently. The fix exempts
+  // that ONE detector from the bound (it is self-bounding: live +
+  // pendingFinalization + ≥24h past the anchor, and self-resolving the
+  // moment the week is finalized); the other three stay bounded.
+  const week5Live = { weekId: 'w5L', status: 'live', dataSourceMode: 'manual', weekNumber: 5,
+    pendingFinalization: true, pendingFinalizationSinceMs: NOW32 - 40 * 3600000 };
+  const week6NewDraft = { weekId: 'w6D', status: 'draft', dataSourceMode: 'manual', weekNumber: 6,
+    createdAt: new Date(NOW32 - 5 * 24 * 3600000).toISOString(), gamesCount: 0 };
+  const wizardJustRan = rules32.computeCommissionerOpsPlan({
+    weeks: [week3Abandoned, week5Live, week6NewDraft], games: [], now: NOW32, activeWeekId: 'w6D',
+  });
+  assert(wizardJustRan.some((x) => x.category === 'LIVE_NOT_FINALIZED' && x.weekId === 'w5L'),
+    `32-20: week 5 is live + pendingFinalization 40h past its anchor while the wizard has already made week 6 active — "ready to finalize" STILL fires for week 5, even though 5 < 6 (got ${JSON.stringify(wizardJustRan.map((x) => `${x.category}:${x.weekId}`))})`);
+  assert(!wizardJustRan.some((x) => x.weekId === 'w3'),
+    `32-21: …and the SAME layout still fires nothing for the abandoned week-3 draft — the exemption is one detector wide, not a repeal of the bound (got ${JSON.stringify(wizardJustRan.map((x) => `${x.category}:${x.weekId}`))})`);
+  assert(wizardJustRan.filter((x) => x.category === 'LIVE_NOT_FINALIZED').length === 1,
+    `32-22: …and the exempt detector runs ONCE per week, never twice for a week that is also inside the bound (got ${JSON.stringify(wizardJustRan.map((x) => `${x.category}:${x.weekId}`))})`);
+
+  // reviewer note (fix round 2) — "in about 1 days". `slateNotBuiltDue()`
+  // floors `n` at 1, so the singular is a REACHABLE sentence, not a
+  // theoretical one; pinned here in both directions.
+  const copy32 = await import('./js/notify-copy.js');
+  assert(copy32.buildCopy('SLATE_NOT_BUILT', { weekN: 6, n: 1 }, 'SLATE_NOT_BUILT|x|y').body.includes('in about 1 day.'),
+    `32-23: n===1 reads "in about 1 day", never "1 days" (got ${copy32.buildCopy('SLATE_NOT_BUILT', { weekN: 6, n: 1 }, 'SLATE_NOT_BUILT|x|y').body})`);
+  assert(copy32.buildCopy('SLATE_NOT_BUILT', { weekN: 6, n: 2 }, 'SLATE_NOT_BUILT|x|y').body.includes('in about 2 days.'),
+    `32-24: …and every other n keeps the plural (got ${copy32.buildCopy('SLATE_NOT_BUILT', { weekN: 6, n: 2 }, 'SLATE_NOT_BUILT|x|y').body})`);
+}
+
+console.log('\n[33] DI-342 — the additive daily-cadence branch, alongside the threshold loop…');
+{
+  const rules33 = await import('./js/reminder-rules.js');
+  const week33 = { weekId: 'w5', status: 'open', dataSourceMode: 'manual', weekNumber: 3, picksLockAt: null, autoLockOffsetMinutes: 30 };
+  const players33 = [{ playerId: 'p1', active: true, displayName: 'Drew' }];
+  const now33 = Date.now();
+  // Lock is 3 days out — no threshold, no locking-soon window.
+  const farKickoff = new Date(now33 + 3 * 24 * 3600000).toISOString();
+  const thresholdsOnly = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: farKickoff }], picks: [], players: players33,
+    now: now33, cadence: 'thresholds-only',
+  });
+  assert(thresholdsOnly.remindersPlan.length === 0,
+    `33-1: cadence 'thresholds-only' ⇒ silent for a week whose lock is days out (got ${thresholdsOnly.remindersPlan.length})`);
+  const daily = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: farKickoff }], picks: [], players: players33,
+    now: now33, cadence: 'daily',
+  });
+  assert(daily.remindersPlan.length === 1 && /^PICKS_REMINDER_CADENCE\|w5\|daily_/.test(daily.remindersPlan[0].dedupKey),
+    `33-2: cadence 'daily' ⇒ one additive entry per active player, own dedup family (got ${JSON.stringify(daily.remindersPlan)})`);
+  assert(rules33.normalizeCadence(undefined) === 'daily' && rules33.normalizeCadence('bogus') === 'daily',
+    '33-3: an absent or unrecognised cadence setting reads as \'daily\' — D-13\'s own ruled default');
+  assert(rules33.normalizeCadence('thresholds-only') === 'thresholds-only',
+    '33-4: …and an explicit choice is honoured verbatim');
+
+  // D-13 SUPPRESSION (fix round 1, 2026-09-25) — a manual post inside the
+  // cooldown window suppresses the scheduled daily-cadence post.
+  const day1 = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: farKickoff }], picks: [], players: players33,
+    now: now33, cadence: 'daily', lastManualPostAtMs: now33 - 30 * 60000, cooldownHours: 3,
+  });
+  assert(day1.remindersPlan.length === 0,
+    `33-5: a manual post 30 minutes ago, 3h cooldown ⇒ the scheduled cadence entry is suppressed (got ${day1.remindersPlan.length})`);
+  const day2 = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: farKickoff }], picks: [], players: players33,
+    now: now33, cadence: 'daily', lastManualPostAtMs: now33 - 4 * 3600000, cooldownHours: 3,
+  });
+  assert(day2.remindersPlan.length === 1,
+    `33-6: …and 4 hours later (past the 3h cooldown) the cadence entry fires normally (got ${day2.remindersPlan.length})`);
+  // The exact scenario the coordinator named: manual at 23:50, cron at 00:10
+  // the NEXT UTC calendar day — different day-buckets, still suppressed,
+  // because suppression is a TIME comparison, never a bucket comparison.
+  const manualAt2350 = new Date('2026-09-24T23:50:00.000Z').getTime();
+  const cronAt0010 = new Date('2026-09-25T00:10:00.000Z').getTime();
+  const crossMidnight = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: new Date(cronAt0010 + 3 * 24 * 3600000).toISOString() }],
+    picks: [], players: players33, now: cronAt0010, cadence: 'daily',
+    lastManualPostAtMs: manualAt2350, cooldownHours: 3,
+  });
+  assert(crossMidnight.remindersPlan.length === 0,
+    `33-7: manual at 23:50, cron at 00:10 the next day (20 minutes apart, DIFFERENT UTC day-buckets) ⇒ still suppressed (got ${crossMidnight.remindersPlan.length})`);
+  const noSuppression = rules33.computeReminderPlan({
+    week: week33, games: [{ weekId: 'w5', kickoff: farKickoff }], picks: [], players: players33,
+    now: now33, cadence: 'daily',
+  });
+  assert(noSuppression.remindersPlan.length === 1,
+    '33-8: no lastManualPostAtMs supplied at all (every pre-fix call site) ⇒ unsuppressed, unchanged');
+}
+
+console.log('\n[34] DI-342/DI-C3 — the manual force path never double-counts against the threshold loop…');
+{
+  const rules34 = await import('./js/reminder-rules.js');
+  const week34 = { weekId: 'w6', status: 'open', dataSourceMode: 'manual', weekNumber: 3, picksLockAt: null, autoLockOffsetMinutes: 30 };
+  const players34 = [
+    { playerId: 'p1', active: true, displayName: 'Drew' },
+    { playerId: 'p2', active: true, displayName: 'Brayden' },
+  ];
+  // Lock is 10 minutes out — inside EVERY threshold window.
+  const soonKickoff = new Date(Date.now() + 40 * 60000).toISOString();
+  const forced = rules34.computeReminderPlan({
+    week: week34, games: [{ weekId: 'w6', kickoff: soonKickoff }], picks: [], players: players34,
+    now: Date.now(), force: true, runId: 'run_1',
+  });
+  assert(forced.remindersPlan.length === 2 && forced.remindersPlan.every((r) => r.threshold === 'manual'),
+    `34-1: a force call inside a threshold window produces EXACTLY one PICKS_REMINDER_MANUAL entry per non-submitter — the threshold loop must not also fire (got ${JSON.stringify(forced.remindersPlan.map((r) => r.threshold))})`);
+  assert(forced.lockingSoonPlan === null,
+    '34-2: …and the locking-soon notice does not ride along with a force call either');
+  assert(!!forced.manualPost && forced.manualPost.nonSubmitters.length === 2,
+    '34-3: the manual room-post summary lists both non-submitters');
+}
+
+console.log('\n[35] DI-342/DI-C3 §4.4 — the cooldown gate runs BEFORE the planner, and a 0-hour setting still floors at 1h…');
+{
+  const rules35 = await import('./js/reminder-rules.js');
+  // "before any plan" — planManualReminder() must never invoke computeReminderPlan
+  // when reserved is false. Proven by RESULT (an unreserved call returns the
+  // SAME empty shape regardless of what a real plan for this fixture would be),
+  // which is the externally-observable half of "never even built".
+  const week35 = { weekId: 'w7', status: 'open', dataSourceMode: 'manual', weekNumber: 3, picksLockAt: null, autoLockOffsetMinutes: 30 };
+  const players35 = [{ playerId: 'p1', active: true, displayName: 'Drew' }];
+  const soonKickoff35 = new Date(Date.now() + 40 * 60000).toISOString();
+  const refused = rules35.planManualReminder({
+    reserved: false, week: week35, games: [{ weekId: 'w7', kickoff: soonKickoff35 }], picks: [], players: players35,
+    now: Date.now(), runId: 'run_refused',
+  });
+  assert(refused.remindersPlan.length === 0 && refused.manualPost === null && refused.skipped === 'cooldown',
+    `35-1: reserved:false ⇒ empty plan, skipped:'cooldown' — never a partially-built plan (got ${JSON.stringify(refused)})`);
+  const granted = rules35.planManualReminder({
+    reserved: true, week: week35, games: [{ weekId: 'w7', kickoff: soonKickoff35 }], picks: [], players: players35,
+    now: Date.now(), runId: 'run_granted',
+  });
+  assert(granted.remindersPlan.length === 1 && granted.skipped === null,
+    `35-2: reserved:true ⇒ the real plan (got ${JSON.stringify(granted)})`);
+
+  // The SQL arithmetic mirror: greatest(coalesce(p_cooldown_hours,3),1).
+  const nowMs = Date.now();
+  const justPosted = nowMs - 30 * 60000; // 30 minutes ago
+  const zeroCooldown = rules35._fakeManualReserve({ lastPostAtMs: justPosted, nowMs, cooldownHours: 0 });
+  assert(zeroCooldown.reserved === false && zeroCooldown.hours === 1,
+    `35-3: a configured cooldown of 0 still floors at 1 hour — 30 minutes since the last post is still inside that floor, so the SECOND call plans zero (got ${JSON.stringify(zeroCooldown)})`);
+  const afterFloor = rules35._fakeManualReserve({ lastPostAtMs: nowMs - 61 * 60000, nowMs, cooldownHours: 0 });
+  assert(afterFloor.reserved === true,
+    '35-4: …and 61 minutes later (past the 1h floor) the SAME 0-hour setting grants again');
+  const stillInsideDefault = rules35._fakeManualReserve({ lastPostAtMs: nowMs - 2 * 3600000, nowMs, cooldownHours: null });
+  assert(stillInsideDefault.reserved === false && stillInsideDefault.hours === 3,
+    `35-5: an unset cooldown defaults to 3 hours — 2 hours since the last post is still inside that window, so it is refused (got ${JSON.stringify(stillInsideDefault)})`);
+  const pastDefault = rules35._fakeManualReserve({ lastPostAtMs: nowMs - 4 * 3600000, nowMs, cooldownHours: null });
+  assert(pastDefault.reserved === true && pastDefault.hours === 3,
+    `35-6: …and 4 hours later (past the 3h default) the same unset setting grants (got ${JSON.stringify(pastDefault)})`);
+}
+
+console.log('\n[36] DI-342/DI-C3 §4.5/§4.6 — the scribe-authored PICKS_REMINDER_MANUAL pools land…');
+{
+  const pools36 = copy._poolsForTest();
+  const named36 = pools36.PICKS_REMINDER_MANUAL;
+  const countOnly36 = pools36.PICKS_REMINDER_MANUAL_COUNT_ONLY;
+
+  assert(Array.isArray(named36) && named36.length >= 6,
+    `36-1: PICKS_REMINDER_MANUAL exists with >= 6 lines (got ${named36 ? named36.length : 'undefined'})`);
+  assert(Array.isArray(countOnly36) && countOnly36.length >= 6,
+    `36-2: PICKS_REMINDER_MANUAL_COUNT_ONLY exists with >= 6 lines (got ${countOnly36 ? countOnly36.length : 'undefined'})`);
+
+  assert(named36.every(tpl => tpl.includes('{namedNonSubmitters}')),
+    `36-3: every PICKS_REMINDER_MANUAL line uses {namedNonSubmitters} — that's the whole point of the named pool (offenders: ${JSON.stringify(named36.filter(tpl => !tpl.includes('{namedNonSubmitters}')))})`);
+  assert(named36.every(tpl => !tpl.includes('{timeUntilLock}')),
+    `36-4: …and no PICKS_REMINDER_MANUAL line uses {timeUntilLock} — the manual post can fire any time picks are open, never a countdown (offenders: ${JSON.stringify(named36.filter(tpl => tpl.includes('{timeUntilLock}')))})`);
+
+  assert(countOnly36.every(tpl => !tpl.includes('{namedNonSubmitters}')),
+    `36-5: no PICKS_REMINDER_MANUAL_COUNT_ONLY line uses {namedNonSubmitters} — structural no-names guarantee for the count-only mode (offenders: ${JSON.stringify(countOnly36.filter(tpl => tpl.includes('{namedNonSubmitters}')))})`);
+  assert(countOnly36.every(tpl => !tpl.includes('{timeUntilLock}')),
+    `36-6: …and no PICKS_REMINDER_MANUAL_COUNT_ONLY line uses {timeUntilLock} either (offenders: ${JSON.stringify(countOnly36.filter(tpl => tpl.includes('{timeUntilLock}')))})`);
+
+  const named36Body = copy.buildCopy('PICKS_REMINDER_MANUAL',
+    { weekN: 3, namedNonSubmitters: 'Kevin, Koby', submittedCount: 4, totalPlayers: 6 }, 'k').body;
+  assert(named36Body.includes('Kevin, Koby'),
+    `36-7: buildCopy('PICKS_REMINDER_MANUAL', …) names the actual non-submitters (got "${named36Body}")`);
+  assert(named36Body !== 'Reminder: picks are still open.' && !/Get yours in before lock\.$/.test(named36Body),
+    `36-8: …and the result is the real SCRIBE pool, not the flat FALLBACK text (got "${named36Body}")`);
+
+  const countOnly36Body = copy.buildCopy('PICKS_REMINDER_MANUAL_COUNT_ONLY',
+    { weekN: 3, submittedCount: 4, totalPlayers: 6 }, 'k').body;
+  assert(countOnly36Body.includes('4') && countOnly36Body.includes('6'),
+    `36-9: buildCopy('PICKS_REMINDER_MANUAL_COUNT_ONLY', …) carries the real counts (got "${countOnly36Body}")`);
+  assert(!countOnly36Body.includes('Kevin'),
+    `36-10: …and never names anyone (got "${countOnly36Body}")`);
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

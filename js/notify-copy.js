@@ -106,6 +106,34 @@ export const ALLOWED_META_KEYS = Object.freeze({
   // template by making {obligationLabel} grammatical: it breaks on the default.
   OBLIGATION_CREATED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
   OBLIGATION_SETTLED:          ['weekN', 'debtorName', 'creditorName', 'obligationLabel'],
+
+  // ── DI-342/DI-C2 §3.1/§3.2 (2026-09-25, UX Revamp group C) — the four
+  // commissioner-operational reminder categories. Notification-Center +
+  // push only (§3.5's security correction: no chat_append_system post —
+  // these are administrative nudges about a week's state, not league news).
+  // Plain, product-voiced copy (no POOLS entry for any of the four — see
+  // the FALLBACK block below), matching CLAUDE.md's "Beyond the visual"
+  // citation this DI makes: the copy names the actual gap, not a generic
+  // "check your week."
+  SLATE_NOT_BUILT:             ['weekN', 'n'],
+  DRAFT_PAST_OPEN:             ['weekN'],
+  OPEN_NO_LOCK_TIME:           ['weekN'],
+  LIVE_NOT_FINALIZED:          ['weekN'],
+
+  // ── DI-342/DI-C3 §4.5/§4.6 — the manual "SCRIBE: remind the stragglers"
+  // CHAT post (the push/Notification-Center side reuses PICKS_REMINDER
+  // unchanged — no new push copy). STRUCTURAL split identical to
+  // PICKS_LOCKING_SOON/PICKS_LOCKING_SOON_COUNT_ONLY: `namedNonSubmitters`
+  // is present on the named event and ABSENT from the count-only one's
+  // allow-list, so a caller that (wrongly) passes names in count-only mode
+  // still cannot get one into the body.
+  //
+  // POOL LANDED (scribe agent, DI-342/DI-C3 §4.5/§4.6, 2026-09-25) — see the
+  // POOLS block below for the two six-line pools. buildCopy() still falls
+  // through to the flat, non-SCRIBE FALLBACK when a required fact is missing
+  // (e.g. no weekN), which remains the SAFE floor — see FALLBACK's comment.
+  PICKS_REMINDER_MANUAL:            ['weekN', 'namedNonSubmitters', 'submittedCount', 'totalPlayers'],
+  PICKS_REMINDER_MANUAL_COUNT_ONLY: ['weekN', 'submittedCount', 'totalPlayers'],
 });
 
 // Module-load-time deny-by-default structural scan — fails the day a future
@@ -191,6 +219,38 @@ const POOLS = {
     "{timeUntilLock} to lock and we're at {submittedCount}/{totalPlayers}. You know who you are.",
     "{timeUntilLock} left. {submittedCount}/{totalPlayers} in. Don't be the holdout.",
   ],
+  // DI-342/DI-C3 §4.5/§4.6 (2026-09-25) — the commissioner's manual
+  // "remind the stragglers" button. Same named/count-only split as
+  // PICKS_LOCKING_SOON above, but this event has NO {timeUntilLock}: the
+  // commissioner can press the button at any point while picks are open,
+  // not just near lock, so no line here promises or implies a countdown.
+  // Register is Dry per SCRIBE.md §4 — a notch more pointed than
+  // PICKS_LOCKING_SOON because this is a deliberate commissioner action, not
+  // an automatic scan, but still no exclamation points, no caps, no
+  // profanity. Exactly one line leans on "the commissioner sent me" framing
+  // (line 2) — that's the whole point of the button, but it's a bit, not a
+  // disclaimer, so it doesn't repeat across the pool.
+  PICKS_REMINDER_MANUAL: [
+    'Straggler check for Week {weekN}: {namedNonSubmitters}. Nobody is forcing you. Yet.',
+    'The commissioner had me pull the list. Week {weekN}, still out: {namedNonSubmitters}.',
+    '{namedNonSubmitters} — Week {weekN} is not locked yet. That is the only reason this is still polite.',
+    '{submittedCount}/{totalPlayers} in for Week {weekN}. {namedNonSubmitters}, that is the gap.',
+    'On the clock for Week {weekN}: {namedNonSubmitters}. Picks do not submit themselves.',
+    '{namedNonSubmitters}, Week {weekN} is still waiting on you.',
+  ],
+  // Count-only twin (NOTIFY_NAME_NON_SUBMITTERS='false'). No line here can
+  // use {namedNonSubmitters} or {timeUntilLock} — only {weekN},
+  // {submittedCount}, {totalPlayers}. Same dry register; the missing names
+  // are acknowledged obliquely ("the rest know who they are") rather than
+  // pretending nobody's missing.
+  PICKS_REMINDER_MANUAL_COUNT_ONLY: [
+    'Straggler check for Week {weekN}: {submittedCount}/{totalPlayers} in. The commissioner is aware of the rest.',
+    '{submittedCount}/{totalPlayers} in for Week {weekN}. The gap knows who it is.',
+    'Week {weekN} sits at {submittedCount}/{totalPlayers}. Still open, still fixable.',
+    'The commissioner had me check. Week {weekN}: {submittedCount}/{totalPlayers} in.',
+    '{submittedCount} of {totalPlayers} in for Week {weekN}. The rest know who they are.',
+    'On the clock for Week {weekN}: {submittedCount}/{totalPlayers} in so far.',
+  ],
   PICKS_LOCKING_SOON_ALL_IN: [
     'All picks in. Week {weekN} is set. LFG.',
     '{totalPlayers}/{totalPlayers} in. Week {weekN} is locked and loaded.',
@@ -270,6 +330,47 @@ const FALLBACK = {
   OBLIGATION_SETTLED: (m) => m.debtorName && m.creditorName
     ? `${m.debtorName} settled with ${m.creditorName}${m.weekN != null ? ` for Week ${m.weekN}` : ''}.`
     : (m.weekN != null ? `The Week ${m.weekN} obligation was settled.` : 'A balance was settled.'),
+
+  // ── DI-342/DI-C2 §3.2 — exact copy, quoted verbatim from the design
+  // input. These are the ONLY text for their events (no POOLS entry above),
+  // so buildCopy() always takes this path for them — deliberate, not a
+  // degraded state: a single fixed operational sentence per category, not a
+  // pool needing variety.
+  // BLOCKING #2's discipline, applied here too: `m.weekN != null` (never
+  // just truthy — 0 is a real week number in theory) gates every branch
+  // that interpolates it, exactly like PICKS_OPENED's own fallback above.
+  // `SLATE_NOT_BUILT` additionally needs `m.n` present before it can quote
+  // the DI's exact "{N} days" sentence; missing either falls to a shorter,
+  // still-honest sentence rather than rendering "undefined".
+  // reviewer note (fix round 2, 2026-09-25): `n` is floored at 1 by
+  // `slateNotBuiltDue()`, so "in about 1 days" is a reachable sentence for
+  // any league whose median create→open gap rounds to a single day.
+  // Singularised here, at the one place the number becomes words.
+  SLATE_NOT_BUILT: (m) => (m.weekN != null && m.n != null)
+    ? `Week ${m.weekN} has no games yet and usually opens in about ${m.n} ${Number(m.n) === 1 ? 'day' : 'days'}. Build the slate when you get a chance.`
+    : (m.weekN != null ? `Week ${m.weekN} has no games yet. Build the slate when you get a chance.` : 'A week has no games yet. Build the slate when you get a chance.'),
+  DRAFT_PAST_OPEN: (m) => m.weekN != null
+    ? `Week ${m.weekN} is still in Draft and past when it usually opens. Players can't pick until you open it.`
+    : 'A week is still in Draft and past when it usually opens. Players can\'t pick until you open it.',
+  OPEN_NO_LOCK_TIME: (m) => m.weekN != null
+    ? `Week ${m.weekN} is open but has no lock time and no games with kickoffs yet — picks won't auto-lock. Set an Auto-Lock time or add games.`
+    : 'A week is open but has no lock time and no games with kickoffs yet — picks won\'t auto-lock. Set an Auto-Lock time or add games.',
+  LIVE_NOT_FINALIZED: (m) => m.weekN != null
+    ? `Every game in Week ${m.weekN} is final. Finalize the week to close out standings and obligations.`
+    : 'Every game in a live week is final. Finalize the week to close out standings and obligations.',
+
+  // ── DI-342/DI-C3 §4.5/§4.6 — non-SCRIBE fallback for the manual
+  // reminder's chat post, used when a required fact is missing (see
+  // POOLS/PICKS_REMINDER_MANUAL above for the shipped SCRIBE pool — this
+  // path is the safety floor beneath it, not the primary copy). Deliberately
+  // never names anyone even in the "named" event — a missing-fact fallback
+  // should promise only what a minimal fact set (weekN, counts) can support.
+  PICKS_REMINDER_MANUAL: (m) => m.weekN != null
+    ? `Week ${m.weekN}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
+    : 'Reminder: picks are still open.',
+  PICKS_REMINDER_MANUAL_COUNT_ONLY: (m) => m.weekN != null
+    ? `Week ${m.weekN}: ${m.submittedCount ?? '?'}/${m.totalPlayers ?? '?'} picks in. Get yours in before lock.`
+    : 'Reminder: picks are still open.',
 };
 
 // Plain-language, non-SCRIBE title per event — Notification Center row format
@@ -285,6 +386,19 @@ const TITLES = {
   RESULTS_FINALIZED:           'Week final',
   OBLIGATION_CREATED:          'New balance',
   OBLIGATION_SETTLED:          'Balance settled',
+
+  // DI-342/DI-C2 §3.2 — quoted verbatim.
+  SLATE_NOT_BUILT:             'Slate not built',
+  DRAFT_PAST_OPEN:             'Week still in draft',
+  OPEN_NO_LOCK_TIME:           'No lock time set',
+  LIVE_NOT_FINALIZED:          'Ready to finalize',
+
+  // DI-342/DI-C3 — the manual reminder's chat post has no Notification
+  // Center row of its own (it rides the existing PICKS_REMINDER push
+  // title); this title exists only so buildCopy()'s shape stays uniform
+  // and _knownEvents() lists it.
+  PICKS_REMINDER_MANUAL:            'Picks reminder',
+  PICKS_REMINDER_MANUAL_COUNT_ONLY: 'Picks reminder',
 };
 
 /**

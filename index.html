@@ -28,7 +28,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=25-1" />
+  <link rel="stylesheet" href="css/styles.css?v=26-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -150,42 +150,48 @@
            UN-117's two-line guarantee still holds structurally: it never
            becomes a third stacked line, because flex ROW (not column) can
            only place items side by side. -->
+      <!-- UX Revamp Group A1 (DI-301/307, 2026-09-25) — the drawer trigger
+           replaces the header's old six-item .header-right identity cluster.
+           FIRST child of .app-header-inner (before .header-meta), per DI-307
+           — there was no left-side logo element here before this pass; do
+           not confuse this with #brand-wordmark (js/app.js's
+           initNativeWordmark(), native-only, still on the RIGHT beside
+           #league-pill for a different purpose, DI-213k — untouched).
+           Filled at boot (an inline temple-mark SVG on native, the shell
+           brand name via getShellBrandName() on web) — empty here, same
+           "no flash of unstyled content" discipline #header-identity/
+           #notif-bell-btn already used below. Opens the control-center
+           drawer (js/control-center.js) on tap. -->
+      <button type="button" id="control-center-trigger" class="control-center-trigger" aria-label="Open control center"></button>
       <div class="header-meta" id="header-meta"><span id="header-meta-week"><strong>Loading…</strong></span></div>
       <div class="header-right">
-        <!-- Phase III Step 3a (DI-184b, reverted to the approved text
-             2026-09-16 — reviewer B4: D-2's "reuse the header title" ruling
-             cannot attach, because .app-header has no title element).
-             Rendered for EVERY account in authMode:'supabase'; hidden and
-             empty in 'pins'/'prelink'. First in .header-right per DI-184a.
-             A <span>, NOT a <button>: DI-184b's single-membership case must
-             be non-interactive with no button role, and a tag cannot change
-             at runtime. renderLeaguePill() (js/app.js) adds role="button" +
-             tabindex + the caret + a click handler ONLY when the account has
-             more than one membership. -->
-        <span id="league-pill" class="league-pill" hidden></span>
-        <!-- UN-106: identity is the most actionable header state, so it renders
-             first. Empty + hidden until renderHeaderIdentity() (js/app.js) reads
-             getSession() — never a flash of "Sign In" before session resolves. -->
-        <button type="button" id="header-identity" class="header-identity" hidden></button>
-        <!-- Bell goes immediately after #header-identity, before #sync-badge —
-             the header's own stated ordering rule (most actionable state
-             first). Starts hidden until renderNotifBell() (js/app.js) runs at
-             boot, purely so it never flashes unstyled before JS attaches.
-             Reachable SIGNED OUT too; it just renders a "sign in" line.
-
-             N1 / DI-N5 (UN-204, 2026-09-12): THE UNREAD BADGE SPAN IS GONE and
-             the bell now opens notification SETTINGS, not the Notification
-             Center list. Drew: "The bell icon is ok for notification settings
-             until we create a settings button." Unread belongs to the chat
-             pill, which is the one counter now — a second badge for the same
-             notices was the "three habits" problem in miniature. Nothing
-             stored was deleted; see js/app.js's bell section. -->
-        <button type="button" id="notif-bell-btn" class="notif-bell-btn" hidden aria-label="Notification settings">
-          <span class="notif-bell-icon">🔔</span>
-        </button>
+        <!-- REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — #league-pill
+             and #header-identity are REMOVED entirely now, not merely hidden.
+             DI-307's original declutter (2026-09-25, same day) left both
+             elements in the DOM with `hidden`, reasoning "no call site
+             currently un-hides it" — that reasoning was WRONG:
+             renderHeaderIdentity()/renderLeaguePill() (js/app.js) are still
+             called from refreshHeader()/resyncPlayerPreferences() and both
+             unconditionally set `el.hidden = false` whenever a session/active
+             league resolves, so the "decluttered" header kept silently
+             reappearing its old identity/league-pill chips. Per mockups/
+             control-center.html:96-102, the header is exactly
+             trigger | #header-meta | #sync-badge — nothing else. The render
+             functions themselves are UNCHANGED (still exported, still
+             called) — each already returns early when
+             `document.getElementById(...)` finds nothing, so removing the
+             elements here is what actually makes them permanently inert,
+             not a second flag anywhere. Their identity/switch-league jobs
+             live in the control-center drawer now (DI-302). -->
+        <!-- #notif-bell-btn, #tz-toggle, #theme-toggle and the header
+             feedback-button mount are REMOVED entirely (not hidden) per
+             DI-307 — the header keeps exactly logo-trigger | #header-meta |
+             #sync-badge now. Their render functions
+             (renderNotifBell()/renderTzToggle()/renderThemeToggle()) are
+             UNCHANGED and now embed inside the control-center drawer's
+             Settings accordion (Notifications/Time zone/Theme rows,
+             DI-303) instead — see js/app.js's buildControlCenterCtx(). -->
         <span id="sync-badge" class="sync-badge"></span>
-        <div id="tz-toggle" class="tz-toggle"></div>
-        <div id="theme-toggle" class="theme-toggle-slot"></div>
       </div>
     </div>
   </header>
@@ -205,10 +211,26 @@
     <section class="page-section" id="page-commissioner">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
+    <!-- DI-320/344/345 (T-12/T-35), UX Revamp wiring pass 2 (2026-09-25) —
+         the Admin panel. Reached via the control-center Admin/Super Admin
+         rows (js/control-center.js's starredPanels()) and, for an admin-only
+         viewer, the bottom-nav Comm icon (DI-320 §Entry point 2) — never a
+         bottom-nav icon of its own; T-35 adds no bottom-nav footprint. -->
+    <section class="page-section" id="page-admin">
+      <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
+    </section>
     <section class="page-section" id="page-rules">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
     <section class="page-section" id="page-chat">
+      <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
+    </section>
+    <!-- DI-308 (T-16) — the Settings tab's own page host. renderSettingsPage()
+         is a thin wrapper reusing js/control-center.js's SAME accordion-row
+         render functions the drawer uses, per DI-308's "one render function,
+         two hosts" instruction — no second, independently-written settings
+         implementation. -->
+    <section class="page-section" id="page-settings">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
   </main>
@@ -233,8 +255,17 @@
     <button class="nav-item" data-tab="leaderboard">
       <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M5 5H3v2a4 4 0 0 0 4 4.5"/><path d="M19 5h2v2a4 4 0 0 0-4 4.5"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="8" y1="20.5" x2="16" y2="20.5"/><line x1="8" y1="20.5" x2="9" y2="18"/><line x1="16" y1="20.5" x2="15" y2="18"/></svg></span><span>Standings</span>
     </button>
-    <button class="nav-item" data-tab="rules">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="5" y="4" width="14" height="17" rx="2"/><rect x="9" y="2.5" width="6" height="3" rx="1"/><line x1="8" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="13" y2="18"/></svg></span><span>Rules</span>
+    <!-- D-3 (2026-09-24): Rules -> Settings. Rules stays reachable (deep
+         links, and the control-center drawer's "Rules" row, DI-304) but
+         leaves the bottom nav — the Settings page (renderSettingsPage())
+         is the same accordion content the drawer's Settings group renders,
+         per DI-308's "one render function, two hosts." Glyph matches
+         js/icons.js's `settings` entry exactly (T-16, hand-authored inline
+         SVG, the same convention every other nav icon here already uses —
+         AD-93 keeps this the app-wide chrome rule, not just a nav-only
+         exception). -->
+    <button class="nav-item" data-tab="settings">
+      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2"/></svg></span><span>Settings</span>
     </button>
     <button class="nav-item" data-tab="commissioner">
       <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><line x1="4.8" y1="4.8" x2="6.6" y2="6.6"/><line x1="17.4" y1="17.4" x2="19.2" y2="19.2"/><line x1="4.8" y1="19.2" x2="6.6" y2="17.4"/><line x1="17.4" y1="6.6" x2="19.2" y2="4.8"/></svg></span><span>Comm.</span>
@@ -256,7 +287,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=25-1"></script>
+<script type="module" src="js/app.js?v=26-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -273,10 +304,28 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=25-1' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=26-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }
 </script>
+<!-- DI-301 — the control-center drawer's mount point. Named
+     `#control-center-root`, deliberately NOT `#control-center`: that id
+     belongs to the drawer element `renderControlCenter()` itself renders
+     (a sibling of `#control-center-backdrop`, both produced by ONE
+     `rootEl.innerHTML =` call at mount time, js/control-center.js's own
+     "fix round 1, finding 1" discipline) — mounting into a container that
+     ALSO carried the id `#control-center` would create a duplicate id and
+     break `js/nav-gestures.js`'s planned
+     `document.querySelector('#control-center[data-open="true"]')` lookup,
+     which must resolve the real drawer node, not this wrapper. A sibling of
+     `.page-wrapper` (not inside it), per DI-301, so `.page-section`
+     display toggling never affects it. No `hidden` attribute — the drawer's
+     own `data-open`/`data-phase` attributes and CSS transitions (not the
+     native `hidden` attribute, which maps to `display:none` and cannot
+     transition) are what gate its visibility; it starts empty and inert by
+     construction (`renderControlCenter()`'s initial `phase:'closed'` state
+     already carries `inert`). -->
+<div id="control-center-root"></div>
 </body>
 </html>

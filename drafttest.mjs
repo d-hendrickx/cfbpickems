@@ -404,7 +404,13 @@ console.log('\n[8] The Supabase-era triggers funnel into renderChatPage() [struc
   assert(repaintBody8.length > 0, '_repaintForSupabaseData() body located [structural]');
   assert(/navigateTo\(state\.currentTab/.test(repaintBody8),
     '_repaintForSupabaseData() repaints via navigateTo() [structural]');
-  assert(/chat:\s*renderChatPage\s*\}\)\[tab\]/.test(appSrc),
+  // UPDATED — DI-308 (T-16, 2026-09-25, UX Revamp wiring pass 1) adds a
+  // seventh dispatch entry (`settings: renderSettingsPage`) AFTER `chat:
+  // renderChatPage` in the SAME tab-dispatch map — the exact literal
+  // `chat: renderChatPage })[tab]` tail this regex pinned no longer exists
+  // (a real, approved map change), so this now allows anything between
+  // `chat: renderChatPage` and the map's own closing `})[tab]`.
+  assert(/chat:\s*renderChatPage\s*,[\s\S]{0,80}\}\)\[tab\]/.test(appSrc),
     'navigateTo(\'chat\') dispatches to renderChatPage() — so every repaint above rebuilds the composer [structural]');
   assert(/afterSupabaseHydrate[\s\S]{0,2000}?_repaintForSupabaseData\(reason\)/.test(appSrc),
     'the rehydrate tick lands on the same repaint [structural]');
@@ -716,9 +722,9 @@ console.log('\n[15] app.js and chat-ui.js wire the generic mechanism [structural
   assert(navFn.length > 0, 'navigateTo() body located [structural]');
   assert(/captureDirtyFields\(/.test(navFn) && /restoreDirtyFields\(/.test(navFn),
     'navigateTo() — the ONE render chokepoint every Realtime repaint lands on — both captures and restores [structural]');
-  assert(navFn.indexOf('captureDirtyFields(') < navFn.indexOf("renderCommPage, rules: renderRulesPage"),
+  assert(navFn.indexOf('captureDirtyFields(') < navFn.indexOf("renderAdminPage, rules: renderRulesPage"),
     'the capture happens BEFORE the render dispatch that destroys the fields [structural]');
-  assert(navFn.indexOf('if (_priorTab === tab) restoreDirtyFields(') > navFn.indexOf("renderCommPage, rules: renderRulesPage"),
+  assert(navFn.indexOf('if (_priorTab === tab) restoreDirtyFields(') > navFn.indexOf("renderAdminPage, rules: renderRulesPage"),
     'and the restore happens AFTER it [structural]');
   assert(/stampFieldOwner\(_pageEl, currentIdentityKey\(\)\)/.test(navFn),
     'navigateTo() stamps whose data it just painted — the guard that stops the NEXT player capturing this one\'s text [structural]');

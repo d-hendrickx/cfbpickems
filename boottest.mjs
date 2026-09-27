@@ -1393,8 +1393,20 @@ let sharedBootHandler = null;
         reg.set(id, el); paintedPages[id] = el;
       }
       const wk = new BEl(); wk.id = 'header-meta-week'; wk.innerHTML = '<strong>Week 4</strong>'; reg.set('header-meta-week', wk); paintedPages['header-meta-week'] = wk;
-      const pl = new BEl(); pl.id = 'league-pill'; pl.innerHTML = "IRB Pick 'Ems"; pl.setAttribute('aria-label', "Active league: IRB Pick 'Ems"); reg.set('league-pill', pl); paintedPages['league-pill'] = pl;
-      const hi = new BEl(); hi.id = 'header-identity'; hi.innerHTML = 'Drew'; reg.set('header-identity', hi); paintedPages['header-identity'] = hi;
+      // SECURITY GATE S-6 (2026-09-25) — #league-pill/#header-identity are
+      // NOT painted here anymore. They were REMOVED from index.html
+      // entirely in the header declutter (pass 3a-bis, REVIEWER F4) —
+      // `renderLeaguePill()`/`renderHeaderIdentity()` are UNCHANGED and
+      // still called elsewhere in boot, but both now correctly no-op
+      // (`if (!el) return;`) against a real DOM that never has these ids.
+      // Painting fake ones here tested a DOM shape production no longer
+      // has: `renderHeaderIdentity()` found the fake element and replaced
+      // its innerHTML with a "Sign In" pill (correct behavior for an
+      // element that exists), which this test's OWN leftover-markup check
+      // then misread as "the hold teardown failed to clear it" — a stale
+      // fixture reporting a real fix as a regression. The teardown's own
+      // (now-removed) dead branches targeting these ids are covered by
+      // authtest.mjs's [10] A6 section instead.
       // The chrome A6's teardown now also acts on (security 7/8): the two
       // containers that get `inert`, an unread pill, an open modal and the
       // toast host. Registered by SELECTOR, which the stub now answers.
@@ -1960,6 +1972,69 @@ let sharedBootHandler = null;
       assert(!deleted.includes(CACHE_NAME_NOW),
         `FALSIFIABILITY: …and it does NOT delete the current one (${CACHE_NAME_NOW}), so this is a purge and not a "delete everything" that would wipe the app shell on every activate`);
     }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // [18b] DI-334 FINDING 6 (UX Revamp, Group F "Accounts") — A RESET/
+    // RECOVERY/OAUTH NAVIGATION IS NEVER CACHED, beside SEC S-6's own proof
+    // just above (same fixture, same swRequest() driver, same real handler —
+    // re-evaluated fresh below so the [18] activate-purge block's mutated
+    // `caches`/listeners are not reused by accident).
+    console.log('\n[18b] DI-334 FINDING 6 — a reset/recovery/OAuth navigation carrying a one-time credential is never written to the cache…');
+    {
+      const cacheStore6 = new Map();
+      const fakeCache6 = {
+        put: async (req, res) => { cacheStore6.set(String(req.url || req), res); },
+        addAll: async () => {},
+        match: async () => undefined,
+      };
+      const fakeCaches6 = {
+        open: async () => fakeCache6,
+        match: async req => cacheStore6.get(String(req.url || req)),
+        keys: async () => [],
+        delete: async () => true,
+      };
+      const listeners6 = {};
+      new Function('self', 'caches', 'fetch', 'Response', 'Request', 'URL', 'importScripts', 'console', swSrc)(
+        { addEventListener: (t, fn) => { (listeners6[t] = listeners6[t] || []).push(fn); }, skipWaiting: () => {}, clients: { claim: async () => {} } },
+        fakeCaches6, swFetch,
+        class { constructor(body, init) { this.body = body; this.status = init?.status; this.synthetic = true; } },
+        class { constructor(u) { this.url = String(u); } },
+        URL, () => { throw new Error('no network in boottest'); }, { warn() {}, error() {}, log() {} },
+      );
+      const swRequest6 = async url => {
+        let responded = null;
+        await (listeners6.fetch[0]({ request: { url, method: 'GET' }, respondWith: p => { responded = p; } }), null);
+        return responded ? await responded : 'NOT_HANDLED';
+      };
+
+      const credentialUrls = [
+        'https://irbfootball.com/index.html?token_hash=abc123&type=recovery',
+        'https://irbfootball.com/index.html?code=pkce-auth-code',
+        'https://irbfootball.com/index.html?access_token=abc.def.ghi&refresh_token=xyz',
+        'https://irbfootball.com/index.html?type=recovery',
+      ];
+      for (const u of credentialUrls) {
+        cacheStore6.clear();
+        const res = await swRequest6(u);
+        assert(res.status === 200 && !res.synthetic, `ONLINE: the page still receives the live network response for ${u}, unchanged`);
+        assert(cacheStore6.size === 0, `…and NOTHING was written to the cache for ${u} (found ${cacheStore6.size} entr(ies))`);
+      }
+
+      // FALSIFIABILITY — an ordinary navigation with none of the four params
+      // (or a token-shaped VALUE under an unrelated key) IS still cached; the
+      // exclusion is scoped to the specific param names, not "any query string".
+      cacheStore6.clear();
+      const ordinary = await swRequest6('https://irbfootball.com/index.html?week=3');
+      assert(ordinary.status === 200 && cacheStore6.size === 1, 'FALSIFIABILITY: an ordinary navigation (an unrelated query param) IS still cached — the exclusion is scoped to the four named params, not a blanket "stop caching navigations"');
+      cacheStore6.clear();
+      const unrelatedNamedToken = await swRequest6('https://irbfootball.com/index.html?tokenish=not-a-real-param-name');
+      assert(unrelatedNamedToken.status === 200 && cacheStore6.size === 1, 'FALSIFIABILITY: a param whose NAME merely contains "token" but is not one of the four exact names IS still cached — this is a closed set of param names, not a substring match');
+
+      // The app shell itself (no query string at all) is unaffected.
+      cacheStore6.clear();
+      const shell6 = await swRequest6('https://irbfootball.com/js/app.js');
+      assert(shell6.status === 200 && cacheStore6.size === 1, 'the app shell (no query string) is still cached, exactly as SEC S-6\'s own block already proves — this exclusion adds nothing new to that path');
+    }
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -2180,10 +2255,17 @@ let sharedBootHandler = null;
       const leftover = Object.entries(r.paintedPages).filter(([, el]) => String(el.innerHTML || '') !== '');
       assert(leftover.length === 0,
         `${reason}: A6 — NO mirror-derived markup is reachable in the DOM (${leftover.length} container(s) still painted: ${JSON.stringify(leftover.map(([id]) => id))}). Not "an overlay exists" — the page content itself is gone.`);
+      // UPDATED — DI-308 (T-16, 2026-09-25, UX Revamp wiring pass 1) added
+      // #page-settings as a SEVENTH page container; DI-320/344/345 (UX Revamp
+      // wiring pass 2, same day) adds #page-admin as an EIGHTH
+      // (appMod._APP_PAGE_CONTAINER_IDS_FOR_TEST, read dynamically above,
+      // already reflects both). SECURITY GATE S-6 (2026-09-25) — nine
+      // containers now, not eleven: #league-pill/#header-identity are no
+      // longer painted at all (see the fixture's own note, above — they
+      // were removed from index.html entirely, and painting fake ones here
+      // tested a DOM shape production no longer has).
       assert(Object.keys(r.paintedPages).length === 9,
-        `${reason}: fixture — nine containers were painted before the boot (six page sections + week block + league pill + identity chip), so the assertion above is about a real teardown`);
-      assert(r.paintedPages['league-pill'].getAttribute('aria-label') === null,
-        `${reason}: DI-184j — …including the league pill's accessible name, through the same _clearLeaguePill()`);
+        `${reason}: fixture — nine containers were painted before the boot (eight page sections + week block), so the assertion above is about a real teardown`);
       assert(r.hydrateCalls.length === 0,
         `${reason}: and no hydrate runs behind the hold (${r.hydrateCalls.length} call(s)) — the hold is a real hold`);
       assert(storageMod.getSession().isAdmin === false,
@@ -4598,7 +4680,9 @@ console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'
       get id() { return this._id; },
       set id(v) { this._id = String(v); if (this._id) reg26.set(this._id, this); },
       set innerHTML(v) { this._html = String(v); }, get innerHTML() { return this._html; },
-      setAttribute() {}, getAttribute() { return null; },
+      // Attributes are STORED (reviewer F5, 2026-09-26): [26d] reads the banner's data-notice back.
+      _attrs: {},
+      setAttribute(k, v) { this._attrs[k] = String(v); }, getAttribute(k) { return k in this._attrs ? this._attrs[k] : null; },
       addEventListener() {}, removeEventListener() {},
       appendChild(c) { this._kids.push(c); if (c && c._id) reg26.set(c._id, c); return c; },
       querySelector() { return null; }, querySelectorAll() { return []; },
@@ -4682,6 +4766,64 @@ console.log('\n[26] RG-180 follow-up — a write held offline puts the adapter\'
     banner: 'The server refused to save cfbp_picks: permission denied. Nothing was saved.' });
   assert(!!red26() && /Nothing was saved/.test(red26().innerHTML),
     '[26] a REFUSAL is still the red banner, in the server’s own words (AD-06 stays loud)');
+  // B-05 (2026-09-25) — the refusal banner is hardcoded to picks-shaped
+  // copy ("Picks made on THIS device may NOT reach other players'
+  // devices…"), which is FALSE for a feedback-submission refusal. A
+  // `cfbp_feedback` refusal must render the feedback-specific title and
+  // must NOT carry the picks hint; every OTHER key (unchanged) keeps
+  // today's wording.
+  appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_feedback', keys: ['cfbp_feedback'],
+    banner: 'The server refused to save cfbp_feedback: permission denied. Nothing was saved.' });
+  assert(!!red26() && /Your feedback was not saved\./.test(red26().innerHTML),
+    `[26b] a cfbp_feedback refusal shows the feedback-specific title (got ${red26() ? red26().innerHTML : 'no banner'})`);
+  assert(!!red26() && !/Picks made on THIS device/.test(red26().innerHTML),
+    '[26b] …and does NOT carry the picks-shaped hint — no pick was involved');
+  assert(!!red26() && /Nothing else on this device is affected/.test(red26().innerHTML),
+    '[26b] …and DOES carry the feedback-specific hint');
+  appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_picks',
+    banner: 'The server refused to save cfbp_picks: permission denied. Nothing was saved.' });
+  assert(!!red26() && /Cross-device sync is OFF on this device\./.test(red26().innerHTML) && /Picks made on THIS device/.test(red26().innerHTML),
+    '[26c] …and a cfbp_picks (or any other/unnamed key) refusal keeps the ORIGINAL picks-shaped wording, unchanged');
+
+  // [26d] RG-253 follow-up (reviewer F2, 2026-09-26) — a `status_moved` refusal (the week-status
+  // compare-and-set) is not "sync is off" and is not something to "tell the commissioner": the
+  // reader IS the commissioner, and sync worked — the server moved the week first. Its banner names
+  // the week by LABEL and says where it is now; no storage key, no raw week id.
+  {
+    const storage26d = await import('./js/storage.js');
+    const prevMode26d = storage26d.getBackendMode();
+    storage26d.setBackendMode('local');
+    storage26d.saveWeek({ weekId: 'wk_26d_internal_id', weekNumber: 5, season: '2026', label: 'Week 5', status: 'final' });
+    appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_weeks', keys: ['cfbp_weeks'], code: 'status_moved',
+      moved: [{ id: 'wk_26d_internal_id', server: 'final', local: 'live', madeFrom: 'locked' }],
+      banner: 'The server refused to save cfbp_weeks: the week’s status moved on the server — "wk_26d_internal_id" is now final (you changed it from locked to live) — so your status change was not applied. Nothing was saved.' });
+    const html26d = red26() ? red26().innerHTML : '';
+    assert(/The week’s status changed on another device\./.test(html26d),
+      `[26d] a status_moved refusal is titled "The week's status changed on another device." (got ${html26d || 'no banner'})`);
+    assert(/The server’s status stands — check the Week tab before changing it again\./.test(html26d),
+      '[26d] …with the "server’s status stands" hint');
+    assert(/Week 5 is now Final\. Your change to Live was not applied\./.test(html26d),
+      '[26d] …and a body that names the week by its LABEL, where it is now, and what was asked for');
+    assert(!/Cross-device sync is OFF/.test(html26d) && !/Tell the commissioner/.test(html26d),
+      '[26d] …and NOT the default "Cross-device sync is OFF … Tell the commissioner" copy (false here)');
+    assert(!/cfbp_weeks/.test(html26d) && !/wk_26d_internal_id/.test(html26d),
+      '[26d] …and no storage key or raw week id anywhere in it');
+    // Reviewer F5 — the notice survives the 'synced' of the follow-up run that sends the key's other
+    // queued edits (it describes a correction already made, not a failure 'synced' resolves)…
+    appMod26._onSupabaseDataStatusForTest('synced', { state: 'ACTIVE', pushed: 1, pendingWrites: 0 });
+    assert(!!red26() && red26().style.display !== 'none' && /changed on another device/.test(red26().innerHTML),
+      '[26d] …and it STAYS UP through the follow-up run\'s "synced" (a notice about a correction already made)');
+    // Any OTHER cfbp_weeks refusal (e.g. bad_transition) keeps the default wording — the new copy is
+    // specific to a moved status, not to the key.
+    appMod26._onSupabaseDataStatusForTest('refused', { state: 'ACTIVE', key: 'cfbp_weeks', code: 'bad_transition',
+      banner: 'The server refused to save cfbp_weeks: bad_transition Nothing was saved.' });
+    assert(!!red26() && /Cross-device sync is OFF on this device\./.test(red26().innerHTML),
+      '[26d] control: a cfbp_weeks refusal that is NOT status_moved keeps the default wording');
+    appMod26._onSupabaseDataStatusForTest('synced', { state: 'ACTIVE', pushed: 1, pendingWrites: 0 });
+    assert(!red26() || red26().style.display === 'none',
+      '[26d] control: an ordinary refusal banner still comes down on "synced" — only the notice is sticky');
+    storage26d.setBackendMode(prevMode26d);
+  }
 
   globalThis.document = saved26.document;
 }
@@ -5048,14 +5190,509 @@ console.log('\n[31] RG-199/RG-200 — a rejected token is not a missing league, 
       '[31-C] …and it still PAINTS neutral, correctly: signed out IS neutral. The guard is on the RECORDING, never on the pixel');
 
     // (iii) STRUCTURAL — the call site this is about really is what resync does.
+    //
+    // ══ AMENDED 2026-09-25 (RG-246, §5 locked-test amendment) ══════════════
+    // WHAT IT PINNED: `applyTheme(getTheme())` inside resyncPlayerPreferences().
+    // WHAT IT PINS NOW: `applyTheme(resyncThemeKey())`.
+    // WHY: that getTheme() call turned out to be the FOURTH mid-boot neutral
+    // paint (B-03/RG-246) — the chokepoint runs on every auth event, including
+    // the ones that land before the hydrate, where getTheme() can only answer
+    // the league default. It was replaced by the hint-aware reader under Drew's
+    // "keep" ruling of 2026-09-25. The amendment is safe for what (C) is ABOUT,
+    // which is the RECORDING guard inside applyTheme() and not which reader
+    // supplies the key: (C) drives applyTheme() directly (step ii above), so the
+    // signed-out 'neutral' it asserts on is still driven exactly as before.
+    // (D) below owns the new reader's behaviour.
     const resyncBody31 = appSrc31.slice(appSrc31.indexOf('function resyncPlayerPreferences('),
       appSrc31.indexOf('export function renderThemeToggle'));
-    assert(resyncBody31.length > 0 && /applyTheme\(getTheme\(\)\)/.test(resyncBody31),
-      '[31-C] fixture: resyncPlayerPreferences() really does re-apply getTheme() — the value that is \'neutral\' for every signed-out caller [structural]');
+    assert(resyncBody31.length > 0 && /applyTheme\(resyncThemeKey\(\)\)/.test(resyncBody31),
+      '[31-C] fixture: resyncPlayerPreferences() really does re-apply the palette on every session change — AMENDED 2026-09-25 (RG-246): this pinned applyTheme(getTheme()) until that call was proven to be the fourth mid-boot neutral paint, and it now pins applyTheme(resyncThemeKey()). What it exists to hold is that the session chokepoint still owns the re-apply at all [structural]');
+  }
+
+  // ── (D) RG-246 — THE FOURTH READER: THE SESSION CHOKEPOINT ─────────────
+  //
+  // Drew, on the phone after v0.23.4 shipped (B-03, re-verified 2026-09-24):
+  // "It starts maroon and then still loads neutral before going maroon." The
+  // third paint outlived RG-215 and RG-217 because there was a FOURTH reader.
+  //
+  // RG-215 taught index.html's inline bootstrap and bootThemeKey() about the
+  // hint. RG-217 taught _repaintForSupabaseData() — (B) above. Nobody looked at
+  // resyncPlayerPreferences(), which called `applyTheme(getTheme())`, and
+  // getTheme() is `_playerPref('theme') || 'neutral'`: on a Supabase device it
+  // can only answer the league default until the member row is readable.
+  //
+  // WHY IT LANDS MID-BOOT. onAuthEvent -> refreshAuthUI() ->
+  // applyIdentityDeltaIfChanged() (unconditional, EVERY auth event) ->
+  // resyncPlayerPreferences(). The first auth event of a cold open arrives
+  // before the hydrate, so the sequence on screen is hint(maroon) -> neutral ->
+  // maroon: exactly the three paints Drew reported, from a fourth site.
+  //
+  // DREW'S RULING, 2026-09-25 ("keep"). After a SIGN-OUT the screen KEEPS the
+  // last palette until the next sign-in rather than dropping to neutral — and
+  // it has to be kept without the hint, because the sign-out sweep has already
+  // removed it (auth.js's `cfbp_` prefix rule; THEME_HINT is deliberately not
+  // in _CLEAR_KEEP_KEYS). The RECORDING rule is untouched: RG-218's provenance
+  // guard inside applyTheme() still refuses to write a hint no player record
+  // supplied, so "keep the pixel" never becomes "adopt the departed player's
+  // palette as this device's default" — asserted below, not assumed.
+  {
+    // DRAIN FIRST. Sections above this one leave membership reads in flight
+    // against their own fake SDK; one of those resolving INSIDE this block's
+    // awaits replaces the identity mid-test (it lands as 'u-stranger', the
+    // owner tuple moves, and DI-180q sweeps the hint — a handover, not the
+    // defect under test). Let them land BEFORE the fixture is built, then build
+    // it over the top. The console is quiet here for the same reason it is
+    // quiet around the event below.
+    {
+      const w = console.warn, e = console.error, i2 = console.info;
+      console.warn = () => {}; console.error = () => {}; console.info = () => {};
+      try { for (let i = 0; i < 60; i++) await new Promise(res => setTimeout(res, 0)); }
+      finally { console.warn = w; console.error = e; console.info = i2; }
+    }
+    appMod31._resetAuthUIWiringForTest();
+    appMod31._resetAuthHoldForTest();
+    appMod31._resetSupabaseDataForTest();
+    auth31._resetAuthForTest();
+    sb31._resetForTest();                 // IDLE: the mirror answers nothing
+    // A COLD DEVICE. Earlier sections of this file leave a persisted session and
+    // a cached membership for a DIFFERENT account ('u-stranger') in the shared
+    // localStorage stub; a membership read that resolves THEM turns this event
+    // into a handover, whose DI-180q sweep takes the hint with it — correctly,
+    // and nowhere near the defect under test. Everything this block needs is
+    // seeded below, explicitly.
+    localStorage.clear();
+    auth31.configureAuth({ authMode: 'supabase', dataMode: 'supabase',
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon', authModeKnown: true });
+    auth31._setMembershipsForTest([{ leagueId: LEAGUE31, memberId: ME31, role: 'commissioner',
+      displayName: 'Drew', leagueName: 'IRB Pick ’Ems' }]);
+    auth31.setActiveLeagueId(LEAGUE31);
+    storage31.setBackendMode('supabase');
+    // A RETURNING DEVICE, which is what Drew's phone is: the account that is
+    // about to sign in is the one already recorded as this device's data owner,
+    // so DI-180q's reconcile answers 'kept' and sweeps nothing. Without this the
+    // fixture models a HANDOVER instead — the sweep takes the hint with it (by
+    // design, RG-215) and the paint under test is never reached with a hint to
+    // keep. Same two lines authtest [DI-180q] uses to stand a device up as its
+    // own owner: the marker is the tuple, derived, never hand-spelled.
+    auth31._setAccountUserIdForTest('u-drew');
+    localStorage.setItem('cfbp_device_data_owner', auth31.getDeviceDataOwnerTuple());
+    // …and an earlier section of this file leaves a fake SDK on `window` whose
+    // membership read resolves a DIFFERENT account ('u-stranger'). With it
+    // installed, the event under test resolves that stranger, the owner tuple
+    // moves, and DI-180q sweeps the hint — correctly, because that is a
+    // HANDOVER. It is not the case B-03 is about, and a fixture that silently
+    // became one would assert nothing. Stood down here, restored below; [31]
+    // already disables `fetch` for the same reason.
+    const savedSdk31D = globalThis.window?.supabase;
+    if (globalThis.window) globalThis.window.supabase = undefined;
+    localStorage.removeItem('cfbp_players');   // the hydrate has NOT landed
+    // Same reasoning as (B): written directly because SEC F1's interlock
+    // refuses every write while the adapter is not serving. KEYS.THEME_HINT is
+    // device-local, so this is the byte the seam reads.
+    localStorage.setItem('cfbp_theme_hint', JSON.stringify('razorback'));
+    bodyClasses31.clear();
+
+    // THE FIRST FRAME, exactly as boot() paints it: applyTheme(bootThemeKey()).
+    appMod31._applyThemeForTest(appMod31._bootThemeKeyForTest());
+    assert(bodyClasses31.has('theme-razorback') && storage31.getTheme() === 'neutral',
+      `[31-D] fixture: the first frame is the hint's palette (${JSON.stringify([...bodyClasses31])}) while getTheme() can still only answer '${storage31.getTheme()}' — the member row is not readable yet`);
+
+    // (i) ONE auth event, through the REAL listener chain — auth.js's own
+    //     dispatcher into app.js's one onAuthEvent() subscriber, not a
+    //     hand-call of refreshAuthUI() with arguments this test chose.
+    const realWarn31 = console.warn, realErr31 = console.error, realInfo31 = console.info;
+    console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try {
+      appMod31.wireAuthUIEvents();
+      auth31._fireAuthEventForTest('SIGNED_IN', { access_token: 'tok',
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        user: { id: 'u-drew', email: 'drew@example.com' } });
+      for (let i = 0; i < 20; i++) await new Promise(res => setTimeout(res, 0));
+    } finally { console.warn = realWarn31; console.error = realErr31; console.info = realInfo31; }
+
+    assert(bodyClasses31.has('theme-razorback') && !bodyClasses31.has('theme-neutral'),
+      `[31-D] THE BUG: an auth event that lands BEFORE the hydrate must not repaint the league default over the hint's correct first frame (body is ${JSON.stringify([...bodyClasses31])}). resyncPlayerPreferences() is the fourth reader of the palette and the only one that still asked getTheme(), which is 'neutral' for every pre-hydrate caller — this is Drew's surviving "starts maroon, still loads neutral, then maroon"`);
+
+    // (ii) DREW'S "KEEP" RULING, 2026-09-25. The sign-out sweep has taken the
+    //      hint off the device by the time the chokepoint runs, so keeping the
+    //      palette cannot come from storage — it comes from what is painted.
+    localStorage.removeItem('cfbp_theme_hint');
+    console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try {
+      auth31._fireAuthEventForTest('SIGNED_OUT', null);
+      for (let i = 0; i < 20; i++) await new Promise(res => setTimeout(res, 0));
+    } finally { console.warn = realWarn31; console.error = realErr31; console.info = realInfo31; }
+
+    assert(!storage31.getSession()?.playerId,
+      `[31-D] fixture: the sign-out really did end the session (playerId ${JSON.stringify(storage31.getSession()?.playerId || null)}) — otherwise the rule below is not being driven on the path Drew ruled on`);
+    assert(bodyClasses31.has('theme-razorback') && !bodyClasses31.has('theme-neutral'),
+      `[31-D] DREW'S RULING (2026-09-25, "keep"): after a sign-out the screen KEEPS the last palette until the next sign-in — it does not drop to neutral (body is ${JSON.stringify([...bodyClasses31])}). The hint is already gone (the sweep), so this can only hold if the signed-out repaint reads what is on screen instead of the league default`);
+    assert(storage31.getThemeHint() === '',
+      `[31-D] …and RG-218 still holds on the other side of the same paint: keeping the PIXEL must not RECORD the departed player's palette as this device's default (hint is ${JSON.stringify(storage31.getThemeHint())}, expected empty). The provenance guard inside applyTheme() is what refuses it`);
+
+    // (iii) STRUCTURAL, and the AMENDMENT to [31-C](iii) — see that assertion.
+    const resyncBodyD31 = appSrc31.slice(appSrc31.indexOf('function resyncPlayerPreferences('),
+      appSrc31.indexOf('export function renderThemeToggle'));
+    assert(resyncBodyD31.length > 0 && /applyTheme\(resyncThemeKey\(\)\)/.test(resyncBodyD31),
+      '[31-D] the session chokepoint applies resyncThemeKey(), not the raw getTheme(): the hint-aware reader while somebody is signed in, and the palette already on screen once nobody is (Drew\'s "keep") [structural]');
+    assert(!/applyTheme\(getTheme\(\)\)/.test(resyncBodyD31.split('\n').filter(l => !/^\s*(\*|\/\/)/.test(l)).join('\n')),
+      '[31-D] …and the getTheme() call that could only ever answer the league default is gone from that path — code only, the comments above it still quote the old line on purpose [structural]');
+
+    // ── restore: leave [31]'s world as (C) found it ───────────────────────
+    if (globalThis.window) globalThis.window.supabase = savedSdk31D;
+    auth31._resetAuthForTest();
+    appMod31._resetAuthUIWiringForTest();
+    storage31.setBackendMode('local');
   }
 
   globalThis.document = saved31.document;
   globalThis.fetch = saved31.fetch;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[32] REVIEWER BLOCK 1 (2026-09-25) — the maintenance-banner fetch fires');
+console.log('     AFTER authMode resolves, asserted against the REAL boot ordering…');
+// Runtime-proven bug: the ORIGINAL call site (`mountControlCenterDrawer()`,
+// inside boot()'s early phase) ran ~198 lines before `applyAuthModeDecision()`
+// resolved `authMode` — so `refreshMaintenanceBannerCache()`'s own `authMode
+// !== 'supabase'` guard was true on every real page load (the module default
+// is 'pins' until config loads) and the fetch silently no-opped, always. Every
+// PRIOR green assertion of this function called it AFTER `resetAll()` had
+// already forced supabase mode directly — which is exactly why 1853 passing
+// assertions never caught this: none of them drove the actual BOOT ORDER, only
+// a pre-configured call. `boot()`/`applyAuthModeDecision()` are not exported
+// for direct invocation (no test hook exists, and adding one is out of this
+// fix's scope), so — matching [10]'s OWN established shape immediately above
+// for exactly this class of proof (`BUG-G — the boot ORDER, asserted against
+// js/app.js`) — this is a STRUCTURAL source-position proof: the fetch call
+// must appear, in source order, AFTER `configureAuth(...)` resolves the mode,
+// and INSIDE `applyAuthModeDecision()`'s own body (never re-introduced at the
+// old boot-early call site, which ran before the mode was known).
+{
+  const { readFileSync } = await import('node:fs');
+  const src32raw = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  // …and COMMENTS ARE STRIPPED FIRST — same lesson, same shape, as
+  // authtest.mjs's own stripComments() (its [17]-area note: this function's
+  // fix comment NAMES `refreshMaintenanceBannerCache()` and `authMode ===
+  // 'supabase'` in prose explaining the bug, which a paren-based needle
+  // finds before the real call/gate and reports the wrong character offset
+  // — or, worse, "finds" a gate that is actually documentation.
+  const stripComments32 = raw => raw.replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const src32 = stripComments32(src32raw);
+
+  const fnStart = src32.indexOf('async function applyAuthModeDecision() {');
+  assert(fnStart > -1, 'fixture: applyAuthModeDecision() was located in js/app.js — a matcher that found nothing would make every comparison below vacuous');
+  // Bound the search to THIS function's own body — `configureAuth(`/the
+  // maintenance-banner call could both appear elsewhere in a 25,000-line
+  // file; this proof is specifically about their ORDER inside this one
+  // function, not merely "somewhere after".
+  const nextFnStart = src32.indexOf('\nasync function ', fnStart + 10);
+  const fnEnd = nextFnStart > -1 ? nextFnStart : src32.length;
+  const fnBody = src32.slice(fnStart, fnEnd);
+
+  const configureAt = fnBody.indexOf('configureAuth({ ...deployed, authMode });');
+  const fetchAt = fnBody.indexOf('refreshMaintenanceBannerCache()');
+  assert(configureAt > -1, '[32a] fixture: configureAuth(...) was located inside applyAuthModeDecision()\'s own body (comments stripped)');
+  assert(fetchAt > -1,
+    '[32b] refreshMaintenanceBannerCache() is CALLED (not merely mentioned in a comment) somewhere inside applyAuthModeDecision() — the fix this section exists to prove, not merely describe');
+  assert(fetchAt > configureAt,
+    `[32c] …and STRICTLY AFTER configureAuth() resolves authMode (configureAuth at char ${configureAt}, fetch at char ${fetchAt} within the comment-stripped function body) — calling it before this line reproduces the exact bug (the guard inside refreshMaintenanceBannerCache() would see the module's stale default, 'pins', every time)`);
+  // Gated on the resolved mode, not unconditional — a 'pins'-mode boot must
+  // never attempt this fetch at all (auth.js's own internal guard already
+  // covers it too; this proves the CALL SITE also does its part, belt and
+  // suspenders, matching every other one-time boot fetch in this file).
+  //
+  // SECURITY GATE NOTE A (2026-09-25) — the gate text below gained a SECOND
+  // clause, `!hasAttemptedMaintenanceBannerFetch()`. Without it, this call
+  // site refetched on EVERY `applyAuthModeDecision()` invocation, including
+  // DI-180l's 20-second background hold re-check — an unbounded fetch loop
+  // for as long as a hold stayed up. The runtime proof that the guard
+  // actually stops the refetch (not just that this string exists) lives in
+  // authtest.mjs [56], NOTE C's runtime companion to this structural section.
+  //
+  // S2-1 (full-app review, 2026-09-26) — the gate also names `sdkReady`: the
+  // call must not run on a pass where the SDK never arrived.
+  const gateAt = fnBody.indexOf("if (authMode === 'supabase' && sdkReady && !hasAttemptedMaintenanceBannerFetch()) {");
+  assert(gateAt > -1 && gateAt < fetchAt && gateAt > configureAt,
+    `[32d] the call site ITSELF is gated on \`authMode === 'supabase' && sdkReady && !hasAttemptedMaintenanceBannerFetch()\`, and that gate sits between configureAuth() and the fetch (gate at char ${gateAt}, configureAuth at ${configureAt}, fetch at ${fetchAt}) — never unconditional, never missing NOTE A's re-check guard, never run without the SDK`);
+
+  // S2-1 (full-app review, 2026-09-26) — THE THIRD MISS OF THIS CLASS. [32c]
+  // only proved "after configureAuth()", which the pre-fix site satisfied
+  // while sitting ~180 lines ABOVE `await ensureSupabaseSdkLoaded()`: on a
+  // cold load the SDK is injected, ensureClient() was null, the fetch threw
+  // and the latch was set — the banner never reached a player. The call must
+  // sit after the SDK load, after both no-SDK hold returns, and after
+  // wireAuthUIEvents(). authtest [56] is the runtime late-SDK companion.
+  const sdk32At = fnBody.indexOf('const sdkReady = await ensureSupabaseSdkLoaded();');
+  const hold32At = fnBody.indexOf('if (!sdkReady && isRecoverySession()) {');
+  const wire32At = fnBody.indexOf('wireAuthUIEvents();');
+  assert(sdk32At > -1 && hold32At > -1 && wire32At > -1,
+    `[32d-sdk-fixture] the SDK load, the recovery no-SDK hold and wireAuthUIEvents() were all located in the comment-stripped body (sdk ${sdk32At}, hold ${hold32At}, wire ${wire32At})`);
+  assert(fetchAt > sdk32At && gateAt > sdk32At,
+    `[32g] S2-1: refreshMaintenanceBannerCache() sits STRICTLY AFTER \`await ensureSupabaseSdkLoaded()\` (sdk at char ${sdk32At}, gate ${gateAt}, fetch ${fetchAt}) — before it, ensureClient() is null on every cold load`);
+  assert(fetchAt > hold32At && fetchAt > wire32At,
+    `[32h] S2-1: …and after both no-SDK hold returns and wireAuthUIEvents() (hold ${hold32At}, wire ${wire32At}, fetch ${fetchAt})`);
+
+  // The OLD, buggy call site must not have been re-introduced anywhere else
+  // in the file (a future merge conflict resurrecting it would silently
+  // undo this fix while this section stayed green if it only checked the
+  // NEW site exists). Comment-stripped source, so this counts real CALLS
+  // only — the file's own prose mentions this exact name several times
+  // (this section's fixture message, `renderMaintenanceBannerIfNeeded()`'s
+  // doc comment) and those must not inflate the count.
+  const oldSiteHits = (src32.match(/refreshMaintenanceBannerCache\(\)/g) || []).length;
+  assert(oldSiteHits === 1,
+    `[32e] refreshMaintenanceBannerCache() is CALLED from exactly ONE place in js/app.js (got ${oldSiteHits}, comments excluded) — a second call site (e.g. a resurrected boot-early one) would be an untested, possibly mis-ordered duplicate`);
+
+  // SECURITY GATE NOTE D (2026-09-25) — `id="maintenance-banner"` is
+  // DELIBERATELY non-unique across containers (renderMaintenanceBannerHTML()'s
+  // own doc comment, js/app.js): it is painted into at most one page
+  // container at a time, and every read of it is scoped to a specific
+  // container (`c.querySelector('#maintenance-banner')`), never a global
+  // lookup. A single `document.getElementById('maintenance-banner')` call
+  // anywhere would silently resolve to whichever copy happens to be first
+  // in document order, not necessarily the one the caller meant — this scan
+  // proves that mistake was never introduced.
+  const globalLookupHits = (src32.match(/document\.getElementById\(\s*['"]maintenance-banner['"]\s*\)/g) || []).length;
+  assert(globalLookupHits === 0,
+    `[32f] SECURITY GATE NOTE D: no document.getElementById('maintenance-banner') call exists anywhere in js/app.js (got ${globalLookupHits}) — every read stays scoped to its own container`);
+}
+
+console.log('\n[33] B2 (3c fix window, 2026-09-25) — the password-recovery token-hash');
+console.log('     verify fires AFTER the SDK is loaded and listeners are wired, asserted');
+console.log('     against the REAL boot ordering (Testing Protocol 165\'s shape)…');
+// Runtime-proven bug (DI-334 Finding 5's own mechanism): the ORIGINAL call site
+// verified the token_hash — and scrubbed it from the URL — BEFORE
+// `ensureSupabaseSdkLoaded()` had run at all, so on a cold load `ensureClient()`
+// returned null (no vendored SDK on the page yet), the resulting
+// `AuthUnavailableError` was only `console.warn`ed, and the one-time token was
+// ALREADY GONE from the URL — a reset link died silently on the exact case that
+// matters most: someone who has never opened this app before, following the
+// email link cold. Same STRUCTURAL proof technique as [32] immediately above
+// (`applyAuthModeDecision()`/`boot()` are not exported for direct invocation
+// from THIS file — authtest.mjs [56]/[58] are this section's runtime
+// companions, same division of labor [32]/authtest[56] already established).
+{
+  const { readFileSync } = await import('node:fs');
+  const src33raw = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const stripComments33 = raw => raw.replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const src33 = stripComments33(src33raw);
+
+  const fnStart = src33.indexOf('async function applyAuthModeDecision() {');
+  assert(fnStart > -1, 'fixture: applyAuthModeDecision() was located in js/app.js — a matcher that found nothing would make every comparison below vacuous');
+  const nextFnStart = src33.indexOf('\nasync function ', fnStart + 10);
+  const fnEnd = nextFnStart > -1 ? nextFnStart : src33.length;
+  const fnBody = src33.slice(fnStart, fnEnd);
+
+  const sdkAt = fnBody.indexOf('const sdkReady = await ensureSupabaseSdkLoaded();');
+  const wireAt = fnBody.indexOf('wireAuthUIEvents();');
+  const verifyAt = fnBody.indexOf('verifyPasswordRecovery(tokenHash)');
+  assert(sdkAt > -1, '[33a] fixture: ensureSupabaseSdkLoaded() was located inside applyAuthModeDecision()\'s own body');
+  assert(wireAt > -1, '[33b] fixture: wireAuthUIEvents() was located inside the same body');
+  assert(verifyAt > -1,
+    '[33c] verifyPasswordRecovery(tokenHash) is CALLED (not merely mentioned in a comment) somewhere inside applyAuthModeDecision() — the fix this section exists to prove, not merely describe');
+  assert(verifyAt > sdkAt,
+    `[33d] …and STRICTLY AFTER the SDK load (sdk at char ${sdkAt}, verify at char ${verifyAt}) — calling it before this line reproduces the exact bug (ensureClient() returns null with no vendored SDK on the page yet)`);
+  assert(verifyAt > wireAt,
+    `[33e] …and STRICTLY AFTER wireAuthUIEvents() (wire at char ${wireAt}, verify at char ${verifyAt}) — the PASSWORD_RECOVERY event verifyOtp() produces needs a listener already registered to reach refreshAuthUI()`);
+
+  // The URL is scrubbed only AFTER a definitive answer (success or a real
+  // rejection) — never before the call, which is what discarded the
+  // one-time token before this fix. Proven by the scrub call sitting inside
+  // the `.then()`/`.catch()` handlers, not on the lines leading up to the call.
+  //
+  // Reviewer round 3, item 2 (2026-09-26) — the `.catch()` arm used to call
+  // `scrubRecoveryParams()` DIRECTLY, unconditionally, before ever asking
+  // what kind of rejection this was (a NETWORK-classified failure is not a
+  // verdict on the token at all). It now HANDS the scrub function to
+  // onRecoveryVerifyRejected(), which only invokes it once
+  // classifyPasswordAuthError() has actually returned a definitive verdict —
+  // that conditional gate is authtest's job (authtest [59b-9]/[59b-10]), not
+  // this structural scan's; this scan only proves the catch arm no longer
+  // scrubs on its own say-so.
+  const callBlockStart = fnBody.lastIndexOf('if (tokenHash && recoveryType === \'recovery\') {', verifyAt);
+  const callBlockEnd = fnBody.indexOf('\n      }', verifyAt);
+  const callBlock = callBlockStart > -1 && callBlockEnd > -1 ? fnBody.slice(callBlockStart, callBlockEnd) : '';
+  assert(!!callBlock, '[33f] fixture: the token_hash/type=recovery guard block was located around the verify call');
+  assert(/\.then\(scrubRecoveryParams\)/.test(callBlock)
+      && /\.catch\(\(e\) => \{[^}]*onRecoveryVerifyRejected\(e, scrubRecoveryParams\)/.test(callBlock)
+      && !/\.catch\(\(e\) => \{[^}]*scrubRecoveryParams\(\)/.test(callBlock),
+    '[33g] the success (.then) arm scrubs directly; the failure (.catch) arm HANDS scrubRecoveryParams to onRecoveryVerifyRejected() rather than calling it itself — never scrubbed unconditionally before a definitive verdict');
+
+  // The OLD call site (before ensureSupabaseSdkLoaded()/wireAuthUIEvents())
+  // must not have been re-introduced — comment-stripped source, real calls
+  // only, same discipline [32e] uses for its own old-site regression.
+  const allVerifyHits = (src33.match(/verifyPasswordRecovery\(tokenHash\)/g) || []).length;
+  assert(allVerifyHits === 1,
+    `[33h] verifyPasswordRecovery(tokenHash) is CALLED from exactly ONE place in js/app.js (got ${allVerifyHits}, comments excluded) — a second, earlier call site would be an untested, possibly mis-ordered duplicate`);
+}
+
+console.log('\n[33-N1] Security N1 (3c fix window, third pass) — the boot / hold-recheck gate decision');
+console.log('        asks isSignedInForApp() and routes a recovery session to the recovery screen');
+console.log('        BEFORE the membership block (boot-order rule; runtime twin: authtest [61])…');
+{
+  const { readFileSync } = await import('node:fs');
+  const raw = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const fnStart = src.indexOf('async function applyAuthModeDecision() {');
+  const fnEnd = src.indexOf('\nasync function ', fnStart + 10);
+  const body = fnStart > -1 ? src.slice(fnStart, fnEnd > -1 ? fnEnd : src.length) : '';
+  assert(!!body, 'fixture: applyAuthModeDecision() located (comment-stripped)');
+  const wireAt = body.indexOf('wireAuthUIEvents();');
+  const recAt = body.indexOf('if (isRecoverySession()) {');
+  const recPaintAt = body.indexOf('showPasswordRecoveryScreen({ overResolvedHold: true })');
+  const memGuardAt = body.indexOf('if (isSignedInForApp()) {');
+  const memCallAt = body.indexOf('await refreshMembershipsAndSession();');
+  assert(recAt > wireAt && wireAt > -1,
+    `[33-N1a] the recovery branch sits AFTER wireAuthUIEvents() (wire@${wireAt}, recovery@${recAt}) — its screen's Back/submit events need the listener`);
+  assert(recPaintAt > recAt && recPaintAt < memGuardAt,
+    `[33-N1b] a recovery session paints the recovery screen, before the membership block (paint@${recPaintAt}, guard@${memGuardAt})`);
+  assert(memGuardAt > -1 && memCallAt > memGuardAt,
+    '[33-N1c] the membership read + auto-link block is guarded by isSignedInForApp(), not the token-only hasValidSupabaseSession()');
+  // The ONE remaining token-question read is the sdk-unavailable pre-identity
+  // branch (authstoragenativetest [11d] pins its text), and it is paired with
+  // an isRecoverySession() clause giving a recovery session the same hold.
+  const tokenReads = (body.match(/hasValidSupabaseSession\(\)/g) || []).length;
+  assert(tokenReads === 1 && /if \(!sdkReady && !hasValidSupabaseSession\(\)\) \{/.test(body) && /if \(!sdkReady && isRecoverySession\(\)\) \{/.test(body),
+    `[33-N1d] applyAuthModeDecision() makes every other sign-in decision on isSignedInForApp(); its single hasValidSupabaseSession() read is the sdk-unavailable branch, paired with a recovery clause (reads: ${tokenReads})`);
+}
+
+console.log('\n[34] iOS shell parity (2026-09-26) — no `@capacitor` literal ships in any');
+console.log('     js/**/*.js file, so munera-ios/scripts/boundarytest.mjs\'s Tier 1 scan');
+console.log('     cannot fail at bundle time…');
+{
+  const { readdir: readdirFs, readFile: readFileFs } = await import('node:fs/promises');
+  const jsDir = new URL('./js/', import.meta.url);
+  const files = (await readdirFs(jsDir)).filter(f => f.endsWith('.js'));
+  assert(files.length > 10, `fixture: js/ really has a non-trivial number of files (got ${files.length})`);
+  const offenders = [];
+  for (const f of files) {
+    const src = await readFileFs(new URL(f, jsDir), 'utf8');
+    if (src.includes('@capacitor')) offenders.push(f);
+  }
+  assert(offenders.length === 0,
+    `[34] no js/**/*.js file contains the literal "@capacitor" (got offenders: ${JSON.stringify(offenders)}) — munera-ios/scripts/boundarytest.mjs's Tier 1 rejects it in any shipped file; a doc-comment naming the package (e.g. "@capacitor/keyboard is NOT installed yet") would fail that scan even though it names no import`);
+}
+
+console.log('\n[35] SECURITY ROUND 3, N-1 (2026-09-26) — hasValidSupabaseSession() (the raw');
+console.log('     TOKEN question) appears in js/app.js ONLY at its six justified sites;');
+console.log('     every gate/release site the security probe reverted reads isSignedInForApp()…');
+{
+  const { readFile: readFileN1 } = await import('node:fs/promises');
+  const srcN1raw = await readFileN1(new URL('./js/app.js', import.meta.url), 'utf8');
+
+  // Deny-by-default scan for the BARE identifier (not just a call with `(` —
+  // the deps-object site below is a bare property-shorthand reference, never
+  // invoked from that object literal itself), same technique rolestest.mjs's
+  // ENUMERATED_CALL_SITES fence uses for `isPlatformAdmin`: every real
+  // (non-comment) line naming the identifier must be one of these six pins,
+  // or the scan reports it as an offender. A future re-derivation moves the
+  // line numbers, never widens the count, without a dated note here.
+  // RE-DERIVED 2026-09-26 (full-app review fix window + the v0.26.0 stamp) —
+  // every pin below (these six and the eight ISFA pins further down) moved,
+  // none was added or removed: the WHATS_NEW_RELEASES prepend + six-entry
+  // trim shifted the file up ~80 lines, and S2-1's maintenance-fetch move,
+  // S1-B's gate-notice helper and S2-3's drawer closes shifted the tail.
+  // Re-derived by exact-text match (each text unique in the file), same
+  // sites, same texts.
+  const ENUMERATED_HVS_SITES = [
+    // The import itself — not a "call site," but unavoidable to use the
+    // function at all; excluded here rather than by file-level exemption
+    // (rolestest's "the module itself" shape) so a SECOND import line
+    // elsewhere in the file still gets caught.
+    { line: 519, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
+    // place a raw token question is still the right question: no vendored
+    // SDK means isSignedInForApp() cannot even be asked yet.
+    { line: 1247, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    // The deps object handed to other modules — a bare reference, never
+    // called from here; whatever THAT module does with it is its own
+    // concern, not this file's gate logic.
+    { line: 1675, text: "hasValidSupabaseSession," },
+    // noIdentityEverProven() — deliberately asks the token question directly
+    // (an identity that was never even attempted is a narrower, and correct,
+    // question than "is the app-level identity signed in").
+    { line: 4528, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+    // isSignedInForApp() itself — the ONE place allowed to compose the raw
+    // token question into the app-level answer everything else must use.
+    { line: 4550, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
+    // whether THIS payload proves the token is fresh; a narrower question
+    // than "is the app signed in," and correctly so.
+    // Re-derived, security round 3 N-2 (2026-09-26) — the recovery-session
+    // guard added to applyIdentityDeltaIfChanged() (above this site in
+    // source order) shifted every line number below it; same site, only the
+    // line number moved.
+    { line: 25120, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+  ];
+
+  // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
+  // whose TEXT began with `*`, `//` or `/*`, so a real call on a line that
+  // merely STARTS with a block comment (`/* x */ if (hasValidSupabaseSession())
+  // {…}`) was skipped and [35a] stayed green. Comments are now STRIPPED first
+  // (block comments blanked with their newlines kept, so line numbers hold;
+  // then `//` line comments), and the scan runs on what is left. The reported
+  // text is still the raw trimmed line, which is what the pins compare.
+  function stripCommentsKeepLines(src) {
+    return src.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  }
+  function findHvsHits(src) {
+    const hits = [];
+    const re = /\bhasValidSupabaseSession\b/;
+    const rawLines = src.split('\n');
+    stripCommentsKeepLines(src).split('\n').forEach((codeLine, i) => {
+      if (re.test(codeLine)) hits.push({ line: i + 1, text: rawLines[i].trim() });
+    });
+    return hits;
+  }
+
+  const hitsN1 = findHvsHits(srcN1raw);
+  const offendersN1 = hitsN1.filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  assert(offendersN1.length === 0,
+    `[35a] every non-comment 'hasValidSupabaseSession' reference in js/app.js is one of the six enumerated sites (offenders: ${JSON.stringify(offendersN1)})`);
+  assert(hitsN1.length === ENUMERATED_HVS_SITES.length,
+    `[35a-canary] the scan finds ALL SIX pinned sites (not fewer — a broken scan that finds zero would make [35a] vacuously pass) (found ${hitsN1.length}: ${JSON.stringify(hitsN1.map(h => h.line))})`);
+
+  // Teeth: prove the scan actually flags an offender when there is one.
+  const poisonedN1 = srcN1raw + '\nfunction __n1Canary() { return hasValidSupabaseSession(); }\n';
+  const poisonedHits = findHvsHits(poisonedN1);
+  const poisonedOffenders = poisonedHits.filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  assert(poisonedOffenders.length === 1,
+    `[35a-mutation] a NEW hasValidSupabaseSession() reference outside the six pins IS reported (got ${poisonedOffenders.length})`);
+  // The security audit's exact bypass shape: a real call on a line that
+  // BEGINS with a block comment. Must be reported, not skipped.
+  const poisonedBlock = srcN1raw + '\n/* x */ if (hasValidSupabaseSession()) { void 0; }\n';
+  const blockOffenders = findHvsHits(poisonedBlock).filter((h) => !ENUMERATED_HVS_SITES.some((c) => c.line === h.line && c.text === h.text));
+  assert(blockOffenders.length === 1 && /^\/\* x \*\/ if \(hasValidSupabaseSession\(\)\)/.test(blockOffenders[0].text),
+    `[35a-block-canary] a call on a line that STARTS with \`/* … */\` IS reported (got ${JSON.stringify(blockOffenders)}) — the pre-fix line-prefix skip let it through`);
+  // …while a reference that is genuinely inside a comment still is not.
+  const commentOnly = srcN1raw + '\n/* hasValidSupabaseSession() in prose */\n// hasValidSupabaseSession() in prose\n';
+  assert(findHvsHits(commentOnly).length === ENUMERATED_HVS_SITES.length,
+    '[35a-comment-canary] …and a mention that is ENTIRELY inside a comment is still not counted');
+
+  // The eight gate/release sites the security probe reverted one at a time
+  // without any suite going red — pinned by exact line+text, so a FUTURE
+  // revert (back to the token-only question) is caught the same way.
+  const ENUMERATED_ISFA_SITES = [
+    { line: 5042, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { line: 22979, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { line: 23045, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { line: 23096, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
+    // the line numbers moved (see the note on the hasValidSupabaseSession
+    // pin above).
+    { line: 24963, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { line: 25269, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { line: 25873, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { line: 25903, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+  ];
+  const linesN1 = srcN1raw.split('\n');
+  const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);
+  assert(isfaMismatches.length === 0,
+    `[35b] all eight gate/release sites still read isSignedInForApp() at their pinned line (mismatches: ${JSON.stringify(isfaMismatches.map(m => m.fn))})`);
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────

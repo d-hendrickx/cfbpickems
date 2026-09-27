@@ -46,15 +46,29 @@
  *  4. Test hooks (auth.js ~:3395 _setStoredSessionForTest, ~:3427
  *     _AUTH_STORAGE_KEY_FOR_TEST) — production code never calls these;
  *     DISPOSITION: not a real reader, not addressed here.
- *  5. No reader outside js/auth.js reads AUTH_STORAGE_KEY, and nothing
- *     anywhere reads a user id/email/expiry FIELD out of that key — this
- *     module's own test (authstoragenativetest.mjs) greps
- *     `cfb-pickems/js` for `AUTH_STORAGE_KEY|cfbp_supabase_session` and
- *     pins the reader set to exactly js/auth.js. The marker is therefore a
- *     UI HINT ONLY: a forged marker reaches the signed-in shell's chrome,
- *     never real data — every read/write still needs the real access token
- *     under RLS. security-reviewer rules on that tradeoff; not re-litigated
- *     here.
+ *  5. No reader outside js/auth.js reads AUTH_STORAGE_KEY — this module's
+ *     own test (authstoragenativetest.mjs) greps `cfb-pickems/js` for
+ *     `AUTH_STORAGE_KEY|cfbp_supabase_session` and pins the reader set to
+ *     exactly js/auth.js. The marker is therefore a UI HINT ONLY: a forged
+ *     marker reaches the signed-in shell's chrome, never real data — every
+ *     read/write still needs the real access token under RLS.
+ *     security-reviewer rules on that tradeoff; not re-litigated here.
+ *     CORRECTED (reviewer round 3, N4, 2026-09-26) — this item used to also
+ *     claim "nothing anywhere reads a user id/email/expiry FIELD out of that
+ *     key," which was never true: item 6 below is exactly such a reader, and
+ *     this inventory missed it, which is how it shipped inert on iOS.
+ *  6. getAccountHasPasswordIdentity() (auth.js ~:975) — used to read
+ *     `user.app_metadata.providers` straight out of
+ *     localStorage[AUTH_STORAGE_KEY]. DISPOSITION WAS WRONG: the marker this
+ *     module writes (item 2 above) has no `user` field at all, so the read
+ *     was always null on native and the Password row could never resolve to
+ *     Set/Change. FIXED in auth.js — it now caches `providers` in memory at
+ *     the same points `_accountEmail` is cached from the live session
+ *     payload (SIGNED_IN/TOKEN_REFRESHED/INITIAL_SESSION/USER_UPDATED,
+ *     PASSWORD_RECOVERY), which this module's own `_attachAuthListener()`
+ *     below already keeps flowing on native exactly like item 1's refresh
+ *     does, and reads that cache FIRST; the direct storage read is now only
+ *     a pre-cache/web fallback. No change needed in this file.
  *
  * MARKER_KEY below is a LITERAL, not an import of auth.js's AUTH_STORAGE_KEY
  * constant — auth.js exports that constant only under a test-only name

@@ -226,7 +226,21 @@ let _inFlightSent = null;
  *  last fully successful flush; `_retryTimer` is the ONE armed retry (never one per key). */
 let _retryAttempt = 0;
 let _retryTimer = null;
-const _refusedKeys = new Map();        // cfbp key -> { code, serverMessage, atHydrateSeq }
+const _refusedKeys = new Map();        // cfbp key -> { code, serverMessage, atHydrateSeq, fp, message }
+/** RG-253 (SEC-2) — the COMPARE half of a week-status compare-and-set: weekId -> the server-confirmed
+ *  status a pending status leg was made AGAINST. Recorded by `set()`; read by `_planRowKey()`, which
+ *  refuses (loudly) a leg whose base has since moved and takes the server's status. A hydrate or a
+ *  Realtime fold re-applies a pending edit over a moved base by design (RG-252) — this is what stops
+ *  that edit from becoming a different leg nobody chose: a phone holding `live` that wakes after
+ *  another device FINALIZED the week would otherwise plan final->live, which the server allows. */
+const _statusLegFrom = new Map();
+/** RG-255 (SEC-1) — the weeks the LAST LANDED HYDRATE read while they were live/final, i.e. while
+ *  `picks_select` (0002_rls.sql:250-254) was serving EVERY member's picks for them. A Realtime
+ *  weeks event can make a week public in the base without a single other member's pick in the
+ *  mirror (no picks row changes at reveal, so no picks event arrives); anything permanent built
+ *  from the picks — the reveal post — must wait for a read that could see them. Replaced wholesale
+ *  by every hydrate, emptied with the mirror. */
+let _picksReadPublic = new Set();
 let _mirrorTag = null;                 // { leagueId, epoch, switchSeq, at }
 let _switchSeq = 0;
 let _hydrateSeq = 0;                   // ++ on every hydrate that LANDS
@@ -392,6 +406,36 @@ export function getStatus() {
   };
 }
 
+/**
+ * RG-251 (2026-09-26) — THE WEEK'S STATUS AS THE SERVER LAST CONFIRMED IT: the base row, which
+ * only a hydrate, a Realtime fold or a status RPC that SUCCEEDED ever advances. The mirror can hold
+ * a status the server never reached (a leg still inside its debounce, or one refused — a refused key
+ * stays dirty and keeps its value, §5.2 item 4), so a caller deciding the NEXT leg, or which legs to
+ * offer, reads this and not the mirror. `null` when unknown (no hydrated mirror, or a week not yet
+ * inserted) — the caller falls back to the mirror. Synchronous, read-only, no network.
+ *
+ * RG-253 (2026-09-26) — before any hydrate has landed on this page (a warm boot painting the device
+ * SNAPSHOT, ACTIVE-STALE), the confirmed status is the snapshot's: it is written only from server
+ * truth and never while anything is dirty, whereas the mirror may already carry a leg written since.
+ * Once a hydrate has landed, a week absent from the base is one the server has never held: `null`.
+ */
+export function getConfirmedWeekStatus(weekId) {
+  if (!_mirrorTag) return null;
+  return _confirmedStatusFor(weekId);
+}
+
+/**
+ * RG-255 (SEC-1) — did a hydrate that LANDED read this week while it was live or final? Only such a
+ * read can have returned the other members' picks (`picks_select`, 0002_rls.sql:250-254); a week
+ * that went public through a Realtime event, a snapshot paint or this device's own leg has only
+ * this device's picks in the mirror until the next hydrate. A caller building something PERMANENT
+ * from the picks (the reveal post: one deterministic id, append-only, first writer wins) asks this
+ * and fails closed. Synchronous, read-only, no network.
+ */
+export function picksReadWhilePublic(weekId) {
+  return !!_mirrorTag && _picksReadPublic.has(weekId);
+}
+
 export function isReady() { return READY_STATES.includes(_state); }
 export function isStale() { return _state === 'ACTIVE-STALE'; }
 export function getState() { return _state; }
@@ -463,7 +507,7 @@ const ROUTES = {
   cfbp_extra_point_guesses: { table: 'extra_point_guesses', comm: 'rows', player: 'rows', ownRowsOnly: true },
   cfbp_rejected_suggestions: { table: 'league_kv', kvKey: 'rejected_suggestions', comm: 'kv', player: 'refuse' },
   cfbp_reactions: { table: 'reactions', comm: 'rows', player: 'rows', ownRowsOnly: true },
-  cfbp_feedback: { table: 'feedback', comm: 'rows', player: 'rows', noDelete: true, memberIdCol: null },
+  cfbp_feedback: { table: 'feedback', comm: 'rows', player: 'rows', noDelete: true, memberIdCol: 'member_id' },
   cfbp_feedback_excluded_ids: { table: 'league_kv', kvKey: 'feedback_excluded_ids', comm: 'kv', kvMode: 'replace', player: 'refuse' },
   // `ownRowsOnly` (security F-6) is what routes this key into `_mayOperateOnRow`'s comments branch
   // at all — without it the function returns true on its first line and a player's whole-array
@@ -668,6 +712,7 @@ export function set(key, value, fields) {
   }
   if (route.verb === 'overlay') return _setOverlay(key, value, route);
 
+  if (key === 'cfbp_weeks') _noteStatusLegs(_mirror.get(key), value);
   _mirror.set(key, value);
   const prev = _dirty.get(key);
   const declared = Array.isArray(fields) && fields.length ? new Set(fields) : null;
@@ -691,6 +736,37 @@ export function set(key, value, fields) {
   });
   _schedulePush();
   return true;
+}
+
+/**
+ * RG-253 (SEC-2) — the status the server had CONFIRMED for a week when this device changed it:
+ * the base row (hydrate / Realtime / an acknowledged RPC); or, before any hydrate has landed on
+ * this page, the device snapshot's value (`_baseValues`, written only from server truth — §5.3).
+ * `null` for a week the server has never held (an INSERT: there is no leg to compare).
+ */
+function _confirmedStatusFor(weekId) {
+  const row = (_baseRows.get('cfbp_weeks') || new Map()).get(weekId);
+  if (row && typeof row.status === 'string') return row.status;
+  if (_baseRows.has('cfbp_weeks')) return null;
+  const snap = _baseValues.get('cfbp_weeks');
+  const w = Array.isArray(snap) ? snap.find((x) => x && x.weekId === weekId) : null;
+  return w && typeof w.status === 'string' ? w.status : null;
+}
+
+/** RG-253 — record, per week, the confirmed status each NEW status leg starts from. A row whose
+ *  status already differed from the confirmed one keeps the origin it was recorded with (a chain of
+ *  presses inside one debounce is one leg from where the server was); a row back at the confirmed
+ *  status has no leg. Synchronous, no network, called only from `set()`. */
+function _noteStatusLegs(prev, next) {
+  if (!Array.isArray(next)) return;
+  const prevById = new Map((Array.isArray(prev) ? prev : []).filter((w) => w && w.weekId).map((w) => [w.weekId, w]));
+  for (const w of next) {
+    if (!w || !w.weekId) continue;
+    const confirmed = _confirmedStatusFor(w.weekId);
+    if (confirmed === null || w.status === confirmed) { _statusLegFrom.delete(w.weekId); continue; }
+    const before = prevById.get(w.weekId);
+    if (!_statusLegFrom.has(w.weekId) || !before || before.status === confirmed) _statusLegFrom.set(w.weekId, confirmed);
+  }
 }
 
 /**
@@ -810,6 +886,23 @@ export async function hydrate(leagueId, { epoch = null, reason = 'hydrate' } = {
   // device that is still holding picks.
   emit('syncing', { state: _state, reason, pendingWrites: _dirty.size });
 
+  // RG-255 follow-up (reviewer F3, 2026-09-26) — the weeks ALREADY public when this read began.
+  // The selects below run in PARALLEL, so a read that straddles the reveal commit can see weeks=live
+  // beside a picks read taken before the commit (only this member's picks). A week counts as "read
+  // while public" only if it was public before any of these requests was issued — then every picks
+  // read in this hydrate was issued after the reveal committed and saw every member's picks. The
+  // cost is one extra hydrate before a just-revealed week counts; the Realtime re-read and the
+  // post-join probe are that hydrate. Before any hydrate, the snapshot is the prior server truth.
+  const publicAtStart = new Set();
+  {
+    const PUBLIC = ['live', 'final'];
+    const baseWeeks = _baseRows.get('cfbp_weeks');
+    if (baseWeeks) { for (const [id, r] of baseWeeks) if (r && PUBLIC.includes(r.status)) publicAtStart.add(id); }
+    else {
+      const snapWeeks = _baseValues.get('cfbp_weeks');
+      if (Array.isArray(snapWeeks)) for (const w of snapWeeks) if (w && w.weekId && PUBLIC.includes(w.status)) publicAtStart.add(w.weekId);
+    }
+  }
   let rowsByTable;
   let contacts = [];
   try {
@@ -912,6 +1005,9 @@ export async function hydrate(leagueId, { epoch = null, reason = 'hydrate' } = {
   _mirror = nextMirror;
   _baseRows = freshBaseRows;
   _baseValues = new Map(fresh);
+  _picksReadPublic = new Set((rowsByTable.weeks || [])
+    .filter((w) => w && w.id != null && (w.status === 'live' || w.status === 'final') && publicAtStart.has(w.id))
+    .map((w) => w.id));
   // §2.4 rule 1's evidence: exactly the contacts THIS hydrate read, replaced
   // wholesale so a previous hydrate's entry can never authorize a write.
   _lastContacts = new Map((contacts || []).filter((c) => c && c.member_id != null).map((c) => [c.member_id, c]));
@@ -1382,8 +1478,14 @@ function _mayOperateOnRow(key, route, row) {
  *  finalize_week). A diff the planner cannot map is refused client-side with
  *  the SERVER'S OWN error name, so the banner names the rule and not a 42501
  *  (§2.3's last paragraph). */
+//
+// 'live>locked' is NOT here (removed 2026-09-26, reviewer F6 / SEC-4), although transition_week's own
+// allow-list names it: that entry is UNREACHABLE server-side — transition_week raises use_lock_week for
+// ANY p_to='locked' before it consults the list (0003_functions.sql:289, 0027:130) — and this planner
+// routes every move to 'locked' through lock_week (below), which requires OPEN. Listing it here only
+// suggested a leg that can never succeed. "Pause (Re-lock)" is gone from the supabase-mode buttons.
 const TRANSITION_ALLOWED = frozenList([
-  'draft>open', 'open>draft', 'locked>open', 'locked>live', 'live>locked', 'final>live',
+  'draft>open', 'open>draft', 'locked>open', 'locked>live', 'final>live',
 ]);
 
 function _planWeekStatus(fromStatus, toStatus, weekId, leagueId) {
@@ -1558,6 +1660,26 @@ export function planFlush() {
   return { plan, refusals, stale, leagueId };
 }
 
+/**
+ * RG-254 — WHAT A KEY PLANS THIS RUN, as a comparable string: its operations plus any client-side
+ * refusal raised for it. The refusal latch records this, and a key is withheld only while it would
+ * send the SAME thing again. `VOLATILE_COLS` are left out of an insert's rows because the projection
+ * stamps them with "now" on every run — counting them would make every plan look new and turn the
+ * latch into a blind retry loop.
+ */
+function _planFingerprint(plan, refusals, key) {
+  const ops = plan.filter((op) => op && op.key === key).map((op) => {
+    if (op.kind !== 'rows' || op.op !== 'insert') return op;
+    const volatile = VOLATILE_COLS[op.table] || [];
+    if (!volatile.length) return op;
+    return { ...op, rows: (op.rows || []).map((r) => {
+      const c = { ...r }; for (const col of volatile) delete c[col]; return c;
+    }) };
+  });
+  const refused = (refusals || []).filter((e) => e && e.key === key).map((e) => e.message);
+  return canonicalize([ops, refused]);
+}
+
 function _planOrder(op) {
   if (op.kind === 'rows' && op.key === 'cfbp_games') return 0;
   if (op.kind === 'finalize') return 2;
@@ -1616,6 +1738,30 @@ function _planRowKey(plan, key, route, leagueId) {
     // refuses a direct status PATCH with 42501, so sending it as a PATCH is a
     // red-banner defect rather than a fallback (§2.1's note, A5's mutant).
     const base = _baseRows.get(key) || new Map();
+    // ══ RG-253 (SEC-2) — THE COMPARE-AND-SET ══════════════════════════════════
+    // A status leg is sent only from the status it was made against. If the server has moved the
+    // week since (another device locked, finalized or reopened it — learned through a hydrate or a
+    // Realtime fold, both of which re-apply this device's pending edit over the new base), the
+    // diff below would be a DIFFERENT leg that nobody chose: `live` made against LOCKED, replayed
+    // over FINAL, is final->live — allowed, and it reopens a finalized week. Refused here, loudly,
+    // for every moved row at once; `_runFlush()` then takes the server's status into the mirror.
+    const moved = [];
+    for (const p of patches) {
+      if (!('status' in p.changed) || !_statusLegFrom.has(p.id)) continue;
+      const server = (base.get(p.id) || {}).status;
+      const madeFrom = _statusLegFrom.get(p.id);
+      if (typeof server === 'string' && madeFrom !== server) moved.push({ id: p.id, server, local: p.changed.status, madeFrom });
+    }
+    if (moved.length) {
+      const what = moved.map((m) => `"${m.id}" is now ${m.server} (you changed it from ${m.madeFrom} to ${m.local})`).join('; ');
+      const err = new AdapterWriteRefusedError(
+        `The week's status changed on the server before this device's change was saved: ${what}. `
+        + 'Your status change was not applied — the server’s status stands. Nothing was saved.',
+        { code: 'status_moved', key: 'cfbp_weeks', rowId: moved[0].id, leagueId,
+          serverMessage: `the week's status moved on the server — ${what} — so your status change was not applied.` });
+      err.moved = moved;
+      throw err;
+    }
     for (const p of patches) {
       if (!('status' in p.changed)) continue;
       const from = (base.get(p.id) || {}).status;
@@ -1776,12 +1922,44 @@ async function _runFlush() {
 
   if (stale.length) _reportStaleSwitch(stale);
 
+  // RG-253 (SEC-2) — the SET half of the compare-and-set. A status leg the planner refused because
+  // the server moved the week takes the SERVER'S status into the mirror, so the device stops showing
+  // (and the tick stops standing down over) a status the server does not hold. Only `status`, only
+  // for the moved rows; every other pending edit of the key stays queued for the next run. The
+  // refusal itself is reported below with every other one — this is never a silent correction.
+  for (const e of refusals) {
+    if (!e || e.code !== 'status_moved' || !Array.isArray(e.moved)) continue;
+    const byId = new Map(e.moved.map((m) => [m.id, m.server]));
+    const weeks = _mirror.get('cfbp_weeks');
+    if (Array.isArray(weeks)) {
+      _mirror.set('cfbp_weeks', weeks.map((w) => (w && byId.has(w.weekId) ? { ...w, status: byId.get(w.weekId) } : w)));
+    }
+    for (const id of byId.keys()) _statusLegFrom.delete(id);
+    // Reviewer F5 — the refusal aborted planning for the WHOLE cfbp_weeks key, so any other week
+    // edit queued with it (a blurb, a timing change on another week) went nowhere this run. With the
+    // status corrected, the key now plans something different, so RG-254's latch does not withhold
+    // it: ONE follow-up run sends the rest (it cannot loop — the corrected status no longer differs).
+    // The repaint is the app's, off the 'refused' emit below, which carries code:'status_moved'.
+    _flushNeedsFollowUp = true;
+  }
+
   // A key whose refusal has not been followed by a landed hydrate is not
   // re-sent. It stays dirty and stays named in the banner.
+  //
+  // RG-254 (2026-09-26) — …UNLESS IT NO LONGER PLANS WHAT WAS REFUSED. The block exists so the SAME
+  // request is not retried blindly (§5.2). It used to hold for anything the key planned until a
+  // hydrate landed, so after a refused OPEN->LIVE leg the commissioner's valid re-save (Lock Week)
+  // was withheld too, and every later flush re-raised the old "Refusing to move … open to live"
+  // text about a leg nobody was asking for any more. The latch now records WHAT it refused (the
+  // key's plan fingerprint, `_planFingerprint`); a key whose plan has since changed — a new edit, or
+  // a base that moved so the key now diffs to nothing — is a new request and is planned normally.
+  // An identical plan stays blocked, so a genuine refusal stays loud and is never re-sent blindly.
+  const fingerprint = (key) => _planFingerprint(plan, refusals, key);
   const blocked = new Set();
   for (const [key, rec] of _refusedKeys) {
-    if (rec.atHydrateSeq === _hydrateSeq) blocked.add(key);
+    if (rec.atHydrateSeq === _hydrateSeq && rec.fp === fingerprint(key)) blocked.add(key);
   }
+  const refusedThisRun = new Set();
   const runnable = plan.filter((op) => !blocked.has(op.key));
 
   const sentKeys = new Set();
@@ -1853,7 +2031,11 @@ async function _runFlush() {
         }
         errors.push(e);
         if (e instanceof AdapterWriteRefusedError) {
-          _refusedKeys.set(op.key, { code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq });
+          _refusedKeys.set(op.key, {
+            code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq,
+            fp: fingerprint(op.key), message: e.message,
+          });
+          refusedThisRun.add(op.key);
         }
       }
     }
@@ -1861,9 +2043,14 @@ async function _runFlush() {
     _inFlightSent = null;
   }
 
+  // RG-254 — a planner refusal re-raised this run REPLACES the record (its words and its
+  // fingerprint), so the latch always describes the refusal the key is under NOW, never an older one.
   for (const e of errors) {
-    if (e instanceof AdapterWriteRefusedError && !_refusedKeys.has(e.key)) {
-      _refusedKeys.set(e.key, { code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq });
+    if (e instanceof AdapterWriteRefusedError && !refusedThisRun.has(e.key)) {
+      _refusedKeys.set(e.key, {
+        code: e.code, serverMessage: e.serverMessage, atHydrateSeq: _hydrateSeq,
+        fp: fingerprint(e.key), message: e.message,
+      });
     }
   }
 
@@ -1935,6 +2122,12 @@ async function _runFlush() {
     emit('refused', {
       state: _state,
       error: _lastError,
+      // RG-253 follow-up (reviewer F2) — the FIRST refusal's key and code, and for a status_moved
+      // refusal the moved rows, so the app can choose honest copy (REFUSAL_COPY) and name the week by
+      // its label instead of rendering this module's storage key and a raw week id.
+      key: first.key || null,
+      code: first.code || null,
+      ...(Array.isArray(first.moved) ? { moved: first.moved.map((m) => ({ ...m })) } : {}),
       keys: [...failedKeys],
       refusedKeys: [..._refusedKeys.keys()],
       banner: `The server refused to save ${[...failedKeys].join(', ') || 'a change'}: `
@@ -2015,6 +2208,12 @@ async function _runFlush() {
   // player would be told everything is fine about the one thing that is not. The banner comes down
   // when the SET is empty, which is what §1.3's latch table already says releases it.
   if (_refusedKeys.size) {
+    // RG-254 — the words come from the refusals STILL LATCHED, not from whatever `_lastError` last
+    // held. A key that has since saved (or been voided) took its latch with it above; its message
+    // must not outlive it on the banner. Every still-refused key keeps its own message, so this can
+    // only drop a stale sentence, never soften a live one.
+    const live = [...new Set([..._refusedKeys.values()].map((r) => r && r.message).filter(Boolean))];
+    if (live.length) _lastError = live.join(' ');
     emit('refused', {
       state: _state,
       error: _lastError,
@@ -2436,6 +2635,11 @@ function _foldWeekStatusIntoBase(weekId, status, leagueId) {
   if (!old) return;
   base.set(weekId, { ...old, status });
   _baseRows.set('cfbp_weeks', base);
+  // RG-253 — the leg is acknowledged: the server is now at `status`. A further press made while it
+  // was in flight is a leg FROM here (the user's own chain), so its origin moves with the base.
+  const mine = (Array.isArray(_mirror.get('cfbp_weeks')) ? _mirror.get('cfbp_weeks') : []).find((w) => w && w.weekId === weekId);
+  if (mine && mine.status !== status) _statusLegFrom.set(weekId, status);
+  else _statusLegFrom.delete(weekId);
 }
 
 /**
@@ -2770,6 +2974,14 @@ function _offlineConditionsHold(leagueId, snap = _readSnapshot()) {
  * proven (A6 becomes a data boundary, §6.2).
  */
 export function primeFromSnapshot(ownerTuple, leagueId) {
+  // RG-257 (2026-09-26) — NEVER OVER A SERVING MIRROR, NEVER OVER AN UNSENT EDIT. app.js calls this
+  // before EVERY hydrate it asks for (ensureSupabaseDataHydrated(): the boot, and also the tick's
+  // re-hydrate, visibilitychange, online and Retry). It used to replace the mirror unconditionally, so
+  // on an ACTIVE device the last CLEAN snapshot overwrote a pick still inside its debounce, and the
+  // hydrate's rebase then re-applied the snapshot's value as the "local edit": plan [], key clean,
+  // pick gone, no banner. A snapshot is a cold-start paint — it is never newer than an ACTIVE
+  // mirror, and nothing may paint over what this device still owes the server.
+  if (_state === 'ACTIVE' || _dirty.size) return 0;
   const snap = _readSnapshot();
   if (!snap) return 0;
   if (ownerTuple && snap.owner !== ownerTuple) {
@@ -2783,6 +2995,7 @@ export function primeFromSnapshot(ownerTuple, leagueId) {
   }
   _mirror = new Map(Object.entries(snap.data));
   _baseRows = new Map();
+  _picksReadPublic = new Set();         // RG-255 — a snapshot paint is not a read that saw anyone else's picks
   _baseValues = new Map(Object.entries(snap.data));
   _mirrorTag = { leagueId: snap.leagueId, epoch: snap.epoch, switchSeq: _switchSeq, at: snap.at };
   _lastSyncAt = snap.at || null;
@@ -2861,6 +3074,8 @@ export function dropMirror(reason = '') {
   _overlay.clear();
   _dirty.clear();
   _refusedKeys.clear();
+  _statusLegFrom.clear();
+  _picksReadPublic = new Set();
   _lastContacts = new Map();
   _mirrorTag = null;
   // `_lastError` is cleared ONLY when there was nothing to report. A refusal
@@ -3022,7 +3237,20 @@ function _onRealtimeEvent(table, payload, token) {
     return false;
   }
   if (_rt) _rt.phase = 'live';
+  const wasPublic = table === 'weeks' && row && row.id != null
+    && ['live', 'final'].includes(((_baseRows.get('cfbp_weeks') || new Map()).get(row.id) || {}).status);
   _foldRealtimeRow(table, payload);
+  // RG-255 (SEC-1) — A WEEK THAT JUST WENT PUBLIC NEEDS A READ THAT CAN SEE THE PICKS. The reveal
+  // changes no picks row, so no picks event follows it: until a hydrate, this device holds only its
+  // own picks for a week every screen now treats as public (the dashboard shows the rest as blank,
+  // and the reveal post — permanent — would say "no picks on file" for five people). Re-read once,
+  // the same way the post-join probe does; `picksReadWhilePublic()` fails the reveal closed until it lands.
+  const nowRow = table === 'weeks' && payload && payload.new;
+  if (nowRow && !wasPublic && (nowRow.status === 'live' || nowRow.status === 'final')) {
+    Promise.resolve()
+      .then(() => hydrate(token.leagueId, { epoch: _safe('getIdentityEpoch'), reason: 'realtime-reveal' }))
+      .catch((e) => console.warn('[sb] the re-read after a week went public failed', e && e.message));
+  }
   const cb = _deps && typeof _deps.onRealtimeEvent === 'function' ? _deps.onRealtimeEvent : null;
   if (cb) { try { cb(table, payload); } catch (e) { console.warn('[sb] onRealtimeEvent listener failed', e && e.name); } }
   return true;
@@ -3033,6 +3261,19 @@ function _onRealtimeEvent(table, payload, token) {
  * `fromRows` so the mirror value is always something the projection produced —
  * never something this file assembled by hand. The overlay for that key is
  * dropped, because the server has just spoken.
+ *
+ * RG-252 (2026-09-26) — A FOLD NEVER DISCARDS AN UNSENT EDIT. This used to re-project the WHOLE key
+ * from the base on every event, which for a DIRTY key replaced the edit still inside its ~800 ms
+ * debounce with the server's value: pick A flushed, pick B set, the Realtime echo of A lands, the
+ * mirror goes back to A, the next plan diffs to [] and the key is marked clean — B silently gone,
+ * no banner. The rule is now `hydrate()`'s own rebase rule ("user intent wins for the keys THIS
+ * DEVICE changed, the server wins for everything else"), taken at ROW granularity so it is
+ * stricter than hydrate's, not looser: the base advances to what the server said; the rows and
+ * columns this device changed RELATIVE TO THE OLD BASE are re-applied on top (`_pendingRowEdits` /
+ * `_reapplyPendingRows`); every other row is the server's. So nothing unsent is dropped, and
+ * nothing another device wrote is reverted — a re-apply of the WHOLE stale value would have turned
+ * the next flush into a patch that undoes the other device's row. A clean key (the echo of my own
+ * landed write, most commonly) re-projects exactly as before: no dirty mark, nothing sent.
  */
 function _foldRealtimeRow(table, payload) {
   const keys = KEYS_FOR_TABLE[table] || [];
@@ -3040,6 +3281,9 @@ function _foldRealtimeRow(table, payload) {
   const evt = (payload && payload.eventType) || (payload && payload.event) || 'UPDATE';
   for (const key of keys) {
     const base = _baseRows.get(key) || new Map();
+    // Captured BEFORE the base moves: what this device still owes the server, as a diff against the
+    // base it was made against. `null` for a clean key (and for league_kv, handled below).
+    const pending = table === 'league_kv' ? null : _pendingRowEdits(key, table, base);
     if (evt === 'DELETE') {
       const old = payload && payload.old;
       if (old && old.id != null) base.delete(old.id);
@@ -3053,9 +3297,18 @@ function _foldRealtimeRow(table, payload) {
         continue;
       }
       base.set(row.id, { ...(base.get(row.id) || {}), ...row });
+      // RG-253 — the server moved a week's status under a status leg this device still owes. Plan
+      // now (one debounce) rather than whenever the next unrelated write happens: the planner's
+      // compare-and-set refuses the moved leg loudly and takes the server's status, and until it
+      // runs the mirror shows a status the server does not hold.
+      const up = pending && pending.upserts && pending.upserts.get(row.id);
+      if (key === 'cfbp_weeks' && up && up.changed && 'status' in up.changed
+        && typeof row.status === 'string' && row.status !== up.old.status) _schedulePush();
     }
     _baseRows.set(key, base);
-    const rowsByTable = { [table]: [...base.values()] };
+    if (pending && pending.keep) continue;       // the edit could not be read as rows: keep the mirror, never drop it
+    const rows = pending ? _reapplyPendingRows(key, base, pending) : [...base.values()];
+    const rowsByTable = { [table]: rows };
     try {
       _mirror.set(key, fromRows[key](rowsByTable, _ctx(_mirrorTag.leagueId, { contacts: [..._lastContacts.values()] })));
     } catch (e) { console.warn(`[sb] could not re-project ${key} after a Realtime event`, e && e.message); }
@@ -3067,10 +3320,106 @@ function _foldRealtimeRow(table, payload) {
     for (const [key, route] of Object.entries(ROUTES)) {
       if (route.table !== 'league_kv' || route.kvKey !== kvKey) continue;
       const rowsByTable = { league_kv: [row].filter(Boolean) };
-      try { _mirror.set(key, fromRows[key](rowsByTable, _ctx(_mirrorTag.leagueId))); }
-      catch (e) { console.warn(`[sb] could not re-project ${key} after a league_kv event`, e && e.message); }
+      let fresh;
+      try { fresh = fromRows[key](rowsByTable, _ctx(_mirrorTag.leagueId)); }
+      catch (e) { console.warn(`[sb] could not re-project ${key} after a league_kv event`, e && e.message); continue; }
+      // RG-252 — the kv base is the legacy value (`_baseValues`, what `_kvFieldPatch()` reads to
+      // decide an `$unset`), so it advances with the server exactly as `_baseRows` does above.
+      if (evt !== 'DELETE') _baseValues.set(key, fresh);
+      const entry = _dirty.get(key);
+      if (!entry || !_mirror.has(key)) { _mirror.set(key, fresh); continue; }
+      // A DIRTY kv key: hydrate()'s rebase, verbatim — a field-scoped write re-applies only its own
+      // fields onto the fresh value (RG-24), a whole-value write stands as the user set it.
+      const local = _mirror.get(key);
+      if (entry.fields instanceof Set && _isPlainObject(fresh) && _isPlainObject(local)) {
+        const merged = { ...fresh };
+        entry.fields.forEach((f) => { if (f in local) merged[f] = local[f]; else delete merged[f]; });
+        _mirror.set(key, merged);
+      }
     }
   }
+}
+
+/**
+ * RG-252 — WHAT THIS DEVICE STILL OWES THE SERVER FOR `key`, as a row diff against `base` (the base
+ * the edit was made against). The comparison is `_diffRows()`'s own — same projection, same
+ * volatile and NOT NULL exclusions — so "pending" here means exactly what the next plan would send.
+ * `null` when the key is clean; `{ keep: true }` when the mirror cannot be read back as rows (the
+ * fold then leaves the mirror alone rather than guess, and the next hydrate rebases it).
+ */
+function _pendingRowEdits(key, table, base) {
+  if (!_dirty.has(key) || !_mirror.has(key) || !_mirrorTag) return null;
+  // Security F5 on f16d87c — hydrate()'s rebase re-applies only an edit captured under THIS mirror's
+  // (league, epoch, switch); so does the fold. An edit captured under another token is not grafted
+  // onto this league's rows: it stays dirty and planFlush() refuses it LOUDLY as write-during-switch
+  // (§3.3 layer 2) — never silently re-applied here. The mirror shows the server's rows meanwhile.
+  const entry = _dirty.get(key);
+  if (!entry || entry.leagueId !== _mirrorTag.leagueId || entry.epoch !== _mirrorTag.epoch
+    || entry.switchSeq !== _mirrorTag.switchSeq) return null;
+  const route = ROUTES[key];
+  if (!route || route.table !== table || typeof toRows[key] !== 'function') return null;
+  let local;
+  try {
+    const projected = toRows[key](stripCredentials(key, _mirror.get(key)), _ctx(_mirrorTag.leagueId));
+    local = (projected && projected[table]) || [];
+  } catch (e) {
+    console.warn(`[sb] ${key}: the unsent edit could not be read as rows (${e && e.message}) — the Realtime event`
+      + ' advances the base only; the mirror keeps the edit.');
+    return { keep: true };
+  }
+  const volatile = new Set(VOLATILE_COLS[table] || []);
+  const notNull = NOT_NULL_COLS[table] || [];
+  const upserts = new Map();                 // id -> { row } (insert) | { changed, old } (patch)
+  const seen = new Set();
+  for (const row of local) {
+    if (!row || row.id == null) continue;
+    seen.add(row.id);
+    const old = base.get(row.id);
+    if (!old) { upserts.set(row.id, { row }); continue; }
+    const changed = {};
+    for (const col of Object.keys(row)) {
+      if (col === 'league_id' || col === 'id' || volatile.has(col)) continue;
+      if (row[col] == null && notNull.includes(col)) continue;
+      if (canonicalize(row[col]) !== canonicalize(old[col])) changed[col] = row[col];
+    }
+    if (Object.keys(changed).length) upserts.set(row.id, { changed, old: { ...old } });
+  }
+  const deletes = new Set();
+  if (!route.noDelete && !route.insertOnly) for (const id of base.keys()) if (!seen.has(id)) deletes.add(id);
+  if (!upserts.size && !deletes.size) return null;
+  return { upserts, deletes };
+}
+
+/**
+ * RG-252 — the server's rows with this device's pending edits laid back on top. A patched row takes
+ * only the columns this device changed, over whatever the server now holds for it.
+ *
+ * A week STATUS is re-applied like any other column, and is decided NOT here but in the planner:
+ * status is a leg, and a leg means something only relative to the status it leaves. Re-applying
+ * a pending 'live' over a base another device has since moved (to locked, or to final) would plan
+ * a DIFFERENT leg that the server may allow — so `_planRowKey()` compares the status each leg was
+ * made against (`_statusLegFrom`, recorded by `set()`) with the base, and refuses a moved one
+ * loudly, taking the server's value (RG-253 / SEC-2, the compare-and-set). One rule, one place, for
+ * the fold and for `hydrate()` alike. The fold only makes sure that check runs promptly (below).
+ */
+function _reapplyPendingRows(key, base, pending) {
+  const out = new Map(base);
+  for (const [id, p] of pending.upserts) {
+    if (p.row) { out.set(id, base.has(id) ? { ...base.get(id), ...p.row } : p.row); continue; }
+    // Security F4 on f16d87c — the server DELETED a row this device had a pending PATCH for (a game
+    // removed, its picks cascaded). Re-creating it from the old base would turn the patch into an
+    // INSERT of a row the server just removed. The patch has nothing left to apply to: it is dropped,
+    // and said so. A pending INSERT (above) is kept — it never depended on the deleted row.
+    // (hydrate()'s whole-value rebase still re-applies such a row — reported, not changed here.)
+    if (!base.has(id)) {
+      console.warn(`[sb] ${key}: row ${id} was deleted on the server while this device had an unsent change to it`
+        + ` (${Object.keys(p.changed).join(', ')}) — the change has no row left to apply to and is DROPPED, not re-created.`);
+      continue;
+    }
+    out.set(id, { ...base.get(id), ...p.changed });
+  }
+  for (const id of pending.deletes) out.delete(id);
+  return [...out.values()];
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -3227,7 +3576,7 @@ export function _resetForTest() {
   if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
   _state = 'IDLE'; _stateReason = '';
   _mirror = new Map(); _baseRows = new Map(); _baseValues = new Map();
-  _overlay.clear(); _dirty.clear(); _refusedKeys.clear();
+  _overlay.clear(); _dirty.clear(); _refusedKeys.clear(); _statusLegFrom.clear(); _picksReadPublic = new Set();
   _lastContacts = new Map();
   _mirrorTag = null; _switchSeq = 0; _hydrateSeq = 0;
   // RG-180 — the flush latch is per-PAGE state like the rest of this list. A section that left it
@@ -3248,6 +3597,9 @@ export function _dirtyKeysForTest() { return [..._dirty.keys()]; }
 export function _retryStateForTest() { return { attempt: _retryAttempt, armed: _retryTimer !== null, backoff: [...RETRY_BACKOFF_MS] }; }
 export function _writeFailureClassForTest(shaped) { return _writeFailureClass(shaped); }
 export function _refusedKeysForTest() { return [..._refusedKeys.keys()]; }
+/** RG-252 — the fold, reachable for a table the Realtime channel does not bind (comments), so the
+ *  "never discard a dirty edit" rule is proven for every row key, not only the four subscribed. */
+export function _foldRealtimeRowForTest(table, payload) { return _foldRealtimeRow(table, payload); }
 export function _overlayForTest() { return _overlay.get('cfbp_games') || new Map(); }
 export function _setContactsForTest(list) {
   _lastContacts = new Map((list || []).map((c) => [c.member_id, c]));

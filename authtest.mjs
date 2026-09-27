@@ -20,7 +20,7 @@
  * what still needs Drew's own click-through (per DI-180k/181j/184i).
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 // ── DOM / browser stubs (same pattern as headermetatest.mjs/boottest.mjs's
@@ -48,7 +48,12 @@ const registry = new Map();
 class FakeEl {
   constructor(tag) {
     this.tagName = tag || 'div'; this.id = ''; this.hidden = false; this.className = '';
-    this.attrs = {}; this.dataset = {}; this._html = ''; this._listeners = {}; this.style = {};
+    this.attrs = {}; this.dataset = {}; this._html = ''; this._listeners = {};
+    // setProperty/removeProperty are non-enumerable so the style object still
+    // reads as the plain {} earlier sections compare against.
+    this.style = {};
+    Object.defineProperty(this.style, 'setProperty', { value(k, v) { this[k] = String(v); }, enumerable: false, configurable: true, writable: true });
+    Object.defineProperty(this.style, 'removeProperty', { value(k) { delete this[k]; }, enumerable: false, configurable: true, writable: true });
     this._subEls = {};
   }
   set innerHTML(v) {
@@ -101,8 +106,20 @@ class FakeEl {
       if (!this._subEls[id]) this._subEls[id] = new FakeEl();
       return this._subEls[id];
     }
+    // THIRD PASS (reviewer B1) — single-class lookups, OPT-IN (FakeEl.
+    // classQueries, set only by [64]) so no earlier section's behaviour moves:
+    // answers a memoized element only when this element's own markup really
+    // carries that class, so openWeekWizardSheet()'s `.chat-sheet-header`
+    // lookup binds its drag handler to an object the test can touch.
+    if (FakeEl.classQueries && /^\.[\w-]+$/.test(sel || '')) {
+      const cls = sel.slice(1);
+      if (!new RegExp(`class="[^"]*\\b${cls}\\b`).test(this._html)) return null;
+      if (!this._subEls[sel]) this._subEls[sel] = new FakeEl();
+      return this._subEls[sel];
+    }
     return null;
   }
+  getBoundingClientRect() { return { width: 300, height: 500, top: 0, left: 0, right: 300, bottom: 500 }; }
   querySelectorAll() { return []; }
   insertAdjacentHTML(pos, html) { this._html = pos === 'afterbegin' ? html + this._html : this._html + html; }
   focus() {}
@@ -299,6 +316,28 @@ function makeFakeClient(overrides = {}) {
       refreshSession: overrides.refreshSession || (async () => ({ data: { session: null }, error: null })),
       signInWithOAuth: overrides.signInWithOAuth || (async () => ({ data: {}, error: null })),
       signOut: overrides.signOut || (async () => { listeners.slice().forEach(fn => fn('SIGNED_OUT', null)); return { error: null }; }),
+      // authtest [57] (UX Revamp Group F wiring, 2026-09-25) — DI-335's
+      // reauthenticate()/updateUser({password,nonce}). Additive defaults,
+      // same reasoning as `functions.invoke` above.
+      reauthenticate: overrides.reauthenticate || (async () => ({ error: null })),
+      updateUser: overrides.updateUser || (async () => ({ error: null })),
+      // authtest [57] — DI-332/333's own three SDK calls, same additive
+      // shape. `signInWithPassword` fires SIGNED_IN on its default success
+      // path (mirrors the REAL SDK's onAuthStateChange contract) so a
+      // wiring test can observe the gate coming down the SAME way every
+      // other signed-in path already does, with no gate-removal code of
+      // its own to test.
+      signInWithPassword: overrides.signInWithPassword || (async () => { listeners.slice().forEach(fn => fn('SIGNED_IN', { access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 })); return { error: null }; }),
+      signUp: overrides.signUp || (async () => ({ error: null })),
+      resetPasswordForEmail: overrides.resetPasswordForEmail || (async () => ({ error: null })),
+      // [59] (3c fix window, 2026-09-25) — DI-334's verifyPasswordRecovery(),
+      // the ONE SDK call this fake client was missing (never previously
+      // exercised through a REAL applyAuthModeDecision() run; [58] fires
+      // PASSWORD_RECOVERY directly via _fireAuthEventForTest(), never through
+      // this call). Same additive shape as every other override above.
+      verifyOtp: overrides.verifyOtp || (async () => ({ error: null })),
+      // THIRD PASS (N3) — resendSignupVerification()'s SDK call.
+      resend: overrides.resend || (async () => ({ error: null })),
     },
     from(table) {
       const b = {
@@ -317,6 +356,13 @@ function makeFakeClient(overrides = {}) {
         // job/limit this particular call was for.
         order(col, opts) { b._order = [col, opts]; return b; },
         limit(n) { b._limit = n; return b; },
+        // getLeagueJoinCode() (UX Revamp wiring pass 3a) is the first real
+        // caller of `.single()` in js/auth.js — a no-op marker here, since
+        // the fake's `overrides.from(table, b)` already returns whatever
+        // shape ITS OWN handler decides (a single object or an array), the
+        // same way the real PostgREST client's `.single()` only changes
+        // envelope shape, never which rows come back.
+        single() { b._single = true; return b; },
         then(resolve, reject) {
           const result = overrides.from ? overrides.from(table, b) : { data: [], error: null };
           return Promise.resolve(result).then(resolve, reject);
@@ -328,6 +374,15 @@ function makeFakeClient(overrides = {}) {
       const fn = overrides.rpc || (() => ({ data: null, error: null }));
       return Promise.resolve(fn(name, params));
     },
+    // UX Revamp Group F wiring (authtest [57], 2026-09-25) — DI-335's
+    // reauthenticate()/updateUser({password,nonce}) and DI-340's
+    // functions.invoke('account-delete'). Additive: every EXISTING call
+    // site that never sets these overrides gets the SAME harmless defaults
+    // it always implicitly had (an unset `.auth.reauthenticate`/
+    // `.auth.updateUser`/`.functions` would previously have thrown
+    // "not a function" the instant any NEW test called it — nothing before
+    // this section ever did).
+    functions: { invoke: overrides.functionsInvoke || (async () => ({ data: null, error: null })) },
     _fire: (event, session) => listeners.slice().forEach(fn => fn(event, session)),
   };
 }
@@ -486,9 +541,17 @@ console.log('\n[3] DI-184 — the active-league pill + DI-184d\'s single-source 
   assert(/const name = getActiveLeagueName\(\)/.test(fnMatch[0]), 'the call result is captured into `name`');
   assert(/escHtml\(name/.test(fnMatch[0]), 'the rendered pill text is escHtml() of that same `name` — one source, provably (DI-184d)');
   assert(!/document\.title/.test(fnMatch[0]), 'and nothing in the function assigns document.title');
+  // REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — index.html no
+  // longer carries #league-pill AT ALL (removed entirely, not merely a tag
+  // shape — the header declutter found renderLeaguePill() was still
+  // un-hiding it on every session resolve, defeating the "hidden" intent).
+  // renderLeaguePill() ITSELF is unchanged (every assertion above this one
+  // still drives it against a manually-injected fake element, same as
+  // always) — this is now an ABSENCE check on the real markup, not a tag-
+  // shape check on markup that no longer exists.
   const htmlSrc = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
-  assert(/<span id="league-pill"/.test(htmlSrc) && !/<button[^>]*id="league-pill"/.test(htmlSrc),
-    'index.html declares #league-pill as a <span>, never a <button> — the single-membership default really is non-interactive');
+  assert(!htmlSrc.includes('id="league-pill"'),
+    'index.html carries NO id="league-pill" anywhere — removed entirely (F4), so renderLeaguePill() is now permanently inert in production, not merely hidden');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -512,6 +575,32 @@ console.log('\n[4] refreshMembershipsAndSession() — auto-resolve, DI-181c/g…
   await auth.refreshMembershipsAndSession();
   assert(auth.getActiveLeagueId() === null, 'TWO memberships, nothing previously active -> stays unresolved (DI-181c selector case)');
 
+  // UX Revamp wiring pass 2 (coordinator addition, 2026-09-25) — `pilot`/
+  // `status` now ride the SAME `leagues` embed as `name`, threaded into the
+  // membership cache at this one chokepoint (DI-318/DI-344 §8). A row with
+  // `pilot:true` yields `pilot:true` on the cached membership; a row with no
+  // opinion on either column (an old fixture, or a device that hasn't
+  // hydrated the new columns yet) fails CLOSED — `pilot:false`,
+  // `status:'active'` — never guessed toward the more alarming/exceptional
+  // state (js/roles.js's isPilotLeague()/isLeaguePaused() own documented
+  // default-when-missing story, CONVENTIONS #10).
+  resetAll({ from: () => ({ data: [{ league_id: 'P', id: 'm1', role: 'commissioner', display_name: 'Drew', active: true, leagues: { name: 'Pilot League', pilot: true, status: 'paused' } }], error: null }),
+             getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }) });
+  await auth.refreshMembershipsAndSession();
+  {
+    const row = auth.getCachedMemberships()[0];
+    assert(row?.pilot === true, `a leagues.pilot=true row maps to pilot:true on the cached membership (got ${JSON.stringify(row)})`);
+    assert(row?.status === 'paused', `a leagues.status='paused' row maps through unchanged (got ${row?.status})`);
+  }
+  resetAll({ from: () => ({ data: [{ league_id: 'N', id: 'm1', role: 'player', display_name: 'x', active: true, leagues: { name: 'Ordinary League' } }], error: null }),
+             getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }) });
+  await auth.refreshMembershipsAndSession();
+  {
+    const row = auth.getCachedMemberships()[0];
+    assert(row?.pilot === false, `an absent leagues.pilot fails CLOSED to pilot:false (got ${JSON.stringify(row)})`);
+    assert(row?.status === 'active', `an absent leagues.status defaults to 'active', never guessed as paused (got ${row?.status})`);
+  }
+
   const src = readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8');
   // `getMemberships(op = null)` since the sixth gate (security F-1's identity
   // epoch is handed in as an operation token), so the signature is matched by
@@ -526,7 +615,11 @@ console.log('\n[4] refreshMembershipsAndSession() — auto-resolve, DI-181c/g…
   // resolution. The embed must NAME its relationship. Comment-blanked so prose cannot satisfy it.
   {
     const code = gm ? gm[0].replace(/\/\/[^\n]*/g, '') : '';
-    assert(/leagues!league_members_league_id_fkey\(name\)/.test(code),
+    // UX Revamp wiring pass 2 (2026-09-25): the embed grew `pilot, status`
+    // beside `name` (DI-318/DI-344 columns, threaded through the membership
+    // cache at this one chokepoint) — matched by prefix so the rule stays
+    // about the RELATIONSHIP being named, not about which columns ride along.
+    assert(/leagues!league_members_league_id_fkey\(name/.test(code),
       'getMemberships() embeds `leagues` through the NAMED relationship `league_members_league_id_fkey` (a bare embed is PGRST201-ambiguous on the live API)');
     assert(!/[^!\w]leagues\(name\)/.test(code),
       '…and no bare `leagues(name)` embed survives in its code (the ambiguous form that failed every membership read at the cutover)');
@@ -604,7 +697,11 @@ console.log('\n[7] app.js — showGoogleSignInGate() (DI-180a/b/c/d)…');
   app.showGoogleSignInGate();
   const gate = registry.get('site-gate-overlay');
   assert(!!gate, 'the overlay reuses #site-gate-overlay — same id showSitePinGate() uses (DI-180e verbatim reuse)');
-  assert(gate.innerHTML.includes('sign in to make your picks'), 'DI-180d subtitle copy present');
+  // UPDATED — DI-310 (T-01, 2026-09-25, UX Revamp wiring pass 1) DELETES the
+  // web gate's subtitle line ("sign in to make your picks") entirely, per
+  // that DI's "platform-agnostic part of Drew's request." Re-asserted here
+  // as an ABSENCE rather than silently dropped.
+  assert(!gate.innerHTML.includes('sign in to make your picks'), 'DI-310 — the web gate subtitle line is GONE, not merely restyled');
   assert(gate.innerHTML.includes('Continue with Google'), 'DI-180d button copy present');
   assert(gate.innerHTML.includes('<svg'), 'D-1 — the Google G-mark inline SVG is present in the button');
   assert(!registry.has('site-pin-input'), 'no PIN input field anywhere in the Google gate — DI-180b "no PIN field"');
@@ -822,12 +919,70 @@ console.log('\n[10] DI-181 — needsLeagueFlowScreen() / renderLeagueFlowScreen(
   assert(app.needsLeagueFlowScreen() === true, 'TWO memberships, none active yet -> true (DI-181c selector)');
   app.renderLeagueFlowScreen('dashboard');
   const selector = registry.get('page-dashboard');
-  assert(selector.innerHTML.includes('Choose a League'), 'DI-181d selector title copy present');
+  // UX Revamp wiring pass 3b — DI-312 replaces the old bare "Choose a
+  // League" list with the richer Leagues Home card list ("Your Leagues"
+  // heading, leagueCardHTML() cards) on this SAME render seam. The
+  // voluntary reopen sheet (showLeagueSelectorSheet()) keeps its own
+  // "Choose a League" modal title, unchanged — that's a different surface.
+  assert(selector.innerHTML.includes('Your Leagues'), 'DI-312 Leagues Home title copy present');
   assert(selector.innerHTML.includes('League A') && selector.innerHTML.includes('League B'), 'both leagues listed by name');
   assert(selector.innerHTML.includes('Commissioner') && selector.innerHTML.includes('Player'), 'role badges present per DI-181d');
+  assert(selector.innerHTML.includes('Create new league'), 'DI-313 stub card present on the Leagues Home landing');
 
   auth.setActiveLeagueId('A');
   assert(app.needsLeagueFlowScreen() === false, 'once one of the two is made active, the selector is no longer forced on every navigation');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[10b] FINDING 8 (pass-2 reviewer, 2026-09-25) — signups_open on the');
+console.log('      Join/Create landing, and the signups_closed refusal copy…');
+{
+  const rpcClient = (script) => ({
+    rpc: (name, params) => (script[name] ? script[name](name, params) : { data: null, error: null }),
+    from: (table) => (script._from ? script._from(table) : { data: [{ key: 'signups_open', value: true }], error: null }),
+  });
+
+  // (a) getCachedSignupsOpen() defaults to true (open) before any read.
+  resetAll();
+  assert(auth.getCachedSignupsOpen() === true, '[10b-1] default (never-fetched) answer is true — DI-344 §3.2 "on by default"');
+
+  // (b) A read with signups_open:false updates the cache.
+  resetAll(rpcClient({ _from: () => ({ data: [{ key: 'signups_open', value: false }, { key: 'maintenance_banner', value: '' }], error: null }) }));
+  await auth.refreshMaintenanceBannerCache();
+  assert(auth.getCachedSignupsOpen() === false, '[10b-2] a real read with signups_open:false updates the cache');
+
+  // (c) The landing renders disabled controls + the closed notice when the
+  // cache says closed — same render function DI-181d's own landing uses.
+  auth._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  auth._setMembershipsForTest([]);
+  registry.set('page-dashboard', new FakeEl());
+  app.renderLeagueFlowScreen('dashboard');
+  const closedLanding = registry.get('page-dashboard');
+  assert(closedLanding.innerHTML.includes("New leagues aren't being created right now — check back soon."),
+    '[10b-3] the closed notice renders on the landing when signups_open is false');
+  assert(/id="league-join-btn"[^>]*disabled/.test(closedLanding.innerHTML) && /id="league-create-btn"[^>]*disabled/.test(closedLanding.innerHTML),
+    '[10b-4] both the Join and Create buttons render disabled');
+  assert(/id="league-join-code"[^>]*disabled/.test(closedLanding.innerHTML) && /id="league-create-name"[^>]*disabled/.test(closedLanding.innerHTML),
+    '[10b-5] both inputs render disabled too — not just the buttons');
+
+  // (d) Reopened — the cache flips back, controls are live again, no stale notice.
+  resetAll(rpcClient({ _from: () => ({ data: [{ key: 'signups_open', value: true }], error: null }) }));
+  await auth.refreshMaintenanceBannerCache();
+  auth._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  auth._setMembershipsForTest([]);
+  registry.set('page-dashboard', new FakeEl());
+  app.renderLeagueFlowScreen('dashboard');
+  const openLanding = registry.get('page-dashboard');
+  assert(!openLanding.innerHTML.includes('check back soon') && !/id="league-join-btn"[^>]*disabled/.test(openLanding.innerHTML),
+    '[10b-6] once reopened, the notice is gone and the controls are live');
+
+  // (e) The server's signups_closed code maps to the SAME sentence, never a
+  // raw code — LEAGUE_RPC_ERROR_COPY's own resolver.
+  const { resolve } = app._LEAGUE_RPC_ERROR_COPY_FOR_TEST;
+  assert(resolve({ message: 'signups_closed' }) === "New leagues aren't being created right now — check back soon.",
+    `[10b-7] a signups_closed server refusal maps to the exact same sentence (got ${JSON.stringify(resolve({ message: 'signups_closed' }))})`);
+  assert(resolve({ message: 'P0001: signups_closed' }) === "New leagues aren't being created right now — check back soon.",
+    '[10b-8] …matched by substring, same as every other code in this table (PostgREST decorates the raw message)');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2174,6 +2329,57 @@ console.log('\n[18] SEC F2 / reviewer N4 — AD-06 loud-fail: no failure ever re
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[18b] Security fix round (2026-09-25), FINDING 1 — the platform-admin/super-admin caches reset at every sign-out site…');
+{
+  const superRpc = (name) => {
+    if (name === 'is_platform_admin') return { data: true, error: null };
+    if (name === 'is_super_admin') return { data: true, error: null };
+    return { data: false, error: null };
+  };
+
+  // The negative half is the one that matters (per the coordinator's own
+  // framing) — a scripted is_super_admin -> true, cached, THEN a deliberate
+  // sign-out must leave BOTH caches false, or the next identity on this page
+  // session (a different member signing in without a full reload) inherits
+  // the previous account's admin/super-admin chrome.
+  resetAll({ rpc: superRpc });
+  wireRealAuthUI();
+  await auth.refreshPlatformAdminFlags();
+  assert(auth.getIsPlatformAdmin() === true && auth.getIsSuperAdmin() === true,
+    'fixture check — refreshPlatformAdminFlags() populates both caches from a scripted is_platform_admin/is_super_admin RPC pair');
+  await auth.signOut();
+  assert(auth.getIsPlatformAdmin() === false && auth.getIsSuperAdmin() === false,
+    'signOut() (SIGNED_OUT branch of _handleAuthStateChange()) resets BOTH admin caches — a stranger signing in next never inherits them');
+
+  // forceSignedOutSession() — SEC F1's interlock latch — is a SEPARATE exit
+  // path from signOut() and must reset the same two caches independently.
+  resetAll({ rpc: superRpc });
+  wireRealAuthUI();
+  await auth.refreshPlatformAdminFlags();
+  assert(auth.getIsSuperAdmin() === true, 'fixture check, second path');
+  auth.forceSignedOutSession();
+  assert(auth.getIsPlatformAdmin() === false && auth.getIsSuperAdmin() === false,
+    'forceSignedOutSession() also resets both admin caches, independently of signOut()');
+
+  // FINDING 2 — applyIdentityDeltaIfChanged() (js/app.js) is the one identity
+  // chokepoint every account handover/sign-out/sign-in passes through
+  // (RG-176's own framing). A structural check, the same "one function, not
+  // six independent checks" precedent this file already uses elsewhere
+  // (e.g. section [52]'s commReauthMode() gate scan): its body must call
+  // BOTH refreshControlCenterAndSettingsPage() (so the drawer/Settings page
+  // repaint with the NEW identity's displayName/initials/league/alma mater,
+  // never a stale A->B carry-over) AND refreshPlatformAdminFlags() (so an
+  // admin who signs in AFTER boot gets admin chrome without a reload).
+  const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const fnMatch2 = appSrc.match(/function applyIdentityDeltaIfChanged\([\s\S]*?\n\}/);
+  assert(!!fnMatch2, 'fixture check — applyIdentityDeltaIfChanged() was located');
+  assert(!!fnMatch2 && /refreshControlCenterAndSettingsPage\(\)/.test(fnMatch2[0]),
+    'FINDING 2 — applyIdentityDeltaIfChanged() calls refreshControlCenterAndSettingsPage() so the drawer/Settings page never shows a stale identity after a handover');
+  assert(!!fnMatch2 && /refreshPlatformAdminFlags\(\)/.test(fnMatch2[0]),
+    'applyIdentityDeltaIfChanged() also calls refreshPlatformAdminFlags(), not just boot\'s one-time mountControlCenterDrawer() call');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[19] SEC F5 — join/create input bounds + one error message per server code…');
 {
   resetAll();
@@ -2513,6 +2719,10 @@ console.log('\n[25] REVIEWER N-b — the vendored SDK gets a deadline, not an op
   assert(!!sdkBranch, 'fixture: boot()\'s SDK branch was located (an unfound branch would make the two rules below vacuous)');
   assert(/if \(!sdkReady && !hasValidSupabaseSession\(\)\) \{[\s\S]{0,200}?showAuthHoldGate\('sdk-unavailable'\)/.test(sdkBranch),
     "boot() USES the answer — with NO proven identity, a false resolution raises DI-180l's sdk-unavailable hold gate");
+  // Security N1 (third pass) — …and a RECOVERY session is not a proven
+  // identity for this branch either.
+  assert(/if \(!sdkReady && isRecoverySession\(\)\) \{[\s\S]{0,200}?showAuthHoldGate\('sdk-unavailable'\)/.test(sdkBranch),
+    'Security N1: with no SDK, a recovery session gets the same pre-identity sdk-unavailable hold (never the post-identity banner)');
   assert(/if \(!sdkReady\) showAuthUnavailableBanner\(\);/.test(sdkBranch),
     '…and with a saved session it is still the banner, never a re-block (DI-180l\'s scope boundary / A8)');
 }
@@ -3909,10 +4119,18 @@ console.log('\n[32] DI-180l — the fail-closed HOLD GATE (A1/A2/A6), on all thr
       registry.set(id, el); painted[id] = el;
     }
     const week = new FakeEl(); week.id = 'header-meta-week'; week.innerHTML = '<strong>Week 4</strong>'; registry.set('header-meta-week', week);
-    const pill = new FakeEl(); pill.id = 'league-pill'; pill.innerHTML = 'IRB Pick \'Ems'; pill.setAttribute('aria-label', 'Active league: IRB Pick \'Ems'); pill.hidden = false; registry.set('league-pill', pill);
-    const ident = new FakeEl(); ident.id = 'header-identity'; ident.innerHTML = 'Drew'; ident.hidden = false; registry.set('header-identity', ident);
-    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 6,
-      'fixture: the teardown list names all six page containers (a shorter list would leave a tab painted behind the gate)');
+    // SECURITY GATE S-6 (2026-09-25) — #league-pill/#header-identity were
+    // REMOVED from index.html entirely in the header declutter (pass
+    // 3a-bis, REVIEWER F4); this fixture no longer paints them, and the
+    // teardown's own dead branches targeting those ids were deleted to
+    // match (js/app.js's tearDownRenderedContentForHold()). The assertion
+    // below is the REPLACEMENT: the teardown must not throw when those ids
+    // are absent from the registry at all — the realistic case now.
+    // UPDATED — DI-308 (T-16, 2026-09-25, UX Revamp wiring pass 1) added
+    // #page-settings as a SEVENTH page container; DI-320/344/345 (wiring
+    // pass 2, same day) adds #page-admin as an EIGHTH.
+    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 8,
+      'fixture: the teardown list names all eight page containers, including page-settings and page-admin (a shorter list would leave a tab painted behind the gate)');
     assert(Object.values(painted).every(el => /Kihoon/.test(el.innerHTML)),
       'fixture: every page container really is painted with league data before the hold fires');
 
@@ -3922,9 +4140,8 @@ console.log('\n[32] DI-180l — the fail-closed HOLD GATE (A1/A2/A6), on all thr
     assert(leftover.length === 0,
       `A6 — every page container is EMPTIED before the gate paints (${leftover.length} still holding markup: ${JSON.stringify(leftover.map(([id]) => id))}) — no mirror-derived markup is left in the DOM, not merely covered by an overlay`);
     assert(week.innerHTML === '', 'A6 — …and the header week block (a week NAME is league data)');
-    assert(pill.hidden === true && pill.innerHTML === '' && pill.getAttribute('aria-label') === null,
-      'A6 — …and the league pill, through the same _clearLeaguePill() DI-184j hardened');
-    assert(ident.hidden === true && ident.innerHTML === '', 'A6 — …and the identity chip');
+    assert(!!document.getElementById('site-gate-overlay') || app.currentAuthHoldReason() === 'config-unreadable',
+      'A6 — …and the teardown completes and paints the hold gate even with no #league-pill/#header-identity in the DOM (S-6: the dead branches targeting those removed ids were deleted, not left to silently no-op forever)');
   }
 
   // ── A2 — THE 20s SILENT RE-CHECK, on a controllable clock ───────────────
@@ -4651,7 +4868,7 @@ console.log('\n[38] SECURITY 5 / REVIEWER F6 — the verification refresh is BOU
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[39] SECURITY S-1/S-2 — the hold gate STAYS a lock, and clearing it never leaves none…');
 {
-  /** Paint the six page containers + the header, and register the class
+  /** Paint the eight page containers + the header, and register the class
    *  selectors the teardown sweeps, exactly as a primed-mirror boot would. */
   function paintPage() {
     const painted = {};
@@ -7468,18 +7685,22 @@ console.log('\n[43] STEP 3b (DI-182/DI-183) — claim codes, linking, and member
   // … not just the player") both fell out of the brief's restatement, and §7 then
   // marked the clause covered. This is the clause, built and asserted.
   //
-  // DRIVEN THROUGH THE REAL READ, not through the render cache. renderCommPage()
-  // paints a LOADING placeholder into #comm-link-status-card and
-  // loadLeagueMembersCard() fills it in a tick later — so seeding
-  // _setMemberCardDataForTest() and reading #page-commissioner's own innerHTML
-  // measures the placeholder, which is what the first draft of this block did.
-  // Going through loadLeagueMembersCard() also exercises listLeagueMembers()'s
-  // new `link_disputed_at` column, which is the half that would break if the
-  // select list and the renderer ever disagreed.
+  // DRIVEN THROUGH THE REAL READ, not through the render cache.
+  // UX Revamp wiring pass 2 (2026-09-25) — Account Linking (the
+  // #comm-link-status-card this block reads) MOVED to the Admin panel
+  // (coordinator ruling); League Members (#comm-members-card) stayed on the
+  // Commissioner panel. Both cards are still filled by the SAME
+  // loadLeagueMembersCard() call, unscoped `document.getElementById()` —
+  // this fixture now paints BOTH page shells (renderCommPage() for
+  // #comm-members-card, renderAdminPage() for #comm-link-status-card, via
+  // the REAL composed-viewer chokepoint, `_setPlatformAdminFlagsForTest()`
+  // standing in for a resolved refreshPlatformAdminFlags() call) before the
+  // one loadLeagueMembersCard() read that exercises listLeagueMembers()'s
+  // `link_disputed_at` column.
   {
     const DISPUTED_AT = new Date(Date.now() - 2 * 3600e3).toISOString();   // two hours ago
-    /** Render the two commissioner cards from a given set of league_members rows
-     *  and return the link-status card's own innerHTML. */
+    /** Render the two now-separated cards from a given set of league_members
+     *  rows and return each card's own innerHTML. */
     const statusCardFor = async (rows, codes = []) => {
       const calls = [];
       resetAll(scriptClient({
@@ -7490,9 +7711,13 @@ console.log('\n[43] STEP 3b (DI-182/DI-183) — claim codes, linking, and member
       storeValidSession();
       auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'mDrew', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
       auth.setActiveLeagueId('L-A');
+      auth._setPlatformAdminFlagsForTest(true, false);
       const commEl = new FakeEl(); commEl.id = 'page-commissioner'; registry.set('page-commissioner', commEl);
+      const adminEl = new FakeEl(); adminEl.id = 'page-admin'; registry.set('page-admin', adminEl);
       app.renderCommPage();
+      app.renderAdminPage();
       await app.loadLeagueMembersCard();
+      auth._setPlatformAdminFlagsForTest(false, false);
       return {
         status: registry.get('comm-link-status-card')?.innerHTML || '',
         members: registry.get('comm-members-card')?.innerHTML || '',
@@ -7556,6 +7781,39 @@ console.log('\n[43] STEP 3b (DI-182/DI-183) — claim codes, linking, and member
         '[43g2] …with the dispute warning still on it — escaping must not swallow the row');
     }
     app._setMemberCardDataForTest({});
+
+    // REVIEWER BLOCK 5 (2026-09-25) — Account Linking is commissioner-scoped
+    // (CARD_OPERABILITY['account-linking'] = {scope:'commissioner'}), so it
+    // only ever renders for a viewer who commissions this league. The bug
+    // reproduces for THAT viewer the moment they reach the Admin panel
+    // DIRECTLY (e.g. via the control center) in a session where
+    // #page-commissioner has not been painted yet this load — only
+    // #comm-link-status-card exists, never #comm-members-card.
+    // loadLeagueMembersCard()'s OLD guard (`if (!leagueId || !cardEl)
+    // return;`) bailed on that missing element before ever touching
+    // `statusEl`, leaving Account Linking stuck reading "Loading members…"
+    // forever.
+    {
+      resetAll(scriptClient({
+        get_claim_codes: () => ({ data: [], error: null }),
+        get_member_contacts: () => ({ data: [], error: null }),
+        _from: (table) => (table === 'league_members' ? { data: [row('mKev', 'Kevin')], error: null } : { data: [], error: null }),
+      }, []));
+      storeValidSession();
+      auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'mDrew', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
+      auth.setActiveLeagueId('L-A');
+      auth._setPlatformAdminFlagsForTest(true, false);
+      const adminOnlyEl = new FakeEl(); adminOnlyEl.id = 'page-admin'; registry.set('page-admin', adminOnlyEl);
+      // Deliberately NO #page-commissioner in the registry this time —
+      // renderCommPage() has not run yet this session.
+      app.renderAdminPage();
+      await app.loadLeagueMembersCard();
+      auth._setPlatformAdminFlagsForTest(false, false);
+      const statusOnly = registry.get('comm-link-status-card')?.innerHTML || '';
+      assert(statusOnly.length > 0 && !/Loading members…/.test(statusOnly),
+        `[43g3] Admin panel reached before Commissioner panel is ever painted — the Account Linking card still fills in, never stuck on "Loading members…" (got ${JSON.stringify(statusOnly.slice(0, 160))})`);
+      app._setMemberCardDataForTest({});
+    }
   }
 
   // ── [43h] THE PRE-LINK BANNER'S SDK ROUTE (§5.8) ───────────────────────────
@@ -8256,6 +8514,15 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         // debounced write made just before the PWA is backgrounded is sent, not lost. Lifecycle only —
         // it moves no data through app.js; flush() itself holds (never drops) when not serving.
         'flush',
+        // RG-251 (2026-09-26): serverConfirmedWeekStatus() reads the week's SERVER-CONFIRMED status
+        // (the adapter's base row) so tickAutoTransition() and the status buttons never act from a
+        // leg the server refused. Read-only status metadata, like getStatus(); it moves no league
+        // data through app.js and writes nothing. [44k2] is the behavioural proof.
+        'getConfirmedWeekStatus',
+        // RG-255 / SEC-1 (2026-09-26): checkPickRevealDue() asks picksReadWhilePublic() before posting the
+        // permanent reveal — did a LANDED hydrate read the week while picks_select served every member's
+        // picks? Read-only metadata about the last read; no league data moves through app.js. [44k3].
+        'picksReadWhilePublic',
         // ── UN-237/238 (DI-260, 2026-09-23) — SCRIBE MEMORY. FOUR MEMBERS, AND THEY ARE NOT A
         //    BREACH OF §0.3 ITEM 1, which is a rule about LEAGUE DATA going through the seam.
         //    `scribe_memory` is deliberately NOT a seam key and never has been: its rows must be
@@ -8272,7 +8539,9 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
         //    adapter's own ROUTES/READ_TABLES do not contain.
         'scribeMemoryList', 'scribeMemoryUpsert', 'scribeMemoryDelete', 'scribeMemoryApply'],
       'auth.js': ['beginSwitch', 'switchLeague', 'dropMirror', 'hasDeviceSnapshot'],
-      'storage.js': ['isReady', 'getState', 'get', 'set'],
+      // RG-253 (2026-09-26): arePicksPublic() — the blind rule — reads the SERVER-CONFIRMED status, so a
+      // polluted mirror (a leg refused or still in flight) cannot reveal picks on one device. [44k3].
+      'storage.js': ['isReady', 'getState', 'get', 'set', 'getConfirmedWeekStatus'],
     };
     for (const [f, allowed] of Object.entries(ALLOWED)) {
       const used = [...new Set([...src[f].matchAll(/\bsb\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]))].sort();
@@ -8560,9 +8829,18 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     // something: the COMMISSIONER's device, same fixture, same call, DOES act.
     auth._setMembershipsForTest([{ leagueId: 'L-k', memberId: 'm-k', role: 'commissioner', displayName: 'Drew', leagueName: 'League K' }]);
     quietK(() => auth.setActiveLeagueId('L-k'));
+    // RG-253 (2026-09-26) — the tick now acts only from a week the SERVER has confirmed on this page
+    // (an ACTIVE adapter whose hydrated base holds the row; [44k3] proves the stand-down). A mirror
+    // seeded over an empty base is a week the server does not hold, so the commissioner control
+    // hydrates the same week as an OPEN row first, then seeds the mirror exactly as before.
+    wireAdapter({ client: fakeClient({ rows: { weeks: [{ extra: {}, league_id: 'L-k', id: 'wk_k', sport: 'cfb', season: '2026', week_number: 1, label: 'Week 1', status: 'open' }] } }), league: () => 'L-k' });
+    quietK(() => auth.registerSupabaseDataBackend(sb.probe));
+    await quiet(() => sb.hydrate('L-k', { epoch: auth.getIdentityEpoch() }));
     seedTickMirror();
     assert(storage.getSession().isAdmin === true,
       '[44k] fixture: the SAME device, now resolving as the commissioner');
+    assert(sb.getState() === 'ACTIVE' && sb.getConfirmedWeekStatus('wk_k') === 'open',
+      '[44k] fixture: …over a HYDRATED base that confirms the week at OPEN');
     quietK(() => { try { app.tickAutoTransition(); } catch (e) { threwK = e; } });
     assert(sb._dirtyKeysForTest().includes('cfbp_weeks'),
       `[44k] the commissioner's device DOES transition the week (dirty: ${JSON.stringify(sb._dirtyKeysForTest())}) — so the gate is about WHO, not a blanket disable, and the three source assertions above are not passing over a dead function`);
@@ -8571,6 +8849,554 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
 
     storage.setBackendMode(modeK);
     quietK(() => sb._resetForTest());
+  }
+
+
+  // ── (k2) RG-251 — ONE STATUS LEG PER TICK, AND NEVER FROM A STATUS THE SERVER NEVER CONFIRMED ──
+  //
+  // Game day 2026-09-26, live on v0.25.1. The commissioner's device first ticked after BOTH the
+  // effective lock time AND the first kickoff had passed (closed or asleep across the lock
+  // boundary — the §7.2 residual [44k]'s comment names). tickAutoTransition() evaluated
+  // OPEN->LOCKED, then evaluated LOCKED->LIVE against the SAME `next`, and wrote ONE saveWeek()
+  // with status 'live' from a server base of 'open'. The planner diffs base against mirror, gets
+  // open>live, which transition_week() does not allow, and refuses it CLIENT-SIDE ("Refusing to
+  // move ... from open to live: the server allows no such transition."). The mirror kept 'live',
+  // so the commissioner's panel showed a LIVE week the server never reached; the other five
+  // phones never got the reveal.
+  //
+  // Driven against the REAL tick, the REAL storage seam and the REAL adapter planner, from a
+  // HYDRATED base. [44k] seeds the mirror only, so its base has no week row and its planner would
+  // see an INSERT, never a status diff — this block needs the base to say 'open'. The clock is
+  // pinned relative to Date.now() (ledger §5: a date-dependent auto-transition fixture pins its
+  // own clock), so nothing here rots with the calendar.
+  {
+    const quietR = (fn) => { const l = console.log, w = console.warn, e = console.error, i = console.info;
+      console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+      try { return fn(); } finally { console.log = l; console.warn = w; console.error = e; console.info = i; } };
+    const scoringR = await import('./js/scoring.js');
+    const LG = 'L-r251';
+    const WK = 'wk_r251';
+    const T0 = Date.now();
+    const weekRow = (status, over = {}) => ({
+      extra: {}, league_id: LG, id: WK, sport: 'cfb', season: '2026', week_number: 4, label: 'Week 4',
+      status, data_source_mode: 'espn_live',
+      picks_open_at: new Date(T0 - 86400e3).toISOString(),
+      picks_lock_at: new Date(T0 - 3 * 3600e3).toISOString(),        // the lock time passed 3 h ago
+      auto_lock_offset_minutes: 30, auto_live_enabled: true, auto_finalize_enabled: true,
+      pending_finalization: false, locked_at: null, locked_alma_maters: null, revealed_at: null,
+      ...over,
+    });
+    const gameRow = (over = {}) => ({
+      extra: {}, league_id: LG, id: 'g_r251', week_id: WK, home_team: 'Home U', away_team: 'Away St',
+      status: 'live', kickoff: new Date(T0 - 2 * 3600e3).toISOString(),  // the FIRST KICKOFF passed 2 h ago
+      spread: -3, favorite: 'Home U', multiplier: 1, home_score: 7, away_score: 3,
+      locked_spread: null, ats_winner: null, ...over,
+    });
+    const hydrateAt = async (weekStatus, weekOver = {}, gameOver = {}) => {
+      wireAdapter({ client: fakeClient({ rows: { weeks: [weekRow(weekStatus, weekOver)], games: [gameRow(gameOver)] } }), league: () => LG });
+      quietR(() => auth.registerSupabaseDataBackend(sb.probe));
+      await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+      quietR(() => {
+        sb._seedMirrorForTest('cfbp_active_week', WK);
+        sb._seedMirrorForTest('cfbp_settings', { autoRefreshInterval: 60 });
+        sb._seedMirrorForTest('cfbp_lock_overrides', {});
+      });
+    };
+    const statusLegs = (plan) => plan.filter((o) => o.kind === 'finalize'
+      || (o.kind === 'rpc' && (o.name === 'lock_week' || o.name === 'transition_week')));
+    const legNames = (plan) => JSON.stringify(statusLegs(plan).map((o) => (o.kind === 'finalize' ? 'finalize_week' : `${o.name}${o.args && o.args.p_to ? `(${o.args.p_to})` : ''}`)));
+    const refusalCodes = (r) => JSON.stringify(r.refusals.map((e) => `${e.code}: ${e.message}`));
+    const tick = () => { let threw = null; quietR(() => { try { app.tickAutoTransition(); } catch (e) { threw = e; } }); return threw; };
+
+    resetAll();
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    auth._setMembershipsForTest([{ leagueId: LG, memberId: 'm-r', role: 'commissioner', displayName: 'Drew', leagueName: 'League R' }]);
+    quietR(() => auth.setActiveLeagueId(LG));
+    auth._setAccountUserIdForTest('u-r');
+    storeValidSession();
+    const modeR = storage.getBackendMode();
+    storage.setBackendMode('supabase');
+
+    // ── PHASE 1 — THE GAME-DAY STATE: server OPEN, lock time AND first kickoff both in the past ──
+    await hydrateAt('open');
+    const w1 = storage.getCurrentWeek();
+    assert(sb.getState() === 'ACTIVE' && storage.getSession().isAdmin === true,
+      '[44k2] fixture: the adapter is ACTIVE and this device is the COMMISSIONER (the one device §7.2 lets tick)');
+    assert(w1 && w1.weekId === WK && w1.status === 'open' && storage.getGames(WK).length === 1,
+      `[44k2] fixture: the HYDRATED week is OPEN with one game (got ${w1 && w1.status})`);
+    const lockAt1 = scoringR.computeEffectiveLockAt(w1, storage.getGames(WK));
+    const liveAt1 = scoringR.computeEffectiveLiveAt(w1, storage.getGames(WK));
+    assert(lockAt1 && lockAt1.getTime() < Date.now() && liveAt1 && liveAt1.getTime() < Date.now() && w1.autoLiveEnabled !== false,
+      '[44k2] fixture: BOTH the effective lock time and the first kickoff are in the past with auto-live on — the exact state the game-day tick met (not vacuous)');
+    assert(tick() === null, '[44k2] phase 1: the tick returns cleanly');
+    const r1 = quietR(() => sb.planFlush());
+    assert(!r1.refusals.some((e) => e.code === 'bad_transition'),
+      `[44k2] phase 1: the planner raises NO client-side bad_transition — the "Refusing to move ... from open to live" banner of 2026-09-26 (refusals: ${refusalCodes(r1)})`);
+    assert(statusLegs(r1.plan).length === 1 && statusLegs(r1.plan)[0].name === 'lock_week',
+      `[44k2] phase 1: EXACTLY ONE status leg reaches the planner, and it is lock_week (got ${legNames(r1.plan)})`);
+    assert(!r1.plan.some((o) => o.name === 'transition_week'),
+      '[44k2] phase 1: …and no transition_week at all — open>live is never asked for');
+    assert(storage.getCurrentWeek().status === 'locked',
+      `[44k2] phase 1: the commissioner's mirror shows LOCKED, the status the server is being asked for — not LIVE (got ${storage.getCurrentWeek().status})`);
+    assert(Array.isArray(storage.getCurrentWeek().lockedAlmaMaters),
+      '[44k2] phase 1: the lock leg still snapshots lockedAlmaMaters (F4 freeze unchanged)');
+    assert(storage.getGames(WK)[0].lockedSpread === -3,
+      '[44k2] phase 1: …and still freezes the spread at its current signed value (spread-freeze unchanged)');
+
+    // ── PHASE 2 — the lock LANDED (server LOCKED); every game is already FINAL ──
+    // The next tick takes the live leg ALONE. The old code would ALSO raise pendingFinalization in
+    // the same save (it read `next.status` after the live leg), putting a transition_week RPC and a
+    // weeks PATCH on the same row in one run — a composite ledger Testing Protocol 121 has never
+    // exercised. One leg per tick sequences it instead.
+    await hydrateAt('locked', { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [] },
+      { status: 'final', locked_spread: -3, home_score: 24, away_score: 10 });
+    assert(storage.getCurrentWeek().status === 'locked', '[44k2] phase 2 fixture: the hydrated week is LOCKED');
+    assert(tick() === null, '[44k2] phase 2: the tick returns cleanly');
+    const r2 = quietR(() => sb.planFlush());
+    assert(!r2.refusals.length, `[44k2] phase 2: nothing is refused (refusals: ${refusalCodes(r2)})`);
+    assert(statusLegs(r2.plan).length === 1 && statusLegs(r2.plan)[0].name === 'transition_week' && statusLegs(r2.plan)[0].args.p_to === 'live',
+      `[44k2] phase 2: exactly ONE status leg, transition_week(live), from the server's own LOCKED (got ${legNames(r2.plan)})`);
+    assert(storage.getCurrentWeek().pendingFinalization !== true,
+      '[44k2] phase 2: pendingFinalization is NOT raised in the same save as the live leg — the next tick raises it');
+
+    // ── PHASE 3 — the live leg LANDED; the next tick raises pendingFinalization, with no status leg ──
+    await hydrateAt('live', { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [], revealed_at: new Date(T0 - 3600e3).toISOString() },
+      { status: 'final', locked_spread: -3, home_score: 24, away_score: 10 });
+    assert(tick() === null, '[44k2] phase 3: the tick returns cleanly');
+    const r3 = quietR(() => sb.planFlush());
+    assert(storage.getCurrentWeek().pendingFinalization === true && storage.getCurrentWeek().status === 'live',
+      '[44k2] phase 3 (non-vacuity control): from a CONFIRMED live week the tick does raise pendingFinalization — the sequencing delays it one tick, it does not lose it');
+    assert(statusLegs(r3.plan).length === 0 && !r3.refusals.length,
+      `[44k2] phase 3: …with NO status leg and nothing refused (got ${legNames(r3.plan)}; refusals ${refusalCodes(r3)})`);
+
+    // ── PHASE 4 — THE POLLUTED MIRROR: server OPEN, mirror holding an UNCONFIRMED 'locked' ──
+    // A status leg sitting dirty (a manual Lock Week inside its debounce, or one the server
+    // refused). The tick must not act FROM that status: acting from 'locked' with the kickoff
+    // passed writes 'live' on top of it, and the planner sees open>live again — the same banner,
+    // reached through the other door.
+    await hydrateAt('open');
+    quietR(() => storage.saveWeek({ ...storage.getCurrentWeek(), status: 'locked' }));
+    assert(tick() === null, '[44k2] phase 4: the tick returns cleanly');
+    const r4 = quietR(() => sb.planFlush());
+    assert(storage.getCurrentWeek().status === 'locked',
+      `[44k2] phase 4: the tick does NOT advance a status the server never confirmed (mirror ${storage.getCurrentWeek().status}, server open)`);
+    assert(!r4.refusals.some((e) => e.code === 'bad_transition') && legNames(r4.plan) === '["lock_week"]',
+      `[44k2] phase 4: …so the pending leg is still exactly lock_week and nothing is refused (got ${legNames(r4.plan)}; refusals ${refusalCodes(r4)})`);
+
+    // ── PHASE 5 — THE PANEL OFFERS ONLY TRANSITIONS THE SERVER CAN MAKE, FROM THE STATUS IT HAS ──
+    const btnR = typeof app._renderWeekStatusButtonsForTest === 'function' ? app._renderWeekStatusButtonsForTest : null;
+    assert(!!btnR, '[44k2] phase 5: renderWeekStatusButtons() is reachable from the harness (_renderWeekStatusButtonsForTest)');
+    const offered = (week) => {
+      if (!btnR) return null;
+      return [...String(btnR(week)).matchAll(/data-to="([a-z]+)"/g)].map((m) => m[1]).join(',');
+    };
+    // (a) polluted: server OPEN, mirror 'live' (what v0.25.1 left on Drew's device)
+    await hydrateAt('open');
+    quietR(() => storage.saveWeek({ ...storage.getCurrentWeek(), status: 'live' }));
+    assert(offered(storage.getCurrentWeek()) === 'locked,draft',
+      `[44k2] phase 5a: with the server at OPEN and the mirror claiming LIVE, the panel offers OPEN's buttons (Lock Week, Back to Draft) — not LIVE's (got ${offered(storage.getCurrentWeek())})`);
+    // (b) clean supabase weeks: the three reversals transition_week() refuses are not offered
+    await hydrateAt('locked');
+    assert(offered(storage.getCurrentWeek()) === 'live,open',
+      `[44k2] phase 5b: LOCKED offers Go Live + Re-open Picks, and NOT Back to Draft (locked>draft is refused server-side) (got ${offered(storage.getCurrentWeek())})`);
+    await hydrateAt('live');
+    assert(offered(storage.getCurrentWeek()) === 'final',
+      `[44k2] phase 5b: LIVE offers Finalize only — NOT Re-open Picks (live>open is refused) and NOT Pause (live>locked: SEC-4, transition_week raises use_lock_week and lock_week requires open) (got ${offered(storage.getCurrentWeek())})`);
+    await hydrateAt('final');
+    assert(offered(storage.getCurrentWeek()) === 'live',
+      `[44k2] phase 5b: FINAL offers Reopen to Live only, NOT Reopen to Open (final>open is refused) (got ${offered(storage.getCurrentWeek())})`);
+    // (c) positive control: a device NOT in supabase data mode keeps the full correction table
+    auth.configureAuth({ authMode: 'pin', dataMode: 'local', authModeKnown: true });
+    const localLocked = { ...weekRow('locked'), weekId: WK, status: 'locked' };
+    assert(offered(localLocked) === 'live,open,draft',
+      `[44k2] phase 5c (control): outside supabase data mode the full table is unchanged — LOCKED still offers Back to Draft (got ${offered(localLocked)})`);
+
+    storage.setBackendMode(modeR);
+    quietR(() => sb._resetForTest());
+  }
+
+  // ── (k3) RG-253 / RG-255 — THE BLIND RULE, THE REVEAL POST AND THE TICK READ WHAT THE SERVER CONFIRMED ──
+  //
+  // Three consumers of week.status that dac4891 left on the MIRROR, each driven here through the
+  // real storage seam and the real adapter from a HYDRATED base:
+  //   B     arePicksPublic() — a mirror polluted by a refused/pending leg (LIVE over a server
+  //         OPEN) made picks public on that one device: chat pick chips, the matrix, the reveal.
+  //   SEC-1 checkPickRevealDue() — a Realtime weeks event makes a week public before any hydrate
+  //         has read the other members' picks (picks_select serves them only once the week is
+  //         live), and the reveal post is permanent: "no picks on file" for everyone else, for good.
+  //   F1    tickAutoTransition() — before the hydrate lands (warm snapshot boot) or for a week the
+  //         hydrated server does not hold, the tick must not act at all.
+  // Plus reviewer note 2: the wizard's Manage screen, driven from the polluted mirror.
+  {
+    const quietS = (fn) => { const l = console.log, w = console.warn, e = console.error, i = console.info;
+      console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+      try { return fn(); } finally { console.log = l; console.warn = w; console.error = e; console.info = i; } };
+    const LG = 'L-r253';
+    const WK = 'wk_r253';
+    const T0 = Date.now();
+    const d0 = new Date(T0);
+    const TODAY = `${d0.getFullYear()}-${String(d0.getMonth() + 1).padStart(2, '0')}-${String(d0.getDate()).padStart(2, '0')}`;
+    const weekRow = (status, over = {}) => ({
+      extra: {}, league_id: LG, id: WK, sport: 'cfb', season: '2026', week_number: 5, label: 'Week 5',
+      status, data_source_mode: 'espn_live', start_date: TODAY, end_date: TODAY,
+      picks_open_at: new Date(T0 - 86400e3).toISOString(),
+      picks_lock_at: new Date(T0 - 3 * 3600e3).toISOString(),
+      auto_lock_offset_minutes: 30, auto_live_enabled: true, auto_finalize_enabled: true,
+      pending_finalization: false, locked_at: null, locked_alma_maters: null, revealed_at: null,
+      ...over,
+    });
+    const gameRow = () => ({
+      extra: {}, league_id: LG, id: 'g_r253', week_id: WK, home_team: 'Home U', away_team: 'Away St',
+      status: 'live', kickoff: new Date(T0 - 2 * 3600e3).toISOString(),
+      spread: -3, favorite: 'Home U', multiplier: 1, home_score: 7, away_score: 3, locked_spread: -3, ats_winner: null,
+    });
+    const member = (id, role, name) => ({ extra: {}, league_id: LG, id, user_id: id === 'm-a' ? 'u-s' : null, role,
+      display_name: name, initials: name.slice(0, 2).toUpperCase(), alma_mater: '', active: true,
+      notify_prefs: {}, preferences: {} });
+    const pickRow = (mid, team) => ({ extra: {}, league_id: LG, id: `pk_${mid}`, week_id: WK, game_id: 'g_r253',
+      member_id: mid, selected_team: team, selected_at: new Date(T0 - 5 * 3600e3).toISOString(),
+      updated_at: new Date(T0 - 5 * 3600e3).toISOString(), locked: false, result: 'pending' });
+    const MINE = pickRow('m-a', 'Home U');
+    const THEIRS = pickRow('m-b', 'Away St');
+    const hydrateWith = async (weekStatus, picks, weekOver = {}) => {
+      wireAdapter({ client: fakeClient({ rows: {
+        league_members: [member('m-a', 'commissioner', 'Drew'), member('m-b', 'player', 'Kevin')],
+        weeks: [weekRow(weekStatus, weekOver)], games: [gameRow()], picks,
+      } }), league: () => LG });
+      quietS(() => auth.registerSupabaseDataBackend(sb.probe));
+      await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+      quietS(() => {
+        sb._seedMirrorForTest('cfbp_active_week', WK);
+        sb._seedMirrorForTest('cfbp_settings', { autoRefreshInterval: 60 });
+        sb._seedMirrorForTest('cfbp_lock_overrides', {});
+      });
+    };
+    const REVEAL_KEY = 'cfbp_reveal_emitted';
+    const revealed = () => { try { return JSON.parse(localStorage.getItem(REVEAL_KEY) || '[]').includes(WK); } catch { return false; } };
+
+    resetAll();
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    auth._setMembershipsForTest([{ leagueId: LG, memberId: 'm-a', role: 'commissioner', displayName: 'Drew', leagueName: 'League S' }]);
+    quietS(() => auth.setActiveLeagueId(LG));
+    auth._setAccountUserIdForTest('u-s');
+    storeValidSession();
+    const modeS = storage.getBackendMode();
+    storage.setBackendMode('supabase');
+
+    // ── B — THE BLIND RULE READS THE SERVER-CONFIRMED STATUS ────────────────────────────────────
+    await hydrateWith('open', [MINE]);
+    assert(sb.getState() === 'ACTIVE' && storage.getCurrentWeek()?.weekId === WK && storage.getCurrentWeek().status === 'open',
+      '[44k3] B fixture: hydrated, ACTIVE, the week is OPEN on the server and on this device');
+    assert(storage.arePicksPublic(storage.getCurrentWeek()) === false, '[44k3] B fixture: an OPEN week is blind (unchanged)');
+    quietS(() => storage.saveWeek({ ...storage.getCurrentWeek(), status: 'live' }));   // the RG-251 pollution
+    assert(storage.getCurrentWeek().status === 'live' && sb.getConfirmedWeekStatus(WK) === 'open',
+      '[44k3] B fixture: the mirror now claims LIVE over a server that is still OPEN (the state v0.25.1 left on Drew\'s device)');
+    assert(storage.arePicksPublic(storage.getCurrentWeek()) === false,
+      '[44k3] B: arePicksPublic() is FALSE on the polluted mirror — the server has not revealed, so no surface on this device may');
+    await hydrateWith('live', [MINE, THEIRS], { revealed_at: new Date(T0 - 60e3).toISOString() });
+    assert(storage.arePicksPublic(storage.getCurrentWeek()) === true,
+      '[44k3] B control: a week the SERVER confirms LIVE is public, exactly as before');
+
+    // ── SEC-1 — THE REVEAL POST WAITS FOR A READ THAT COULD SEE THE PICKS ────────────────────────
+    await hydrateWith('locked', [MINE], { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [] });
+    localStorage.removeItem(REVEAL_KEY);
+    assert(storage.getPicks(WK).length === 1, '[44k3] SEC-1 fixture: LOCKED — RLS served this device only its own pick');
+    quietS(() => sb._foldRealtimeRowForTest('weeks', { eventType: 'UPDATE',
+      new: weekRow('live', { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [], revealed_at: new Date(T0).toISOString() }) }));
+    assert(sb.getConfirmedWeekStatus(WK) === 'live' && storage.arePicksPublic(storage.getCurrentWeek()) === true,
+      '[44k3] SEC-1 fixture: the Realtime LIVE event made the week public on this device (the server really did reveal)');
+    assert(storage.getPicks(WK).length === 1, '[44k3] SEC-1 fixture: …and the mirror STILL holds only this device\'s own pick');
+    quietS(() => { try { app.checkPickRevealDue(); } catch { /* the ledger is the observable */ } });
+    assert(!revealed(),
+      '[44k3] SEC-1: NO reveal is posted from a mirror no hydrate has read as public — it would say "no picks on file" for everyone else, permanently');
+    await hydrateWith('live', [MINE, THEIRS], { revealed_at: new Date(T0).toISOString() });
+    quietS(() => { try { app.checkPickRevealDue(); } catch { /* the ledger is the observable */ } });
+    assert(!revealed(), '[44k3] SEC-1 (reviewer F3): the FIRST hydrate that sees the week live is not enough — it may have read picks before the reveal committed');
+    await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));   // the post-join probe / the Realtime re-read
+    assert(storage.getPicks(WK).length === 2, '[44k3] SEC-1 fixture: the hydrate at LIVE returned the other member\'s pick');
+    quietS(() => { try { app.checkPickRevealDue(); } catch { /* the ledger is the observable */ } });
+    assert(revealed(), '[44k3] SEC-1 control: once a hydrate has read the week as public, the reveal IS posted (the gate delays it, never loses it)');
+    // Seam finding (security, f16d87c) — the reveal ledger goes through the storage seam. A SOURCE
+    // scan of checkPickRevealDue()'s own body: no `localStorage` token outside comments, and the
+    // seam accessors are what it calls. (The ledger KEY is unchanged, so the behavioural assertions
+    // above read the same entry.)
+    {
+      const srcS = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const at = srcS.indexOf('export function checkPickRevealDue()');
+      const body = at < 0 ? '' : srcS.slice(at, srcS.indexOf('\n}\n', at));
+      const code = body.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+      assert(!!body && !/localStorage/.test(code),
+        '[44k3] seam: checkPickRevealDue() never reads or writes localStorage directly (the ledger goes through load()/save())');
+      assert(/getRevealEmitted\(\)/.test(code) && /setRevealEmitted\(/.test(code),
+        '[44k3] seam: …it uses the storage seam accessors getRevealEmitted()/setRevealEmitted()');
+    }
+
+    // ── F1 — THE TICK STANDS DOWN UNTIL THE SERVER HAS CONFIRMED THE WEEK ON THIS PAGE ───────────
+    const tickS = () => { let threw = null; quietS(() => { try { app.tickAutoTransition(); } catch (e) { threw = e; } }); return threw; };
+    await hydrateWith('open', [MINE]);
+    quietS(() => sb._setStateForTest('ACTIVE-STALE', 'warm snapshot boot, hydrate in flight'));
+    assert(tickS() === null && !sb._dirtyKeysForTest().includes('cfbp_weeks') && storage.getCurrentWeek().status === 'open',
+      `[44k3] F1: with the hydrate still in flight (ACTIVE-STALE) the tick takes NO leg, though the lock time and kickoff have both passed (dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+    await hydrateWith('open', [MINE]);
+    quietS(() => sb._seedMirrorForTest('cfbp_weeks', [...storage.getWeeks().map((w) => ({ ...w, weekId: 'wk_local_only' }))]));
+    quietS(() => sb._seedMirrorForTest('cfbp_games', [...storage.getGames(WK).map((g) => ({ ...g, gameId: 'g_local_only', weekId: 'wk_local_only' }))]));
+    quietS(() => sb._seedMirrorForTest('cfbp_active_week', 'wk_local_only'));
+    assert(storage.getCurrentWeek()?.weekId === 'wk_local_only' && storage.getGames('wk_local_only').length === 1 && storage.getCurrentWeek().status === 'open',
+      '[44k3] F1 fixture: the current week is an OPEN, due-to-lock week WITH a game — but only in the mirror (not vacuous)');
+    assert(tickS() === null && !sb._dirtyKeysForTest().includes('cfbp_weeks'),
+      '[44k3] F1: for a week the hydrated server does not hold, the tick takes NO leg (confirmed status null)');
+    await hydrateWith('open', [MINE]);
+    assert(tickS() === null && sb._dirtyKeysForTest().includes('cfbp_weeks') && storage.getCurrentWeek().status === 'locked',
+      '[44k3] F1 control: once the server has confirmed the week (ACTIVE, base row present) the tick DOES take the lock leg');
+
+    // ── reviewer note 2 — THE WIZARD'S MANAGE SCREEN FROM A POLLUTED MIRROR (phase-5a twin) ──────
+    const mgr = typeof app._renderWeekWizardManageHTMLForTest === 'function' ? app._renderWeekWizardManageHTMLForTest : null;
+    assert(!!mgr, '[44k3] the wizard Manage screen is reachable from the harness (_renderWeekWizardManageHTMLForTest)');
+    if (mgr) {
+      await hydrateWith('open', [MINE]);
+      quietS(() => storage.saveWeek({ ...storage.getCurrentWeek(), status: 'live' }));
+      let html = '';
+      quietS(() => { try { html = String(mgr(storage.getCurrentWeek(), storage.getGames(WK))); } catch (e) { html = `THREW ${e && e.message}`; } });
+      const tos = [...html.matchAll(/week-wizard-status-btn" data-to="([a-z]+)"/g)].map((m) => m[1]).join(',');
+      assert(tos === 'locked,draft',
+        `[44k3] reviewer 2: with the server at OPEN and the mirror claiming LIVE, the wizard Manage screen offers OPEN's legs (Lock Week, Back to Draft) — not LIVE's (got ${tos || html.slice(0, 120)})`);
+    }
+
+    // ── (k4) RG-256 — A COMM/ADMIN SAVE SPREADS THE WEEK AS IT IS NOW, NOT AS IT WAS PAINTED ──────
+    // bindCommEventListeners(week, …) closes over the week at RENDER time. The commissioner leaves
+    // the Admin (or Commissioner) tab painted while the week is OPEN; the week then locks (the tick —
+    // which repaints only the Commissioner tab — or another device; here the server's LOCKED arrives
+    // as a Realtime event, Realtime being the only thing that moves this device's copy); he taps a
+    // save. The old handlers spread the stale `status:'open'` back into saveWeek(), the planner saw
+    // locked->open — an ALLOWED leg — and reopened picks with no banner. Driven through the REAL
+    // handlers bound by the REAL bindCommEventListeners(), clicked on the fake DOM.
+    {
+      const lockedRow = weekRow('locked', { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [] });
+      const statusLegs = (plan) => plan.filter((o) => o.kind === 'finalize'
+        || (o.kind === 'rpc' && (o.name === 'lock_week' || o.name === 'transition_week')));
+      const input = (id, value) => { const el = new FakeEl('input'); el.id = id; el.value = value; registry.set(id, el); return el; };
+      const button = (id) => { const el = new FakeEl('button'); el.id = id; registry.set(id, el); return el; };
+      const drive = async (label, btnId, inputs, changedField) => {
+        await hydrateWith('open', [MINE]);
+        const painted = storage.getCurrentWeek();                     // the render-time week: OPEN
+        const btn = button(btnId);
+        Object.entries(inputs).forEach(([id, v]) => input(id, v));
+        quietS(() => app.bindCommEventListeners(painted, storage.getGames(WK), [], [], storage.getSettings(), [painted], []));
+        quietS(() => sb._foldRealtimeRowForTest('weeks', { eventType: 'UPDATE', new: lockedRow }));
+        assert(sb.getConfirmedWeekStatus(WK) === 'locked' && storage.getCurrentWeek().status === 'locked' && painted.status === 'open',
+          `[44k4] ${label} fixture: the week LOCKED under a tab painted while it was OPEN`);
+        let threw = null;
+        quietS(() => { try { btn.click(); } catch (e) { threw = e; } });
+        const r = quietS(() => sb.planFlush());
+        const weeksPatch = r.plan.filter((o) => o.key === 'cfbp_weeks' && o.op === 'patch' && o.rowId === WK);
+        assert(threw === null && storage.getCurrentWeek().status === 'locked',
+          `[44k4] ${label}: the save keeps the week LOCKED on this device (got ${storage.getCurrentWeek().status}${threw ? `; threw ${threw.message}` : ''})`);
+        assert(!statusLegs(r.plan).length && !r.refusals.length,
+          `[44k4] ${label}: …and plans NO status leg — no transition_week(open) reopening picks, nothing refused (legs ${JSON.stringify(statusLegs(r.plan).map((o) => `${o.name}(${o.args && o.args.p_to})`))}, refusals ${JSON.stringify(r.refusals.map((e) => e.code))})`);
+        assert(weeksPatch.length === 1 && changedField in weeksPatch[0].changed && !('status' in weeksPatch[0].changed),
+          `[44k4] ${label}: …and the weeks patch carries the edited field and never the status (${JSON.stringify(weeksPatch.map((o) => Object.keys(o.changed)))})`);
+      };
+      await drive('Save Blurb', 'save-blurb-btn', { 'blurb-input': 'Rivalry week.' }, 'blurb');
+      await drive('Save Tiebreaker', 'save-tb-btn', { 'tb-question': 'Total points in the late game?', 'tb-actual': '' }, 'tiebreaker_question');
+      await drive('Save Week Settings', 'save-week-settings-btn', { 'week-round-label': 'Rivalry' }, 'round_label');
+      await drive('Admin Save Data Source Mode', 'admin-save-data-source-mode-btn', { 'admin-data-source-mode': 'espn' }, 'data_source_mode');
+      // Dismiss-pending: the painted week carried pendingFinalization; the server's copy still does.
+      {
+        await hydrateWith('open', [MINE]);
+        const painted = { ...storage.getCurrentWeek(), pendingFinalization: true };
+        const btn = button('dismiss-pending-btn');
+        quietS(() => app.bindCommEventListeners(painted, storage.getGames(WK), [], [], storage.getSettings(), [painted], []));
+        quietS(() => sb._foldRealtimeRowForTest('weeks', { eventType: 'UPDATE', new: { ...lockedRow, pending_finalization: true } }));
+        quietS(() => { try { btn.click(); } catch { /* read below */ } });
+        const r = quietS(() => sb.planFlush());
+        assert(storage.getCurrentWeek().status === 'locked' && !statusLegs(r.plan).length && !r.refusals.length,
+          `[44k4] Dismiss pending finalization: keeps the week LOCKED and plans no status leg (status ${storage.getCurrentWeek().status}, legs ${JSON.stringify(statusLegs(r.plan).map((o) => o.name))})`);
+      }
+
+      // ── SECURITY F1 on f16d87c — THE AUTO-REFRESH TICK ACTS ONLY FROM THE BASE ITS OWN RE-HYDRATE
+      //    RETURNS. The base is LOCKED with the first kickoff past (the tick would take the live leg);
+      //    the server has meanwhile been FINALIZED by another device. The tick's round re-hydrates
+      //    (Realtime is not live here) — and used to call tickAutoTransition() in the same breath,
+      //    from the stale LOCKED base, queueing a `live` that a flush racing the hydrate would send
+      //    as transition_week(live) to a FINAL week (final->live is allowed server-side).
+      {
+        // A client whose reads can be HELD, so "while the round's re-hydrate is in flight" is a state
+        // the test controls rather than a microtask it races. The ESPN fetch is counted, not served.
+        const heldClient = (rows) => {
+          const inner = fakeClient({ rows });
+          let release = null;
+          const gate = { held: false, wait: null };
+          gate.hold = () => { gate.held = true; gate.wait = new Promise((r) => { release = r; }); };
+          gate.release = () => { gate.held = false; if (release) release(); };
+          const after = (p) => (gate.held ? gate.wait.then(() => p) : p);
+          const client = {
+            from: (t) => {
+              const b = inner.from(t);
+              return { select() { return this; }, eq() { return this; },
+                then(res, rej) { return after(Promise.resolve()).then(() => b.then(res, rej)); } };
+            },
+            rpc: (n, a) => after(Promise.resolve()).then(() => inner.rpc(n, a)),
+          };
+          return { client, gate };
+        };
+        const realFetchT = globalThis.fetch;
+        let espnCalls = 0;
+        globalThis.fetch = async (url) => { if (/espn/i.test(String(url))) espnCalls++; throw new Error('network disabled in authtest'); };
+        const settle = () => quiet(() => new Promise((r) => setTimeout(r, 20)));
+        const espnGame = () => ({ ...gameRow(), espn_event_id: '401500001' });   // refreshable: an ESPN-linked game
+        const setup = async (rowsT) => {
+          const { client, gate } = heldClient(rowsT);
+          wireAdapter({ client, league: () => LG });
+          quietS(() => auth.registerSupabaseDataBackend(sb.probe));
+          await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+          quietS(() => {
+            sb._seedMirrorForTest('cfbp_active_week', WK);
+            sb._seedMirrorForTest('cfbp_settings', { autoRefreshInterval: 60 });
+            sb._seedMirrorForTest('cfbp_lock_overrides', {});
+          });
+          return gate;
+        };
+        try {
+          // (a) the security F1 property — stale LOCKED base, server FINAL.
+          const rowsT = {
+            league_members: [member('m-a', 'commissioner', 'Drew'), member('m-b', 'player', 'Kevin')],
+            weeks: [lockedRow], games: [espnGame()], picks: [MINE, THEIRS],
+          };
+          const gate = await setup(rowsT);
+          assert(sb.getState() === 'ACTIVE' && storage.getCurrentWeek()?.status === 'locked' && sb.getStatus().realtime !== 'live',
+            '[44k4] tick fixture: ACTIVE, the week LOCKED with the first kickoff past, Realtime not live (so the tick re-hydrates)');
+          rowsT.weeks = [weekRow('final', { locked_at: new Date(T0 - 3 * 3600e3).toISOString(), locked_alma_maters: [], revealed_at: new Date(T0 - 3600e3).toISOString() })];
+          rowsT.games = [{ ...espnGame(), status: 'final' }];
+          gate.hold();                                                   // the round's re-hydrate will hang
+          espnCalls = 0;
+          let round = null;
+          quietS(() => { round = app.runAutoRefreshTick(); });
+          // Bounded: a round that WAITED for the held hydrate (the pre-fix shape) must read as red, not hang.
+          await quiet(async () => { try { await Promise.race([round, new Promise((r) => setTimeout(r, 200))]); } catch { /* read the state */ } });
+          assert(!sb._dirtyKeysForTest().includes('cfbp_weeks') && storage.getCurrentWeek().status === 'locked',
+            `[44k4] tick: NO status leg is queued from the stale LOCKED base while the round's re-hydrate is in flight (dirty ${JSON.stringify(sb._dirtyKeysForTest())})`);
+          assert(espnCalls > 0,
+            `[44k4] tick (reviewer re-gate on 6178906): the ROUND finished and the ESPN score refresh RAN while that hydrate was still pending — scores are never frozen behind it (ESPN fetches ${espnCalls})`);
+          gate.release();
+          await settle();
+          await quiet(async () => { try { await round; } catch { /* settled */ } });
+          assert(sb.getConfirmedWeekStatus(WK) === 'final' && storage.getCurrentWeek().status === 'final',
+            `[44k4] tick: …the re-hydrate landed and the tick then saw the server's FINAL (confirmed ${sb.getConfirmedWeekStatus(WK)}, mirror ${storage.getCurrentWeek().status}) — not vacuous`);
+          const rT = quietS(() => sb.planFlush());
+          assert(!statusLegs(rT.plan).length && !rT.refusals.length,
+            `[44k4] tick: …and nothing plans transition_week(live) against a finalized week (legs ${JSON.stringify(statusLegs(rT.plan).map((o) => `${o.name}(${o.args && o.args.p_to})`))})`);
+          // (b) non-vacuity — the status tick really does run off the hydrate: server still OPEN, lock
+          //     time past. Nothing while held; the lock leg once it lands.
+          const rowsO = {
+            league_members: [member('m-a', 'commissioner', 'Drew'), member('m-b', 'player', 'Kevin')],
+            weeks: [weekRow('open')], games: [espnGame()], picks: [MINE],
+          };
+          const gateO = await setup(rowsO);
+          gateO.hold();
+          let roundO = null;
+          quietS(() => { roundO = app.runAutoRefreshTick(); });
+          await quiet(async () => { try { await Promise.race([roundO, new Promise((r) => setTimeout(r, 200))]); } catch { /* read the state */ } });
+          assert(!sb._dirtyKeysForTest().includes('cfbp_weeks'), '[44k4] tick control: while the hydrate is held the status tick has not run');
+          gateO.release();
+          await settle();
+          await quiet(async () => { try { await roundO; } catch { /* settled */ } });
+          assert(sb._dirtyKeysForTest().includes('cfbp_weeks') && storage.getCurrentWeek().status === 'locked',
+            `[44k4] tick control: …and once it lands the status tick DOES run from the fresh base and takes the lock leg (status ${storage.getCurrentWeek().status})`);
+          // (c) security N2 — overlapping rounds do not stack.
+          const rowsN = { ...rowsO, weeks: [weekRow('open')] };
+          const gateN = await setup(rowsN);
+          let espnHold = null;
+          espnCalls = 0;
+          // Every fetch of this round hangs until released; after release every fetch fails at once, so a
+          // proxy/retry attempt inside the first round cannot hang the suite.
+          let released = false; const waiting = [];
+          espnHold = () => { released = true; waiting.splice(0).forEach((rej) => rej(new Error('late'))); };
+          globalThis.fetch = (url) => { if (/espn/i.test(String(url))) espnCalls++; if (released) return Promise.reject(new Error('x')); return new Promise((_, rej) => { waiting.push(rej); }); };
+          void gateN;
+          let r1 = null; let r2 = null;
+          quietS(() => { r1 = app.runAutoRefreshTick(); });
+          await settle();
+          quietS(() => { r2 = app.runAutoRefreshTick(); });
+          await quiet(async () => { try { await Promise.race([r2, new Promise((r) => setTimeout(r, 200))]); } catch { /* read */ } });
+          assert(espnCalls === 1, `[44k4] tick (security N2): a second round while the first is still fetching is SKIPPED, not stacked (ESPN fetches ${espnCalls})`);
+          if (espnHold) espnHold();
+          await quiet(async () => { try { await r1; } catch { /* read */ } });
+          await settle();
+        } finally {
+          globalThis.fetch = realFetchT;
+        }
+      }
+    }
+
+
+
+    // ── (k5) Reviewer re-gate on 6178906 — THE REFUSAL BANNER'S COPY, FROM THE ADAPTER'S REAL EMIT ──
+    // B-05's feedback-specific copy shipped dead because its test hand-built a `detail` the adapter
+    // never sent. So this one drives a REAL flush through the REAL adapter against a server that
+    // refuses every write (42501), with the REAL onSupabaseDataStatus() subscribed, and reads the
+    // banner the fake DOM ends up holding.
+    {
+      const refusingClient = (rows) => {
+        const inner = fakeClient({ rows });
+        const refused = () => Promise.resolve({ data: null, status: 403,
+          error: { code: '42501', message: 'new row violates row-level security policy' } });
+        return {
+          from: (t) => {
+            const b = inner.from(t);
+            const chain = { eq() { return chain; }, select() { return refused(); } };
+            return {
+              select() { return this; }, eq() { return this; }, then(res, rej) { return b.then(res, rej); },
+              insert() { return chain; }, update() { return chain; }, delete() { return chain; },
+            };
+          },
+          rpc: (n, a) => inner.rpc(n, a),
+        };
+      };
+      const bannerHtml = () => { const el = registry.get('backend-error-banner'); return el ? String(el.innerHTML) : ''; };
+      const newFeedback = () => ({ id: `fb_k5_${Math.random().toString(36).slice(2)}`, memberId: 'm1', name: 'Drew',
+        kind: 'bug', weekId: WK, body: 'the chip is tiny', submittedAt: new Date(T0).toISOString(),
+        appVersion: 'test', siteUrl: 'https://irbfootball.com', status: 'new', excludedFromExport: false });
+      const newPick = () => ({ pickId: 'pk_k5', weekId: WK, gameId: 'g_r253', playerId: 'm1', selectedTeam: 'Away St',
+        selectedAt: new Date(T0).toISOString(), updatedAt: new Date(T0).toISOString(), locked: false, result: 'pending' });
+      const run = async (writes) => {
+        wireAdapter({ client: refusingClient({
+          league_members: [member('m-a', 'commissioner', 'Drew'), member('m-b', 'player', 'Kevin')],
+          weeks: [weekRow('open')], games: [gameRow()], picks: [],
+        }), league: () => LG });
+        // wireAdapter()'s adapter session is { isAdmin: true, playerId: 'm1' } — the pick is m1's own row.
+        quietS(() => auth.registerSupabaseDataBackend(sb.probe));
+        await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+        const off = sb.onStatus(app._onSupabaseDataStatusForTest);
+        registry.delete('backend-error-banner');
+        const details = [];
+        const offD = sb.onStatus((s, d) => { if (s === 'refused') details.push(d); });
+        try {
+          quietS(() => writes());
+          await quiet(() => sb.flush());
+        } finally { off(); offD(); }
+        return details;
+      };
+      // (a) feedback AND a pick refused in ONE run — feedback first, so it is the emit's `key`.
+      const d2 = await run(() => {
+        sb.set('cfbp_feedback', [...(sb.get('cfbp_feedback') || []), newFeedback()]);
+        sb.set('cfbp_picks', [...(sb.get('cfbp_picks') || []), newPick()]);
+      });
+      const last2 = d2[d2.length - 1] || {};
+      assert(Array.isArray(last2.keys) && last2.keys.includes('cfbp_feedback') && last2.keys.includes('cfbp_picks') && last2.key === 'cfbp_feedback',
+        `[44k5] fixture: ONE real flush refused BOTH keys, and the emit's key is the first, cfbp_feedback (key ${last2.key}, keys ${JSON.stringify(last2.keys)})`);
+      assert(!/Nothing else on this device is affected/.test(bannerHtml()) && /Picks made on THIS device/.test(bannerHtml()),
+        `[44k5] with a pick refused alongside the feedback, the banner does NOT say "Nothing else on this device is affected" — it keeps the picks warning (${bannerHtml().replace(/\s+/g, ' ').slice(0, 200)})`);
+      // (b) control — feedback alone: the feedback-specific copy (B-05) now really fires from a real emit.
+      const d1 = await run(() => { sb.set('cfbp_feedback', [...(sb.get('cfbp_feedback') || []), newFeedback()]); });
+      const last1 = d1[d1.length - 1] || {};
+      assert(JSON.stringify(last1.keys) === '["cfbp_feedback"]' && /Your feedback was not saved\./.test(bannerHtml()),
+        `[44k5] control: a feedback refusal ALONE, from the real emit, gets the feedback-specific copy (keys ${JSON.stringify(last1.keys)}; ${bannerHtml().replace(/\s+/g, ' ').slice(0, 160)})`);
+    }
+
+    storage.setBackendMode(modeS);
+    quietS(() => sb._resetForTest());
   }
 
 
@@ -9636,18 +10462,18 @@ console.log('\n[49] Step 6 Phase 4 (trainer) — the LOW-FREQUENCY staleness rul
     return i === -1 ? '' : html.slice(i, i + 320);
   };
   // PAST THE GRACE WINDOW — 8 hours after the slot, 2 past the 6-hour grace.
-  const trainerBlock = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 8 * 3600000 }));
+  const trainerBlock = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 8 * 3600000, pilot: true }));
   assert(/expected weekly \(Mon 09:00 America\/Chicago\)\. This job may be dead\./.test(trainerBlock),
     `[49] (j) a trainer switch flipped a month ago with no run -> escalates with the WEEKLY cadence label, not a minutes-based one (got ${JSON.stringify(trainerBlock)})`);
   // INSIDE THE GRACE WINDOW — 3 hours after the same slot. The informative
   // sentence, NOT the alarm. Without this case the assertion above would pass
   // just as happily against a card that escalated unconditionally.
-  const trainerBlockGrace = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 3 * 3600000 }));
+  const trainerBlockGrace = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: MON_9AM_CHICAGO_UTC + 3 * 3600000, pilot: true }));
   assert(/has not run yet\./.test(trainerBlockGrace) && !/may be dead/.test(trainerBlockGrace),
     `[49] (j2) …and three hours after the slot — inside the 6-hour grace — the SAME fixture reads "has not run yet", not "may be dead" (got ${JSON.stringify(trainerBlockGrace)})`);
   // AND THE INJECTED CLOCK IS REALLY THE ONE BEING USED: an instant BEFORE the
   // flip-time's own week cannot be overdue, whatever the real wall clock says.
-  const trainerBlockEarly = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: flipped49 + 3600000 }));
+  const trainerBlockEarly = blockAt(app.renderBackgroundJobsAdminSectionHTML({ now: flipped49 + 3600000, pilot: true }));
   assert(!/may be dead/.test(trainerBlockEarly),
     `[49] (j3) …and an instant one hour after the flip is never overdue — proof the card read the injected clock rather than Date.now() (got ${JSON.stringify(trainerBlockEarly)})`);
 
@@ -9958,6 +10784,1888 @@ console.log('\n[51] SECURITY A-3 — "Logout Commissioner" is dead in supabase m
   auth._resetAuthForTest();
   auth.configureAuth({ authMode: 'supabase', dataMode: 'sheets', authModeKnown: true,
     supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+}
+
+console.log('\n[53] SECURITY GATE FINDING 5 (2026-09-25) — RPC-shape coverage for the thin');
+console.log('     auth.js wrappers UX Revamp wiring pass 3a added (previously zero coverage)…');
+{
+  // Local copy of [43]'s own `scriptClient` shape — that one is a closure
+  // inside [43]'s block and not reachable here. `resetAll(overrides)` ->
+  // `installFakeSupabase(overrides)` -> `makeFakeClient(overrides)`, whose
+  // `rpc(name, params)` calls `overrides.rpc(name, params)` directly, so
+  // this object's `rpc`/`from` fields ARE the fake client's own seam.
+  const rpcClient = (script) => ({
+    rpc: (name, params) => {
+      const fn = script[name];
+      return Promise.resolve(fn ? fn(name, params) : { data: null, error: null });
+    },
+    from: (table, b) => (script._from ? script._from(table, b) : { data: [], error: null }),
+  });
+
+  // adminSetMemberRole(leagueId, memberId, role)
+  {
+    let seen = null;
+    resetAll(rpcClient({ admin_set_member_role: (name, params) => { seen = params; return { data: null, error: null }; } }));
+    await auth.adminSetMemberRole('L-A', 'mKoby', 'commissioner');
+    assert(seen && seen.p_league === 'L-A' && seen.p_member === 'mKoby' && seen.p_role === 'commissioner',
+      `[53a] adminSetMemberRole() calls admin_set_member_role with {p_league,p_member,p_role} exactly, unmutated (got ${JSON.stringify(seen)})`);
+
+    resetAll(rpcClient({ admin_set_member_role: () => ({ data: null, error: { message: 'not_authorized' } }) }));
+    let threw = null;
+    try { await auth.adminSetMemberRole('L-A', 'mKoby', 'commissioner'); } catch (e) { threw = e; }
+    assert(threw && threw.message === 'not_authorized', '[53b] adminSetMemberRole() propagates a server refusal rather than swallowing it');
+  }
+
+  // adminSetPlatformAdmin(userId, on)
+  {
+    let seen = null;
+    resetAll(rpcClient({ admin_set_platform_admin: (name, params) => { seen = params; return { data: null, error: null }; } }));
+    await auth.adminSetPlatformAdmin('u-1', true);
+    assert(seen && seen.p_user === 'u-1' && seen.p_on === true,
+      `[53c] adminSetPlatformAdmin() calls admin_set_platform_admin with {p_user,p_on} exactly, p_on a real boolean not a stringified one (got ${JSON.stringify(seen)})`);
+
+    resetAll(rpcClient({ admin_set_platform_admin: () => ({ data: null, error: { message: 'last_admin' } }) }));
+    let threw2 = null;
+    try { await auth.adminSetPlatformAdmin('u-1', false); } catch (e) { threw2 = e; }
+    assert(threw2 && threw2.message === 'last_admin', '[53d] adminSetPlatformAdmin() propagates the last-admin guard\'s refusal');
+  }
+
+  // getLeagueJoinCode(leagueId) / rotateJoinCode(leagueId)
+  {
+    resetAll(rpcClient({ _from: (table) => (table === 'leagues' ? { data: { join_code: 'ABC12XYZ' }, error: null } : { data: null, error: null }) }));
+    const code = await auth.getLeagueJoinCode('L-A');
+    assert(code === 'ABC12XYZ', `[53e] getLeagueJoinCode() reads leagues.join_code for the given league (got ${JSON.stringify(code)})`);
+
+    let rotSeen = null;
+    resetAll(rpcClient({ rotate_join_code: (name, params) => { rotSeen = params; return { data: 'NEWCODE1', error: null }; } }));
+    const newCode = await auth.rotateJoinCode('L-A');
+    assert(rotSeen && rotSeen.p_league === 'L-A' && newCode === 'NEWCODE1',
+      `[53f] rotateJoinCode() calls rotate_join_code with {p_league} and returns the new code (params=${JSON.stringify(rotSeen)}, returned=${JSON.stringify(newCode)})`);
+  }
+
+  // superSetPlatformKv(key, value) — SECURITY GATE FINDING 1's own fix,
+  // covered here for the first time: value must reach the RPC RAW, never
+  // re-stringified (a second JSON.stringify() is exactly the regression).
+  {
+    let seen = null;
+    resetAll(rpcClient({ super_set_platform_kv: (name, params) => { seen = params; return { data: null, error: null }; } }));
+    await auth.superSetPlatformKv('signups_open', false);
+    assert(seen && seen.p_key === 'signups_open' && seen.p_value === false,
+      `[53g] superSetPlatformKv() sends p_value RAW — a real boolean false, never the string "false" (got ${JSON.stringify(seen)}, typeof p_value=${typeof (seen && seen.p_value)})`);
+  }
+
+  // SECURITY F2 (pass-2, 2026-09-25) — setMemberRole(leagueId, memberId, role)
+  // is now a THIN WRAPPER over admin_set_member_role, not a direct
+  // `.from('league_members').update({role})`. Migration 0026 SECTION 5's own
+  // comment names this exactly: "there is only ONE function body
+  // server-side" — a second write path would bypass the RPC's
+  // platform_audit_log insert and its F6/B-3 self-promotion refusals.
+  {
+    let seen = null;
+    resetAll(rpcClient({ admin_set_member_role: (name, params) => { seen = params; return { data: null, error: null }; } }));
+    await auth.setMemberRole('L-A', 'mKoby', 'player');
+    assert(seen && seen.p_league === 'L-A' && seen.p_member === 'mKoby' && seen.p_role === 'player',
+      `[53h] setMemberRole() calls admin_set_member_role with {p_league,p_member,p_role} exactly — the SAME RPC adminSetMemberRole() uses (got ${JSON.stringify(seen)})`);
+
+    resetAll(rpcClient({ admin_set_member_role: () => ({ data: null, error: { message: 'not_authorized' } }) }));
+    let threw3 = null;
+    try { await auth.setMemberRole('L-A', 'mKoby', 'player'); } catch (e) { threw3 = e; }
+    assert(threw3 && threw3.message === 'not_authorized', '[53i] setMemberRole() propagates the RPC\'s refusal rather than swallowing it');
+
+    // The client-side role-enum guard is UNCHANGED by the thin-wrapper fix —
+    // still refuses before ever reaching the network.
+    resetAll(rpcClient({}));
+    let threw4 = null;
+    try { await auth.setMemberRole('L-A', 'mKoby', 'co-commissioner'); } catch (e) { threw4 = e; }
+    assert(threw4 && /Unknown role/.test(threw4.message), '[53j] setMemberRole() still refuses an unknown role client-side, before any RPC call');
+  }
+
+  // SECURITY F2's structural half — a static scan of every js/ file: no
+  // `.from('league_members').update(...)` call may carry `role` in its patch
+  // object anywhere in the tree. Migration 0026 made admin_set_member_role
+  // the ONE code path for a role change; a future edit re-introducing a
+  // direct table write for `role` would silently bypass it again.
+  {
+    const jsDir = new URL('./js/', import.meta.url);
+    const files = readdirSync(jsDir).filter(f => f.endsWith('.js'));
+    const offenders = [];
+    for (const f of files) {
+      const src = readFileSync(new URL(f, jsDir), 'utf8');
+      // Matches `.from('league_members')` (any quote style) followed, within
+      // a short window, by `.update(` whose argument object mentions `role`
+      // — deliberately loose (a few hundred chars) so a multi-line chain
+      // (`.from('league_members')\n  .update({ role })`) is still caught.
+      const re = /\.from\(\s*['"`]league_members['"`]\s*\)[\s\S]{0,120}?\.update\(\s*\{[^}]*\brole\b[^}]*\}/g;
+      let m;
+      while ((m = re.exec(src))) {
+        const line = src.slice(0, m.index).split('\n').length;
+        offenders.push(`${f}:${line}`);
+      }
+    }
+    assert(offenders.length === 0,
+      `[53k] no js/ file writes league_members.role via a direct .update() — the RPC is the only path (found: ${offenders.join(', ') || 'none'})`);
+
+    // Canary — the regex actually catches the shape it exists to catch.
+    const poison = `client.from('league_members').update({ role }).eq('id', memberId);`;
+    const canaryRe = /\.from\(\s*['"`]league_members['"`]\s*\)[\s\S]{0,120}?\.update\(\s*\{[^}]*\brole\b[^}]*\}/;
+    assert(canaryRe.test(poison), '[53k canary] the scan pattern actually matches a direct league_members.role update');
+  }
+}
+
+console.log('\n[54] REVIEWER N4 / SECURITY N4 (pass-2, 2026-09-25) — bindSuperAdminControls()\'s');
+console.log('     two-tap confirm + 350ms floor, driven through real addEventListener/.click()…');
+{
+  // Local copy of [53]'s own rpcClient shape (that one is a closure inside
+  // [53]'s block and not reachable here).
+  const rpcClient = (script) => ({
+    rpc: (name, params) => {
+      const fn = script[name];
+      return Promise.resolve(fn ? fn(name, params) : { data: null, error: null });
+    },
+    from: (table, b) => (script._from ? script._from(table, b) : { data: [], error: null }),
+  });
+
+  // The FakeEl class itself is authtest's own module-local — not exported —
+  // so a button is built the SAME way every other section in this file
+  // builds one: via document.createElement(), which the harness already
+  // gives real addEventListener()/dataset/dispatch('click') behavior.
+  function freshButton({ leagueId = 'L-A', nextStatus = 'paused' } = {}) {
+    const btn = globalThis.document.createElement('button');
+    btn.className = 'super-league-pause-btn';
+    btn.dataset.leagueId = leagueId;
+    btn.dataset.nextStatus = nextStatus;
+    btn.textContent = nextStatus === 'paused' ? 'Pause' : 'Resume';
+    return btn;
+  }
+  /** #toast-container, registered exactly like paintPage() elsewhere in this
+   *  file registers it — showToast() early-returns without one. */
+  function makeToastContainer() {
+    const c = globalThis.document.createElement('div');
+    c.id = 'toast-container';
+    registry.set('toast-container', c);
+    return c;
+  }
+
+  // (a) ARM — the first tap only arms the confirm; NO RPC call yet.
+  {
+    let rpcCalls = 0;
+    resetAll(rpcClient({ super_set_league_status: (name, params) => { rpcCalls++; return { data: null, error: null }; } }));
+    makeToastContainer();
+    const btn = freshButton();
+    setClassEls('.super-league-pause-btn', [btn]);
+    app.bindSuperAdminControls();
+    btn.click();
+    assert(rpcCalls === 0, '[54a-1] the FIRST tap does not call the RPC — it only arms the confirm');
+    assert(btn.dataset.confirmArmed === '1', '[54a-2] confirmArmed is set to \'1\' after the first tap');
+    assert(btn.textContent === 'Tap again to pause', '[54a-3] the button label changes to the shortened confirm prompt');
+  }
+
+  // (b) TOO-FAST SECOND TAP — SECURITY GATE FINDING 3's 350ms floor: a
+  // second tap arriving before 350ms has elapsed since the arm is IGNORED,
+  // not treated as a confirm (a double-tap gesture must not fire the RPC).
+  {
+    let rpcCalls = 0;
+    resetAll(rpcClient({ super_set_league_status: (name, params) => { rpcCalls++; return { data: null, error: null }; } }));
+    makeToastContainer();
+    const btn = freshButton();
+    setClassEls('.super-league-pause-btn', [btn]);
+    app.bindSuperAdminControls();
+    btn.click();                    // arm
+    btn.click();                    // "confirm", but well under 350ms later
+    assert(rpcCalls === 0, '[54b] a second tap arriving under the 350ms floor is IGNORED — no RPC call');
+    assert(btn.dataset.confirmArmed === '1', '[54b-2] …and the button stays armed (the window is not consumed by an ignored tap)');
+  }
+
+  // (c) AFTER 350ms — the confirm fires, with the exact {p_league,p_status}
+  // args, and haptic-then-RPC ordering is irrelevant to this assertion (RPC
+  // args are what matter here). `armedAt` is set directly rather than a real
+  // sleep — deterministic, and this is exactly what the 350ms comparison
+  // reads.
+  {
+    let rpcArgs = null;
+    resetAll(rpcClient({ super_set_league_status: (name, params) => { rpcArgs = params; return { data: null, error: null }; } }));
+    makeToastContainer();
+    const btn = freshButton({ leagueId: 'L-B', nextStatus: 'paused' });
+    setClassEls('.super-league-pause-btn', [btn]);
+    app.bindSuperAdminControls();
+    btn.click();                                          // arm
+    btn.dataset.armedAt = String(Date.now() - 400);        // simulate 400ms elapsed
+    btn.click();                                           // confirm
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0));
+    assert(rpcArgs && rpcArgs.p_league === 'L-B' && rpcArgs.p_status === 'paused',
+      `[54c] after the 350ms floor, the confirm tap fires super_set_league_status with {p_league,p_status} exactly (got ${JSON.stringify(rpcArgs)})`);
+    const toastEl = registry.get('toast-container');
+    const lastToast = (toastEl.children || []).slice(-1)[0];
+    assert(lastToast && lastToast.className.includes('success') && lastToast.textContent === 'League paused.',
+      `[54c-2] …and the success toast reads "League paused." (got ${JSON.stringify(lastToast && { cls: lastToast.className, text: lastToast.textContent })})`);
+  }
+
+  // (d) ERROR TOAST BRANCH — the RPC rejects; calm copy, button re-enabled,
+  // confirmArmed reset (so a retry re-arms cleanly rather than staying
+  // stuck mid-confirm).
+  {
+    resetAll(rpcClient({ super_set_league_status: () => ({ data: null, error: { message: 'not_super_admin' } }) }));
+    makeToastContainer();
+    const btn = freshButton({ leagueId: 'L-C', nextStatus: 'paused' });
+    setClassEls('.super-league-pause-btn', [btn]);
+    app.bindSuperAdminControls();
+    btn.click();
+    btn.dataset.armedAt = String(Date.now() - 400);
+    btn.click();
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0));
+    const toastEl = registry.get('toast-container');
+    const lastToast = (toastEl.children || []).slice(-1)[0];
+    assert(lastToast && lastToast.className.includes('error') && lastToast.textContent === 'Super admin access required.',
+      `[54d] a not_super_admin refusal shows the calm, specific copy (got ${JSON.stringify(lastToast && { cls: lastToast.className, text: lastToast.textContent })})`);
+    assert(btn.disabled === false, '[54d-2] the button is re-enabled after the refusal — a retry is possible');
+    assert(btn.dataset.confirmArmed === '0', '[54d-3] confirmArmed is reset — a fresh tap re-arms cleanly, not stuck mid-confirm');
+  }
+
+  // (e) GENERIC ERROR — any OTHER rejection gets the generic calm copy, never
+  // the raw server message.
+  {
+    resetAll(rpcClient({ super_set_league_status: () => ({ data: null, error: { message: 'weird_pg_error_42P01' } }) }));
+    makeToastContainer();
+    const btn = freshButton({ leagueId: 'L-D', nextStatus: 'active' });
+    setClassEls('.super-league-pause-btn', [btn]);
+    app.bindSuperAdminControls();
+    btn.click();
+    btn.dataset.armedAt = String(Date.now() - 400);
+    btn.click();
+    for (let i = 0; i < 4; i++) await new Promise(r => setTimeout(r, 0));
+    const toastEl = registry.get('toast-container');
+    const lastToast = (toastEl.children || []).slice(-1)[0];
+    assert(lastToast && lastToast.textContent === 'Unable to save. Try again.' && !lastToast.textContent.includes('42P01'),
+      `[54e] an unrecognized error code shows the generic calm copy, never the raw server message (got ${JSON.stringify(lastToast && lastToast.textContent)})`);
+  }
+
+  // (f) SECURITY GATE S-3 (2026-09-25) — adminRoleActionErrorCopy() must
+  // match by SUBSTRING, not exact equality, because PostgREST can (and per
+  // [10b-4]'s own fixture, does) prefix a raised code with its SQLSTATE
+  // (e.g. 'P0001: not_found'), which an exact `switch` would silently miss
+  // and fall through to the generic copy for.
+  {
+    const { map, resolve } = app._ADMIN_ROLE_ACTION_ERROR_COPY_FOR_TEST;
+    assert(map.length >= 8, `[54f-0] fixture: the admin-role error copy table carries all eight documented codes (got ${map.length})`);
+    assert(resolve({ message: 'not_found' }) === "We couldn't find that member.",
+      '[54f-1] bare code still resolves (unchanged behavior)');
+    assert(resolve({ message: 'P0001: not_found' }) === "We couldn't find that member.",
+      `[54f-2] a SQLSTATE-PREFIXED code resolves to the SAME specific copy, not the generic fallback (got ${JSON.stringify(resolve({ message: 'P0001: not_found' }))})`);
+    assert(resolve({ message: 'P0001: last_admin' }) === 'That is the only platform admin — add another first.',
+      '[54f-3] …and a second prefixed code, to rule out a one-off coincidence');
+    assert(resolve({ message: 'totally_unrecognized' }, { grantFamily: false }) === "Unable to update this member's role. Try again.",
+      '[54f-4] an unrecognized code still falls back to the role-family generic copy');
+    assert(resolve({ message: 'totally_unrecognized' }, { grantFamily: true }) === 'Unable to update admin access. Try again.',
+      '[54f-5] …and the grant-family generic copy when grantFamily is set');
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[55] SECURITY GATE S-1 (2026-09-25) — renderAdminPage()\'s Comm-page');
+console.log('     shield must never fire for a tab this call did not just navigate to…');
+{
+  // Repro (coordinator's own words): Admin -> Send Test Push -> tap Comm
+  // within the poll window -> the deferred renderAdminPage() re-render used
+  // to wipe #page-commissioner unconditionally, with nothing left to
+  // repaint it. Driven at the SAME chokepoint the real bug lived in
+  // (renderAdminPage()'s own `_commPageForShield` teardown), not through
+  // the async call sites (those are the SAME one-line gate, asserted
+  // separately would just re-prove `state.currentTab` works).
+  resetAll();
+  storeValidSession();
+  auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'mDrew', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
+  auth.setActiveLeagueId('L-A');
+  auth._setPlatformAdminFlagsForTest(false, false);
+
+  const commEl = new FakeEl(); commEl.id = 'page-commissioner'; registry.set('page-commissioner', commEl);
+  const adminEl = new FakeEl(); adminEl.id = 'page-admin'; registry.set('page-admin', adminEl);
+
+  // Paint the Comm page for real, the way navigateTo('commissioner') would.
+  app.state.currentTab = 'commissioner';
+  app.renderCommPage();
+  const paintedBefore = commEl.innerHTML;
+  assert(paintedBefore.length > 0, 'fixture: renderCommPage() really painted #page-commissioner with real markup');
+
+  // The commissioner has navigated to Comm — state.currentTab now says so.
+  // A deferred async callback (background jobs refresh, a role-action
+  // re-render, the pause/resume .then()) lands here and calls
+  // renderAdminPage() directly, exactly as those call sites do.
+  app.renderAdminPage();
+
+  assert(commEl.innerHTML === paintedBefore,
+    `[55a] renderAdminPage(), called while state.currentTab === 'commissioner', must NOT touch #page-commissioner at all (before: ${paintedBefore.length} chars, after: ${commEl.innerHTML.length} chars)`);
+
+  // …and the inverse: called while ACTUALLY on the admin tab, the shield
+  // still does its job (this is not a regression into "never clears").
+  app.state.currentTab = 'admin';
+  app.renderAdminPage();
+  assert(commEl.innerHTML === '',
+    "[55b] renderAdminPage(), called while state.currentTab === 'admin', still empties #page-commissioner (the shield's own documented job, unchanged)");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[56] SECURITY GATE NOTE C (2026-09-25; S2-1 REWRITE 2026-09-26) — the');
+console.log('     maintenance-banner boot fetch, driven through the REAL');
+console.log('     applyAuthModeDecision() on a COLD LOAD (the vendored SDK injected, not');
+console.log('     already on window.supabase — [59]\'s late-SDK harness), fires exactly');
+console.log('     once AFTER the SDK lands, and still only once across a repeated call…');
+{
+  // S2-1 (full-app review, 2026-09-26) — THE THIRD BOOT-ORDER MISS OF THIS
+  // CLASS. The previous version of this section called installFakeSupabase()
+  // BEFORE applyAuthModeDecision(), i.e. it pre-configured the exact state
+  // the call depends on (window.supabase present) — so it stayed green while
+  // the real call sat ~180 lines ABOVE ensureSupabaseSdkLoaded(): on every
+  // real cold load window.supabase is undefined (the SDK is injected, not
+  // script-tagged), ensureClient() returned null, AuthUnavailableError was
+  // thrown, and `_maintenanceBannerAttempted` was ALREADY latched true, with
+  // no other fetch site — the banner never reached a player. This version
+  // reproduces that exact sequence: SDK absent at call time, injected script,
+  // 'load' dispatched later (Testing Protocol 165's runtime late-precondition
+  // case). Against the pre-fix code 56-1 is red (0 platform_kv calls).
+  resetAll();
+  app._resetAuthHoldForTest();
+  app._resetSupabaseSdkLoaderForTest();
+  auth._resetMaintenanceBannerCacheForTest();
+  auth._setHasSupabaseDataBackendForTest(true);
+  let platformKvCalls = 0;
+  const kvOverrides = {
+    from: (table) => {
+      if (table === 'platform_kv') {
+        platformKvCalls++;
+        return { data: [{ key: 'maintenance_banner', value: 'Scheduled downtime Sat 2am ET.' }, { key: 'signups_open', value: true }], error: null };
+      }
+      return { data: [], error: null };
+    },
+  };
+  globalThis.window.supabase = undefined; // the cold-load case — nothing on the page yet
+  const realFetch56 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('config.json')) {
+      return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+    }
+    throw new Error('no network');
+  };
+  const realWarn56 = console.warn; console.warn = () => {};
+  try {
+    const beforeScripts = createdScripts.length;
+    const pending = app._applyAuthModeDecisionForTest(); // NOT awaited — the SDK has not arrived
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    const injected = createdScripts.slice(beforeScripts).find((el) => /supabase/.test(String(el.src || '')));
+    assert(!!injected, 'fixture 56: the vendored SDK script was injected (the cold-load, no-window.supabase-yet path)');
+    assert(platformKvCalls === 0 && auth.hasAttemptedMaintenanceBannerFetch() === false,
+      `56-0: while the SDK is still loading, NO platform_kv fetch has been attempted and the one-shot latch is NOT set (calls ${platformKvCalls}, attempted ${auth.hasAttemptedMaintenanceBannerFetch()}) — a fetch before the SDK can only fail, and a latch set by that failure is exactly what silenced the banner`);
+    installFakeSupabase(kvOverrides); // the real vendored script's side effect
+    injected.dispatch('load', {});
+    await pending;
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(auth.getAuthMode() === 'supabase', 'fixture: applyAuthModeDecision() really resolved authMode to supabase');
+    assert(platformKvCalls === 1,
+      `S2-1 56-1: on a COLD load, platform_kv is fetched exactly once, AFTER the late SDK lands (got ${platformKvCalls}) — the pre-fix call site fired before the SDK and never fetched at all`);
+    assert(auth.getCachedMaintenanceBanner() === 'Scheduled downtime Sat 2am ET.',
+      'NOTE C 56-2: …and the cache actually reflects the fetched value, not just a call count');
+
+    // Simulate DI-180l's 20-second background hold re-check calling
+    // applyAuthModeDecision() again — WITHOUT NOTE A's guard this refetches
+    // platform_kv on every single one of those ticks, unbounded.
+    await app._applyAuthModeDecisionForTest();
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(platformKvCalls === 1,
+      `NOTE A regression guard 56-3: a SECOND applyAuthModeDecision() call (simulating the 20s hold re-check) does NOT re-fetch platform_kv — got ${platformKvCalls} total calls, want 1`);
+
+    // …and the guard is not a permanent one-shot: an identity delta re-arms it.
+    auth.clearMaintenanceBannerCacheOnIdentityChange();
+    await app._applyAuthModeDecisionForTest();
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(platformKvCalls === 2,
+      `NOTE C 56-4: after an identity-delta reset, the NEXT applyAuthModeDecision() call fetches again (got ${platformKvCalls} total calls, want 2) — the guard is re-armed per identity, not a permanent latch`);
+  } finally {
+    globalThis.fetch = realFetch56;
+    console.warn = realWarn56;
+    auth._resetMaintenanceBannerCacheForTest();
+  }
+}
+
+// S2-1 unit half (2026-09-26) — auth.js's own latch, independent of app.js's
+// call site: a refresh with NO client (SDK not on the page) must not latch
+// `_maintenanceBannerAttempted`, so a later real attempt is still possible.
+{
+  resetAll();
+  auth._resetMaintenanceBannerCacheForTest();
+  globalThis.window.supabase = undefined;
+  auth._resetAuthForTest();
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  const realWarn56b = console.warn; console.warn = () => {};
+  try {
+    await auth.refreshMaintenanceBannerCache();
+    assert(auth.hasAttemptedMaintenanceBannerFetch() === false,
+      '56-5: refreshMaintenanceBannerCache() with no Supabase client (SDK absent) does NOT set the one-shot latch — a no-client call is not an attempt');
+    let kv = 0;
+    installFakeSupabase({ from: (t) => { if (t === 'platform_kv') kv++; return { data: [{ key: 'maintenance_banner', value: 'late banner' }], error: null }; } });
+    await auth.refreshMaintenanceBannerCache();
+    assert(kv === 1 && auth.hasAttemptedMaintenanceBannerFetch() === true && auth.getCachedMaintenanceBanner() === 'late banner',
+      `56-6: …so once the SDK arrives the next call really fetches and latches (calls ${kv}, attempted ${auth.hasAttemptedMaintenanceBannerFetch()}, banner '${auth.getCachedMaintenanceBanner()}')`);
+  } finally {
+    console.warn = realWarn56b;
+    auth._resetMaintenanceBannerCacheForTest();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[57] UX Revamp Group F wiring (DI-332…340, 2026-09-25) — the gate\'s');
+console.log('     password block, the password-change sheet, and the delete-account');
+console.log('     sheet, driven through the REAL app.js functions against the fake client…');
+{
+  // 57a — the gate's password block: mode toggle is pure DOM, no network.
+  resetAll();
+  app.showGoogleSignInGate();
+  const modeBtn = () => document.getElementById('pwacct-gate-submit');
+  const toggleBtn = () => document.getElementById('pwacct-mode-toggle');
+  const forgotBtn = () => document.getElementById('pwacct-forgot-link');
+  const pwField = () => document.getElementById('pwacct-password');
+  assert(modeBtn()?.dataset.mode === 'signin' && modeBtn()?.textContent === 'Sign In',
+    '57a-1: the gate starts in sign-in mode — DI-332\'s own "the block starts in sign-in mode"');
+  toggleBtn()?.click();
+  assert(modeBtn()?.dataset.mode === 'signup' && modeBtn()?.textContent === 'Create Account',
+    '57a-2: tapping the mode toggle flips to sign-up — button label AND data-mode both change');
+  assert(toggleBtn()?.textContent === 'Already have an account? Sign in',
+    '57a-3: …and the toggle\'s OWN label flips too, to the sign-up-mode copy');
+  assert(forgotBtn()?.style.display === 'none',
+    '57a-4: "Forgot password?" hides in sign-up mode (DI-332\'s own state table — sign-in only)');
+  assert(pwField()?.getAttribute?.('autocomplete') === undefined || pwField()?.attrs?.autocomplete === 'new-password',
+    '57a-5: the password field\'s autocomplete becomes "new-password" in sign-up mode (Native First — real Keychain suggestions per mode)');
+  toggleBtn()?.click();
+  assert(modeBtn()?.dataset.mode === 'signin' && forgotBtn()?.style.display === '',
+    '57a-6: toggling AGAIN returns to sign-in mode — "Forgot password?" reappears');
+
+  // 57b — sign-in: the enumeration-safe NO_MATCH copy on a rejection.
+  installFakeSupabase({ signInWithPassword: async () => ({ error: { code: 'invalid_credentials', message: 'Invalid login credentials' } }) });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  document.getElementById('pwacct-email').value = 'nia@example.com';
+  document.getElementById('pwacct-password').value = 'wrong-password';
+  await modeBtn()?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  const gateMsg = () => document.getElementById('pwacct-gate-message');
+  assert(gateMsg()?.textContent === "That email and password don't match. Check them and try again.",
+    `57b: a rejected sign-in shows DI-339's exact NO_MATCH copy, not a technical error (got "${gateMsg()?.textContent}")`);
+  assert(!/PGRST|invalid_credentials/.test(gateMsg()?.textContent || ''),
+    '57b-2: …and it never leaks the raw Supabase code/message (Interaction Principles\' Errors rule)');
+
+  // 57c — sign-in success takes the gate down via the SAME real event path
+  // every other sign-in already uses (no gate-removal code of this screen's
+  // own to test independently). The real SDK writes the session to the
+  // localStorage mirror SYNCHRONOUSLY before notifying any listener
+  // (RG-233's own documented reason `hasValidSupabaseSession()`, not the
+  // payload alone, gates `signedIn` on web) — `storeValidSession()`
+  // replicates exactly that ordering here.
+  resetAll();
+  wireRealAuthUI();
+  app.showGoogleSignInGate();
+  document.getElementById('pwacct-email').value = 'nia@example.com';
+  document.getElementById('pwacct-password').value = 'correct-password';
+  // The real SDK's own synchronous localStorage write happens BEFORE it
+  // notifies anyone (RG-233's own documented reason `hasValidSupabaseSession()`
+  // reads the mirror, not the event payload alone). Stood in for here, ahead
+  // of the click, so it's already true the instant the fake client's default
+  // signInWithPassword() fires SIGNED_IN.
+  storeValidSession();
+  await document.getElementById('pwacct-gate-submit')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(document.getElementById('site-gate-overlay') === null,
+    '57c: a successful sign-in (the fake client\'s default signInWithPassword fires SIGNED_IN) takes the gate down through refreshAuthUI()\'s existing `signedIn` path — no separate removal logic in the password block itself');
+
+  // 57d — the delete-account sheet: typed-confirm gating is pure DOM state,
+  // asserted before any network call is even attempted.
+  resetAll();
+  storeValidSession();
+  app._showDeleteAccountSheetForTest();
+  const delInput = () => document.getElementById('pwacct-delete-confirm');
+  const delBtn = () => document.getElementById('pwacct-delete-submit');
+  assert(delBtn()?.disabled === true,
+    '57d-1: the Delete button starts disabled (set explicitly at mount, belt-and-suspenders with the static HTML attribute)');
+  delInput().value = 'delete';
+  delInput().dispatch('input', {});
+  assert(delBtn()?.disabled === true,
+    '57d-2: a case-mismatched "delete" (lowercase) does NOT enable the button — exact match only');
+  delInput().value = 'DELETE';
+  delInput().dispatch('input', {});
+  assert(delBtn()?.disabled === false,
+    '57d-3: exactly "DELETE" enables the button');
+
+  // 57e — the delete-account sheet's actual delete call, mocked success.
+  let deleteInvoked = null;
+  installFakeSupabase({ functionsInvoke: async (name) => { deleteInvoked = name; return { data: { ok: true, what: 'deleted' }, error: null }; } });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  await delBtn()?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(deleteInvoked === 'account-delete',
+    `57e: confirming delete calls client.functions.invoke('account-delete') — DI-340's own Edge Function, not a client-side write (got ${JSON.stringify(deleteInvoked)})`);
+  assert(document.getElementById('pwacct-delete-overlay') === null,
+    '57e-2: the sheet closes on a confirmed success');
+
+  // 57f — the delete-account sheet's LOUD-FAIL path: a failure never closes
+  // the sheet silently, never claims success (AD-06).
+  resetAll();
+  storeValidSession();
+  installFakeSupabase({ functionsInvoke: async () => { throw new Error('network down'); } });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  app._showDeleteAccountSheetForTest();
+  document.getElementById('pwacct-delete-confirm').value = 'DELETE';
+  document.getElementById('pwacct-delete-confirm').dispatch('input', {});
+  await document.getElementById('pwacct-delete-submit')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(document.getElementById('pwacct-delete-overlay') !== null,
+    '57f: a failed delete does NOT close the sheet — the player is never told it worked when it did not');
+  assert(document.getElementById('pwacct-delete-message')?.textContent?.includes("Couldn't delete"),
+    '57f-2: …and shows the calm, honest failure copy');
+
+  // 57g — the password-change sheet: step 1 -> step 2 on a successful code
+  // request, and the nonce-required update.
+  resetAll();
+  storeValidSession();
+  let updateUserArgs = null;
+  installFakeSupabase({
+    reauthenticate: async () => ({ error: null }),
+    updateUser: async (args) => { updateUserArgs = args; return { error: null }; },
+  });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  app._showPasswordChangeSheetForTest();
+  assert(document.getElementById('pwacct-change-code') === null,
+    '57g-1: fixture check — step 2\'s code field does not exist yet, step 1 (Send Code) is what\'s on screen');
+  await document.getElementById('pwacct-change-send-code')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(document.getElementById('pwacct-change-code') !== null,
+    '57g-2: a successful requestPasswordChangeCode() advances to step 2 (the code + new-password fields now exist)');
+  document.getElementById('pwacct-change-code').value = '123456';
+  document.getElementById('pwacct-change-new').value = 'a-much-better-password';
+  document.getElementById('pwacct-change-confirm').value = 'a-much-better-password';
+  await document.getElementById('pwacct-change-submit')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(updateUserArgs && updateUserArgs.password === 'a-much-better-password' && updateUserArgs.nonce === '123456',
+    // FINDING 3 — the nonce is REQUIRED, and this proves the WIRED call
+    // actually carries it end to end, not merely that updatePassword()
+    // itself refuses a missing one (authpasswordtest.mjs's own coverage).
+    `57g-3: SECURITY FINDING 3 — the update call carries BOTH the new password AND the code as its nonce, wired end to end from the sheet's own fields (got ${JSON.stringify(updateUserArgs)})`);
+
+  // 57h — the password-change sheet's mismatch check is client-side, before
+  // any network call.
+  resetAll();
+  storeValidSession();
+  let updateCalledAgain = false;
+  installFakeSupabase({ reauthenticate: async () => ({ error: null }), updateUser: async () => { updateCalledAgain = true; return { error: null }; } });
+  auth.configureAuth({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  app._showPasswordChangeSheetForTest();
+  await document.getElementById('pwacct-change-send-code')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  document.getElementById('pwacct-change-code').value = '123456';
+  document.getElementById('pwacct-change-new').value = 'password-one';
+  document.getElementById('pwacct-change-confirm').value = 'password-TWO';
+  await document.getElementById('pwacct-change-submit')?.dispatch('click', {});
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(updateCalledAgain === false,
+    '57h: mismatched new/confirm passwords never reach updateUser() at all — caught client-side first');
+  assert(document.getElementById('pwacct-change-message')?.textContent === "Those passwords don't match.",
+    '57h-2: …with the exact client-side copy, not a server error');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[58] SECURITY GATE F1 (3c fix window, 2026-09-25) — the REAL listener chain:');
+console.log('     PASSWORD_RECOVERY, then SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED each');
+console.log('     re-fired mid-recovery, must never drop the gate or read memberships;');
+console.log('     the successful set-password path then takes the gate down explicitly…');
+{
+  // The security probe's own finding, restated: with only the event-name
+  // exclusion (`event !== 'PASSWORD_RECOVERY'`), a re-fired SIGNED_IN,
+  // TOKEN_REFRESHED or USER_UPDATED carrying the SAME recovery session
+  // computed signedIn:TRUE and took the gate down mid-recovery — through
+  // THREE different doors, none of them the literal PASSWORD_RECOVERY event
+  // authnativetest.mjs's sandboxed [15i]/[15j] already covered. This section
+  // drives the REAL listener chain (auth.js -> app.wireAuthUIEvents() ->
+  // app.js's real refreshAuthUI()) rather than a sandboxed extraction, so it
+  // proves the WIRED behavior, not just the isolated predicate.
+  let membershipReadCalls = 0;
+  resetAll({
+    from: (table) => { if (table === 'league_members') membershipReadCalls += 1; return { data: [], error: null }; },
+    getSession: async () => ({ data: { session: { user: { id: 'u1' }, access_token: 't' } } }),
+  });
+  wireRealAuthUI();
+  // THIRD PASS (reviewer test gap) — a recovery session IS a valid stored
+  // session; without this line hasValidSupabaseSession() answered false and
+  // 58-2 held for that reason alone, with app.js's recovery exclusion deleted
+  // (mutation-checked in a scratch copy, third pass). Stored FIRST, so the
+  // only thing between these events and the gate coming down is the guard.
+  storeValidSession();
+  const fresh = () => ({ user: { id: 'u1', email: 'nia@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+
+  auth._fireAuthEventForTest('PASSWORD_RECOVERY', fresh());
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  const overlayAfterRecovery = document.getElementById('site-gate-overlay');
+  assert(!!overlayAfterRecovery, '58-1: fixture — PASSWORD_RECOVERY paints #site-gate-overlay');
+  // This harness's fake DOM (FakeEl, this file's own header) does not parse
+  // `innerHTML` strings into a real node tree — `data-gate-state="recovery"`
+  // is set via a raw HTML string on the INNER `.site-gate` div
+  // (`showPasswordRecoveryScreen()`), never via a real `setAttribute()` call
+  // on a FakeEl, so `querySelector`/`getAttribute` cannot see it (unlike the
+  // HOLD gate variant elsewhere in this file, which DOES call
+  // `wrap.setAttribute('data-gate-state', ...)` directly on the wrapper).
+  // Matched as a literal string inside `.innerHTML`, the same technique
+  // `[4063]`'s own hold-gate HTML-shape assertion already uses.
+  assert(/data-gate-state="recovery"/.test(overlayAfterRecovery?.innerHTML || ''),
+    '58-1b: fixture — …tagged data-gate-state="recovery" (the new-password screen, not the Google gate)');
+  assert(membershipReadCalls === 0, '58-1d: fixture — no league_members read yet');
+
+  for (const event of ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED']) {
+    auth._fireAuthEventForTest(event, fresh());
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    const overlay = document.getElementById('site-gate-overlay');
+    const isRecoveryMarkup = !!overlay && /data-gate-state="recovery"/.test(overlay.innerHTML || '');
+    assert(isRecoveryMarkup,
+      `58-2 (${event}): a re-fired ${event} carrying the SAME recovery session does NOT replace the recovery screen with the Google gate — #site-gate-overlay is still present with the recovery markup (got ${overlay ? JSON.stringify(overlay.innerHTML).slice(0, 80) : 'no overlay at all'})`);
+    assert(membershipReadCalls === 0,
+      `58-4 (${event}): …and NO league_members read happened (got ${membershipReadCalls}) — attemptAutoLink() must never run against an account that has not yet proven a password exists`);
+  }
+
+  // Non-vacuity: the SAME three events, OUTSIDE a recovery session, DO take
+  // the gate down and DO read memberships — proving 58-2/58-4's holds above
+  // are the recovery guard actually doing something, not a harness that
+  // would answer the same way regardless of state. `resetAll()` deliberately
+  // does NOT clear the device-local RECOVERY_PENDING_KEY marker (the SAME
+  // F-3 persistence property authpasswordtest.mjs's own resetAll() header
+  // documents) — the loop above left it set, so it is cleared explicitly
+  // here or this "control" would silently re-test the SAME gated state.
+  for (const event of ['SIGNED_IN', 'TOKEN_REFRESHED', 'USER_UPDATED']) {
+    let controlReads = 0;
+    resetAll({
+      from: (table) => { if (table === 'league_members') controlReads += 1; return { data: [], error: null }; },
+      getSession: async () => ({ data: { session: { user: { id: 'u2' }, access_token: 't2' } } }),
+    });
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+    assert(auth.isRecoverySession() === false, `58-5-pre (${event}): fixture — the control genuinely starts OUTSIDE any recovery session`);
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest(event, { user: { id: 'u2', email: 'k@example.com' }, access_token: 't2', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(document.getElementById('site-gate-overlay') === null,
+      `58-5 non-vacuity (${event}): OUTSIDE a recovery session, the SAME event DOES take the gate down (got ${document.getElementById('site-gate-overlay') ? 'still present' : 'removed'})`);
+    assert(controlReads > 0,
+      `58-6 non-vacuity (${event}): …and DOES read league_members (got ${controlReads}) — proving 58-4's zero above is the recovery guard, not a dead counter`);
+  }
+  try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+
+  // The successful set-password path: updatePasswordForRecovery() must take
+  // the gate down EXPLICITLY (B1's own fix — nothing else would announce the
+  // moment the flags clear, since USER_UPDATED already fired above while
+  // still gated). Re-enter a fresh recovery session first.
+  let membershipReadCalls2 = 0;
+  resetAll({
+    from: (table) => { if (table === 'league_members') membershipReadCalls2 += 1; return { data: [], error: null }; },
+    getSession: async () => ({ data: { session: { user: { id: 'u1' }, access_token: 't-final', expires_at: Math.floor(Date.now() / 1000) + 3600 } } }),
+    updateUser: async () => ({ data: {}, error: null }),
+  });
+  wireRealAuthUI();
+  auth._fireAuthEventForTest('PASSWORD_RECOVERY', fresh());
+  for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(!!document.getElementById('site-gate-overlay'), '58-7: fixture — recovery screen is up again');
+  // The REAL SDK writes an updateUser() session to the localStorage mirror
+  // SYNCHRONOUSLY, before notifying any listener (RG-233's own documented
+  // ordering, restated at [57c]'s comment above) — `hasValidSupabaseSession()`
+  // reads THAT mirror, not the event payload, so app.js's `signedIn` term
+  // needs it to already be true the instant updatePasswordForRecovery()'s
+  // own internal SIGNED_IN re-fire reaches refreshAuthUI(), exactly as [57c]
+  // stands this same fixture in ahead of its own click.
+  auth._setStoredSessionForTest({ access_token: 't-final', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  await auth.updatePasswordForRecovery('a-brand-new-strong-password');
+  for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+  assert(document.getElementById('site-gate-overlay') === null,
+    '58-8: a successful updatePasswordForRecovery() explicitly takes #site-gate-overlay down — the gate does not merely wait for an event that already fired');
+  assert(app.isContentWithheld() === false,
+    '58-9: …and content is no longer withheld — the app is genuinely signed in now, not just gate-less');
+  assert(membershipReadCalls2 > 0,
+    `58-10: …and a REAL membership read now happens (got ${membershipReadCalls2}) — the auto-link that was correctly suppressed throughout recovery now runs, exactly once recovery is genuinely complete`);
+  // Security N1 (third pass) — isContentWithheld()'s no-identity case now
+  // counts a recovery session as NO identity. Proven against this exact
+  // non-withheld state (58-9), so it is not a predicate that was true anyway.
+  localStorage.setItem(auth._RECOVERY_PENDING_KEY_FOR_TEST, '1');
+  assert(app.isContentWithheld() === true && app.isSignedInForApp() === false,
+    '58-11: the SAME signed-in state with a recovery marker on the device is WITHHELD and not signed-in-for-app (Security N1: a recovery session is not an identity)');
+  localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST);
+  assert(app.isContentWithheld() === false && app.isSignedInForApp() === true,
+    '58-12: …and clearing only the marker releases it again (the marker is the whole difference)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[59] B2 (3c fix window, 2026-09-25) — a cold load: the vendored SDK arrives');
+console.log('     LATE (script injection, not already on window.supabase), and the');
+console.log('     token_hash recovery verify still fires — exactly once — once it lands…');
+{
+  // Runtime companion to boottest.mjs [33]'s structural proof (same division
+  // of labor as [32]/[56] above). The bug this reproduces: the ORIGINAL call
+  // site verified (and scrubbed) the token_hash BEFORE
+  // ensureSupabaseSdkLoaded() had ever run — on a cold load (no vendored SDK
+  // on the page yet, exactly what a first-time visitor following a password-
+  // reset email link IS), `ensureClient()` returned null, the resulting
+  // AuthUnavailableError was only console.warn'ed, and the URL was ALREADY
+  // scrubbed — the one-time token was gone. This drives the REAL
+  // applyAuthModeDecision() (via its `_applyAuthModeDecisionForTest()` seam)
+  // through the SDK's late-arrival path this file's own [25] section already
+  // established (`createdScripts`, `.dispatch('load', {})`).
+  resetAll();
+  app._resetSupabaseSdkLoaderForTest();
+  auth._setHasSupabaseDataBackendForTest(true);
+  const savedLocation = globalThis.location;
+  const savedHistory = globalThis.history;
+  globalThis.location = { origin: 'https://irbfootball.test', pathname: '/', search: '?token_hash=cold-load-token-abc&type=recovery' };
+  globalThis.history = { replaceState: () => {} };
+  globalThis.window.supabase = undefined; // force the injection path — the cold-load case
+  const realFetch59 = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+    throw new Error('no network');
+  };
+  const realWarn59 = console.warn; console.warn = () => {};
+  try {
+    const beforeScripts = createdScripts.length;
+    const pending = app._applyAuthModeDecisionForTest(); // deliberately NOT awaited yet
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+    const injected = createdScripts.slice(beforeScripts).find((el) => /supabase/.test(String(el.src || '')));
+    assert(!!injected, 'fixture: the vendored SDK script was injected (the cold-load, no-window.supabase-yet path)');
+
+    // The real vendored script's own side effect, once it actually loads, is
+    // defining `window.supabase` — modelled here the same way [25]'s own
+    // late-success case does, immediately before dispatching 'load'.
+    let verifyOtpCalls = [];
+    installFakeSupabase({ verifyOtp: async (args) => { verifyOtpCalls.push(args); return { data: {}, error: null }; } });
+    injected.dispatch('load', {});
+    await pending;
+    for (let i = 0; i < 8; i++) await new Promise((r) => setTimeout(r, 0));
+
+    assert(verifyOtpCalls.length === 1,
+      `59-1: verifyOtp() (via verifyPasswordRecovery()) fires exactly ONCE, AFTER the late-arriving SDK actually loads (got ${verifyOtpCalls.length} call(s)) — the pre-fix ordering could never reach this call at all on a cold load`);
+    assert(verifyOtpCalls[0]?.type === 'recovery' && verifyOtpCalls[0]?.token_hash === 'cold-load-token-abc',
+      `59-2: …called with the REAL token_hash parsed off the cold-load URL (got ${JSON.stringify(verifyOtpCalls[0])})`);
+  } finally {
+    globalThis.location = savedLocation;
+    globalThis.history = savedHistory;
+    globalThis.fetch = realFetch59;
+    console.warn = realWarn59;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[59b] R2-2 (3c fix window, third pass) — an EXPIRED / already-used reset link');
+console.log('      (verifyOtp rejects otp_expired) paints the expired-link state, not the plain gate…');
+{
+  const otpErr = () => Object.assign(new Error('Email link is invalid or has expired'), { code: 'otp_expired', status: 403 });
+  const savedLocation = globalThis.location;
+  const savedHistory = globalThis.history;
+  const realFetch = globalThis.fetch;
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // The reviewer's exact sequence: cold boot on the link, SDK present,
+    // verifyOtp() answers otp_expired, nothing else happens.
+    resetAll({ verifyOtp: async () => ({ data: {}, error: otpErr() }) });
+    app._resetSupabaseSdkLoaderForTest();
+    auth._setHasSupabaseDataBackendForTest(true);
+    globalThis.location = { origin: 'https://irbfootball.test', pathname: '/', search: '?token_hash=spent-token&type=recovery' };
+    globalThis.history = { replaceState: () => {} };
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+      throw new Error('no network');
+    };
+    await app._applyAuthModeDecisionForTest();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    const ov = document.getElementById('site-gate-overlay');
+    assert(!!ov && ov.getAttribute('data-recovery-variant') === 'expired' && /expired or was already used/.test(ov.innerHTML || ''),
+      `59b-1: verifyOtp() rejecting otp_expired paints DI-334's expired/used-link state (got ${ov ? JSON.stringify((ov.innerHTML || '').slice(0, 90)) : 'no overlay'})`);
+    assert(!/Continue with Google/.test(ov?.innerHTML || ''),
+      '59b-2: …and not the ordinary sign-in gate the visitor would otherwise be left on with no explanation');
+
+    // AuthUnavailableError is a transport problem, not a verdict on the link.
+    resetAll();
+    app.showGoogleSignInGate();
+    app._onRecoveryVerifyRejectedForTest(new auth.AuthUnavailableError('no client'));
+    const ov2 = document.getElementById('site-gate-overlay');
+    assert(!!ov2 && /Continue with Google/.test(ov2.innerHTML || '') && !ov2.getAttribute('data-recovery-variant'),
+      '59b-3: an AuthUnavailableError does NOT paint the expired state (the link was never judged) — the gate on screen is left alone');
+
+    // A hold gate is never painted over (A7).
+    resetAll();
+    app.showAuthHoldGate('config-unreadable');
+    app._onRecoveryVerifyRejectedForTest(otpErr());
+    assert(document.getElementById('site-gate-overlay')?.getAttribute('data-gate-state') === 'hold',
+      '59b-4: with a HOLD gate up, a rejected link paints nothing over it (A7)');
+    app._resetAuthHoldForTest();
+
+    // A player already signed in for the app gets a toast, never a gate.
+    resetAll();
+    storeValidSession();
+    app._onRecoveryVerifyRejectedForTest(otpErr());
+    assert(document.getElementById('site-gate-overlay') === null,
+      '59b-5: a player already signed in who clicks a stale link is NOT thrown behind a full-screen gate whose exits sign them out (toast only)');
+    {
+      const toastHost5 = new FakeEl(); toastHost5.id = 'toast-container'; registry.set('toast-container', toastHost5);
+      app._onRecoveryVerifyRejectedForTest(otpErr());
+      const lastToast5 = (toastHost5.children || []).slice(-1)[0];
+      // S1-C (full-app review, 2026-09-26) — "Settings → Profile" does not
+      // exist; the Password row is in the drawer under the player's name.
+      assert(lastToast5 && /already signed in.*open the menu, tap your name, then Password/.test(lastToast5.textContent || '')
+          && !/Settings\s*→\s*Profile/.test(lastToast5.textContent || ''),
+        `59b-5b (item 7, S1-C): the signed-in-visitor toast names a next action that EXISTS — menu → your name → Password, never "Settings → Profile" (got ${JSON.stringify(lastToast5 && lastToast5.textContent)})`);
+    }
+
+    // ── 59b-6..9 (coordinator round 3, item 2) — a NETWORK-classified
+    // rejection is NOT a verdict on the token: the reviewer's exact failing
+    // sequence, reproduced through the REAL boot path (same shape as 59b-1),
+    // with verifyOtp() answering a transport failure instead of otp_expired.
+    resetAll({ verifyOtp: async () => { throw new TypeError('Failed to fetch'); } });
+    app._resetSupabaseSdkLoaderForTest();
+    auth._setHasSupabaseDataBackendForTest(true);
+    const toastHost6 = new FakeEl(); toastHost6.id = 'toast-container'; registry.set('toast-container', toastHost6);
+    globalThis.location = { origin: 'https://irbfootball.test', pathname: '/', search: '?token_hash=spent-token&type=recovery' };
+    const historyReplaceCalls = [];
+    globalThis.history = { replaceState: (...a) => { historyReplaceCalls.push(a); } };
+    globalThis.fetch = async (url) => {
+      if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+      throw new Error('no network');
+    };
+    await app._applyAuthModeDecisionForTest();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(historyReplaceCalls.length === 0,
+      `59b-6: a NETWORK-classified verifyOtp() failure does NOT scrub the URL (history.replaceState was called ${historyReplaceCalls.length}x) — the token survives for a retry`);
+    const ov6 = document.getElementById('site-gate-overlay');
+    assert(!ov6 || ov6.getAttribute('data-recovery-variant') !== 'expired',
+      '59b-7: …and does NOT paint DI-334\'s expired/used-link state — the link was never actually judged');
+    // S1-B (full-app review, 2026-09-26) — the reviewer's exact sequence:
+    // signed-out cold boot on the link, NETWORK failure, the sign-in gate is
+    // what the visitor is looking at. The copy used to go to a toast (z 1000)
+    // UNDER that gate (z 9000) — invisible. It must land INSIDE the overlay.
+    assert(!!ov6, '59b-8 fixture: a signed-out cold boot on the link leaves #site-gate-overlay on screen (the state the reviewer reproduced)');
+    const gateSlot6 = ov6 && /id="pwacct-gate-message"/.test(ov6.innerHTML || '') ? ov6.querySelector('#pwacct-gate-message') : null;
+    assert(gateSlot6 && /couldn't verify the link.*connection/i.test(gateSlot6.textContent || '') && gateSlot6.style.display === 'block',
+      `59b-8 (S1-B): the calm, retryable NETWORK copy lands INSIDE #site-gate-overlay (its #pwacct-gate-message slot, visible) — not in a toast hidden under the gate (got ${JSON.stringify(gateSlot6 && gateSlot6.textContent)})`);
+    const toasts6 = (toastHost6.children || []).map((t) => t.textContent || '');
+    assert(!toasts6.some((t) => /couldn't verify the link/i.test(t)),
+      `59b-8b (S1-B): …and it is NOT also emitted as a toast behind the gate (toasts: ${JSON.stringify(toasts6)})`);
+
+    // ── 59b-9 — the reorder withholds scrub ONLY for NETWORK; every OTHER
+    // definitive verdict still scrubs exactly as before this fix.
+    let scrubCalls9 = 0;
+    resetAll();
+    app.showGoogleSignInGate();
+    app._onRecoveryVerifyRejectedForTest(otpErr(), () => { scrubCalls9++; });
+    assert(scrubCalls9 === 1, '59b-9: a definitive verdict (otp_expired) still scrubs — the reorder is scoped to NETWORK only');
+    let scrubCalls10 = 0;
+    resetAll();
+    app.showGoogleSignInGate();
+    app._onRecoveryVerifyRejectedForTest(new TypeError('Failed to fetch'), () => { scrubCalls10++; });
+    assert(scrubCalls10 === 0, '59b-10: …while a NETWORK-classified rejection calls the scrub function ZERO times');
+
+    // ── 59b-11..14 (S1-B low, full-app review 2026-09-26) — a 5xx from
+    // GoTrue on verify is the server failing, not a verdict on the link.
+    // Pre-fix it classified UNKNOWN, scrubbed the token and painted
+    // "expired or already used".
+    const err5xx = () => Object.assign(new Error('Internal Server Error'), { status: 503, name: 'AuthApiError' });
+    let scrubCalls11 = 0;
+    resetAll();
+    app.showGoogleSignInGate();
+    app._onRecoveryVerifyRejectedForTest(err5xx(), () => { scrubCalls11++; });
+    const ov11 = document.getElementById('site-gate-overlay');
+    assert(scrubCalls11 === 0, `59b-11: a 5xx verify failure does NOT scrub the token (scrub called ${scrubCalls11}x) — retryable like NETWORK`);
+    assert(!!ov11 && ov11.getAttribute('data-recovery-variant') !== 'expired' && /Continue with Google/.test(ov11.innerHTML || ''),
+      '59b-12: …and does NOT paint the expired/used-link state — the sign-in gate stays');
+    const slot11 = ov11?.querySelector('#pwacct-gate-message');
+    assert(slot11 && /couldn't verify the link/i.test(slot11.textContent || '') && !/expired|already used/i.test(slot11.textContent || ''),
+      `59b-13: …and the gate's own slot carries calm retryable copy (got ${JSON.stringify(slot11 && slot11.textContent)})`);
+    // With NO gate up, the same notice is a toast (the only visible surface).
+    resetAll();
+    const toastHost14 = new FakeEl(); toastHost14.id = 'toast-container'; registry.set('toast-container', toastHost14);
+    const where14 = app._showNoticeOnGateOrToastForTest("We couldn't verify the link — check your connection and open it again.");
+    const last14 = (toastHost14.children || []).slice(-1)[0];
+    assert(where14 === 'toast' && last14 && /couldn't verify the link/.test(last14.textContent || ''),
+      `59b-14: with no #site-gate-overlay, the notice falls back to a toast (routed to ${where14})`);
+  } finally {
+    globalThis.location = savedLocation;
+    globalThis.history = savedHistory;
+    globalThis.fetch = realFetch;
+    console.warn = realWarn;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[60] R2-1 (3c fix window, third pass) — Back on the recovery screen, through the REAL');
+console.log('     listener chain, lands on the sign-in gate (never stranded, signed out, Back disabled)…');
+{
+  const fresh = () => ({ user: { id: 'u1', email: 'nia@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // The reviewer's exact sequence: PASSWORD_RECOVERY -> the new-password
+    // form -> tap Back -> cancelRecovery() -> signOut() -> SIGNED_OUT.
+    resetAll();
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('PASSWORD_RECOVERY', fresh());
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    const before = document.getElementById('site-gate-overlay');
+    assert(!!before && before.getAttribute('data-recovery-variant') === 'form',
+      'fixture: the new-password form is on screen');
+    document.getElementById('pwacct-recovery-back-btn').click();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    const after = document.getElementById('site-gate-overlay');
+    assert(!!after && /Continue with Google/.test(after.innerHTML || '') && !/data-gate-state="recovery"/.test(after.innerHTML || ''),
+      `60-1: Back lands on the ordinary sign-in gate (got ${after ? JSON.stringify((after.innerHTML || '').slice(0, 90)) : 'no overlay'})`);
+    assert(auth.isRecoverySession() === false && auth.hasValidSupabaseSession() === false,
+      '60-2: …the recovery is over and the device is signed out (DI-334: any exit before completion signs out)');
+    assert(app.isContentWithheld() === true, '60-3: …and nothing was released behind the gate');
+
+    // The EXPIRED variant's Back — the signed-out branch deliberately keeps
+    // that screen (it is copy to read), so ONLY the Back handler's own
+    // repaint can move the player on. Pins that repaint independently.
+    resetAll();
+    wireRealAuthUI();
+    app._showPasswordRecoveryScreenForTest({ expired: true });
+    assert(document.getElementById('site-gate-overlay')?.getAttribute('data-recovery-variant') === 'expired', 'fixture: the expired-link state is on screen');
+    document.getElementById('pwacct-recovery-back-btn').click();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(/Continue with Google/.test(document.getElementById('site-gate-overlay')?.innerHTML || ''),
+      '60-4: Back on the EXPIRED-link state also lands on the sign-in gate (the Back handler\'s own repaint)');
+  } finally {
+    console.warn = realWarn;
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[61] SECURITY N1 (3c fix window, third pass) — the boot / hold-recheck gate decision');
+console.log('     treats a RECOVERY session as not signed in (the security probe, made permanent)…');
+{
+  const fresh = () => ({ user: { id: 'u1', email: 'nia@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  const realFetch = globalThis.fetch;
+  const realST = globalThis.setTimeout;
+  const quiet = { warn: console.warn, error: console.error, info: console.info };
+  console.warn = () => {}; console.error = () => {}; console.info = () => {};
+  globalThis.setTimeout = (fn, ms, ...a) => (ms === 20000 ? { unref() {} } : realST(fn, ms, ...a));
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('config.json')) return { ok: true, json: async () => ({ authMode: 'supabase', supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' }) };
+    throw new Error('no network');
+  };
+  try {
+    // ── The probe: showAuthHoldGate('config-unreadable') -> a recovery session
+    //    stored -> PASSWORD_RECOVERY -> runAuthHoldCheck({manual:true}) with the
+    //    config now readable. ─────────────────────────────────────────────────
+    let reads = 0;
+    resetAll({
+      from: (table) => { if (table === 'league_members') reads += 1; return { data: [], error: null }; },
+      getSession: async () => ({ data: { session: { user: { id: 'u1' }, access_token: 't' } } }),
+    });
+    app._resetSupabaseSdkLoaderForTest();
+    auth._setHasSupabaseDataBackendForTest(true);
+    wireRealAuthUI();
+    app.showAuthHoldGate('config-unreadable');
+    storeValidSession();
+    auth._fireAuthEventForTest('PASSWORD_RECOVERY', fresh());
+    for (let i = 0; i < 4; i++) await new Promise((r) => realST(r, 0));
+    assert(auth.isRecoverySession() === true && document.getElementById('site-gate-overlay')?.getAttribute('data-gate-state') === 'hold',
+      'fixture: a recovery session is live UNDER the hold (A7 kept the hold on screen)');
+    await app.runAuthHoldCheck({ manual: true });
+    for (let i = 0; i < 12; i++) await new Promise((r) => realST(r, 0));
+    assert(app.currentAuthHoldReason() === '',
+      '61-0: fixture — the config really was readable, so the re-check genuinely reached the gate decision (the hold cleared)');
+    const ov = document.getElementById('site-gate-overlay');
+    assert(!!ov && /data-gate-state="recovery"/.test(ov.innerHTML || ''),
+      `61-1: the gate is STILL UP, and it is the recovery screen (got ${ov ? JSON.stringify((ov.innerHTML || '').slice(0, 80)) : 'NO GATE AT ALL — the finding'})`);
+    assert(app.isContentWithheld() === true, '61-2: content is still withheld');
+    assert(reads === 0, `61-3: and NO membership read ran (got ${reads}) — no refreshMembershipsAndSession(), no attemptAutoLink()`);
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+    app._resetAuthHoldForTest();
+
+    // ── A reload mid-recovery: the device marker + a stored session, cold
+    //    boot through the real decision. ────────────────────────────────────
+    let reads2 = 0;
+    resetAll({ from: (table) => { if (table === 'league_members') reads2 += 1; return { data: [], error: null }; } });
+    app._resetSupabaseSdkLoaderForTest();
+    auth._setHasSupabaseDataBackendForTest(true);
+    localStorage.setItem(auth._RECOVERY_PENDING_KEY_FOR_TEST, '1');
+    storeValidSession();
+    const out = await app._applyAuthModeDecisionForTest();
+    for (let i = 0; i < 8; i++) await new Promise((r) => realST(r, 0));
+    const ov2 = document.getElementById('site-gate-overlay');
+    assert(out.hold === null && !!ov2 && /data-gate-state="recovery"/.test(ov2.innerHTML || ''),
+      `61-4: a reload mid-recovery boots to the recovery screen, never gate-less (got hold=${out.hold}, ${ov2 ? 'overlay present' : 'no overlay'})`);
+    assert(app.isContentWithheld() === true && reads2 === 0,
+      `61-5: …content withheld and no membership read at boot (reads ${reads2})`);
+    // …then the SDK's INITIAL_SESSION for that stored session: auth.js's F-3
+    // arm refuses it and signs out. The orphaned form must give way to the
+    // sign-in gate rather than strand the player on a form that can only fail.
+    auth._fireAuthEventForTest('INITIAL_SESSION', fresh());
+    for (let i = 0; i < 10; i++) await new Promise((r) => realST(r, 0));
+    assert(/Continue with Google/.test(document.getElementById('site-gate-overlay')?.innerHTML || '') && reads2 === 0,
+      '61-6: the refused INITIAL_SESSION leaves the ordinary sign-in gate (not an orphaned new-password form), still with no membership read');
+
+    // ── refreshMembershipsAndSession() refuses on its own, whoever calls it.
+    let reads3 = 0;
+    resetAll({
+      from: (table) => { if (table === 'league_members') reads3 += 1; return { data: [], error: null }; },
+      getSession: async () => ({ data: { session: { user: { id: 'u3' }, access_token: 't3' } } }),
+    });
+    storeValidSession();
+    localStorage.setItem(auth._RECOVERY_PENDING_KEY_FOR_TEST, '1');
+    const r3 = await auth.refreshMembershipsAndSession();
+    assert(r3 === null && reads3 === 0, `61-7: refreshMembershipsAndSession() refuses during a recovery session (returned ${JSON.stringify(r3)}, reads ${reads3})`);
+    localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST);
+    await auth.refreshMembershipsAndSession();
+    assert(reads3 > 0, `61-8 non-vacuity: …and outside one it reads (reads ${reads3})`);
+  } finally {
+    globalThis.fetch = realFetch;
+    globalThis.setTimeout = realST;
+    console.warn = quiet.warn; console.error = quiet.error; console.info = quiet.info;
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+    app._resetAuthHoldForTest();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[62] F5 (3c fix window, third pass) — an identity change closes the open sheets PROPERLY:');
+console.log('     the League Page\'s inert lock is lifted and the chat sheet\'s game id is cleared…');
+{
+  const chatUi = await import('./js/chat-ui.js');
+  const realWarn = console.warn; const realInfo = console.info;
+  console.warn = () => {}; console.info = () => {};
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uA' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uA', email: 'a@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    const main = new FakeEl(), nav = new FakeEl(), header = new FakeEl();
+    setClassEls('.main-content', [main]); setClassEls('.bottom-nav', [nav]); setClassEls('.app-header', [header]);
+    // Open the League Page through its real opener if this state allows it,
+    // else stand its two effects in exactly as the opener makes them.
+    app._showLeaguePageOverlayForTest?.();
+    let lp = document.getElementById('league-page-overlay');
+    if (!lp) {
+      lp = document.createElement('div'); lp.id = 'league-page-overlay'; lp.setAttribute('data-hold-teardown', ''); document.body.appendChild(lp);
+      for (const el of [main, nav, header]) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+    }
+    assert('inert' in main.attrs && 'inert' in header.attrs, 'fixture: the League Page is open and the app behind it is inert');
+    // The chat game-thread sheet, through its real opener.
+    let chatWrap = null;
+    try { chatUi.openGameChatSheet('g-f5'); chatWrap = document.getElementById('chat-sheet-wrap'); } catch {}
+    if (!chatWrap) { chatWrap = document.createElement('div'); chatWrap.id = 'chat-sheet-wrap'; document.body.appendChild(chatWrap); }
+    const chatOpenedForReal = chatUi._getChatSheetGameIdForTest() === 'g-f5';
+    setClassEls('[data-hold-teardown]', [lp, chatWrap]);
+
+    // Identity change — a DIFFERENT account signs in on the same page.
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uB', email: 'b@example.com' }, access_token: 't2', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(lp._removed === true && chatWrap._removed === true, '62-1: both sheets are GONE after the identity change');
+    assert(!('inert' in main.attrs) && !('inert' in nav.attrs) && !('inert' in header.attrs) && !('aria-hidden' in main.attrs),
+      '62-2: …and .main-content / .bottom-nav / .app-header are no longer inert (the League Page closed through its own close path, not just removed)');
+    if (chatOpenedForReal) {
+      assert(chatUi._getChatSheetGameIdForTest() === null, '62-3: …and the chat sheet state no longer points at the departed identity\'s game thread (U.sheetGameId cleared)');
+    } else {
+      // The real opener refused in this harness (chat disabled); prove the
+      // reset seam itself clears the id the sweep relies on.
+      chatUi.resetGameChatSheetForTeardown();
+      assert(chatUi._getChatSheetGameIdForTest() === null, '62-3: the chat sheet reset the sweep calls clears U.sheetGameId');
+    }
+  } finally { console.warn = realWarn; console.info = realInfo; setClassEls('[data-hold-teardown]', []); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[63] SECURITY GATE F3 + REVIEWER B2/R2 (third pass) — the League Page swipe settle:');
+console.log('     Standings->League resets the offset with no transition; a CLOSE plays out, then removes…');
+{
+  const log = [];
+  const mkOverlay = () => {
+    const el = new FakeEl();
+    el.id = 'league-page-overlay';
+    el.setAttribute('data-dragging', 'true');
+    const origSet = el.setAttribute.bind(el), origRemove = el.removeAttribute.bind(el);
+    el.setAttribute = (k, v) => { log.push(`set:${k}`); origSet(k, v); };
+    el.removeAttribute = (k) => { log.push(`remove:${k}`); origRemove(k); };
+    Object.defineProperty(el.style, 'setProperty', { value(k, v) { log.push(`${k}=${v}`); this[k] = String(v); }, enumerable: false });
+    document.body.appendChild(el);
+    return el;
+  };
+  resetAll();
+  // The reviewer's sequence: Standings view, drag partway, release past the
+  // threshold -> dismissed -> back one level to League, SAME node.
+  app._setLeaguePageOverlayViewForTest('standings');
+  const ov = mkOverlay();
+  ov.style.setProperty('--league-page-drag-x', '0.62');
+  log.length = 0;
+  app._settleLeaguePageSwipeForTest(ov, { dismissed: true, reducedMotion: false });
+  assert(app._getLeaguePageOverlayViewForTest() === 'league', 'fixture: the dismissed swipe went back one level, Standings -> League');
+  assert(ov.style['--league-page-drag-x'] === '0',
+    `63-1: …and the drag offset is reset to 0 (got ${ov.style['--league-page-drag-x']}) — the League view is not left parked off to the side`);
+  const iNoT = log.indexOf('set:data-no-transition'), iZero = log.indexOf('--league-page-drag-x=0'), iRestore = log.indexOf('remove:data-no-transition');
+  assert(iNoT > -1 && iZero > iNoT && iRestore > iZero,
+    `63-2: …reset with the transition SUPPRESSED first and restored after (no slide-in from the release point) — order ${JSON.stringify(log)}`);
+  assert(!('data-dragging' in ov.attrs) && document.getElementById('league-page-overlay') === ov,
+    '63-3: …the dragging flag is cleared and the overlay is still up (one level back, not closed)');
+  // Cancelled swipe: springs back, view unchanged.
+  const ov2 = mkOverlay();
+  app._setLeaguePageOverlayViewForTest('standings');
+  ov2.style.setProperty('--league-page-drag-x', '0.2');
+  app._settleLeaguePageSwipeForTest(ov2, { dismissed: false, reducedMotion: false });
+  assert(ov2.style['--league-page-drag-x'] === '0' && app._getLeaguePageOverlayViewForTest() === 'standings',
+    '63-4: a cancelled swipe springs back (offset 0) and stays on Standings');
+  // CLOSE from the League view — reviewer R2: play the rest of the slide, then remove.
+  resetAll();
+  app._setLeaguePageOverlayViewForTest('league');
+  const ov3 = mkOverlay();
+  ov3.style.setProperty('--league-page-drag-x', '0.55');
+  app._settleLeaguePageSwipeForTest(ov3, { dismissed: true, reducedMotion: false });
+  assert(ov3.style['--league-page-drag-x'] === '1' && document.getElementById('league-page-overlay') === ov3,
+    '63-5: a CLOSE animates the offset to 1 and the overlay is still on screen mid-slide — it never pops');
+  ov3.dispatch('transitionend', { target: ov3 });
+  assert(document.getElementById('league-page-overlay') === null && ov3._removed === true,
+    '63-6: …and it is removed on its transitionend');
+  // Reduced motion: removed at once.
+  resetAll();
+  app._setLeaguePageOverlayViewForTest('league');
+  const ov4 = mkOverlay();
+  app._settleLeaguePageSwipeForTest(ov4, { dismissed: true, reducedMotion: true });
+  assert(document.getElementById('league-page-overlay') === null, '63-7: under reduced motion a CLOSE removes the overlay immediately');
+  app._setLeaguePageOverlayViewForTest('league');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64] REVIEWER B1 / SECURITY GATE F2 (third pass) — the REAL openWeekWizardSheet() on a');
+console.log('     native window: a downward drag on .chat-sheet-header dismisses the sheet (it self-blocked)…');
+{
+  const savedMM = globalThis.matchMedia;
+  const realWarn = console.warn; const realInfo = console.info;
+  console.warn = () => {}; console.info = () => {};
+  FakeEl.classQueries = true;
+  globalThis.window.Capacitor = { isNativePlatform: () => true };
+  const drag = (headerEl) => {
+    headerEl.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }] });
+    headerEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }] });
+    headerEl.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 300 }] });   // 300/500 = 60%
+    headerEl.dispatch('touchend', { touches: [] });
+  };
+  const signIn = async () => {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uW' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uW', email: 'w@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+  try {
+    // (a) full motion: the drag completes the slide, THEN the sheet goes.
+    globalThis.matchMedia = () => ({ matches: false });
+    await signIn();
+    assert(app.isContentWithheld() === false, 'fixture: a signed-in, un-withheld page (the opener refuses otherwise)');
+    app._openWeekWizardSheetForTest();
+    const wrap = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrap, 'fixture: the REAL openWeekWizardSheet() put #week-wizard-sheet-wrap on the page');
+    const headerEl = wrap?.querySelector('.chat-sheet-header');
+    const sheetEl = wrap?.querySelector('#week-wizard-sheet');
+    assert(!!headerEl && headerEl.listenerCount('touchstart') === 1,
+      'fixture: the drag handler is bound on the sheet header (native, bindSwipeToDismiss())');
+    drag(headerEl);
+    assert(wrap.style['--wizard-drag-y'] === '1' && document.getElementById('week-wizard-sheet-wrap') === wrap,
+      '64-1: past the threshold the sheet plays the REST of the slide (offset -> 1) and is still on screen mid-slide — it does not pop (reviewer R2)');
+    sheetEl.dispatch('transitionend', { target: sheetEl });
+    assert(document.getElementById('week-wizard-sheet-wrap') === null && wrap._removed === true,
+      '64-2: …and on the sheet\'s transitionend the wizard is GONE — the drag-to-dismiss actually works (before the fix getBlocked() saw the wizard\'s own wrap and never armed)');
+
+    // (b) reduced motion: removed at once, no slide to wait for.
+    globalThis.matchMedia = (q) => ({ matches: /reduce/.test(String(q)) });
+    await signIn();
+    app._openWeekWizardSheetForTest();
+    const wrap2 = document.getElementById('week-wizard-sheet-wrap');
+    drag(wrap2.querySelector('.chat-sheet-header'));
+    assert(document.getElementById('week-wizard-sheet-wrap') === null,
+      '64-3: under prefers-reduced-motion the dismissed sheet is removed immediately');
+
+    // (c) cancel: a short drag springs back and the sheet stays.
+    globalThis.matchMedia = () => ({ matches: false });
+    await signIn();
+    app._openWeekWizardSheetForTest();
+    const wrap3 = document.getElementById('week-wizard-sheet-wrap');
+    const h3 = wrap3.querySelector('.chat-sheet-header');
+    h3.dispatch('touchstart', { touches: [{ clientX: 100, clientY: 0 }] });
+    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 20 }] });
+    await new Promise((r) => setTimeout(r, 400));
+    h3.dispatch('touchmove', { touches: [{ clientX: 100, clientY: 60 }] });   // 12%, slow
+    await new Promise((r) => setTimeout(r, 50));
+    h3.dispatch('touchend', { touches: [] });
+    assert(document.getElementById('week-wizard-sheet-wrap') === wrap3 && wrap3.style['--wizard-drag-y'] === '0',
+      '64-4: a short, slow drag springs back (offset 0) and the wizard stays open');
+    // (d) a gate raised over the wizard blocks the drag entirely.
+    app.showGoogleSignInGate();
+    drag(h3);
+    assert(document.getElementById('week-wizard-sheet-wrap') === wrap3,
+      '64-5: with the sign-in gate up over it, the wizard\'s drag never arms');
+  } finally {
+    globalThis.matchMedia = savedMM;
+    delete globalThis.window.Capacitor;
+    FakeEl.classQueries = false;
+    console.warn = realWarn; console.info = realInfo;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[65] STEP B (third pass) — join-code terminal error state (1) + the S-2 static scans (2),');
+console.log('     each scan with a poisoned canary proving it can go red…');
+{
+  // (1) The chip's three states, rendered.
+  const errHtml = app._inviteCodeChipHTMLForTest({ leagueId: 'L1', code: '', loading: false, error: 'boom' });
+  assert(/id="invite-code-retry-btn"/.test(errHtml) && /Couldn&#39;t load the join code\.|Couldn't load the join code\./.test(errHtml) && !/>—</.test(errHtml) && !/boom/.test(errHtml),
+    '65-1: a failed join-code read renders calm error copy + a Retry button — never a bare "—", never the raw server string');
+  assert(/Loading…/.test(app._inviteCodeChipHTMLForTest({ leagueId: 'L1', code: '', loading: true, error: null })) && !/invite-code-retry-btn/.test(app._inviteCodeChipHTMLForTest({ leagueId: 'L1', code: '', loading: true, error: null })),
+    '65-2: loading renders "Loading…" and no Retry');
+  const okHtml = app._inviteCodeChipHTMLForTest({ leagueId: 'L1', code: '<AB12>', loading: false, error: null });
+  assert(/&lt;AB12&gt;/.test(okHtml) && !/invite-code-retry-btn/.test(okHtml), '65-3: a loaded code renders escaped, no Retry');
+
+  const { readFileSync: rfs } = await import('node:fs');
+  const raw = rfs(new URL('./js/app.js', import.meta.url), 'utf8');
+  const strip = (t) => t.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const src = strip(raw);
+  const bodyOf = (text, header) => {
+    const at = text.indexOf(header);
+    if (at < 0) return '';
+    const open = text.indexOf(') {', at) + 2;   // the BODY brace, past any destructured-param braces
+    let depth = 0;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}') { depth--; if (depth === 0) return text.slice(open, i + 1); }
+    }
+    return '';
+  };
+  // The Retry is bound, and calls the refresh DIRECTLY (not via the guard).
+  assert(/getElementById\('invite-code-retry-btn'\)\?\.addEventListener\('click', \(\) => \{[\s\S]{0,160}?refreshJoinCodeCache\(leagueId\)/.test(src),
+    '65-4: the join-code Retry is bound and calls refreshJoinCodeCache() directly');
+
+  // (2a) applyIdentityDeltaIfChanged() resets all four admin caches.
+  const cacheResets = (body) => [
+    [/_platformKvCache = \{[^}]*maintenanceBanner: ''[^}]*loaded: false[^}]*\}/, '_platformKvCache'],
+    [/_allLeaguesCache = \{[^}]*rows: null[^}]*\}/, '_allLeaguesCache'],
+    [/_usersAcrossLeaguesCache = \{[^}]*rows: null[^}]*\}/, '_usersAcrossLeaguesCache'],
+    [/_joinCodeCache = \{[^}]*leagueId: null[^}]*code: ''[^}]*\}/, '_joinCodeCache'],
+  ].filter(([re]) => !re.test(body)).map(([, n]) => n);
+  const idBody = bodyOf(src, 'function applyIdentityDeltaIfChanged(');
+  assert(!!idBody && cacheResets(idBody).length === 0,
+    `65-5 (S-2a): applyIdentityDeltaIfChanged() resets ALL FOUR admin caches to their never-fetched/empty defaults (missing: ${cacheResets(idBody).join(', ') || 'none'})`);
+  const poisonA = idBody.replace(/_joinCodeCache = \{[^}]*\};?/, '');
+  assert(cacheResets(poisonA).includes('_joinCodeCache'), '65-5 canary: a body that drops the _joinCodeCache reset is caught');
+
+  // (2b) _repaintMaintenanceBannerSurface() asks isContentWithheld() before ANY render dispatch.
+  const withheldFirst = (body) => {
+    const w = body.indexOf('isContentWithheld()');
+    const r = body.search(/\brender[A-Z]\w*/);
+    return w > -1 && r > -1 && w < r;
+  };
+  const mbBody = bodyOf(src, 'function _repaintMaintenanceBannerSurface(');
+  assert(!!mbBody && withheldFirst(mbBody),
+    '65-6 (S-2b): _repaintMaintenanceBannerSurface() checks isContentWithheld() before any render dispatch');
+  const poisonB = mbBody.replace('if (isContentWithheld()) return;', '').replace(/\}\s*$/, ' if (isContentWithheld()) return; }');
+  assert(!withheldFirst(poisonB), '65-6 canary: the withheld check moved after the dispatch is caught');
+
+  // (2c) renderAdminPage() gates the #page-commissioner shield on the admin tab, BEFORE binding the comm listeners.
+  const shieldFirst = (body) => {
+    const sh = body.search(/if \(state\.currentTab === 'admin'\) \{\s*const (\w+) = document\.getElementById\('page-commissioner'\);\s*if \(\1\) \1\.innerHTML = '';\s*\}/);
+    const b = body.indexOf('bindCommEventListeners(');
+    return sh > -1 && b > -1 && sh < b;
+  };
+  const adBody = bodyOf(src, 'export function renderAdminPage(');
+  assert(!!adBody && shieldFirst(adBody),
+    "65-7 (S-2c): renderAdminPage() clears #page-commissioner behind `state.currentTab === 'admin'` BEFORE bindCommEventListeners()");
+  const poisonC1 = adBody.replace("if (state.currentTab === 'admin') {", 'if (true) {');
+  const poisonC2 = adBody.replace(/if \(state\.currentTab === 'admin'\) \{[\s\S]*?innerHTML = '';\s*\}/, '') + "\n if (state.currentTab === 'admin') { const x = document.getElementById('page-commissioner'); if (x) x.innerHTML = ''; }";
+  assert(!shieldFirst(poisonC1) && !shieldFirst(poisonC2), '65-7 canary: an ungated shield, or one placed after the bind, is caught');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[66] STEP B(3) (third pass) — the paused-league banner PERSISTS correctly: idempotent,');
+console.log('     never re-enables submit on a pick tap, and every page renderer ends by calling it…');
+{
+  resetAll();
+  auth._setMembershipsForTest([{ leagueId: 'LP', memberId: 'm1', role: 'player', displayName: 'P', leagueName: 'Paused League', status: 'paused' }]);
+  auth.setActiveLeagueId('LP');
+  const page = {
+    id: 'page-picks', html: '<div class="card">picks</div>',
+    insertAdjacentHTML(pos, h) { this.html = pos === 'afterbegin' ? h + this.html : this.html + h; },
+    querySelector(sel) {
+      if (sel === '#paused-league-banner' && this.html.includes('id="paused-league-banner"')) {
+        const self = this;
+        return { remove() { self.html = self.html.replace(/<div[^>]*id="paused-league-banner"[^>]*>[\s\S]*?<\/div>/, ''); } };
+      }
+      return null;
+    },
+  };
+  document.body.appendChild(page);
+  const btn = new FakeEl(); btn.setAttribute('id', 'submit-picks-btn'); btn.disabled = false;
+  const count = new FakeEl(); count.setAttribute('id', 'pick-count');
+  app._renderPausedLeagueBannerIfNeededForTest('picks');
+  app._renderPausedLeagueBannerIfNeededForTest('picks');
+  const n = (page.html.match(/id="paused-league-banner"/g) || []).length;
+  assert(n === 1, `66-1: two renders of a paused league leave exactly ONE banner (got ${n})`);
+  assert(btn.disabled === true, '66-2: …and the submit button is disabled while paused');
+  // A pick tap re-runs updateSubmitEnabled() with a COMPLETE slate.
+  const games = [{ gameId: 'g1' }, { gameId: 'g2' }];
+  const week = { weekId: 'w1', tiebreakerQuestion: '' };
+  const savedDraft = app.state.draftPicks;
+  app.state.draftPicks = { g1: 'A', g2: 'B' };
+  try {
+    app._updateSubmitEnabledForTest(games, week);
+    assert(btn.disabled === true, '66-3: paused + a pick tap that completes the slate -> submit STAYS disabled');
+    // Non-vacuity: the same complete slate in an ACTIVE league enables submit.
+    auth._setMembershipsForTest([{ leagueId: 'LP', memberId: 'm1', role: 'player', displayName: 'P', leagueName: 'Paused League', status: 'active' }]);
+    auth.setActiveLeagueId('LP');
+    app._updateSubmitEnabledForTest(games, week);
+    assert(btn.disabled === false, '66-4 non-vacuity: the same complete slate in an ACTIVE league enables submit');
+    app._renderPausedLeagueBannerIfNeededForTest('picks');
+    assert(!page.html.includes('id="paused-league-banner"'), '66-5: un-pausing and re-rendering removes the banner');
+  } finally { app.state.draftPicks = savedDraft; }
+
+  // Source check — each of the six page renderers ENDS by calling the banner
+  // (a banner painted before a later innerHTML write is wiped by it).
+  const { readFileSync: rfs } = await import('node:fs');
+  const raw = rfs(new URL('./js/app.js', import.meta.url), 'utf8');
+  const src = raw.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const bodyOf = (header) => {
+    const at = src.indexOf(header); if (at < 0) return '';
+    const open = src.indexOf(') {', at) + 2; let d = 0;
+    for (let i = open; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}') { d--; if (d === 0) return src.slice(open, i + 1); } }
+    return '';
+  };
+  // "Last" is stated as the property that matters: after the banner call,
+  // nothing in the renderer writes the page again (an innerHTML assignment or
+  // insertAdjacentHTML would wipe or bury the banner it just painted).
+  const bannerIsLast = (body, tab) => {
+    const at = body.lastIndexOf(`renderPausedLeagueBannerIfNeeded('${tab}')`);
+    if (at < 0) return false;
+    const after = body.slice(at);
+    return !/\.innerHTML\s*=(?!=)/.test(after) && !/insertAdjacentHTML\(/.test(after);
+  };
+  const renderers = [
+    ['function renderDashboard(', 'dashboard'], ['export function renderLeaderboard(', 'leaderboard'],
+    ['export function renderCommPage(', 'commissioner'], ['export function renderAdminPage(', 'admin'],
+    ['export function renderRulesPage(', 'rules'],
+  ];
+  for (const [hdr, tab] of renderers) {
+    const body = bodyOf(hdr);
+    assert(!!body && bannerIsLast(body, tab),
+      `66-6 (${tab}): ${hdr.replace('export ', '').replace('function ', '')}) calls renderPausedLeagueBannerIfNeeded('${tab}') and writes nothing to the page after it`);
+  }
+  const picksCalls = (src.match(/renderPausedLeagueBannerIfNeeded\('picks'\)/g) || []).length;
+  assert(picksCalls >= 2, `66-6 (picks): the picks page calls the banner on both of its render exits (got ${picksCalls})`);
+  // canary
+  const poison = "{ c.innerHTML = x; renderPausedLeagueBannerIfNeeded('rules'); c.innerHTML = y; }";
+  assert(!bannerIsLast(poison, 'rules') && bannerIsLast("{ c.innerHTML = x; renderPausedLeagueBannerIfNeeded('rules'); }", 'rules'),
+    '66-6 canary: a banner call followed by a later page write is caught; one with nothing after it passes');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[67] STEP B(4)-(8) (third pass) — the gate and password sheet: N1 swap + email kept,');
+console.log('     N2 on-blur email check, N3 resend-verification, N4 Change/Set + current password + R-5, N5 fit…');
+{
+  const tick = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // ── N1 — sign-in -> forgot carries the email; forgot -> Back carries it home.
+    resetAll();
+    app.showGoogleSignInGate();
+    const inner = new FakeEl();
+    setClassEls('#site-gate-overlay .site-gate-inner', [inner]);
+    document.getElementById('pwacct-email').value = 'kev@example.com';
+    document.getElementById('pwacct-forgot-link').click();
+    assert(/id="pwacct-reset-email"[^>]*value="kev@example\.com"/.test(inner.innerHTML),
+      'N1-1: "Forgot password?" carries the typed email onto the reset screen');
+    document.getElementById('pwacct-email').value = '';                  // the old node is gone in a real DOM
+    document.getElementById('pwacct-reset-email').value = 'kev2@example.com';   // edited on the reset screen
+    document.getElementById('pwacct-reset-back-btn').click();
+    assert(document.getElementById('pwacct-email').value === 'kev2@example.com',
+      'N1-2: Back from the reset screen PRESERVES the typed email (was: a fresh, empty sign-in gate)');
+    setClassEls('#site-gate-overlay .site-gate-inner', []);
+    const { readFileSync: rfs } = await import('node:fs');
+    const css = rfs(new URL('./css/styles.css', import.meta.url), 'utf8');
+    const appRaw = rfs(new URL('./js/app.js', import.meta.url), 'utf8');
+    const nav = Number((css.match(/--motion-nav:(\d+)ms/) || [])[1]);
+    assert(/@keyframes gateSwapIn\{from\{opacity:0\}to\{opacity:1\}\}/.test(css)
+      && /\.site-gate-inner\.gate-swap-in\{animation:gateSwapIn var\(--motion-nav,260ms\)/.test(css)
+      && nav >= 250 && nav <= 300
+      && /@media \(prefers-reduced-motion:reduce\)\{\.site-gate-inner\.gate-swap-in\{animation:none\}\}/.test(css),
+      `N1-3 [structural]: the swap cross-fades over --motion-nav (${nav}ms, inside 250-300), off under reduced motion`);
+    assert(/inner\.innerHTML = forgotPasswordScreenHTML\(prefillEmail\);\s*playGateSwap\(inner\);/.test(appRaw)
+      && /showGoogleSignInGate\(undefined, \{ prefillEmail: [^}]*swap: true \}\)/.test(appRaw),
+      'N1-4 [structural]: both directions of the swap play the fade (forgot on entry, Back via swap:true)');
+
+    // ── N2 — on-blur email check + submit guard (no round trip on a typo).
+    let signInCalls = 0;
+    resetAll({ signInWithPassword: async () => { signInCalls++; return { error: null }; } });
+    app.showGoogleSignInGate();
+    const em = document.getElementById('pwacct-email');
+    const msg = () => document.getElementById('pwacct-gate-message');
+    em.value = 'kevin-at-example';
+    em.dispatch('blur');
+    assert(msg().textContent === 'Enter a valid email address.' && msg().style.display === 'block', 'N2-1: blurring a malformed email shows the inline "Enter a valid email address."');
+    em.value = 'kevin@example.com';
+    em.dispatch('blur');
+    assert(msg().style.display === 'none', 'N2-2: …and it clears as soon as the value is plausible');
+    em.value = 'bad@@';
+    document.getElementById('pwacct-password').value = 'hunter22';
+    document.getElementById('pwacct-gate-submit').click();
+    await tick();
+    assert(signInCalls === 0 && msg().textContent === 'Enter a valid email address.', 'N2-3: a submit with a malformed email makes NO sign-in call and says why');
+    assert(app._isPlausibleEmailForTest('a@b.co') && !app._isPlausibleEmailForTest('a@b') && !app._isPlausibleEmailForTest('a b@c.d'), 'N2-4: the plausibility check (fixture)');
+
+    // ── N6 (reviewer round 3, item 6) — the fields sit inside a real <form>
+    // with iOS AutoFill attributes, and the form's own submit event is
+    // caught and prevented — never a page reload — while the button's own
+    // click handler (tested all through N1-N5 above) is untouched.
+    resetAll();
+    app.showGoogleSignInGate();
+    const n6GateHtml = document.getElementById('site-gate-overlay').innerHTML;
+    const formBlock = n6GateHtml.slice(n6GateHtml.indexOf('<form'), n6GateHtml.indexOf('</form>') + '</form>'.length);
+    assert(/^<form id="pwacct-gate-form"[ >]/.test(formBlock), 'N6-1: a real <form id="pwacct-gate-form"> wraps the fields');
+    // N6-7 (security audit, 2026-09-26) — a form with no method defaults to
+    // GET: were the preventDefault listener ever unbound, a native submit
+    // would put ?email=…&password=… into the URL, history and the SW cache.
+    const formTag7 = (formBlock.match(/^<form\b[^>]*>/) || [''])[0];
+    assert(/\smethod="post"(\s|>)/i.test(formTag7) && /\snovalidate(\s|>|=)/.test(formTag7),
+      `N6-7: the gate form declares method="post" (credentials never serialized into a GET URL) and novalidate (no native validation bubble) (got ${JSON.stringify(formTag7)})`);
+    assert(/<input class="form-input" id="pwacct-email" name="email" type="email" inputmode="email" autocomplete="email" placeholder="you@example\.com" required \/>/.test(formBlock),
+      `N6-2: the email field carries name="email" and required, inside the form (got ${JSON.stringify(formBlock.slice(0, 260))})`);
+    assert(/<input class="form-input" id="pwacct-password" name="password" type="password" autocomplete="current-password" required \/>/.test(formBlock),
+      'N6-3: the password field carries name="password" and required, inside the form');
+    assert(/<button class="site-gate-btn" id="pwacct-gate-submit" type="submit" data-mode="signin">Sign In<\/button>\s*<\/form>/.test(formBlock),
+      'N6-4: the submit button is type="submit" (was type="button") and closes out the form');
+    assert(!/pwacct-forgot-link|pwacct-mode-toggle/.test(formBlock),
+      'N6-5: the Forgot-password/mode-toggle link row is OUTSIDE the form — secondary navigation, not submission');
+    let preventedCalls = 0;
+    document.getElementById('pwacct-gate-form').dispatch('submit', { preventDefault: () => { preventedCalls++; } });
+    assert(preventedCalls === 1, 'N6-6: the form\'s real bound "submit" listener calls preventDefault() exactly once — a native form submission (e.g. a mobile keyboard\'s "Go" action) never reloads the page');
+
+    // ── N3 — the unverified-account notice gets a resend link that works.
+    resetAll({ signInWithPassword: async () => ({ error: Object.assign(new Error('Email not confirmed'), { code: 'email_not_confirmed' }) }) });
+    app.showGoogleSignInGate();
+    document.getElementById('pwacct-email').value = 'new@example.com';
+    document.getElementById('pwacct-password').value = 'hunter22';
+    document.getElementById('pwacct-gate-submit').click();
+    await tick();
+    assert(/hasn't been verified yet/.test(msg().textContent) && /id="pwacct-resend-verify"/.test(msg().innerHTML),
+      'N3-1: the unverified-account notice carries a "Resend verification email" link');
+    let resendArgs = null;
+    resetAll({ resend: async (a) => { resendArgs = a; return { error: null }; } });
+    const slot = { insertAdjacentHTML() { const b = new FakeEl(); b.setAttribute('id', 'pwacct-resend-verify'); b.textContent = 'Resend verification email'; } };
+    app._appendResendVerificationLinkForTest(slot, 'new@example.com');
+    const rb = document.getElementById('pwacct-resend-verify');
+    await rb._listeners.click[0]({ target: rb });
+    assert(resendArgs?.type === 'signup' && resendArgs?.email === 'new@example.com' && /sent/.test(rb.textContent),
+      `N3-2: tapping it calls the SDK resend for THAT address (got ${JSON.stringify(resendArgs)}) and confirms`);
+    resetAll({ resend: async () => ({ error: Object.assign(new Error('rate'), { code: 'over_email_send_rate_limit', status: 429 }) }) });
+    app._appendResendVerificationLinkForTest(slot, 'new@example.com');
+    const rb2 = document.getElementById('pwacct-resend-verify');
+    await rb2._listeners.click[0]({ target: rb2 });
+    assert(rb2.textContent === 'Too many attempts. Wait a few minutes and try again.' && rb2.disabled === false,
+      'N3-3: a rate-limited resend gets the HONEST copy (the account was already disclosed by email_not_confirmed) and can be retried later');
+
+    // ── N4 — Change vs Set, the UX-only current password, R-5.
+    const fresh = Math.floor(Date.now() / 1000) + 3600;
+    let updateCalls = 0;
+    resetAll({
+      signInWithPassword: async () => ({ error: Object.assign(new Error('Invalid login credentials'), { code: 'invalid_credentials', status: 400 }) }),
+      updateUser: async () => { updateCalls++; return { error: null }; },
+    });
+    auth._setStoredSessionForTest({ access_token: 't', expires_at: fresh, user: { email: 'k@example.com', app_metadata: { providers: ['google', 'email'] } } });
+    app._showPasswordChangeSheetForTest();
+    const sheet = document.getElementById('pwacct-change-overlay');
+    assert(/<h3>Change Password<\/h3>/.test(sheet.innerHTML), 'N4-1: an account WITH a password identity gets "Change Password"');
+    document.getElementById('pwacct-change-send-code').click();
+    await tick();
+    assert(/id="pwacct-change-current"/.test(sheet.innerHTML), 'N4-2: …and step 2 asks for the current password (UX-only pre-check)');
+    document.getElementById('pwacct-change-code').value = '123456';
+    document.getElementById('pwacct-change-current').value = 'wrong-one';
+    document.getElementById('pwacct-change-new').value = 'a-new-strong-pw';
+    document.getElementById('pwacct-change-confirm').value = 'a-new-strong-pw';
+    document.getElementById('pwacct-change-submit').click();
+    await tick();
+    assert(document.getElementById('pwacct-change-message').textContent === 'Current password is incorrect.' && updateCalls === 0,
+      'N4-3: a wrong current password says so inline and never reaches updateUser()');
+    resetAll();
+    auth._setStoredSessionForTest({ access_token: 't', expires_at: fresh, user: { email: 'g@example.com', app_metadata: { providers: ['google'] } } });
+    app._showPasswordChangeSheetForTest();
+    assert(/<h3>Set Password<\/h3>/.test(document.getElementById('pwacct-change-overlay').innerHTML), 'N4-4: a Google-only account gets "Set Password"');
+    document.getElementById('pwacct-change-send-code').click();
+    await tick();
+    assert(!/id="pwacct-change-current"/.test(document.getElementById('pwacct-change-overlay').innerHTML), 'N4-5: …with no current-password field (there is none to check)');
+    // R-5 — reauthenticate() refused for an unconfirmed email.
+    resetAll({ reauthenticate: async () => ({ error: Object.assign(new Error('Email not confirmed'), { code: 'email_not_confirmed' }) }) });
+    auth._setStoredSessionForTest({ access_token: 't', expires_at: fresh, user: { email: 'u@example.com', app_metadata: { providers: ['email'] } } });
+    auth._fireAuthEventForTest('TOKEN_REFRESHED', { user: { id: 'uu', email: 'u@example.com' }, access_token: 't', expires_at: fresh });   // a signed-in account knows its email
+    await tick();
+    app._showPasswordChangeSheetForTest();
+    document.getElementById('pwacct-change-send-code').click();
+    await tick();
+    const m5 = document.getElementById('pwacct-change-message');
+    assert(/Verify your email first/.test(m5.textContent) && /id="pwacct-resend-verify"/.test(m5.innerHTML || m5._html || ''),
+      `N4-6 (R-5): an unconfirmed email refusal shows DI-336's verify-your-email copy + a resend link (got "${m5.textContent}")`);
+    assert(/u@example\.com/.test(m5.textContent), 'N4-7 (R-5): …naming the address the link went to');
+
+    // ── N4-8 (reviewer round 3, N4) — the EXACT failing sequence: a native
+    // Keychain marker in storage (auth-storage-native.js's own shape —
+    // {access_token,refresh_token,expires_at}, no `user` field at all, so the
+    // OLD localStorage-only read always came back null on iOS) with the real
+    // session having arrived only through a live SIGNED_IN event. If
+    // getAccountHasPasswordIdentity() were still reading storage first, this
+    // would resolve to neutral "Password"; reading the in-memory cache first
+    // is what makes it resolve at all.
+    resetAll();
+    localStorage.setItem(auth._AUTH_STORAGE_KEY_FOR_TEST, JSON.stringify({ access_token: '<native-keychain>', refresh_token: '<native-keychain>', expires_at: fresh }));
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'ios1', email: 'ios@example.com', app_metadata: { providers: ['google', 'email'] } }, access_token: 't', expires_at: fresh });
+    await tick();
+    app._showPasswordChangeSheetForTest();
+    assert(/<h3>Change Password<\/h3>/.test(document.getElementById('pwacct-change-overlay').innerHTML),
+      'N4-8: a native-shaped Keychain marker (no `user` field in storage) still resolves "Change Password" — from the in-memory session cache, not the localStorage read');
+    resetAll();
+    localStorage.setItem(auth._AUTH_STORAGE_KEY_FOR_TEST, JSON.stringify({ access_token: '<native-keychain>', refresh_token: '<native-keychain>', expires_at: fresh }));
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'ios2', email: 'ios2@example.com', app_metadata: { providers: ['google'] } }, access_token: 't', expires_at: fresh });
+    await tick();
+    app._showPasswordChangeSheetForTest();
+    assert(/<h3>Set Password<\/h3>/.test(document.getElementById('pwacct-change-overlay').innerHTML),
+      'N4-9: …and a Google-only account behind the same native marker shape resolves "Set Password", not the neutral fallback');
+
+    // ── N5 — the gate fits (or scrolls) on a 667pt screen.
+    assert(/\.site-gate\{overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;\s*padding:max\(24px, env\(safe-area-inset-top,0px\)\) 24px max\(24px, env\(safe-area-inset-bottom,0px\)\)\}/.test(css)
+      && /\.site-gate > \.site-gate-inner\{margin:auto;min-height:auto;flex-shrink:0\}/.test(css),
+      'N5-1 [structural]: the gate scrolls (momentum, contained) with safe-area padding, and its inner block centres by auto margins — it can never clip its top on a short screen');
+    // Height BUDGET for the native gate's stack, from nominal block heights
+    // (44pt controls per the Principles; label ~18, wordmark ~48, tagline ~24,
+    // divider ~24, 12pt field gaps). An estimate — the device check is the
+    // real proof — but it pins that the stack was designed to fit 667pt.
+    globalThis.window.Capacitor = { isNativePlatform: () => true };
+    resetAll();
+    app.showGoogleSignInGate();
+    const gateHtml = document.getElementById('site-gate-overlay').innerHTML;
+    delete globalThis.window.Capacitor;
+    const blocks = {
+      wordmark: /site-gate-wordmark/.test(gateHtml) ? 48 : 0, tagline: /site-gate-tagline/.test(gateHtml) ? 24 : 0,
+      google: 44 + 12, divider: /divider-or/.test(gateHtml) ? 24 : 0,
+      fields: ((gateHtml.match(/class="form-group"/g) || []).length) * (18 + 44 + 12),
+      submit: /id="pwacct-gate-submit"/.test(gateHtml) ? 44 + 12 : 0, links: /site-gate-link-row/.test(gateHtml) ? 44 : 0,
+      padding: 24 * 2, safeAreas: 47 + 34,
+    };
+    const total = Object.values(blocks).reduce((a, b) => a + b, 0);
+    assert(total <= 667, `N5-2: the native gate stack's height budget is ${total}pt (${JSON.stringify(blocks)}) — within a 667pt screen`);
+  } finally { console.warn = realWarn; }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[68] STEP B(12) (third pass) — a role change patches the cached row in place (no refetch,');
+console.log('     no skeleton) and cross-fades only that row…');
+{
+  const rpcCalls = [];
+  resetAll({ rpc: (name, params) => { rpcCalls.push(name); return { data: null, error: null }; } });
+  const rows = [
+    { memberId: 'm1', leagueId: 'L', leagueName: 'L', role: 'player', displayName: 'Ann', userId: 'u1' },
+    { memberId: 'm2', leagueId: 'L', leagueName: 'L', role: 'commissioner', displayName: 'Bo', userId: 'u2' },
+  ];
+  app._setUsersAcrossLeaguesCacheForTest({ rows, loading: false, error: null, attempted: true });
+  const listeners = [];
+  const btn = { dataset: { leagueId: 'L', memberId: 'm1', name: 'Ann' }, textContent: 'Make Commissioner', disabled: false,
+    classList: { contains: (c) => c === 'admin-make-commissioner-btn' }, addEventListener: (t, fn) => listeners.push(fn) };
+  setClassEls('.admin-make-commissioner-btn, .admin-make-player-btn', [btn]);
+  const savedConfirm = globalThis.confirm; globalThis.confirm = () => true;
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    app._bindUsersAcrossLeaguesControlsForTest();
+    await listeners[0]();
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    const after = app._getUsersAcrossLeaguesCacheForTest();
+    assert(rpcCalls.filter(n => n === 'admin_set_member_role').length === 1, `fixture: the role RPC ran once (${JSON.stringify(rpcCalls)})`);
+    assert(Array.isArray(after.rows) && after.attempted === true && after.rows.find(r => r.memberId === 'm1').role === 'commissioner',
+      '68-1: the cache is PATCHED in place (rows kept, attempted kept, m1 now commissioner) — not nulled into a skeleton + refetch');
+    assert(after.rows.find(r => r.memberId === 'm2').role === 'commissioner' && rpcCalls.length === 1,
+      '68-2: …the sibling row is untouched and no list refetch was issued');
+    // The cross-fade targets exactly the changed row.
+    const mk = (m, l) => { const cls = new Set(); return { getAttribute: (k) => (k === 'data-member-row' ? m : k === 'data-league-row' ? l : null), classList: { add: c => cls.add(c), remove: c => cls.delete(c), has: c => cls.has(c) }, offsetWidth: 1 }; };
+    const r1 = mk('m1', 'L'), r2 = mk('m2', 'L'), r3 = mk('m1', 'OTHER');
+    setClassEls('.player-admin-row[data-member-row]', [r1, r2, r3]);
+    app._crossfadeAdminRowForTest({ memberId: 'm1', leagueId: 'L' });
+    assert(r1.classList.has('admin-row-crossfade') && !r2.classList.has('admin-row-crossfade') && !r3.classList.has('admin-row-crossfade'),
+      '68-3: only the changed row (same member AND same league) gets the 150ms cross-fade class');
+  } finally { globalThis.confirm = savedConfirm; console.warn = realWarn; setClassEls('.admin-make-commissioner-btn, .admin-make-player-btn', []); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[69] STEP B(13) (third pass) — League Page sports come from the league\'s sport_default');
+console.log('     + its weeks\' sport values, DB codes normalized to ESPN keys…');
+{
+  const lh = await import('./js/leagues-home.js');
+  const keys = (list) => list.map(x => x.key).join(',');
+  assert(keys(lh.deriveLeagueSports({ sportDefault: 'cfb', weekSports: ['cfb', 'cfb'] })) === 'college-football',
+    "69-1: the DB's 'cfb' (sport_default and every week) is ONE 'College Football' card, not a second unlabeled 'cfb'");
+  const two = lh.deriveLeagueSports({ sportDefault: 'cfb', weekSports: ['cfb', 'nfl'] });
+  assert(keys(two) === 'college-football,nfl' && two[1].label === 'NFL', '69-2: a league with an NFL week gets both cards, labelled');
+  assert(keys(lh.deriveLeagueSports({})) === 'college-football', '69-3: nothing known -> the one default card (unchanged)');
+  // The membership read carries sport_default through, and the overlay passes both inputs.
+  let seenSelect = '';
+  resetAll({
+    from: (table, b) => {
+      if (table === 'league_members') return { data: [{ league_id: 'L', id: 'm', role: 'player', display_name: 'X', active: true, leagues: { name: 'L', pilot: false, status: 'active', sport_default: 'nfl' } }], error: null };
+      return { data: [], error: null };
+    },
+    getSession: async () => ({ data: { session: { user: { id: 'u' }, access_token: 't' } } }),
+  });
+  storeValidSession();
+  await auth.refreshMembershipsAndSession();
+  const m = auth.getCachedMemberships()[0];
+  assert(m?.sportDefault === 'nfl', `69-4: a membership row carries the league's sport_default (got ${JSON.stringify(m?.sportDefault)})`);
+  const { readFileSync: rfs } = await import('node:fs');
+  const authSrc = rfs(new URL('./js/auth.js', import.meta.url), 'utf8');
+  assert(/leagues!league_members_league_id_fkey\(name, pilot, status, sport_default\)/.test(authSrc)
+    && /\.select\('league_id, id, role, display_name, active, leagues!league_members_league_id_fkey\(name\)'\)/.test(authSrc),
+    '69-5 [structural]: sport_default is read on the primary membership select only; the pre-0026 retry select is unchanged');
+  const appSrc = rfs(new URL('./js/app.js', import.meta.url), 'utf8');
+  assert(/deriveLeagueSports\(\{\s*sportDefault: active\?\.sportDefault \|\| undefined,\s*weekSports: getWeeks\(\)\.map\(w => w\?\.sport\)\.filter\(Boolean\),\s*\}\)/.test(appSrc),
+    '69-6 [structural]: the League Page overlay passes BOTH the league\'s sport_default and its weeks\' sports');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[70] REVIEWER ROUND 3, ITEM 4 — the join-code Retry repaints the loading/');
+console.log('     disabled state in the SAME tick as the tap, not only once the refetch settles…');
+{
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // Controllable by CLOSURE, not by re-installing the fake client —
+    // ensureClient() caches its client at module scope and only recreates it
+    // after auth._resetAuthForTest(), so a second installFakeSupabase() call
+    // mid-scenario would silently be ignored by the already-cached client.
+    let singleResult = () => ({ data: null, error: { message: 'boom' } });
+    resetAll({ from: (table, b) => (table === 'leagues' && b._single) ? singleResult() : { data: [], error: null } });
+    storeValidSession();
+    auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'mDrew', role: 'commissioner', displayName: 'Drew', leagueName: 'IRB' }]);
+    auth.setActiveLeagueId('L-A');
+    auth._setPlatformAdminFlagsForTest(false, false);
+    const commEl = new FakeEl(); commEl.id = 'page-commissioner'; registry.set('page-commissioner', commEl);
+    app.state.currentTab = 'commissioner';
+    app.renderCommPage();                          // triggers the FIRST (failing) fetch via the render-time guard
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(/invite-code-retry-btn/.test(commEl.innerHTML),
+      `fixture: the initial failed fetch settles into the terminal error state with a Retry button (got ${JSON.stringify(commEl.innerHTML.slice(0, 160))})`);
+
+    // A second fetch, held open on demand, so the assertion right after the
+    // click lands in the SAME synchronous tick the click handler ran in —
+    // before this promise has any chance to settle.
+    let releaseFetch;
+    const held = new Promise((res) => { releaseFetch = res; });
+    singleResult = () => held.then(() => ({ data: { join_code: 'NEWCODE1' }, error: null }));
+    document.getElementById('invite-code-retry-btn').click();
+    assert(/Loading…/.test(commEl.innerHTML) && !/invite-code-retry-btn/.test(commEl.innerHTML),
+      `70-1: the tap repaints to "Loading…" (Retry gone) in the SAME tick — before the refetch has resolved (got ${JSON.stringify(commEl.innerHTML.slice(0, 160))})`);
+    releaseFetch();
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(/NEWCODE1/.test(commEl.innerHTML),
+      '70-2: …and the settled refetch still repaints the real code once it resolves (refreshJoinCodeCache()\'s own repaint, unchanged)');
+  } finally {
+    console.warn = realWarn;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[71] SECURITY ROUND 3, N-2 (2026-09-26) — refreshPlatformAdminFlags() is skipped');
+console.log('     while a PASSWORD_RECOVERY session is pending, through the REAL identity');
+console.log('     chokepoint (applyIdentityDeltaIfChanged(), driven by the real listener chain)…');
+{
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    let rpcCalls = [];
+    const superRpc = (name) => {
+      rpcCalls.push(name);
+      if (name === 'is_platform_admin') return { data: true, error: null };
+      if (name === 'is_super_admin') return { data: true, error: null };
+      return { data: false, error: null };
+    };
+    const fresh = Math.floor(Date.now() / 1000) + 3600;
+
+    // The reviewer's exact sequence: a PASSWORD_RECOVERY event lands through
+    // the real onAuthStateChange -> _authListeners -> refreshAuthUI() chain
+    // (wireRealAuthUI(), never a hand-called refreshAuthUI() — reviewer B1's
+    // own rule), which is what actually calls applyIdentityDeltaIfChanged().
+    resetAll({ rpc: superRpc });
+    wireRealAuthUI();
+    auth._fireAuthEventForTest('PASSWORD_RECOVERY', { user: { id: 'u-recover', email: 'r@example.com' }, access_token: 't', expires_at: fresh });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(auth.isRecoverySession() === true, 'fixture: the PASSWORD_RECOVERY event really put this page into a recovery session');
+    assert(rpcCalls.length === 0,
+      `N2-1: refreshPlatformAdminFlags()'s RPCs are NOT called while a recovery session is pending (got ${JSON.stringify(rpcCalls)})`);
+    assert(auth.getIsPlatformAdmin() === false && auth.getIsSuperAdmin() === false,
+      'N2-2: both admin caches stay at their safe (false) default — refreshControlCenterAndSettingsPage() still ran just above this guard, so nothing else regresses');
+
+    // Non-vacuity — an ORDINARY SIGNED_IN (no recovery in progress) still
+    // calls it, exactly as section [18b]'s structural check already expects.
+    // The device-local recovery marker (SECURITY F-3) is DELIBERATELY not
+    // touched by resetAll()/_resetAuthForTest() — it is meant to survive a
+    // reload — so this section clears it itself, the documented way, or the
+    // PREVIOUS sub-test's own recovery marker would leak into this one.
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+    rpcCalls = [];
+    resetAll({ rpc: superRpc });
+    wireRealAuthUI();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u-ordinary', email: 'o@example.com' }, access_token: 't', expires_at: fresh });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(auth.isRecoverySession() === false, 'fixture: an ordinary SIGNED_IN is NOT a recovery session');
+    assert(rpcCalls.includes('is_platform_admin') && rpcCalls.includes('is_super_admin'),
+      `N2-3: …while an ORDINARY sign-in still calls refreshPlatformAdminFlags() normally — the guard is scoped to recovery only, not a regression (got ${JSON.stringify(rpcCalls)})`);
+    assert(auth.getIsPlatformAdmin() === true && auth.getIsSuperAdmin() === true,
+      'N2-4: …and the caches actually populate from it, same as section [18b]\'s fixture check');
+  } finally {
+    console.warn = realWarn;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[72] S2-3 (full-app review, 2026-09-26) — the control-center drawer is CLOSED on');
+console.log('     every sign-out (the identity chokepoint) and by the hold sweep, never left');
+console.log('     open under a gate to reappear after the next sign-in…');
+{
+  const closes = [];
+  const spy = { close: (opts) => closes.push(opts || {}), open() {}, update() {}, destroy() {}, getState: () => ({ phase: 'open' }) };
+  const prevApi = app._setControlCenterApiForTest(spy);
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // The reviewer's sequence: signed in, drawer open, sign-out arrives
+    // (here the involuntary SIGNED_OUT; the drawer's own Sign Out row is
+    // controlcentertest [11n]) — through the REAL listener chain.
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u1' } } } }),
+               from: () => ({ data: [{ league_id: 'L', id: 'm1', role: 'player', display_name: 'x', active: true, leagues: { name: 'L' } }], error: null }) });
+    app._setControlCenterApiForTest(spy);
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u1', email: 'x@example.com' } });
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    closes.length = 0;
+    auth._setStoredSessionForTest(null);
+    auth._fireAuthEventForTest('SIGNED_OUT', null);
+    for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(!!document.getElementById('site-gate-overlay'), '72 fixture: the SIGNED_OUT re-showed the sign-in gate');
+    assert(closes.length >= 1 && closes.every((o) => o.immediate === true),
+      `72-1: the identity chokepoint closes the drawer, instantly, on sign-out (close calls: ${JSON.stringify(closes)})`);
+
+    // The hold sweep — a hold arriving while the drawer is open.
+    resetAll();
+    app._setControlCenterApiForTest(spy);
+    closes.length = 0;
+    app.showAuthHoldGate('config-unreadable');
+    assert(closes.length >= 1 && closes.every((o) => o.immediate === true),
+      `72-2: the hold sweep (tearDownRenderedContentForHold) closes the drawer, instantly (close calls: ${JSON.stringify(closes)})`);
+    app._resetAuthHoldForTest();
+  } finally {
+    console.warn = realWarn;
+    app._setControlCenterApiForTest(prevApi);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[73] B-1 / note 1 (full-app review follow-up, 2026-09-26) — an empty Sign In');
+console.log('     says what is missing and focuses it (the form is novalidate, so there is no');
+console.log('     native bubble); a filled one still signs in once; the gate notice slot is reused…');
+{
+  const tick73 = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)); };
+  const realWarn = console.warn; console.warn = () => {};
+  try {
+    // The reviewer's exact sequence: a signed-out visitor on the gate taps
+    // Sign In with an empty field. Pre-fix: a silent return — no text, no
+    // focus move, nothing.
+    const cases = [
+      { email: '', password: '', copy: 'Enter your email and password.', focus: 'pwacct-email', tag: 'both empty' },
+      { email: '', password: 'hunter22', copy: 'Enter your email.', focus: 'pwacct-email', tag: 'email empty' },
+      { email: 'kev@example.com', password: '', copy: 'Enter your password.', focus: 'pwacct-password', tag: 'password empty' },
+      { email: '   ', password: 'hunter22', copy: 'Enter your email.', focus: 'pwacct-email', tag: 'whitespace-only email' },
+    ];
+    for (const c of cases) {
+      let calls = 0;
+      resetAll({ signInWithPassword: async () => { calls++; return { error: null }; } });
+      app.showGoogleSignInGate();
+      const em = document.getElementById('pwacct-email');
+      const pw = document.getElementById('pwacct-password');
+      const focused = [];
+      em.focus = () => focused.push('pwacct-email');
+      pw.focus = () => focused.push('pwacct-password');
+      em.value = c.email; pw.value = c.password;
+      document.getElementById('pwacct-gate-submit').click();
+      await tick73();
+      const m = document.getElementById('pwacct-gate-message');
+      assert(m.textContent === c.copy && m.style.display === 'block',
+        `73-1 (${c.tag}): the gate's own slot shows ${JSON.stringify(c.copy)} (got ${JSON.stringify(m.textContent)}, display ${m.style.display})`);
+      assert(focused.length === 1 && focused[0] === c.focus,
+        `73-2 (${c.tag}): focus moves to the first empty field, ${c.focus} (got ${JSON.stringify(focused)})`);
+      assert(calls === 0, `73-3 (${c.tag}): ZERO signInWithPassword calls (got ${calls})`);
+    }
+    // The keyboard path (return on Password) takes the same guard.
+    {
+      let calls = 0;
+      resetAll({ signInWithPassword: async () => { calls++; return { error: null }; } });
+      app.showGoogleSignInGate();
+      document.getElementById('pwacct-email').value = 'kev@example.com';
+      document.getElementById('pwacct-password').dispatch('keydown', { key: 'Enter', preventDefault() {} });
+      await tick73();
+      assert(document.getElementById('pwacct-gate-message').textContent === 'Enter your password.' && calls === 0,
+        `73-4: return on an empty Password says so too, with no auth call (calls ${calls})`);
+      // Typing clears it — the copy never lingers over a filled field.
+      document.getElementById('pwacct-password').value = 'h';
+      document.getElementById('pwacct-password').dispatch('input', {});
+      assert(document.getElementById('pwacct-gate-message').style.display === 'none',
+        '73-5: typing into the named field clears the empty-field copy');
+    }
+    // A FILLED submit is unchanged: exactly one sign-in call, slot hidden.
+    {
+      let calls = 0; let args = null;
+      resetAll({ signInWithPassword: async (a) => { calls++; args = a; return { error: null }; } });
+      app.showGoogleSignInGate();
+      document.getElementById('pwacct-email').value = '';
+      document.getElementById('pwacct-gate-submit').click();          // empty first…
+      await tick73();
+      document.getElementById('pwacct-email').value = 'kev@example.com';
+      document.getElementById('pwacct-password').value = 'hunter22';
+      document.getElementById('pwacct-gate-submit').click();          // …then filled
+      await tick73();
+      assert(calls === 1 && args?.email === 'kev@example.com',
+        `73-6: a filled submit still calls signInWithPassword exactly once (got ${calls}, ${JSON.stringify(args && args.email)})`);
+      assert(document.getElementById('pwacct-gate-message').style.display === 'none',
+        '73-7: …and the earlier empty-field copy is gone once it does');
+    }
+    // The form markup is untouched by B-1: still method="post" novalidate.
+    {
+      resetAll();
+      app.showGoogleSignInGate();
+      const html73 = document.getElementById('site-gate-overlay').innerHTML;
+      assert(/<form id="pwacct-gate-form" method="post" novalidate>/.test(html73),
+        '73-8: the gate form keeps method="post" novalidate (B-1 is handler + copy, not markup)');
+    }
+
+    // ── Note 1 — a gate with NO message slot of its own (the league-flow
+    // screen): two notices must not append two #site-gate-notice-slot nodes.
+    // The overlay gets REAL querySelector semantics for this case (null when
+    // the id is absent) — the shared FakeEl memoizes every #id lookup, which
+    // would hide the bug.
+    {
+      resetAll();
+      const overlay = new FakeEl();
+      overlay.id = 'site-gate-overlay';
+      registry.set('site-gate-overlay', overlay);
+      overlay.innerHTML = '<div class="site-gate-inner"><h2>Pick a league</h2></div>';
+      const inner = new FakeEl();
+      const findById = (root, id) => {
+        for (const ch of (root.children || [])) { if (ch.id === id) return ch; const d = findById(ch, id); if (d) return d; }
+        return null;
+      };
+      overlay.querySelector = (sel) => (sel === '.site-gate-inner' ? inner
+        : sel?.startsWith?.('#') ? findById(inner, sel.slice(1)) || findById(overlay, sel.slice(1)) : null);
+      const r1 = app._showNoticeOnGateOrToastForTest('First notice.');
+      const r2 = app._showNoticeOnGateOrToastForTest('Second notice.', 'error');
+      const slots = (inner.children || []).filter((c) => c.id === 'site-gate-notice-slot');
+      assert(r1 === 'gate' && r2 === 'gate' && slots.length === 1,
+        `73-9: two notices on a slot-less gate leave ONE #site-gate-notice-slot, not two (got ${slots.length})`);
+      assert(slots[0]?.textContent === 'Second notice.' && slots[0]?.className === 'site-gate-error',
+        `73-10: …carrying the latest text and tone (got ${JSON.stringify(slots[0] && slots[0].textContent)})`);
+    }
+  } finally {
+    console.warn = realWarn;
+  }
 }
 
 // ── REVIEWER F8 (sixth gate, 2026-09-17) — THE SUMMARY LINE MUST SURVIVE THE

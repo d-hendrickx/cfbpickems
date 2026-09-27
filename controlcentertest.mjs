@@ -1,0 +1,995 @@
+/**
+ * CFB Pickems — controlcentertest.mjs
+ * ====================================
+ * UX Revamp, group A1, Build Wave 1 (T-13/T-14) — js/control-center.js.
+ * Fix round 1 (reviewer BLOCK) folded in — every section below that changed
+ * is marked "FIX ROUND 1" at its own header.
+ *
+ * jsdom-free. Sections [0]-[9] test PURE functions directly, no DOM at all.
+ * Sections [10]-[12] need a DOM realistic enough to prove the fix-round-1
+ * requirements honestly (root-node stability, real setTimeout fallback,
+ * attribute-vs-content-repaint separation) — a hand-rolled MINIMAL DOM
+ * (`FakeElement` + a small HTML-subset parser + a small selector engine,
+ * below) stands in for jsdom, which this repo does not depend on. It
+ * supports exactly the operations `js/control-center.js` actually performs
+ * (id/class/attribute/dataset get-set, `innerHTML` parse-and-replace,
+ * `querySelector(All)`/`closest` over `#id`/`.class`/`tag`/`[attr]`/
+ * `[attr="value"]`/comma-lists, `addEventListener`/a manual `_dispatch`,
+ * `style.setProperty`, `focus()`) — nothing more.
+ *
+ * Run: node controlcentertest.mjs
+ *
+ * SECTIONS
+ *   [0]  Zero top-level side effects at import.
+ *   [1]  Constants — DRAWER_EDGE_ZONE_PX reuse; DRAWER_MOTION_MS now 260ms,
+ *        matching the shared --motion-nav token (fix round 1 checklist note).
+ *   [2]  Drawer phase state machine.
+ *   [3]  Profile push/back.
+ *   [4]  Accordion single-open-per-group — NOW one unified 'toggle-row'
+ *        event keyed by `group` ('settings' | 'feedback'), replacing fix
+ *        round 0's separate 'toggle-settings-row'/'toggle-history' events.
+ *   [5]  isDrawerVisuallyOpen() / the data-open hook.
+ *   [6]  _resolveDrawerSettle().
+ *   [7]  _isWithinEdgeZone().
+ *   [8]  starredPanels() — FIX ROUND 1 finding 6: each entry now carries a
+ *        `group` ('admin'|'commissioner'), Super Admin grouped under 'admin'.
+ *   [9]  renderControlCenter() — data-open contract, body embedding, XSS,
+ *        coming-soon copy. FIX ROUND 1 finding 4/5: Feedback is now an
+ *        ACCORDION embedding `bodies.feedbackCardHTML` (was a deep link).
+ *        FIX ROUND 1 finding 6: renderStarredPanels() produces TWO labeled
+ *        groups. FIX ROUND 1 finding 5: "View League As" is gone. FIX ROUND
+ *        1 finding 7: Profile back affordance uses icon('chevronLeft').
+ *   [10] bindControlCenterEdgeSwipe() — FIX ROUND 1 finding 3: must NOT
+ *        bail when the (future-amended) shared gesturesSuspended() would say
+ *        true because THIS drawer is open — tested with a fake `document`
+ *        that returns a node for `#control-center[data-open="true"]`.
+ *   [11] mountControlCenter() — FIX ROUND 1 finding 1: the ROOT NODE is
+ *        stable across dispatches (proven via the realistic fake DOM, no
+ *        hand-dispatched `transitionend`), and phase completes via the REAL
+ *        `setTimeout` fallback when no transitionend ever arrives. FIX ROUND
+ *        1 finding 2: `onAfterPaint`/`update()`. FIX ROUND 1 finding 8: no
+ *        content repaint on drag-move (only `--cc-drag-progress` + attrs),
+ *        focus only on closed->open, `haptic('light')` on `api.open()`.
+ *        FIX ROUND 1 finding 9: field-preserve wraps content repaints.
+ */
+
+let pass = 0, fail = 0;
+function assert(cond, label) {
+  if (cond) { pass++; console.log('  ✅', label); }
+  else { fail++; console.error('  ❌', label); }
+}
+
+console.log('\n[control-center] UX Revamp group A1, Build Wave 1 — DI-301…306 (fix round 1)\n');
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('[0] Zero top-level side effects at import…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+  const savedLocalStorage = globalThis.localStorage;
+  delete globalThis.document;
+  delete globalThis.window;
+  delete globalThis.localStorage;
+
+  let threw = null;
+  let CC;
+  try { CC = await import('./js/control-center.js'); } catch (e) { threw = e; }
+  assert(!threw, `0a: importing js/control-center.js with no document/window/localStorage at all never throws (${threw && threw.message})`);
+  assert(typeof CC?.renderControlCenter === 'function', '0b: the module still exposes its exports with nothing global defined');
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+  globalThis.localStorage = savedLocalStorage;
+}
+
+const CC = await import('./js/control-center.js');
+const {
+  DRAWER_WIDTH_VW, DRAWER_MAX_WIDTH_PX, DRAWER_EDGE_ZONE_PX, DRAWER_MOTION_MS,
+  DRAWER_OPEN_SETTLE_RATIO, DRAWER_FLICK_VELOCITY_PX_MS,
+  initialControlCenterState, _controlCenterStateMachine, _toggleAccordionRow,
+  isDrawerVisuallyOpen, _isWithinEdgeZone, _resolveDrawerSettle,
+  starredPanels, renderControlCenter, renderIdentityHeader, renderProfileScreen,
+  renderStarredPanels, renderSettingsAccordion, renderFeedbackRulesGroup, renderHelpFooter,
+  bindControlCenterEdgeSwipe, mountControlCenter,
+} = CC;
+
+const NG = await import('./js/nav-gestures.js');
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function icon(name) {
+  const known = {
+    bell: '<svg data-icon="bell"></svg>',
+    chevronRight: '<svg data-icon="chevronRight"></svg>',
+    chevronLeft: '<svg data-icon="chevronLeft"></svg>',
+    almaMater: '<svg data-icon="almaMater"></svg>',
+  };
+  return known[name] || '';
+}
+
+function baseCtx(overrides = {}) {
+  return {
+    session: { player: { id: 'p1', displayName: 'Drew', initials: 'DH', almaMater: 'Texas A&M' }, isAdmin: true },
+    memberships: [],
+    league: { id: 'l1', name: "IRB Pick'Ems", pilot: false },
+    escHtml, icon,
+    isNativeShell: () => false,
+    flags: { isCommissioner: false, isPlatformAdmin: false, isSuperAdmin: false, isPilotLeague: false },
+    version: { APP_VERSION: '0.26.0', APP_VERSION_DATE: '2026-09-25' },
+    bodies: {
+      notifSettingsHTML: '<div data-body="notif">NOTIF BODY</div>',
+      chatPrefsHTML: '<div data-body="chat">CHAT BODY</div>',
+      scribeFileHTML: '<div data-body="scribe">SCRIBE BODY</div>',
+      feedbackCardHTML: '<div data-body="feedback">FEEDBACK BODY</div>',
+      gameRequestHTML: '<div data-body="gamereq">GAME REQUEST BODY</div>',
+      releaseNotesHTML: '<div data-body="history">RELEASE NOTES BODY</div>',
+    },
+    currentTimeZone: 'PT',
+    currentTheme: 'neutral',
+    logoView: false,
+    callbacks: {},
+    ...overrides,
+  };
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[1] CONSTANTS…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(DRAWER_EDGE_ZONE_PX === NG.WEEK_SWIPE_EDGE_EXCLUDE_PX,
+    '1a: DRAWER_EDGE_ZONE_PX is the SAME value as nav-gestures.js\'s WEEK_SWIPE_EDGE_EXCLUDE_PX (28) — reused, never re-declared');
+  assert(DRAWER_EDGE_ZONE_PX === 28, '1b: …and that shared value is 28px');
+  assert(DRAWER_WIDTH_VW === 85 && DRAWER_MAX_WIDTH_PX === 340, '1c: drawer width — 85vw, capped at 340px (DI-301)');
+  assert(DRAWER_OPEN_SETTLE_RATIO === 0.4, '1d: 40%-of-width settle threshold (DI-301)');
+  assert(DRAWER_FLICK_VELOCITY_PX_MS === 0.3, '1e: flick-velocity override threshold');
+  assert(DRAWER_MOTION_MS === 260, '1f: FIX ROUND 1 checklist note — DRAWER_MOTION_MS now matches the shared --motion-nav token (260ms, css/styles.css:92), not the fix-round-0 literal 280ms');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[2] Drawer phase state machine…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const a = _controlCenterStateMachine([{ type: 'open', reducedMotion: false }]);
+  assert(a[0].phase === 'opening', '2a: open (motion) -> transient "opening" phase');
+  const b = _controlCenterStateMachine([{ type: 'open', reducedMotion: false }, { type: 'transition-end' }]);
+  assert(b[1].phase === 'open', '2b: transition-end completes opening -> open');
+  const c = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }]);
+  assert(c[0].phase === 'open', '2c: prefers-reduced-motion -> "open" directly, no transient');
+  const d2 = _controlCenterStateMachine([
+    { type: 'open', reducedMotion: true }, { type: 'close', reducedMotion: false }, { type: 'transition-end' },
+  ]);
+  assert(d2[2].phase === 'closed', '2d: close (motion) -> "closing" -> transition-end -> "closed"');
+  const e = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }, { type: 'close', reducedMotion: true }]);
+  assert(e[1].phase === 'closed', '2e: reduced-motion close -> "closed" directly');
+  const f = _controlCenterStateMachine([{ type: 'open', reducedMotion: false }, { type: 'open', reducedMotion: false }]);
+  assert(f[0].phase === 'opening' && f[1].phase === 'opening', '2f-1: a second "open" while opening is a no-op');
+  const f2 = _controlCenterStateMachine([{ type: 'close', reducedMotion: false }]);
+  assert(f2[0].phase === 'closed', '2f-2: "close" from initial closed state is a no-op');
+  const s1 = initialControlCenterState(); const s2 = initialControlCenterState();
+  s1.phase = 'open';
+  assert(s2.phase === 'closed', '2g: initialControlCenterState() returns a fresh object each call');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[3] Profile push/back…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const a = _controlCenterStateMachine([{ type: 'open', reducedMotion: false }, { type: 'push-profile' }]);
+  assert(a[1].pane === 'main', '3a: push-profile while still "opening" is a no-op');
+  const b = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }, { type: 'push-profile' }]);
+  assert(b[1].pane === 'profile', '3b: push-profile once fully "open" -> pane becomes "profile"');
+  const c = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }, { type: 'push-profile' }, { type: 'pop-profile' }]);
+  assert(c[2].pane === 'main', '3c: pop-profile -> pane returns to "main"');
+  const d = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }, { type: 'push-profile' }, { type: 'close', reducedMotion: true }]);
+  assert(d[2].phase === 'closed' && d[2].pane === 'main', '3d: closing from the Profile pane resets pane to "main"');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[4] Accordion single-open-per-group — unified toggle-row event…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(_toggleAccordionRow(null, 'timezone') === 'timezone', '4a: opening a row from closed sets it as the open row');
+  assert(_toggleAccordionRow('timezone', 'notifications') === 'notifications', '4b: opening a different row replaces the open one');
+  assert(_toggleAccordionRow('timezone', 'timezone') === null, '4c: re-tapping the open row closes it');
+
+  const steps = _controlCenterStateMachine([
+    { type: 'toggle-row', group: 'settings', rowId: 'timezone' },
+    { type: 'toggle-row', group: 'feedback', rowId: 'version-history' },
+    { type: 'toggle-row', group: 'settings', rowId: 'notifications' },
+  ]);
+  assert(steps[0].settingsOpenRow === 'timezone' && steps[0].feedbackGroupOpenRow === null, '4d-1: settings group opens independently of the feedback group');
+  assert(steps[1].settingsOpenRow === 'timezone' && steps[1].feedbackGroupOpenRow === 'version-history', '4d-2: opening the feedback group does not close the settings group\'s open row');
+  assert(steps[2].settingsOpenRow === 'notifications' && steps[2].feedbackGroupOpenRow === 'version-history', '4d-3: switching the settings row does not touch the feedback group\'s state');
+
+  // FIX ROUND 1, finding 4/5: Feedback now lives in the SAME single-open
+  // group as Version history (they used to be independent — Feedback was a
+  // deep link with no open state at all).
+  const fb = _controlCenterStateMachine([
+    { type: 'toggle-row', group: 'feedback', rowId: 'feedback' },
+    { type: 'toggle-row', group: 'feedback', rowId: 'version-history' },
+  ]);
+  assert(fb[0].feedbackGroupOpenRow === 'feedback', '4e-1: opening Feedback sets it as the feedback group\'s open row');
+  assert(fb[1].feedbackGroupOpenRow === 'version-history', '4e-2: opening Version history in the SAME group closes Feedback (single-open-per-group, now spanning both rows)');
+
+  assert(_controlCenterStateMachine([{ type: 'toggle-row', group: 'nonsense', rowId: 'x' }])[0].settingsOpenRow === null,
+    '4f: an unrecognized group is a no-op, never throws, never opens anything (deny-by-default)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5] isDrawerVisuallyOpen()…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(isDrawerVisuallyOpen(initialControlCenterState()) === false, '5a: closed -> not visually open');
+  assert(isDrawerVisuallyOpen({ phase: 'opening', dragging: false, dragProgress: 0 }) === true, '5b: "opening" -> visually open');
+  assert(isDrawerVisuallyOpen({ phase: 'open', dragging: false, dragProgress: 0 }) === true, '5c: "open" -> visually open');
+  assert(isDrawerVisuallyOpen({ phase: 'closing', dragging: false, dragProgress: 0 }) === true, '5d: "closing" -> still visually open (mid-animation)');
+  assert(isDrawerVisuallyOpen({ phase: 'closed', dragging: false, dragProgress: 0 }) === false, '5e: settled "closed" -> not visually open');
+  assert(isDrawerVisuallyOpen({ phase: 'closed', dragging: true, dragProgress: 0.1 }) === true, '5f: mid-drag with progress, even while phase is still "closed" -> visually open');
+  assert(isDrawerVisuallyOpen({ phase: 'closed', dragging: true, dragProgress: 0 }) === false, '5g: a drag that has moved 0px is NOT yet visually open');
+  assert(isDrawerVisuallyOpen(null) === false, '5h: a null state is safely "not open", never throws');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[6] _resolveDrawerSettle()…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(_resolveDrawerSettle({ progress: 0.5, velocityPxPerMs: 0 }) === true, '6a: past 40% with no velocity -> settles open');
+  assert(_resolveDrawerSettle({ progress: 0.39, velocityPxPerMs: 0 }) === false, '6b: under 40% with no velocity -> settles closed');
+  assert(_resolveDrawerSettle({ progress: 0.4, velocityPxPerMs: 0 }) === true, '6c: exactly 40% (>=) -> settles open');
+  assert(_resolveDrawerSettle({ progress: 0.1, velocityPxPerMs: 0.5 }) === true, '6d: a rightward flick opens even at low distance progress');
+  assert(_resolveDrawerSettle({ progress: 0.9, velocityPxPerMs: -0.5 }) === false, '6e: a leftward flick closes even at high distance progress');
+  assert(_resolveDrawerSettle({ progress: 0.9 }) === true, '6f: velocityPxPerMs defaults to 0 when omitted');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[7] _isWithinEdgeZone()…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(_isWithinEdgeZone(0) === true, '7a: x=0 within the zone');
+  assert(_isWithinEdgeZone(27) === true, '7b: x=27 within the zone');
+  assert(_isWithinEdgeZone(28) === false, '7c: x=28 NOT within the zone');
+  assert(_isWithinEdgeZone(100) === false, '7d: well inside the content, never within the zone');
+  assert(_isWithinEdgeZone(-1) === false, '7e: negative x rejected');
+  assert(_isWithinEdgeZone(undefined) === false, '7f: non-numeric x rejected');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[8] starredPanels() — FIX ROUND 1 finding 6: grouping…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  assert(starredPanels({}).length === 0, '8a: no flags -> no panels');
+  assert(starredPanels(undefined).length === 0, '8b: undefined flags never throws');
+
+  const commOnly = starredPanels({ isCommissioner: true });
+  assert(commOnly.length === 1 && commOnly[0].label === 'Commissioner Panel' && commOnly[0].group === 'commissioner',
+    '8c: commissioner-only -> one panel, group="commissioner"');
+
+  const adminOnly = starredPanels({ isPlatformAdmin: true });
+  assert(adminOnly.length === 1 && adminOnly[0].label === 'Admin Panel' && adminOnly[0].group === 'admin',
+    '8d: platform-admin-only -> one panel, group="admin"');
+
+  const superOnly = starredPanels({ isSuperAdmin: true });
+  assert(superOnly.length === 1 && superOnly[0].group === 'admin',
+    '8e: FIX ROUND 1 finding 6 — Super Admin\'s group is "admin" (nested under the Admin group label), not its own group');
+
+  const all3 = starredPanels({ isCommissioner: true, isPlatformAdmin: true, isSuperAdmin: true });
+  assert(all3.length === 3 && all3[0].group === 'admin' && all3[1].group === 'admin' && all3[2].group === 'commissioner',
+    '8f: all three -> Super Admin and Admin both group="admin" (in that order), Commissioner group="commissioner"');
+
+  const truthy = starredPanels({ isCommissioner: 1, isPlatformAdmin: 'yes' });
+  assert(truthy.length === 0, '8g: a truthy-but-not-===true flag value does NOT grant a panel');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[9] renderControlCenter() / renderStarredPanels() / renderFeedbackRulesGroup() / renderProfileScreen()…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const closedHTML = renderControlCenter(baseCtx(), initialControlCenterState());
+  assert(closedHTML.includes('id="control-center"') && closedHTML.includes('data-open="false"'),
+    '9a: closed phase -> #control-center carries data-open="false"');
+  assert(closedHTML.includes('inert'), '9a-2: closed drawer carries `inert`');
+
+  const openState = { ...initialControlCenterState(), phase: 'open' };
+  const openHTML = renderControlCenter(baseCtx(), openState);
+  assert(openHTML.includes('data-open="true"'), '9b: fully open phase -> data-open="true"');
+  assert(!/id="control-center"[^>]*inert/.test(openHTML.split('data-pane="profile"')[0]), '9b-2: open drawer does not carry `inert`');
+
+  const draggingState = { ...initialControlCenterState(), phase: 'closed', dragging: true, dragProgress: 0.2 };
+  const draggingHTML = renderControlCenter(baseCtx(), draggingState);
+  assert(draggingHTML.includes('data-open="true"') && draggingHTML.includes('data-dragging="true"') && draggingHTML.includes('--cc-drag-progress:0.2'),
+    '9c: mid-drag — data-open="true", data-dragging="true", and the --cc-drag-progress custom property carries the live value (fix round 1 finding 8 hook)');
+
+  const profileState = { ...initialControlCenterState(), phase: 'open', pane: 'profile' };
+  const profileHTML = renderControlCenter(baseCtx(), profileState);
+  assert(profileHTML.includes('data-pane="profile" data-active="true"'), '9d-1: profile pane active when state.pane is "profile"');
+  assert(profileHTML.includes('data-pane="main" data-active="false"'), '9d-2: main pane correspondingly inactive');
+
+  const collapsedAll = renderControlCenter(baseCtx(), { ...initialControlCenterState(), phase: 'open' });
+  assert(!collapsedAll.includes('NOTIF BODY') && !collapsedAll.includes('CHAT BODY') && !collapsedAll.includes('SCRIBE BODY')
+    && !collapsedAll.includes('GAME REQUEST BODY') && !collapsedAll.includes('RELEASE NOTES BODY') && !collapsedAll.includes('FEEDBACK BODY'),
+    '9e-1: every accordion row collapsed -> NONE of the injected bodies appear at all');
+
+  const notifOpen = { ...initialControlCenterState(), phase: 'open', settingsOpenRow: 'notifications' };
+  const notifHTML = renderControlCenter(baseCtx(), notifOpen);
+  assert((notifHTML.match(/NOTIF BODY/g) || []).length === 1, '9e-2: Notifications open -> its body appears exactly once');
+  assert(!notifHTML.includes('CHAT BODY') && !notifHTML.includes('FEEDBACK BODY'), '9e-3: opening one row never renders a different row\'s body');
+
+  // FIX ROUND 1, finding 4/5 — Feedback is NOW an accordion row embedding
+  // feedbackCardHTML, per the DI VERDICT's own amendment (3).
+  const feedbackOpen = { ...initialControlCenterState(), phase: 'open', feedbackGroupOpenRow: 'feedback' };
+  const feedbackHTML = renderControlCenter(baseCtx(), feedbackOpen);
+  assert((feedbackHTML.match(/FEEDBACK BODY/g) || []).length === 1, '9f-1: Feedback open -> ctx.bodies.feedbackCardHTML is embedded exactly once (was NEVER embedded in fix round 0 — this is the corrected behavior)');
+  assert(feedbackHTML.includes('data-action="cc-toggle-row" data-group="feedback" data-row="feedback"'), '9f-2: Feedback is wired as an accordion toggle, not a deep-link action');
+  assert(!feedbackHTML.includes('data-action="cc-feedback"'), '9f-3: the old deep-link action (cc-feedback) no longer exists anywhere in the output');
+  assert(feedbackHTML.includes('data-action="cc-navigate" data-target="rules"'), '9f-4: Rules is still a plain nav row, unchanged');
+
+  const historyOpenHTML = renderControlCenter(baseCtx(), { ...initialControlCenterState(), phase: 'open', feedbackGroupOpenRow: 'version-history' });
+  assert((historyOpenHTML.match(/RELEASE NOTES BODY/g) || []).length === 1, '9f-5: Version history open -> its body appears exactly once, and (single-open-per-group) Feedback\'s body does not');
+  assert(!historyOpenHTML.includes('FEEDBACK BODY'), '9f-6: …confirmed — Feedback body absent while Version history is the open row in the same group');
+
+  // XSS sweep.
+  const XSS = '<script>evil()</script>';
+  const xssCtx = baseCtx({
+    session: { player: { id: 'p1', displayName: XSS, initials: 'XX', almaMater: XSS } },
+    league: { id: 'l1', name: XSS, pilot: false },
+  });
+  const xssHTML = renderControlCenter(xssCtx, { ...initialControlCenterState(), phase: 'open' });
+  assert(!xssHTML.includes('<script>'), '9g-1: a <script> player displayName/league name is escaped in the identity header');
+  const xssProfileHTML = renderProfileScreen(xssCtx);
+  assert(!xssProfileHTML.includes('<script>'), '9g-2: a <script> displayName/almaMater is escaped in the pushed Profile screen');
+
+  let threw = false;
+  try { renderControlCenter({ ...baseCtx(), escHtml: undefined }, initialControlCenterState()); }
+  catch (e) { threw = e instanceof TypeError; }
+  assert(threw, '9h-1: renderControlCenter() throws a TypeError when escHtml is missing');
+  threw = false;
+  try { renderControlCenter({ ...baseCtx(), icon: undefined }, initialControlCenterState()); }
+  catch (e) { threw = e instanceof TypeError; }
+  assert(threw, '9h-2: …and the same when `icon` is missing');
+
+  const helpHTML = renderHelpFooter(baseCtx());
+  const expectedCopy = "The Help Center isn't available yet — it's coming in a future update.";
+  assert(helpHTML.includes('data-action="coming-soon"'), '9i-1: the Help Center row uses the shared [data-action="coming-soon"] contract');
+  assert(helpHTML.includes(`data-coming-soon-copy="${escHtml(expectedCopy)}"`), '9i-2: …carrying the exact shared-pattern copy string, escaped');
+  assert(helpHTML.includes('href="privacy.html"'), '9i-3: the footer links to privacy.html');
+
+  // Emoji sweep — ✕ (U+2715, close control) is an allowed plain symbol glyph
+  // (existing `showAccountSheet()` precedent, file header note 7); ‹ is no
+  // longer used anywhere (fix round 1 finding 7 replaced it with
+  // icon('chevronLeft')), so nothing else needs allow-listing.
+  const fullHTML = renderControlCenter(
+    baseCtx({ flags: { isCommissioner: true, isPlatformAdmin: true, isSuperAdmin: true, isPilotLeague: true } }),
+    { ...initialControlCenterState(), phase: 'open' },
+  );
+  const sweepTarget = fullHTML.replace(/✕/gu, '');
+  const emojiPattern = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+  assert(!emojiPattern.test(sweepTarget), '9j: no emoji code points anywhere in the rendered chrome, aside from the allowed ✕ glyph');
+  assert(!fullHTML.includes('‹'), '9j-2: FIX ROUND 1 finding 7 — the literal ‹ character is gone entirely, replaced by icon(\'chevronLeft\')');
+
+  assert(!fullHTML.includes('cc-view-league-as') && !fullHTML.includes('View League As') && !fullHTML.includes('View League as'),
+    '9k: FIX ROUND 1 finding 5 — the "View League As" row is gone entirely, under every flag combination, with no residual callback hook');
+
+  // FIX ROUND 1, finding 7 — the Profile back affordance.
+  const profileScreenHTML = renderProfileScreen(baseCtx());
+  assert(profileScreenHTML.includes('data-icon="chevronLeft"'), '9l: the Profile pane\'s back affordance renders icon(\'chevronLeft\') (the real Phase-1 icon), not a literal ‹');
+  // STEP B(7) / N4 (third pass) — account rows only in Supabase auth mode,
+  // Password row carries the drill-in chevron, label per DI-335.
+  assert(!profileScreenHTML.includes('cc-open-password-change') && !profileScreenHTML.includes('cc-open-delete-account'),
+    'N4-a: with no accountRows flag (any non-supabase mode) the Password and Delete Account rows are NOT rendered');
+  const acctHTML = renderProfileScreen(baseCtx({ accountRows: true }));
+  const pwRow = (acctHTML.match(/<button[^>]*data-action="cc-open-password-change"[\s\S]*?<\/button>/) || [''])[0];
+  assert(!!pwRow && pwRow.includes('cc-row-chevron') && pwRow.includes('data-icon="chevronRight"') && acctHTML.includes('cc-open-delete-account'),
+    'N4-b: accountRows:true renders both rows, and the Password row carries the chevronRight drill-in affordance');
+  assert(/>Password</.test(pwRow), 'N4-c: unknown password identity -> neutral "Password" label');
+  assert(/>Change Password</.test(renderProfileScreen(baseCtx({ accountRows: true, hasPasswordIdentity: true }))), 'N4-d: a password identity -> "Change Password"');
+  assert(/>Set Password</.test(renderProfileScreen(baseCtx({ accountRows: true, hasPasswordIdentity: false }))), 'N4-e: Google-only -> "Set Password"');
+
+  // FIX ROUND 1, finding 6 — renderStarredPanels() produces TWO labeled
+  // groups, Super Admin nested inside "Admin", labels escaped through
+  // ctx.escHtml (proven with a TRACKING escHtml, not the pass-through one).
+  const trackingEsc = (s) => `[[${s}]]`;
+  const starredCtx = baseCtx({
+    escHtml: trackingEsc,
+    flags: { isCommissioner: true, isPlatformAdmin: true, isSuperAdmin: true },
+  });
+  const starredHTML = renderStarredPanels(starredCtx);
+  const groupBlocks = starredHTML.split('control-center-group--starred');
+  assert(groupBlocks.length - 1 === 2, `9m-1: exactly TWO labeled starred groups render when all three flags are set (got ${groupBlocks.length - 1})`);
+  assert(starredHTML.includes('[[Admin]]') && starredHTML.includes('[[Commissioner]]'), '9m-2: both group LABELS are routed through the injected escHtml (tracking wrapper proves the call, not just a pass-through)');
+  assert(starredHTML.includes('[[Super Admin Panel]]') && starredHTML.includes('[[Admin Panel]]'), '9m-3: both admin-group ROW labels are also escaped');
+  const adminGroupIdx = starredHTML.indexOf('[[Admin]]');
+  const commGroupIdx = starredHTML.indexOf('[[Commissioner]]');
+  const superRowIdx = starredHTML.indexOf('[[Super Admin Panel]]');
+  const adminRowIdx = starredHTML.indexOf('[[Admin Panel]]');
+  assert(adminGroupIdx < superRowIdx && superRowIdx < adminRowIdx && adminRowIdx < commGroupIdx,
+    '9m-4: document order is Admin (group label) -> Super Admin Panel -> Admin Panel -> Commissioner (group label) — Super Admin sits INSIDE the Admin group, before the Commissioner group even starts');
+
+  const commissionerOnlyHTML = renderStarredPanels(baseCtx({ flags: { isCommissioner: true } }));
+  assert(!commissionerOnlyHTML.includes('Admin') , '9n: commissioner-only -> the "Admin" group is entirely absent (deny-by-default extends to whole groups, not just rows)');
+
+  assert(renderStarredPanels(baseCtx()) === '', '9o: no flags at all -> renderStarredPanels() returns an empty string, no empty group shells');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[10] bindControlCenterEdgeSwipe() — FIX ROUND 1 finding 3: must not suspend itself…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow = globalThis.window;
+  const savedDocument = globalThis.document;
+
+  function makeFakeWindow() {
+    const handlers = {};
+    return {
+      Capacitor: { isNativePlatform: () => true },
+      addEventListener(type, fn) { handlers[type] = fn; },
+      removeEventListener(type) { delete handlers[type]; },
+      _fire(type, evt) { handlers[type]?.(evt); },
+    };
+  }
+  function touch(x, y) { return { touches: [{ clientX: x, clientY: y }] }; }
+
+  // 10a: off-native -> inert no-op, never binds.
+  globalThis.window = { addEventListener() { throw new Error('must not bind off-native'); }, removeEventListener() {} };
+  const unbindOff = bindControlCenterEdgeSwipe(() => {}, () => initialControlCenterState());
+  assert(typeof unbindOff === 'function', '10a-1: returns a callable unbind even when nothing was ever bound');
+  unbindOff();
+
+  globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} } };
+
+  // 10b: closed drawer, outside the edge zone -> never arms.
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState());
+    fakeWin._fire('touchstart', touch(100, 300));
+    fakeWin._fire('touchmove', touch(160, 300));
+    assert(events.length === 0, '10b: outside the 28px edge zone (closed drawer), the gesture never arms');
+    unbind();
+  }
+
+  // 10c: closed drawer, inside the edge zone -> arms.
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300 });
+    fakeWin._fire('touchstart', touch(10, 300));
+    fakeWin._fire('touchmove', touch(30, 300));
+    assert(events.some(e => e.type === 'drag-start'), '10c: inside the edge zone, past the axis dead-zone, arms a drag');
+    unbind();
+  }
+
+  // 10d: open drawer, drag anywhere -> arms (not edge-gated).
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const state = { ...initialControlCenterState(), phase: 'open' };
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => state, { getWidthPx: () => 300 });
+    fakeWin._fire('touchstart', touch(250, 300));
+    fakeWin._fire('touchmove', touch(200, 300));
+    assert(events.some(e => e.type === 'drag-start'), '10d: drawer OPEN — a drag arms regardless of starting x');
+    unbind();
+  }
+
+  // 10e — THE FIX ITSELF. A fake `document` that RETURNS A NODE for
+  // `#control-center[data-open="true"]` — simulating nav-gestures.js's
+  // FUTURE amended gesturesSuspended(), which per the wiring checklist will
+  // say "suspended" whenever this drawer is open. The binder must NOT
+  // consult that (or any equivalent self-referential check) — dragging the
+  // open drawer must still work.
+  {
+    globalThis.document = {
+      getElementById: () => null, // no site-gate-overlay, no chat-sheet-wrap
+      querySelector: (sel) => {
+        if (sel === '#control-center[data-open="true"]') return { id: 'control-center' }; // "the drawer is open"
+        if (sel === '.modal-overlay') return null; // no OTHER modal is open
+        return null;
+      },
+      body: { dataset: {} },
+    };
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const state = { ...initialControlCenterState(), phase: 'open' };
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => state, { getWidthPx: () => 300 });
+    fakeWin._fire('touchstart', touch(250, 300));
+    fakeWin._fire('touchmove', touch(200, 300));
+    assert(events.some(e => e.type === 'drag-start'),
+      '10e: FIX ROUND 1 FINDING 3 — even when a document query for "#control-center[data-open=\\"true\\"]" (the drawer\'s OWN open-state, exactly what the amended shared gesturesSuspended() will check) returns a node, dragging the OPEN drawer left still arms and closes — this binder never treats its own openness as a suspension');
+    unbind();
+  }
+
+  // 10f: a GENUINE other suspension (real gate) still blocks — the fix must
+  // not have thrown out real suspension along with the self-reference.
+  {
+    globalThis.document = { getElementById: (id) => (id === 'site-gate-overlay' ? {} : null), querySelector: () => null, body: { dataset: {} } };
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState());
+    fakeWin._fire('touchstart', touch(5, 300));
+    fakeWin._fire('touchmove', touch(50, 300));
+    assert(events.length === 0, '10f: a REAL other suspension (site-gate-overlay) still blocks the edge-swipe from arming at all');
+    unbind();
+  }
+
+  // 10g: a real OTHER modal also still blocks.
+  {
+    globalThis.document = { getElementById: () => null, querySelector: (sel) => (sel === '.modal-overlay' ? {} : null), body: { dataset: {} } };
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState());
+    fakeWin._fire('touchstart', touch(5, 300));
+    fakeWin._fire('touchmove', touch(50, 300));
+    assert(events.length === 0, '10g: a real OTHER modal (.modal-overlay) still blocks the edge-swipe');
+    unbind();
+  }
+
+  // 10h/10i: reviewer B4 (3c fix window, third pass) — the League Page overlay
+  // and the wizard sheet carry their OWN native drags; a touch at clientX 10
+  // (inside the 28 px band) must not arm the drawer too. 10j: the control —
+  // the same touch with neither present DOES arm it.
+  for (const [label, id] of [['10h', 'league-page-overlay'], ['10i', 'week-wizard-sheet-wrap']]) {
+    globalThis.document = { getElementById: (x) => (x === id ? {} : null), querySelector: () => null, body: { dataset: {} } };
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300 });
+    fakeWin._fire('touchstart', touch(10, 300));
+    fakeWin._fire('touchmove', touch(60, 300));
+    fakeWin._fire('touchend', touch(60, 300));
+    assert(events.length === 0, `${label}: with #${id} up, an edge touch at clientX 10 does NOT start a drawer drag (one gesture owner per touch)`);
+    unbind();
+  }
+  {
+    globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} } };
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300 });
+    fakeWin._fire('touchstart', touch(10, 300));
+    fakeWin._fire('touchmove', touch(60, 300));
+    assert(events.length > 0, '10j non-vacuity: with neither surface up, the SAME edge touch does start the drawer drag');
+    unbind();
+  }
+
+  globalThis.window = savedWindow;
+  globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// A MINIMAL, REAL-ENOUGH FAKE DOM — see the file header. Supports exactly
+// what js/control-center.js's mountControlCenter() actually calls.
+// ═════════════════════════════════════════════════════════════════════════
+
+const VOID_TAGS = new Set(['br', 'img', 'hr', 'meta', 'link']);
+
+function toDataAttr(prop) {
+  return 'data-' + String(prop).replace(/[A-Z]/g, m => '-' + m.toLowerCase());
+}
+
+class FakeElement {
+  constructor(tagName) {
+    this.tagName = String(tagName || 'div').toUpperCase();
+    this._attrs = new Map();
+    this.children = [];
+    this.parentNode = null;
+    this._listeners = {};
+    this.style = {
+      _props: {},
+      setProperty(k, v) { this._props[k] = v; },
+      getPropertyValue(k) { return this._props[k] || ''; },
+    };
+    this.disabled = false;
+    this._value = '';
+    const self = this;
+    this.dataset = new Proxy({}, {
+      get(_, prop) { return self._attrs.get(toDataAttr(prop)); },
+      set(_, prop, value) { self._attrs.set(toDataAttr(prop), String(value)); return true; },
+    });
+  }
+  get id() { return this._attrs.get('id') || ''; }
+  set id(v) { this._attrs.set('id', v); }
+  get className() { return this._attrs.get('class') || ''; }
+  get value() { return this._value; }
+  set value(v) { this._value = v; }
+  get defaultValue() { return this._defaultValue ?? ''; }
+  setAttribute(name, value) { this._attrs.set(name, value === undefined ? '' : String(value)); }
+  getAttribute(name) { return this._attrs.has(name) ? this._attrs.get(name) : null; }
+  removeAttribute(name) { this._attrs.delete(name); }
+  hasAttribute(name) { return this._attrs.has(name); }
+  addEventListener(type, fn) { (this._listeners[type] ||= []).push(fn); }
+  removeEventListener(type, fn) { this._listeners[type] = (this._listeners[type] || []).filter(f => f !== fn); }
+  _dispatch(type, evt = {}) { (this._listeners[type] || []).slice().forEach(fn => fn({ target: this, ...evt })); }
+  focus() { if (typeof document !== 'undefined') document.activeElement = this; }
+  set innerHTML(html) {
+    const kids = parseHTML(html);
+    for (const k of kids) k.parentNode = this;
+    this.children = kids;
+  }
+  get innerHTML() { return '[parsed]'; }
+  querySelector(sel) { return findAll(this, sel)[0] || null; }
+  querySelectorAll(sel) { return findAll(this, sel); }
+  closest(sel) {
+    let node = this;
+    while (node) { if (elMatchesSelectorList(node, sel)) return node; node = node.parentNode; }
+    return null;
+  }
+}
+
+function parseAttrs(el, attrStr) {
+  if (!attrStr) return;
+  const attrRe = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)(?:\s*=\s*("([^"]*)"|'([^']*)'|[^\s>]+))?/g;
+  let am;
+  while ((am = attrRe.exec(attrStr))) {
+    const name = am[1];
+    if (!name) continue;
+    const value = am[3] !== undefined ? am[3] : (am[4] !== undefined ? am[4] : (am[2] !== undefined ? am[2] : ''));
+    el.setAttribute(name, value);
+    // `value` and `defaultValue` are set TOGETHER at parse time — the same
+    // real-DOM contract field-preserve.js's dirty check relies on: `value`
+    // is the LIVE property (mutable afterward by test code / a real edit),
+    // `defaultValue` is a snapshot of what the markup itself specified and
+    // never changes again for this node.
+    if (name === 'value') { el.value = value; el._defaultValue = value; }
+  }
+}
+
+/** A small, well-formed-input-only HTML parser — see the file header for
+ *  scope. Returns the TOP-LEVEL child element array. */
+function parseHTML(html) {
+  const root = { children: [] };
+  const stack = [root];
+  const tagRe = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^<>]*?)?)\s*(\/?)>/g;
+  let m;
+  while ((m = tagRe.exec(html))) {
+    const [, closing, tagName, attrStr, selfClose] = m;
+    if (closing) {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    const el = new FakeElement(tagName);
+    parseAttrs(el, attrStr || '');
+    el.parentNode = stack[stack.length - 1] === root ? null : stack[stack.length - 1];
+    stack[stack.length - 1].children.push(el);
+    const isVoid = selfClose === '/' || VOID_TAGS.has(tagName.toLowerCase());
+    if (!isVoid) stack.push(el);
+  }
+  return root.children;
+}
+
+function parseCompound(compound) {
+  let s = compound.trim();
+  const result = { tag: null, id: null, classes: [], attrs: [] };
+  const re = /(#[-\w]+)|(\.[-\w]+)|(\[[^\]]+\])|([a-zA-Z][a-zA-Z0-9-]*)/g;
+  let m;
+  while ((m = re.exec(s))) {
+    if (m[1]) result.id = m[1].slice(1);
+    else if (m[2]) result.classes.push(m[2].slice(1));
+    else if (m[3]) {
+      const am = m[3].slice(1, -1).match(/^([-a-zA-Z0-9_:]+)(?:="([^"]*)")?$/);
+      if (am) result.attrs.push({ name: am[1], value: am[2] });
+    } else if (m[4]) result.tag = m[4].toUpperCase();
+  }
+  return result;
+}
+
+function elMatchesCompound(el, compound) {
+  if (!el || !el.tagName) return false;
+  if (compound.tag && el.tagName !== compound.tag) return false;
+  if (compound.id && el.id !== compound.id) return false;
+  for (const c of compound.classes) {
+    if (!(el.className || '').split(/\s+/).includes(c)) return false;
+  }
+  for (const a of compound.attrs) {
+    if (!el.hasAttribute(a.name)) return false;
+    if (a.value !== undefined && el.getAttribute(a.name) !== a.value) return false;
+  }
+  return true;
+}
+
+function elMatchesSelectorList(el, selector) {
+  return selector.split(',').some(part => elMatchesCompound(el, parseCompound(part.trim())));
+}
+
+function findAll(root, selector) {
+  const out = [];
+  function walk(el) {
+    for (const child of el.children || []) {
+      if (elMatchesSelectorList(child, selector)) out.push(child);
+      walk(child);
+    }
+  }
+  walk(root);
+  return out;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[11] mountControlCenter() — FIX ROUND 1 findings 1, 2, 8, 9…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow = globalThis.window;
+  const savedDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }; // no Capacitor -> edge-swipe binder no-ops
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+
+  // ── 11a-11d: root-node stability (finding 1), NO hand-dispatched transitionend anywhere in this block. ──
+  {
+    const root = new FakeElement('div');
+    const ctx = baseCtx();
+    const paintLog = [];
+    const api = mountControlCenter(root, ctx, { onAfterPaint: (r, s) => paintLog.push(s.phase) });
+
+    const drawer1 = root.querySelector('#control-center');
+    const backdrop1 = root.querySelector('#control-center-backdrop');
+    const mainContent1 = root.querySelector('[data-pane-content="main"]');
+    assert(!!drawer1 && !!backdrop1 && !!mainContent1, '11a-0: fixture sanity — the initial mount produced a real #control-center/#control-center-backdrop/content tree');
+    assert(paintLog.length === 1 && paintLog[0] === 'closed', '11a-1: onAfterPaint fires once after the initial mount');
+
+    api.open(); // motion path (no reducedMotion stub -> prefersReducedMotion() reads false, no matchMedia global)
+    const drawer2 = root.querySelector('#control-center');
+    assert(drawer2 === drawer1, '11b: FIX ROUND 1 FINDING 1 — #control-center is the SAME node instance after api.open() (was a BRAND NEW node every dispatch before the fix)');
+    assert(api.getState().phase === 'opening', '11b-2: phase is the transient "opening" (root never got the chance to be "born already open" — no transitionend has fired)');
+
+    // A content-affecting dispatch (open a settings row) — even THIS must
+    // not touch the DRAWER ROOT or BACKDROP, only the main pane's content
+    // container.
+    root._dispatch('click', {
+      target: (() => {
+        // Can't toggle a settings row until the drawer is fully 'open' in a
+        // strict UX sense, but the reducer doesn't actually gate toggle-row
+        // on phase — confirm the ROOT survives regardless.
+        const btn = new FakeElement('button');
+        btn.setAttribute('data-action', 'cc-toggle-row');
+        btn.setAttribute('data-group', 'settings');
+        btn.setAttribute('data-row', 'timezone');
+        btn.parentNode = root;
+        return btn;
+      })(),
+    });
+    const drawer3 = root.querySelector('#control-center');
+    const backdrop3 = root.querySelector('#control-center-backdrop');
+    assert(drawer3 === drawer1 && backdrop3 === backdrop1, '11c: the root/backdrop nodes are STILL the same instances after a content-affecting dispatch (toggle-row)');
+    assert(root.querySelector('[data-row="timezone"] .control-center-row-body') !== null || root.querySelector('#cc-body-timezone') !== null,
+      '11c-2: …and the content repaint DID actually happen — the timezone row\'s body is now present');
+    // F11 (pass-2 reviewer, 2026-09-25) — the inner clipping wrapper: a CSS
+    // grid track cannot itself clip content during the 0fr->1fr transition
+    // (the abrupt "pop" the Design Philosophy names), so `.control-center-row-body`
+    // needs a CHILD with `overflow:hidden;min-height:0` to actually collapse.
+    assert(root.querySelector('.control-center-row-body-inner') !== null,
+      '11c-3: F11 — .control-center-row-body wraps its content in .control-center-row-body-inner (the actual clipping element)');
+
+    api.destroy();
+  }
+
+  // ── 11e: phase completes via the REAL setTimeout fallback — no hand-dispatched transitionend anywhere in this test. ──
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    api.open();
+    assert(api.getState().phase === 'opening', '11e-1: fixture check — opening (motion path)');
+    // Real wait, bounded: DRAWER_MOTION_MS + 40 is the armed delay; give it
+    // a comfortable margin without hand-firing transitionend.
+    await new Promise(resolve => setTimeout(resolve, DRAWER_MOTION_MS + 120));
+    assert(api.getState().phase === 'open', `11e-2: FIX ROUND 1 FINDING 1 — phase advanced to "open" via the REAL setTimeout fallback alone (no transitionend was ever dispatched in this test) — was permanently stuck under the old bug`);
+    api.destroy();
+  }
+
+  // ── 11f: onAfterPaint + update() (finding 2). ──
+  {
+    const root = new FakeElement('div');
+    const ctx1 = baseCtx({ logoView: false });
+    const paintLog = [];
+    const api = mountControlCenter(root, ctx1, { onAfterPaint: () => paintLog.push(1) });
+    const countAfterMount = paintLog.length;
+    assert(countAfterMount >= 1, '11f-1: onAfterPaint fires at least once at mount');
+
+    const toggleBtn = root.querySelector('[data-action="cc-toggle-logo-view"]');
+    assert(!!toggleBtn, '11f-2: fixture sanity — the logo-view toggle row rendered');
+    let savedValue = null;
+    const ctx2 = baseCtx({ logoView: false, callbacks: { onSetLogoView: (v) => { savedValue = v; } } });
+    // Re-mount with the real callback wired (baseCtx() above had none) —
+    // simplest way to exercise the callback without reaching into closures.
+    const root2 = new FakeElement('div');
+    const api2 = mountControlCenter(root2, ctx2, {});
+    root2._dispatch('click', { target: root2.querySelector('[data-action="cc-toggle-logo-view"]') });
+    assert(savedValue === true, '11f-3: tapping the Team-logos toggle calls onSetLogoView(true) via the SAME content the mount built');
+
+    // update(): a fresh ctx reflecting the saved preference — content
+    // reflects it, phase/pane/open-row are preserved.
+    api2.open();
+    root2._dispatch('click', { target: root2.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="timezone"]') });
+    assert(api2.getState().settingsOpenRow === 'timezone', '11f-4: fixture — timezone row is open before update()');
+    const paintCountBeforeUpdate = paintLog.length;
+    api2.update(baseCtx({ logoView: true }));
+    const toggleAfterUpdate = root2.querySelector('[data-action="cc-toggle-logo-view"]');
+    assert(toggleAfterUpdate?.getAttribute('aria-checked') === 'true', '11f-5: update(nextCtx) re-renders content against the NEW ctx (logoView:true now reflected)');
+    assert(api2.getState().settingsOpenRow === 'timezone', '11f-6: …while PRESERVING the open accordion row (state untouched by update())');
+    assert(api2.getState().phase === 'opening' || api2.getState().phase === 'open', '11f-7: …and the drawer phase is also preserved (still open/opening, not reset to closed)');
+
+    api.destroy(); api2.destroy();
+  }
+
+  // ── 11g: no content repaint on drag-move; --cc-drag-progress updates
+  // directly; focus only on closed->open; light haptic on api.open(). Needs
+  // a genuine native-shell mount so the real bindControlCenterEdgeSwipe()
+  // (covered independently in [10]) is the thing driving the drag. ──
+  {
+    globalThis.window = {
+      Capacitor: { isNativePlatform: () => true },
+      _listeners: {},
+      addEventListener(type, fn) { this._listeners[type] = fn; },
+      removeEventListener(type) { delete this._listeners[type]; },
+      _fire(type, evt) { this._listeners[type]?.(evt); },
+    };
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx(), {});
+    const mainContentEl = root.querySelector('[data-pane-content="main"]');
+    const childrenRefBefore = mainContentEl.children;
+    const drawerEl = root.querySelector('#control-center');
+
+    globalThis.window._fire('touchstart', { touches: [{ clientX: 10, clientY: 300 }] });
+    globalThis.window._fire('touchmove', { touches: [{ clientX: 50, clientY: 300 }] });
+    const mainContentAfterDrag = root.querySelector('[data-pane-content="main"]');
+    assert(mainContentAfterDrag.children === childrenRefBefore,
+      '11h-1: FIX ROUND 1 FINDING 8 — a drag-move NEVER touches the main pane content (children array reference is untouched — no innerHTML reassignment happened)');
+    assert(drawerEl.style._props['--cc-drag-progress'] !== undefined && Number(drawerEl.style._props['--cc-drag-progress']) > 0,
+      '11h-2: …but the --cc-drag-progress custom property on the STABLE root DID update, live, during the drag (1:1 finger tracking hook)');
+
+    globalThis.window._fire('touchend', {});
+    api.destroy();
+    globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  }
+
+  // ── 11i: focus only on closed->open, never on every subsequent paint. ──
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    const closeBtn = root.querySelector('[data-action="cc-close"]');
+    api.open();
+    assert(document.activeElement === closeBtn, '11i-1: opening from closed focuses the close control');
+    // Simulate the player focusing something else inside the drawer, then
+    // trigger an unrelated content-affecting dispatch — focus must NOT jump
+    // back to the close button (fix round 0 refocused on every paint).
+    const otherEl = root.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="timezone"]');
+    document.activeElement = otherEl;
+    root._dispatch('click', { target: otherEl });
+    assert(document.activeElement === otherEl, '11i-2: FIX ROUND 1 FINDING 8 — a later content-affecting dispatch does NOT steal focus back to the close button');
+    api.destroy();
+  }
+
+  // ── 11j: light haptic on api.open() (finding 8) — via js/haptics.js's real plugin-call fixture. ──
+  {
+    const haptics = await import('./js/haptics.js');
+    const calls = [];
+    globalThis.window = {
+      Capacitor: { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(o) } } },
+      addEventListener() {}, removeEventListener() {},
+    };
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    api.open();
+    // iOS shell parity check (2026-09-26) — the installed @capacitor/haptics
+    // iOS plugin compares style strings CASE-SENSITIVELY against
+    // 'MEDIUM'/'LIGHT'/'HEAVY' (js/haptics.js); 'Light' fired HEAVY on every
+    // call. Updated to the real UPPER-CASE value the fix now sends.
+    assert(calls.length === 1 && calls[0].style === 'LIGHT', '11j: FIX ROUND 1 FINDING 8 — api.open() (the header-tap path) fires a LIGHT haptic, matching the swipe-settle-open path');
+    api.destroy();
+    globalThis.window = { addEventListener() {}, removeEventListener() {} };
+    void haptics;
+  }
+
+  // ── 11k: field-preserve integration (finding 9) — a dirty Profile field survives a content repaint. ──
+  {
+    const root = new FakeElement('div');
+    const ctx = baseCtx();
+    const api = mountControlCenter(root, ctx);
+    api.open();
+    // Push to Profile and dirty the display-name field.
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-push-profile"]') });
+    const nameField = root.querySelector('[data-field="display-name"]');
+    nameField.value = 'Drew (editing)';
+    // Force a content repaint via update() — field-preserve should carry
+    // the dirty value across it, per RG-176.
+    api.update(baseCtx());
+    const nameFieldAfter = root.querySelector('[data-field="display-name"]');
+    assert(nameFieldAfter.value === 'Drew (editing)',
+      '11k: FIX ROUND 1 FINDING 9 — an in-progress edit in the Profile pane survives a content repaint (update()), via js/field-preserve.js capture/restore, matching RG-176\'s own rule for every other repainted surface');
+    api.destroy();
+  }
+
+  // ── 11l: SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — the
+  // identity header's league-name tap is its OWN target, separate from the
+  // avatar/name tap (which stays Profile), and it calls onOpenLeaguePage(),
+  // not onNavigate()/onSwitchLeague(). Before this fix League Page had no
+  // reachable entry point from the drawer at all. ──────────────────────────
+  {
+    let openedLeaguePage = 0, pushedProfile = 0;
+    const root = new FakeElement('div');
+    const ctx = baseCtx({ callbacks: { onOpenLeaguePage: () => { openedLeaguePage++; }, onNavigate: () => { pushedProfile++; } } });
+    const api = mountControlCenter(root, ctx);
+    api.open();
+    const leagueTap = root.querySelector('[data-action="cc-open-league-page"]');
+    assert(!!leagueTap, '11l-1: the identity header renders a [data-action="cc-open-league-page"] tap target');
+    assert(!!leagueTap && leagueTap.tagName === 'BUTTON',
+      '11l-1b: …and it is a real <button>, not a non-interactive span (elements cannot nest buttons, which is why it had to move out)');
+    const profileBtn = root.querySelector('[data-action="cc-push-profile"]');
+    assert(!!profileBtn && profileBtn.querySelector('[data-action="cc-open-league-page"]') === null,
+      '11l-2: the league-name tap target is NOT nested inside the profile-tap button — it is a sibling element, so the two tap targets can never collide (a button cannot contain another button at all)');
+    root._dispatch('click', { target: leagueTap });
+    assert(openedLeaguePage === 1 && pushedProfile === 0,
+      `11l-3: tapping the league name calls onOpenLeaguePage() exactly once, and does NOT also fire onNavigate() (got openedLeaguePage=${openedLeaguePage}, pushedProfile=${pushedProfile})`);
+    // 11l-4: the SAME tap ALSO closes the drawer (League Page is a
+    // full-screen overlay; leaving the drawer open behind it stacks two
+    // dismissable surfaces) — same `dispatch({type:'close'})` shape
+    // `cc-navigate`/`cc-close` already use. Asserted as "no longer open/
+    // opening" (closing OR closed) rather than a specific terminal phase —
+    // the motion-vs-reduced-motion / transition-fallback-timer mechanics
+    // are §2's own concern, not this finding's.
+    const phaseAfter = root.querySelector('#control-center')?.getAttribute('data-phase');
+    assert(phaseAfter === 'closing' || phaseAfter === 'closed',
+      `11l-4: tapping the league name also closes the drawer — a close was dispatched (got data-phase="${phaseAfter}")`);
+    api.destroy();
+  }
+
+  // ── 11m: S2-2 (full-app review, 2026-09-26) — Switch League used to open
+  // the league sheet (z 200) UNDER the still-open drawer (z 501). The drawer
+  // must already be closing/closed at the moment onSwitchLeague() runs. ──
+  {
+    let phaseAtCallback = null;
+    const root = new FakeElement('div');
+    const ctx = baseCtx({ callbacks: { onSwitchLeague: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
+    const api = mountControlCenter(root, ctx);
+    api.open();
+    const btn = root.querySelector('[data-action="cc-switch-league"]');
+    assert(!!btn, '11m fixture: the drawer renders a [data-action="cc-switch-league"] row');
+    root._dispatch('click', { target: btn });
+    assert(phaseAtCallback === 'closing' || phaseAtCallback === 'closed',
+      `11m: S2-2 — Switch League closes the drawer BEFORE onSwitchLeague() opens the sheet (phase seen by the callback: "${phaseAtCallback}") — never a sheet under an open drawer`);
+    api.destroy();
+  }
+
+  // ── 11n: S2-3 (full-app review, 2026-09-26) — Sign Out used to leave the
+  // drawer OPEN under the sign-in gate (not inert, back after the next
+  // sign-in). It must be fully CLOSED — no slide, the gate paints over it —
+  // by the time onSignOut() runs. ──
+  {
+    let phaseAtCallback = null;
+    const root = new FakeElement('div');
+    const ctx = baseCtx({ callbacks: { onSignOut: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
+    const api = mountControlCenter(root, ctx);
+    api.open();
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-signout"]') });
+    assert(phaseAtCallback === 'closed',
+      `11n: S2-3 — Sign Out closes the drawer INSTANTLY before onSignOut() runs (phase seen by the callback: "${phaseAtCallback}", want "closed")`);
+    assert(api.getState().phase === 'closed', '11n-2: …and it stays closed afterwards (nothing to reappear after the next sign-in)');
+    api.destroy();
+  }
+
+  // ── 11o: the api.close({ immediate: true }) teardown form app.js's hold
+  // sweep and identity chokepoint call — closed at once, never "closing". ──
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    api.open();
+    api.close({ immediate: true });
+    assert(api.getState().phase === 'closed',
+      `11o: api.close({ immediate: true }) lands on "closed" at once (got "${api.getState().phase}") — a teardown under a gate never waits on a transitionend`);
+    api.close({ immediate: true });
+    assert(api.getState().phase === 'closed', '11o-2: …and a second close on a closed drawer is a no-op');
+    api.destroy();
+  }
+
+  globalThis.window = savedWindow;
+  globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log(`\n[control-center] ${pass} passed, ${fail} failed\n`);
+if (fail > 0) process.exit(1);

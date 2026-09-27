@@ -164,6 +164,57 @@ export async function runTrainerRemote(/* { adminPasswordHash } */) {
  * DI-T6.0(f)), so `js/app.js`'s click handler branches on it identically regardless of which path
  * answered — DI-T6.0(f)'s whole point.
  */
+/**
+ * Reviewer BLOCK fix F1 (DI-318 pilot check, 2026-09-25) — mirrors the F-6 precedent in
+ * js/auth.js's `deleteOwnAccount()` EXACTLY: a non-2xx from `functions.invoke()` arrives as
+ * `FunctionsHttpError` (vendor/supabase-js-2.116.0.js) carrying only the raw, unconsumed
+ * Response as `.context` — `error.message` is the SDK's own generic "Edge Function returned a
+ * non-2xx status code", never the function's own named refusal body. Without this, the
+ * Trainer's `pilot_only` 403 (`trainer/index.js`'s `envelopeError(runId, 'This feature is only
+ * available to the pilot league.')`) never reached the commissioner: js/app.js's own catch
+ * toasts `err.message` (unmodified by this fix — app.js is another agent's), so the thrown
+ * error's `.message` IS the toast text.
+ *
+ * Extracted as its OWN exported function — separately from `runTrainerViaEdgeFunction()` below,
+ * which has no injectable Supabase client — so a test can assert the RENDERED message directly
+ * against a synthetic `FunctionsHttpError`-shaped object, without standing up the whole client.
+ *
+ * @param {*} error the `error` half of `functions.invoke()`'s return, whatever shape it is.
+ * @returns {Promise<string|null>} the function's own body.error string, or `null` when there is
+ *   none to read (not a FunctionsHttpError, no `.context.json`, a body that fails to parse or
+ *   parses to something with no usable `error` string) — the caller falls back to `error` itself.
+ */
+export async function extractFunctionErrorMessage(error) {
+  if (!(error && error.name === 'FunctionsHttpError' && error.context
+      && typeof error.context.json === 'function')) {
+    return null;
+  }
+  let body = null;
+  try { body = await error.context.json(); } catch { body = null; }
+  return (body && typeof body.error === 'string' && body.error) ? body.error : null;
+}
+
+/**
+ * Reviewer BLOCK coverage note (2026-09-25) — the ORIGINAL fix left `extractFunctionErrorMessage()`
+ * tested but not PINNED as the thing `runTrainerViaEdgeFunction()` actually uses: reverting its
+ * catch to a bare `throw error;` left every §[30] assertion green, because none of them exercised
+ * the caller. This function is the DECISION `runTrainerViaEdgeFunction()` must make — the Error to
+ * throw, not merely the string extraction — so a test can pin the caller against IT by identity
+ * (`functionInvokeError(fetchError) === fetchError` — the ORIGINAL error object, unwrapped, not a
+ * copy) and a source-shape assertion can require the exact call text `throw await
+ * functionInvokeError(` inside `runTrainerViaEdgeFunction()`'s own body.
+ *
+ * @param {*} error the `error` half of `functions.invoke()`'s return, whatever shape it is.
+ * @returns {Promise<Error>} `new Error(bodyMessage)` when `extractFunctionErrorMessage()` found a
+ *   string body error; otherwise the ORIGINAL `error` argument, unmodified — so a caller that does
+ *   `throw await functionInvokeError(error)` reproduces the pre-fix behavior exactly whenever there
+ *   is no function-supplied copy to prefer.
+ */
+export async function functionInvokeError(error) {
+  const bodyMessage = await extractFunctionErrorMessage(error);
+  return bodyMessage ? new Error(bodyMessage) : error;
+}
+
 export async function runTrainerViaEdgeFunction() {
   const client = getSupabaseClient();
   const leagueId = getActiveLeagueId();
@@ -171,7 +222,11 @@ export async function runTrainerViaEdgeFunction() {
     return { ok: false, error: 'Not signed in to a league — cannot reach the Trainer function' };
   }
   const { data, error } = await client.functions.invoke('trainer', { body: { league_id: leagueId } });
-  if (error) throw error;
+  // `functionInvokeError()` decides WHICH Error reaches the caller — the function's own copy
+  // when the body carried one, else the original SDK error, untouched. See its own header for
+  // why this must be the exact call shape (`throw await functionInvokeError(`) rather than the
+  // extraction inlined here again.
+  if (error) throw await functionInvokeError(error);
   return data;
 }
 

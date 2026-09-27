@@ -701,13 +701,21 @@ console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
     // Same card, and ONE heading. The push sub-section is appended INSIDE the Background jobs
     // card's `.card`, after the per-job rows the warnings' own toggles live in — which is what
     // makes the word "below" true at phone width, where everything is one column.
-    const cardAt = appSrc.indexOf('🛠 Background jobs');
+    //
+    // UX Revamp wiring pass 3a (2026-09-25) — the card relocated whole to the
+    // Admin panel (DI-320 §Data) and its heading moved OUT of app.js entirely
+    // into js/admin-panel.js's ADMIN_CARD_TITLE map (cardShell() supplies the
+    // title now, plain text "Background Jobs", no emoji — D-1's chrome rule).
+    // `renderBackgroundJobsAdminSectionHTML()`'s own function start is the
+    // stable marker this scan uses instead of the now-relocated emoji text.
+    const cardAt = appSrc.indexOf('export function renderBackgroundJobsAdminSectionHTML');
     const rowsAt = appSrc.indexOf('${rowsHtml}', cardAt);
     const subAt = appSrc.indexOf('${renderPushSelfTestHTML()}', cardAt);
     assert(cardAt > -1 && rowsAt > cardAt && subAt > rowsAt,
-      `11c-6: the push sub-section renders INSIDE the Background jobs card and BELOW the per-job rows (card=${cardAt}, rows=${rowsAt}, sub=${subAt}) — so "below" is literally true in the one-column phone layout, not just conceptually`);
-    assert((appSrc.match(/🛠 Background jobs/g) || []).length === 1,
-      '11c-7: …and there is exactly ONE "🛠 Background jobs" heading. Both merged branches added to this card; two headings would be the visible seam of the merge');
+      `11c-6: the push sub-section renders INSIDE renderBackgroundJobsAdminSectionHTML() and BELOW the per-job rows (fn=${cardAt}, rows=${rowsAt}, sub=${subAt}) — so "below" is literally true in the one-column phone layout, not just conceptually`);
+    const adminPanelSrc = await readFile(new URL('./js/admin-panel.js', import.meta.url), 'utf8');
+    assert((adminPanelSrc.match(/'background-jobs': 'Background Jobs'/g) || []).length === 1,
+      '11c-7: …and there is exactly ONE "Background Jobs" title entry in js/admin-panel.js\'s ADMIN_CARD_TITLE map — cardShell() supplies it once, from one place, no second heading duplicated inside the body (relocated to Admin, UX Revamp wiring pass 3a)');
     // Counted as RENDERED MARKUP (`>App version last seen`), not as raw occurrences: the phrase
     // also appears in the three warning strings above and once more in the comment that explains
     // why those warnings were reworded, and none of those is a heading. What must be unique is the
@@ -1829,6 +1837,90 @@ console.log('\n[14] Drew residual 3 — the private self-test row is labelled, s
     assert(!/\.chat-private-chip\{[^}]*opacity:/.test(block),
       '14-21: …and the CHIP is not dimmed: the sentence explaining why a row looks faded must not itself be faded');
   }
+  chat14._resetForTest();
+
+  // ── 14g. DI-292 (2026-09-24) — THE PRIVATE SCRIBE CHANGELOG ROW REUSES THE
+  //         SAME CHIP, DETECTED BY A DIFFERENT STRUCTURAL TELL (the id suffix
+  //         PLUS meta.playerId, not the self-test's id+author+meta.test
+  //         triple) ─────────────────────────────────────────────────────────
+  const CHANGELOG_ROW = (o = {}) => ({
+    id: 'sys_scribe_changelog_sl_1__private', seq: 50, ts: 1_700_000_002_000, type: 'message',
+    author: 'system', authorKind: 'system', notify: false, gameTag: '',
+    body: '📓 SCRIBE update — feedback from Drew changed something about its language right away: "be cleaner" (Commissioner can undo this in Comm → Data → SCRIBE Training.) 🔒 Only you can see this.',
+    meta: { kind: 'scribeChangelog', learningId: 'sl_1', origin: 'instant', category: 'profanity', playerId: 'p_drew' },
+    ...o,
+  });
+  const PUBLIC_CHANGELOG_ROW = (o = {}) => CHANGELOG_ROW({
+    id: 'sys_scribe_changelog_sl_w1', meta: { kind: 'scribeChangelog', learningId: 'sl_w1', origin: 'trainer', category: 'brevity', playerId: '' },
+    body: '📓 SCRIBE update — feedback from a player changed something about how long its posts are in last night\'s training pass: "trim it" (Commissioner can undo this in Comm → Data → SCRIBE Training.)',
+    ...o,
+  });
+  assert(chat14.isPrivateScribeChangelog(CHANGELOG_ROW()) === true,
+    '14-26: the private-shape row (id ending `__private`, author "system", meta.kind "scribeChangelog", meta.playerId non-empty) is recognised');
+  assert(chat14.isPrivateScribeChangelog(PUBLIC_CHANGELOG_ROW()) === false,
+    '14-27: …and the PUBLIC/windowed shape (no `__private` suffix, empty meta.playerId — the same base id `buildChangelogPost()` has always used) is NOT — the un-suffixed shape must keep meaning what it meant before this DI');
+  for (const [label, row] of [
+    ['a member-written row wearing the suffixed id', CHANGELOG_ROW({ author: 'p_kihoon' })],
+    ['the suffix without the meta.kind',             CHANGELOG_ROW({ meta: {} })],
+    ['meta.kind without the suffix',                 PUBLIC_CHANGELOG_ROW({ id: 'sys_scribe_changelog_sl_1' })],
+    ['an ordinary message that merely ENDS in __private', { id: 'sys_scribe_changelog_x__private', type: 'message', author: 'p1', meta: {} }],
+    ['a self-test row (the OTHER private shape)',     TEST_ROW()],
+    ['null',                                          null],
+    // Coordinator finding 1 (reviewer APPROVE WITH NOTES on F-1, 2026-09-24) — the id-suffix
+    // lock ALONE is not enough: a WINDOWED row's model-supplied learningId can coincidentally
+    // end in the reserved suffix (trainer/index.js:929, capStored only truncates). The SECOND,
+    // independent lock — meta.playerId non-empty — must refuse this exact shape.
+    ['a PUBLIC row whose learningId coincidentally ends in the reserved suffix (meta.playerId still empty)',
+      PUBLIC_CHANGELOG_ROW({ id: 'sys_scribe_changelog_sl_w2__private', meta: { kind: 'scribeChangelog', learningId: 'sl_w2__private', origin: 'trainer', category: 'brevity', playerId: '' } })],
+  ]) {
+    assert(chat14.isPrivateScribeChangelog(row) === false,
+      `14-28: ${label} is not a private scribe-changelog row`);
+  }
+
+  const changelogHTML = chatUi14._messageHTMLForTest(CHANGELOG_ROW(), 'p_drew', false);
+  const publicChangelogHTML = chatUi14._messageHTMLForTest(PUBLIC_CHANGELOG_ROW(), 'p_drew', false);
+  assert(changelogHTML.includes('🔒 Only you can see this') && /class="chat-private-chip"/.test(changelogHTML) && /class="chat-msg[^"]*chat-msg-private/.test(changelogHTML),
+    '14-29: the private changelog row gets the SAME chip and subdued treatment as the self-test row — no new class, no new copy, per DI-292');
+  assert(!publicChangelogHTML.includes('Only you can see this') && !/chat-msg-private/.test(publicChangelogHTML),
+    '14-30: …and the PUBLIC/windowed changelog row (the adjacent-need carve-out) gets neither — it is exactly as public as it always was');
+
+  // ── 14g2. Coordinator finding 2 (reviewer APPROVE WITH NOTES on F-1, 2026-09-24) — SEARCH
+  //         RESULTS carry the same chip AND the same dim as the bubble. Before this fix, the
+  //         search result's outer class toggle read `isPrivateSelfTest(m)` alone, so a private
+  //         changelog HIT rendered the chip (already driven by `privateRowChipHTML()`) without
+  //         the dim — CONVENTIONS #21's "one marker, every surface" violated at exactly one
+  //         call site.
+  chat14._resetForTest();
+  chat14.ingest([CHANGELOG_ROW(), PUBLIC_CHANGELOG_ROW({ id: 'sys_scribe_changelog_sl_w3', meta: { kind: 'scribeChangelog', learningId: 'sl_w3', origin: 'trainer', category: 'brevity', playerId: '' }, body: 'find-me-public-row about brevity' })]);
+  const changelogHits = chatUi14._searchResultsHTMLForTest('be cleaner');
+  assert(/chat-search-result/.test(changelogHits) && changelogHits.includes('🔒 Only you can see this') && /chat-search-result[^"]*chat-msg-private/.test(changelogHits),
+    '14-34: a private changelog row found by search carries the SAME chip AND the SAME `chat-msg-private` dim as its bubble — the class toggle and the chip must never disagree');
+  const publicChangelogHits = chatUi14._searchResultsHTMLForTest('find-me-public-row');
+  assert(/chat-search-result/.test(publicChangelogHits) && !publicChangelogHits.includes('Only you can see this') && !/chat-msg-private/.test(publicChangelogHits),
+    '14-35: …and the PUBLIC/windowed changelog row found by search carries NEITHER — it is exactly as public in search as it is in the room');
+  chat14._resetForTest();
+
+  // ── 14h. DI-293 (2026-09-24, coordinator fix-forward) — THE PRIVATE
+  //         CHANGELOG ROW DOES BADGE ITS RECIPIENT. Drew's own words: "so
+  //         that you know your feedback helped scribe" — the badge IS the
+  //         confirmation, so `notify:false` gets a NAMED exception inside
+  //         isUnreadFor() rather than excluding it like every other ambient
+  //         system row (the self-test row keeps the OLD outcome — still
+  //         excluded, for its own pre-existing reason).
+  chat14._resetForTest();
+  chat14.ingest([CHANGELOG_ROW()]);
+  assert(chat14.unreadCount('p_drew', 'all') === 1,
+    '14-31: the private changelog row DOES badge — DI-293\'s exception in isUnreadFor(), not the general ambient-system rule. `notify` stays false; only the in-app badge choke point is affected');
+  assert(chat14.unreadAuthors('p_drew', 'all').includes('system'),
+    '14-31b: …attributed to \'system\', same as it would render');
+  chat14._resetForTest();
+  chat14.ingest([PUBLIC_CHANGELOG_ROW()]);
+  assert(chat14.unreadCount('p_drew', 'all') === 0,
+    '14-32: …but the PUBLIC/windowed changelog row (no credited player, DI-290\'s carve-out) is NOT exempted — it falls back to the general ambient-system rule and does not badge, exactly as it always has');
+  chat14._resetForTest();
+  chat14.ingest([TEST_ROW()]);
+  assert(chat14.unreadCount('p_drew', 'all') === 0,
+    '14-33: …and the self-test row is UNCHANGED by this exception — isPrivateSelfTest()\'s own guard runs first and still excludes it (14-12 already proves this; repeated here so the three-way contrast — private changelog badges, public changelog and self-test do not — lives at one call site)');
   chat14._resetForTest();
 }
 

@@ -641,6 +641,15 @@ const GAME_COLS = [
   { legacy: 'isManual', column: 'is_manual', type: 'bool' },
   { legacy: 'leagueLabel', column: 'league_label' },
   { legacy: 'espnSport', column: 'espn_sport' },
+  // DI-331b/AD-94, fix round 1 (2026-09-25, reviewer BLOCK) — WITHOUT these
+  // two entries, `homeLogo`/`awayLogo` are unmodeled legacy fields and
+  // `rowFromLegacy()` (line ~380 above) puts every unmodeled field into
+  // `extra` (line ~393-398), never a typed column — so the two nullable
+  // `home_logo`/`away_logo` columns `sql-drafts/E_logos.sql` adds would sit
+  // forever null while the real URL sat inside `extra.homeLogo`/
+  // `extra.awayLogo` instead. Named here explicitly, not left implicit.
+  { legacy: 'homeLogo', column: 'home_logo' },
+  { legacy: 'awayLogo', column: 'away_logo' },
   { legacy: 'lastUpdated', column: 'last_updated', type: 'ts' },
   { legacy: 'createdAt', column: 'created_at', type: 'ts' },
   { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
@@ -702,15 +711,31 @@ const OBLIGATION_COLS = [
   { legacy: 'mergedFrom', column: 'merged_from' },
 ];
 
-// feedback — js/app.js submitFeedback() (~line 11085-11107). The legacy
-// object NEVER carries `memberId`/`status`/`excludedFromExport` at all — those
-// three are Step-1-only columns (member_id: null on import; status: 'new'
-// commissioner-only column, guard-triggered in 0002; excluded_from_export:
-// mirrors cfbp_feedback_excluded_ids for NEW rows only, per that column's own
-// DDL comment). All three are therefore listed here WITH defaults so the
-// generic absent/extra machinery marks them absent on every legacy row and
-// `legacyFromRow` always strips them back out — the round-tripped object
-// never gains fields the app itself never wrote.
+// feedback — the entry built by submitFeedback() in js/app.js, appended
+// through appendFeedback() in js/storage.js. (The line citation that stood
+// here, "~line 11085-11107", had drifted by some 5,000 lines; app.js line
+// numbers are not a stable reference — reviewer, B-05.)
+//
+// `status`/`excludedFromExport` are never on the legacy object: they are
+// Step-1-only columns (status: 'new', a commissioner-only column guarded in
+// 0002; excluded_from_export mirrors cfbp_feedback_excluded_ids for NEW rows
+// only, per that column's own DDL comment). Both are listed here WITH defaults
+// so the generic absent/extra machinery marks them absent and `legacyFromRow`
+// strips them back out — the round-tripped object never gains fields the app
+// itself never wrote.
+//
+// ══ B-05 (2026-09-25) — `memberId` IS NOW ON THE LEGACY OBJECT ══════════════
+//
+// It used to be in that same list, and this comment used to say the legacy
+// object "NEVER carries memberId" — which was true, and was the bug:
+// `feedback_insert` (0002_rls.sql:313) is
+// `member_id = my_member_id(league_id)`, so every submission emitted
+// `member_id: null`, compared NULL against the caller's id, and was refused
+// 42501. appendFeedback() now stamps the author onto the record, so `memberId`
+// is PRESENT on rows written from that point on and round-trips exactly.
+// The default below stays `null` for the rows that genuinely have no author:
+// pre-cutover imports, which is what the column's DDL comment describes. Those
+// still mark it absent and still restore without it. Guard: feedbackrlstest.mjs.
 const FEEDBACK_COLS = [
   { legacy: 'id', column: 'id' },
   { legacy: 'memberId', column: 'member_id' },

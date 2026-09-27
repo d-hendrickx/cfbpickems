@@ -57,11 +57,53 @@ const root = path.dirname(fileURLToPath(import.meta.url));
 // showGoogleSignInGate() body as it existed pre-DI-216). Pasted verbatim via
 // JSON.stringify of the captured string, so no manual retyping can introduce
 // a whitespace drift the diff wouldn't show. This is the byte-identity
-// anchor DI-216j/A3 requires: the web branch must never move, and this
-// constant is the proof of what "never moved" means, captured from the real
-// pre-change function rather than reconstructed from memory.
-// ─────────────────────────────────────────────────────────────────────────────
-const PRE_CHANGE_WEB_GATE_HTML = "\n    <div class=\"site-gate\">\n      <div class=\"site-gate-inner\">\n        <div class=\"site-gate-title-top\">welcome to</div>\n        <div class=\"site-gate-title\">irb pick 'ems</div>\n        <div class=\"site-gate-subtitle\">sign in to make your picks</div>\n        <div id=\"google-gate-message\" style=\"display:none\"></div>\n        <button class=\"site-gate-btn google-signin-btn\" id=\"google-gate-submit\" type=\"button\">\n          <span class=\"google-g-mark\"><svg viewBox=\"0 0 18 18\" width=\"18\" height=\"18\" aria-hidden=\"true\" focusable=\"false\">\n  <path fill=\"#4285F4\" d=\"M17.64 9.2045c0-.6381-.0573-1.2518-.1636-1.8409H9v3.4814h4.8436c-.2086 1.125-.8427 2.0782-1.7959 2.7164v2.2581h2.9087c1.7018-1.5668 2.6836-3.874 2.6836-6.615z\"/>\n  <path fill=\"#34A853\" d=\"M9 18c2.43 0 4.4673-.8059 5.9564-2.1805l-2.9087-2.2581c-.8059.54-1.8368.8591-3.0477.8591-2.3436 0-4.3282-1.5831-5.0359-3.7104H.9573v2.3318C2.4382 15.9832 5.4818 18 9 18z\"/>\n  <path fill=\"#FBBC05\" d=\"M3.9641 10.71c-.18-.54-.2823-1.1168-.2823-1.71s.1023-1.17.2823-1.71V4.9582H.9573A8.9965 8.9965 0 000 9c0 1.4523.3477 2.8264.9573 4.0418L3.9641 10.71z\"/>\n  <path fill=\"#EA4335\" d=\"M9 3.5795c1.3214 0 2.5077.4541 3.4404 1.346l2.5818-2.5818C13.4632.8918 11.4259 0 9 0 5.4818 0 2.4382 2.0168.9573 4.9582L3.9641 7.29C4.6718 5.1627 6.6564 3.5795 9 3.5795z\"/>\n</svg></span>\n          <span id=\"google-gate-btn-label\">Continue with Google</span>\n        </button>\n      </div>\n    </div>";
+// anchor DI-216j/A3 requires: the web branch must never move WITHOUT an
+// explicit, approved instruction to move it, and this constant is the proof
+// of what "moved" means, captured from the real function rather than
+// reconstructed from memory.
+//
+// UPDATED — DI-310 (T-01, 2026-09-25, UX Revamp wiring pass 1) is exactly
+// such an explicit instruction: its subtitle-removal is named "the
+// platform-agnostic part of Drew's request," i.e. deliberately applies to
+// BOTH platforms, web included. The `<div class="site-gate-subtitle">sign
+// in to make your picks</div>` line is removed from this fixture in the
+// SAME edit that removed it from js/app.js's showGoogleSignInGate() — this
+// remains the proof that NOTHING ELSE on web moved.
+//
+// UPDATED AGAIN — DI-332 (Group F accounts, wiring pass 3c, 2026-09-25) is
+// ANOTHER such explicit instruction, and this one is the biggest single
+// change this fixture has absorbed: DI-332's own "Placement" section
+// requires the email/password block to be appended below the Google button
+// IN THIS SAME FUNCTION, on BOTH platforms — this is not drift, it is the
+// literal, approved spec. `passwordGateBlockHTML()`'s output (a divider,
+// two form fields, the mode-toggle submit button, the Forgot-password/
+// mode-toggle link row, and its own message slot — all fresh `#pwacct-*`
+// ids, per DI-332's own instruction never to reuse the dead `#sec-pw-*`
+// ids) is appended verbatim, byte-captured the same way every prior update
+// to this constant was: JSON.stringify() of the REAL function's own output,
+// never hand-retyped. This remains the proof that nothing ELSE on web
+// moved alongside it.
+//
+// UPDATED AGAIN — reviewer round 3, item 6 (2026-09-26), the DI-310 [10d]
+// precedent applied to THIS fixture: passwordGateBlockHTML()'s email/
+// password fields are now wrapped in `<form id="pwacct-gate-form">`, each
+// input gains `name="email"`/`name="password"` and `required` (iOS AutoFill
+// / password-manager save-prompt grouping needs a real form, not just
+// `autocomplete` hints on bare inputs), and the submit button is
+// `type="submit"` (was `type="button"`) so it actually participates in that
+// form — its own click handler is unchanged and still does the real work
+// (bindPasswordGateBlock() gains a SEPARATE `submit` listener whose only job
+// is `preventDefault()`). The Forgot-password/mode-toggle link row stays
+// OUTSIDE the form, exactly as before — this is deliberately an explicit,
+// approved instruction, the same class of change DI-310/DI-332 already were,
+// captured the same way: JSON.stringify() of the REAL function's own output.
+//
+// UPDATED AGAIN — full-app review + security audit (2026-09-26): the form tag
+// gains `method="post"` (a native submit, should the preventDefault listener
+// ever be unbound, can never GET the credentials into the URL/history/SW
+// cache) and `novalidate` (the gate's own copy owns validation; no native
+// browser bubble). That one tag is the only change; regenerated the same way.
+const PRE_CHANGE_WEB_GATE_HTML = "\n    <div class=\"site-gate\">\n      <div class=\"site-gate-inner\">\n        <div class=\"site-gate-title-top\">welcome to</div>\n        <div class=\"site-gate-title\">irb pick 'ems</div>\n        <div id=\"google-gate-message\" style=\"display:none\"></div>\n        <button class=\"site-gate-btn google-signin-btn\" id=\"google-gate-submit\" type=\"button\">\n          <span class=\"google-g-mark\"><svg viewBox=\"0 0 18 18\" width=\"18\" height=\"18\" aria-hidden=\"true\" focusable=\"false\">\n  <path fill=\"#4285F4\" d=\"M17.64 9.2045c0-.6381-.0573-1.2518-.1636-1.8409H9v3.4814h4.8436c-.2086 1.125-.8427 2.0782-1.7959 2.7164v2.2581h2.9087c1.7018-1.5668 2.6836-3.874 2.6836-6.615z\"/>\n  <path fill=\"#34A853\" d=\"M9 18c2.43 0 4.4673-.8059 5.9564-2.1805l-2.9087-2.2581c-.8059.54-1.8368.8591-3.0477.8591-2.3436 0-4.3282-1.5831-5.0359-3.7104H.9573v2.3318C2.4382 15.9832 5.4818 18 9 18z\"/>\n  <path fill=\"#FBBC05\" d=\"M3.9641 10.71c-.18-.54-.2823-1.1168-.2823-1.71s.1023-1.17.2823-1.71V4.9582H.9573A8.9965 8.9965 0 000 9c0 1.4523.3477 2.8264.9573 4.0418L3.9641 10.71z\"/>\n  <path fill=\"#EA4335\" d=\"M9 3.5795c1.3214 0 2.5077.4541 3.4404 1.346l2.5818-2.5818C13.4632.8918 11.4259 0 9 0 5.4818 0 2.4382 2.0168.9573 4.9582L3.9641 7.29C4.6718 5.1627 6.6564 3.5795 9 3.5795z\"/>\n</svg></span>\n          <span id=\"google-gate-btn-label\">Continue with Google</span>\n        </button>\n        \n    <div class=\"divider-or\" aria-hidden=\"true\"><span>or</span></div>\n    <form id=\"pwacct-gate-form\" method=\"post\" novalidate>\n    <div class=\"form-group\">\n      <label class=\"form-label\" for=\"pwacct-email\">Email</label>\n      <input class=\"form-input\" id=\"pwacct-email\" name=\"email\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" placeholder=\"you@example.com\" required />\n    </div>\n    <div class=\"form-group\">\n      <label class=\"form-label\" for=\"pwacct-password\">Password</label>\n      <input class=\"form-input\" id=\"pwacct-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required />\n    </div>\n    <button class=\"site-gate-btn\" id=\"pwacct-gate-submit\" type=\"submit\" data-mode=\"signin\">Sign In</button>\n    </form>\n    <div class=\"site-gate-link-row\">\n      <button type=\"button\" class=\"site-gate-link\" id=\"pwacct-forgot-link\">Forgot password?</button>\n      <button type=\"button\" class=\"site-gate-link\" id=\"pwacct-mode-toggle\">New here? Create an account</button>\n    </div>\n    <div id=\"pwacct-gate-message\" style=\"display:none\"></div>\n      </div>\n    </div>";
 
 /**
  * Runs showGoogleSignInGate() in a fresh child process (own event loop, own
@@ -201,6 +243,24 @@ console.log('\n[8] js/app.js — DI-213k header wordmark, native-only, escHtml\'
     '[8b] initNativeWordmark() gates on isNativeShell() as its FIRST line — on web this function is a single false-check, never reaching document.createElement');
   assert(appSrc.includes("wm.innerHTML = escHtml(getShellWordmark() || '');"),
     '[8c] the wordmark text is escHtml\'d before it ever reaches innerHTML (S-C2 — even though getShellWordmark() only ever returns a fixed literal today, the same rule every other rendered string gets)');
+  // REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — the wordmark used
+  // to anchor on `#league-pill`, which F4's header declutter just removed
+  // from the DOM entirely (index.html no longer carries that id at all —
+  // headermetatest.mjs's own [hdr-a] pins the absence). An unfixed anchor
+  // would make `document.getElementById('league-pill')` return null forever,
+  // silently disabling the native wordmark — a real regression to a shipped,
+  // Drew-approved feature (DI-213k). Re-anchored on `#sync-badge`, the one
+  // element `.header-right` is still guaranteed to have.
+  // Scoped to the FUNCTION BODY, not the whole file — renderLeaguePill()
+  // legitimately still looks up 'league-pill' (to no-op safely now that the
+  // element is gone); this assertion is only about initNativeWordmark().
+  const wmFnStart = appSrc.indexOf('function initNativeWordmark()');
+  assert(wmFnStart !== -1, '[8d] fixture: initNativeWordmark() found in js/app.js');
+  const wmFnBody = appSrc.slice(wmFnStart, appSrc.indexOf('\n}', wmFnStart));
+  assert(!wmFnBody.includes("document.getElementById('league-pill')"),
+    '[8d] initNativeWordmark() no longer references the removed #league-pill id at all');
+  assert(/const anchor = document\.getElementById\('sync-badge'\);/.test(wmFnBody) && /anchor\.parentNode\.insertBefore\(wm, anchor\);/.test(wmFnBody),
+    '[8e] the wordmark now anchors on #sync-badge (still present) and still inserts itself BEFORE its anchor — same left-of-badge position as before');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,8 +339,11 @@ console.log('\n[10] DI-216 — showGoogleSignInGate() on NATIVE renders the Mune
     '[10b] the wordmark text "MUNERA" (getShellWordmark()) is rendered on native');
   assert(/>Enter the arena\.</.test(h),
     '[10c] the tagline "Enter the arena." (getShellTagline()) is rendered on native');
-  assert(/>Sign in to make your picks\.</.test(h),
-    '[10d] the sub-line reads sentence-case "Sign in to make your picks." on native (A1)');
+  // UPDATED — DI-310 (T-01, 2026-09-25, UX Revamp wiring pass 1) DELETES the
+  // native sub-line entirely ("sub-line removed"). Re-asserted as an
+  // ABSENCE rather than silently dropped.
+  assert(!/Sign in to make your picks\./.test(h),
+    '[10d] DI-310 — the native sub-line is GONE, not merely restyled');
   assert(!/welcome to/i.test(h) && !/irb pick 'ems/i.test(h),
     '[10e] the old "welcome to / irb pick \'ems" eyebrow+title is GONE on native — this is the whole point of the amendment');
   assert(/id="google-gate-submit"/.test(h) && /Continue with Google/.test(h),
@@ -348,17 +411,24 @@ console.log('\n[12] A2/A1 — the Georgia/Baskerville serif stacks and the 50vh 
     assert(/letter-spacing:\.071em/.test(taglineRule[1]),
       '[12f] tagline letter-spacing is .071em — the SVG\'s 4-unit spacing on a 56-unit font-size (4/56)');
   }
-  // Wordmark:tagline size ratio — 176:56 in the SVG reduces to 22:7 exactly;
-  // 2.2rem:0.7rem preserves that exact ratio (2.2/0.7 === 22/7).
+  // UPDATED — DI-310 (T-01, 2026-09-25, UX Revamp wiring pass 1): "wordmark
+  // higher, tagline larger" DELIBERATELY breaks the SVG-derived 22:7 ratio
+  // this assertion used to pin (Drew's own instruction, per the DI text —
+  // not a drift to catch, a design change to record). The tagline grows
+  // .7rem -> 1rem; the wordmark is untouched at 2.2rem. New ratio: 11:5.
   const wordSize = Number(wordmarkRule?.[1].match(/font-size:([\d.]+)rem/)?.[1]);
   const taglineSize = Number(taglineRule?.[1].match(/font-size:([\d.]+)rem/)?.[1]);
-  assert(Number.isFinite(wordSize) && Number.isFinite(taglineSize) && Math.abs((wordSize / taglineSize) - (22 / 7)) < 1e-9,
-    `[12g] wordmark:tagline font-size ratio is EXACTLY 22:7 (the SVG's 176:56 reduced), matching launch-screen.svg's own proportions (got ${wordSize}rem:${taglineSize}rem = ${(wordSize / taglineSize).toFixed(6)})`);
+  assert(Number.isFinite(wordSize) && Number.isFinite(taglineSize) && Math.abs((wordSize / taglineSize) - (11 / 5)) < 1e-9,
+    `[12g] wordmark:tagline font-size ratio is 11:5 (2.2rem:1rem) — DI-310 (2026-09-25) deliberately breaks the launch-screen SVG's original 22:7 proportion here, per its own explicit "tagline larger" instruction (got ${wordSize}rem:${taglineSize}rem = ${(wordSize / taglineSize).toFixed(6)})`);
   if (gateRule) {
     assert(/align-items:flex-start/.test(gateRule[1]),
       '[12h] the native-only gate variant overrides align-items to flex-start (A1) — the shared .site-gate\'s align-items:center would otherwise center the WHOLE column, not just the wordmark+tagline block, landing it well above the SVG\'s 50%-of-height position');
-    assert(/padding-top:max\(24px, ?calc\(50vh - 44\.68px\)\)/.test(gateRule[1]),
-      '[12i] padding-top is max(24px, calc(50vh - <half the block\'s own height>)) — the BLOCK\'S CENTER lands at 50% of viewport height on tall viewports, the same fraction the launch screen\'s layout math centers it at, with a 24px floor (reviewer note, landscape) so it never crowds the top edge on a short/landscape viewport');
+    // UPDATED — DI-310 moves the target fraction from 50vh to ~38vh ("wordmark
+    // higher") and the half-block-height constant is RECOMPUTED (not reused)
+    // because the tagline's own height changed with its font-size growth —
+    // see [13i]/[14m] below for the derivation this literal must agree with.
+    assert(/padding-top:max\(24px, ?calc\(38vh - 47\.44px\)\)/.test(gateRule[1]),
+      '[12i] padding-top is max(24px, calc(38vh - <half the block\'s own height>)) — DI-310: the BLOCK\'S CENTER lands at 38% of viewport height on tall viewports (moved up from 50vh, "wordmark higher"), with a 24px floor (reviewer note, landscape) so it never crowds the top edge on a short/landscape viewport');
   }
   // Global uniqueness — these font-family values may not leak into any OTHER
   // rule in the file (web's monospace .site-gate-inner, the hold gate, the
@@ -374,20 +444,32 @@ console.log('\n[12] A2/A1 — the Georgia/Baskerville serif stacks and the 50vh 
   const baskervilleCount = (cssCode.match(/Baskerville/g) || []).length;
   assert(cssCode.length < cssSrc.length,
     '[12-pre] non-vacuity: stripCssComments() actually removed characters — a no-op strip would make 12j/12k below count comment prose too');
-  // Since Drew's font-follow-up ([14] below), the serif family also covers
-  // the sub-line, the button and the message slot (one rule, two selectors)
-  // — five rule-sites total, all still inside the SAME native-scoped block.
+  // UPDATED — DI-310 DELETES the native subtitle DOM node entirely (T-01's
+  // "sub-line removed"), so its native-scoped CSS override is dead code
+  // removed in the same edit (per that DI's own instruction, and the CSS
+  // comment left in its place). Four rule-sites remained after that: wordmark,
+  // tagline, button, and the grouped error/notice rule.
+  // UPDATED AGAIN — B5 (3c fix window, 2026-09-25): DI-332's email/password
+  // block (added AFTER DI-310's pass) left `.form-label`/`.site-gate-link`
+  // still falling through to the app-wide Oswald/no-font-family rules —
+  // Georgia + Oswald + Inter + Courier on one screen, where DI-310 had
+  // already reduced everything else to one face, per Drew's own "the font
+  // needs to all follow the munera theme" ruling. A FIFTH rule-site
+  // (`.form-label`, `.site-gate-link`, one shared declaration) extends the
+  // SAME Georgia treatment to the field label and the Back/Forgot/mode-
+  // toggle links — never a sixth invented face.
   assert(georgiaCount === 5,
-    `[12j] "Georgia" appears EXACTLY five times in styles.css's CODE — wordmark, tagline, sub-line, button, and the grouped error/notice rule, ALL inside the native-scoped block, and nowhere else (got ${georgiaCount})`);
+    `[12j] "Georgia" appears EXACTLY five times in styles.css's CODE — wordmark, tagline, button, the grouped error/notice rule, and the B5 form-label/site-gate-link rule, ALL inside the native-scoped block, and nowhere else (got ${georgiaCount})`);
   assert(baskervilleCount === 1,
     `[12k] "Baskerville" appears EXACTLY once in styles.css's CODE — only in the wordmark rule's actual declaration (every other native-text rule uses the plain Georgia/Times New Roman/serif stack, per the SVG's own tagline face) — (got ${baskervilleCount})`);
-  // No OTHER rule anywhere in the file overrides .site-gate-subtitle's
-  // text-transform outside this native-scoped block (the hold gate has its
-  // own, unrelated override at a DIFFERENT selector — [data-gate-state="hold"]
-  // — so this counts occurrences of the EXACT native-scoped selector only).
+  // UPDATED — DI-310 removes the native-scoped .site-gate-subtitle override
+  // entirely (the DOM node it styled is deleted). The count is now zero, by
+  // design — the base (shared/web) `.site-gate-subtitle` rule and the
+  // hold-gate's own override at a DIFFERENT selector are both untouched and
+  // out of scope for this specific native-scoped selector count.
   const subtitleOverrideCount = (cssSrc.match(/body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-subtitle\{/g) || []).length;
-  assert(subtitleOverrideCount === 1,
-    `[12l] the native-only .site-gate-subtitle text-transform override appears exactly once (got ${subtitleOverrideCount})`);
+  assert(subtitleOverrideCount === 0,
+    `[12l] the native-only .site-gate-subtitle override is GONE (DI-310 deleted the sub-line it styled) — appears zero times (got ${subtitleOverrideCount})`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -457,7 +539,8 @@ console.log('\n[13] Reviewer R1 items 2/3 — Ink/Gold hexes pinned; the 44.68px
   assert(Number.isFinite(wordmarkHeight) && Number.isFinite(taglineHeight),
     `[13-pre] non-vacuity: both block heights were actually parsed from the CSS (wordmark=${wordmarkHeight}, tagline=${taglineHeight}) — a parse failure would make 13i below compare NaN to NaN and pass for the wrong reason`);
   const derivedHalf = (wordmarkHeight + taglineHeight) / 2;
-  const cssConstant = Number(gateRule?.[1].match(/calc\(50vh - ([\d.]+)px\)/)?.[1]);
+  // UPDATED — DI-310 moves the target fraction from 50vh to 38vh.
+  const cssConstant = Number(gateRule?.[1].match(/calc\(38vh - ([\d.]+)px\)/)?.[1]);
   assert(Number.isFinite(cssConstant), '[13-pre] non-vacuity: the padding-top rule\'s calc() constant was actually parsed');
   assert(Math.abs(derivedHalf - cssConstant) < 0.005,
     `[13i] the padding-top calc() constant (${cssConstant}px) EQUALS half the wordmark+tagline block's height, DERIVED here from the SAME declared font-size/line-height/margin-bottom values [12] already parsed (derived ${derivedHalf}px) — editing any one of those three properties on either element now turns this assertion RED instead of silently de-centring the block`);
@@ -479,19 +562,16 @@ console.log('\n[14] Drew\'s font follow-up — sub-line/button/message slot go s
   const btnRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-btn\{([^}]*)\}/.exec(cssSrc);
   const errNoticeRule = /body\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-error,\s*\nbody\.native-shell \.site-gate\[data-gate-state="google"\] \.site-gate-notice\{([^}]*)\}/.exec(cssSrc);
 
-  assert(!!subtitleRule, '[14-pre] the native-scoped .site-gate-subtitle rule exists (fixture check for 14a-c)');
+  // UPDATED — DI-310 (2026-09-25) deletes the native sub-line entirely
+  // ("sub-line removed"), so its native-scoped override is gone by design —
+  // 14a-c (which depended on it) are retired along with it, same as [12l]
+  // above. 14d-i (button, message slot) are UNTOUCHED by DI-310 and still
+  // apply.
+  assert(!subtitleRule, '[14-pre] the native-scoped .site-gate-subtitle rule is GONE — DI-310 deleted the sub-line it styled, and its dead CSS in the same edit');
   assert(!!btnRule, '[14-pre] the native-scoped .site-gate-btn rule exists (fixture check for 14d-g)');
   assert(!!errNoticeRule, '[14-pre] the grouped native-scoped .site-gate-error/.site-gate-notice rule exists (fixture check for 14h-i)');
 
   const SERIF = "Georgia,'Times New Roman',serif";
-  if (subtitleRule) {
-    assert(subtitleRule[1].includes(`font-family:${SERIF}`),
-      '[14a] the sub-line uses the Munera serif stack (no Baskerville — that\'s the wordmark\'s own accent)');
-    assert(/letter-spacing:\.0[2-4]em/.test(subtitleRule[1]),
-      `[14b] the sub-line's letter-spacing is in the requested .02-.04em serif-appropriate band (got "${subtitleRule[1].match(/letter-spacing:[^;]*/)?.[0]}")`);
-    assert(/font-size:1rem/.test(subtitleRule[1]),
-      '[14c] the sub-line is sized ≈1rem, per the requested hierarchy');
-  }
   if (btnRule) {
     assert(btnRule[1].includes(`font-family:${SERIF}`),
       '[14d] the button (and its inherited label span) uses the Munera serif stack');
@@ -543,7 +623,8 @@ console.log('\n[14] Drew\'s font follow-up — sub-line/button/message slot go s
   };
   const derivedHalf = wordmarkRule && taglineRule
     ? (parseHeight(wordmarkRule[1]) + parseHeight(taglineRule[1])) / 2 : NaN;
-  const cssConstant = Number(gateRule?.[1].match(/calc\(50vh - ([\d.]+)px\)/)?.[1]);
+  // UPDATED — DI-310 moves the target fraction from 50vh to 38vh.
+  const cssConstant = Number(gateRule?.[1].match(/calc\(38vh - ([\d.]+)px\)/)?.[1]);
   assert(Number.isFinite(derivedHalf) && Number.isFinite(cssConstant) && Math.abs(derivedHalf - cssConstant) < 0.005,
     `[14m] [13i]'s derived-centering constant STILL holds after this pass (constant=${cssConstant}px, derived=${derivedHalf}px) — the wordmark+tagline block above the sub-line was not touched by this change, verified here rather than assumed`);
 }
@@ -579,12 +660,13 @@ console.log('\n[15] Reviewer R2 — landscape safety: height media query (native
   assert(maxHeightQueryCount === 1,
     `[15e] exactly one @media (max-height:...) query exists in styles.css (got ${maxHeightQueryCount})`);
 
-  // Portrait must be pixel-identical to before this pass: at 874px (or any
-  // height > 500px) the media query's own condition is false, so the ONLY
-  // padding-top in effect is the unchanged max(24px, calc(50vh - 44.68px))
-  // — re-verified here (not assumed) that this base rule is untouched.
-  assert(!!gateRule && /padding-top:max\(24px, ?calc\(50vh - 44\.68px\)\)/.test(gateRule[1]),
-    '[15f] the base (portrait / >500px height) padding-top rule is UNCHANGED — max(24px, calc(50vh - 44.68px)) — so portrait rendering is pixel-identical to before this pass');
+  // UPDATED — DI-310 (2026-09-25) intentionally changes the base portrait
+  // padding-top formula (50vh/44.68px -> 38vh/47.44px, "wordmark higher").
+  // Re-verified here that the media-query THRESHOLD mechanism (max-height:
+  // 500px, reverting to a flat 24px below it) is otherwise unaffected by
+  // that change — the base rule's own new value is [12i]/[13i]'s concern.
+  assert(!!gateRule && /padding-top:max\(24px, ?calc\(38vh - 47\.44px\)\)/.test(gateRule[1]),
+    '[15f] the base (portrait / >500px height) padding-top rule matches DI-310\'s new formula — max(24px, calc(38vh - 47.44px))');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

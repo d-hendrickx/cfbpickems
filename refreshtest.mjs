@@ -524,6 +524,55 @@ console.log('\n[5] R1/R2 — display-only polling and the idempotent kickoff/fin
       `5h-3: THE BROWSER IS UNCHANGED — with no options at all the SAME failure falls back to the first proxy and SUCCEEDS (proxies=${JSON.stringify(proxyCalls())}, updated=${dflt.updated.length}). The default is TRUE; only the server opts out (CONVENTIONS #10's direction: absent behaves exactly as before)`);
   }
 
+  // ── 5j. RG-260 candidate (2026-09-26) — the User-Agent is SERVER-ONLY ─────
+  //    ESPN's edge now 403s `Deno/<ver>`, so scores-refresh sends an explicit
+  //    User-Agent via fetchOptions.userAgent. A browser MUST NOT: the Fetch spec
+  //    no longer forbids User-Agent (Firefox honours a script-set value, Chromium
+  //    ignores it), and a script-set value is not CORS-safelisted, so it would
+  //    force a preflight ESPN does not answer and break the fetch. What protects
+  //    the browser is that every browser call site passes NO options — so its
+  //    fetch init must stay exactly what it was: headers
+  //    { Accept: 'application/json' } and nothing else (5j-1 / 5j-2 / 5j-2b).
+  {
+    let inits = [];
+    const installInitSpy = () => {
+      inits = [];
+      globalThis.fetch = async (url, init = {}) => {
+        inits.push({ url: String(url), headers: init.headers });
+        const body = JSON.stringify({ events: [espnEvent()] });
+        return { ok: true, status: 200, headers: { get: () => String(body.length) }, json: async () => JSON.parse(body), text: async () => body };
+      };
+    };
+    const stored = [{ gameId: 'rg1', espnEventId: '401520100', espnSport: 'college-football' }];
+
+    installInitSpy();
+    await provider.refreshScoresByEventIds(['401520100'], stored);
+    assert(inits.length === 1 && JSON.stringify(inits[0].headers) === JSON.stringify({ Accept: 'application/json' }),
+      `5j-1: THE BROWSER'S FETCH IS BYTE-IDENTICAL — refreshScoresByEventIds() with no options sends headers exactly {"Accept":"application/json"}, no User-Agent (got ${JSON.stringify(inits.map(i => i.headers))})`);
+
+    installInitSpy();
+    await provider.fetchCurrentCFBGames();
+    assert(inits.length >= 1 && inits.every(i => JSON.stringify(i.headers) === JSON.stringify({ Accept: 'application/json' })),
+      `5j-2: …and the commissioner's slate fetch (fetchCurrentCFBGames) likewise (got ${JSON.stringify(inits.map(i => i.headers))})`);
+
+    // fetchEspnTeamsList() calls attemptFetch() DIRECTLY (not via resilientFetch),
+    // so attemptFetch's own default is what it gets — pinned separately.
+    installInitSpy();
+    await provider.fetchEspnTeamsList();
+    assert(inits.length >= 1 && inits.every(i => JSON.stringify(i.headers) === JSON.stringify({ Accept: 'application/json' })),
+      `5j-2b: …and the alma-mater teams fetch (fetchEspnTeamsList, attemptFetch's own default) likewise (got ${JSON.stringify(inits.map(i => i.headers))})`);
+
+    installInitSpy();
+    await provider.refreshScoresByEventIds(['401520100'], stored, { allowProxy: false, userAgent: '' });
+    assert(inits.length === 1 && !('User-Agent' in (inits[0].headers || {})),
+      `5j-3: an EMPTY userAgent adds no header at all — opt-in means a non-empty string (got ${JSON.stringify(inits.map(i => i.headers))})`);
+
+    installInitSpy();
+    await provider.refreshScoresByEventIds(['401520100'], stored, { allowProxy: false, userAgent: 'axios/1.7.7 test/1.0' });
+    assert(inits.length === 1 && inits[0].headers?.['User-Agent'] === 'axios/1.7.7 test/1.0' && inits[0].headers?.Accept === 'application/json',
+      `5j-4: a caller that DOES pass userAgent gets it on the direct fetch, beside Accept (got ${JSON.stringify(inits.map(i => i.headers))}) — the seam scores-refresh uses`);
+  }
+
   // ── 5i. THE OTHER TWO CALL SITES, PINNED WHERE THEY CANNOT BE DRIVEN ────
   //    Call site (i) is driven for real in 5a-5. Sites (ii) and (iii) live
   //    inside the Supabase adapter's wiring — `sb.init({onRealtimeEvent})` and

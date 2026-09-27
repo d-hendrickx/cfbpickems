@@ -47,6 +47,13 @@
 export const CHANGELOG_SUMMARY_MAX = 80;
 export const CHANGELOG_BODY_MAX = 300;
 
+/** DI-291 — the private affordance, a second sentence, appended (not woven
+ *  into the reviewed/shipped sentence above). `flatten()` collapses real
+ *  newlines to a space (see its own comment), so this is the LAST clause of
+ *  one line, not a second visual line — the one-line-only invariant that
+ *  keeps a system notice from being forged holds either way. */
+export const CHANGELOG_PRIVATE_LINE = '🔒 Only you can see this.';
+
 /** Human labels for the learning categories the instant path may produce.
  *  A category outside the list renders as itself — a new category from a future
  *  Trainer must not produce an empty phrase. */
@@ -98,17 +105,23 @@ export function changelogFields({ playerDisplayName, category, instruction, orig
  * descended from a player's own words; presenting it unquoted would read as the
  * app speaking rather than as the app reporting.
  */
-export function changelogBody(fields) {
+export function changelogBody(fields, isPrivate = false) {
   const f = fields && typeof fields === 'object' ? fields : {};
   const who = f.playerDisplayName || 'a player';
   const what = f.categoryLabel ? ` about ${f.categoryLabel}` : '';
   const how = f.origin === 'instant' ? 'right away' : 'in last night\'s training pass';
   const summary = f.instructionSummary ? ` "${f.instructionSummary}"` : '';
-  return flatten(
-    `📓 SCRIBE update — feedback from ${who} changed something${what} ${how}:${summary} `
-    + '(Commissioner can undo this in Comm → Data → SCRIBE Training.)',
-    CHANGELOG_BODY_MAX,
-  );
+  const sentence = `📓 SCRIBE update — feedback from ${who} changed something${what} ${how}:${summary} `
+    + '(Commissioner can undo this in Comm → Data → SCRIBE Training.)';
+  if (!isPrivate) return flatten(sentence, CHANGELOG_BODY_MAX);
+  // DI-291 — reserve the tell's own budget EXPLICITLY, before flattening the
+  // sentence, so a long sentence can never truncate the tell away and the
+  // tell can never push the combined body over CHANGELOG_BODY_MAX. `+1` is
+  // the separating space between the clipped sentence and the tell.
+  const reserved = CHANGELOG_PRIVATE_LINE.length + 1;
+  const sentenceBudget = Math.max(0, CHANGELOG_BODY_MAX - reserved);
+  const clippedSentence = flatten(sentence, sentenceBudget);
+  return flatten(`${clippedSentence} ${CHANGELOG_PRIVATE_LINE}`, CHANGELOG_BODY_MAX);
 }
 
 /** A stable, per-learning id, so a retried insert is the SAME row rather than a
@@ -125,14 +138,35 @@ export function changelogMessageId(learningId) {
  */
 export function buildChangelogPost({ leagueId, learningId, playerDisplayName, playerId, category, instruction, origin }) {
   const fields = changelogFields({ playerDisplayName, category, instruction, origin });
-  return {
+  const recipientId = String(playerId || '');
+  const row = {
     league_id: leagueId,
-    id: changelogMessageId(learningId),
+    // DI-292 — the id shape carries the privacy tell client-side, because the
+    // client cannot read `visible_to` at all (see below). A `__private`
+    // suffix on a PRIVATE row, the un-suffixed shape unchanged for the
+    // public/windowed case, so `sys_scribe_changelog_` alone (no suffix)
+    // still means what it meant before this DI — a structural tell, not a
+    // wording one.
+    //
+    // WHY `__private` AND NOT THE ORIGINAL `_p` (coordinator finding 1,
+    // reviewer APPROVE WITH NOTES on F-1, 2026-09-24): `learningId` on the
+    // TRAINER path is `capStored(model_output.learning_id, …)` —
+    // model-supplied, `capStored` only TRUNCATES, does not sanitise — so a
+    // PUBLIC (windowed, no credited player) row whose model-chosen
+    // learning_id happened to end in `_p` would false-positive the client's
+    // id-based private detector. `__private` is a longer, wordier suffix a
+    // model's short learning-id token is far less likely to end in BY
+    // ACCIDENT, and `isPrivateScribeChangelog()` (js/chat.js) additionally
+    // requires `meta.playerId` non-empty as a SECOND, independent lock — the
+    // one field that is only ever non-empty when this very branch fired — so
+    // even a coincidental id match on the trainer path (playerId always ''
+    // there, see js/chat.js's own comment) still fails the meta check.
+    id: recipientId ? `${changelogMessageId(learningId)}__private` : changelogMessageId(learningId),
     type: 'message',
     author: 'system',
     author_kind: 'system',
     game_tag: '',
-    body: changelogBody(fields),
+    body: changelogBody(fields, !!recipientId),
     notify: false,
     meta: {
       kind: 'scribeChangelog',
@@ -143,7 +177,21 @@ export function buildChangelogPost({ leagueId, learningId, playerDisplayName, pl
       // in the body where the room reads it; carrying the id as well is what
       // lets the Training card link the row back to the person without
       // re-parsing a sentence.
-      playerId: String(playerId || ''),
+      playerId: recipientId,
     },
   };
+  // DI-290 — private to the credited player, and ONLY when there is one. A
+  // windowed/aggregate learning has no single feedback-giver (`playerId` is
+  // ''), and there is no one person to make it private TO — that row stays
+  // public exactly as it behaved before this DI (UN-252's transparency need
+  // is still live for that case). `visible_to` is a service-role write here
+  // (both callers run under `serviceClient()`), so RLS's `messages_select`
+  // policy (migration 0018:181, generic over `visible_to`, not self-test-
+  // specific) scopes the row with ZERO new migration, grant, or policy change
+  // — see DI-P5. `playerId` here must already be the `league_members.id` the
+  // policy's `my_member_id(league_id)` compares against; both current callers
+  // (scribe-learn/index.js's `row.author`, trainer/index.js's
+  // `sourcePlayerId`) already pass exactly that id.
+  if (recipientId) row.visible_to = recipientId;
+  return row;
 }

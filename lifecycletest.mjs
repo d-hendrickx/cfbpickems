@@ -441,9 +441,17 @@ console.log('\n[6] The bell — notification SETTINGS only, no list, in rendered
   assert(!/notif-prefs-card/.test(signedOutBody),
     '6-7: …and renders no prefs card while signed out, because the category toggles live on the PLAYER record and there is no player to attach them to');
 
+  // UPDATED — DI-307 (UX Revamp Group A1, 2026-09-25) removes
+  // #notif-bell-btn from index.html entirely (not hidden) — notification
+  // settings moved into the control-center drawer's Settings accordion
+  // (DI-303's Notifications row, embedding renderNotifSettingsBodyHTML()).
+  // renderNotifBell() (js/app.js) is unchanged pending that rewiring; this
+  // assertion now confirms the header mount is GONE, not that it still
+  // announces itself — the aria-label this test used to pin lived on that
+  // now-removed button.
   const indexSrc = await readFile(new URL('./index.html', import.meta.url), 'utf8');
-  assert(/aria-label="Notification settings"/.test(indexSrc) && !/notif-bell-badge/.test(indexSrc),
-    '6-8: index.html: the bell announces "Notification settings" to a screen reader and its badge span is gone');
+  assert(!/id="notif-bell-btn"/.test(indexSrc) && !/notif-bell-badge/.test(indexSrc),
+    '6-8: index.html no longer mounts #notif-bell-btn in the header (DI-307 — moved into the control-center drawer) and carries no badge span');
   const cssSrc = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
   const bellRule = (cssSrc.match(/\.notif-bell-btn\{[^}]*\}/) || [''])[0];
   const mh = Number((bellRule.match(/min-height:(\d+)px/) || [])[1] || 0);

@@ -1578,23 +1578,56 @@ console.log('\n[15] RG-234 — a completed native sign-in always takes the gate 
   const appSrc15 = await readFile(path.join(root, 'js', 'app.js'), 'utf8');
   const predSrc = (appSrc15.match(/const payloadSessionFresh = [\s\S]*?const signedIn = .*;/) || [null])[0];
   assert(!!predSrc, '[15-pre1] fixture: the real `signedIn` decision was extracted from js/app.js');
-  assert(!!predSrc && /hasValidSupabaseSession\(\)/.test(predSrc) && /isNativeOrigin\(\)/.test(predSrc),
+  // Security N1 (third pass) — the mirror read is now spelled
+  // isSignedInForApp() (= hasValidSupabaseSession() && !isRecoverySession()),
+  // the ONE sign-in predicate every gate decision in app.js uses.
+  assert(!!predSrc && /(hasValidSupabaseSession|isSignedInForApp)\(\)/.test(predSrc) && /isNativeOrigin\(\)/.test(predSrc),
     '[15-pre2] fixture: it still reads the mirror AND is origin-positive (isNativeOrigin(), never isNativeShell())');
+  // B1 FIX (3c fix window, 2026-09-25) — `predSrc` now ALSO references
+  // `isRecoverySession()` (`&& !isRecoverySession()`), the fix for the gate
+  // being keyed on the event NAME alone rather than the recovery STATE (a
+  // re-fired SIGNED_IN/TOKEN_REFRESHED carrying the same recovery session
+  // bypassed the old `event !== 'PASSWORD_RECOVERY'`-only term). Pinned here
+  // the same way [15-pre2] pins the other two calls this predicate depends on.
+  assert(!!predSrc && /isRecoverySession\(\)/.test(predSrc),
+    '[15-pre3] fixture: the predicate also gates on isRecoverySession(), not the event name alone (B1 fix)');
 
-  async function evalPredicate(src, { payload, native, markerValid }) {
+  // SECURITY GATE FINDING 1 (916bdb7 review, 2026-09-25) — `predSrc`'s
+  // extracted `signedIn` expression now references `event` (the
+  // `event !== 'PASSWORD_RECOVERY' && ...` clause), which this sandboxed
+  // module previously never supplied at all — the extraction is a bare
+  // string, not a real function call, so `event` was a ReferenceError
+  // waiting to happen the moment the real predicate grew that term.
+  // `event` defaults to `'SIGNED_IN'` (never equal to `'PASSWORD_RECOVERY'`)
+  // so every EXISTING call below — none of which named a class of event at
+  // all, because there was nothing to name before this fix — keeps its
+  // exact same true/false outcome; [15i]/[15j] below are the new, explicit
+  // proof for the term itself.
+  async function evalPredicate(src, { payload, native, markerValid, event = 'SIGNED_IN', recovery = false }) {
     const mod = [
-      "let _payload = null, _native = false, _marker = false;",
-      "export function setup(p, n, m) { _payload = p; _native = n; _marker = m; }",
+      "let _payload = null, _native = false, _marker = false, _event = 'SIGNED_IN', _recovery = false;",
+      "export function setup(p, n, m, e, r) { _payload = p; _native = n; _marker = m; _event = e; _recovery = !!r; }",
       "function hasValidSupabaseSession() { return _marker; }",
       "function isNativeOrigin() { return _native; }",
+      // B1 FIX (3c fix window, 2026-09-25) — the real predicate now calls
+      // this too; the sandbox needs a stub or every EXISTING call below
+      // (which never named a recovery state, because there was nothing to
+      // name before this fix) would hit a ReferenceError. Defaults false,
+      // so every pre-existing assertion's outcome is unchanged; [15k]/[15l]
+      // below are the new, explicit proof for the term itself.
+      "function isRecoverySession() { return _recovery; }",
+      // Security N1 (third pass) — the real app.js definition, restated over
+      // the two stubs above (it is exactly this conjunction, js/app.js).
+      "function isSignedInForApp() { return hasValidSupabaseSession() && !isRecoverySession(); }",
       "export function decide() {",
       "  const payload = _payload;",
+      "  const event = _event;",
       src,
       "  return signedIn;",
       "}",
     ].join('\n');
     const m = await import('data:text/javascript,' + encodeURIComponent(mod));
-    m.setup(payload, native, markerValid);
+    m.setup(payload, native, markerValid, event, recovery);
     return m.decide();
   }
 
@@ -1636,6 +1669,43 @@ console.log('\n[15] RG-234 — a completed native sign-in always takes the gate 
     '[15g] the overlay removal still sits inside `if (signedIn)` and still refuses to take a HOLD gate down (A7 unchanged)');
   assert(/if \(nativePath\) restoreIdle\(\);/.test(appSrc15),
     '[15h] a successful NATIVE sign-in also restores the button to "Continue with Google" — the flow resolves in-page there, so nothing else would ever repaint it');
+
+  // SECURITY GATE FINDING 1 (2026-09-25) — a PASSWORD_RECOVERY event must
+  // NEVER compute signedIn:true, on ANY input, including Drew's own exact
+  // "fresh native payload" case from [15a] above — a recovery session
+  // carries a full-privilege token indistinguishable from an ordinary one
+  // at the token level, and this is the one line standing between a
+  // password-reset email link and the app's normal signed-in surface.
+  assert(await evalPredicate(predSrc, { payload: fresh, native: true, markerValid: false, event: 'PASSWORD_RECOVERY' }) === false,
+    '[15i] PASSWORD_RECOVERY + a FRESH native payload (the exact inputs that made [15a] TRUE) → signedIn is FALSE — the event-type exclusion overrides even Drew\'s own bug-fix case');
+  assert(await evalPredicate(predSrc, { payload: fresh, native: false, markerValid: true, event: 'PASSWORD_RECOVERY' }) === false,
+    '[15j] …and on WEB, with a valid mirror session too (the strongest possible "should be signed in" signal otherwise) → still FALSE for this one event');
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // B1 FIX (3c fix window, 2026-09-25) — [15i]/[15j] proved the event-NAME
+  // exclusion holds for the literal 'PASSWORD_RECOVERY' event. They did NOT
+  // prove the gate survives the vendored SDK re-emitting SIGNED_IN (on a
+  // visibility change, `_onVisibilityChanged` -> `_recoverAndRefresh`) or
+  // TOKEN_REFRESHED (the SDK's hourly autoRefresh) while carrying the SAME
+  // recovery session — neither event name is 'PASSWORD_RECOVERY', so the
+  // OLD `event !== 'PASSWORD_RECOVERY'`-only term would have computed
+  // signedIn:TRUE on exactly this input, taking the gate down mid-recovery
+  // through a second door the event-name check alone could never close.
+  // `isRecoverySession()` is the actual STATE; these are its explicit proof.
+  // ═══════════════════════════════════════════════════════════════════════
+  assert(await evalPredicate(predSrc, { payload: fresh, native: true, markerValid: false, event: 'SIGNED_IN', recovery: true }) === false,
+    '[15k] SIGNED_IN (Drew\'s own [15a] bug-fix case, re-fired by the SDK\'s visibility-change re-emit) + isRecoverySession():true → signedIn is FALSE — the gate stays up for a session STILL mid-recovery, even though the event name says "SIGNED_IN"');
+  assert(await evalPredicate(predSrc, { payload: fresh, native: false, markerValid: true, event: 'TOKEN_REFRESHED', recovery: true }) === false,
+    '[15l] …and on WEB, TOKEN_REFRESHED (the SDK\'s hourly autoRefresh) carrying the same recovery session → still FALSE, same reasoning');
+  // Non-vacuity / RED-proof: on the SAME inputs as [15k]/[15l], with
+  // isRecoverySession() FALSE (an ordinary, non-recovery session), signedIn
+  // is TRUE — proving [15k]/[15l]'s FALSE result is the recovery flag
+  // actually doing something, not the predicate simply always answering
+  // FALSE for these event names.
+  assert(await evalPredicate(predSrc, { payload: fresh, native: true, markerValid: false, event: 'SIGNED_IN', recovery: false }) === true,
+    '[15m] non-vacuity: the SAME SIGNED_IN input with isRecoverySession():false → signedIn TRUE (matches [15a]) — recovery state, not the event name, is what [15k] is actually gating on');
+  assert(await evalPredicate(predSrc, { payload: fresh, native: false, markerValid: true, event: 'TOKEN_REFRESHED', recovery: false }) === true,
+    '[15n] non-vacuity: the SAME TOKEN_REFRESHED input with isRecoverySession():false → signedIn TRUE — [15l]\'s FALSE was the recovery flag, not the event name');
 }
 
 // ── Result ───────────────────────────────────────────────────────────────────

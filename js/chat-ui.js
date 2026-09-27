@@ -88,6 +88,7 @@ import {
   isChatImagePreviewEnabled,
   forceRefresh,
   isPrivateSelfTest,
+  isPrivateScribeChangelog,
 } from './chat.js';
 import {
   scribeInspectMessage, scribeTrigger, resetScribeMemory,
@@ -114,6 +115,22 @@ import { calculateAtsWinner } from './scoring.js';
 // transport flip, the read-marker tick), so this module drives the same pair
 // itself for its own page. See js/field-preserve.js for the four rules.
 import { captureDirtyFields, restoreDirtyFields, stampFieldOwner, isComposing } from './field-preserve.js';
+// DI-344/345 (T-35), UX Revamp wiring pass 2 (2026-09-25) — the paused-
+// league banner + composer disable. Both pure/data modules (roles.js: NO
+// DOM, NO NETWORK; auth.js's getters are synchronous reads of an
+// already-hydrated cache) — no cycle risk, this file already imports
+// similarly from storage.js/scoring.js above.
+import { isLeaguePaused, PAUSED_LEAGUE_BANNER_TEXT } from './roles.js';
+import { getActiveLeagueId, getCachedMemberships, getCachedMaintenanceBanner } from './auth.js';
+// UX Revamp Group A2 (DI-326, 2026-09-25) — native-only haptics, gated
+// internally by haptic() itself (isNativeShell()) — no extra gating needed
+// at any of this file's three call sites.
+import { haptic } from './haptics.js';
+// Step 6 (full-app review, 2026-09-26) — the left-edge zone reserved for the
+// control-center drawer's edge swipe (DRAWER_EDGE_ZONE_PX aliases this exact
+// constant in js/control-center.js). nav-gestures.js imports only platform
+// and haptics, so this adds no cycle.
+import { WEEK_SWIPE_EDGE_EXCLUDE_PX } from './nav-gestures.js';
 
 export const chatDigest = _digest;
 
@@ -123,6 +140,23 @@ export const chatDigest = _digest;
 // opens the full REACTION_PALETTE (data-model.js, AD-20's one shared source)
 // anchored to the message. There is no more "always-visible subset" concept
 // left for QUICK_EMOJI to describe — do not reintroduce it.
+//
+// UX Revamp Group A2 amendment (DI-326, 2026-09-25, coordinator VERDICT) —
+// QUICK_REACT_PALETTE below is NOT a reintroduction of that retired
+// always-visible row: it is gated behind the SAME reveal mechanism (long-
+// press / right-click, `.chat-actions-revealed`) as the action buttons, so
+// it reserves zero layout height at rest exactly like `.chat-actions` does
+// — the RG-21 density concern the retirement above protects against does
+// not apply to a reveal-gated element (never on-screen for a resting
+// message). This is the iMessage Tapback layout the coordinator approved:
+// a curated 6-emoji row renders ABOVE `.chat-actions` the instant the SAME
+// gesture that already reveals the action row fires, so "press and hold
+// the message for the reactions" (Drew's own words) is literally true on
+// the first frame, without a second tap into the full ➕ picker — which
+// stays, unchanged, for the other 12 entries (named deviation from the
+// literal UN-280 wording was explicitly REJECTED in favor of this: nothing
+// existing is removed, see DI-326 item 3).
+const QUICK_REACT_PALETTE = REACTION_PALETTE.slice(0, 6);
 const EDIT_WINDOW_MS = 5 * 60 * 1000;
 // XSS-HARDEN round 2, C2 (2026-09-12) — the palette moved to data-model.js so
 // storage.js's setAccent() can validate against the SAME list without importing
@@ -954,8 +988,15 @@ function searchResultsHTML(query) {
   // reader's own room, so it carries the SAME chip here — a result that omitted
   // it would be the one place the marker is missing, which is exactly the
   // inconsistency CONVENTIONS #21 is about.
+  // 2026-09-24 (coordinator finding 2, reviewer APPROVE WITH NOTES on F-1): this class toggle
+  // read `isPrivateSelfTest(m)` alone, so a private SCRIBE changelog hit rendered the chip
+  // (below, via `privateRowChipHTML()`) without the dim — the one surface where the marker and
+  // the treatment could disagree (CONVENTIONS #21). Driven off `privateRowChipHTML(m)` itself
+  // — the SAME truthiness that decides the chip — so the two can never diverge again; this is
+  // the exact expression `messageHTML()` already uses for its own bubble (`privateChip ?
+  // ' chat-msg-private' : ''`).
   const rows = results.map(m => `
-    <button type="button" class="chat-search-result${isPrivateSelfTest(m) ? ' chat-msg-private' : ''}" data-search-jump="${esc(m.id)}">
+    <button type="button" class="chat-search-result${privateRowChipHTML(m) ? ' chat-msg-private' : ''}" data-search-jump="${esc(m.id)}">
       <span class="chat-search-result-meta"><strong>${esc(nameOf(m.author))}</strong> · ${relTime(m.ts)}${privateRowChipHTML(m)}</span>
       <span class="chat-search-result-body">${esc(m.body).replace(/\n/g, ' ')}</span>
     </button>`).join('');
@@ -2160,7 +2201,15 @@ export const _wagerAckHTMLForTest = wagerAckHTML;
  * trade. Themed vars only; no colour of its own.
  */
 function privateRowChipHTML(m) {
-  return isPrivateSelfTest(m) ? '<span class="chat-private-chip">🔒 Only you can see this</span>' : '';
+  // DI-292 (2026-09-24): the SCRIBE changelog row private to one credited
+  // player (js/scribeChangelog.js's `visible_to`, detected client-side via
+  // `isPrivateScribeChangelog()`'s id suffix `__private` AND non-empty
+  // `meta.playerId` — 0025 reserves the namespace server-side, which is what
+  // makes both terms trustworthy) gets the SAME chip as the push self-test
+  // row — same fact ("only you can see this"), same reuse-don't-reinvent
+  // instinct DI-292 asked for: no new class, no new copy.
+  return (isPrivateSelfTest(m) || isPrivateScribeChangelog(m))
+    ? '<span class="chat-private-chip">🔒 Only you can see this</span>' : '';
 }
 export const _privateRowChipHTMLForTest = privateRowChipHTML;
 
@@ -2180,8 +2229,16 @@ function messageHTML(m, self, showNewDivider) {
   }
   if (m.type === 'gamereact') return '';   // rendered via coalescing pass
 
-  const mine = m.author === self;
   const scribe = m.author === 'scribe';
+  // DI-346 (UN-304, T-36) regression guard: SCRIBE never renders as "mine",
+  // even in the edge case self happens to equal 'scribe' (it never should —
+  // no player identity is ever the literal string 'scribe' — but this is
+  // exactly the class of predicate mistake that has bitten this project
+  // before, per the spread-sign history in data-model.js). Side is a
+  // right-there-in-the-room visual signal now (bubble side, hidden avatar/
+  // name), not just a text label, so a SCRIBE post picking up .chat-mine
+  // would be a much louder authorship error than before this DI.
+  const mine = m.author === self && !scribe;
   const failed = isFailed(m.id);
   const pending = isPending(m.id);
   const canEdit = mine && !m.deleted && Date.now() - (m.ts || 0) < EDIT_WINDOW_MS;
@@ -2193,7 +2250,7 @@ function messageHTML(m, self, showNewDivider) {
     <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${esc(accent)};color:#fff"` : ''}>${esc(initialsOf(m.author))}</div>
     <div class="chat-bubble-col">
       <div class="chat-meta">
-        <span class="chat-author">${esc(nameOf(m.author))}</span>
+        <span class="chat-author">${esc(nameOf(m.author))}</span>${mine ? '<span class="sr-only">You</span>' : ''}
         ${privateChip}
         ${pickChip(m.author, m.gameTag)}
         ${tagChipHTML(m)}
@@ -2208,9 +2265,12 @@ function messageHTML(m, self, showNewDivider) {
       ${reactionsHTML(m, self, persistentStarHTML(m, self))}
       ${m.deleted ? '' : whatsNewLinkHTML(m)}
       ${m.deleted ? '' : wagerAckHTML(m, self)}
-      ${m.deleted ? '' : `<div class="chat-actions">
+      ${m.deleted ? '' : `<div class="chat-quick-react-row">
+        ${QUICK_REACT_PALETTE.map(em => `<button type="button" class="chat-act chat-quick-react-btn" data-quick-react="${esc(m.id)}" data-emoji="${esc(em)}" title="React ${esc(em)}">${em}</button>`).join('')}
+      </div>
+      <div class="chat-actions">
         ${isScribeFeedbackEnabled() ? feedbackButtonHTML(m, self) : ''}
-        <button class="chat-act chat-act-react" data-react-open="${esc(m.id)}" title="React">➕</button>
+        <button class="chat-act chat-act-react" data-react-open="${esc(m.id)}" title="More reactions">➕</button>
         <button class="chat-act" data-reply="${esc(m.id)}" title="Reply">↩</button>
         ${calloutEligible(m) ? `<button class="chat-act" data-callout="${esc(m.id)}" title="Quote this next to the result">📎</button>` : ''}
         ${wagerActionHTML(m, self)}
@@ -2462,6 +2522,39 @@ export function renderChatPage() {
   `;
 
   bindChatPage();
+  // DI-344/345 §Render paths — the SAME isLeaguePaused(league) check
+  // js/app.js's navigateTo() uses for its five nav destinations, extended
+  // to the sixth (Chat) here since this page is reached from several
+  // places that never pass through navigateTo() (see this file's own
+  // header note on renderChatPage()'s four other callers). The composer is
+  // disabled via the standard `disabled` attribute — `.chat-input:disabled`/
+  // `.chat-send-btn:disabled` (css/styles.css) reuse the SAME reduced-
+  // opacity shape `.btn:disabled`/`.pick-btn:disabled` already use
+  // (no disabled-composer rule existed before this pass; the composer had
+  // never been disablable) — plus the reused banner sentence as an inline
+  // caption via the placeholder, never a second string.
+  // NOTE 6 / BLOCK 4 (2026-09-25) — the platform-wide maintenance banner,
+  // read from the same shared cache js/app.js's six nav destinations use
+  // (js/auth.js's getCachedMaintenanceBanner()/refreshMaintenanceBannerCache()).
+  // Independent of league-pause state (see js/app.js's MAINTENANCE BANNER
+  // section header comment) — inserted first so the paused-league banner
+  // below, if also present, ends up above it (more urgent, more specific).
+  {
+    const bannerText = getCachedMaintenanceBanner();
+    if (bannerText) {
+      c.insertAdjacentHTML('afterbegin', `<div class="warning-box maintenance-banner" role="status" id="maintenance-banner">${esc(bannerText)}</div>`);
+    }
+  }
+  {
+    const activeLeagueId = getActiveLeagueId();
+    const m = getCachedMemberships().find(x => x.leagueId === activeLeagueId);
+    if (isLeaguePaused(m ? { status: m.status } : null)) {
+      c.insertAdjacentHTML('afterbegin', `<div class="warning-box paused-league-banner" role="status">${esc(PAUSED_LEAGUE_BANNER_TEXT)}</div>`);
+      const input = document.getElementById('chat-input');
+      if (input) { input.disabled = true; input.placeholder = PAUSED_LEAGUE_BANNER_TEXT; }
+      document.getElementById('chat-send')?.setAttribute('disabled', '');
+    }
+  }
   // RG-174 — put the draft back onto the FRESH composer, after bindChatPage()
   // so the restored text lands on a node whose listeners are already live.
   restoreComposerDraft(draft);
@@ -2903,8 +2996,10 @@ function bindFilterButtons(root) {
 
 /**
  * DI-125b — the per-message action buttons ([data-reply], [data-react-
- * open], [data-pin], [data-edit], [data-del], [data-callout], and — UN-159,
- * E1 — [data-fb-open]), wired ONCE here and reused by BOTH the main feed
+ * open], [data-pin], [data-edit], [data-del], [data-callout], — UN-159,
+ * E1 — [data-fb-open], and — DI-326 amendment, 2026-09-25 — [data-quick-
+ * react], the Tapback-style row above `.chat-actions`), wired ONCE here and
+ * reused by BOTH the main feed
  * (bindChatPage, `host = #page-chat`) and the sheet (renderSheetMessages,
  * `host = #chat-sheet-scroll`) — not forked into two near-identical copies.
  * `renderFn` is the surface's own refresh (renderChatPage vs
@@ -2938,6 +3033,20 @@ function bindMessageActionButtons(host, renderFn, surface) {
     e.stopPropagation();
     if (!me()) return;
     toggleMessageReactPicker(b, b.dataset.reactOpen, renderFn);
+  }));
+  // DI-326 amendment (2026-09-25) — the Tapback-style quick-react row above
+  // .chat-actions. A direct commit (same as picking from the full picker,
+  // toggleMessageReactPicker's option handler just above) — not a second
+  // "open a picker" step. Closes the full picker too, if it happened to be
+  // open (e.g. reopened from a prior tap) — only one reaction surface should
+  // ever be mid-interaction for a message at once.
+  host?.querySelectorAll('[data-quick-react]').forEach(b => b.addEventListener('click', e => {
+    e.stopPropagation();
+    const self = me(); if (!self) return;
+    document.getElementById('chat-react-picker')?.remove();
+    haptic('selection');
+    toggleReact(b.dataset.quickReact, b.dataset.emoji, self);
+    renderFn();
   }));
   host?.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => {
     const self = me(); if (!self) return;
@@ -3019,6 +3128,13 @@ function bindChatPage() {
   document.getElementById('chat-prefs-btn')?.addEventListener('click', () => {
     U.prefsOpen = !U.prefsOpen; renderChatPage();
   });
+  // NOT scoped to `c` — see bindPrefsPanel()'s own header. #page-chat is the
+  // FIRST host of these ids in document order (index.html's static markup),
+  // so the unscoped, document-wide getElementById() this call has always
+  // used continues to resolve to THIS page's own copy even when the drawer's
+  // copy is also mounted; the drawer's own call (bindControlCenterBodies())
+  // is the one that needs (and gets) real scoping, since it is the SECOND
+  // copy in document order and would otherwise never be found.
   bindPrefsPanel();
   document.getElementById('chat-refresh-btn')?.addEventListener('click', onChatRefreshTap);
 
@@ -3180,6 +3296,8 @@ function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
   host.appendChild(picker);
   picker.querySelectorAll('[data-emoji]').forEach(opt => opt.addEventListener('click', ev => {
     ev.stopPropagation();
+    // DI-326 — native-only, gated internally by haptic() itself.
+    haptic('selection');
     toggleReact(mid, opt.dataset.emoji, self);
     picker.remove();
     renderFn();
@@ -3288,6 +3406,8 @@ function bindMessageActionsLongPress(root) {
       _lpTimer = null;
       if (_lpTargetMid) {
         revealMessageActions(_lpTargetMid, rootId);
+        // DI-326 — native-only, gated internally by haptic() itself.
+        haptic('medium');
         if (navigator.vibrate) try { navigator.vibrate(12); } catch {}
       }
     }, LONG_PRESS_MS);
@@ -3377,6 +3497,9 @@ function bindMessageSwipe(root) {
     const msgEl = e.target.closest?.('.chat-msg');
     if (!msgEl) return;
     const t = e.touches[0];
+    // A touch that starts in the left-edge zone belongs to the drawer's edge
+    // swipe (and iOS's own back gesture), never to a message reply swipe.
+    if (typeof t.clientX === 'number' && t.clientX >= 0 && t.clientX < WEEK_SWIPE_EDGE_EXCLUDE_PX) { start = null; targetMid = null; return; }
     start = { x: t.clientX, y: t.clientY };
     targetMid = msgEl.dataset.mid;
     axis = null;
@@ -3394,6 +3517,8 @@ function bindMessageSwipe(root) {
     if (axis === 'x' && Math.abs(dx) >= SWIPE_THRESHOLD_PX) {
       committed = true;
       cancelPendingLongPress();
+      // DI-326 — native-only, gated internally by haptic() itself.
+      haptic('light');
       if (dx > 0) openReplyFor(targetMid, surface); else openReactPickerFor(targetMid, surface);
     }
   }, { passive: true });
@@ -3569,7 +3694,15 @@ function almaOptionsHTML(current) {
   return `<option value="">— None —</option>${cur ? `<option value="${esc(cur)}" selected>${esc(cur)}</option>` : ''}`;
 }
 
-function prefsPanelHTML() {
+// UX Revamp wiring pass 1 (DI-303, 2026-09-25) — exported so js/app.js can
+// embed this SAME body inside the control-center drawer's Chat settings
+// accordion row and the Settings page's own host (DI-308's "one render
+// function, two hosts"). Already host-agnostic as written — every query
+// inside this function and bindPrefsPanel() below is a plain
+// document.getElementById()/document.querySelectorAll() call, never scoped
+// to a #page-chat ancestor — so no change was needed to make it reusable
+// outside #page-chat; only the export was missing.
+export function prefsPanelHTML() {
   const self = me();
   if (!self) return '';
   const prefs = getNotifPrefs();
@@ -3640,11 +3773,42 @@ export const _prefsPanelHTMLForTest = prefsPanelHTML;
  *  it, a mutation that put the whole-row spread BACK at the call site inside
  *  saveSelfField() left authtest green — the suite was exercising patchPlayer()
  *  and not the one line that decides what patchPlayer() is handed. Production
- *  reaches bindPrefsPanel() through renderChatPage() and nothing else. */
-export const _bindPrefsPanelForTest = () => bindPrefsPanel();
+ *  reaches bindPrefsPanel() through bindChatPage() (renderChatPage()'s own
+ *  binder) AND, since the security fix round (2026-09-25, NOTE 4), through
+ *  js/app.js's bindControlCenterBodies() for the drawer/Settings page's Chat
+ *  accordion row — both now pass their own scope container explicitly. */
+export const _bindPrefsPanelForTest = (scopeEl) => bindPrefsPanel(scopeEl);
 
-function bindPrefsPanel() {
-  document.getElementById('pref-nick')?.addEventListener('change', e => { setChatNick(e.target.value); renderChatPage(); });
+/**
+ * Security fix round (2026-09-25), NOTE 4 — `scopeEl` is now REQUIRED-in-
+ * spirit (defaults to `document` only so the two pre-existing call sites
+ * below and `_bindPrefsPanelForTest`'s own callers stay source-compatible).
+ * This panel is now embedded in TWO hosts (`bindChatPage()`'s `#page-chat`,
+ * AND the control-center drawer/Settings page's Chat accordion row —
+ * `js/app.js`'s `bindControlCenterBodies()`), and a bare
+ * `document.getElementById('pref-nick')` resolves to whichever host's copy
+ * of that id appears FIRST in document order — with both open (drawer open
+ * while the Chat tab is also mounted), the second host's inputs bind
+ * nothing and silently drop every edit. Scoped to the CONTAINER the caller
+ * actually just (re)painted, mirroring `bindFilterButtons(c)`/
+ * `bindLoginPrompt(c)` immediately above this function's other call site.
+ *
+ * `document.getElementById(id)` when scoped to the whole document (the
+ * default, and `bindChatPage()`'s effective scope before this fix), never
+ * `document.querySelector('#'+id)` — both resolve the same element in a real
+ * browser, but `getElementById` is the one that also works against this
+ * repo's Node test-fixture `document` stub (authtest.mjs's `FakeEl`/
+ * `freshDom()`, which implements `getElementById` against its id registry
+ * but does not implement `document.querySelector('#id')`). A NON-document
+ * `scopeEl` (the drawer/Settings-page host) uses `scopeEl.querySelector`,
+ * which is what actually scopes to that subtree in a real DOM.
+ */
+function _prefsField(root, id) {
+  return root === document ? document.getElementById(id) : (root?.querySelector?.(`#${id}`) || null);
+}
+export function bindPrefsPanel(scopeEl = document) {
+  const root = scopeEl && (typeof scopeEl.querySelector === 'function' || typeof scopeEl.getElementById === 'function') ? scopeEl : document;
+  _prefsField(root, 'pref-nick')?.addEventListener('change', e => { setChatNick(e.target.value); renderChatPage(); });
   // ── DI-182a (Step 3b) — the two league-identity rows ──────────────────────
   // Both write the SAME fields the commissioner's Edit Player modal writes,
   // through the SAME injected field patch (js/app.js's patchPlayer(), security
@@ -3666,14 +3830,14 @@ function bindPrefsPanel() {
     }
     _playerPatchWriter(self, patch);
   };
-  document.getElementById('pref-initials')?.addEventListener('change', e => {
+  _prefsField(root, 'pref-initials')?.addEventListener('change', e => {
     // Trimmed + uppercased to match getPlayerInitials()'s own fallback, which
     // uppercases the first letter of the display name — otherwise a player who
     // types "dh" gets a lowercase avatar next to five uppercase ones.
     saveSelfField({ initials: String(e.target.value || '').trim().toUpperCase().slice(0, 3) });
     renderChatPage();
   });
-  document.getElementById('pref-alma')?.addEventListener('change', e => {
+  _prefsField(root, 'pref-alma')?.addEventListener('change', e => {
     // The VALUE is `location`, the same field parseAndReport() stores as
     // game.homeTeam/awayTeam — so Alma Mater Watch's exact-equality match
     // applies to whatever is saved here, exactly as it does to the
@@ -3681,12 +3845,12 @@ function bindPrefsPanel() {
     saveSelfField({ almaMater: String(e.target.value || '') });
     renderChatPage();
   });
-  document.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
+  root.querySelectorAll('[data-accent]').forEach(b => b.addEventListener('click', () => { setAccent(b.dataset.accent || null); renderChatPage(); }));
   // The pref-toasts / pref-toast-duration / pref-sound handlers were removed
   // with their rows (2026-09-24, Option A) — see prefsPanelHTML(). The `?.`
   // would have made them harmless no-ops, but a listener bound to an id that
   // this file no longer renders is a false lead for the next reader.
-  document.getElementById('pref-sys')?.addEventListener('change', e => { setNotifPrefs({ systemEvents: e.target.checked }); renderChatPage(); });
+  _prefsField(root, 'pref-sys')?.addEventListener('change', e => { setNotifPrefs({ systemEvents: e.target.checked }); renderChatPage(); });
 }
 
 // ── Game-card bubble + bottom sheet ───────────────────────────────────────────
@@ -3795,6 +3959,14 @@ export function openGameChatSheet(gameId) {
   const found = gameById(gameId);
   const wrap = document.createElement('div');
   wrap.id = 'chat-sheet-wrap';
+  // SECURITY GATE FINDING 1 (916bdb7 review, 2026-09-25) — this sheet
+  // `document.body.appendChild()`s its own root above `#site-gate-overlay`'s
+  // z-index, same as the League Page overlay / week-wizard sheet in app.js.
+  // `app.js`'s `tearDownRenderedContentForHold()` sweeps every
+  // `[data-hold-teardown]` element generically (it cannot import this
+  // module, and this module cannot import it — this shared attribute IS the
+  // cross-module contract, not a function call).
+  wrap.setAttribute('data-hold-teardown', '');
   const g = found?.game;
   const score = g && g.homeScore != null ? `${esc(g.awayScore)}–${esc(g.homeScore)}` : '';
   const firstUse = !lsGet('cfbp_chat_sheet_hint');
@@ -3832,6 +4004,17 @@ export function openGameChatSheet(gameId) {
   markSeen(gameId);
   updateChatBadges();
 }
+/**
+ * F5 (3c fix window, third pass) — app.js's identity-change sweep removes
+ * every `[data-hold-teardown]` root, including `#chat-sheet-wrap`, by DOM
+ * removal alone. That left `U.sheetGameId` pointing at the departed
+ * identity's thread, so the next realtime event re-rendered into a sheet that
+ * no longer existed (and a send path keyed on it stayed armed). This is the
+ * same close the sheet's own ✕ performs — idempotent when nothing is open.
+ */
+export function resetGameChatSheetForTeardown() { closeSheet(); }
+/** Test seam — which game thread (if any) the sheet state still points at. */
+export function _getChatSheetGameIdForTest() { return U.sheetGameId; }
 function closeSheet() {
   // DI-125a: the message currently revealed (if any) is about to have its DOM
   // removed if it belongs to THIS sheet — dismiss it explicitly rather than

@@ -160,9 +160,11 @@ setScribeAutonomousEnabled(true);
 setScribeFrequency('balanced');
 const dial = renderScribeParticipationCardHTML();
 
-assert(/<div class="admin-section" data-comm-tab="settings">/.test(dial),
-  'RG-10: the card ships its OWN data-comm-tab="settings" wrapper (an untagged .admin-section renders on all five tabs)');
-assert(!/data-comm-tab="(week|games|players|data)"/.test(dial),
+// UX Revamp wiring pass 3a (2026-09-25) — the four SCRIBE cards moved from
+// the `settings` tab to the renamed `scribe` tab (DI-319 §SCRIBE).
+assert(/<div class="admin-section" data-comm-tab="scribe">/.test(dial),
+  'RG-10: the card ships its OWN data-comm-tab="scribe" wrapper (retagged from "settings", UX Revamp wiring pass 3a)');
+assert(!/data-comm-tab="(week|games|players|rules)"/.test(dial),
   'RG-10 negative check: the dial renders under no other commissioner tab');
 assert(dial.includes('How often SCRIBE jumps into the conversation on its own. Direct @SCRIBE questions always get answered regardless of this setting.'),
   'the approved DI-D1 copy is present verbatim, including the "direct @SCRIBE questions always get answered" promise');
@@ -1095,8 +1097,8 @@ console.log('\n[15] DI-252 — SCRIBE pacing: the hourly cap and the cooldown ar
   setScribeAutonomousEnabled(true);
   storage.saveSetting('scribe', undefined);
   const unset = renderPacingCard();
-  assert(/data-comm-tab="settings"/.test(unset) && !/data-comm-tab="(week|games|players|data)"/.test(unset),
-    '15b: RG-10 — the pacing controls inherit the dial card\'s own settings-tab wrapper and render under no other commissioner tab');
+  assert(/data-comm-tab="scribe"/.test(unset) && !/data-comm-tab="(week|games|players|rules)"/.test(unset),
+    '15b: RG-10 — the pacing controls inherit the dial card\'s own scribe-tab wrapper and render under no other commissioner tab (retagged from "settings", UX Revamp wiring pass 3a)');
   assert(unset.includes('Unprompted posts per hour') && unset.includes('Minimum gap between unprompted posts'),
     '15b: both approved labels render verbatim');
   assert(/id="scribe-hourly-limit-select"[\s\S]*?<option value="4" selected>4<\/option>/.test(unset),
@@ -1284,9 +1286,9 @@ console.log('\n[16] DI-263/DI-267 — the Heat card, the tolerance note, the one
 
   setScribeHeat('dry');
   const heat = renderScribeHeatCardHTML();
-  assert(/<div class="admin-section" data-comm-tab="settings">/.test(heat),
-    '16-1: RG-10 — the Heat card ships its OWN data-comm-tab="settings" wrapper. An untagged .admin-section renders on all five commissioner tabs, which is a defect this codebase has already shipped once');
-  assert(!/data-comm-tab="(week|games|players|data)"/.test(heat),
+  assert(/<div class="admin-section" data-comm-tab="scribe">/.test(heat),
+    '16-1: RG-10 — the Heat card ships its OWN data-comm-tab="scribe" wrapper (retagged from "settings", UX Revamp wiring pass 3a). An untagged .admin-section renders on all five commissioner tabs, which is a defect this codebase has already shipped once');
+  assert(!/data-comm-tab="(week|games|players|rules)"/.test(heat),
     '16-2: RG-10 negative check — it renders under no other tab');
   assert(HEAT_COPY.length === 5 && SCRIBE_HEAT_ORDER.every(l => heat.includes(`data-scribe-heat="${l}"`)),
     '16-3: all FIVE rungs are selectable — Polite / Dry / Spicy / Savage / No Mercy');
@@ -1364,10 +1366,15 @@ console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
     `17-1: an UNSET model reads as Sonnet — today's behaviour and the cheaper of the two (CONVENTIONS #10). A missing value must never resolve to the option that multiplies the bill (got ${getScribeModel()})`);
 
   const card = renderScribeModelCardHTML();
-  assert(/<div class="admin-section" data-comm-tab="settings">/.test(card),
-    '17-2: RG-10 — the Model card ships its OWN data-comm-tab="settings" wrapper. An untagged .admin-section renders on all five commissioner tabs');
-  assert(!/data-comm-tab="(week|games|players|data)"/.test(card),
-    '17-3: RG-10 negative check — it renders under no other tab');
+  // UX Revamp wiring pass 3a (2026-09-25) — SCRIBE Model relocated whole to
+  // the Admin panel (Admin → Settings, 2026-09-25 amendment item 2);
+  // js/admin-panel.js's cardShell() now supplies the ONE `.admin-section`
+  // wrapper. This function returns BARE inner content (the double-wrap fix
+  // the wiring checklist named).
+  assert(!/<div class="admin-section"/.test(card),
+    '17-2: the Model card returns BARE content — no self-wrapping <div class="admin-section"> any more (relocated to Admin, UX Revamp wiring pass 3a)');
+  assert(!/data-comm-tab=/.test(card),
+    '17-3: RG-10 negative check — it carries no data-comm-tab of its own at all — it is not a Commissioner-panel surface any more');
   assert(SCRIBE_MODEL_CHOICES.length === 2 && SCRIBE_MODEL_CHOICES.every(id => card.includes(`data-scribe-model="${id}"`)),
     `17-4: BOTH ids are selectable, and they are the ids the server prices — the card cannot offer a model rateSettings() would refuse (got ${JSON.stringify(SCRIBE_MODEL_CHOICES)})`);
   assert((card.match(/scribe-freq-opt selected/g) || []).length === 1,
@@ -1412,8 +1419,13 @@ console.log('\n[17] DI-282 — the SCRIBE Model toggle…');
   // ── The wiring: the render and the handler name the same attribute. ──
   {
     const src = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-    assert(/c\.insertAdjacentHTML\('beforeend', renderScribeModelCardHTML\(\)\);/.test(src),
-      '17-18: renderCommPage() actually INSERTS the card. A pure render function nothing calls is a card that exists only in this test (the RG-27 shape)');
+    // UX Revamp wiring pass 2 (2026-09-25) — the SCRIBE Model card moved
+    // from renderCommPage()'s renderCommExtrasV16() to renderAdminPage()'s
+    // own `bodies` injection map (coordinator ruling: "Account Linking and
+    // SCRIBE Model cards move to Admin"), via js/admin-panel.js's CARD
+    // SHELL CONTRACT rather than a direct insertAdjacentHTML call.
+    assert(/'scribe-model': \(\) => renderScribeModelCardHTML\(\),/.test(src),
+      '17-18: renderAdminPage() actually INSERTS the card, via its bodies map. A pure render function nothing calls is a card that exists only in this test (the RG-27 shape)');
     const wiring = src.slice(src.indexOf("document.querySelectorAll('[data-scribe-model]')"), src.indexOf("const readPacingSelects = () =>"));
     assert(wiring.length > 0 && /setScribeModel\(id\)/.test(wiring),
       '17-19: the click handler drives the REAL setScribeModel() — the same refusing write asserted above, not a second copy of the validation');

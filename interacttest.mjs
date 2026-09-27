@@ -52,6 +52,8 @@ import {
 import { REACTION_PALETTE, effectiveScribeBestOfN, SCRIBE_BEST_OF_N_DEFAULT, SCRIBE_BEST_OF_N_VALUES } from './js/data-model.js';
 import {
   parseCandidates, parseJudgeVerdict, summarizeJudge, JUDGE_REJECTION_REASONS,
+  // RG-247 (live, 2026-09-25) — the envelope reader and the last-line guard.
+  ensurePlainBody,
   JUDGE_SYSTEM, SCREENSHOT_TEST, ASSERTION_OF_TRUTH_TEST, BEST_OF_CANDIDATES,
   CANDIDATES_OUTPUT_FORMAT, JUDGE_OUTPUT_FORMAT, CANDIDATES_INSTRUCTION,
 } from './supabase/functions/_shared/scribe-bestof.mjs';
@@ -451,6 +453,108 @@ console.log('\n[8] DI-286/288 — the judge grades against SCRIBE.md\'s own two 
     '8-9: the judge is PERSONA-FREE — it does not carry the ~6,000-token persona snapshot, which is what makes it cheap by construction rather than by luck');
   assert(/MAKE THEM GENUINELY DIFFERENT/.test(CANDIDATES_INSTRUCTION),
     '8-10: and the generation instruction demands three DIFFERENT angles — a judge choosing between three phrasings of one joke is choosing nothing');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[9] RG-247 — the envelope is READ, never PUBLISHED…');
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// THE LIVE DEFECT (2026-09-25, v0.25.1). SCRIBE posted the best-of-three
+// GENERATION ENVELOPE — `{"candidates":["…","…","…"]}`, braces, key and all —
+// into the room under its own name, in front of six people.
+//
+// `parseCandidates()` ended in `return [text]` for anything `JSON.parse` could
+// not read, and that degrade is RIGHT (best-of-1 beats silence; see its own
+// header). What it never asked was WHAT the raw text is. When the unreadable
+// text is the envelope, "one candidate" IS the envelope — and both handlers
+// skip the judge on `candidates.length > 1`, so the gate that would have looked
+// at it was skipped BECAUSE there was only one of it.
+//
+// The whole-turn `JSON.parse` was the too-strict half. `scribe-ask` sends the
+// three-candidate contract as PROSE with no `output_config.format` at all (its
+// own D1-4), so the reader had to survive everything a prose-instructed model
+// puts AROUND correct JSON. It survived none of it.
+//
+// Section [6] above pins the parser's three shapes. This pins the RECOVERY and
+// the LAST-LINE GUARD — end-to-end proof that the envelope never reaches a
+// `messages` row lives in `scribeAsk.twin [D5]` and `scribeAutonomous.twin [D6]`,
+// where the real handlers run.
+{
+  const THREE = ['Zero lands flat.', 'One is the funny one.', 'Two is mean.'];
+  const E = JSON.stringify({ candidates: THREE });
+  const same = (got, want) => JSON.stringify(got) === JSON.stringify(want);
+
+  assert(same(parseCandidates('```json\n' + E + '\n```'), THREE),
+    '9-1: A FENCED envelope is READ, not treated as one giant candidate. A model told in prose to "return them as JSON" fences the JSON — this is the single most common way a correct answer fails a strict whole-turn parse');
+  assert(same(parseCandidates('Here are three:\n' + E), THREE),
+    '9-2: …so is one with a PREAMBLE. `CANDIDATES_INSTRUCTION` forbids a preamble; a model that writes one anyway is not malfunctioning, and the cost of reading it wrong was a permanent public post');
+  assert(same(parseCandidates(E + ' .'), THREE),
+    '9-3: …and one with a single TRAILING TOKEN after it. One stray character is the whole distance between the intended shape and the live incident');
+  assert(same(parseCandidates(E + '\n\nHope that helps.'), THREE),
+    '9-4: …and one with a trailing SENTENCE, which is also what `textParts.join(\' \')` produces when a turn arrives as two text blocks (scribe-ask:334)');
+
+  assert(same(parseCandidates(E.slice(0, E.indexOf(THREE[2]))), [THREE[0], THREE[1]]),
+    '9-5: A TRUNCATED envelope yields the candidates that DID arrive. `stop_reason:max_tokens` lands mid-array; two complete candidates is still a judged batch, and RG-239 raised the token ceiling for exactly this shape without closing the branch that published the result');
+  assert(parseCandidates('{"candidates":["Zero lands flat.", "One is the fun').length === 1,
+    '9-6: …stopping at the first literal that does not close, rather than guessing at half a line. A salvaged candidate is a real one or it is not salvaged');
+
+  assert(same(parseCandidates('{"candidates":["","",""]}'), []),
+    '9-7: AN ENVELOPE WITH NOTHING IN IT IS NOT PROSE. It used to fall through to the raw-text branch and post itself; now it is NOTHING, and each caller applies its own no-post answer — a canned line under a standing ack, silence where nobody asked');
+  assert(same(parseCandidates('{"candidates":"one line"}'), []),
+    '9-8: …and so is an envelope whose `candidates` is not an array. Same door, quieter costume');
+
+  assert(same(parseCandidates('Iowa covers, and Kevin knows it.'), ['Iowa covers, and Kevin knows it.']),
+    '9-9: PROSE IS STILL ONE CANDIDATE. 6-5\'s degrade is untouched — with bestOfN defaulting to 3, a shape surprise must cost best-of-1 and never silence, and a fix that also ate good posts would be the worse bug');
+  assert(same(parseCandidates('{ "note": "not an envelope" }'), ['{ "note": "not an envelope" }']),
+    '9-10: …and JSON that is not THIS envelope is left exactly as it was, rather than the reader inventing candidates out of any object it meets');
+
+  const guardedEnvelope = ensurePlainBody(E);
+  assert(guardedEnvelope.repaired === true && guardedEnvelope.text === THREE[0],
+    `9-11: THE LAST LINE BEFORE THE ROOM. Every post SCRIBE makes is permanent, public and undeletable by the six people reading it, and the only property that matters about a body is the one nothing on either path was checking: is this plain text a human would read, or a structure we sent ourselves (got ${JSON.stringify(guardedEnvelope)})`);
+  assert(ensurePlainBody('```json\n' + E + '\n```').text === THREE[0],
+    '9-12: …through a FENCE, because a fence is formatting rather than content and is stripped before the test. A PREAMBLE is deliberately NOT this function\'s case — `parseCandidates()` reads a preambled envelope at attempt 2, one layer up, so it never arrives here as a body (9-2)');
+
+  // ── REVIEWER F1 (2026-09-25) — THE CONTROLS THE FIRST CUT OF THIS FIX DID NOT HAVE.
+  //
+  // The original test matched `"candidates":[` ANYWHERE in the body. The controls that were
+  // supposed to prove narrowness (9-14/9-15, D5-13, D6-10) contained no such token, so they
+  // proved nothing about it — the reviewer's word was "vacuous," and it was right.
+  //
+  // THIS IS LIVE-RELEVANT, NOT HYPOTHETICAL. The envelope is in the room's history now;
+  // `scribe-ask` feeds recent room text to the writer; and `COMEBACK_VOICE_BRIEF` (a) instructs
+  // SCRIBE to anchor a comeback on what the player actually said, IN HIS WORDS. A player pasting
+  // the incident and SCRIBE quoting it back is the expected next conversation.
+  const PROSE_QUOTING = 'The log reads "candidates":[ … and Kevin called it "peak SCRIBE".';
+  assert(same(parseCandidates(PROSE_QUOTING), [PROSE_QUOTING]),
+    '9-16: A REAL LINE THAT QUOTES `"candidates":[` MID-SENTENCE IS ONE CANDIDATE — the whole line, unaltered. Unanchored, the salvage arm read the quoted token as a truncated envelope and returned `["peak SCRIBE"]`, which would have posted two words out of the middle of SCRIBE\'s own sentence');
+  assert(ensurePlainBody(PROSE_QUOTING).repaired === false
+    && ensurePlainBody(PROSE_QUOTING).text === PROSE_QUOTING,
+    '9-17: …and the last-line guard leaves it byte-identical. An unanchored guard would have published `peak SCRIBE` as the entire message on the mention path and gone SILENT on the unprompted one');
+  const PROSE_UNCLOSED = '…the bit that starts "candidates":[ — and Jacob will not let it go.';
+  assert(same(parseCandidates(PROSE_UNCLOSED), [PROSE_UNCLOSED])
+    && ensurePlainBody(PROSE_UNCLOSED).repaired === false,
+    '9-18: …the same holds when the quoted token never closes, which is the shape that used to reach the salvage arm with nothing in it: `[]` from the parser meant the canned degrade on scribe-ask and SILENCE on scribe-autonomous, for a line that was fine');
+  const PROSE_BRACKET = 'Kevin\'s line ["peak SCRIBE"] was the highlight of the week.';
+  assert(same(parseCandidates(PROSE_BRACKET), [PROSE_BRACKET])
+    && ensurePlainBody(PROSE_BRACKET).repaired === false,
+    '9-19: …and a BRACKETED QUOTE inside prose is not a wrapper-less envelope. Attempt 2 hunts for a balanced JSON value anywhere in the turn, so `["peak SCRIBE"]` parsed and would have become the post; it now takes OBJECTS only, and the wrapper-less shape is read at attempt 1 or by the anchored arm, both of which require it to BE the body');
+  assert(same(parseCandidates(JSON.stringify(THREE)), THREE),
+    '9-20: …while a genuine wrapper-less answer — the WHOLE turn is the array — still reads as three candidates, so 6-4\'s shape is not the price of 9-19');
+
+  const NESTED = JSON.stringify({ candidates: [E, 'Plain two.', 'Plain three.'] });
+  assert(same(parseCandidates(NESTED), [E, 'Plain two.', 'Plain three.']),
+    '9-21: A DOUBLE-WRAPPED answer parses as three candidates and the parser is right to — the outer envelope is well formed. The first candidate just happens to BE an envelope, which is the one arrival the reader cannot catch and the guard exists for');
+  assert(ensurePlainBody(parseCandidates(NESTED)[0]).repaired === true
+    && ensurePlainBody(parseCandidates(NESTED)[0]).text === THREE[0],
+    '9-22: …and the last-line guard catches it there, which is the case that proves the guard is load-bearing rather than shadowed by the parser fixing everything first');
+  const guardedEmpty = ensurePlainBody('{"candidates":["","",""]}');
+  assert(guardedEmpty.repaired === true && guardedEmpty.text === '',
+    `9-13: …an envelope with nothing recoverable in it returns NO TEXT rather than itself, which is what lets each handler answer with its own no-post line instead of publishing the structure (got ${JSON.stringify(guardedEmpty)})`);
+  const guardedProse = ensurePlainBody('Kevin is 23-15 and still typing.');
+  assert(guardedProse.repaired === false && guardedProse.text === 'Kevin is 23-15 and still typing.',
+    `9-14: A REAL POST PASSES THROUGH BYTE-IDENTICALLY, flag and all. The guard fires on the body BEING our wire format, never on a line that merely mentions one — narrowness is the point (got ${JSON.stringify(guardedProse)})`);
+  assert(ensurePlainBody('{"winnerIndex":1,"rejections":[]}').repaired === false,
+    '9-15: …including OTHER JSON. The guard knows one shape, ours, and does not appoint itself the judge of everything with a brace in it');
 }
 
 console.log(`\n${'─'.repeat(70)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n${'─'.repeat(70)}`);

@@ -18,7 +18,12 @@
  *    (even null); otherwise the current view's tag; otherwise null.
  *  - Notification classes: every event carries notify. Messages/replies/
  *    mention-responses notify; reactions, gamereacts, system events, and
- *    unprompted SCRIBE are ambient (render, never badge).
+ *    unprompted SCRIBE are ambient (render, never badge) — ONE NAMED
+ *    EXCEPTION (DI-293, 2026-09-24): a private SCRIBE changelog row
+ *    (isPrivateScribeChangelog()) still badges its one RLS-scoped recipient
+ *    despite notify:false, because that badge IS the confirmation UN-266
+ *    exists to deliver; push fan-out is unaffected (separate gate, still
+ *    reads notify). See isUnreadFor()'s own comment for the full argument.
  *  - Transport lives ENTIRELY in chatTransport.js (AD-16). This module never
  *    sees a URL. Polling cadence is supplied to the transport via roomMode().
  *  - Outbox: optimistic send, 750ms coalescing window, retries with backoff,
@@ -1944,6 +1949,66 @@ export function isPrivateSelfTest(m) {
     && !!(m.meta && typeof m.meta === 'object' && m.meta.test === true);
 }
 
+/**
+ * ══ DI-292 (2026-09-24) — THE PRIVATE SCRIBE CHANGELOG ROW ═════════════════
+ *
+ * `js/scribeChangelog.js`'s `buildChangelogPost()` sets `visible_to` on a
+ * changelog row credited to one identifiable player (DI-290) — but the
+ * client cannot read `visible_to` (not in `SB_MESSAGE_COLS`, not granted to
+ * `authenticated`; same fact `isPrivateSelfTest()` above is built around), so
+ * privacy has to be inferred from row SHAPE, exactly like `SELF_TEST_ID_RE`.
+ *
+ * THE SHAPE: a private changelog row's id is the base
+ * `sys_scribe_changelog_<learningId>` PLUS a `__private` suffix — the
+ * un-suffixed shape is reserved for the public/windowed case
+ * (`playerId === ''`) — PLUS `meta.playerId` non-empty, a SECOND, INDEPENDENT
+ * lock (coordinator finding 1, reviewer APPROVE WITH NOTES on F-1,
+ * 2026-09-24).
+ *
+ * WHY TWO LOCKS, NOT ONE. `learningId` on the TRAINER path is
+ * `capStored(model_output.learning_id, …)` (trainer/index.js:929) —
+ * MODEL-SUPPLIED, and `capStored` only truncates, never sanitises. A PUBLIC
+ * (windowed) row whose model-chosen learning_id happened to end in the
+ * reserved suffix would otherwise false-positive this predicate — rendering
+ * the "only you can see this" chip on a row everyone can see, and (worse,
+ * since 19403b4's DI-293 fix-forward) tripping `isUnreadFor()`'s exception
+ * and badging EVERY member for a row that was never private. `meta.playerId`
+ * is the field `buildChangelogPost()` sets to the credited player's id ONLY
+ * when `visible_to` is also set (js/scribeChangelog.js:141-180) — it is ''
+ * on every trainer-path row REGARDLESS of the model's learning_id, because
+ * a freshly-proposed trainer learning never carries a `source.playerId` at
+ * all (this file's own DI-293(a)/(b) test note; trainer.twin.mjs 19-3: "a
+ * learning carries no source id"). So even a coincidental id-suffix match on
+ * that path still fails this second, independent term. `meta` IS in
+ * `SB_MESSAGE_COLS` (js/chatTransport.js:454) and is therefore readable —
+ * unlike `visible_to` — which is exactly why it can be the second lock.
+ * `author === 'system'` and `meta.kind === 'scribeChangelog'` are checked
+ * too, mirroring `isPrivateSelfTest()`'s multi-signature style — this
+ * predicate is a COSMETIC caption/badge tell, not the privacy boundary (RLS
+ * is), but a check that only looked at the id would mislabel a
+ * hypothetically-similar id from anywhere else in the room, and (as of this
+ * finding) from THIS room's own public rows too.
+ *
+ * MIGRATION 0025 is what makes `meta.kind`/`meta.playerId` on a
+ * `sys_scribe_changelog_` row TRUSTWORTHY at all: before it, any member could
+ * `rpc('chat_append_system', …)` a row wearing this exact shape (id, author,
+ * meta) with `visible_to` left NULL by that RPC — the client would read the
+ * forgery as real. 0025 reserves the id prefix and the `meta.kind` value
+ * inside `chat_append_system` itself, so the two legitimate writers
+ * (`scribe-learn`/`trainer`, which insert directly via their own
+ * service-role client and never call that RPC) are the only source of a row
+ * this predicate can ever see.
+ */
+const PRIVATE_CHANGELOG_ID_RE = /^sys_scribe_changelog_.+__private$/;
+
+export function isPrivateScribeChangelog(m) {
+  return !!m
+    && PRIVATE_CHANGELOG_ID_RE.test(String(m.id || ''))
+    && String(m.author || '') === 'system'
+    && !!(m.meta && typeof m.meta === 'object' && m.meta.kind === 'scribeChangelog')
+    && !!(m.meta && String(m.meta.playerId || ''));
+}
+
 function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   // A message hidden by retention can never count toward unread — a player
   // who can't scroll to it should never see a badge promising it's there.
@@ -1954,6 +2019,26 @@ function isUnreadFor(m, selfId, afterSeq, cutoff = retentionCutoff()) {
   if (isHiddenByEpoch(m)) return false;
   // The commissioner's own private push self-test. See isPrivateSelfTest().
   if (isPrivateSelfTest(m)) return false;
+  // DI-293 (2026-09-24, coordinator fix-forward) — THE ONE NAMED EXCEPTION TO
+  // "system events are ambient, never badge" (this file's own header comment).
+  // UN-266's private SCRIBE changelog confirmation is HOW the feedback-giver
+  // finds out their feedback landed — Drew's own words, "so that you know your
+  // feedback helped scribe" — and a confirmation nobody is told arrived is not
+  // a confirmation. `notify` stays false UNCHANGED (js/scribeChangelog.js's own
+  // comment: "Don't flip notify as part of this change") — push fan-out is a
+  // SEPARATE gate (`shouldFanout()`, notifytest.mjs §[31]) and is untouched by
+  // this exception; this is ONLY the in-app badge choke point. Safe to admit
+  // here specifically because RLS is what makes the row exist for its reader
+  // at all: `messages_select` (migration 0018:181) means a private row's
+  // FOLDED COPY can only ever be sitting in THIS caller's own `S.items` if
+  // that caller IS the one member `visible_to` names — so "counts as unread
+  // for whoever is asking" is automatically "counts as unread for the
+  // recipient, and only them" with no id comparison needed beyond `m.author
+  // !== selfId` below (always true here: the row's author is 'system').
+  if (isPrivateScribeChangelog(m)) {
+    return m.type === 'message' && !m.deleted &&
+           typeof m.seq === 'number' && m.seq > afterSeq && m.author !== selfId;
+  }
   return m.type === 'message' && !m.deleted && m.notify &&
          typeof m.seq === 'number' && m.seq > afterSeq && m.author !== selfId;
 }

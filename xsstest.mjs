@@ -456,9 +456,16 @@ saveSetting('customRules', null);
 // "looks like a form field, not HTML".
 console.log('\n[7c] Sweep — no <textarea> in js/ interpolates an unwrapped expression…');
 const chatUiSrc = await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8');
+// R-3 (DI-345 "XSS / escaping", 2026-09-25) — js/admin-panel.js is a new render call site this
+// build wave (and DI-320 before it) — the maintenance_banner string and platform_audit_log
+// before_role/after_role values (both user-authored, both super-admin-authored text echoed back
+// to every signed-in user) are new interpolation sites the existing hardcoded per-file sweeps
+// (:461, :1823, :2162) would otherwise never see. Added to every one of those lists rather than
+// a new, separate sweep, so it gets the same coverage every other render file already has.
+const adminPanelSrc = await readFile(new URL('./js/admin-panel.js', import.meta.url), 'utf8');
 const TEXTAREA_RE = /<textarea[^>]*>([\s\S]*?)<\/textarea>/g;
 const textareaHits = [];
-for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc]]) {
+for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc], ['js/admin-panel.js', adminPanelSrc]]) {
   TEXTAREA_RE.lastIndex = 0;
   let m;
   while ((m = TEXTAREA_RE.exec(src))) {
@@ -1226,9 +1233,24 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
 // the module that will hold league names, member display names and account
 // emails, i.e. values typed into a Google profile by someone outside this
 // league, which is the highest-risk input class in the whole app.
-const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/auth.js'];
+// SECURITY GATE FINDING 4 (2026-09-25) — `js/admin-panel.js` JOINS THE SWEEP
+// AT ZERO, the same reasoning as `js/auth.js` above. It was mutation-proven
+// to be a gap: an unescaped `${kv.maintenanceBanner}` (a super-admin-typed
+// string, rendered on the Admin panel's Super Admin tab, read by every
+// signed-in account per DI-344 §3.1's `using (true)` SELECT policy) shipped
+// green because only three narrow scans ever looked at this file, not this
+// suite's full markup-sink sweep. Enters at zero, the same as auth.js did.
+// SECURITY AUDIT (full-app, 2026-09-26) — FOUR MORE FILES JOIN AT ZERO, the
+// js/auth.js / js/admin-panel.js precedent above: js/control-center.js (the
+// drawer: display name, league name, alma mater), js/leagues-home.js (league
+// and member names across leagues), js/week-wizard.js (week/game labels) and
+// js/icons.js (the SVG family every chrome surface interpolates). All four
+// render markup and none was in this suite's full sweep. [9c-1c] below
+// asserts each sweeps clean with NO exemption of its own.
+const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/auth.js', 'js/admin-panel.js',
+  'js/control-center.js', 'js/leagues-home.js', 'js/week-wizard.js', 'js/icons.js'];
 const RESOLVABLE = [...SWEPT, 'js/data-model.js', 'js/scoring.js', 'js/storage.js', 'js/chat.js',
-  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js'];
+  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js', 'js/roles.js'];
 const SRC = {};
 for (const f of RESOLVABLE) SRC[f] = await readFile(new URL('./' + f, import.meta.url), 'utf8');
 
@@ -1329,6 +1351,122 @@ const EXEMPTIONS = [
 
   { file: 'js/chat-ui.js', expr: "m.deleted ? '' : whatsNewLinkHTML(m)",
     why: "whatsNewLinkHTML() returns '' or a template whose BOTH interpolations are esc()'d at chat-ui.js:1390; the scanner denies only because the value is String(m.meta?.version || '') and its String() rule accepts String(Number(...)) alone" },
+
+  // ── app.js — renderSettingsPage()'s four control-center.js calls
+  //    (renderStarredPanels / renderSettingsAccordion / renderFeedbackRulesGroup
+  //    / renderHelpFooter) — EXEMPTIONS REMOVED 2026-09-26 (security audit,
+  //    full-app): js/control-center.js now sits in SWEPT/RESOLVABLE, so the
+  //    classifier resolves these calls through the file's own sweep ([9c-1c]'s
+  //    ratchet) and the four entries became dead ([9b-ii] fails a dead
+  //    exemption, correctly — it would pre-approve whatever lands on that text next).
+
+  // ── app.js — icon('almaMater') (DI-330, Group E, 2026-09-25) ────────────
+  // icon(name) (js/icons.js) is called here with a single HARD-CODED STRING
+  // LITERAL argument at every one of its four Alma Mater Watch call sites —
+  // never a variable, never player/game data. There is no injection vector:
+  // the only way this expression's output ever changes is a code edit to
+  // js/icons.js's own frozen ICONS map. Same class of triviality as a
+  // literal '' branch elsewhere in this sweep.
+  { file: 'js/app.js', expr: "icon('almaMater')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+
+  // REVIEWER BLOCK 4 (pass-2, 2026-09-25) — renderSourceBadge()'s four
+  // data-quality glyphs (icons.js:F8's converted badges). Same triviality as
+  // icon('almaMater') immediately above: name AND label are both hard-coded
+  // string literals at every one of these four call sites, never a variable.
+  // (icon()'s own aria-label attribute-value sink is separately escaped —
+  // js/icons.js's _escAttr(), SECURITY N2 — this exemption is only about
+  // whether js/app.js's OWN interpolation of the icon() call's return value
+  // can carry player/game data, which it cannot: neither argument does.)
+  { file: 'js/app.js', expr: "icon('calendarWeek', { label: 'ESPN Historical' })",
+    why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
+  // STEP B(14) (3c fix window, third pass) — the week wizard's status-button
+  // glyph. wizardStatusIconHTML() returns icon(b.icon) or '', where b.icon is
+  // a name from js/week-wizard.js's FROZEN module-constant FULL_STATUS_BUTTONS
+  // table (never player/game data), and icon() only ever returns one of the
+  // hand-authored ICONS strings or '' for an unknown name (iconstest [7a]).
+  { file: 'js/app.js', expr: 'wizardStatusIconHTML(b)',
+    why: "returns a js/icons.js ICONS literal (or '') selected by a name from a frozen constant table in js/week-wizard.js — no data flows through it" },
+  { file: 'js/app.js', expr: "icon('clipboard', { label: 'Demo' })",
+    why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
+  { file: 'js/app.js', expr: "icon('pin', { label: 'Proposed' })",
+    why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
+  { file: 'js/app.js', expr: "icon('warning', { label: 'Partial' })",
+    why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
+  // The three National TV sites (a filter-chip label, a live-badge, a
+  // scheduled-badge) — same triviality, no `{ label }` option needed since
+  // visible text sits beside each (decorative default, per icon()'s own
+  // header comment).
+  { file: 'js/app.js', expr: "icon('tv')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // Reviewer round 3, item 5 (2026-09-26) — the backend-error-banner icon and
+  // the invite-card's Copy/Rotate buttons. Same triviality as icon('tv')
+  // immediately above: each is a hard-coded string literal, no `{ label }`
+  // option needed since visible text sits beside every one of these.
+  { file: 'js/app.js', expr: "icon('warning')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  { file: 'js/app.js', expr: "icon('clipboard')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  { file: 'js/app.js', expr: "icon('refresh')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // Full-app review Step 6 (2026-09-26) — the backend-error banner's Dismiss
+  // (was a literal ✕). Same reasoning: a hard-coded name, no label, no data.
+  { file: 'js/app.js', expr: "icon('close')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // renderWeekStatusButtons() (2026-09-26, reviewer round 3 item 5) — same
+  // reasoning as wizardStatusIconHTML(b) immediately above: `x.icon` is a
+  // name from THIS function's own frozen-shape local table `t` (never
+  // player/game data), and icon() only ever returns one of the hand-authored
+  // ICONS strings or '' for an unknown name (iconstest [1]).
+  { file: 'js/app.js', expr: 'icon(x.icon)',
+    why: "returns a js/icons.js ICONS literal (or '') selected by a name from renderWeekStatusButtons()'s own local, hard-coded table — no data flows through it" },
+
+  // ── app.js — the Standard/Compact layout-toggle markup (reviewer BLOCK F9,
+  // 2026-09-25 — hidden under isNativeShell(), a dead control on native) ───
+  // The whole ternary is a STATIC markup block: `isNativeShell()` is a
+  // boolean with no injection surface, and the two nested interpolations
+  // inside it (`currentDashLayout==='standard'?' active':''` /
+  // `currentDashLayout==='compact'?' active':''`) each resolve to one of two
+  // hard-coded literal strings (' active' or '') — `currentDashLayout` is
+  // never itself interpolated, only compared. No player/game data anywhere
+  // in this expression.
+  { file: 'js/app.js', expr: "isNativeShell() ? '' : ` <div class=\"layout-toggle\" role=\"group\" aria-label=\"View density\"> <button class=\"layout-toggle-btn${currentDashLayout==='standard'?' active':''}\" data-layout=\"standard\" title=\"Wide matrix\">Standard</button> <button class=\"layout-toggle-btn${currentDashLayout==='compact'?' active':''}\" data-layout=\"compact\" title=\"Mobile-friendly stacked view\">Compact</button> </div>`",
+    why: "isNativeShell() is a boolean with no injection surface; the two nested interpolations each resolve to one of two hard-coded literal strings (' active' or ''), never interpolating currentDashLayout's actual value" },
+
+  // ── app.js — leagueSelectorListHTML()'s leagueCardHTML() call — EXEMPTION
+  //    REMOVED 2026-09-26 (security audit, full-app): js/leagues-home.js now
+  //    sits in SWEPT/RESOLVABLE and the call resolves through its own sweep
+  //    ([9c-1c]'s ratchet); the entry was dead ([9b-ii]).
+
+  // ── app.js — renderWeekWizardTrackerHTML() (DI-C1, UX Revamp wiring pass
+  //    3b, 2026-09-25) — both NUMBERS, no data flows through either ────────
+  // `activeStep` (renamed from the bare `step`, REVIEWER minor finding
+  // 916bdb7 — a generic identifier's exemption text matches file-wide on
+  // exact-equality, so a future UNRELATED `${step}` interpolation elsewhere
+  // in this 25k-line file would silently inherit this "safe" verdict; the
+  // rename makes the exemption text specific to this one concept instead)
+  // is `_weekWizardStep`, a module int always 1-6 or set from
+  // `selectWizardEntry()`'s own return — never a string a player typed. The
+  // loop's own `s.step` (`WIZARD_STEPS`, js/week-wizard.js — a frozen array
+  // of six literal `{step, id, title}` objects) only ever appears inside
+  // ternaries between two hard-coded string literals (' active'/''
+  // and ' done'/''), which never reach this sweep at all — no player/game
+  // data flows through it either.
+  { file: 'js/app.js', expr: 'activeStep', why: "renderWeekWizardTrackerHTML()'s step number — always 1-6, from the module's own _weekWizardStep int or selectWizardEntry()'s return, never player-typed text; renamed from the generic `step` so this exemption cannot accidentally cover an unrelated future site" },
+  { file: 'js/app.js', expr: 'WIZARD_STEP_COUNT',
+    why: "js/week-wizard.js's WIZARD_STEPS.length — a frozen array's own .length, a number, imported as a constant" },
+
+  // ── app.js — renderWeekWizardManageHTML() (DI-C1 §2.6) — b.cls/b.to ─────
+  // `b` is one row of `narrowedWeekStatusButtons(week.status)`'s return —
+  // js/week-wizard.js's FULL_STATUS_BUTTONS, a frozen, hand-authored literal
+  // table of CSS class names ('btn-primary'/'btn-secondary'/'btn-ghost')
+  // and status-machine targets ('draft'/'open'/'locked'/'live'/'final').
+  // Neither field is ever player/game data — `b.label` (the one field on
+  // the same row that IS shown as text) is already escHtml()'d, one line
+  // over, which is why only cls/to (attribute-position, closed-vocabulary)
+  // needed this exemption at all.
+  { file: 'js/app.js', expr: 'b.cls', why: "narrowedWeekStatusButtons()'s row — a CSS class name from week-wizard.js's own frozen FULL_STATUS_BUTTONS literal table, never player/game data" },
+  { file: 'js/app.js', expr: 'b.to', why: "narrowedWeekStatusButtons()'s row — a status-machine target string from the same frozen literal table, never player/game data" },
 ];
 
 // [9b-i] AN EXEMPTION CANNOT BE A WILDCARD. Matching is `===` on normalised
@@ -1399,7 +1537,180 @@ for (const file of ['js/extra-point.js', 'js/recap.js', 'js/notifications.js', '
     `[9c-1] ${file}: every interpolation in a markup-bearing template is wrapped, provably safe, or exempted — found ${hits.length}: ${hits.slice(0, 6).map(h => `${h.line}:${h.expr.slice(0, 60)}`).join(' | ')}`);
 }
 
+// [9c-1c] SECURITY AUDIT (full-app, 2026-09-26) — the four files that joined
+// SWEPT. The audit asked for all four "at zero backlog"; against the real code
+// only js/week-wizard.js is at zero. The other three carry sites that are safe
+// by construction but not provable by this classifier: js/control-center.js
+// escapes through its INJECTED `ctx.escHtml(...)` and glyphs through
+// `ctx.icon(...)` (a dependency bag the classifier cannot follow), plus reducer
+// enums (`state.pane`/`state.phase`) and internal row ids; js/leagues-home.js's
+// injected `icon`/`roleBadgeHTML`; js/icons.js's own `_escAttr(label)`
+// (a String().replace() chain). Teaching the classifier those shapes is a
+// security-suite design change, deliberately NOT made under the stamp; the
+// three files are pinned as RATCHETS instead — the ADMIN_PANEL_BACKLOG shape
+// ([9c-1b] below): digest + count, generated from the live sweep on
+// 2026-09-26, only tightens, and any NEW unclassified site fails. Pinned, not
+// approved. week-wizard.js is asserted at zero with no exemptions.
+assert(sweepFile('js/week-wizard.js').length === 0,
+  `[9c-1c] js/week-wizard.js sweeps clean at ZERO backlog, no exemptions (found ${sweepFile('js/week-wizard.js').length})`);
+const NEW_SWEPT_BACKLOG = {
+  'js/control-center.js': [
+    { d: "2e594f378c", n: 1, t: "initials" },
+    { d: "82a3537ff0", n: 1, t: "name" },
+    { d: "098fe0e15d", n: 1, t: "leagueName" },
+    { d: "8728666a04", n: 1, t: "versionLine" },
+    { d: "bd23753159", n: 1, t: "backIcon" },
+    { d: "18a6e623ab", n: 1, t: "ctx.escHtml(player.displayName || '')" },
+    { d: "afed03527f", n: 1, t: "ctx.escHtml(player.initials || '')" },
+    { d: "e1f7419945", n: 1, t: "almaIcon" },
+    { d: "aae7f26412", n: 1, t: "ctx.escHtml(player.almaMater || '')" },
+    { d: "2920cdbf16", n: 2, t: "ctx.escHtml(label)" },
+    { d: "b55ac8822f", n: 3, t: "chevron" },
+    { d: "e14d65d016", n: 1, t: "ctx.escHtml(p.target)" },
+    { d: "2c7c720cbc", n: 1, t: "ctx.escHtml(p.label)" },
+    { d: "3cd021bc86", n: 1, t: "ctx.escHtml(g.label)" },
+    { d: "fe37cddac6", n: 3, t: "rowId" },
+    { d: "ad936fcbed", n: 1, t: "group" },
+    { d: "13dd052941", n: 1, t: "iconHTML" },
+    { d: "5cf3bd7371", n: 1, t: "iconOrNothing(ctx, 'chevronRight')" },
+    { d: "6898f6c6e6", n: 1, t: "bodyHTML" },
+    { d: "9c6bef1bca", n: 1, t: "ctx.escHtml(o.key ?? o.value)" },
+    { d: "2a0aa77d30", n: 1, t: "ctx.escHtml(o.label)" },
+    { d: "c0d2856b74", n: 1, t: "field" },
+    { d: "d2a1edd66c", n: 1, t: "opts" },
+    { d: "ee2a7d5c9d", n: 1, t: "ctx.escHtml(copy)" },
+    { d: "670edf0acc", n: 1, t: "state.pane" },
+    { d: "c39e7b69be", n: 1, t: "state.phase" },
+    { d: "b9f4c1ac11", n: 1, t: "iconOrNothing(ctx, 'close') || '✕'" },
+  ],
+  'js/leagues-home.js': [
+    { d: "3e7b7d75d0", n: 1, t: "roleBadgeHTML(m.role, { leagueId: m.leagueId })" },
+    { d: "0b7aab5601", n: 3, t: "icon('chevronRight')" },
+    { d: "fd1890afaf", n: 1, t: "glyph" },
+    { d: "8b0e1ec23b", n: 2, t: "icon('chevronLeft')" },
+    { d: "b4076cf587", n: 1, t: "sportCards" },
+  ],
+  'js/icons.js': [
+    { d: "2362533504", n: 1, t: "_escAttr(label)" },
+  ],
+};
+{
+  const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
+  for (const [file, backlog] of Object.entries(NEW_SWEPT_BACKLOG)) {
+    const hits = sweepFile(file);
+    const pinned = new Map(backlog.map(b => [b.d, b]));
+    const live = new Map();
+    for (const h of hits) { const d = digest(h.expr); live.set(d, (live.get(d) || 0) + 1); }
+    const pinnedTotal = backlog.reduce((a, b) => a + b.n, 0);
+    assert(pinned.size === backlog.length && backlog.every(b => Number.isInteger(b.n) && b.n >= 1),
+      `[9c-1c-a] ${file}: every pin is well-formed and no digest is pinned twice`);
+    const added = hits.filter(h => !pinned.has(digest(h.expr)));
+    assert(added.length === 0,
+      `[9c-1c-b] ${file}: NO NEW unclassified interpolation — new: ${added.slice(0, 4).map(h => `${h.line}:${h.expr.slice(0, 70)}`).join(' | ')}`);
+    const grew = [...live.entries()].filter(([d, n]) => pinned.has(d) && n > pinned.get(d).n).map(([d, n]) => `${pinned.get(d).t.slice(0, 60)} (pinned ${pinned.get(d).n}, now ${n})`);
+    assert(grew.length === 0,
+      `[9c-1c-c] ${file}: NO ADDITIONAL site reuses a pinned expression (${hits.length} now vs ${pinnedTotal} pinned) — grew: ${grew.slice(0, 4).join(' | ')}`);
+    const shrunk = backlog.filter(b => (live.get(b.d) || 0) < b.n).map(b => `${b.t.slice(0, 60)} (pinned ${b.n}, now ${live.get(b.d) || 0})`);
+    assert(shrunk.length === 0,
+      `[9c-1c-d] ${file}: the pinned backlog is current — stale pins hide the next regression: ${shrunk.slice(0, 4).join(' | ')}`);
+    console.log(`     ℹ ${file} backlog: ${hits.length} unclassified sites (pinned: ${pinnedTotal} sites / ${backlog.length} expressions) — pinned, not approved`);
+    // Canary, per file: a NEW unwrapped site must still be reported despite the pin.
+    const POISON = SRC[file] + `
+function __xssNewSweptCanary(evil) { return \`<div title="\${evil.nsAttr}">\${evil.nsText}</div>\`; }`;
+    const poisoned = sweepFile(file, POISON).map(h => h.expr);
+    assert(poisoned.includes('evil.nsAttr') && poisoned.includes('evil.nsText') && !pinned.has(digest('evil.nsAttr')) && !pinned.has(digest('evil.nsText')),
+      `[9c-1c canary] ${file}: a NEW unwrapped site is REPORTED despite the pin (got: ${JSON.stringify(poisoned.slice(-2))})`);
+  }
+  // …and week-wizard.js's zero is not vacuous: the same poison is reported there too.
+  const wwPoison = SRC['js/week-wizard.js'] + `
+function __xssWwCanary(evil) { return \`<b>\${evil.wwText}</b>\`; }`;
+  assert(sweepFile('js/week-wizard.js', wwPoison).some(h => h.expr === 'evil.wwText'),
+    '[9c-1c canary] js/week-wizard.js: an unwrapped site added to it IS reported (its zero is a real sweep, not an empty one)');
+}
 
+// [9c-1b] SECURITY F3 (pass-2, 2026-09-25) — `js/admin-panel.js` was already in
+// `SWEPT`/`RESOLVABLE` (SECURITY GATE FINDING 4), but neither the [9c-1] bare
+// loop above NOR APP_BACKLOG's own js/app.js-only ratchet ([9c-2] below) ever
+// actually SWEEPS it — mutation-proven: unescaping the banner echo in this
+// file left the whole suite green, because nothing iterated its own hits.
+// `js/admin-panel.js` has 8 sites this pass that are genuinely safe but not
+// literally wrapped in `esc(...)` — every one is either a property read off a
+// hardcoded, `Object.freeze()`d, in-module constant array (`ADMIN_TABS`/
+// `SUPER_ADMIN_TAB`'s own `.key`/`.icon`/`.label`), an internal dispatch key
+// the module's own call sites pass as string literals (`tab`/`cardId` in
+// `cardShell()`/`renderLeagueSelectorButton()`), a variable already built from
+// `esc(...)`-wrapped fragments (`leagueRows`), or a pass-through of markup
+// another function is independently responsible for escaping
+// (`cardShell()`'s own `bodyHtml` — every `bodies` map entry it renders is
+// itself swept via APP_BACKLOG/EXEMPTIONS in js/app.js). Pinned as a RATCHET
+// (`ADMIN_PANEL_BACKLOG`, the SAME shape APP_BACKLOG uses below — digest +
+// count, ratchet only tightens), not blanket EXEMPTIONS: unlike EXEMPTIONS'
+// permanent file+expr match, a ratchet re-flags the moment the SAME
+// identifier name (`tab`, `cardId`, `bodyHtml`) is reused for something less
+// safe, which is exactly the risk of trusting a short, generic identifier
+// name forever.
+const ADMIN_PANEL_BACKLOG = [
+  { d: "6e05deb4be", n: 1, t: "t.key" },
+  { d: "5eb9cc5667", n: 1, t: "iconFn(t.icon)" },
+  { d: "827c0f0a66", n: 1, t: "t.label" },
+  // Item 6 (pass-2, wiring pass 3a-bis, 2026-09-25) — text changed (a third
+  // ternary branch, the skeleton-while-loading case, added around the SAME
+  // already-escaped `leagueRows` variable and a hardcoded literal `<p>`);
+  // same safety reasoning as before, re-pinned under the new digest.
+  { d: "3b322e0113", n: 1, t: "leagueRows || (allLeaguesLoading && !leagues.length ? crossLeagueSkeletonRowsHTML() : `<p>...No leagues found.</p>`)" },
+  { d: "7508386a20", n: 2, t: "tab" },
+  { d: "a3b96062b7", n: 1, t: "cardId" },
+  { d: "17f0ffc19c", n: 1, t: "bodyHtml" },
+];
+{
+  const file = 'js/admin-panel.js';
+  const hits = sweepFile(file).filter(h => !EXEMPTIONS.some(e => e.file === file && e.expr === h.expr));
+  const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
+  const pinned = new Map(ADMIN_PANEL_BACKLOG.map(b => [b.d, b]));
+  const liveCount = new Map();
+  for (const h of hits) { const d = digest(h.expr); liveCount.set(d, (liveCount.get(d) || 0) + 1); }
+  const pinnedTotal = ADMIN_PANEL_BACKLOG.reduce((a, b) => a + b.n, 0);
+
+  const malformed = ADMIN_PANEL_BACKLOG.filter(b => !Number.isInteger(b.n) || b.n < 1);
+  assert(malformed.length === 0,
+    `[9c-1b-a] every ADMIN_PANEL_BACKLOG pin carries n (integer ≥1) — malformed: ${malformed.slice(0, 4).map(b => `${b.t.slice(0, 40)} (n=${JSON.stringify(b.n)})`).join(' | ')}`);
+  assert(pinned.size === ADMIN_PANEL_BACKLOG.length,
+    `[9c-1b-a] no digest is pinned twice (${ADMIN_PANEL_BACKLOG.length} entries, ${pinned.size} distinct digests)`);
+
+  const added = hits.filter(h => !pinned.has(digest(h.expr)));
+  assert(added.length === 0,
+    `[9c-1b-b] js/admin-panel.js: NO NEW unclassified interpolation — new: ${added.slice(0, 4).map(h => `${h.line}:${h.expr.slice(0, 70)}`).join(' | ')}`);
+
+  const grew = [...liveCount.entries()]
+    .filter(([d, n]) => pinned.has(d) && n > pinned.get(d).n)
+    .map(([d, n]) => `${pinned.get(d).t.slice(0, 60)} (pinned ${pinned.get(d).n}, now ${n})`);
+  assert(grew.length === 0,
+    `[9c-1b-c] js/admin-panel.js: NO ADDITIONAL site reuses an already-pinned expression (${hits.length} sites now vs ${pinnedTotal} pinned) — grew: ${grew.slice(0, 4).join(' | ')}`);
+
+  const shrunk = ADMIN_PANEL_BACKLOG
+    .filter(b => (liveCount.get(b.d) || 0) < b.n)
+    .map(b => { const n = liveCount.get(b.d) || 0; return `${b.t.slice(0, 60)} (pinned ${b.n}, now ${n}${n === 0 ? ' — entry must be REMOVED' : ' — n must be updated'})`; });
+  assert(shrunk.length === 0,
+    `[9c-1b-d] js/admin-panel.js: the pinned backlog is current — stale pins hide the next regression: ${shrunk.slice(0, 4).join(' | ')}`);
+
+  console.log(`     ℹ js/admin-panel.js backlog: ${hits.length} unclassified sites (pinned: ${pinnedTotal} sites / ${ADMIN_PANEL_BACKLOG.length} expressions) — pinned, not approved`);
+}
+
+// [9c-1b canary] SECURITY F3's own mutation-check, self-tested here rather
+// than only by hand: a synthetic unwrapped site injected into
+// js/admin-panel.js must still be REPORTED by the sweep despite the pin
+// above — proves the ratchet, not a blanket pass.
+{
+  const POISON = SRC['js/admin-panel.js'] + `
+function __xssAdminPanelCanary(evil) { return \`<div title="\${evil.apAttr}">\${evil.apText}</div>\`; }`;
+  const poisoned = sweepFile('js/admin-panel.js', POISON).map(h => h.expr);
+  assert(poisoned.includes('evil.apAttr') && poisoned.includes('evil.apText'),
+    `[9c-1b canary] a NEW unwrapped site in js/admin-panel.js is still reported despite the pin (got: ${JSON.stringify(poisoned.slice(-3))})`);
+  const known = new Set(ADMIN_PANEL_BACKLOG.map(b => b.d));
+  const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
+  assert(!known.has(digest('evil.apAttr')) && !known.has(digest('evil.apText')),
+    '[9c-1b canary] …and the pin does not cover it — the ratchet fails on anything new');
+}
 
 
 // [9c-2] js/app.js — THE REVIEW BACKLOG, pinned as a RATCHET.
@@ -1462,7 +1773,11 @@ const APP_BACKLOG = [
   { d: "ac8c754b7b", n: 6, t: "game.gameId" },
   { d: "60a52e8c9d", n: 2, t: "game.status" },
   { d: "86c3e75df5", n: 1, t: "gameId" },
-  { d: "b544a9db4c", n: 1, t: "getAutoLockOffsetMinutes(week)" },
+  // n bumped 1 -> 2, UX Revamp wiring pass 3b (2026-09-25) — Group C's
+  // renderWeekWizardTimingFieldsHTML() adds a SECOND site reusing this
+  // exact expression (shared by Step 4 and the Manage screen); same
+  // number, same source function, not a new expression.
+  { d: "b544a9db4c", n: 2, t: "getAutoLockOffsetMinutes(week)" },
   { d: "f5256fe858", n: 1, t: "getSettings().season||'2026'" },
   { d: "767e85a142", n: 1, t: "groupRows.map(({gid,label,winner,loser})=>{ // UN-126 — presence of an obligation for this gid n…" },
   { d: "81d121bc48", n: 1, t: "guesses || '<span class=\"text-muted\">none yet</span>'" },
@@ -1497,6 +1812,15 @@ const APP_BACKLOG = [
   { d: "0e5dfc9af6", n: 1, t: "parts[id]" },
   { d: "62a2fed3d6", n: 1, t: "pending" },
   { d: "98df4506a5", n: 1, t: "pickCells" },
+  // UX Revamp wiring pass 3a (2026-09-25) — renderExportDataCardBody()'s two
+  // pre-composed HTML blocks (`pickShapedScope`/`fullBackup`). Both are
+  // built ENTIRELY from literal markup plus `${week?'':'disabled'}`-shaped
+  // boolean ternaries and an `esc()`-wrapped-elsewhere `isMember` boolean —
+  // no direct interpolation of any user-typed string reaches either
+  // variable, so injecting them bare is provably safe; classified here
+  // rather than restructured, matching this backlog's existing precedent
+  // for other pre-composed-HTML-chunk variables (e.g. "standComposed.html").
+  { d: "d3f33f86ff", n: 1, t: "pickShapedScope" },
   { d: "633ed3870b", n: 1, t: "players.filter(p=>p.active).map(p=>{ const nick=getNickname(week.weekId,p.playerId)||''; return`…" },
   { d: "2db8bd1d98", n: 1, t: "players.map(p => { const sub = week ? hasPlayerSubmitted(week.weekId, p.playerId) : false; const…" },
   { d: "69fedf42f3", n: 1, t: "players.map(p=>{ const pin = getPlayerPin(p.playerId); return ` <div class=\"player-admin-row\" da…" },
@@ -1518,7 +1842,6 @@ const APP_BACKLOG = [
   { d: "9d1ce5e3e6", n: 1, t: "renderObligationsAdmin()" },
   { d: "6c9d8dccec", n: 1, t: "renderScoreSummaryRowsHTML(week, weeklyResults, players, actualTB)" },
   { d: "9d1bc9a693", n: 1, t: "renderTiebreakerGuessesAdmin(week,players,week.actualTiebreakerValue)" },
-  { d: "76e79b1635", n: 1, t: "renderWeekStatusButtons(week)" },
   { d: "bc51e9e65d", n: 2, t: "rows" },
   { d: "9a07b0a6e2", n: 1, t: "rows || '<p class=\"text-muted\">No games recorded for this week.</p>'" },
   { d: "fd19c07491", n: 2, t: "rows.join('')" },
@@ -1543,9 +1866,14 @@ const APP_BACKLOG = [
   { d: "d0619b2845", n: 1, t: "standComposed.html" },
   { d: "b4c6695f1a", n: 2, t: "stats.hiddenCount" },
   { d: "5b2ce9b30e", n: 2, t: "stats.protectedCount" },
-  { d: "287f0a593e", n: 1, t: "t.icon" },
-  { d: "6e05deb4be", n: 2, t: "t.key" },
-  { d: "827c0f0a66", n: 1, t: "t.label" },
+  // "t.icon"/"t.label" entries REMOVED (UX Revamp wiring pass 3a, 2026-09-25)
+  // — the inline Commissioner tab-bar `tabs.map(t => ...)` block those two
+  // sites lived in was replaced by one call to renderCommTabBar()
+  // (js/comm-panel-layout.js), which those two unclassified interpolations
+  // do not exist in app.js at all any more. "t.key" n updated 2 -> 1: one of
+  // its two occurrences was in that same removed block; the surviving one
+  // is the THEMES.map() dropdown at app.js:5287.
+  { d: "6e05deb4be", n: 1, t: "t.key" },
   { d: "05e7c62dfb", n: 2, t: "tally.pendingWeeks" },
   { d: "4e019a2921", n: 1, t: "tally.pendingWeeks === 1 ? `${tally.pendingWeeks} week isn't counted yet.` : `${tally.pendingWee…" },
   { d: "14dcb0dcd3", n: 1, t: "thisWeek.length ? groupGameRequests(thisWeek).map(rowHTML).join('') : `<p class=\"text-muted text…" },
@@ -1564,12 +1892,23 @@ const APP_BACKLOG = [
   { d: "04176e6538", n: 1, t: "wkNames.map(n=>{ const arr=SEASON_2025.weeklyScores[n]; return `<tr><td class=\"player-name-cell\"…" },
   { d: "9d709a05ea", n: 1, t: "wl" },
   { d: "816415a13a", n: 1, t: "x.cls" },
-  { d: "e6b1b31a8d", n: 1, t: "x.label" },
+  // "x.label" (was pinned e6b1b31a8d) REMOVED, reviewer round 3 item 5
+  // (2026-09-26) — renderWeekStatusButtons() no longer interpolates the raw
+  // emoji label; it now renders icon(x.icon) + escHtml(x.text) (both
+  // classified in EXEMPTIONS / provably safe respectively).
   { d: "b88cca4044", n: 1, t: "x.to" },
 ];
 
 {
-  const hits = sweepFile('js/app.js');
+  // UX Revamp wiring pass 1 (2026-09-25) — js/app.js's sweep now ALSO passes
+  // through EXEMPTIONS, the same escape hatch [9c-1] already gives the other
+  // four files, so a genuinely-safe NEW interpolation (an imported,
+  // pre-escaped render function — see the four control-center.js entries
+  // added to EXEMPTIONS this pass) does not have to be smuggled into
+  // APP_BACKLOG to pass. This does NOT touch APP_BACKLOG's own 133 pinned
+  // entries or weaken the "no new backlog growth" ratchet below — it only
+  // gives NEW code a route to PROVE safety instead of joining the debt list.
+  const hits = sweepFile('js/app.js').filter(h => !EXEMPTIONS.some(e => e.file === 'js/app.js' && e.expr === h.expr));
   const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
   const pinned = new Map(APP_BACKLOG.map(b => [b.d, b]));
   const liveCount = new Map();
@@ -1648,6 +1987,21 @@ assert(/54 yd/.test(app.renderCommExtraPointCardHTML(wk)),
 localStorage.setItem('cfbp_extra_point_guesses', JSON.stringify({ [`${wk.weekId}__xss_p1`]: 0 }));
 assert(/0 yd/.test(app.renderCommExtraPointCardHTML(wk)),
   '[9c] a 0-yard guess still reads "0 yd" — numHtml(0) is "0", escHtml(0) would be ""');
+
+// [9c-4] BEHAVIOURAL — NOTE 6 / BLOCK 4 (2026-09-25): the player-facing
+// maintenance banner. Super-admin-authored (`platform_kv.maintenance_banner`),
+// read by EVERY signed-in account (DI-344 §3.1's `using (true)` SELECT
+// policy) on all six nav destinations plus the leagues-home/gate screen — a
+// genuinely new render site named explicitly in DI-345 "XSS / escaping".
+// `renderMaintenanceBannerHTML()` is the one function both js/app.js's six
+// call sites AND (via its own `esc()`-wrapped sibling literal) js/chat-ui.js
+// build the banner markup with — this proves the app.js half directly rather
+// than relying on the structural sweep alone.
+console.log('\n[9c-4] Poisoned maintenance_banner text through the real renderer…');
+const maintenanceHtml = app.renderMaintenanceBannerHTML(PAYLOAD);
+assert(/maintenance-banner/.test(maintenanceHtml), 'fixture: the maintenance banner actually rendered');
+assert(!/<img/i.test(maintenanceHtml), '[9c-4] renderMaintenanceBannerHTML: no live <img from the banner text');
+assert(/&lt;img/.test(maintenanceHtml), '[9c-4] the banner text is present as escaped text');
 
 // [9d] BEHAVIOURAL — the score summary's tiebreaker column (tbDisp), both
 // branches: with an actual value (guess + delta) and without (guess only).
@@ -1820,7 +2174,7 @@ assert(chatUi._escForTest ? chatUi._escForTest(0) === '0' : true,
 // ══════════════════════════════════════════════════════════════════════════
 console.log('\n[13] Escapers vs. attribute quoting…');
 const SINGLE_QUOTED_ATTR = /=\s*'[^'\n]*\$\{(?:numHtml|escHtml|esc)\(/g;
-for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc]]) {
+for (const [file, src] of [['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc], ['js/admin-panel.js', adminPanelSrc]]) {
   SINGLE_QUOTED_ATTR.lastIndex = 0;
   const hits = [...src.matchAll(SINGLE_QUOTED_ATTR)].map(m => src.slice(0, m.index).split('\n').length);
   assert(hits.length === 0,
@@ -2159,7 +2513,7 @@ assert(Object.isFrozen(REACTION_PALETTE),
 const chatSrc = await readFile(new URL('./js/chat.js', import.meta.url), 'utf8');
 assert(/REACTION_PALETTE/.test(storageSrc) && /REACTION_PALETTE/.test(chatSrc),
   '[15h] both write seams validate against data-model.js REACTION_PALETTE, not a local literal');
-for (const [file, src] of [['js/storage.js', storageSrc], ['js/chat.js', chatSrc], ['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc]]) {
+for (const [file, src] of [['js/storage.js', storageSrc], ['js/chat.js', chatSrc], ['js/app.js', appSrc], ['js/chat-ui.js', chatUiSrc], ['js/admin-panel.js', adminPanelSrc]]) {
   assert(!/\[\s*'👍'\s*,\s*'👎'\s*,\s*'🔥'/.test(src),
     `[15h] ${file} does not re-declare the emoji palette as a local literal`);
 }

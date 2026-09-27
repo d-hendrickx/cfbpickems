@@ -376,10 +376,19 @@ export const SITE_PIN_KEY = 'cfbp_site_unlocked';
 
 /**
  * Per-player theme catalog.
- *  - Default theme is 'neutral' (school-agnostic slate) as of v0.17.0; school palettes are opt-in.
+ *  - Default theme is 'neutral' as of v0.17.0; school palettes are opt-in.
+ *    DI-328/AD-92 (2026-09-25): 'neutral' now carries the Munera palette
+ *    (Ink/Marble/Gold/Oxblood), repointed from the earlier cool-slate look —
+ *    the label below describes what it actually renders today, not what it
+ *    rendered pre-v0.26. `aggie` correspondingly picked up the literal
+ *    Aggie-maroon values that used to live in bare `:root` (css/styles.css),
+ *    so it now reads as a true explicit opt-in, unchanged in appearance.
  *  - Each theme is applied by adding a class `theme-<key>` to <body>, which the
  *    stylesheet uses to override the root CSS variables for primary brand colors.
- *  - Fonts stay constant across themes (Oswald + Inter).
+ *  - Display headings (h1-h3, .font-display) use Cinzel as of v0.26; Oswald
+ *    stays the UI-label face (badges, buttons, chips, h4) and Inter stays the
+ *    body face — three families now, not two (see css/styles.css's DI-328d
+ *    deviation comment for why Oswald wasn't dropped outright).
  *  - Selected theme is stored per-DEVICE in settings.theme.
  */
 export const THEMES = [
@@ -390,7 +399,10 @@ export const THEMES = [
   { key: 'irish',     label: 'Notre Dame (Navy & Gold)',   school: 'Notre Dame' },
   { key: 'boilermaker', label: 'Purdue (Old Gold & Black)',school: 'Purdue' },
   { key: 'razorback', label: 'Arkansas (Cardinal)',        school: 'Arkansas' },
-  { key: 'neutral',   label: 'Neutral (Slate)',            school: null, desc: 'Default' },
+  // DI-328h — the label must describe the actual palette, not the old
+  // pre-Munera one, or the theme picker shows a stale name for the correct
+  // colors ("the pills said one thing, the data said another").
+  { key: 'neutral',   label: 'Munera (Ink · Marble · Gold)', school: null, desc: 'Default' },
 ];
 
 // ─── DEFAULT RULES ────────────────────────────────────────────────────────────
@@ -575,6 +587,22 @@ export const DEFAULT_SETTINGS = {
   // path that writes rows and spends money, which is the wrong direction for
   // every failure mode.
   scribeLearningRate: 'normal',
+  // DI-C3 §4.3 (T-33, UN-297, 2026-09-25) — the SCRIBE pick-reminder cadence
+  // while a week is OPEN, commissioner-controlled. `'daily'` is the DI's own
+  // stated default (D-13 ruling: "one planner, daily default, thresholds
+  // kept") — a missing/malformed value must read as TODAY'S behavior once
+  // this ships, so 'daily' matches the DI's shipped default exactly, not a
+  // conservative fallback. `js/reminder-rules.js`'s `normalizeCadence()` is
+  // the one place that validates this against `REMINDER_CADENCE_VALUES` —
+  // this default is read straight through, never re-validated here.
+  reminderCadence: 'daily',
+  // DI-C3 §4.3/§4.4 — the manual-reminder cooldown window in hours,
+  // commissioner-adjustable, "default 3h" per D-13's ruling. The REAL
+  // enforcement is server-side (`reminders_manual_reserve()`'s 1-hour floor,
+  // supabase/migrations — not this file's concern); this default only
+  // matches what a never-configured league should see in the client's own
+  // cooldown-input and "last reminded" copy.
+  reminderCooldownHours: 3,
 };
 
 // ─── SCRIBE FREQUENCY DIAL (Build 3, Group D, DI-D1) ──────────────────────────
@@ -1209,6 +1237,15 @@ export function createGame(weekId, overrides={}) {
     dataQuality: DATA_QUALITY.MANUAL,
     dataSource:  DATA_SOURCE_MODE.MANUAL,
     homeTeam:'', awayTeam:'',
+    // DI-331b (T-31, AD-94) — ESPN's per-competitor `team.logo` CDN URL,
+    // captured at parse time by data-provider.js's parseAndReport(). Default-
+    // when-missing (CONVENTIONS #10): every existing/old game record and
+    // every manual (isManual:true) game simply has null here — every render
+    // path treats null exactly like "no logo, show the team name" (DI-331d),
+    // never a broken-image icon, never blank space. This is the ONE field
+    // for a team's logo (AD-94) — no renderer ever derives or looks one up
+    // ad hoc; renderers wire against this field in a later pass.
+    homeLogo:null, awayLogo:null,
     homeMascot:'', awayMascot:'',
     homeConference:'', awayConference:'',
     homeRank:null, awayRank:null,
