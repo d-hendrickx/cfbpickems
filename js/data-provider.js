@@ -280,6 +280,19 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
         kickoff:          storedConfirmed ? stored.kickoff          : (liveGame.kickoff ?? stored.kickoff),
         kickoffConfirmed: storedConfirmed ? stored.kickoffConfirmed : liveGame.kickoffConfirmed,
         kickoffDateOnly:  storedConfirmed ? stored.kickoffDateOnly  : liveGame.kickoffDateOnly,
+        // Logo backfill (Drew, 2026-09-27: "I flipped the logos switch and
+        // didn't see any logos") — games CREATED before v0.26.0 have null
+        // homeLogo/awayLogo, and nothing ever re-populated them once the
+        // display switch shipped. This score refresh already re-reads the
+        // SAME ESPN event, which carries the logo URLs (liveGame.homeLogo/
+        // awayLogo, `createGame()`'s own parse above) — backfill a stored
+        // row's logo ONLY when it is currently null, so a commissioner's
+        // manually-cleared/overridden logo (a genuine, if rare, edit) is
+        // never silently overwritten by a live poll. `logoOk()` already
+        // sanitized `liveGame`'s value at parse time, so no second check is
+        // needed here.
+        ...(stored.homeLogo == null && liveGame.homeLogo != null ? { homeLogo: liveGame.homeLogo } : {}),
+        ...(stored.awayLogo == null && liveGame.awayLogo != null ? { awayLogo: liveGame.awayLogo } : {}),
         lastUpdated: new Date().toISOString(),
         // Item 2 remediation — live status is NOT attached here. It rides
         // the sibling `liveStatusByEventId` map returned below, keyed by

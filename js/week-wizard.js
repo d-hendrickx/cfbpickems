@@ -41,6 +41,71 @@
  * suggestions come back. They are listed here deliberately so the eventual
  * wiring knows to PASS them (reviewer note, fix round 2, 2026-09-25). The
  * guards stay, so the module remains testable without them.
+ *
+ * ── v0.27.0 additions (UX Revamp post-deploy pass, DI-353/354/357/358/359,
+ * 2026-09-27) ──────────────────────────────────────────────────────────────
+ * Same rule as the block above: this file stays DOM-free and import-free
+ * (no `js/app.js` import, ever), so every new dep the app.js wiring pass
+ * needs is named again below, at each function that needs it, and collected
+ * in this batch's handoff report. Five DIs, one file:
+ *   DI-353 — the Data Source field is being removed from the commissioner-
+ *     facing form entirely (app.js's job); this module's own share of that
+ *     is `createWeekFromWizard()`'s default `dataSourceMode`, changed below
+ *     from `'manual'` to `'espn_live'` so a week created with the field gone
+ *     from `fields` still gets a sane, non-blank value.
+ *   DI-354 — `stepBackTarget()` and `shouldConfirmAnnouncementDiscard()`,
+ *     shared by every Back button in BOTH step machines this file now
+ *     describes (the create-flow's 6 steps and the new Finalize flow's 4).
+ *   DI-357 — `tiebreakerWizardStepSummary()` / `applyTiebreakerQuestion()`,
+ *     Step 6's tiebreaker-question display+save. Per the coordinator's
+ *     Part-5 ruling 4 (2026-09-27): a blank question is a real, if rare,
+ *     commissioner choice and never blocks Open — `gatingChecklist()` itself
+ *     is UNTOUCHED by this addition, on purpose.
+ *   DI-358 — `OPEN_MODES`, `finishWeekSetupFromWizard()` (Now/Scheduled/
+ *     Draft at Step 6) and `dueForScheduledOpen()` (the pure predicate the
+ *     app.js-owned `tickAutoTransition()` needs for the draft→open leg the
+ *     coordinator's Part-5 ruling 5 says belongs there — verified ABSENT
+ *     from `tickAutoTransition()` as of this pass; see the handoff report,
+ *     since `js/app.js` is out of this file's ownership and cannot be
+ *     edited here).
+ *   DI-359 — `FINALIZE_STEPS`/`FINALIZE_STEP_COUNT` and one orchestration
+ *     function per guided-flow step (`finalizeApproveScores`,
+ *     `finalizeAutoCalcTiebreaker`/`confirmFinalizeTiebreaker`,
+ *     `finalizeExtraPointSummary`/`confirmFinalizeExtraPoint`,
+ *     `unresolvedTieWarning`/`confirmFinalizeWeek`) — every one a thin
+ *     sequence of calls this codebase already has (AD-33 unchanged: neither
+ *     the tiebreaker nor the Extra Point ever becomes a standings input).
+ *
+ * ── reviewer-fix pass (commit ddf9e4f review round, same day) ──────────────
+ * Seven items, all in this file, all covered by red-first tests + a
+ * mutation-proof round-trip (see the handoff report for counts):
+ *   1. REQUIRED — `finalizeApproveScores()` (Step 1) no longer calls
+ *      `finalizeWeek()` at all. That function publishes permanent chat
+ *      posts and raises the weekly obligation off `actualTiebreakerValue`,
+ *      which is still null this early in the flow. ATS grading only; the
+ *      one and only `finalizeWeek()` call is at Step 4.
+ *   2. `createWeekFromWizard()`'s `dataSourceMode` precedence is now
+ *      `fields.dataSourceMode ?? existingWeek?.dataSourceMode ?? 'espn_live'`
+ *      — an existing week's own mode is never silently overwritten by the
+ *      default once the field leaves the form.
+ *   3. `confirmFinalizeTiebreaker`/`confirmFinalizeExtraPoint`/
+ *      `confirmFinalizeWeek` all now re-read `deps.getWeek(week.weekId) ||
+ *      week` before spreading (RG-256 class, matching every real app.js
+ *      handler) — `getWeek` is a new REQUIRED factory dep.
+ *   4. The tiebreaker calc-mode captions were factually wrong (see
+ *      `TIEBREAKER_CALC_MODE_CAPTIONS`'s own comment) — corrected to what
+ *      the mode actually distinguishes (a flagged subset of the slate vs.
+ *      every alma-mater game on it), never "leaves the slate."
+ *   5. `confirmFinalizeExtraPoint`/`confirmFinalizeTiebreaker` refuse a
+ *      non-finite `actualValue` (NaN/Infinity/a string); `null` stays legal
+ *      for the tiebreaker only (extraPointActual must always be finite,
+ *      matching `ep-save-btn`'s own guard).
+ *   6. `dueForScheduledOpen()` now returns `{ due, blocked, gate }` instead
+ *      of a bare boolean, so the tick leg can name WHY a past-due week
+ *      still hasn't opened.
+ *   7. `finishWeekSetupFromWizard()`'s SCHEDULED mode requires
+ *      `week.status === 'draft'` and rejects a past datetime
+ *      (`WIZARD_COPY.SCHEDULE_PAST_DATETIME`).
  */
 
 // ── Step metadata (§2.3's ASCII diagram) ────────────────────────────────────
@@ -66,7 +131,51 @@ export const WIZARD_COPY = Object.freeze({
   ANNOUNCE_SKIP_CONFIRM: 'You can send an announcement anytime from the Week tab — skip for now?',
   OPEN_SUCCESS: (weekNumber) => `Week ${weekNumber} is open — picks unlock now.`,
   EVERYONE_PICKED: "Everyone's picked — nothing to nudge.",
+  // DI-358 — the three-way open-mode control at Step 6.
+  SCHEDULE_MISSING_DATETIME: 'Pick a date and time, or choose Open now.',
+  SCHEDULE_PAST_DATETIME: 'That time has passed. Choose Open now or a later time.',
+  SCHEDULE_SUCCESS: (weekNumber) => `Week ${weekNumber} will open automatically at the scheduled time.`,
+  // DI-359 — the guided Finalize Week flow's inline tie warning, replacing
+  // the manual status button's browser confirm() (`weekHasUnresolvedTie`'s
+  // own text, reworded for this flow's step names rather than "Cancel/OK" —
+  // flagged in the handoff report as reworded copy, not Drew's own words).
+  // Carry-over fix (app-shell part 3A review, 2026-09-27) — the leading ⚠️
+  // written-text emoji is REMOVED: D-1's chrome-icon rule (CLAUDE.md) means
+  // every .warning-box in the wizard renders the box's own icon('warning')
+  // glyph (js/icons.js, fill="none" stroke="currentColor"), not an emoji
+  // baked into the copy string. The render site (renderFinalizeStep4HTML(),
+  // js/app.js) prefixes icon('warning') now — see that function's own note.
+  UNRESOLVED_TIE_WARNING: 'This week has a tie in correct picks and no tiebreaker entered — the winner/loser will be decided arbitrarily until you enter one. Enter it in Confirm Tiebreaker, then continue to Finalize.',
 });
+
+// DI-357 — the tiebreaker Auto-Calc's calculation-basis caption, keyed by
+// `week.tiebreakerCalculationMode`. Corrected against `js/data-model.js`'s
+// actual `TIEBREAKER_CALC_MODE` enum while building this (THREE values exist
+// — `selectedSlateOnly`/`allAlmaMaterGames`/`manual` — not the "only one
+// mode exists today" the DI text assumed).
+//
+// coordinator fix (review round on ddf9e4f) — the FIRST version of this
+// caption was wrong about what the modes actually distinguish: it read
+// `calculateAlmaMaterTotal()`'s (scoring.js) `games` PARAMETER as "the
+// slate" and assumed the non-`selectedSlateOnly` modes look OUTSIDE it
+// ("not just the slate"). They never do — `games` is always the caller's
+// `getGames(week.weekId)`, this week's slate only, in every mode; that
+// function never fetches or is handed any other week's games. What the
+// binary branch (`calcMode==='selectedSlateOnly' ? g.isAlmaMaterGame&&isAlma
+// : isAlma`) actually distinguishes is the `isAlmaMaterGame` FLAG — a
+// commissioner-curated subset of the slate — vs. every slate game that
+// merely involves a claimed alma mater, flag or not. Two real captions, not
+// three, because `manual` and `allAlmaMaterGames` are functionally
+// identical in that function today (no separate `manual` branch exists
+// there either).
+export const TIEBREAKER_CALC_MODE_CAPTIONS = Object.freeze({
+  selectedSlateOnly: 'Based on: the alma mater games you flagged on this slate',
+  allAlmaMaterGames: 'Based on: every game on this slate involving an alma mater',
+  manual: 'Based on: every game on this slate involving an alma mater',
+});
+export function tiebreakerCalcModeCaption(mode) {
+  return TIEBREAKER_CALC_MODE_CAPTIONS[mode] || TIEBREAKER_CALC_MODE_CAPTIONS.selectedSlateOnly;
+}
 
 /**
  * §2.3 step 6's summary checklist. Never enables "Open for Picks" with any
@@ -231,7 +340,29 @@ export function narrowedWeekStatusButtons(status) {
  */
 export function createWeekFromWizard({ fields, deps, existingWeek = null }) {
   const { createWeek, saveWeek, setActiveWeekId } = deps;
-  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode = 'manual' } = fields;
+  // DI-353 (2026-09-27) — the Data Source control is being removed from the
+  // commissioner-facing form entirely (Admin → Week's `data-source-mode`
+  // card is the one surviving control); a week created here with no
+  // `dataSourceMode` in `fields` now defaults to `'espn_live'`, matching the
+  // form's OWN prior default (`weekCreateFormFieldsHTML()`'s `mode =
+  // defaults.dataSourceMode || 'espn_live'`), not the more conservative
+  // `'manual'` this function used to fall back to when the field was still
+  // present and could be left at its own blank/default option.
+  //
+  // coordinator fix (review round on ddf9e4f) — that default was wired as a
+  // destructuring default on `fields.dataSourceMode`, which ALWAYS produces
+  // a value (falling to 'espn_live' the instant `fields` omits the key) and
+  // then unconditionally overwrote `existingWeek.dataSourceMode` with it —
+  // so re-entering Step 1 on an existing DEMO or MANUAL week (now that the
+  // field is gone from the form and never appears in `fields` at all) would
+  // silently flip that week to espn_live on every re-save. The precedence is
+  // now explicit and three-tiered: an EXPLICITLY passed `fields.dataSourceMode`
+  // always wins (a caller that does pass it is still honored, unchanged);
+  // otherwise an existing week KEEPS its own mode (nothing to fix, nothing
+  // was asked to change); only a brand-new week with no `existingWeek` and
+  // no `fields.dataSourceMode` falls all the way to the 'espn_live' default.
+  const { season, weekNumber, roundLabel = '', startDate = '', endDate = '', dataSourceMode: fieldsDataSourceMode } = fields;
+  const dataSourceMode = fieldsDataSourceMode ?? existingWeek?.dataSourceMode ?? 'espn_live';
   const week = existingWeek
     ? { ...existingWeek, season, weekNumber, roundLabel, startDate, endDate, dataSourceMode }
     : { ...createWeek(season, weekNumber, startDate, endDate), dataSourceMode, roundLabel };
@@ -317,6 +448,425 @@ export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, t
   return { ok: true, week: updated, gate };
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// DI-354 — STEP NAVIGATION, shared by every "Back" button in BOTH step
+// machines this file describes: the create-flow sheet (§2.3's 6 steps,
+// `WIZARD_STEPS` above) and the Finalize sheet (DI-359's 4 steps,
+// `FINALIZE_STEPS` below). One function, so a future step added to either
+// flow inherits correct Back behavior instead of a third hand-copied
+// `_stepVar = N - 1` literal.
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * The step immediately before `step`, or `null` at step 1 (no Back button
+ * renders there in either flow — confirmed for the create-flow by DI-354's
+ * own audit: "Step 1 correctly has none, it's the first step"). Works for
+ * ANY step-numbered flow (no step-count ceiling needed — Back only ever
+ * looks backward), which is why this is not `WIZARD_`- or `FINALIZE_`-
+ * prefixed: it is the one shared primitive, not a copy per flow.
+ */
+export function stepBackTarget(step) {
+  return step > 1 ? step - 1 : null;
+}
+
+/**
+ * Step 5 (Announce)'s existing Skip handler already refuses to discard a
+ * drafted-but-unsent announcement silently (`WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM`,
+ * confirmed via a browser `confirm()`) — DI-354 asks the NEW Back button on
+ * the same step to reuse that exact judgment, not invent a second "has this
+ * been typed" check that could drift from Skip's. Whitespace-only text does
+ * not count as drafted content (a stray space shouldn't gate navigation).
+ */
+export function shouldConfirmAnnouncementDiscard(announceText) {
+  return !!(announceText && announceText.trim().length > 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-357 — Step 6 shows/confirms the tiebreaker question before "Open for
+// Picks" is offered. Ruling 4 (coordinator, 2026-09-27): a blank question is
+// a real, if rare, commissioner choice and is VISIBLE + EDITABLE, never a
+// gate — `gatingChecklist()` above is intentionally untouched by this DI.
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * What Step 6 shows for the tiebreaker: the question as it stands today
+ * (blank is a valid, real state — not an error) and a caption naming what
+ * the Auto-Calc will sum, so the commissioner sees rather than guesses.
+ */
+export function tiebreakerWizardStepSummary(week) {
+  const question = (week && week.tiebreakerQuestion) || '';
+  const calculationMode = (week && week.tiebreakerCalculationMode) || 'selectedSlateOnly';
+  return {
+    question,
+    hasQuestion: question.trim().length > 0,
+    calculationMode,
+    calculationModeCaption: tiebreakerCalcModeCaption(calculationMode),
+  };
+}
+
+/**
+ * A pure updater, not a save — the wizard's Step 6 write path is the exact
+ * same `saveWeek({...week, tiebreakerQuestion})` call the standalone
+ * Commissioner → Week Tiebreaker card's own `tb-question` input already
+ * uses (`app.js:14572`'s equivalent); this only builds the object to hand
+ * that call, so the two surfaces can never independently decide what
+ * "saving the question" means.
+ */
+export function applyTiebreakerQuestion(week, question) {
+  return { ...week, tiebreakerQuestion: question };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-358 — Step 6's explicit open-mode choice: Open now / Open at a
+// scheduled time / Keep as draft. No new server concept — `picksOpenAt` and
+// `gatingChecklist()` both already exist and are reused as-is; "Open now"
+// reuses `openForPicksFromWizard()` above verbatim rather than duplicating
+// its gate-then-status-change sequence.
+// ══════════════════════════════════════════════════════════════════════════
+
+export const OPEN_MODES = Object.freeze({ NOW: 'now', SCHEDULED: 'scheduled', DRAFT: 'draft' });
+
+/**
+ * The Step 6 "Finish setup" action, one function for all three modes so the
+ * DOM only ever calls one thing regardless of which radio is selected.
+ *   NOW       → delegates to `openForPicksFromWizard()`, unchanged.
+ *   SCHEDULED → requires `week.status === 'draft'` (scheduling only makes
+ *               sense before the week has ever opened — coordinator fix,
+ *               review round on ddf9e4f); rejects a datetime that has
+ *               already passed (`WIZARD_COPY.SCHEDULE_PAST_DATETIME` —
+ *               "Choose Open now" is the correct action there, not a
+ *               schedule that will never fire); still gated by the SAME
+ *               three-item checklist (you should not be able to schedule an
+ *               open with missing spreads any more than you can open
+ *               immediately with them) — saves `picksOpenAt` on the
+ *               still-draft week; the actual flip to `open` at that
+ *               timestamp is `tickAutoTransition()`'s job in app.js
+ *               (`dueForScheduledOpen()` below is that leg's pure predicate
+ *               — this function never flips status itself).
+ *   DRAFT     → no status change, no gate check (nothing is being opened);
+ *               closing the sheet is the caller's (app.js's) job, same as
+ *               today's unlabeled "don't click Open for Picks" exit.
+ *
+ * `now` defaults to `Date.now()` (real time) and exists as an explicit
+ * parameter purely so the past-datetime check is deterministically testable
+ * — same pattern `dueForScheduledOpen()` already uses.
+ */
+export function finishWeekSetupFromWizard({ week, mode, scheduledAt, now = Date.now(), gamesCount, missingSpreadCount, timingConfigured, deps }) {
+  if (mode === OPEN_MODES.DRAFT) {
+    return { ok: true, mode, week };
+  }
+  if (mode === OPEN_MODES.NOW) {
+    const result = openForPicksFromWizard({ week, gamesCount, missingSpreadCount, timingConfigured, deps });
+    return { ...result, mode };
+  }
+  if (mode === OPEN_MODES.SCHEDULED) {
+    if (!week || week.status !== 'draft') return { ok: false, mode, reason: 'week_not_draft' };
+    if (!scheduledAt) return { ok: false, mode, reason: 'missing_scheduled_at' };
+    const at = new Date(scheduledAt);
+    if (Number.isNaN(at.getTime())) return { ok: false, mode, reason: 'invalid_scheduled_at' };
+    if (at.getTime() <= now) return { ok: false, mode, reason: 'past_scheduled_at' };
+    const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
+    if (!gate.canOpen) return { ok: false, mode, gate };
+    const { saveWeek, showToast } = deps;
+    const updated = { ...week, picksOpenAt: at.toISOString() };
+    saveWeek(updated);
+    if (showToast) showToast(WIZARD_COPY.SCHEDULE_SUCCESS(week.weekNumber), 'success');
+    return { ok: true, mode, week: updated, gate };
+  }
+  return { ok: false, mode, reason: 'unknown_mode' };
+}
+
+/**
+ * The pure predicate `tickAutoTransition()` (js/app.js, out of this file's
+ * ownership) needs for the DRAFT→OPEN leg the coordinator's Part-5 ruling 5
+ * assigns to the commissioner-device tick (RG-251's one-leg-per-tick rule:
+ * the server cron only ever handles locked→live). Verified ABSENT from
+ * `tickAutoTransition()` as of this pass — it has branches for OPEN→LOCKED,
+ * LOCKED→LIVE and LIVE→pendingFinalization only. See this batch's handoff
+ * report for the exact call the app.js pass adds; this function is only the
+ * DECISION half — it never calls `applyWeekStatusChange` itself, so a tick
+ * that merely IMPORTS this stays free of any side effect until its caller
+ * chooses to act on `true`.
+ *
+ * coordinator fix (review round on ddf9e4f) — a plain boolean silently
+ * conflated two very different situations: "not due yet" (the scheduled
+ * time hasn't arrived — nothing wrong, just wait) and "due, but can't open"
+ * (the time arrived and the week is STILL missing games/spreads/timing — a
+ * real problem nobody would otherwise be told about, since the tick would
+ * just keep returning `false` forever with no distinguishing signal). Now
+ * returns `{ due, blocked, gate }`:
+ *   `due`     — true only when the time has passed AND the checklist clears;
+ *               this is the ONLY case the tick should actually flip status.
+ *   `blocked` — true when the time has passed but the checklist does NOT
+ *               clear — the tick's cue to raise a commissioner notice
+ *               instead of silently never opening. Named per `gate`'s own
+ *               fields (`gate.gamesLabel`/`spreadsLabel`/`timingLabel`), not
+ *               re-derived.
+ *   `gate`    — the full `gatingChecklist()` result once the time has
+ *               passed; `null` while still waiting (nothing to check yet).
+ * `due` and `blocked` are mutually exclusive and both `false` before the
+ * scheduled time arrives.
+ */
+export function dueForScheduledOpen({ week, now = Date.now(), gamesCount, missingSpreadCount, timingConfigured }) {
+  if (!week || week.status !== 'draft' || !week.picksOpenAt) return { due: false, blocked: false, gate: null };
+  const at = new Date(week.picksOpenAt).getTime();
+  if (!Number.isFinite(at) || now < at) return { due: false, blocked: false, gate: null };
+  const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
+  return { due: gate.canOpen, blocked: !gate.canOpen, gate };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-359 — FINALIZE WEEK, a guided flow sequencing three already-built
+// actions behind one sheet. NO NEW MATH anywhere below: every function here
+// is a thin wrapper calling exactly the function today's three separate
+// cards already call, in the same order, through the same save paths.
+// AD-33 is unchanged by this DI — neither the tiebreaker nor the Extra
+// Point ever becomes a `calculateWeeklyResults()` standings input; this
+// flow only makes SETTING them, before finalize, harder to skip by accident.
+// ══════════════════════════════════════════════════════════════════════════
+
+export const FINALIZE_STEPS = Object.freeze([
+  { step: 1, id: 'approve-scores', title: 'Approve Scores' },
+  { step: 2, id: 'confirm-tiebreaker', title: 'Confirm Tiebreaker' },
+  { step: 3, id: 'confirm-extra-point', title: 'Confirm Extra Point' },
+  { step: 4, id: 'finalize', title: 'Finalize' },
+]);
+export const FINALIZE_STEP_COUNT = FINALIZE_STEPS.length;
+
+// ── Step 1 — Approve Scores ─────────────────────────────────────────────
+
+/**
+ * A pure readiness check over the slate — no write. A game "blocks" this
+ * step the same way the manual `finalize-scoring-btn` handler already
+ * implicitly requires (`g.status===GAME_STATUS.FINAL && g.lockedSpread!==null`
+ * before it will grade a game at all): not yet final, or final with no
+ * locked spread to grade against.
+ */
+export function finalizeApproveScoresSummary(games) {
+  const list = games || [];
+  const notFinal = list.filter((g) => g && g.status !== 'final');
+  const missingLockedSpread = list.filter((g) => g && (g.lockedSpread === null || g.lockedSpread === undefined));
+  return {
+    gamesCount: list.length,
+    notFinalCount: notFinal.length,
+    missingLockedSpreadCount: missingLockedSpread.length,
+    blocked: list.length === 0 || notFinal.length > 0 || missingLockedSpread.length > 0,
+  };
+}
+
+/**
+ * The step's Next action — grades ATS for every final+locked-spread game
+ * (the `saveGame({...g, atsWinner: calculateAtsWinner(g)})` half of
+ * `finalize-scoring-btn`'s sequence, `app.js:14014-14024`), and NOTHING
+ * ELSE. Refuses to run at all while
+ * `finalizeApproveScoresSummary(games).blocked` is true — this is the
+ * step's own confirm gate.
+ *
+ * coordinator fix, REQUIRED (review round on ddf9e4f) — this function MUST
+ * NOT call `finalizeWeek()`. The original version reused
+ * `finalize-scoring-btn`'s full sequence including its own `finalizeWeek(week)`
+ * call, reasoning (wrongly) that the button's own chat emitters were
+ * deterministic-id/server-deduped so an extra call was harmless. That
+ * missed what `finalizeWeek()` actually does at Step 1 of a flow that has
+ * not reached Step 4 yet: it PUBLISHES PERMANENT CHAT POSTS
+ * (`sys_weekfinal_<weekId>`, the results notice, SCRIBE week signals) and
+ * raises the weekly obligation — using `week.actualTiebreakerValue`, which
+ * is still `null` at this point in the guided flow (Step 2 hasn't run yet).
+ * A commissioner who only got as far as reviewing scores would have already
+ * posted a public "week final" announcement and an obligation computed
+ * against a missing tiebreaker. `finalizeWeek()` runs EXACTLY ONCE, at Step
+ * 4 (`confirmFinalizeWeek()`, below) — it re-grades ATS itself, so nothing
+ * here is lost by not calling it.
+ */
+export function finalizeApproveScores({ week, games, deps }) {
+  const summary = finalizeApproveScoresSummary(games);
+  if (summary.blocked) return { ok: false, summary };
+  const { calculateAtsWinner, saveGame } = deps;
+  let graded = 0;
+  for (const g of (games || [])) {
+    if (g.status === 'final' && g.lockedSpread !== null && g.lockedSpread !== undefined) {
+      saveGame({ ...g, atsWinner: calculateAtsWinner(g) });
+      graded += 1;
+    }
+  }
+  return { ok: true, summary, graded };
+}
+
+// ── Step 2 — Confirm Tiebreaker ─────────────────────────────────────────
+
+/**
+ * What Step 2 shows: the question (read-only reference — DI-357 owns
+ * editing it, back in Step 6, before the week was ever locked), whether an
+ * actual value is already on file, and the value to PREFILL the "Actual
+ * Value" input with (the existing value if the commissioner already set one
+ * via the standalone card, otherwise the freshly-run Auto-Calc). Per DI-359:
+ * "if tiebreaker/Extra Point actual values are already set... pre-fill from
+ * the existing values rather than forcing re-entry."
+ */
+export function tiebreakerConfirmSummary({ week, autoCalcValue = null } = {}) {
+  const question = (week && week.tiebreakerQuestion) || '';
+  const existing = week && week.actualTiebreakerValue != null ? week.actualTiebreakerValue : null;
+  return {
+    question,
+    hasQuestion: question.trim().length > 0,
+    autoCalcValue,
+    alreadySet: existing != null,
+    prefillValue: existing != null ? existing : autoCalcValue,
+  };
+}
+
+/**
+ * Runs the SAME Auto-Calc the standalone card's `auto-calc-tb-btn` handler
+ * runs (`app.js:14608-14623`, unchanged): `calculateAlmaMaterTotal()` over
+ * `almaMatersForAutoCalc(week)` (the lock-frozen roster once the week is
+ * past OPEN — see that function's own docstring) and the week's own
+ * `tiebreakerCalculationMode`. Returns `{ok:false}` (never a value of
+ * `null`) when there are no final alma-mater scores yet to sum, matching
+ * that handler's own "⚠️ No final alma mater scores yet." branch.
+ */
+export function finalizeAutoCalcTiebreaker({ week, deps }) {
+  const { calculateAlmaMaterTotal, almaMatersForAutoCalc, getGames } = deps;
+  const roster = almaMatersForAutoCalc ? almaMatersForAutoCalc(week) : [];
+  const games = getGames ? getGames(week.weekId) : [];
+  const total = calculateAlmaMaterTotal(games, roster, week.tiebreakerCalculationMode || 'selectedSlateOnly');
+  return { ok: total !== null, value: total };
+}
+
+/**
+ * The step's Confirm action — writes through the EXACT save path the
+ * standalone Tiebreaker card's "Save Tiebreaker" button already uses
+ * (`app.js:14572`'s equivalent: `actualTiebreakerValue`/`tiebreakerFinalized`
+ * together, one `saveWeek`), including that handler's own conditional
+ * recompute (`finalizeWeek(upd)` ONLY when the week is already `'final'` —
+ * during THIS guided flow the week is still `live`/pending, so that branch
+ * does not fire here; the real recompute happens once, at Step 4).
+ *
+ * coordinator fix, REQUIRED (review round on ddf9e4f), RG-256 class — this
+ * spreads `deps.getWeek(week.weekId) || week`, NEVER the raw `week` the
+ * caller passed in, before building `updated`. Same invariant every real
+ * handler in app.js documents at length (`save-tb-btn`, `ep-save-btn`,
+ * `confirm-finalize-btn` all re-read the mirror first): if the wizard's
+ * caller is holding a STALE week object — e.g. Step 2 already saved onto
+ * the mirror and the caller re-renders Step 3 from a closure that still
+ * points at the pre-Step-2 object — spreading that stale object here would
+ * silently NULL OUT whatever Step 2 (or any other device) already wrote.
+ * `getWeek` must be added to the factory's dep bag by the app.js wiring
+ * pass — every REAL call always has it, matching every actual app.js
+ * handler, which never guards it either. It IS guarded here
+ * (`getWeek && getWeek(...)`, falling back to the passed `week`), the same
+ * defensive-optional pattern this module already uses for
+ * `saveFetchProof`/`isSuggestionRejected` (see this file's own header) —
+ * so a caller/test that omits it degrades to the OLD (pre-fix) behavior
+ * rather than throwing, but the fallback is a safety net, not the intended
+ * path once wired.
+ *
+ * Also refuses a non-finite, non-null `actualValue` (NaN, Infinity, a
+ * string) rather than writing garbage — `null` STAYS LEGAL (an explicit
+ * "no tiebreaker value yet," `tiebreakerFinalized` correctly stays false).
+ */
+export function confirmFinalizeTiebreaker({ week, actualValue, deps }) {
+  const invalidValue = actualValue !== null && actualValue !== undefined && !Number.isFinite(actualValue);
+  if (invalidValue) return { ok: false, reason: 'invalid_value' };
+  const { saveWeek, finalizeWeek, getWeek } = deps;
+  const cur = (getWeek && getWeek(week.weekId)) || week;
+  const updated = { ...cur, actualTiebreakerValue: actualValue, tiebreakerFinalized: actualValue != null };
+  saveWeek(updated);
+  if (updated.status === 'final' && finalizeWeek) finalizeWeek(updated);
+  return { ok: true, week: updated };
+}
+
+// ── Step 3 — Confirm Extra Point ────────────────────────────────────────
+
+/**
+ * What Step 3 shows: the actual value on file (if any) and, when one is
+ * set, the SAME grading `gradeWeekExtraPoint()` already computes for the
+ * standalone Extra Point card (`js/extra-point.js`, unchanged) — this is a
+ * read, never a second grading implementation. `players` is the caller's
+ * already-filtered active-player list (same shape every other
+ * `gradeWeekExtraPoint()` call site in app.js already passes).
+ */
+export function finalizeExtraPointSummary({ week, players, deps }) {
+  const { gradeWeekExtraPoint } = deps;
+  const actualValue = week && week.extraPointActual != null ? week.extraPointActual : null;
+  return {
+    actualValue,
+    hasActual: actualValue != null,
+    graded: actualValue != null && gradeWeekExtraPoint ? gradeWeekExtraPoint(week, players || []) : null,
+  };
+}
+
+/**
+ * The step's Confirm action — the SAME save the standalone card's
+ * `ep-save-btn` handler already makes (`app.js:19752-19758`'s equivalent:
+ * `saveWeek({...week, extraPointActual})`), unchanged. Grading itself is
+ * derived at read time (`gradeWeekExtraPoint`, above) — there is nothing
+ * else to write.
+ *
+ * coordinator fix, REQUIRED (review round on ddf9e4f), RG-256 class — same
+ * fix, same guard shape, as `confirmFinalizeTiebreaker()`: spreads
+ * `deps.getWeek(week.weekId) || week`, never the raw (possibly stale)
+ * `week` argument. `getWeek` must be added to the factory's dep bag.
+ *
+ * Also refuses a non-finite `actualValue` (NaN, Infinity, a string,
+ * `null`/`undefined`) — matching `ep-save-btn`'s own guard exactly
+ * (`if (!Number.isFinite(v)) { showToast('Enter the actual longest FG
+ * first', 'error'); return; }`, `app.js:19752-19754`): that button never
+ * accepts a blank/null value either, so this doesn't loosen anything the
+ * real handler already enforces.
+ */
+export function confirmFinalizeExtraPoint({ week, actualValue, deps }) {
+  if (!Number.isFinite(actualValue)) return { ok: false, reason: 'invalid_value' };
+  const { saveWeek, getWeek } = deps;
+  const cur = (getWeek && getWeek(week.weekId)) || week;
+  const updated = { ...cur, extraPointActual: actualValue };
+  saveWeek(updated);
+  return { ok: true, week: updated };
+}
+
+// ── Step 4 — Finalize ────────────────────────────────────────────────────
+
+/**
+ * The inline warning DI-359 asks to replace today's browser `confirm()`
+ * with (the manual `.week-status-btn` "Finalize" path's own dialog,
+ * `app.js:13627-13629`) — same trigger condition
+ * (`weekHasUnresolvedTie(week, players, picks, games)`, unexported today;
+ * see the handoff report), rendered as a warning box the commissioner can
+ * read and still choose to proceed past, never a gate (matching today's
+ * "finalize anyway and fix it later" behavior exactly — entering the
+ * tiebreaker afterward already recalculates automatically, DI-D).
+ */
+export function unresolvedTieWarning({ week, players, picks, games, deps }) {
+  const { weekHasUnresolvedTie } = deps;
+  const show = !!(weekHasUnresolvedTie && weekHasUnresolvedTie(week, players, picks, games));
+  return { show, text: show ? WIZARD_COPY.UNRESOLVED_TIE_WARNING : '' };
+}
+
+/**
+ * The step's Finalize action — the EXACT sequence `confirm-finalize-btn`'s
+ * handler already runs (`app.js:13745-13762`, unchanged): save the status
+ * transition first (`status:'final', finalizedAt, pendingFinalization:
+ * false`), THEN hand `finalizeWeek()` the PERSISTED object, never the
+ * pre-save snapshot (the same ordering invariant that handler's own comment
+ * documents — storage and the caller's object must agree before a
+ * downstream guard reads either one).
+ *
+ * coordinator fix, REQUIRED (review round on ddf9e4f), RG-256 class — same
+ * fix as the two functions above: spreads `deps.getWeek(week.weekId) ||
+ * week` FIRST, so this step's own base is the mirror's current row (which
+ * by now carries Steps 1-3's writes: graded ATS, `actualTiebreakerValue`,
+ * `extraPointActual`) rather than whatever `week` snapshot the Finalize
+ * step's caller happened to be holding. `getWeek` must be added to the
+ * factory's dep bag, same guard shape as the two functions above.
+ */
+export function confirmFinalizeWeek({ week, deps }) {
+  const { saveWeek, finalizeWeek, getWeek } = deps;
+  const cur = (getWeek && getWeek(week.weekId)) || week;
+  const updated = { ...cur, status: 'final', finalizedAt: new Date().toISOString(), pendingFinalization: false };
+  saveWeek(updated);
+  if (finalizeWeek) finalizeWeek(updated);
+  return { ok: true, week: updated };
+}
+
 /**
  * Factory — the "one call" wiring the DI's own §6 asks for. Returns the
  * pure decision functions above, bound to nothing (they take their own
@@ -337,5 +887,22 @@ export function createWeekWizard(deps = {}) {
     createWeek: (fields, existingWeek) => createWeekFromWizard({ fields, deps, existingWeek }),
     fetchAndApplySuggestedSlate: (week) => fetchAndApplySuggestedSlate({ week, deps }),
     openForPicks: (args) => openForPicksFromWizard({ ...args, deps }),
+    // DI-354 — shared step-navigation, both flows.
+    stepBackTarget: (step) => stepBackTarget(step),
+    shouldConfirmAnnouncementDiscard: (text) => shouldConfirmAnnouncementDiscard(text),
+    // DI-357 — Step 6's tiebreaker confirmation.
+    tiebreakerStepSummary: (week) => tiebreakerWizardStepSummary(week),
+    applyTiebreakerQuestion: (week, question) => applyTiebreakerQuestion(week, question),
+    // DI-358 — the three-way open-mode choice + the scheduled-open tick predicate.
+    finishWeekSetup: (args) => finishWeekSetupFromWizard({ ...args, deps }),
+    dueForScheduledOpen: (args) => dueForScheduledOpen(args),
+    // DI-359 — the guided Finalize Week flow, one function per step.
+    finalizeApproveScores: (args) => finalizeApproveScores({ ...args, deps }),
+    finalizeAutoCalcTiebreaker: (week) => finalizeAutoCalcTiebreaker({ week, deps }),
+    confirmFinalizeTiebreaker: (args) => confirmFinalizeTiebreaker({ ...args, deps }),
+    finalizeExtraPointSummary: (args) => finalizeExtraPointSummary({ ...args, deps }),
+    confirmFinalizeExtraPoint: (args) => confirmFinalizeExtraPoint({ ...args, deps }),
+    unresolvedTieWarning: (args) => unresolvedTieWarning({ ...args, deps }),
+    confirmFinalizeWeek: (week) => confirmFinalizeWeek({ week, deps }),
   };
 }

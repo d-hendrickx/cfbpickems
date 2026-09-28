@@ -260,16 +260,32 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // cache in auth.js does not touch app.js; the app.js-side fixes for items
   // 2/4/5/6 and the N-2 recovery guard landed ahead of these two sites).
   // Re-derived 2026-09-26 (v0.26.0 stamp + full-app review fix window): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (v0.27.0 bugfix pass: the #control-center-trigger fill + week-swipe chronology + stamp): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (UX Revamp post-deploy pass, APP-SHELL slice: DI-348's
+  // warm-relaunch snapshot + needsLeagueFlowScreen() rewrite, DI-358's scheduled-open
+  // tick leg, header trigger/week-swipe reviewer fixes — all land ahead of these three
+  // sites): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (this pass, DI-360/wizard reconciliation edits
+  // above these sites) — line numbers only, same three sites, matched by
+  // exact text.
+  // Re-derived 2026-09-27 (app-shell part 3A review pass: Finding 4's
+  // _buildControlCenterCtxForTest export ahead of buildControlCenterCtx(),
+  // plus a pre-existing drift this pass also found and closed rather than
+  // compounding — same sites, only the line numbers moved, matched by text).
+  // Re-derived 2026-09-28 (fix-final-v0270: logo-merge gate, league-pill fit, sync-glyph span ahead of these sites) — line numbers only, same sites, same texts, matched by exact text.
   const ENUMERATED_CALL_SITES = [
-    { file: 'app.js', line: 3432, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
-    { file: 'app.js', line: 12376, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
+    // pass — code added above both sites shifted their line numbers only;
+    // same two sites, matched by exact text).
+    { file: 'app.js', line: 3533, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', line: 12594, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
     // UX Revamp wiring pass 3a (2026-09-25) — renderAdminPage()'s own
     // cross-league users-read gate (WIRING_CHECKLIST_B_092526.md
     // §Window(b)): only fetch listUsersAcrossLeagues() when the composed
     // viewer bag says isPlatformAdmin, the same chrome-gating shape every
     // other enumerated site here already uses. Text updated, wiring pass
     // 3a-bis (BLOCK 2's `attempted` guard replaces `rows == null`).
-    { file: 'app.js', line: 12787, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
+    { file: 'app.js', line: 13005, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
   ];
 
   function findIdentifierHits(src, ident) {
@@ -887,14 +903,29 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // same shift/same reasoning as ENUMERATED_CALL_SITES's own note above;
   // same five sites, no new ones.
   // Re-derived 2026-09-26 (v0.26.0 stamp + full-app review fix window): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (v0.27.0 bugfix pass: the #control-center-trigger fill + week-swipe chronology + stamp): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (UX Revamp post-deploy pass, APP-SHELL slice) — same
+  // reasoning/same shift as ENUMERATED_CALL_SITES's own note above; same five
+  // sites, no new ones, only their line numbers moved.
+  // Re-derived 2026-09-27 (this pass, DI-360/wizard reconciliation edits
+  // above these sites) — line numbers only, same five sites, matched by
+  // exact text.
+  // Re-derived 2026-09-27 (app-shell part 3A review pass: Finding 4's
+  // _buildControlCenterCtxForTest export ahead of buildControlCenterCtx(),
+  // plus a pre-existing drift this pass also found and closed rather than
+  // compounding — same five sites, only the line numbers moved, matched by
+  // text).
+  // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
+  // pass — code added above every one of these five sites shifted their
+  // line numbers only; same five sites, matched by exact text).
   const ENUMERATED_SUPER_CALL_SITES = [
-    { file: 'app.js', line: 3433, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 12377, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 12764, text: 'if (viewer.isSuperAdmin) {' },
+    { file: 'app.js', line: 3534, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 12595, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 12982, text: 'if (viewer.isSuperAdmin) {' },
     // Text updated, wiring pass 3a-bis (BLOCK 2's `attempted` guard replaces
     // `loaded`/`loading`-only).
-    { file: 'app.js', line: 12779, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
-    { file: 'app.js', line: 12947, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
+    { file: 'app.js', line: 12997, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
+    { file: 'app.js', line: 13165, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
   ];
 
   function findIdentifierHitsLocal(src, ident) {

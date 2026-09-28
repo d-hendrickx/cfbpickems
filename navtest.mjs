@@ -266,57 +266,84 @@ console.log('\n[1] calc() whitespace — no declaration in styles.css is invalid
     'fixture: extra whitespace around a valid operator is not flagged');
 }
 
-// ── [2] the nav-clearance contract ──────────────────────────────────────────
-// Content must clear the FIXED nav. Two declarations own this: the base
-// shorthand and the @supports override that adds the safe-area inset. §1
-// proved they parse; this proves they still say the right thing.
-console.log('\n[2] nav clearance — .main-content reserves at least the nav height at the bottom…');
+// ── [2] the nav-clearance contract — RE-DERIVED for the pill (DI-397, UN-357,
+//        2026-09-27) ─────────────────────────────────────────────────────────
+// `.bottom-nav` retired its old full-bleed `bottom:0;height:var(--nav-height)`
+// shape for a floating, inset PILL: `--nav-height` is GONE from the sheet
+// entirely (mutation-proof at the end of this section) — replaced by four
+// named parts (`--nav-pill-h/gap/inset/radius`) and ONE compound total,
+// `--nav-bar-clearance`, that every consumer (`.main-content`, `.submit-bar`,
+// the pill itself) now reads instead. The old @supports(padding-bottom:
+// env(safe-area-inset-bottom)) block this section used to inspect is GONE
+// too — `--nav-bar-clearance` bakes `env(safe-area-inset-bottom,0px)` into
+// itself unconditionally, so there is no separate installed-app override
+// left to check: one declaration is now correct in both worlds.
+console.log('\n[2] nav clearance — the pill\'s four named tokens + the one compound clearance…');
 {
-  const navH = (cssSrc.match(/--nav-height\s*:\s*(\d+)px/) || [])[1];
-  assert(!!navH, `--nav-height is declared as a px length (got ${navH})`);
+  const rootBlock = (cssSrc.match(/:root\s*\{[\s\S]*?\n\}/) || [''])[0];
+  assert(/--nav-pill-h\s*:\s*48px/.test(rootBlock), '--nav-pill-h is declared as 48px (the pill\'s own content height)');
+  assert(/--nav-pill-gap\s*:\s*8px/.test(rootBlock), '--nav-pill-gap is declared as 8px (the floating offset above the true screen edge)');
+  assert(/--nav-pill-inset\s*:\s*12px/.test(rootBlock), '--nav-pill-inset is declared as 12px (the left/right inset from the screen edges)');
+  assert(/--nav-pill-radius\s*:\s*24px/.test(rootBlock), '--nav-pill-radius is declared as 24px — exactly half of --nav-pill-h, a true capsule');
+  const clearanceDecl = (rootBlock.match(/--nav-bar-clearance\s*:\s*([^;]+);/) || [])[1] || '';
+  assert(/var\(--nav-pill-h\)/.test(clearanceDecl) && /var\(--nav-pill-gap\)/.test(clearanceDecl) && /env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(clearanceDecl),
+    `--nav-bar-clearance sums pill height + gap + the safe-area inset (with a 0px fallback), computed once — got "${clearanceDecl.trim()}"`);
+  assert(invalidCalcs(`.p{x:${clearanceDecl}}`).length === 0, '--nav-bar-clearance\'s own calc() is valid (no unspaced operator)');
 
+  // `.main-content` reads the ONE compound token — no separate installed-app
+  // override left to keep in sync with it.
   const mainPad = ruleBodies('.main-content')[0] || '';
   const shorthand = (mainPad.match(/padding\s*:\s*([^;}]+)/) || [])[1] || '';
-  assert(/var\(--nav-height\)/.test(shorthand),
-    `.main-content's base padding derives its bottom value from --nav-height rather than hardcoding it (got "${shorthand.trim()}")`);
+  assert(/var\(--nav-bar-clearance\)/.test(shorthand),
+    `.main-content's padding derives its bottom value from --nav-bar-clearance rather than hardcoding it (got "${shorthand.trim()}")`);
+  assert(!/@supports\s*\(padding-bottom:\s*env\(safe-area-inset-bottom\)\)/.test(cssSrc),
+    'the old safe-area @supports block is genuinely gone, not merely emptied — --nav-bar-clearance replaced the two-declaration (base + override) shape it existed for');
 
-  // The @supports override must ALSO carry --nav-height, or the installed app
-  // (where the feature query passes) loses the clearance entirely.
-  const supportsBlock = (cssSrc.match(/@supports\s*\(padding-bottom:\s*env\(safe-area-inset-bottom\)\)\s*\{[\s\S]*?\n\}/) || [])[0] || '';
-  assert(supportsBlock.length > 0, 'sanity: the safe-area @supports block is present to inspect');
-  const supportsMain = (supportsBlock.match(/\.main-content\s*\{([^}]*)\}/) || [])[1] || '';
-  assert(/padding-bottom\s*:[^;}]*var\(--nav-height\)/.test(supportsMain),
-    `the @supports override keeps --nav-height in .main-content's padding-bottom (got "${supportsMain.trim()}")`);
-  assert(/env\(safe-area-inset-bottom\)/.test(supportsMain),
-    'the @supports override also adds env(safe-area-inset-bottom) — the installed app pays both');
-  assert(invalidCalcs(supportsBlock).length === 0,
-    'the whole @supports block is free of invalid calc() (it is the only clearance the installed app actually gets)');
+  // `.bottom-nav` itself: a floating pill, inset from both side edges and the
+  // true bottom edge — never `left:0;right:0;bottom:0` again.
+  const navBody = ruleBodies('.bottom-nav')[0] || '';
+  assert(/position:\s*fixed/.test(navBody), '.bottom-nav is still position:fixed');
+  assert(/left:\s*var\(--nav-pill-inset\)/.test(navBody) && /right:\s*var\(--nav-pill-inset\)/.test(navBody),
+    `.bottom-nav is inset from BOTH side edges by --nav-pill-inset, never full-bleed left:0;right:0 (got "${navBody.trim()}")`);
+  const navBottom = (navBody.match(/bottom\s*:\s*([^;]+);/) || [])[1] || '';
+  assert(/var\(--nav-pill-gap\)/.test(navBottom) && /env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(navBottom),
+    `.bottom-nav floats above the true bottom edge by --nav-pill-gap + the safe-area inset (got "${navBottom.trim()}") — never bottom:0`);
+  assert(/height\s*:\s*var\(--nav-pill-h\)/.test(navBody), '.bottom-nav\'s own height is exactly --nav-pill-h — no separate installed-app growth rule left');
+  assert(/border-radius\s*:\s*var\(--nav-pill-radius\)/.test(navBody), '.bottom-nav is a true capsule (border-radius:var(--nav-pill-radius))');
+  assert(invalidCalcs(navBody).length === 0, '.bottom-nav\'s own bottom: calc() is valid');
 
-  // .bottom-nav itself: unchanged, and still the thing being cleared.
-  assert(/\.bottom-nav\{[^}]*position:fixed[^}]*bottom:0/.test(cssSrc),
-    '.bottom-nav is still position:fixed;bottom:0 — no speculative repositioning shipped for B-a');
-  const navSupports = (supportsBlock.match(/\.bottom-nav\s*\{([^}]*)\}/) || [])[1] || '';
-  assert(/height\s*:[^;}]*var\(--nav-height\)[^;}]*env\(safe-area-inset-bottom\)/.test(navSupports),
-    `on the installed app the nav grows by the safe-area inset instead of letting its padding eat the icon row (got "${navSupports.trim()}")`);
+  // MUTATION-PROOF (RG-27) — `--nav-height` really is retired, not just
+  // unused: css/styles.css's own comment on --nav-bar-clearance claims this
+  // is mutation-proof; this section is what actually proves it, against the
+  // real source text, not a hand-typed stand-in.
+  // Checked against `cssRules` (the comment-stripped copy §1 already
+  // defines), not raw `cssSrc` — the token's OWN retirement is explained in
+  // several historical comments that quote it verbatim (e.g. the
+  // --nav-bar-clearance :root comment above), and a check against the raw
+  // source would false-positive on its own explanation.
+  assert(!/--nav-height\s*:/.test(cssRules), '--nav-height is not DECLARED anywhere in css/styles.css (outside comments) — DI-397 retired it, not merely stopped reading it');
+  assert(!/var\(--nav-height\)/.test(cssRules), 'no rule in css/styles.css READS var(--nav-height) either (outside comments) — every former consumer was repointed at --nav-bar-clearance or the pill\'s own named tokens');
 }
 
-// ── [3] the submit bar clears the nav rather than hiding under it ───────────
+// ── [3] the submit bar clears the pill rather than hiding under it ──────────
 // .bottom-nav is z-index 100, .submit-bar z-index 50. If the bar's offset ever
 // falls back to 0 again it sticks flush to the viewport bottom, BEHIND the
 // nav — invisible, with its Submit button untappable.
-console.log('\n[3] .submit-bar — its sticky offset clears the nav it sits under…');
+console.log('\n[3] .submit-bar — its sticky offset clears the pill it sits above…');
 {
   const body = ruleBodies('.submit-bar')[0] || '';
-  const bottom = (body.match(/bottom\s*:\s*([^;}]+)/) || [])[1] || '';
-  assert(/var\(--nav-height\)/.test(bottom),
-    `.submit-bar's offset is expressed in terms of --nav-height, so it tracks the nav (got "${bottom.trim()}")`);
+  const bottom = (body.match(/bottom\s*:\s*([^;]+);/) || [])[1] || '';
+  assert(/var\(--nav-bar-clearance\)/.test(bottom),
+    `.submit-bar's offset is expressed in terms of --nav-bar-clearance, so it tracks the pill's full footprint (height + gap + inset) as one unit (got "${bottom.trim()}")`);
   const plus = bottom.match(/\+\s*(\d+)px/);
   assert(!!plus && Number(plus[1]) > 0,
-    `.submit-bar clears the nav by a positive margin rather than sitting exactly on its edge (got "${bottom.trim()}")`);
-  const navZ = Number((cssSrc.match(/\.bottom-nav\{[^}]*z-index:(\d+)/) || [])[1]);
+    `.submit-bar clears the pill by a positive margin rather than sitting exactly on its edge (got "${bottom.trim()}")`);
+  assert(invalidCalcs(body).length === 0, '.submit-bar\'s own bottom: calc() is valid');
+  const navBody3 = ruleBodies('.bottom-nav')[0] || '';
+  const navZ = Number((navBody3.match(/z-index:\s*(\d+)/) || [])[1]);
   const barZ = Number((body.match(/z-index:\s*(\d+)/) || [])[1]);
   assert(navZ > barZ,
-    `the nav still paints above the submit bar (nav z-index ${navZ} > bar z-index ${barZ}), which is why the bar must be offset rather than layered`);
+    `the pill still paints above the submit bar (pill z-index ${navZ} > bar z-index ${barZ}), which is why the bar must be offset rather than layered`);
 }
 
 // ── [4] B-a: no speculative fix was shipped ─────────────────────────────────
@@ -507,65 +534,55 @@ console.log('\n[6] B-c — the .submit-bar ancestor chain, and the two sticky ru
       `${name} sets no overflow shorthand and no non-visible overflow-y — either would make it a scroll container again and re-break the bar (got: ${joined.trim().slice(0, 160)})`);
   }
 
-  // ── THE SAFE-AREA CLEARANCE AUDIT (reviewer BLOCK, round 1) ───────────────
-  // On the installed app .bottom-nav GROWS by env(safe-area-inset-bottom) — its
-  // @supports override sets height:calc(var(--nav-height) + env(...)). So any
-  // offset that means "clear the bottom nav" and is written in terms of
-  // --nav-height ALONE is short by the inset on every notched iPhone, and lands
-  // INSIDE the opaque z-index:100 nav. This is a class check over the whole
-  // sheet, not a check of .submit-bar: every sibling rule (#auth-banner-stack,
-  // #page-chat .chat-jump-latest) already carries the term, and the next one
-  // written must too.
+  // ── THE SAFE-AREA CLEARANCE AUDIT — RE-DERIVED for --nav-bar-clearance
+  //    (DI-397, 2026-09-27) ───────────────────────────────────────────────
+  // The reviewer's original finding (round 1): an offset written in terms of
+  // --nav-height ALONE, with no separate env(safe-area-inset-bottom) term of
+  // its own, was short by the inset on a notched iPhone. --nav-bar-clearance
+  // now BAKES that env() term into itself once (§[2]) — so the class of bug
+  // this audit exists to catch is now "a bottom: offset that reads the
+  // pill's raw parts (--nav-pill-h/--nav-pill-gap) directly instead of the
+  // one compound token that already carries the inset." Scoped OFF
+  // `.bottom-nav` itself (and its `.nav-hidden`/keyboard-up variants), which
+  // legitimately compose the raw parts PLUS its own explicit env() term —
+  // §[2] already audits that rule on its own terms.
   const RULE_RE = /([^{}]+)\{([^{}]*)\}/g;
-  const navClearanceOffenders = [];
-  const navClearanceChecked = [];
+  const rawPartOffenders = [];
+  const clearanceChecked = [];
   for (const [, selector, body] of cssRules.matchAll(RULE_RE)) {
-    const decl = body.match(/(?:^|[;{])\s*bottom\s*:\s*([^;}]+)/);
-    if (!decl || !/var\(--nav-height\)/.test(decl[1])) continue;
     const sel = selector.trim().replace(/\s+/g, ' ');
-    navClearanceChecked.push(`${sel}{bottom:${decl[1].trim()}}`);
-    if (!/env\(\s*safe-area-inset-bottom/.test(decl[1])) navClearanceOffenders.push(`${sel}{bottom:${decl[1].trim()}}`);
+    if (/\.bottom-nav/.test(sel)) continue;   // audited directly in §[2]
+    const decl = body.match(/(?:^|[;{])\s*bottom\s*:\s*([^;}]+)/);
+    if (!decl) continue;
+    if (/var\(--nav-bar-clearance\)/.test(decl[1])) { clearanceChecked.push(`${sel}{bottom:${decl[1].trim()}}`); continue; }
+    if (/var\(--nav-pill-(h|gap)\)/.test(decl[1])) rawPartOffenders.push(`${sel}{bottom:${decl[1].trim()}}`);
   }
-  assert(navClearanceChecked.length >= 3,
-    `fixture check: found ${navClearanceChecked.length} rules whose bottom offset is derived from --nav-height to audit (${navClearanceChecked.length ? navClearanceChecked.map(s => s.split('{')[0]).join(', ') : 'none — the scanner is broken'})`);
-  assert(navClearanceOffenders.length === 0,
-    `every offset that clears .bottom-nav also carries env(safe-area-inset-bottom) — the nav GROWS by that inset on a notched iPhone (@supports block), so an offset of --nav-height alone lands the element INSIDE the opaque nav. Offenders: ${navClearanceOffenders.join(' | ') || 'none'}`);
+  assert(clearanceChecked.length >= 3,
+    `fixture check: found ${clearanceChecked.length} non-nav rules whose bottom offset is derived from --nav-bar-clearance to audit (${clearanceChecked.length ? clearanceChecked.map(s => s.split('{')[0]).join(', ') : 'none — the scanner is broken'})`);
+  assert(rawPartOffenders.length === 0,
+    `no rule outside .bottom-nav itself composes the pill's RAW parts (--nav-pill-h/--nav-pill-gap) for a bottom: offset — every consumer reads the one compound --nav-bar-clearance token instead, so the safe-area inset can never be silently dropped by hand-assembling the parts. Offenders: ${rawPartOffenders.join(' | ') || 'none'}`);
 
-  // The REST-POSITION invariant. The bar pins at (nav + inset + 8); .main-content
-  // reserves (nav + inset + 20) below the content, so the bar's flow position is
-  // always 12px ABOVE the pin line and a short slate can never make sticky shove
-  // it up over the tiebreaker. BOTH numbers exist TWICE — a base rule and an
-  // @supports override that adds the inset — and the invariant has to hold in
-  // BOTH. Reading only the base pair (as this section first did) is blind to
-  // exactly the installed-app case the reviewer caught.
-  // Both quantities are now (--nav-height) + (inset) + (constant). The bar has
-  // ONE rule carrying env(...,0px), so it is correct in both worlds; the reserve
-  // has TWO — a base rule with no inset and an @supports override that adds one.
-  // The invariant to prove is that the CONSTANT terms keep their margin in each
-  // world, and that the inset term appears on both sides in the installed case
-  // so the two grow together.
-  const supportsBlock6 = (cssSrc.match(/@supports\s*\(padding-bottom:\s*env\(safe-area-inset-bottom\)\)\s*\{[\s\S]*?\n\}/) || [])[0] || '';
+  // The REST-POSITION invariant. The bar pins at (clearance + 8); .main-content
+  // reserves (clearance + 20) below the content, so the bar's flow position is
+  // always 12px ABOVE the pin line and a short slate can never make sticky
+  // shove it up over the tiebreaker. Both quantities now read the SAME single
+  // --nav-bar-clearance token (§[2]) — no more base-rule/@supports-override
+  // pair to keep in sync, so there is only ONE world to prove the invariant
+  // in, not two: whatever the inset resolves to, both sides move together by
+  // construction.
   const barDecl = (/\.submit-bar\{[^}]*?bottom:(calc\([^;}]*\))/.exec(cssRules) || [])[1] || '';
-  const reserveBase = (/\.main-content\{[^}]*padding:[^;}]*?calc\(([^;}]*)\)/.exec(cssRules) || [])[1] || '';
-  const reserveInset = (/\.main-content\s*\{[^}]*?padding-bottom:calc\(([^;}]*)\)/.exec(supportsBlock6) || [])[1] || '';
+  const reserveDecl = (/\.main-content\{[^}]*padding:[^;}]*?calc\(([^;}]*)\)/.exec(cssRules) || [])[1] || '';
   const constOf = expr => { const m = [...String(expr).matchAll(/\+\s*(\d+)px/g)]; return m.length ? Number(m[m.length - 1][1]) : NaN; };
-  const hasInset = expr => /env\(\s*safe-area-inset-bottom/.test(String(expr));
 
-  assert(!!barDecl && !!reserveBase && !!reserveInset,
-    `all three declarations are readable — bar offset "${barDecl}", base reserve "${reserveBase}", @supports reserve "${reserveInset}"`);
-  assert(hasInset(barDecl) && hasInset(reserveInset),
-    `on the installed app the bar's offset AND .main-content's reserve both grow by env(safe-area-inset-bottom), so they move together instead of drifting apart by the inset (bar: ${hasInset(barDecl)}, reserve: ${hasInset(reserveInset)})`);
-  assert(/env\(\s*safe-area-inset-bottom\s*,\s*0px\s*\)/.test(barDecl),
-    `the bar's inset term carries the 0px fallback, so the same single declaration is correct in a desktop browser too — matching #auth-banner-stack and #page-chat .chat-jump-latest rather than needing an @supports block (got "${barDecl}")`);
-  for (const [world, offset, reserve] of [
-    ['browser (inset resolves to 0)', constOf(barDecl), constOf(reserveBase)],
-    ['installed app (inset live)', constOf(barDecl), constOf(reserveInset)],
-  ]) {
-    assert(Number.isFinite(offset) && Number.isFinite(reserve),
-      `${world}: both constants are readable — bar +${offset}px, reserve +${reserve}px`);
-    assert(reserve > offset,
-      `${world}: .main-content reserves MORE below the content (+${reserve}px) than the bar's sticky offset (+${offset}px), so the bar rests ${reserve - offset}px above its pinned position and never shoves up over the tiebreaker`);
-  }
+  assert(!!barDecl && !!reserveDecl,
+    `both declarations are readable — bar offset "${barDecl}", .main-content reserve "${reserveDecl}"`);
+  assert(/var\(--nav-bar-clearance\)/.test(barDecl) && /var\(--nav-bar-clearance\)/.test(reserveDecl),
+    `both the bar's offset AND .main-content's reserve read the SAME --nav-bar-clearance token, so they move together by construction instead of drifting apart (bar: "${barDecl}", reserve: "${reserveDecl}")`);
+  const offset = constOf(barDecl), reserve = constOf(reserveDecl);
+  assert(Number.isFinite(offset) && Number.isFinite(reserve),
+    `both constants are readable — bar +${offset}px, reserve +${reserve}px`);
+  assert(reserve > offset,
+    `.main-content reserves MORE below the content (+${reserve}px) than the bar's sticky offset (+${offset}px), so the bar rests ${reserve - offset}px above its pinned position and never shoves up over the tiebreaker`);
 
   // The two deliberate holds. `relative`, not `static`: a sticky that never
   // sticks paints identically to relative AND keeps z-index applying (z-index
@@ -628,28 +645,27 @@ console.log('\n[7] ENGINE-MEASURED (Chromium over the DevTools protocol, 393×85
   const cssHref = 'file://' + here + 'css/styles.css';
   // THE INSTALLED-APP VARIANT (reviewer BLOCK, round 1). env(safe-area-inset-*)
   // is 0 in every desktop engine, so a browser-only pass is blind to the case
-  // that actually bit: on a notched iPhone .bottom-nav grows by the bottom
-  // inset. Same technique B-a's harness used — substitute the inset TEXTUALLY
-  // into a copy of the real stylesheet and lay the real rules out against it.
-  // The env() inside the @supports CONDITION is protected, or the whole block
-  // would stop matching and the override under test would never apply.
+  // that actually bit: on a notched iPhone the pill's GAP grows by the bottom
+  // inset (DI-397 moved the growth from the nav's own HEIGHT into its
+  // POSITION — see §[2]/§7e2). Same technique B-a's harness used —
+  // substitute the inset TEXTUALLY into a copy of the real stylesheet and lay
+  // the real rules out against it. DI-397 (2026-09-27) retired the
+  // @supports(padding-bottom:env(safe-area-inset-bottom)) block this used to
+  // protect during substitution — --nav-bar-clearance bakes
+  // env(safe-area-inset-bottom,0px) into itself UNCONDITIONALLY now, so every
+  // env() occurrence in the sheet is a real consumer and none needs shielding
+  // from a blind text substitution.
   const INSET = 34;                       // iPhone 14/15/16 home-indicator inset
-  const COND = '@supports(padding-bottom:env(safe-area-inset-bottom))';
   const navStart = htmlSrc.indexOf('<nav class="bottom-nav"');
   const navHtml = htmlSrc.slice(navStart, htmlSrc.indexOf('</nav>', navStart) + 6);
   const tmp = mkdtempSync(join(tmpdir(), 'cfbp-navtest-'));
 
   const insetFile = join(tmp, 'styles-inset.css');
   {
-    const GUARD = '/*__SUPPORTS_CONDITION__*/';
-    let sheet = cssSrc.split(COND).join(GUARD);
+    const sheet = cssSrc.replace(/env\(\s*safe-area-inset-bottom\s*(?:,[^)]*)?\)/g, INSET + 'px');
     assert(sheet !== cssSrc,
-      `fixture check: the @supports safe-area block was found and protected before substitution, so the installed-app override still applies in the variant (looked for "${COND}")`);
-    const before = sheet;
-    sheet = sheet.replace(/env\(\s*safe-area-inset-bottom\s*(?:,[^)]*)?\)/g, INSET + 'px');
-    assert(sheet !== before,
       `fixture check: at least one env(safe-area-inset-bottom) was substituted with ${INSET}px — otherwise the variant would be identical to the browser case and prove nothing (RG-27)`);
-    writeFileSync(insetFile, sheet.split(GUARD).join(COND));
+    writeFileSync(insetFile, sheet);
   }
   const insetHref = 'file://' + insetFile;
 
@@ -795,7 +811,8 @@ ${navHtml}</div></body></html>`);
       return {top:+r.top.toFixed(1),bottom:+r.bottom.toFixed(1),left:+r.left.toFixed(1),right:+r.right.toFixed(1),h:+r.height.toFixed(1),w:+r.width.toFixed(1)}; };
     const se = document.scrollingElement;
     const out = {viewport:{w:innerWidth,h:innerHeight},
-      navH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-height')),
+      navPillH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-pill-h')),
+      navPillGap: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--nav-pill-gap')),
       doc:{scrollHeight:se.scrollHeight,scrollWidth:se.scrollWidth,clientWidth:se.clientWidth,clientHeight:se.clientHeight},
       computed:{}, samples:{}};
     for (const sel of (cfg.computed||[])) { const e = document.querySelector(sel);
@@ -854,11 +871,11 @@ ${navHtml}</div></body></html>`);
       `fixture check: the 14-game slate really is much taller than one screen (page scrolls ${long.maxScroll}px) — a bar that "pins" on a page that cannot scroll would prove nothing`);
 
     // ── 7b. THE BUG: pinned above the nav while scrolled, not only at the end ─
-    const pinLine = long.viewport.h - long.navH - 8;
+    const pinLine = long.viewport.h - long.navPillH - long.navPillGap - 8;
     for (const where of ['top', 'mid']) {
       const s = long.samples[where];
       assert(Math.abs(s.bar.bottom - pinLine) <= 1.5,
-        `at scroll ${where} (scrollY ${s.scrollY}) the submit bar is PINNED: its bottom is ${s.bar.bottom}px, the pin line is ${pinLine}px (viewport ${long.viewport.h} − nav ${long.navH} − 8) — B-c was the bar rendering at its flow position instead, ${Math.round(long.maxScroll)}px down the page`);
+        `at scroll ${where} (scrollY ${s.scrollY}) the submit bar is PINNED: its bottom is ${s.bar.bottom}px, the pin line is ${pinLine}px (viewport ${long.viewport.h} − pill height ${long.navPillH} − gap ${long.navPillGap} − 8) — B-c was the bar rendering at its flow position instead, ${Math.round(long.maxScroll)}px down the page`);
       assert(s.bar.top >= 0 && s.bar.bottom <= long.viewport.h,
         `at scroll ${where} the whole bar is inside the viewport (top ${s.bar.top}, bottom ${s.bar.bottom} of ${long.viewport.h}) — Submit is on screen without hunting for it`);
       assert(s.bar.bottom <= s.nav.top - 7,
@@ -877,40 +894,55 @@ ${navHtml}</div></body></html>`);
         `${n}-game slate, at the end: the resting bar is above the nav (bar bottom ${s.bar.bottom} ≤ nav top ${s.nav.top}), fully tappable`);
     }
 
-    // ── 7e. §4's nav contract, measured rather than asserted from source ─────
+    // ── 7e. DI-397's pill contract, measured rather than asserted from source ──
+    // A floating pill, not a full-bleed bar: it never touches the viewport's
+    // true bottom edge (it floats --nav-pill-gap above it), never spans the
+    // full width (inset --nav-pill-inset from both sides), and its height
+    // never varies with scroll position.
     for (const where of ['top', 'mid', 'bottom']) {
       const s = long.samples[where];
-      assert(Math.abs(s.nav.bottom - long.viewport.h) <= 0.5 && Math.abs(s.nav.h - long.navH) <= 0.5,
-        `at scroll ${where} the bottom nav is still flush to the viewport bottom at its full height (bottom ${s.nav.bottom} of ${long.viewport.h}, height ${s.nav.h} vs --nav-height ${long.navH}) — B-a's geometry is unchanged by RG-188`);
+      const gapBelow = long.viewport.h - s.nav.bottom;
+      assert(Math.abs(gapBelow - long.navPillGap) <= 0.5,
+        `at scroll ${where} the pill floats --nav-pill-gap (${long.navPillGap}px) above the true viewport bottom, not flush to it (measured gap ${gapBelow.toFixed(1)}px, nav bottom ${s.nav.bottom} of viewport ${long.viewport.h})`);
+      assert(Math.abs(s.nav.h - long.navPillH) <= 0.5,
+        `at scroll ${where} the pill's own height is a CONSTANT --nav-pill-h (${long.navPillH}px), never growing (measured ${s.nav.h}px)`);
+      assert(s.nav.left > 0 && (long.viewport.w - s.nav.right) > 0,
+        `at scroll ${where} the pill is inset from BOTH side edges (left ${s.nav.left}, right-gap ${(long.viewport.w - s.nav.right).toFixed(1)}), never full-bleed left:0;right:0 (viewport ${long.viewport.w}px wide)`);
     }
 
-    // ── 7e2. THE INSTALLED APP: nav grows by the inset, bar must grow with it ─
-    // Reviewer BLOCK round 1. With a 34px home-indicator inset the nav is 94px
-    // tall; a bar offset of --nav-height alone (68px) puts the bar's bottom 26px
-    // INSIDE an opaque z-index:100 nav, which is the reported bug wearing a hat.
-    // Everything here is measured against the substituted stylesheet.
+    // ── 7e2. THE INSTALLED APP: the GAP grows by the inset, the pill's own
+    //        HEIGHT does not — the structural fix DI-397 names by name (the
+    //        safe-area clearance lives in the pill's POSITION, never inside
+    //        its own box height). Reviewer BLOCK round 1's ORIGINAL bug (a
+    //        nav that grew by the inset, offset math that didn't) is now a
+    //        different-shaped bug to guard against: a pill whose HEIGHT
+    //        stayed 48px is correct; the same bug would now look like the
+    //        GAP failing to grow, or --nav-bar-clearance (which the bar's
+    //        offset reads) failing to move with it. Everything here is
+    //        measured against the substituted stylesheet.
     for (const n of [1, 3, 14]) {
       const m = await measure(fixtures['inset' + n],
         { computed: [...CHAIN, '.submit-bar'], rects: RECTS, scrolls: ['top', 'mid', 'bottom'] });
       const navH = m.samples.top.nav.h;
-      assert(Math.abs(navH - (m.navH + INSET)) <= 0.5,
-        `inset variant, ${n}-game slate: the nav really is ${navH}px — --nav-height ${m.navH} PLUS the ${INSET}px inset (its @supports override applied), which is the whole reason this variant exists`);
-      assert(Math.abs(m.samples.top.nav.bottom - m.viewport.h) <= 0.5,
-        `inset variant, ${n}-game slate: the taller nav is still flush to the viewport bottom (${m.samples.top.nav.bottom} of ${m.viewport.h})`);
+      assert(Math.abs(navH - m.navPillH) <= 0.5,
+        `inset variant, ${n}-game slate: the pill's own height is UNCHANGED by the inset — still --nav-pill-h (${m.navPillH}px), measured ${navH}px (the old "nav grows by the inset" shape is retired: DI-397 moves the clearance into the pill's POSITION instead)`);
+      const gapBelow = m.viewport.h - m.samples.top.nav.bottom;
+      assert(Math.abs(gapBelow - (m.navPillGap + INSET)) <= 0.5,
+        `inset variant, ${n}-game slate: the GAP below the pill grows by the inset instead — --nav-pill-gap (${m.navPillGap}px) PLUS the ${INSET}px inset (measured gap ${gapBelow.toFixed(1)}px), which is the whole reason this variant exists`);
       const scrolled = m.maxScroll > 0 ? m.samples.mid : m.samples.top;
       assert(scrolled.bar.bottom <= scrolled.nav.top - 7.5,
-        `inset variant, ${n}-game slate: the pinned bar clears the TALLER nav by ${Math.round(scrolled.nav.top - scrolled.bar.bottom)}px (bar bottom ${scrolled.bar.bottom}, nav top ${scrolled.nav.top}) — without the inset term in its offset it lands ${INSET}px inside the nav and the player cannot tap Submit at all`);
+        `inset variant, ${n}-game slate: the pinned bar clears the pill (now floating higher, not taller) by ${Math.round(scrolled.nav.top - scrolled.bar.bottom)}px (bar bottom ${scrolled.bar.bottom}, nav top ${scrolled.nav.top}) — without the inset term in --nav-bar-clearance it would land ${INSET}px inside the pill's floated position and the player could not tap Submit at all`);
       assert(scrolled.bar.top >= 0 && scrolled.bar.bottom <= m.viewport.h,
         `inset variant, ${n}-game slate: the whole bar is on screen (top ${scrolled.bar.top}, bottom ${scrolled.bar.bottom} of ${m.viewport.h})`);
       const rest = m.samples.bottom;
       assert(rest.bar.top >= rest.tb.bottom,
-        `inset variant, ${n}-game slate, at the end: the resting bar still does not cover #tb-input (bar top ${rest.bar.top} ≥ input bottom ${rest.tb.bottom}) — the @supports bottom reserve grows by the same inset the offset does`);
+        `inset variant, ${n}-game slate, at the end: the resting bar still does not cover #tb-input (bar top ${rest.bar.top} ≥ input bottom ${rest.tb.bottom}) — .main-content's --nav-bar-clearance reserve grows by the same inset the bar's offset does, the same one token both read`);
       assert(rest.bar.top >= rest.lastCard.bottom && rest.bar.bottom <= rest.nav.top,
-        `inset variant, ${n}-game slate, at the end: the last game card is not hidden (card bottom ${rest.lastCard.bottom} ≤ bar top ${rest.bar.top}) and the bar is clear of the nav (bar bottom ${rest.bar.bottom} ≤ nav top ${rest.nav.top})`);
+        `inset variant, ${n}-game slate, at the end: the last game card is not hidden (card bottom ${rest.lastCard.bottom} ≤ bar top ${rest.bar.top}) and the bar is clear of the pill (bar bottom ${rest.bar.bottom} ≤ nav top ${rest.nav.top})`);
     }
 
     // ── 7f. the two deliberate holds, measured ──────────────────────────────
-    assert(long.computed['.submit-bar'].position === 'sticky' && long.computed['.submit-bar'].bottom === `${long.navH + 8}px`,
+    assert(long.computed['.submit-bar'].position === 'sticky' && long.computed['.submit-bar'].bottom === `${long.navPillH + long.navPillGap + 8}px`,
       `the bar's own rule is untouched: position ${long.computed['.submit-bar'].position}, resolved offset ${long.computed['.submit-bar'].bottom} (B-a's calc fix, now doing visible work)`);
     const hdrMid = long.samples.mid.header;
     assert(hdrMid.bottom < 0,

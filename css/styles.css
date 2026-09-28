@@ -1,4 +1,4 @@
-/* CFB Pickems — Munera default v6 · Cinzel + Inter
+/* CFB Pickems — Munera default v7 · Oswald + Inter
    ─────────────────────────────────────────────────────────────────────────
    UX Revamp Group E (DI-328, AD-92, 2026-09-25): the bare :root and the
    `theme-neutral` key are repointed from the old Aggie-Maroon/slate palettes
@@ -25,10 +25,23 @@
    intended shape of "Munera becomes the default brand, school themes stay
    opt-in COLOR overlays" (D-2) — not a second, undocumented rebrand of the
    five school themes. */
-/* DI-328d ADDS Cinzel for display/heading use; Oswald and Inter both stay
-   loaded (see the deviation note at the h1,h2,h3,.font-display rule below —
-   Oswald remains the UI-label face at ~80 unreviewed call sites). */
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600&family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+/* DI-347 (UN-305, 2026-09-27, Drew: "I also don't like the font and want to
+   go back to sans serif") — REVERTS DI-328d's Cinzel display face. Cinzel
+   split the app's typographic hierarchy into three families (Cinzel headings
+   / Oswald labels / Inter body) where the pre-v0.26.0 app used two (Oswald
+   headings+labels / Inter body); this restores that two-family consistency
+   per the Design Philosophy's "Typography should be extremely consistent...
+   limit font weights" and "Branding should be subtle." Cinzel is dropped
+   from the @import entirely — no CSS declaration in this file sets
+   font-family to Cinzel anymore (verified by grep; the remaining hits are
+   this history comment and two others narrating the same reversion). The
+   native sign-in gate's Georgia serif
+   (body.native-shell .site-gate[data-gate-state="google"] ..., ~line 3700+)
+   is a SEPARATE, already-approved (2026-09-20) decision, untouched by this
+   DI — see DI-347's own "open question for Drew" note in the design-input
+   doc: he hasn't seen it on a TestFlight build yet, so it isn't reverted
+   alongside the web headings. */
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
 
 /* ── DI-328b — Munera token table + computed WCAG contrast (reproduced) ─────
    All ratios via the standard WCAG relative-luminance formula.
@@ -58,11 +71,63 @@
    Rule, stated once: Gold as TEXT requires its darkened variant on light
    surfaces (--gold-text, existing) and its lightened variant on Oxblood/dark
    surfaces (--gold-light, existing token, new role here) — plain --gold is
-   decoration-only (borders, washes, dividers), never text color directly. */
+   decoration-only (borders, washes, dividers), never text color directly.
+
+   ── DI-362 (UN-320, 2026-09-27, Drew: "I want the munera red to be a deeper
+   red, a more striking crimson. Same with the gold... a very nice royal
+   gold") — AMENDS the base --maroon/--gold hexes above. This is a refinement
+   of the SAME two-token system (one crimson primary, one gold accent), not
+   an expansion of the palette (Design Philosophy §Colors: "One primary
+   brand color. One accent... avoid rainbow interfaces").
+
+   Old -> new base tokens:
+     --maroon      #7A1F2B -> #8C1515  ("Deep Cardinal", R2 of 3 candidates)
+     --gold        #C9A24B -> #D4A017  ("Royal Gold", G1 of 3 candidates)
+   --gold-light/--gold-text are UNCHANGED — verified below, not assumed.
+   --maroon-mid/--maroon-light/--maroon-pale/--maroon-tint are recomputed
+   proportionally from the new base (same HSL delta each stop held to the
+   OLD base, per DI-362's "mechanical follow-on" instruction), not
+   hand-picked — see brandtokentest.mjs's [1]/[2] for the exact values and
+   the re-verified WCAG figures.
+
+   Recomputed WCAG contrast (standard relative-luminance formula, matches
+   DI-362's own candidate table exactly):
+     R2 (#8C1515) text on Marble bg            7.42:1   AAA
+     R2 text on white (--bg-card)              9.40:1   AAA  (as White-on-R2)
+     White text on R2 bg (buttons/etc.)        9.40:1   AAA  (existing
+                                                              background:var(--maroon);color:#fff
+                                                              sites need zero further change)
+     G1 (#D4A017) text on Ink bg               7.92:1   AAA
+     G1 text on Marble bg                      1.87:1   FAIL — use --gold-text (#6E5419), 5.62:1 AA (unchanged)
+     G1 text on R2 bg (Gold-on-Crimson)        3.96:1   FAIL for body text (passes AA-Large only)
+                                                         — SAME SHAPE as the old Gold-on-Oxblood
+                                                         finding (4.25:1) — use --gold-light
+                                                         (#E8C96A, UNCHANGED) instead: 5.82:1 AA
+                                                         (down slightly from 6.31:1 on the old
+                                                         Oxblood, still a comfortable pass — this
+                                                         is the hard requirement DI-360's night mode
+                                                         depends on, re-verified here, not assumed)
+   Ink-on-Marble (14.84:1 AAA) is unaffected — Ink/Marble are untouched by
+   this DI. */
 :root {
-  --maroon:#7A1F2B;--maroon-mid:#922536;--maroon-light:#A83B4A;
-  --maroon-pale:#F7EEF0;--maroon-tint:#F0DFE1;
-  --gold:#C9A24B;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
+  --maroon:#8C1515;--maroon-mid:#A6191C;--maroon-light:#BF2C2D;
+  --maroon-pale:#FBF2F3;--maroon-tint:#F5E2E2;
+  /* Reviewer BLOCK fix (2026-09-27, item 1) — TEXT-USE indirection tokens.
+     Light mode: byte-identical aliases of their base (zero visual change to
+     anything shipped). Dark mode (both dark blocks, below): remapped to a
+     LIGHTER crimson clearing AA on the dark ground/card — plain
+     --maroon/--maroon-mid/--maroon-light measure ~1.9-2.0:1 as TEXT on the
+     dark surfaces (headless-Chrome finding, reviewer BLOCK on d74286b).
+     Every plain "color:" declaration reading --maroon/--maroon-mid in this
+     file (the ones that are genuinely text, never background/border-color)
+     is retargeted to read the matching -text token instead — see
+     brandtokentest.mjs's audit assertion for the exact count. Fills/borders
+     keep reading the base tokens unchanged, per the coordinator's own "keep
+     fills on --maroon" instruction. */
+  --maroon-text:var(--maroon);
+  --maroon-mid-text:var(--maroon-mid);
+  --maroon-light-text:var(--maroon-light);
+  --gold:#D4A017;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
   /* v0.17.8 (RG-42/UN-127): --gold is a decorative accent (borders, badges,
      background washes) and in several themes is too light to read as TEXT
      against --gold-pale — in Sooner/Razorback it is functionally invisible
@@ -89,13 +154,87 @@
   --text-primary:#14110E;--text-secondary:#5C4E43;--text-muted:#9A8A7A;
   --win:#1A7A3F;--win-bg:#EBF7F0;
   --loss:#B91C1C;--loss-bg:#FEF2F2;
+  /* Reviewer BLOCK fix (2026-09-27), discovered by contrastscan.mjs, not
+     originally named in the reviewer's own list — a SEPARATE regression
+     from the same Phase-1 dark remap: --win/--loss are correctly
+     brightened for dark mode as TEXT (paired with --win-bg/--loss-bg,
+     both also dark-remapped), but ~10 call sites use them as a SOLID FILL
+     with white text on top (.pick-cell.result-win/loss, .status-pill-final,
+     .alma-result-pill, the .dc-chip-win/loss compact-view overrides) —
+     white-on-bright-dark-mode-green/red measured as low as 1.74:1. Same
+     fix shape as --oxblood/--oxblood-on above: a CONSTANT pair, same
+     light-mode value in every mode, never touched by any dark block —
+     white-on-fill is background-agnostic (10.1x:1 either way) so there is
+     nothing to remap. Every genuinely-fill call site (never the
+     TEXT-on-tint pattern, which keeps reading plain --win/--loss unchanged)
+     is retargeted — see contrastscan.mjs's own count. */
+  --win-fill:#1A7A3F;--loss-fill:#B91C1C;
   --nd:#7A6A5A;--nd-bg:#F5F0EA;
   --push:#C09B3A;--push-bg:#FDF8EC;
   --live:#DC2626;--live-bg:#FEF2F2;
-  --nav-height:60px;--card-radius:14px;--btn-radius:10px;
+  /* Reviewer BLOCK fix (2026-09-27, item 1/2) — same text-use-indirection
+     pattern as --maroon-text above, for the no-decision/push/live semantic
+     trio. Light mode: byte-identical aliases (--win/--loss already got this
+     treatment directly, not via an indirection token, in the original DI-360
+     Phase 1 pass — nd/push/live are the ones Phase 1 explicitly deferred). */
+  --nd-text:var(--nd);
+  --push-text:var(--push);
+  --live-text:var(--live);
+  /* .warning-box's own color was hand-tuned to #7A6000 — darker than plain
+     --push (#C09B3A), presumably because body-sized warning text needed a
+     stronger bar than a small badge. NOT --push-text (a different, LIGHTER
+     value) — a dedicated token, light-mode byte-identical to the existing
+     hardcoded literal, dark-mode remapped alongside it below. */
+  --warning-text:#7A6000;
+  /* DI-397 (UN-357, 2026-09-27) — `.bottom-nav` retires its old fixed
+     `--nav-height:60px` (DI-395's own root-cause finding: 60px already
+     exceeded native's 49pt tab-bar content height, and every consumer of
+     that token had to separately re-add `env(safe-area-inset-bottom)` on
+     top of it — a duplicated calculation living at N call sites instead of
+     one). Four named parts, ONE compound total — CONVENTIONS #21 discipline
+     applied to a spacing token, not just a data field:
+       --nav-pill-h       the pill's own CONTENT height (48px, an 8-pt value,
+                           close to native's 49pt, comfortably >=44pt).
+       --nav-pill-gap     the bottom OFFSET — how far the pill's own bottom
+                           edge floats above the true screen edge, BEFORE the
+                           safe-area inset. This is what makes it a floating
+                           pill instead of a full-bleed bar.
+       --nav-pill-inset   the LEFT/RIGHT inset from the screen edges — stays
+                           OUTSIDE the pill's own box (a position, not a
+                           padding), so a page's own content-clearance math
+                           never has to account for horizontal inset at all.
+       --nav-pill-radius  half of --nav-pill-h — a true capsule, not an
+                           independently-chosen number that could drift out
+                           of sync with the height.
+     --nav-bar-clearance is the ONE thing every OTHER rule in this file that
+     used to read `--nav-height` (+ its own separate `env(safe-area-inset-
+     bottom)`) now reads instead — computed once, here, so no consumer can
+     drift from any other (mutation-proof: `--nav-height` does not appear
+     anywhere else in this file — navgesturestest.mjs asserts this). */
+  --nav-pill-h:48px;--nav-pill-gap:8px;--nav-pill-inset:12px;--nav-pill-radius:24px;
+  --nav-bar-clearance:calc(var(--nav-pill-h) + var(--nav-pill-gap) + env(safe-area-inset-bottom,0px));
+  /* Reviewer BLOCK fix (2026-09-27, round 2) — the pill's translucent
+     material (below, `.bottom-nav`'s positive @supports block) was a
+     HARDCODED `rgba(255,255,255,.72)` — a light glass, unconditionally, in
+     BOTH color schemes. In dark mode that composites to roughly #BDBCBB (a
+     LIGHT capsule floating on the dark app), and the icons painted on top
+     (var(--text-muted)/var(--maroon-text), both dark-mode-remapped for a
+     DARK card) measured 1.9:1/1.6:1 on it — the exact "at-rule blind spot"
+     shape as the reviewer's first round (background declared, never
+     resolved against the mode it actually ships in). A real TOKEN, not a
+     literal, so it can flip per mode the same way --bg-card already does:
+     light = the original rgba(255,255,255,.72); both dark blocks (media
+     query + manual override, kept byte-identical, same discipline as every
+     other dark-mode token pair in this file) = rgba(31,27,23,.72), i.e.
+     --bg-card's own dark hex (#1F1B17) at the SAME .72 alpha — a dark
+     glass over the dark app, not an inverted light one. */
+  --nav-material:rgba(255,255,255,.72);
+  --card-radius:14px;--btn-radius:10px;
   --gap:12px;--page-pad:16px;--max-width:740px;
-  --shadow-card:0 1px 4px rgba(122,31,43,.05),0 4px 16px rgba(122,31,43,.07);
-  --shadow-btn:0 2px 8px rgba(122,31,43,.18);--transition:.16s ease;
+  /* DI-362 — shadow tint recomputed from the new --maroon base RGB(140,21,21),
+     was rgba(122,31,43,...) (the old Oxblood #7A1F2B). */
+  --shadow-card:0 1px 4px rgba(140,21,21,.05),0 4px 16px rgba(140,21,21,.07);
+  --shadow-btn:0 2px 8px rgba(140,21,21,.18);--transition:.16s ease;
   /* DI-328e — shared motion/loading tokens (new vocabulary; every group
      building motion this arc reads these instead of inventing a per-feature
      duration). Ranges per Interaction Principles' Animation Standards. */
@@ -193,18 +332,201 @@ body.theme-razorback {
 /* DI-328a/AD-92 — Munera default. Repointed from cool slate (v5) to the same
    Ink/Marble/Gold/Oxblood values as bare :root, so a no-class fallback and an
    explicit `theme-neutral` selection render identically. Key name `neutral`
-   is unchanged (no `theme-munera` added — AD-71 preserved in spirit). */
+   is unchanged (no `theme-munera` added — AD-71 preserved in spirit).
+   DI-362 (2026-09-27) — --maroon/--gold amended to the deeper crimson/richer
+   gold, mirroring bare :root's own amendment above; --oxblood/--oxblood-on
+   stay at the OLD constant Oxblood value on purpose (admin-panel marker,
+   never repointed by any theme, see :root's own comment on that token). */
 body.theme-neutral {
-  --maroon:#7A1F2B;--maroon-mid:#922536;--maroon-light:#A83B4A;
-  --maroon-pale:#F7EEF0;--maroon-tint:#F0DFE1;
-  --gold:#C9A24B;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
+  --maroon:#8C1515;--maroon-mid:#A6191C;--maroon-light:#BF2C2D;
+  --maroon-pale:#FBF2F3;--maroon-tint:#F5E2E2;
+  --gold:#D4A017;--gold-light:#E8C96A;--gold-pale:#FAF1DE;
   --gold-text:#6E5419;
   --oxblood:#7A1F2B;--oxblood-on:#FFFFFF;
   --bg:#E8E4DC;--bg-card:#FFFFFF;--bg-card-alt:#F2EFE9;--bg-input:#F2EFE9;
   --border:#DAD3C5;--border-strong:#C3BAA5;
-  --shadow-card:0 1px 4px rgba(122,31,43,.05),0 4px 16px rgba(122,31,43,.07);
-  --shadow-btn:0 2px 8px rgba(122,31,43,.18);
+  --shadow-card:0 1px 4px rgba(140,21,21,.05),0 4px 16px rgba(140,21,21,.07);
+  --shadow-btn:0 2px 8px rgba(140,21,21,.18);
 }
+
+/* ── DI-360 (UN-318, 2026-09-27, Drew: "I want the default munera colors to
+   have a night mode munera colorscheme with the gold and oxblood") — Munera
+   night mode, Phase 1. Scope: the Munera DEFAULT theme (`body.theme-neutral`)
+   ONLY — the six school themes stay light-only opt-in overlays, exactly as
+   CLAUDE.md's "school palettes are opt-in" rule and AD-92 already establish;
+   this DI does not give every school theme a dark variant (Drew's own
+   scoping: "the default munera colors"). Confirmed before this pass: zero
+   `prefers-color-scheme` references existed anywhere in this file or in
+   js/app.js — this is a genuinely new axis, not a fix to an existing one.
+
+   TWO TRIGGERS, both wired here:
+     1. `prefers-color-scheme: dark` — automatic, follows the OS/browser
+        setting. This is the trigger a CSS-only pass CAN build alone.
+     2. `body.theme-neutral[data-color-scheme="dark"|"light"]` — a manual
+        override hook, independent of the OS setting, for the Settings-tab
+        toggle DI-360 also calls for (recommended:
+        `player.preferences.colorScheme: 'system'|'light'|'dark'`, mirroring
+        CLAUDE.md's per-player-preference pattern, architecture bullet 4).
+        WIRING THAT TOGGLE IS OUT OF SCOPE HERE — this pass's file ownership
+        is css/styles.css + js/brand.js + tests, never js/app.js. Flagged for
+        the serialized app.js pass: on preference change/boot, set
+        `document.body.dataset.colorScheme = 'dark'` or `'light'` for an
+        explicit choice, or delete the attribute entirely (or set it to
+        anything other than "dark"/"light") for 'system' so the OS setting
+        alone governs via trigger 1. The CSS below already honors both
+        states; only that one JS write is missing.
+
+   PHASE 1 SCOPE (the "easy 20%", per this DI's own risk framing): the
+   trigger mechanism above, plus the core ground/text/border/win-loss tokens
+   below, contrast-checked fresh against the DI-362-amended crimson
+   (#8C1515)/gold (#D4A017) base — NOT the pre-DI-362 Oxblood/Gold this DI's
+   own draft text originally quoted (per the coordinator's sequencing note:
+   "DI-362's new values land FIRST, then this DI's dark mapping builds on top
+   of them").
+
+   PHASE 2 (reviewer BLOCK on d74286b, 2026-09-27 — Phase 1 shipped WITHOUT
+   this and was correctly blocked: a headless-Chrome scan measured Marble
+   text on light pale-tint surfaces at 1.13-1.15:1, and plain crimson-as-TEXT
+   on the dark card at ~1.9:1, both severe AA fails). This pass closes the
+   "harder 80%" Phase 1 named as a gap:
+     (a) TEXT-USE indirection tokens (--maroon-text/--maroon-mid-text/
+         --maroon-light-text/--nd-text/--push-text/--live-text, declared in
+         :root above as light-mode aliases of their base token) are remapped
+         below to LIGHTER, dark-safe variants. Every genuinely-text call site
+         reading a base token's plain "color:" declaration (never a
+         background/border-color use, those keep reading the base token
+         unchanged) is retargeted to its -text sibling — see
+         brandtokentest.mjs's audit for the exact count and the two
+         hardcoded near-duplicate hex values (.warning-box, .pick-chip) this
+         pass converts to token references in the same pass.
+     (b) --gold-text IS remapped here (superseding the OLD "--gold-text
+         DELIBERATELY UNCHANGED" comment below, which predates this fix) —
+         every one of its call sites is "text on a gold-pale-like surface,"
+         so remapping the token itself (not a new indirection) is the
+         correct, minimal fix; --gold/--gold-light/--maroon/--maroon-mid/
+         --maroon-light themselves stay UNCHANGED (fills/borders keep their
+         light-mode-computed color, per the coordinator's "keep fills on
+         --maroon" instruction).
+     (c) The pale/tint BACKGROUND tokens (--maroon-pale/--maroon-tint/
+         --gold-pale/--nd-bg/--push-bg/--live-bg) are remapped to dark,
+         low-luminance tinted surfaces (same hue family, ~11-14% lightness,
+         close to --bg-card) — this is what fixes the Marble-on-pale-pink
+         1.13:1 finding: the surface goes dark, so the ALREADY-dark Marble
+         text (inherited --text-primary) reads fine against it without
+         needing its own override.
+
+   Every value below is contrast-checked against the other new values it
+   pairs with, not assumed — see brandtokentest.mjs's night-mode section for
+   the computed WCAG ratios (text-primary/secondary/muted on both --bg and
+   --bg-card; the win/loss dark pairs on their own -bg tints; every new -text
+   token against both the dark ground/card AND its own family's new dark
+   pale/tint background). */
+@media (prefers-color-scheme: dark) {
+  body.theme-neutral:not([data-color-scheme="light"]) {
+    color-scheme:dark;                         /* native UI chrome (scrollbars, form controls) goes dark too */
+    --bg:#14110E;                              /* Ink — the ground flips */
+    --bg-card:#1F1B17;--bg-card-alt:#262119;--bg-input:#262119;
+    --border:#3A332A;--border-strong:#4A4136;  /* warm dark greys, same hue family as Ink, not neutral grey */
+    --text-primary:#E8E4DC;                    /* Marble — the text flips */
+    --text-secondary:#B8AFA0;--text-muted:#8F8474;
+    --win:#4ADE80;--win-bg:#123821;
+    --loss:#F87171;--loss-bg:#3B1414;
+    /* --maroon/--maroon-mid/--maroon-light/--gold/--gold-light are
+       DELIBERATELY UNCHANGED here — Oxblood/Crimson-as-FILL is
+       background-agnostic (white-on-fill clears AAA either way, per
+       DI-362's own table above) and --gold-light already clears AA against
+       the new crimson (5.82:1, re-verified for dark mode specifically in
+       brandtokentest.mjs). --gold-text, unlike its siblings, IS remapped
+       just below — see the Phase 2 comment above for why. */
+    /* PHASE 2 — text-use indirection tokens, remapped to lighter, dark-safe
+       variants (source HSL search, held to AA >= 4.5:1 against BOTH the
+       dark ground #14110E and the dark card #1F1B17, plus each token's own
+       family's new dark pale/tint background below). */
+    --maroon-text:#E86464;
+    --maroon-mid-text:#E86467;
+    --maroon-light-text:#DE6E6F;
+    --nd-text:#B68F68;
+    --push-text:#BC9839;
+    --live-text:#E66161;
+    /* .warning-box's dedicated token — reuses --push-text's own computed
+       dark value (same background family, --push-bg), rather than deriving
+       a third distinct dark brown for one component. */
+    --warning-text:#BC9839;
+    /* --gold-text remapped (not a new indirection — see Phase 2 comment
+       above): every call site is "text on a gold-pale-like surface," so
+       this is the correct minimal fix. Reuses --gold-light's own value —
+       already proven AA-safe on dark surfaces (11.64:1 on Ink, Phase 1). */
+    --gold-text:#E8C96A;
+    /* PHASE 2 — pale/tint BACKGROUND tokens, remapped from light pale-pink/
+       cream tints to dark, low-luminance tinted surfaces (same hue family,
+       lightness close to --bg-card) — this is what fixes the Marble-text-
+       on-light-pale-tint 1.13-1.15:1 finding: the surface goes dark, so the
+       already-dark-mode Marble text (inherited --text-primary) reads fine
+       against it without needing a per-class override. */
+    --maroon-pale:#301216;
+    --maroon-tint:#3B1616;
+    --gold-pale:#302612;
+    --nd-bg:#302312;
+    --push-bg:#302712;
+    --live-bg:#301212;
+    --shadow-card:0 1px 4px rgba(0,0,0,.35),0 4px 16px rgba(0,0,0,.45);
+    --shadow-btn:0 2px 8px rgba(0,0,0,.5);
+    /* Reviewer BLOCK fix (round 2, 2026-09-27) — the pill's glass material,
+       dark variant: --bg-card's own dark hex (#1F1B17) at the same .72
+       alpha the light mode value uses — see :root's own comment for the
+       full derivation. brandtokentest.mjs's [2c-a]/[2c-b]-style sync
+       assertion covers this pair too. */
+    --nav-material:rgba(31,27,23,.72);
+  }
+}
+/* Manual override — the SAME token set as the media-query block above,
+   applied unconditionally once the future toggle sets the attribute,
+   regardless of the OS setting. KEEP THESE TWO BLOCKS IN SYNC — there is no
+   CSS mixin without a build step (CLAUDE.md: no build step, no framework),
+   so this is the one deliberate duplication in this file's night-mode
+   support. */
+body.theme-neutral[data-color-scheme="dark"] {
+  /* Coordinator fix (2026-09-27) — tells the browser to paint native UI
+     (scrollbars, form-control chrome, the default focus ring) in dark
+     styling too, not just our own tokens. Pairs with the page-level
+     `<meta name="color-scheme" content="light dark">` line (index.html,
+     the app-shell pass owns that file) — the meta tag sets the DEFAULT for
+     the whole document; this rule pins it specifically once
+     body.theme-neutral is actually in dark mode, independent of whichever
+     value the meta tag ends up carrying. */
+  color-scheme:dark;
+  --bg:#14110E;
+  --bg-card:#1F1B17;--bg-card-alt:#262119;--bg-input:#262119;
+  --border:#3A332A;--border-strong:#4A4136;
+  --text-primary:#E8E4DC;
+  --text-secondary:#B8AFA0;--text-muted:#8F8474;
+  --win:#4ADE80;--win-bg:#123821;
+  --loss:#F87171;--loss-bg:#3B1414;
+  /* PHASE 2 (reviewer BLOCK, 2026-09-27) — BYTE-IDENTICAL to the media-query
+     block above; see that block's own comments for the derivation/rationale
+     of every value below. brandtokentest.mjs's [2c-a]/[2c-b] assertions
+     enforce the sync. */
+  --maroon-text:#E86464;
+  --maroon-mid-text:#E86467;
+  --maroon-light-text:#DE6E6F;
+  --nd-text:#B68F68;
+  --push-text:#BC9839;
+  --live-text:#E66161;
+  --warning-text:#BC9839;
+  --gold-text:#E8C96A;
+  --maroon-pale:#301216;
+  --maroon-tint:#3B1616;
+  --gold-pale:#302612;
+  --nd-bg:#302312;
+  --push-bg:#302712;
+  --live-bg:#301212;
+  --shadow-card:0 1px 4px rgba(0,0,0,.35),0 4px 16px rgba(0,0,0,.45);
+  --shadow-btn:0 2px 8px rgba(0,0,0,.5);
+  /* Reviewer BLOCK fix (round 2, 2026-09-27) — BYTE-IDENTICAL to the
+     media-query block above (--bg-card's dark hex at .72 alpha). */
+  --nav-material:rgba(31,27,23,.72);
+}
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 /* DI-327 (T-29 SCROLL-BOUNCE) — defensive assertion-of-intent: neither html
    nor body may ever set overscroll-behavior:none|contain, which would kill
@@ -224,34 +546,16 @@ html{height:100%;font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:sm
    project's floor is iOS 16.4, so every real device takes the clip. Same change
    on .page-wrapper and .main-content — all three are in the chain. */
 body{min-height:100%;background:var(--bg);color:var(--text-primary);font-family:'Inter',system-ui,sans-serif;font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden;overflow-x:clip}
-/* DI-328d — display face becomes Cinzel (inscriptional serif), matching the
-   native launch-screen wordmark's own family (DI-214d), for h1/h2/h3 ONLY —
-   confined to real headings (fix round 1, 2026-09-25, reviewer BLOCK).
-   DEVIATION FROM THE DI, NAMED EXPLICITLY: the DI's own text ("Oswald
-   dropped entirely") would also drop it from the ~80 OTHER
-   `font-family:'Oswald'` sites in this file that were never part of the
-   4-level heading hierarchy — badges, buttons, table headers, stat numbers,
-   chips, form labels (grep this file for 'Oswald' to see the full list).
-   Those sites are the app's UI-LABEL face, a separate typographic role the
-   DI's grounding section never enumerated or reviewed. Dropping Oswald from
-   the @import above would silently fall every one of them back to system
-   sans-serif — an unreviewed, sitewide visual regression, not the narrow
-   "font and overall vibe" fix Drew asked for. So: Cinzel is ADDED for
-   real-heading use only; Oswald stays loaded and stays the UI-label face.
-   `.font-display` was INITIALLY grouped into the Cinzel rule alongside h1-h3
-   in this DI's first pass — corrected here: it is a label class used at 11
-   small inline sites (player names, PIN display, member-list rows —
-   `js/app.js` — never a page heading), so it moved to the Oswald rule below,
-   alongside `h4` and every sibling label class (.card-title/.form-label/
-   .badge), which is what it actually is. Flagged to the coordinator/
-   user-experience as a follow-up DI: either retire Oswald from every label
-   site too (deliberate, reviewed) or formally record the 3-face system
-   (Cinzel heading / Oswald label / Inter body) as what's actually shipped. */
-h1,h2,h3{font-family:'Cinzel',serif;font-weight:600;letter-spacing:.02em;line-height:1.2}
+/* DI-347 (UN-305, 2026-09-27) — REVERTS DI-328d's Cinzel display face back
+   to Oswald, merged with the existing h4/.font-display/label rule below so
+   the whole heading+label hierarchy is ONE face again (Oswald), exactly as
+   it was before v0.26.0. This also retires the 3-face-system open question
+   DI-328d's own comment (above the @import) had flagged as unresolved —
+   there is no third face to reconcile anymore. */
+h1,h2,h3,h4,.font-display{font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.02em;line-height:1.2}
 h1{font-size:2rem}h2{font-size:1.4rem}h3{font-size:1.1rem}
-h4,.font-display{font-family:'Oswald',sans-serif;font-weight:600;line-height:1.2}
 h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
-.text-maroon{color:var(--maroon)}.text-muted{color:var(--text-muted);font-size:.85rem}
+.text-maroon{color:var(--maroon-text)}.text-muted{color:var(--text-muted);font-size:.85rem}
 .text-secondary{color:var(--text-secondary)}.text-sm{font-size:.875rem}
 .text-xs{font-size:.75rem}.text-center{text-align:center}.ml-sm{margin-left:6px}
 .page-wrapper{min-height:100vh;display:flex;flex-direction:column}
@@ -269,7 +573,7 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    only padding-top:8px from the rule near :466, never the gutters). Measured in
    WKWebView — 520px showed a 0px gutter, 393px was unaffected. Guarded by
    navtest.mjs §1, which fails on ANY invalid calc() in this file. */
-.main-content{flex:1;max-width:var(--max-width);margin:0 auto;width:100%;padding:0 var(--page-pad) calc(var(--nav-height) + 20px)}
+.main-content{flex:1;max-width:var(--max-width);margin:0 auto;width:100%;padding:0 var(--page-pad) calc(var(--nav-bar-clearance) + 20px)}
 /* ══ SECURITY A-1-R (2026-09-21) — `inert` DOES NOT STOP PAINT ═══════════════
    The boot identity cover sets `inert` + aria-hidden on these two containers
    while this device has not established who it is. That removes them from
@@ -290,7 +594,7 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
 .bottom-nav[inert]{visibility:hidden}
 .page-section{display:none}.page-section.active{display:block}
 .section-header{padding:20px 0 12px;border-bottom:2px solid var(--maroon-tint);margin-bottom:16px}
-.section-header h2{color:var(--maroon)}.section-header .subtitle{color:var(--text-muted);font-size:.875rem;margin-top:2px}
+.section-header h2{color:var(--maroon-text)}.section-header .subtitle{color:var(--text-muted);font-size:.875rem;margin-top:2px}
 /* UN-117 — week nomenclature on two deliberate lines.
    Drew: the single-line label wrapped wherever it ran out of room, so "Week 1
    — Sep 5" would keep the name and half the date range together and orphan the
@@ -301,11 +605,33 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    this works without changing any font sizes. */
 .week-heading{display:block}
 .week-heading-dates{display:block;white-space:nowrap;font-family:'Inter',system-ui,sans-serif;font-weight:400;font-size:.72em;letter-spacing:.02em;color:var(--text-muted);margin-top:2px;line-height:1.3}
-/* The app header is a tight horizontal strip — the same two lines, but the
-   name and its status badge stay on one row. */
-.week-heading-inline{display:inline-block;vertical-align:middle;line-height:1.25}
-.week-heading-inline .week-heading-name{display:block;white-space:nowrap}
-.week-heading-inline .week-heading-dates{font-size:.68rem;margin-top:1px}
+/* The app header is a one-line strip (DI-393) — name and its status badge
+   share the one row; there is no second (date) line here any more — see the
+   base `.week-heading-dates` rule above, still used verbatim by
+   renderWeekBanner()/the dashboard's own `<h2 class="week-heading">` (both
+   OUTSIDE the header, untouched by this DI).
+   `max-width:100%` — an inline-block with no explicit width sizes via
+   shrink-to-fit, and CSS2.1's shrink-to-fit formula never shrinks below an
+   element's OWN preferred-minimum width — for a nowrap span with no
+   line-break opportunity, preferred-minimum == preferred width, so without
+   an explicit max-width tied to the parent it renders at its full natural
+   width regardless of available space, and text-overflow:ellipsis (below)
+   never has anything to clip. */
+.week-heading-inline{display:inline-block;vertical-align:middle;line-height:1.25;max-width:100%}
+/* DI-393 (2026-09-27) / reviewer BLOCK fix (fix-final-v0270, 2026-09-28) —
+   `.week-heading-name` is a FLEX ROW, not an ellipsizing block: the status
+   badge is its own flex item (`.header-meta .badge{flex-shrink:0}`, below)
+   and ONLY the <strong> week name ellipsizes (`.header-meta strong`, below).
+   The previous shape (display:block + text-overflow on the whole span, badge
+   INSIDE the ellipsis box) clipped the BADGE first the moment `.header-meta`
+   gave up a fraction of a pixel — "Week 4 …" with LOCKED gone, rendered at
+   375/390px on 3e4f57a. The badge is load-bearing status text; it is never
+   what truncates. `.week-heading-inline` needs min-width:0 too so the flex
+   chain (#header-meta-week → .week-heading-inline → .week-heading-name →
+   strong) can actually hand the squeeze down to the name. Pinned in
+   headermetatest.mjs [css4-d]. */
+.week-heading-inline .week-heading-name{display:flex;align-items:center;min-width:0;max-width:100%;white-space:nowrap}
+.header-meta .week-heading-inline{display:flex;min-width:0}
 /* Header */
 /* UN-98: on the installed app, viewport-fit=cover + a translucent status bar
    (index.html) make safe-area insets non-zero and draw the app UNDER the
@@ -313,48 +639,241 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    at styles.css:98,313 — env() with a 0px fallback so a Safari tab (inset 0)
    is unaffected. */
 .app-header{background:var(--maroon);border-bottom:3px solid var(--gold);position:sticky;top:0;z-index:100;box-shadow:0 2px 12px rgba(80,0,0,.25);padding-top:env(safe-area-inset-top,0px)}
-.app-header-inner{max-width:var(--max-width);margin:0 auto;padding:12px var(--page-pad);display:flex;align-items:center;justify-content:space-between;gap:12px}
-/* UN-108: header-meta is the LEFT slot (week label + status badge) now that
-   UN-109 removed the app-logo block that used to occupy it.
-   UN-127 (change 1): held the two-line week text (#header-meta-week) AND the
-   feedback shortcut button (js/app.js setupHeaderFeedbackButton) as flex ROW
-   siblings, specifically so the button could never become a third STACKED
-   line under UN-117's original "exactly two lines" guarantee.
-   DI-A1 AMENDMENT (2026-09-09, Drew's explicit request): Drew asked for the
-   feedback button, now carrying a visible "Feedback" text label, on its OWN
-   LINE beneath the week date range — the third stacked line the row layout
-   above existed to prevent. UN-117's guarantee is narrowed to "unless
-   explicitly requested"; this is that request. display switched from `flex`
-   (row) to `flex` (COLUMN) so the week block and the button stack as real
-   sibling lines instead of sitting side by side — a flex row structurally
-   cannot produce this, which is why the axis had to change, not just the
-   button's own markup. align-items:flex-start keeps both children left-
-   aligned, matching the existing text-align:left. No breakpoint below
-   reintroduces the row — this is a permanent height cost, accepted, since
-   the header is position:sticky and pays it on every screen. */
-.header-meta{display:flex;flex-direction:column;align-items:flex-start;gap:4px;text-align:left;font-size:.75rem;color:rgba(255,255,255,.75);line-height:1.4}
-/* The week-text block must never be squeezed narrower than its own content —
-   both its lines are white-space:nowrap by design (UN-117). flex-shrink:0
-   keeps it at its natural width regardless of the column layout above. */
-.header-meta #header-meta-week{flex-shrink:0}
-.header-meta strong{color:#fff;display:block;font-size:.82rem;font-family:'Oswald',sans-serif}
+/* DI-393 (UN-353, 2026-09-27) — SUPERSEDES DI-361 in full. DI-361's own
+   three-zone/centred-meta grid (a good fix for the layout AS SPECIFIED at
+   the time — see the ledger's reversal-forensics note) is replaced outright
+   by a true ONE-LINE nav-bar row, per Drew's own live ruling once he saw
+   DI-361 shipped: "a small one line header with an icon... that shows sync
+   status, the league name..., and the week and status... dont need date in
+   header." One row, no wrap, five logical zones left-to-right:
+     [trigger mark] [league label] [spacer] [week · status] [sync icon]
+   — a flex row, not a grid: a grid's column count is a fixed structural
+   commitment (exactly what made DI-361's #sync-badge:empty case collapse
+   awkwardly); a flex row lets the ONE genuinely flexible zone (the league
+   label) be the one that grows/shrinks, while every fixed-content zone
+   (trigger, week+status, sync icon) simply keeps its own natural size,
+   which is a truthful match for what these five things actually are.
+   Height is content-driven (line-height of the tallest zone + this
+   padding), not a hardcoded px — DI-395's own finding was that a fixed
+   `--nav-height:60px` this file's bottom nav used to carry was already
+   taller than native's own 49pt tab bar; this header never repeats that
+   mistake by not inventing an equivalent fixed number for itself. */
+.app-header-inner{max-width:var(--max-width);margin:0 auto;padding:10px var(--page-pad);display:flex;align-items:center;gap:8px;min-height:44px}
+/* Leading — #control-center-trigger (below, its own rule) is UNCHANGED by
+   this DI (native: Munera temple mark; web: brand name + chevron) — only
+   its participation in a flex row, not a grid row, needs declaring here:
+   never grow, never shrink, keep its own natural (>=44px) box. */
+.control-center-trigger{flex:0 0 auto}
+/* Center-left — #league-pill (styles.css, DI-184 section, below) is the
+   ONE compressible zone in this row: it truncates FIRST, before the
+   week+status zone ever has to (DI-393's own explicit 320px-width
+   requirement). flex:0 1 auto — never grows past its own content, but DOES
+   shrink below it once the row runs out of room; min-width:0 is what lets
+   a flex item shrink past its own text's min-content width at all (without
+   it, text-overflow:ellipsis below has no room to ever engage).
+   2026-09-28 (web header overflow fix, reviewer BLOCK round 2) — the pill is
+   the ONLY zone that shrinks while it is visible: `.header-meta` is
+   flex-shrink 0 until `#league-pill[hidden]` (the sibling rule below
+   `.header-meta`). A 100:1 shrink ratio was tried first and is NOT strict —
+   flex shares negative space by factor x base size, so the week zone still
+   gave up a fraction of a pixel while the pill had room, and that fraction
+   was enough to clip the status badge. Strict order instead: the pill
+   shrinks to its own padding (~26px), js/app.js _fitLeaguePill() hides it
+   below 48px (a sliver of border with an ellipsis is not a label), and only
+   THEN may the week name ellipsize. */
+#league-pill{flex:0 1 auto;min-width:0}
+/* The spacer — an ordinary flex-grow item with a ZERO flex-basis, not a
+   fixed width. `flex:1 1 0%` means: absorb every pixel of positive free
+   space (pushing the week+status/sync zones flush toward the trailing
+   edge, the same visual job `justify-content:space-between` used to do
+   less reliably), but when the row is actually short on room its own
+   basis is already 0 — it has nothing left to give up, so 100% of any
+   NEGATIVE space is absorbed by #league-pill's shrink first (since
+   2026-09-28 .header-meta can shrink too, but ONLY once the pill is hidden —
+   `#league-pill[hidden]~.header-meta`, below — so the week name never
+   ellipsizes while a league label is still on screen), never taken
+   out of the trigger or the sync icon.
+   This is the whole mechanism behind "#league-pill truncates before the
+   week text does" — no JS media-query logic needed, it falls out of the
+   flex algorithm's own math once the flex factors are set this way. */
+.header-spacer{flex:1 1 0%;min-width:0}
+/* Center-right — "Week N · Status." #header-meta now holds ONLY the
+   name+badge line (#header-meta-week) — DI-393 drops the date range from
+   the header entirely (it moves to DI-394's viewing-week card) and the
+   header feedback shortcut is already retired from this slot (DI-307,
+   2026-09-25; setupHeaderFeedbackButton() is kept only for
+   headermetatest.mjs's own DOM-injection coverage, never called at boot —
+   see js/app.js's own boot-sequence comment). flex-shrink 0 WHILE THE
+   LEAGUE PILL IS VISIBLE (see the `#league-pill[hidden]~.header-meta` rule
+   below for when it may shrink): this zone is short, load-bearing text
+   ("Week 12 · LOCKED") that a player needs to read without a truncated
+   guess, unlike the league name beside it.
+   Reviewer BLOCK (round 2, 2026-09-27) — `max-width` ADDED. `flex:0 0 auto`
+   with no width ceiling at all meant this zone had genuinely NO backstop —
+   an extreme case (a very long commissioner-entered round/week name) could
+   push content past the header's own right edge, overlapping or hiding the
+   sync icon, instead of ever engaging the ellipsis chain below. `max-width:
+   60vw` is a LAST-RESORT ceiling, not a second truncation priority ahead of
+   `#league-pill`: it is generous enough that ordinary week text ("Week 12 ·
+   LOCKED") never approaches it in practice (league-pill's own 35vw ceiling
+   plus its flex:0 1 auto shrink absorbs ordinary pressure first, exactly as
+   designed), and only clamps this zone in the pathological case league-pill
+   alone can't resolve. */
+/* 2026-09-28 (web header overflow fix, 375/390px) — min-width:0 ADDED, and
+   the zone becomes shrinkable ONLY once the league pill is hidden (next
+   rule). The 60vw ceiling above was not a backstop on a phone: trigger
+   (mark + brand name) + gaps + padding + the 24px sync icon + 60vw of week
+   text is wider than a 375px row, so with this zone unable to shrink the
+   overflow went out the trailing edge and took the sync icon with it. Now
+   the week NAME ellipsizes instead — strictly after #league-pill has been
+   hidden (js/app.js _fitLeaguePill(), <48px) — and the sync icon always
+   stays on screen. The badge never shrinks (.header-meta .badge, below).
+   Pinned in headermetatest.mjs [css4]. */
+.header-meta{display:flex;align-items:center;flex:0 0 auto;min-width:0;max-width:60vw;font-size:.75rem;color:rgba(255,255,255,.75)}
+/* Reviewer BLOCK round 2 (fix-final-v0270, 2026-09-28) — STRICT truncation
+   order, not a shrink ratio. `#league-pill` precedes `.header-meta` in
+   index.html's header row, so this general-sibling rule turns the week zone
+   shrinkable exactly when the pill is gone (hidden by _fitLeaguePill(), or
+   never rendered — _clearLeaguePill() also sets hidden). While a league
+   label is on screen the week name and its badge cannot lose a pixel. */
+#league-pill[hidden]~.header-meta{flex:0 1 auto}
+/* `min-width:0` ADDED (Reviewer BLOCK, round 2) — required for this flex
+   ITEM (of `.header-meta`, a flex container) to actually shrink below its
+   own content's min-content width when `.header-meta`'s new max-width above
+   is hit; without it the max-width ceiling has nothing to transfer down to
+   the ellipsis chain below, and content would overflow the capped box
+   instead of clipping inside it. */
+.header-meta #header-meta-week{display:inline-flex;align-items:center;min-width:0}
+/* Reviewer note (app-shell part 3B, 2026-09-27) — #header-meta-week is
+   `display:inline-flex` (immediately above), which makes its `.badge` child
+   a flex item with the default `flex-shrink:1` — under real width pressure
+   the STATUS pill could start collapsing before #league-pill (DI-393's own
+   explicit "league label truncates first" zone) ever gives up any space.
+   Scoped to `.header-meta .badge` only — every other `.badge` use in the
+   app (dozens of sites, never inside the header) is untouched. */
+.header-meta .badge{flex-shrink:0}
+/* Reviewer BLOCK fix (2026-09-27, eed1d62 follow-up) — this <strong> needed
+   its OWN copy of .week-heading-name's overflow:hidden/text-overflow:
+   ellipsis, since a nested block child's independent formatting context is
+   unreachable by a parent's ellipsis alone.
+   Reviewer BLOCK, ROUND 2 (2026-09-27) — `display:block` was the wrong
+   choice for THAT fix: a block-level element always starts a new line and
+   claims its container's FULL width, which pushed the sibling status badge
+   (`<span class="badge...">`, immediately after this element in the same
+   markup) onto a second line every time this rule's own display value took
+   effect — a real, standing bug, not a hypothetical one (name and badge
+   were never actually staying on one line once this rule landed). Switched
+   to `display:inline-block`: it keeps the SAME independent-formatting-
+   context property the ellipsis fix actually needed (an inline-block
+   establishes its own block formatting context, same as block does, so
+   `overflow:hidden;text-overflow:ellipsis` still works identically) while
+   ALSO flowing inline with the badge sibling, the one property `block`
+   never had — both requirements the original fix and this one need are now
+   satisfied by the same declaration, not in tension. Pinned one-line in
+   headermetatest.mjs. */
+/* fix-final-v0270 (2026-09-28) — `min-width:0` ADDED: this <strong> is now a
+   flex ITEM of the `.week-heading-name` flex row (above), and a flex item
+   never shrinks below its min-content width without it — the ellipsis would
+   never engage and the badge would be pushed out of the row instead. */
+.header-meta strong{color:#fff;display:inline-block;font-size:.82rem;font-family:'Oswald',sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;min-width:0}
+/* Trailing — the sync-status icon slot (#sync-badge, reused id — only its
+   CLASS and content change, see the "Cloud sync status" section below for
+   the full data-sync colour/animation rules; this is just its flex-row
+   participation). Never grows, never shrinks — a fixed 24x24 icon. */
+#sync-badge{flex:0 0 auto}
 /* Nav */
-.bottom-nav{position:fixed;bottom:0;left:0;right:0;height:var(--nav-height);background:#fff;border-top:1px solid var(--border);display:flex;z-index:100;box-shadow:0 -2px 12px rgba(0,0,0,.06);padding-bottom:env(safe-area-inset-bottom,0px);
+/* DI-397 (UN-357, 2026-09-27) — `.bottom-nav` REPLACED (not just restyled)
+   with a floating, inset, icon-only pill (Drew's own live ruling: "a
+   smaller, floating tab screen at the bottom like instagram"). Class name
+   and DOM position are UNCHANGED on purpose — js/nav-gestures.js's
+   bindScrollDirection() and every other `.bottom-nav`-ancestor check in the
+   codebase keeps working with zero changes to that file.
+   THE STRUCTURAL FIX (closes the blank band Drew reported): the safe-area
+   clearance now lives in the pill's POSITION (`bottom:`, below) — the GAP
+   below the pill — never inside its own box height. The old rule padded
+   `env(safe-area-inset-bottom)` INTO a full-bleed bar's height, which is
+   the "padding-plus-height double-accounting" DI-395's own root-cause
+   analysis named; a floating pill has no bottom padding to double-count
+   because there's nothing beneath it to pad against — the inset itself
+   IS the answer.
+   MATERIAL: the base rule below is a SOLID, resolvable `var(--bg-card)`
+   background on purpose, not the translucent one — contrastscan.mjs can
+   only assert on a rule with a resolvable background (an `rgba()` literal
+   is skipped by design, per its own doc comment), so the translucent
+   "native tab-bar material" look is layered ON TOP via a POSITIVE
+   `@supports` feature query immediately below, never baked into the base
+   rule. This is what makes "contrastscan stays green... material fallback
+   included" true by construction: the ALWAYS-APPLIED base is the exact
+   same `--bg-card` pairing that already cleared this selector's contrast
+   check before this DI (Reviewer BLOCK fix, 2026-09-27, eed1d62 — .nav-item
+   children inherit --text-primary or set their own --maroon-text/
+   --text-muted, so a permanently-white bar under dark-mode-flipped text
+   measured 3.26-3.67:1; --bg-card is dark-remapped alongside every other
+   consumer, byte-identical in light mode). Browsers WITHOUT backdrop-filter
+   support simply never enter the @supports block and keep this exact,
+   already-proven-safe solid rule — a real fallback, not an assumed one. */
+.bottom-nav{position:fixed;left:var(--nav-pill-inset);right:var(--nav-pill-inset);
+  bottom:calc(var(--nav-pill-gap) + env(safe-area-inset-bottom,0px));
+  height:var(--nav-pill-h);border-radius:var(--nav-pill-radius);
+  background:var(--bg-card);border:1px solid var(--border);
+  display:flex;z-index:100;box-shadow:var(--shadow-card);
   /* DI-322 (T-24 NAV-HIDE-ON-SCROLL), UX Revamp group A2 — transform lives on
      the element ITSELF (not the .nav-hidden selector alone) so the SAME
      transition timing applies both directions (hide on scroll-down, show on
      scroll-up). NAV_HIDE_SHOW_MS (js/nav-gestures.js) = 240ms, inside the
-     Interaction Principles' 220-300ms Navigation range. */
+     Interaction Principles' 220-300ms Navigation range — UNCHANGED; DI-397's
+     own text confirms the existing BINARY slide (not a new scale/resize
+     physics) is what Drew is actually describing having used on Instagram. */
   transform:translateY(0);transition:transform 240ms ease-out}
-.bottom-nav.nav-hidden{transform:translateY(100%);transition:transform 240ms ease-in}
+/* The translucent "native tab-bar material" — a POSITIVE feature query
+   (progressive enhancement), not `@supports not(...)`: a browser that
+   fails this query gets nothing extra and keeps the base rule's solid
+   background untouched, which is exactly what a fallback should mean.
+   Reviewer BLOCK (round 2, 2026-09-27) — this was a HARDCODED
+   `rgba(255,255,255,.72)`, unconditionally, in BOTH color schemes: a light
+   glass floating on the dark app in dark mode, measured compositing to
+   ~#BDBCBB, with the icons painted on top (var(--text-muted)/
+   var(--maroon-text), both dark-mode-remapped for a DARK card) landing at
+   1.9:1/1.6:1 on it — the SAME "at-rule blind spot" shape as the original
+   d74286b finding, one level up the at-rule stack (a background declared,
+   never resolved against the mode it actually ships in, because
+   contrastscan.mjs discarded every @supports block outright). Now reads
+   `var(--nav-material)` (:root, both dark blocks — see that token's own
+   comment for the derivation) so the material genuinely flips per mode,
+   the same way `--bg-card` already does everywhere else in this file. */
+@supports ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){
+  .bottom-nav{background:var(--nav-material);
+    -webkit-backdrop-filter:blur(20px) saturate(180%);backdrop-filter:blur(20px) saturate(180%)}
+}
+/* Reviewer BLOCK (round 2, 2026-09-27) — a system-level "reduce
+   transparency" preference (Interaction Principles' Accessibility section:
+   respect the user's stated motion/transparency/contrast preferences, the
+   same discipline every `prefers-reduced-motion` block in this file already
+   follows) drops the glass material and its blur unconditionally, back to
+   the exact same solid, already-contrast-proven `--bg-card` the base rule
+   ships to every browser without backdrop-filter support — one answer for
+   "don't apply this effect," not two different fallback shapes. */
+@media (prefers-reduced-transparency:reduce){
+  .bottom-nav{background:var(--bg-card);backdrop-filter:none;-webkit-backdrop-filter:none}
+}
+/* DI-397's own bug this closes, named explicitly: a pill offset ABOVE the
+   true screen edge by `--nav-pill-gap` cannot be fully hidden by
+   `translateY(100%)` alone — that only moves it by its OWN height, leaving
+   a `--nav-pill-gap`-tall sliver of the pill's top edge still on-screen
+   (do the box math: top edge ends at `viewport-bottom - --nav-pill-gap`,
+   which is ABOVE the viewport's true bottom). The translate distance must
+   ALSO cross the pill's own bottom offset to leave zero pixels showing. */
+.bottom-nav.nav-hidden{transform:translateY(calc(100% + var(--nav-pill-gap) + env(safe-area-inset-bottom,0px)));transition:transform 240ms ease-in}
 /* DI-323 (T-25 NAV-KEYBOARD-AVOID) — the composer must never sit under a
    still-visible nav while the on-screen keyboard is up. This rule OUT-
    SPECIFIES the JS-driven .nav-hidden toggle unconditionally (higher
    specificity: an attribute selector + a class beats two classes) so it
    holds even under prefers-reduced-motion, where js/nav-gestures.js's own
    reducer folds keyboard-up into `suspended` (which SHOWS the nav) rather
-   than animating a hide. */
-body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
+   than animating a hide. Same full-offset transform as .nav-hidden above —
+   this rule must never regress back to the bare `100%` the sliver bug
+   shipped with. */
+body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pill-gap) + env(safe-area-inset-bottom,0px)))}
 /* Reviewer BLOCK (2026-09-25), F10 — `.bottom-nav`'s hide/show transform had
    no `prefers-reduced-motion` override (every OTHER motion rule in this file
    does — see the other `@media (prefers-reduced-motion:reduce)` blocks). The
@@ -365,13 +884,46 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 @media (prefers-reduced-motion:reduce){
   .bottom-nav,.bottom-nav.nav-hidden{transition:none}
 }
-.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;color:var(--text-muted);font-size:.62rem;font-family:'Inter',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase;transition:color var(--transition);border:none;background:none;padding:6px 4px;min-height:44px;-webkit-tap-highlight-color:transparent}
-.nav-item .nav-icon{font-size:1.25rem;line-height:1}
+/* DI-397 — labels removed (icon-only, "like insta"); each button's visible
+   text moves to the existing `.sr-only` utility (VoiceOver only, never
+   `display:none` — the label stays in the accessibility tree). `gap:3px`
+   is harmless to leave: an `.sr-only` sibling is position:absolute, so it
+   is out of flow and consumes no flex gap — the icon renders perfectly
+   centered either way. `min-width:44px` is new: with the label gone,
+   nothing else in this rule guaranteed the Interaction Principles' 44pt
+   tap-target floor at very narrow widths (5 buttons in a 296px-wide pill
+   at the 320px viewport floor is ~59px each already, but the floor is
+   stated explicitly rather than left to arithmetic that could change). */
+.nav-item{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;color:var(--text-muted);font-size:.62rem;font-family:'Inter',sans-serif;font-weight:600;letter-spacing:.04em;text-transform:uppercase;transition:color var(--transition),transform var(--motion-fast) ease-out;border:none;background:none;padding:6px 4px;min-width:44px;min-height:44px;-webkit-tap-highlight-color:transparent}
+/* Touch feedback (Interaction Principles' Button Behavior, ~97% compress) —
+   a gap this rule genuinely had: every OTHER tappable chrome control in
+   this file (.control-center-row, .control-center-trigger, .btn) already
+   carries this exact `:active{transform:scale(.97)}` pattern; the nav
+   buttons never did. Reused verbatim, not a new value. */
+.nav-item:active{transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.nav-item{transition:color var(--transition)}}
 /* UN-97: inline SVG sized to the ~20px footprint the emoji it replaced had
    (.nav-icon's 1.25rem font-size at the default 16px root). No color rule
    here — currentColor inherits `color` from .nav-item / .nav-item.active. */
 .nav-icon svg{width:20px;height:20px;display:block}
-.nav-item.active,.nav-item:active{color:var(--maroon)}
+.nav-item.active,.nav-item:active{color:var(--maroon-text)}
+/* Reviewer BLOCK (round 2, 2026-09-27) — the selected tab used to differ from
+   every other tab by COLOUR alone (var(--maroon-text) vs. var(--text-muted)),
+   which fails anyone who can't reliably distinguish the two (colour-blindness,
+   a washed-out outdoor display) — Interaction Principles' Accessibility
+   section: never rely on colour as the only differentiator. A small dot
+   UNDER the active icon, not a heavier stroke: `.nav-item`'s own selector
+   already targets a static `.active` class the markup sets on tab change
+   (unchanged, existing convention — `body`/app.js toggles it, this DI never
+   touches that), so a `::after` pseudo-element needs NO markup change at
+   all, unlike a stroke-weight class that would need one threaded through.
+   Scoped to `.nav-item.active` ONLY, never `.nav-item:active` (the
+   momentary touch-press state, shared by EVERY tab on tap) — a dot that
+   flashed on every press regardless of which tab is actually selected would
+   be a worse, more confusing signal than the colour-only cue it replaces. */
+.nav-item.active::after{content:'';position:absolute;bottom:4px;left:50%;
+  transform:translateX(-50%);width:4px;height:4px;border-radius:50%;
+  background:var(--maroon-text)}
 /* F2 (WIRING_CHECKLIST_B_092526.md) — Munera icon-family sizing for inline
    chrome icons that sit beside text (alma-mater badges, card titles,
    admin-section titles, the game-filter chip labels, the Rules-tab section
@@ -421,12 +973,12 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
    .pick-btn.selected, one weight down: this is a record of a choice, not a
    tappable control, so it must not read as a button. */
 .team.team-picked{background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:var(--btn-radius);padding:6px 4px}
-.team-pick-flag{font-family:'Oswald',sans-serif;font-size:.68rem;font-weight:700;color:var(--maroon);text-transform:uppercase;letter-spacing:.04em}
+.team-pick-flag{font-family:'Oswald',sans-serif;font-size:.68rem;font-weight:700;color:var(--maroon-text);text-transform:uppercase;letter-spacing:.04em}
 .vs-divider{font-family:'Oswald',sans-serif;font-size:.85rem;color:var(--text-muted);font-weight:500}
 .spread-row{display:flex;align-items:center;justify-content:center;gap:8px;font-size:.8rem;border-top:1px solid var(--border);padding-top:10px}
-.spread-badge{background:var(--maroon-pale);color:var(--maroon);font-weight:700;font-family:'Oswald',sans-serif;font-size:.85rem;padding:2px 10px;border-radius:20px;border:1px solid var(--maroon-tint)}
-.spread-badge-sm{background:var(--maroon-pale);color:var(--maroon);font-size:.7rem;font-weight:700;font-family:'Oswald',sans-serif;padding:1px 7px;border-radius:20px;border:1px solid var(--maroon-tint);white-space:nowrap}
-.alma-mater-badge{font-size:.7rem;font-weight:600;color:var(--maroon);background:var(--maroon-tint);padding:2px 8px;border-radius:20px;border:1px solid rgba(80,0,0,.2)}
+.spread-badge{background:var(--maroon-pale);color:var(--maroon-text);font-weight:700;font-family:'Oswald',sans-serif;font-size:.85rem;padding:2px 10px;border-radius:20px;border:1px solid var(--maroon-tint)}
+.spread-badge-sm{background:var(--maroon-pale);color:var(--maroon-text);font-size:.7rem;font-weight:700;font-family:'Oswald',sans-serif;padding:1px 7px;border-radius:20px;border:1px solid var(--maroon-tint);white-space:nowrap}
+.alma-mater-badge{font-size:.7rem;font-weight:600;color:var(--maroon-text);background:var(--maroon-tint);padding:2px 8px;border-radius:20px;border:1px solid rgba(80,0,0,.2)}
 /* DI-7 (Commissioner Slate Builder) — commissioner-only badge (Available
    Games / Selected Slate). Deliberately NOT maroon like the alma badge —
    this is an informational proxy tag, not a highlight — so it stays neutral
@@ -435,8 +987,8 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .ats-row{display:flex;gap:16px;justify-content:center;font-size:.78rem;padding:6px 0;border-top:1px dashed var(--border);margin-top:6px}
 .live-score{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;text-align:center;padding:8px 0;border-top:1px solid var(--border);margin-top:8px}
 .score-num{font-family:'Oswald',sans-serif;font-size:1.5rem;font-weight:700;color:var(--text-primary)}
-.score-leading{color:var(--maroon)}
-.score-status{font-size:.72rem;color:var(--live);font-weight:700;animation:pulse 1.5s infinite}
+.score-leading{color:var(--maroon-text)}
+.score-status{font-size:.72rem;color:var(--live-text);font-weight:700;animation:pulse 1.5s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
 /* Item 2 (in-game quarter+clock), Pass B — halftime/stale live status must NOT
    pulse (a frozen score under a pulsing LIVE reads as a stalled poll). */
@@ -461,16 +1013,16 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .dq-espn-live{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3)}
 .dq-espn-hist{background:#EEF0FE;color:#3A4A9A;border:1px solid #AABAF0}
 .dq-demo{background:#F4EEFE;color:#6A3A9A;border:1px solid #CAABF0}
-.dq-partial{background:var(--push-bg);color:var(--push);border:1px solid rgba(192,155,58,.3)}
+.dq-partial{background:var(--push-bg);color:var(--push-text);border:1px solid rgba(192,155,58,.3)}
 .dq-unavailable{background:var(--loss-bg);color:var(--loss);border:1px solid rgba(185,28,28,.3)}
 /* Pick buttons */
 .pick-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px}
 .pick-btn{padding:14px 10px;border-radius:var(--btn-radius);border:2px solid var(--border);background:var(--bg-card-alt);color:var(--text-secondary);font-family:'Oswald',sans-serif;font-size:.92rem;font-weight:600;cursor:pointer;transition:all var(--transition);text-align:center;line-height:1.25;min-height:56px;-webkit-tap-highlight-color:transparent;word-break:break-word}
 .pick-btn:active:not(:disabled){transform:scale(.97)}
-.pick-btn.selected{border-color:var(--maroon);background:var(--maroon-pale);color:var(--maroon)}
+.pick-btn.selected{border-color:var(--maroon);background:var(--maroon-pale);color:var(--maroon-text)}
 .pick-btn.locked-win{border-color:var(--win);background:var(--win-bg);color:var(--win)}
 .pick-btn.locked-loss{border-color:var(--loss);background:var(--loss-bg);color:var(--loss)}
-.pick-btn.locked-nd{border-color:var(--nd);background:var(--nd-bg);color:var(--nd)}
+.pick-btn.locked-nd{border-color:var(--nd);background:var(--nd-bg);color:var(--nd-text)}
 .pick-btn:disabled{cursor:not-allowed;opacity:.55}
 /* DI-331d/g (UX Revamp Group E, T-31/UN-287) — Team logos on the Picks page
    pick buttons. Fixed box, reserved BEFORE the image loads (DI-331g "no
@@ -500,7 +1052,7 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .btn-primary{background:var(--maroon);color:#fff;box-shadow:var(--shadow-btn)}.btn-primary:hover{background:var(--maroon-mid)}
 .btn-secondary{background:var(--bg-input);color:var(--text-secondary);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
 .btn-danger{background:var(--loss-bg);color:var(--loss);border:1px solid rgba(185,28,28,.25)}
-.btn-ghost{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}.btn-ghost:hover{border-color:var(--maroon);color:var(--maroon)}
+.btn-ghost{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}.btn-ghost:hover{border-color:var(--maroon);color:var(--maroon-text)}
 .btn-win{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.25)}
 .btn-sm{padding:7px 14px;font-size:.78rem;min-height:34px}.btn-block{width:100%}
 /* Badges */
@@ -513,14 +1065,14 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
    (locked, v0.17.2, same rule that keeps thread-header colors static). */
 .badge-beta{background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border)}
 .badge-open{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3)}
-.badge-locked{background:var(--maroon-pale);color:var(--maroon);border:1px solid var(--maroon-tint)}
-.badge-live{background:var(--live-bg);color:var(--live);border:1px solid rgba(220,38,38,.3);animation:pulse 1.5s infinite}
+.badge-locked{background:var(--maroon-pale);color:var(--maroon-text);border:1px solid var(--maroon-tint)}
+.badge-live{background:var(--live-bg);color:var(--live-text);border:1px solid rgba(220,38,38,.3);animation:pulse 1.5s infinite}
 .badge-final{background:var(--bg-input);color:var(--text-muted);border:1px solid var(--border)}
 .badge-win{background:var(--win-bg);color:var(--win);border:1px solid rgba(26,122,63,.3)}
 .badge-loss{background:var(--loss-bg);color:var(--loss);border:1px solid rgba(185,28,28,.3)}
-.badge-nd{background:var(--nd-bg);color:var(--nd);border:1px solid rgba(122,106,90,.3)}
-.result-win{color:var(--win)}.result-loss{color:var(--loss)}.result-push{color:var(--push)}
-.result-nd{color:var(--nd)}.result-live{color:var(--live)}.result-pending{color:var(--text-muted)}
+.badge-nd{background:var(--nd-bg);color:var(--nd-text);border:1px solid rgba(122,106,90,.3)}
+.result-win{color:var(--win)}.result-loss{color:var(--loss)}.result-push{color:var(--push-text)}
+.result-nd{color:var(--nd-text)}.result-live{color:var(--live-text)}.result-pending{color:var(--text-muted)}
 /* Forms */
 .form-group{margin-bottom:16px}
 .form-label{display:block;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--text-muted);margin-bottom:6px;font-family:'Oswald',sans-serif}
@@ -538,14 +1090,14 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .player-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px}
 .player-tile{background:var(--bg-card-alt);border:2px solid var(--border);border-radius:var(--card-radius);padding:14px 10px;text-align:center;cursor:pointer;transition:all var(--transition);min-height:88px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;-webkit-tap-highlight-color:transparent}
 .player-tile:active{transform:scale(.96)}.player-tile.selected,.player-tile:hover{border-color:var(--maroon);background:var(--maroon-pale)}
-.player-avatar{width:40px;height:40px;background:var(--maroon-tint);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:700;color:var(--maroon)}
+.player-avatar{width:40px;height:40px;background:var(--maroon-tint);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:700;color:var(--maroon-text)}
 .player-tile.selected .player-avatar,.player-tile:hover .player-avatar{background:var(--maroon);color:#fff}
 .player-tile-name{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;color:var(--text-primary)}
-.player-tile-nick{font-size:.72rem;color:var(--maroon);font-style:italic}.player-tile-done{font-size:.65rem;color:var(--win);font-weight:700}
+.player-tile-nick{font-size:.72rem;color:var(--maroon-text);font-style:italic}.player-tile-done{font-size:.65rem;color:var(--win);font-weight:700}
 /* Week banner */
 .week-banner{background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-left:4px solid var(--maroon);border-radius:var(--card-radius);padding:14px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:12px}
 .week-banner-icon{font-size:1.4rem;flex-shrink:0}.week-banner-body{flex:1;min-width:0}
-.week-banner-title{font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;color:var(--maroon);margin-bottom:4px}
+.week-banner-title{font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;color:var(--maroon-text);margin-bottom:4px}
 .week-banner-blurb{font-size:.875rem;color:var(--text-secondary);line-height:1.45;font-style:italic}
 /* Week status card (locked week) */
 .week-status-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:20px;display:flex;align-items:flex-start;gap:14px;box-shadow:var(--shadow-card)}
@@ -557,12 +1109,30 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .tiebreaker-label{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gold-text);margin-bottom:6px}
 .tiebreaker-question{font-size:.95rem;color:var(--text-primary);font-weight:500;line-height:1.4}
 .tiebreaker-submitted{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px}
-.tiebreaker-value{font-family:'Oswald',sans-serif;font-size:1.6rem;font-weight:700;color:var(--maroon)}
+.tiebreaker-value{font-family:'Oswald',sans-serif;font-size:1.6rem;font-weight:700;color:var(--maroon-text)}
 .tiebreaker-dashboard{margin-bottom:12px}.tb-actual{font-family:'Oswald',sans-serif;font-size:1rem;font-weight:600;color:var(--win);margin-top:4px}
 /* Info / error / warning boxes */
 .info-box{background:var(--bg-card-alt);border:1px solid var(--border);border-radius:var(--btn-radius);padding:12px 16px;font-size:.875rem;color:var(--text-secondary);line-height:1.5}
 .error-box{background:var(--loss-bg);border:1px solid rgba(185,28,28,.3);border-radius:var(--btn-radius);padding:12px 14px;font-size:.875rem;color:var(--loss);line-height:1.5}
-.warning-box{background:var(--push-bg);border:1px solid rgba(192,155,58,.3);border-radius:var(--btn-radius);padding:10px 14px;font-size:.85rem;color:#7A6000;line-height:1.4}
+/* Reviewer BLOCK fix (2026-09-27) — was a hardcoded literal (`color:#7A6000`),
+   which never changed with theme and measured ~2.46:1 (a real AA fail) once
+   --push-bg went dark. Converted to --warning-text — light mode is
+   byte-identical to the literal it replaces. */
+.warning-box{background:var(--push-bg);border:1px solid rgba(192,155,58,.3);border-radius:var(--btn-radius);padding:10px 14px;font-size:.85rem;color:var(--warning-text);line-height:1.4}
+/* app-shell part 3B (2026-09-27) — the Finalize Step 4 unresolved-tie
+   warning (js/app.js's warningIconHTML, weekWizardApi().unresolvedTieWarning)
+   is the one .warning-box host that places an icon() glyph inline before its
+   text (`${warningIconHTML} ${escHtml(warning.text)}`) — iconstest [8d]'s
+   structural audit needs a scoped svg{width;height} rule for it (24px).
+   inline-block + vertical-align, NOT display:block — the icon sits BESIDE
+   the warning text on one line, the same "icon beside text" shape
+   .alma-mater-badge svg/.card-title svg (F2, WIRING_CHECKLIST_B_092526.md)
+   already use, just at this host's own larger 24px size; a block value would
+   push the icon onto its own line above the text instead. Every OTHER
+   .warning-box site (Step 6's blocked-open banner, the paused-league/
+   maintenance banners) never places an icon inside it, so this is harmless
+   there — nothing for the selector to match. */
+.warning-box svg{width:24px;height:24px;display:inline-block;vertical-align:-6px}
 /* DI-344/345 (T-35), UX Revamp wiring pass 2 (2026-09-25) — the paused-
    league banner. Reuses .warning-box verbatim (no new visual treatment,
    per the DI's own "reuse each control's EXISTING disabled-state CSS"
@@ -582,17 +1152,17 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 /* ESPN URL box */
 .api-url-box{background:var(--bg-input);border:1px solid var(--border);border-radius:var(--btn-radius);padding:12px 14px}
 .api-url-label{font-size:.75rem;font-weight:600;color:var(--text-muted);font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:4px}
-.api-url-code{display:block;font-family:monospace;font-size:.75rem;color:var(--maroon);word-break:break-all;line-height:1.5;background:var(--maroon-pale);padding:6px 8px;border-radius:6px;margin-top:4px}
+.api-url-code{display:block;font-family:monospace;font-size:.75rem;color:var(--maroon-text);word-break:break-all;line-height:1.5;background:var(--maroon-pale);padding:6px 8px;border-radius:6px;margin-top:4px}
 /* Data proof */
 .proof-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;margin-bottom:8px}
 .proof-item{display:flex;flex-direction:column;gap:3px}
 .proof-label{font-size:.72rem;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;font-family:'Oswald',sans-serif}
 .proof-value{font-size:.9rem;font-weight:600;color:var(--text-primary)}
-.proof-code{font-family:monospace;font-size:.72rem;color:var(--maroon);word-break:break-all;line-height:1.4}
-.proof-good{color:var(--win)}.proof-bad{color:var(--loss)}.proof-warn{color:var(--push)}
+.proof-code{font-family:monospace;font-size:.72rem;color:var(--maroon-text);word-break:break-all;line-height:1.4}
+.proof-good{color:var(--win)}.proof-bad{color:var(--loss)}.proof-warn{color:var(--push-text)}
 .proof-list{padding-left:18px;margin-top:6px}.proof-list li{font-size:.82rem;color:var(--text-secondary);margin-bottom:3px}
 .proof-ids{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.id-chip{background:var(--maroon-pale);color:var(--maroon);font-family:monospace;font-size:.7rem;padding:2px 6px;border-radius:6px;border:1px solid var(--maroon-tint)}
+.id-chip{background:var(--maroon-pale);color:var(--maroon-text);font-family:monospace;font-size:.7rem;padding:2px 6px;border-radius:6px;border:1px solid var(--maroon-tint)}
 /* Submit bar */
 /* B-a (2026-09-19): same unspaced-`+` defect as .main-content above — this
    offset resolved to 0 instead of 68px (measured: WKWebView reported 0px for
@@ -612,22 +1182,38 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
    a short slate can never make sticky shove the bar up over the tiebreaker.
    Change either number and re-read that sentence.
 
-   THE env() TERM IS NOT OPTIONAL (reviewer BLOCK, RG-188 round 2). On a notched
-   iPhone .bottom-nav GROWS by env(safe-area-inset-bottom) — see its @supports
-   override — so an offset built from --nav-height alone is short by the inset
-   and the bar pins INSIDE the opaque nav: measured at a 34px inset, nav top 758
-   vs. bar bottom 784, i.e. 26px under it, with Submit untappable. Written inline
-   with a 0px fallback rather than in the @supports block, matching the two
-   sibling rules that already got this right (#auth-banner-stack and
-   #page-chat .chat-jump-latest). .main-content's @supports override adds the
-   same inset to its bottom reserve, so the 20 > 8 margin above survives
-   unchanged on the installed app. Guarded by navtest.mjs [1], [3], [6] (a CLASS
-   audit: ANY offset clearing the nav must carry the inset) and [7], which
-   measures all of it in a real engine at 393×852, including a variant with the
-   inset substituted at 34px. */
-.submit-bar{position:sticky;bottom:calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + 8px);background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
+   THE SAFE-AREA TERM IS NOT OPTIONAL (reviewer BLOCK, RG-188 round 2). On a
+   notched iPhone the nav's own bottom offset GROWS by env(safe-area-inset-
+   bottom) — an offset that didn't carry it pinned the bar INSIDE the opaque
+   nav (measured at a 34px inset: nav top 758 vs. bar bottom 784, i.e. 26px
+   under it, with Submit untappable). DI-397 (2026-09-27) changed HOW that
+   term reaches this rule, not WHETHER it does: `--nav-bar-clearance` (:root)
+   now bakes `env(safe-area-inset-bottom,0px)` into the one token every
+   nav-adjacent offset reads (this rule included) — there is no longer a
+   separate @supports override that adds it on top, because the token itself
+   already carries it unconditionally (the `,0px` fallback is what makes it a
+   no-op on a browser without the feature, doing the @supports gate's old job
+   structurally rather than conditionally). The 20 > 8 relationship this
+   comment's own math depends on (.main-content's +20px vs. this rule's +8px)
+   is unchanged — both still read the SAME compound token, so they can never
+   drift out of the relationship relative to each other, only relative to the
+   nav's own footprint if that ever changes again.
+   Previously "guarded by navtest.mjs [1],[3],[6],[7]" — navtest.mjs was NOT
+   in this pass's file ownership and still hard-pins the OLD full-bleed
+   `.bottom-nav{position:fixed;bottom:0;height:var(--nav-height)}` contract
+   (literal token name, literal `bottom:0`) across its calc-validator, its
+   nav-clearance section, and a REAL-BROWSER harness (§5–7) measuring the old
+   geometry — it will fail red under this DI's floating-pill redesign until
+   someone re-derives its assertions against the new contract (named
+   explicitly in this pass's handoff, not silently left for the suite to
+   discover). */
+/* Reviewer BLOCK fix (2026-09-27, eed1d62 follow-up) — was a hardcoded
+   #fff; this rule sets no `color:` of its own, so its text inherits
+   --text-primary (Marble in dark) — measured 1.27:1. Same --bg-card
+   conversion as .bottom-nav/.toast/.modal below. */
+.submit-bar{position:sticky;bottom:calc(var(--nav-bar-clearance) + 8px);background:var(--bg-card);border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 -4px 20px rgba(0,0,0,.1);z-index:50;margin-top:12px}
 .submit-progress{font-size:.875rem;color:var(--text-secondary)}
-.submit-progress strong{font-family:'Oswald',sans-serif;font-size:1.15rem;color:var(--maroon)}
+.submit-progress strong{font-family:'Oswald',sans-serif;font-size:1.15rem;color:var(--maroon-text)}
 /* Leaderboard */
 .leaderboard-table{width:100%;border-collapse:collapse}
 .leaderboard-table th{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);font-weight:600;font-family:'Oswald',sans-serif;padding:6px 10px;text-align:left;border-bottom:2px solid var(--border)}
@@ -636,7 +1222,7 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .rank-cell{font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:700;color:var(--text-muted);width:36px}
 .rank-1{color:var(--gold)}.rank-2{color:#9A9A9A}.rank-3{color:#9A6040}
 .player-name-cell{font-weight:600;color:var(--text-primary)}
-.points-cell{font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:700;color:var(--maroon);text-align:right}
+.points-cell{font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:700;color:var(--maroon-text);text-align:right}
 .winner-row td{background:rgba(192,155,58,.06)}.loser-row td{background:rgba(185,28,28,.04)}
 /* UN-105a — horizontal-scroll edge-fade cue. ONE shared class applied to
    every wide-table wrapper (.dashboard-scroll here + .batch-grid-scroll
@@ -692,7 +1278,7 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .blind-note-icon{flex:none;font-size:.9rem}
 /* Commissioner */
 .admin-section{margin-bottom:24px}
-.admin-section-title{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--maroon);margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--maroon-tint)}
+.admin-section-title{font-family:'Oswald',sans-serif;font-size:.78rem;font-weight:600;text-transform:uppercase;letter-spacing:.1em;color:var(--maroon-text);margin-bottom:10px;padding-bottom:6px;border-bottom:2px solid var(--maroon-tint)}
 /* UN-123 — feedback review list, commissioner Data tab */
 .feedback-admin-list{max-height:340px;overflow-y:auto;-webkit-overflow-scrolling:touch}
 /* Item 10 (DI-B1) — exclude-from-CSV-export checkbox. A bare checkbox (the
@@ -707,28 +1293,34 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .game-admin-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .game-admin-matchup{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;flex:1;color:var(--text-primary)}
 .game-admin-meta{font-size:.78rem;color:var(--text-muted);display:flex;gap:10px;flex-wrap:wrap}
-.candidate-reason{font-size:.7rem;color:var(--maroon);background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:20px;padding:2px 8px;display:inline-flex;align-items:center}
+.candidate-reason{font-size:.7rem;color:var(--maroon-text);background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:20px;padding:2px 8px;display:inline-flex;align-items:center}
 .player-admin-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
 .player-admin-row:last-of-type{border-bottom:none}
 .player-admin-info{display:flex;align-items:center;gap:10px}
-.player-admin-avatar{width:34px;height:34px;background:var(--maroon-tint);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;font-size:1rem;font-weight:700;color:var(--maroon);flex-shrink:0}
+.player-admin-avatar{width:34px;height:34px;background:var(--maroon-tint);border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;font-size:1rem;font-weight:700;color:var(--maroon-text);flex-shrink:0}
 .player-admin-avatar.inactive{background:var(--bg-input);color:var(--text-muted)}
 /* Refresh */
 .refresh-bar{display:flex;align-items:center;justify-content:space-between;font-size:.75rem;color:var(--text-muted);padding:8px 0;margin-bottom:8px}
 .refresh-btn-mini{background:none;border:1px solid var(--border);color:var(--text-muted);cursor:pointer;font-size:.75rem;padding:4px 10px;border-radius:6px;display:flex;align-items:center;gap:4px;transition:all var(--transition)}
-.refresh-btn-mini:hover{border-color:var(--maroon);color:var(--maroon)}
+.refresh-btn-mini:hover{border-color:var(--maroon);color:var(--maroon-text)}
 /* Toast */
 /* UN-98 coupled change: once .app-header can grow taller in standalone (safe
    area padding above), a flat 76px no longer clears it — grow with the same
    inset so the toast never lands under the new taller header. */
 #toast-container{position:fixed;top:calc(76px + env(safe-area-inset-top,0px));right:16px;left:16px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:420px;margin:0 auto}
-.toast{background:#fff;border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,.12);animation:toast-in .25s ease;pointer-events:all;font-size:.9rem;color:var(--text-primary)}
+/* Reviewer BLOCK fix (2026-09-27, eed1d62 follow-up) — was a hardcoded
+   #fff paired with color:var(--text-primary) — a permanently-white surface
+   under dark-mode-flipped Marble text measured 1.27:1. */
+.toast{background:var(--bg-card);border:1.5px solid var(--border);border-radius:var(--card-radius);padding:12px 16px;display:flex;align-items:center;gap:10px;box-shadow:0 4px 20px rgba(0,0,0,.12);animation:toast-in .25s ease;pointer-events:all;font-size:.9rem;color:var(--text-primary)}
 .toast.success{border-color:var(--win)}.toast.error{border-color:var(--loss)}.toast.warning{border-color:var(--gold)}
 @keyframes toast-in{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:translateY(0)}}
 /* Modal */
 .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;display:flex;align-items:flex-end;justify-content:center}
 .modal-overlay.centered{align-items:center;padding:16px}
-.modal{background:#fff;border:1px solid var(--border);border-radius:var(--card-radius) var(--card-radius) 0 0;padding:24px var(--page-pad);width:100%;max-width:var(--max-width);max-height:90vh;overflow-y:auto;animation:modal-up .25s ease}
+/* Reviewer BLOCK fix (2026-09-27, eed1d62 follow-up) — was a hardcoded
+   #fff, no `color:` of its own — title/body text inherits --text-primary,
+   which measured 1.27:1 against the unchanging white sheet in dark mode. */
+.modal{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius) var(--card-radius) 0 0;padding:24px var(--page-pad);width:100%;max-width:var(--max-width);max-height:90vh;overflow-y:auto;animation:modal-up .25s ease}
 .modal-overlay.centered .modal{border-radius:var(--card-radius);max-height:85vh}
 @keyframes modal-up{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
 .modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
@@ -741,10 +1333,10 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--maroon);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
 @keyframes spin{to{transform:rotate(360deg)}}
 /* Rules */
-.rules-section{margin-bottom:16px}.rules-section h3{color:var(--maroon);margin-bottom:8px;font-size:1rem}
+.rules-section{margin-bottom:16px}.rules-section h3{color:var(--maroon-text);margin-bottom:8px;font-size:1rem}
 .rules-list{list-style:none;display:flex;flex-direction:column;gap:7px}
 .rules-list li{padding:10px 14px;background:var(--bg-card-alt);border-left:3px solid var(--maroon-tint);border-radius:0 var(--btn-radius) var(--btn-radius) 0;font-size:.9rem;color:var(--text-secondary);line-height:1.45}
-.rules-list li::before{content:'▸ ';color:var(--maroon)}
+.rules-list li::before{content:'▸ ';color:var(--maroon-text)}
 .admin-login-card{max-width:360px;margin:40px auto 0}
 /* Utils */
 .divider{height:1px;background:var(--border);margin:14px 0}
@@ -779,10 +1371,17 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
 @media (min-width:1024px){
   .main-content:has(#page-dashboard.active){max-width:1400px}
 }
-@supports(padding-bottom:env(safe-area-inset-bottom)){
-  .bottom-nav{padding-bottom:env(safe-area-inset-bottom);height:calc(var(--nav-height) + env(safe-area-inset-bottom))}
-  .main-content{padding-bottom:calc(var(--nav-height) + env(safe-area-inset-bottom) + 20px)}
-}
+/* DI-397 (2026-09-27) — this @supports(padding-bottom:env(...)) block is
+   RETIRED, not just repointed. It existed to add the safe-area inset on top
+   of a base rule that didn't otherwise carry it; `--nav-bar-clearance`
+   (:root, above) now bakes `env(safe-area-inset-bottom,0px)` into the ONE
+   token every consumer reads from the start (the `,0px` fallback already
+   makes it a no-op on a browser without the feature — the exact job this
+   @supports gate used to do, now structural rather than conditional). Both
+   rules this block used to carry (.bottom-nav's height, .main-content's
+   padding-bottom) are declared once each, above, with no duplicate second
+   declaration to keep in sync — the CONVENTIONS #21 discipline this file's
+   own comments elsewhere already ask for. */
 
 /* ── v7 ADDITIONS ─────────────────────────────────────────────────────────── */
 
@@ -792,8 +1391,12 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(100%)}
    against a single small logo on the left. THAT was the literal mechanism
    behind "unbalanced," not a spacing nit. header-meta moved out to become
    its own left slot (above); row + wrap here is the other half of the fix —
-   .app-header-inner's existing justify-content:space-between now creates a
-   real left/right split instead of lopsided/tall vs. flat/wide. */
+   .app-header-inner's (then) justify-content:space-between created a real
+   left/right split instead of lopsided/tall vs. flat/wide.
+   DI-361 (2026-09-27) superseded .app-header-inner's layout model itself
+   (flex/space-between -> grid, 3 columns) — see that rule's own comment.
+   .header-right's OWN row+wrap behavior here is unchanged by that; it is
+   still just the trailing GRID column's content now, not a flex sibling. */
 .header-right{display:flex;flex-direction:row;align-items:center;flex-wrap:wrap;justify-content:flex-end;gap:8px}
 
 /* UN-111's tab-gated visibility rules for the header's OWN #tz-toggle/
@@ -820,6 +1423,15 @@ body[data-tab="chat"] .app-header{display:none}
 .header-identity{display:flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;
   padding:8px 4px;min-height:40px;min-width:40px;-webkit-tap-highlight-color:transparent}
 .header-identity[hidden]{display:none}
+/* Reviewer BLOCK fix (2026-09-27), discovered by contrastscan.mjs — this,
+   #notif-bell-badge, .chat-pill.active .chat-unread-dot and .cc-avatar are
+   the FOUR exceptions to the blanket color:var(--maroon)->--maroon-text
+   retarget: their background is --gold or a hardcoded #fff, NEITHER of
+   which changes between light and dark (unlike --bg/--bg-card/the pale-tint
+   family) — so pairing them with --maroon-text (deliberately BRIGHTENED for
+   dark mode) makes contrast WORSE in dark, not better, since the lighter
+   text is closer in luminance to an unchanging light-ish surface. Plain
+   --maroon (also unchanging) is correct here, same as it always was. */
 .header-identity-avatar{width:27px;height:27px;border-radius:50%;background:var(--gold);color:var(--maroon);
   display:inline-flex;align-items:center;justify-content:center;font-family:'Oswald',sans-serif;
   font-size:.68rem;font-weight:700;flex-shrink:0}
@@ -916,7 +1528,15 @@ body[data-tab="chat"] .app-header{display:none}
 .game-time{font-family:'Oswald',sans-serif;font-size:.75rem;font-weight:600;color:var(--text-secondary);letter-spacing:.02em;white-space:nowrap}
 
 /* Demo week banner variant */
-.week-banner-demo{background:#FDF8EC;border-color:var(--gold);border-left-color:var(--gold)}
+/* Reviewer BLOCK fix (2026-09-27), discovered by contrastscan.mjs — was a
+   hardcoded #FDF8EC (a near-duplicate of --gold-pale, #FAF1DE), which never
+   changed with theme; its own .week-banner-title/-blurb children read
+   --maroon-text/--text-secondary (both correctly dark-mode-brightened), so
+   a hardcoded-light surface behind now-light text measured as low as
+   1.20:1. Converted to the token — dark-mode-remapped alongside every other
+   --gold-pale consumer, and light mode is visually indistinguishable from
+   the literal it replaces (FDF8EC vs FAF1DE, ~2 units per channel). */
+.week-banner-demo{background:var(--gold-pale);border-color:var(--gold);border-left-color:var(--gold)}
 .demo-label{background:var(--gold);color:#1C1410;font-size:.6rem;font-weight:700;font-family:'Oswald',sans-serif;text-transform:uppercase;letter-spacing:.06em;padding:1px 7px;border-radius:20px;margin-left:8px}
 
 /* Player tile alma mater */
@@ -925,7 +1545,7 @@ body[data-tab="chat"] .app-header{display:none}
 /* Alma mater watch */
 .alma-watch-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);flex-wrap:wrap}
 .alma-watch-row:last-child{border-bottom:none}
-.alma-watch-team{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:600;color:var(--maroon);min-width:110px}
+.alma-watch-team{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:600;color:var(--maroon-text);min-width:110px}
 .alma-watch-matchup{font-size:.85rem;color:var(--text-secondary);flex:1}
 .alma-watch-time{font-size:.78rem;color:var(--text-muted);white-space:nowrap}
 .alma-watch-bye{font-size:.82rem;color:var(--text-muted);font-style:italic}
@@ -950,13 +1570,13 @@ body[data-tab="chat"] .app-header{display:none}
 .suggested-game-row{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--maroon-tint);flex-wrap:wrap}
 .suggested-game-row:last-child{border-bottom:none}
 .suggested-game-row.on-slate{opacity:.55}
-.suggested-num{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:700;color:var(--maroon);min-width:22px}
+.suggested-num{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:700;color:var(--maroon-text);min-width:22px}
 .suggested-matchup{font-family:'Oswald',sans-serif;font-size:.9rem;font-weight:600;flex:1;color:var(--text-primary)}
 .suggested-spread{white-space:nowrap}
 .suggested-time{white-space:nowrap}
 /* DI-6 — budget visibility banner + anchor-not-filled notes, directly above
    the Suggested Slate game list. */
-.suggested-budget-banner{font-family:'Oswald',sans-serif;font-weight:600;font-size:.85rem;color:var(--maroon);margin-bottom:8px}
+.suggested-budget-banner{font-family:'Oswald',sans-serif;font-weight:600;font-size:.85rem;color:var(--maroon-text);margin-bottom:8px}
 .suggested-anchor-note{margin-bottom:4px}
 
 /* Proposed data source badge */
@@ -1033,7 +1653,7 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 .divider-or::before,.divider-or::after{content:'';flex:1;height:1px;background:var(--border)}
 /* DI-332/333/334 — the gate's own understated text-link row (Forgot
    password? / mode toggle / Back).
-   B5 (3c fix window, 2026-09-25) — was `color:var(--maroon)`, Oxblood text
+   B5 (3c fix window, 2026-09-25) — was `color:var(--maroon-text)`, Oxblood text
    directly on `.site-gate`'s black/Ink background: measured 1.84:1 on
    black, 2.06:1 on native Ink — both well under WCAG AA's 4.5:1 floor
    (Oxblood is a DARK color; DI-328b's own table names "Ink text on
@@ -1102,12 +1722,22 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 .site-gate[data-gate-state="hold"] .site-gate-btn:disabled{opacity:.6;cursor:default}
 
 /* DI-184 — active-league header pill. Same chrome as .header-identity-pill
-   (below), distinguishable by position (first in .header-right) and content,
-   not a new visual style. */
+   (below), distinguishable by position and content, not a new visual style.
+   DI-393 (2026-09-27) — re-anchored as the ONE compressible zone of the new
+   one-line header (`#league-pill{flex:0 1 auto;min-width:0}`, above): the
+   old fixed `max-width:120px` truncated at 120px regardless of how much
+   room the row actually had (too eager on a wide screen, not the real
+   overflow risk DI-393 names). `max-width:35vw` is DI-393's own explicit
+   "bounded fraction of the row" recommendation — the league name is the
+   most compressible element and should truncate first, but only give up as
+   much room as it actually needs to. `display:inline-block` dropped (a flex
+   child's `display` is blockified regardless of what's declared, per the
+   CSS spec — the property was already inert here once this became a flex
+   item; removing it avoids implying a behaviour that no longer applies). */
 .league-pill{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.4);color:#fff;
   font-family:'Oswald',sans-serif;font-size:.72rem;font-weight:700;letter-spacing:.03em;
-  padding:4px 12px;border-radius:20px;max-width:120px;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;display:inline-block;vertical-align:middle;-webkit-tap-highlight-color:transparent}
+  padding:4px 12px;border-radius:20px;max-width:35vw;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;-webkit-tap-highlight-color:transparent}
 /* Reviewer B4 / DI-184b — #league-pill is a <span> for EVERY account now. The
    single-membership case is a static label (no caret, no handler, no button
    role); the multi-membership case gets role="button" from renderLeaguePill(),
@@ -1151,7 +1781,7 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
    vertically, never overlap, and the red .backend-error-banner (top of screen,
    z-index 200, its own node) is untouched and visible alongside any of them. */
 #auth-banner-stack{position:fixed;left:0;right:0;
-  bottom:calc(var(--nav-height) + env(safe-area-inset-bottom,0px));
+  bottom:var(--nav-bar-clearance);
   z-index:10000;display:flex;flex-direction:column;pointer-events:none}
 #auth-banner-stack > *{pointer-events:auto}
 .auth-banner{padding:10px 14px;font-family:'Inter',sans-serif;
@@ -1183,7 +1813,7 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
    sync or auth problem): small, bottom-anchored, clears the bottom nav and
    the safe area the same way #auth-banner-stack does. */
 .update-available-banner{position:fixed;left:0;right:0;
-  bottom:calc(var(--nav-height) + env(safe-area-inset-bottom,0px));
+  bottom:var(--nav-bar-clearance);
   z-index:9999;padding:10px 14px;font-family:'Inter',sans-serif;font-size:.82rem;
   text-align:center;color:#fff;background:#0a5a6b;border-top:3px solid #063e49;
   box-shadow:0 -2px 8px rgba(0,0,0,.25);cursor:pointer}
@@ -1218,7 +1848,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* Calm "LIVE 14–10" pill — maroon tonal, matches the app's brand palette
    instead of clashing amber/blue. */
-.live-pill{display:inline-flex;align-items:center;color:var(--maroon-mid);
+.live-pill{display:inline-flex;align-items:center;color:var(--maroon-mid-text);
   background:var(--maroon-pale);border:1px solid var(--maroon-tint);
   padding:1px 8px;border-radius:20px;font-weight:600;font-family:'Oswald',sans-serif;
   letter-spacing:.03em;white-space:nowrap}
@@ -1292,13 +1922,80 @@ label[for="week-show-history"],label:has(#week-show-history){
   font-weight:700;padding:1px 5px;border-radius:4px;margin-left:6px;vertical-align:middle;
   font-family:'Oswald',sans-serif;letter-spacing:.06em}
 
-/* ── v11: Cloud sync status badge ─────────────────────────────────────────────── */
+/* ── v11: Cloud sync status badge — CHAT'S OWN #chat-sync-badge ONLY ─────────
+   (js/app.js updateSyncBadge()'s `chatEl` target). DI-393 (below) gives the
+   HEADER's #sync-badge a completely different, icon-based visual language
+   (.header-sync-icon) — this text-pill styling stays exactly as it was for
+   its one remaining consumer and is otherwise untouched. */
 .sync-badge{font-size:.62rem;font-family:'Oswald',sans-serif;letter-spacing:.04em;
   padding:2px 7px;border-radius:20px;white-space:nowrap;align-self:center}
 .sync-badge:empty{display:none}
 .sync-syncing{background:rgba(224,160,32,.15);color:#9a6a00}
 .sync-synced{background:var(--win-bg);color:var(--win)}
 .sync-error{background:var(--loss-bg);color:var(--loss)}
+
+/* DI-393 (UN-353, 2026-09-27) — the HEADER's sync slot: a quiet, icon-only
+   status indicator, not the text pill above. Reuses #sync-badge's existing
+   ID (js/app.js's updateSyncBadge() already targets `getElementById(
+   'sync-badge')` — zero lookup churn) with a NEW class, `.header-sync-icon`,
+   so this rule set never collides with the chat pill's `.sync-badge` class
+   above. Deliberately NOT `:empty{display:none}` (unlike the old pill) — a
+   24x24 reserved box holds its place in the one-line row from first paint,
+   so the header never visibly reflows once boot resolves the first real
+   sync state (a "no layout jump" Polish-pass fix this DI gets for free by
+   NOT copying the old pill's collapse-when-empty behaviour). */
+.header-sync-icon{display:flex;align-items:center;justify-content:center;
+  flex:0 0 auto;width:24px;height:24px;color:rgba(255,255,255,.75)}
+.header-sync-icon svg,.header-sync-glyph svg{width:24px;height:24px;display:block}
+/* 2026-09-28 — `.header-sync-glyph` is the inner wrapper updateSyncBadge()
+   renders the icon into. It used to carry `.header-sync-icon` too, and that
+   class's base `color` (above) then beat the colour the inner span would
+   otherwise INHERIT from #sync-badge[data-sync="…"] — so every state painted
+   the synced colour. The wrapper sets no colour; the state rules below are
+   the only colour source for the glyph. */
+/* State colours — every value below is picked and WCAG-verified AGAINST
+   THE ACTUAL SURFACE THIS ICON SITS ON, `var(--maroon)` (#8C1515) — NOT
+   against `--bg-card` the way almost every other token pairing in this
+   file is. contrastscan.mjs cannot check this rule (it has no `background`
+   of its own — the scanner only fires on rules with a resolvable
+   background, see contrastscan.mjs's own doc comment), so this is a
+   by-hand WCAG 1.4.11 (non-text/graphical-object contrast, 3.0:1 floor —
+   the correct criterion for an ICON, not 1.4.3's 4.5:1 text floor) audit,
+   spelled out so the next edit here doesn't have to re-derive it:
+     - `--live`/`--live-text` (#DC2626 in light mode) on #8C1515 measures
+       ~1.95:1 — a genuine fail, a trap this file's usual "reuse the
+       semantic token" reflex would walk straight into on THIS background.
+     - `rgba(255,255,255,.75)` (matches `.header-meta`'s own existing,
+       already-shipped dim-white-on-this-exact-maroon convention) ≈ 5.81:1.
+     - `var(--gold-light)` on #8C1515 ≈ 5.82:1 (the SAME pairing DI-362's
+       own contrast table already verified for Gold-on-Oxblood/Cardinal
+       text — reused here, not re-derived from scratch).
+     - `rgba(255,255,255,.6)` ≈ 4.18:1 (clears the 3.0:1 graphical-object
+       floor with real margin, while still reading visibly dimmer than the
+       .75 synced/refused states).
+     - `#fff` (matches `.header-meta strong`'s own existing white-on-maroon
+       convention) ≈ 9.40:1.
+   DI-393's own instruction: `synced` reads NEUTRAL (a quiet "nothing to
+   report," not a celebratory green the old text badge used) — the
+   loud-fail RED banner, unchanged and untouched by this DI, is what
+   actually announces a real problem; this icon is a persistent, quiet
+   companion to it, never a second alarm. `refused`/`error` are
+   distinguished from `synced` by full-opacity white (not by hue — a
+   saturated red icon on this exact maroon has no safe value, per the
+   failed pairing named above) plus, at the markup layer, the `warning`
+   glyph itself (a different SILHOUETTE from the `cloudData` glyph the
+   other three states use) — shape carries the "this one is different"
+   signal a hue never safely could here. `offline` reuses the same white
+   base, dimmed, per DI-393's own "recommend reusing cloudData at reduced
+   opacity" note — visibly fainter than `synced` without dropping under
+   the 3.0:1 icon floor. `syncing` is the one state that DOES get its own
+   hue (gold, the brand's own accent-on-maroon color) because it is
+   genuinely transient and benefits from being spotted at a glance. */
+.header-sync-icon[data-sync="synced"]{color:rgba(255,255,255,.75)}
+.header-sync-icon[data-sync="syncing"]{color:var(--gold-light);animation:spin 1.6s linear infinite}
+.header-sync-icon[data-sync="offline"]{color:rgba(255,255,255,.6)}
+.header-sync-icon[data-sync="refused"],.header-sync-icon[data-sync="error"]{color:#fff}
+@media (prefers-reduced-motion:reduce){.header-sync-icon[data-sync="syncing"]{animation:none}}
 
 /* ── v13: Player admin row — pin / email / actions ─────────────────────────── */
 .player-admin-row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(0,2fr);gap:14px;
@@ -1320,7 +2017,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* ── v13: Collapsible commissioner sections + section menu ─────────────────── */
 .admin-section-title-toggle{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
-.admin-section-title-toggle:hover{color:var(--maroon-light,var(--maroon))}
+.admin-section-title-toggle:hover{color:var(--maroon-light-text,var(--maroon-text))}
 .section-chevron{font-size:.7rem;margin-left:6px;transition:transform .18s ease;opacity:.6;flex:0 0 auto}
 .admin-section-collapsed .section-chevron{transform:rotate(-90deg)}
 .admin-section-collapsed > :not(.admin-section-title){display:none!important}
@@ -1344,7 +2041,7 @@ label[for="week-show-history"],label:has(#week-show-history){
   background-position:calc(100% - 11px) 50%,calc(100% - 7px) 50%;
   background-size:4px 4px,4px 4px;background-repeat:no-repeat;
   max-width:160px;text-overflow:ellipsis}
-.theme-select:hover{border-color:var(--maroon);color:var(--maroon)}
+.theme-select:hover{border-color:var(--maroon);color:var(--maroon-text)}
 .theme-select:focus{outline:2px solid var(--gold);outline-offset:1px}
 @media (max-width:560px){.theme-select{max-width:110px;font-size:.65rem}}
 
@@ -1371,7 +2068,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 .avail-group-header::-webkit-details-marker{display:none}
 .avail-group-header::before{content:'▾';font-size:.7rem;margin-right:6px;opacity:.55;transition:transform .15s ease}
 .avail-group:not([open]) .avail-group-header::before{transform:rotate(-90deg)}
-.avail-group-header:hover{color:var(--maroon)}
+.avail-group-header:hover{color:var(--maroon-text)}
 .avail-group-body{padding:8px}
 
 /* Tiebreaker privacy marker — *** shown to viewers who haven't earned the right
@@ -1381,7 +2078,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* Subtle ESPN gamecast link inside the dashboard row meta */
 .espn-link{font-size:.66rem;color:var(--text-muted);text-decoration:none;border-bottom:1px dotted var(--text-muted);padding-bottom:0;letter-spacing:.04em}
-.espn-link:hover{color:var(--maroon);border-bottom-color:var(--maroon)}
+.espn-link:hover{color:var(--maroon-text);border-bottom-color:var(--maroon)}
 
 /* Cloud-sync explainer panel — surfaces what auto-syncs vs. doesn't, plus live stats */
 .sync-status-panel{background:var(--maroon-pale);border:1px solid var(--maroon-tint);
@@ -1482,7 +2179,12 @@ label[for="week-show-history"],label:has(#week-show-history){
      leave that side empty and undo the balance fix on exactly the narrowest
      devices. Left visible; .header-meta{font-size:.65rem} from the <=480px
      tier above still applies. */
-  .nav-item span:last-child { font-size: .58rem; }
+  /* Reviewer BLOCK (round 2, 2026-09-27) — REMOVED. `.nav-item span:last-child
+     { font-size: .58rem }` was sizing the OLD visible label span (the "Picks"/
+     "Dashboard"/etc. text, the last child of `.nav-item`). DI-397 makes that
+     same span `.sr-only` (visually hidden, clipped to 1x1px, VoiceOver-only)
+     — this rule now silently sets a font-size on invisible text, a genuinely
+     dead declaration rather than a harmless no-op left for tidiness. */
 }
 
 /* ── v14: Dashboard layout toggle (Standard / Compact) ─────────────────────── */
@@ -1491,7 +2193,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 .layout-toggle-btn{background:transparent;border:none;padding:5px 12px;font-size:.72rem;font-family:'Oswald',sans-serif;
   font-weight:600;letter-spacing:.04em;color:var(--text-muted);cursor:pointer;border-radius:4px;transition:all var(--transition)}
 .layout-toggle-btn.active{background:var(--maroon);color:#fff}
-.layout-toggle-btn:hover:not(.active){color:var(--maroon)}
+.layout-toggle-btn:hover:not(.active){color:var(--maroon-text)}
 
 /* DI-311 (T-32) — cross-fade for the LIVE width-driven matrix/compact
    switch (a resize crossing the 1024px breakpoint with no explicit player
@@ -1516,13 +2218,13 @@ label[for="week-show-history"],label:has(#week-show-history){
 .dc-meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:.7rem;color:var(--text-muted)}
 .dc-status{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:10px;font-weight:600;font-family:'Oswald',sans-serif;letter-spacing:.03em}
 .dc-status.dc-final{background:var(--bg-input);color:var(--text-secondary)}
-.dc-status.dc-live{background:var(--maroon-pale);color:var(--maroon-mid);border:1px solid var(--maroon-tint)}
+.dc-status.dc-live{background:var(--maroon-pale);color:var(--maroon-mid-text);border:1px solid var(--maroon-tint)}
 .dc-status.dc-scheduled{background:transparent;color:var(--text-muted)}
 /* Item 2 (in-game quarter+clock), Pass B (DI-5) — quarter/clock chip, own pill
    so it never pushes into the score chip's text. liveStatusDisplayShort()
    already caps this at ~14 chars; white-space:nowrap is the defensive belt
    ensuring the chip itself never wraps to a second line (UN-119 density). */
-.dc-status.dc-live-detail{background:transparent;color:var(--maroon-mid);white-space:nowrap}
+.dc-status.dc-live-detail{background:transparent;color:var(--maroon-mid-text);white-space:nowrap}
 
 /* FEAT-7 (UN-174) — red-zone mark. One visual, two surfaces:
    .rz-mark        inline span inside the matrix's .game-info-meta flex-wrap row
@@ -1569,16 +2271,16 @@ label[for="week-show-history"],label:has(#week-show-history){
 @media (prefers-reduced-motion:reduce){.dc-chip-logo{transition:none}}
 /* Decided states — bold colours, mirror the matrix */
 .dc-chip-win{background:var(--win-bg);border-color:rgba(26,122,63,.35);color:var(--win)}
-.dc-chip-win .dc-chip-init{background:var(--win)}
+.dc-chip-win .dc-chip-init{background:var(--win-fill)}
 .dc-chip-loss{background:var(--loss-bg);border-color:rgba(185,28,28,.35);color:var(--loss)}
-.dc-chip-loss .dc-chip-init{background:var(--loss)}
-.dc-chip-nd{background:var(--nd-bg);color:var(--nd)}
+.dc-chip-loss .dc-chip-init{background:var(--loss-fill)}
+.dc-chip-nd{background:var(--nd-bg);color:var(--nd-text)}
 /* Live tentative — same light tints as the matrix, gentle pulse */
 .dc-chip-live-covering{background:rgba(26,122,63,.10);color:#1A7A3F;animation:live-cell-breathe-cov 2s ease-in-out infinite}
-.dc-chip-live-covering .dc-chip-init{background:var(--win)}
+.dc-chip-live-covering .dc-chip-init{background:var(--win-fill)}
 .dc-chip-live-trailing{background:rgba(185,28,28,.08);color:#9a3030;animation:live-cell-breathe-trail 2s ease-in-out infinite}
-.dc-chip-live-trailing .dc-chip-init{background:var(--loss)}
-.dc-chip-live{background:var(--maroon-pale);color:var(--maroon-mid)}
+.dc-chip-live-trailing .dc-chip-init{background:var(--loss-fill)}
+.dc-chip-live{background:var(--maroon-pale);color:var(--maroon-mid-text)}
 .dc-chip-none{opacity:.5}
 @media (prefers-reduced-motion: reduce){
   .dc-chip-live-covering,.dc-chip-live-trailing{animation:none}
@@ -1640,8 +2342,8 @@ label[for="week-show-history"],label:has(#week-show-history){
 /* has messages, zero unread → dim icon */
 .dc-meta .chat-bubble-read{color:var(--text-muted);opacity:.7}
 /* has unread → accent-coloured icon + the existing count badge */
-.dc-meta .chat-bubble-unread{color:var(--maroon);font-weight:700}
-.dc-meta .chat-bubble-unread .chat-bubble-count{color:var(--maroon)}
+.dc-meta .chat-bubble-unread{color:var(--maroon-text);font-weight:700}
+.dc-meta .chat-bubble-unread .chat-bubble-count{color:var(--maroon-text)}
 /* Reactions: unchanged behaviour, just relocated. margin-top:6px (and the
    -empty variant's 2px) existed to space the strip below .dc-chips as its
    own row; inline inside .dc-meta (align-items:center) that same margin
@@ -1654,13 +2356,13 @@ label[for="week-show-history"],label:has(#week-show-history){
   background:var(--bg-input);border:1px solid var(--border);cursor:pointer;font-size:.72rem;
   font-family:'Oswald',sans-serif;color:var(--text-secondary);line-height:1;transition:all var(--transition)}
 .reaction-chip:hover{border-color:var(--maroon-light);background:var(--maroon-pale)}
-.reaction-chip-mine{background:var(--maroon-pale);border-color:var(--maroon-light);color:var(--maroon)}
+.reaction-chip-mine{background:var(--maroon-pale);border-color:var(--maroon-light);color:var(--maroon-text)}
 .reaction-chip-emoji{font-size:.85rem;line-height:1}
 .reaction-chip-count{font-weight:600;font-size:.7rem}
 .reaction-add-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;
   border-radius:50%;border:1px dashed var(--border);background:transparent;color:var(--text-muted);
   cursor:pointer;font-size:.85rem;line-height:1;padding:0;font-weight:600;transition:all var(--transition)}
-.reaction-add-btn:hover{border-color:var(--maroon);color:var(--maroon);background:var(--maroon-pale)}
+.reaction-add-btn:hover{border-color:var(--maroon);color:var(--maroon-text);background:var(--maroon-pale)}
 .reaction-picker{position:absolute;top:100%;left:0;margin-top:4px;background:var(--bg-card);
   border:1px solid var(--border);border-radius:8px;padding:4px;display:flex;gap:2px;
   box-shadow:var(--shadow-card);z-index:50}
@@ -1797,12 +2499,12 @@ label[for="week-show-history"],label:has(#week-show-history){
    because the result colors carry critical semantic meaning that should NOT
    be overridden by visual zebra-striping. */
 .pick-cell.result-win {
-  background: var(--win) !important;
+  background: var(--win-fill) !important;
   color: #fff !important;
   font-weight: 700;
 }
 .pick-cell.result-loss {
-  background: var(--loss) !important;
+  background: var(--loss-fill) !important;
   color: #fff !important;
   font-weight: 700;
 }
@@ -1811,8 +2513,8 @@ label[for="week-show-history"],label:has(#week-show-history){
 .pick-cell.result-loss .pick-icon { color: #fff !important; }
 
 /* Compact view: bold final colors on the chips themselves, same override */
-.dc-chip-win  { background: var(--win)  !important; color: #fff !important; border-color: var(--win)  !important; }
-.dc-chip-loss { background: var(--loss) !important; color: #fff !important; border-color: var(--loss) !important; }
+.dc-chip-win  { background: var(--win-fill)  !important; color: #fff !important; border-color: var(--win-fill)  !important; }
+.dc-chip-loss { background: var(--loss-fill) !important; color: #fff !important; border-color: var(--loss-fill) !important; }
 .dc-chip-win  .dc-chip-init { background: rgba(255,255,255,.25) !important; color: #fff !important; }
 .dc-chip-loss .dc-chip-init { background: rgba(255,255,255,.25) !important; color: #fff !important; }
 
@@ -1877,7 +2579,7 @@ label[for="week-show-history"],label:has(#week-show-history){
   letter-spacing: .04em; border-radius: 10px; line-height: 1.5;
 }
 .status-pill-final {
-  background: var(--win); color: #fff;
+  background: var(--win-fill); color: #fff;
   /* "FINAL" pill uses the same saturated green as the result cells so the
      two visual languages stay consistent. */
 }
@@ -1892,14 +2594,14 @@ label[for="week-show-history"],label:has(#week-show-history){
   font-family: 'Oswald', sans-serif; font-weight: 700; font-size: .7rem;
   letter-spacing: .04em; line-height: 1.5;
 }
-.alma-result-pill.alma-result-win  { background: var(--win);  color: #fff; }
-.alma-result-pill.alma-result-loss { background: var(--loss); color: #fff; }
+.alma-result-pill.alma-result-win  { background: var(--win-fill);  color: #fff; }
+.alma-result-pill.alma-result-loss { background: var(--loss-fill); color: #fff; }
 .alma-result-pill.alma-result-tie  { background: var(--text-muted); color: #fff; }
 
 .alma-live-pill {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 1px 8px; border-radius: 10px;
-  background: var(--maroon-pale); color: var(--maroon-mid);
+  background: var(--maroon-pale); color: var(--maroon-mid-text);
   border: 1px solid var(--maroon-tint);
   font-family: 'Oswald', sans-serif; font-weight: 600; font-size: .68rem;
   letter-spacing: .04em; line-height: 1.5;
@@ -1909,7 +2611,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* ── v15.2: Edit-mode banner on picks page ─────────────────────────────────── */
 .edit-mode-banner {
-  background: var(--maroon-pale); color: var(--maroon-mid);
+  background: var(--maroon-pale); color: var(--maroon-mid-text);
   border: 1px solid var(--maroon-tint); border-radius: 8px;
   padding: 10px 12px; font-size: .82rem; margin-bottom: 12px;
   line-height: 1.35;
@@ -1946,7 +2648,7 @@ label[for="week-show-history"],label:has(#week-show-history){
   color: var(--text-muted);
   transition: all var(--transition);
 }
-.comm-tab:hover { color: var(--maroon); background: rgba(80,0,0,.04); }
+.comm-tab:hover { color: var(--maroon-text); background: rgba(80,0,0,.04); }
 .comm-tab.active {
   background: var(--maroon);
   color: #fff;
@@ -2065,7 +2767,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 .league-chip {
   display: inline-flex; align-items: center;
   padding: 1px 7px; margin-left: 6px;
-  background: var(--maroon-pale); color: var(--maroon-mid);
+  background: var(--maroon-pale); color: var(--maroon-mid-text);
   border: 1px solid var(--maroon-tint);
   font-family: 'Oswald', sans-serif; font-weight: 600;
   font-size: .65rem; letter-spacing: .06em; text-transform: uppercase;
@@ -2132,12 +2834,12 @@ label[for="week-show-history"],label:has(#week-show-history){
 }
 .comment-bubble:hover {
   border-color: var(--maroon-light);
-  color: var(--maroon);
+  color: var(--maroon-text);
   background: var(--maroon-pale);
 }
 .comment-bubble.has-comments {
   border-color: var(--maroon-tint);
-  color: var(--maroon-mid);
+  color: var(--maroon-mid-text);
   background: var(--maroon-pale);
 }
 .cb-icon { font-size: .9rem; line-height: 1; }
@@ -2219,7 +2921,7 @@ label[for="week-show-history"],label:has(#week-show-history){
 
 /* ── Picks week navigation ── */
 .picks-week-nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;background:var(--bg-card);border-radius:var(--card-radius);padding:6px 8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
-.picks-week-nav-label{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon);font-size:.95rem;text-align:center}
+.picks-week-nav-label{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon-text);font-size:.95rem;text-align:center}
 /* T-27 (DI-325, 2026-09-25) — PARITY-BY-DESIGN: native gets the in-tab
    left/right swipe (js/nav-gestures.js's bindWeekSwipe(), wired in
    navigateTo()) INSTEAD OF the tap arrows, so the same gesture is never
@@ -2245,7 +2947,7 @@ body.native-shell .picks-week-nav{justify-content:center}
 /* ── Recap / Chart Review cards ── */
 .recap-card{border-left:4px solid var(--maroon)}
 .recap-header{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:8px}
-.recap-header h3{color:var(--maroon);font-size:1rem}
+.recap-header h3{color:var(--maroon-text);font-size:1rem}
 .recap-byline{font-size:.65rem;letter-spacing:.08em;text-transform:uppercase;color:var(--text-muted)}
 .recap-line{font-size:.85rem;padding:4px 0;border-bottom:1px dashed var(--bg-input)}
 .recap-line:last-of-type{border-bottom:none}
@@ -2258,7 +2960,7 @@ body.native-shell .picks-week-nav{justify-content:center}
 /* ── Extra Point ── */
 .ep-input-card{border-left:4px solid #B8860B}
 .ep-card{border-left:4px solid #B8860B}
-.ep-title{color:var(--maroon);margin-bottom:6px}
+.ep-title{color:var(--maroon-text);margin-bottom:6px}
 .ep-actual{font-size:.9rem;margin-bottom:8px}
 .ep-row{display:flex;justify-content:space-between;gap:8px;padding:5px 2px;font-size:.85rem;border-bottom:1px dashed var(--bg-input)}
 .ep-row:last-of-type{border-bottom:none}
@@ -2322,11 +3024,36 @@ body.native-shell .picks-week-nav{justify-content:center}
 .faq-perms th:nth-child(1),.faq-perms td:nth-child(1){width:46%}
 .faq-perms th:nth-child(2),.faq-perms td:nth-child(2){width:27%}
 .faq-perms th:nth-child(3),.faq-perms td:nth-child(3){width:27%}
-.faq-perms thead th{color:var(--maroon);font-family:'Oswald',sans-serif}
+.faq-perms thead th{color:var(--maroon-text);font-family:'Oswald',sans-serif}
 
 /* ── Chat: nav badge ── */
 .nav-item{position:relative}
-.nav-unread{position:absolute;top:4px;right:calc(50% - 20px);background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
+/* DI-397 (2026-09-27) — was `right:calc(50% - 20px)`, tuned for the OLD
+   icon+label stack where the icon sat near the button's own left/center
+   edge. The icon-only pill centers a 20px icon in the MIDDLE of a wide
+   (flex:1) button, so a badge positioned relative to the button's own
+   right edge would float in empty space, nowhere near the icon it is
+   supposed to mark. Anchored to the button's horizontal CENTER instead
+   (`left:50%`, where the centered icon always sits regardless of the
+   button's own width) and nudged out to the icon's own top-right corner
+   (the icon is 20px, so its right edge is 10px from center; `4px` shifts
+   the badge slightly further out for the usual corner-badge overlap look,
+   `-3px` lifts it just above the icon's own top edge) — this is deliberately
+   NOT the DI's own literal "top:2px;right:2px" suggestion (a fine
+   recommendation for a button that's roughly icon-sized, not one this
+   wide), reasoned out here rather than applied verbatim against a layout
+   it doesn't fit.
+   Reviewer BLOCK (round 2, 2026-09-27) — at `top:-3px` this badge sits
+   3px ABOVE `.bottom-nav`'s own top edge, which `.bottom-nav{overflow:
+   hidden}` (added to clip the pill's own background to its rounded
+   corners) was clipping 2px of. `overflow:hidden` is REMOVED from
+   `.bottom-nav` instead of nudging this badge's own offset — border-radius
+   already clips an element's OWN background/border painting to the
+   rounded shape regardless of `overflow`; `overflow:hidden` was only ever
+   needed for descendant content that paints past that curve, and nothing
+   here does (`.nav-item`'s own background is `none`, so there is no
+   square-cornered child fill to clip at the pill's rounded edges). */
+.nav-unread{position:absolute;top:-3px;left:calc(50% + 4px);background:#D62828;color:#fff;font-size:.6rem;font-weight:700;border-radius:9px;min-width:16px;height:16px;display:flex;align-items:center;justify-content:center;padding:0 4px;line-height:1}
 
 /* ── Chat page ── */
 .chat-pills-scroll{display:flex;gap:6px;overflow-x:auto;padding:2px 0 8px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
@@ -2365,33 +3092,44 @@ body.native-shell .picks-week-nav{justify-content:center}
    by RG-188's change of those rules to overflow-x:clip (B-c, 2026-09-19) — the
    trap itself is gone, but nothing here depended on it either way. */
 #page-chat.active{display:flex;flex-direction:column;
-  height:calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom,0px));
+  height:calc(100dvh - var(--nav-bar-clearance));
   padding-top:env(safe-area-inset-top,0px);
   overflow:hidden}
-@supports not (height:100dvh){#page-chat.active{height:calc(100vh - var(--nav-height) - env(safe-area-inset-bottom,0px))}}
+@supports not (height:100dvh){#page-chat.active{height:calc(100vh - var(--nav-bar-clearance))}}
 /* DI-323 (T-25 NAV-KEYBOARD-AVOID) — the nav is hidden (transform, above)
    while the keyboard is up, but this page's own height calc still reserved
-   --nav-height worth of dead space beneath the composer unless the token
-   itself is zeroed for the duration. `data-keyboard-up` is set on `body`
-   (js/nav-gestures.js's `bindKeyboardAvoid()`), never on #page-chat itself,
-   so this is a descendant selector, not an attribute-on-self one. Scoped to
-   #page-chat.active only — every OTHER var(--nav-height) consumer
-   (.main-content, .submit-bar, the two chat-sheet bottom offsets,
-   .chat-jump-latest) is a DIFFERENT page's layout and must not shrink just
-   because the keyboard happens to be up on Chat. */
-body[data-keyboard-up] #page-chat.active{--nav-height:0}
+   --nav-bar-clearance worth of dead space beneath the composer unless the
+   token itself is zeroed for the duration. `data-keyboard-up` is set on
+   `body` (js/nav-gestures.js's `bindKeyboardAvoid()`), never on #page-chat
+   itself, so this is a descendant selector, not an attribute-on-self one.
+   Scoped to #page-chat.active only — every OTHER var(--nav-bar-clearance)
+   consumer (.main-content, .submit-bar, #auth-banner-stack,
+   .update-available-banner, .chat-jump-latest) is a DIFFERENT page's layout
+   and must not shrink just because the keyboard happens to be up on Chat. */
+/* Coordinator fix (2026-09-27, carried forward under the renamed token by
+   DI-397) — this was `--nav-height:0` (unitless) once, which is exactly the
+   defect class this comment exists to prevent from ever shipping again:
+   every consumer reads the token inside `calc(... - var(--x) - ...)`; a
+   custom property has no type of its own, so an unquoted `0` substitutes
+   the literal token `0` into the calc() expression, and CSS Values & Units'
+   calc() grammar requires a <length> operand there — `0` alone is a
+   <number>, not a <length>, so the whole calc() is invalid at
+   computed-value time and the property falls back to its initial value
+   (`height:auto`), which is exactly why the chat thread stopped scrolling
+   the first time this shipped. `0px` is a <length>, so calc() accepts it —
+   kept as `0px` here under the new name for the same reason. */
+body[data-keyboard-up] #page-chat.active{--nav-bar-clearance:0px}
 /* Consequence of the above, not itself spelled out in the design input
    (flagged here, same as the --chat-composer-h "jump to latest" fix was
    flagged in UN-104's handoff): .main-content's generic padding-bottom
-   (calc(nav-height + safe-area-inset-bottom + 20px), base rule + the
-   @supports override near the top of this file) exists so pages that scroll
-   as a normal document clear the FIXED .bottom-nav. #page-chat.active already
-   subtracts nav-height + the safe-area inset from its own explicit height, so
-   without this override .main-content would demand ~20px MORE height than the
-   viewport actually has (double-counting the nav clearance), forcing the
-   whole page to scroll on chat and defeating "no scroll needed to see the
-   composer." Higher specificity (0,2,1) wins over both the base rule and its
-   @supports override regardless of source order or feature support. */
+   (calc(var(--nav-bar-clearance) + 20px), above) exists so pages that
+   scroll as a normal document clear the FIXED nav. #page-chat.active
+   already subtracts the full clearance from its own explicit height, so
+   without this override .main-content would demand ~20px MORE height than
+   the viewport actually has (double-counting the nav clearance), forcing
+   the whole page to scroll on chat and defeating "no scroll needed to see
+   the composer." Higher specificity (0,2,1) wins over the base rule
+   regardless of source order. */
 body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-sticky-stack,.chat-offline-banner,.chat-retention-notice,.chat-composer,#chat-jump{flex:0 0 auto}
 /* min-height:0 is REQUIRED — a flex child will not shrink or scroll without
@@ -2411,7 +3149,7 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-msg.is-pending{opacity:1} /* v0.17.0 — pending shows a 🕐, never dimmed text (stuck-dim was the offline bug's symptom) */
 .chat-msg.is-failed .chat-bubble{border:1px solid #B02A37}
 .chat-flash .chat-bubble{outline:2px solid var(--maroon);transition:outline .2s}
-.chat-avatar{flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:var(--maroon-tint);color:var(--maroon);display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;margin-top:2px}
+.chat-avatar{flex:0 0 30px;width:30px;height:30px;border-radius:50%;background:var(--maroon-tint);color:var(--maroon-text);display:flex;align-items:center;justify-content:center;font-size:.68rem;font-weight:700;margin-top:2px}
 .chat-avatar-scribe{background:#1C1410;color:#F3EFEA}
 .chat-avatar-mine{background:var(--maroon);color:#fff}
 /* UN-120: position:relative anchors .chat-actions (now position:absolute,
@@ -2439,7 +3177,12 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-msg:not(.chat-mine):not(.chat-scribe):not(.chat-system) .chat-bubble-col{flex:0 1 auto;max-width:78%;display:flex;flex-direction:column;align-items:flex-start}
 .chat-meta{display:flex;gap:6px;align-items:center;font-size:.68rem;color:var(--text-muted);flex-wrap:wrap}
 .chat-author{font-weight:700;color:var(--text-secondary)}
-.chat-scribe .chat-author{color:#1C1410;letter-spacing:.04em}
+/* Reviewer BLOCK fix (2026-09-27), discovered by contrastscan.mjs —
+   #1C1410 was a hardcoded near-duplicate of --text-primary's own #14110E
+   (both near-black ink), which never changed with theme; converted to the
+   token so it flips to Marble in dark mode alongside the bubble background
+   fix directly below. */
+.chat-scribe .chat-author{color:var(--text-primary);letter-spacing:.04em}
 /* DI-346 — a signed-in player never needs a picture of, or name label for,
    their own words (Messages' own convention); the rest of .chat-meta (time,
    edited/pin/pending/failed state) is unchanged, just inside a right-pushed
@@ -2458,9 +3201,17 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    change to answer, pointed the other way. Reuses the existing token
    (var(--maroon-pale)); no new color. */
 .chat-msg.chat-mine .chat-bubble{border-radius:12px 12px 4px 12px}
-.chat-scribe .chat-bubble{background:#F3EFEA;border-left:3px solid #1C1410;font-family:ui-monospace,Menlo,monospace;font-size:.8rem}
+/* Reviewer BLOCK fix (2026-09-27), discovered by contrastscan.mjs — was a
+   hardcoded #F3EFEA (a near-duplicate of --bg-card-alt, #F2EFE9), which
+   never changed with theme; the bubble's own base rule (.chat-bubble above)
+   sets no color of its own, so its text inherits --text-primary — Marble on
+   a permanently-light cream measured 1.11:1. Converted to the token — dark-
+   mode-remapped alongside every other --bg-card-alt consumer, light mode
+   visually indistinguishable from the literal it replaces. border-left
+   color is left hardcoded (decorative, not text). */
+.chat-scribe .chat-bubble{background:var(--bg-card-alt);border-left:3px solid #1C1410;font-family:ui-monospace,Menlo,monospace;font-size:.8rem}
 .chat-tombstone{color:var(--text-muted)}
-.chat-mention{color:var(--maroon);font-weight:600}
+.chat-mention{color:var(--maroon-text);font-weight:600}
 .chat-system{justify-content:center;align-items:center;gap:6px}
 .chat-system-body{font-size:.7rem;color:var(--text-secondary);background:var(--bg-card-alt);border:1px dashed var(--bg-input);border-radius:999px;padding:3px 10px;text-align:center}
 .chat-system .chat-time{font-size:.6rem;color:var(--text-muted)}
@@ -2579,7 +3330,7 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
    floor. Bumped now that this row is reachable by touch at all. */
 .chat-act{background:none;border:none;font-size:.85rem;cursor:pointer;border-radius:8px;padding:0;min-width:40px;min-height:40px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box}
 .chat-act:hover{background:var(--bg-input)}
-.chat-game-chip{background:var(--maroon-pale);border:none;border-radius:6px;padding:1px 7px;font-size:.62rem;font-weight:600;color:var(--maroon);cursor:pointer}
+.chat-game-chip{background:var(--maroon-pale);border:none;border-radius:6px;padding:1px 7px;font-size:.62rem;font-weight:600;color:var(--maroon-text);cursor:pointer}
 
 /* composer */
 .chat-composer{margin-top:10px;background:var(--bg-card);border-radius:var(--card-radius);padding:8px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
@@ -2696,7 +3447,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 @media(min-width:700px){.chat-sheet{left:auto;top:0;bottom:0;width:420px;border-radius:18px 0 0 18px;max-height:none;animation:none}}
 .chat-sheet-header{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;
   border-radius:10px;padding:4px 6px;transition:background var(--transition)}
-.chat-sheet-title{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon)}
+.chat-sheet-title{font-family:'Oswald',sans-serif;font-weight:600;color:var(--maroon-text)}
 .chat-sheet-sub{font-size:.7rem;color:var(--text-muted)}
 .chat-sheet-header-actions{display:flex;gap:6px;align-items:center}
 .chat-sheet-close{background:var(--bg-input);border:none;border-radius:50%;width:30px;height:30px;cursor:pointer}
@@ -2737,7 +3488,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    smaller type, tighter padding, no subtitle. It lives inside
    .chat-sticky-stack below, so it docks with the pills/view-header as a unit. */
 .chat-header-row{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0 6px;border-bottom:1px solid var(--border)}
-.chat-header-row h2{font-size:1.05rem;color:var(--maroon);margin:0;display:flex;align-items:center;gap:8px}
+.chat-header-row h2{font-size:1.05rem;color:var(--maroon-text);margin:0;display:flex;align-items:center;gap:8px}
 .chat-pending{font-size:.7rem}
 /* UN-104: the compact header row + filter pills + optional per-game view
    header dock TOGETHER as one unit at the top of the page.
@@ -2789,20 +3540,31 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    measures the real composer height and publishes --chat-composer-h; the
    fallback (90px) is a generous over-estimate on purpose, since sitting a
    little high is a much safer failure mode than sitting under the composer. */
-#page-chat .chat-jump-latest{bottom:calc(var(--nav-height) + env(safe-area-inset-bottom, 0px) + var(--chat-composer-h,90px) + 10px);z-index:46}
+#page-chat .chat-jump-latest{bottom:calc(var(--nav-bar-clearance) + var(--chat-composer-h,90px) + 10px);z-index:46}
 .chat-flash{animation:chatFlash 1.2s ease-out}
 @keyframes chatFlash{0%{background:var(--gold-pale)}100%{background:transparent}}
 .chat-load-older{display:block;margin:0 auto 10px;background:none;border:1px solid var(--border);
   border-radius:999px;padding:4px 12px;font-size:.7rem;color:var(--text-muted);cursor:pointer}
 .chat-tag-chip-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap}
 .chat-tag-chip{display:inline-flex;align-items:center;gap:6px;background:var(--maroon-pale);
-  border:1px solid var(--maroon-tint);color:var(--maroon);border-radius:999px;
+  border:1px solid var(--maroon-tint);color:var(--maroon-text);border-radius:999px;
   padding:3px 10px;font-size:.72rem;font-weight:600}
 .chat-tag-chip button{background:none;border:none;cursor:pointer;color:inherit;font-size:.75rem;padding:0}
 .chat-game-chip{background:var(--bg-card-alt);border:1px solid var(--border);border-radius:999px;
   padding:1px 8px;font-size:.64rem;color:var(--text-secondary);cursor:pointer}
+/* Reviewer BLOCK fix (2026-09-27) — `color:#6b5900` was a near-duplicate of
+   --gold-text (#6E5419, same dark-olive-brown, ~3-unit-per-channel
+   difference, visually indistinguishable) that never changed with theme.
+   Consolidated to the canonical token — clears the same 2.46:1-style AA
+   fail once --gold-pale goes dark, and removes a stray hardcoded duplicate
+   CONVENTIONS #13 asks call sites to avoid. .pick-chip-win/.pick-chip-loss
+   below are a DIFFERENT, self-contained hardcoded pair (background AND
+   color both fixed, neither reads a token that changes with theme) — not a
+   contrast failure in dark mode, just visually still "light mode" there;
+   named explicitly as a follow-up polish item, out of THIS BLOCK's scope
+   (a contrast fix), not silently left unexamined. */
 .pick-chip{display:inline-flex;align-items:center;gap:2px;font-size:.62rem;font-weight:700;
-  padding:1px 6px;border-radius:999px;background:var(--gold-pale);border:1px solid var(--gold);color:#6b5900}
+  padding:1px 6px;border-radius:999px;background:var(--gold-pale);border:1px solid var(--gold);color:var(--gold-text)}
 .pick-chip-win{background:#E7F6EC;border-color:#1E7E34;color:#1E7E34}
 .pick-chip-loss{background:#FBEAEA;border-color:#B02A37;color:#B02A37}
 .chat-pinned{font-size:.68rem}
@@ -2832,7 +3594,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .chat-mention-menu{display:flex;gap:6px;flex-wrap:wrap;padding:6px 0}
 .chat-mention-opt{background:var(--bg-card-alt);border:1px solid var(--border);border-radius:999px;
   padding:3px 10px;font-size:.72rem;cursor:pointer}
-.chat-mention-opt:hover{border-color:var(--maroon);color:var(--maroon)}
+.chat-mention-opt:hover{border-color:var(--maroon);color:var(--maroon-text)}
 /* Toast */
 /* UN-99: same safe-area pattern as UN-98 so the floating chat toast clears
    the camera housing / status bar on the installed app. */
@@ -2841,7 +3603,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
   background:var(--bg-card);border:1px solid var(--border-strong);border-radius:12px;
   padding:10px 14px;box-shadow:var(--shadow-card);cursor:pointer;animation:toastIn .25s ease-out}
 @keyframes toastIn{from{opacity:0;transform:translate(-50%,-8px)}to{opacity:1;transform:translate(-50%,0)}}
-.chat-toast-avatar{width:28px;height:28px;border-radius:50%;background:var(--maroon-pale);color:var(--maroon);
+.chat-toast-avatar{width:28px;height:28px;border-radius:50%;background:var(--maroon-pale);color:var(--maroon-text);
   display:inline-flex;align-items:center;justify-content:center;font-size:.7rem;font-weight:700;flex-shrink:0}
 .chat-toast-body{font-size:.78rem;line-height:1.3;overflow:hidden;flex:1;min-width:0}
 /* UN-102c: iMessage-style banners stay manually dismissible even when they
@@ -2864,7 +3626,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .chat-sheet-header-actions{display:flex;align-items:center;gap:6px}
 .chat-sheet-hint{background:var(--gold-pale);border:1px solid var(--gold);border-radius:8px;
   padding:6px 10px;margin:8px 12px 0;font-size:.72rem;display:flex;justify-content:space-between;gap:8px;align-items:center}
-.chat-sheet-hint button{background:none;border:none;color:var(--maroon);font-weight:700;cursor:pointer;font-size:.72rem}
+.chat-sheet-hint button{background:none;border:none;color:var(--maroon-text);font-weight:700;cursor:pointer;font-size:.72rem}
 .recap-alias{color:var(--text-muted);font-size:.72em;font-style:italic}
 
 /* ── v0.17.1 obligation filter tabs (What I owe / Owed to me) ──────────── */
@@ -2881,7 +3643,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
   letter-spacing: .04em; cursor: pointer;
   transition: all var(--transition);
 }
-.ob-filter-tab:hover { color: var(--maroon); border-color: var(--maroon-tint); }
+.ob-filter-tab:hover { color: var(--maroon-text); border-color: var(--maroon-tint); }
 .ob-filter-tab.active { background: var(--maroon); color: #fff; border-color: var(--maroon); }
 .ob-net-me {
   margin-left: auto; padding: 3px 10px; border-radius: 10px;
@@ -2900,7 +3662,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 }
 .pt-item { display: inline-flex; align-items: center; gap: 4px; }
 .pt-item strong { color: var(--text-primary); font-weight: 600; }
-.pt-item em { color: var(--maroon); font-style: normal; font-weight: 600; margin-left: 2px; }
+.pt-item em { color: var(--maroon-text); font-style: normal; font-weight: 600; margin-left: 2px; }
 .pt-item.pt-passed { opacity: .55; text-decoration: line-through; }
 
 /* ── v0.17.1 commissioner auto-transition config card ──────────────────── */
@@ -2914,7 +3676,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
   background: var(--bg-input); font-size: .78rem;
 }
 .effective-times-preview div { padding: 2px 0; }
-.effective-times-preview strong { color: var(--maroon); font-weight: 600; }
+.effective-times-preview strong { color: var(--maroon-text); font-weight: 600; }
 
 /* ── v0.17.1 pending-finalization banner ───────────────────────────────── */
 .pending-final-banner {
@@ -2938,7 +3700,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 }
 .lock-countdown-icon { font-size: 1.4rem; line-height: 1; flex-shrink: 0; }
 .lock-countdown-main {
-  font-weight: 700; font-size: .95rem; color: var(--maroon);
+  font-weight: 700; font-size: .95rem; color: var(--maroon-text);
 }
 .lock-countdown-sub {
   font-size: .74rem; color: var(--text-secondary); margin-top: 2px;
@@ -2948,7 +3710,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .lock-countdown-urgent {
   background: var(--live-bg); border-color: var(--live); border-left-color: var(--live);
 }
-.lock-countdown-urgent .lock-countdown-main { color: var(--live); }
+.lock-countdown-urgent .lock-countdown-main { color: var(--live-text); }
 /* Deadline passed / week locked. */
 .lock-countdown-closed {
   background: var(--bg-card-alt); border-color: var(--border);
@@ -3145,7 +3907,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    maroon "mine" accent language .chat-react-pill.me already established
    (styles.css:1686) rather than inventing a second "this is mine" color. */
 .feedback-pick-option.active{border-color:var(--maroon);
-  background:var(--maroon-pale);color:var(--maroon)}
+  background:var(--maroon-pale);color:var(--maroon-text)}
 
 /* ── SCRIBE v3, Package B — DI-268 reason chips + DI-269 free-text "why" ──
    The SECOND ROW of the same popover, revealed by the rating itself (see
@@ -3176,7 +3938,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 /* Same maroon "this is mine" language .feedback-pick-option.active uses — a
    selected chip and a selected rating are the same kind of statement. */
 .feedback-chip.active{border-color:var(--maroon);
-  background:var(--maroon-pale);color:var(--maroon)}
+  background:var(--maroon-pale);color:var(--maroon-text)}
 .feedback-note-input{display:block;width:100%;box-sizing:border-box;
   margin-top:8px;min-height:40px;padding:6px 10px;border-radius:8px;
   border:1px solid var(--border);background:var(--bg-input);
@@ -3291,7 +4053,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 
 /* The file modal. Rows wrap rather than truncate at 320px (DI-D4). */
 .scribe-file-section{margin-bottom:18px}
-.scribe-file-h{color:var(--maroon);font-size:.95rem;margin-bottom:4px}
+.scribe-file-h{color:var(--maroon-text);font-size:.95rem;margin-bottom:4px}
 .scribe-file-rows{margin-top:8px}
 .scribe-mem-row{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;
   padding:10px 12px;margin-bottom:8px}
@@ -3319,7 +4081,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    precisely where an undersized target gets missed. */
 .scribe-mem-jump{display:flex;align-items:center;margin-top:4px;padding:4px 0;min-height:44px;
   background:none;border:none;cursor:pointer;font-family:inherit;
-  font-size:.72rem;color:var(--maroon);text-align:left}
+  font-size:.72rem;color:var(--maroon-text);text-align:left}
 .scribe-hardline-add{display:flex;gap:8px;align-items:center;margin-top:8px}
 .scribe-hardline-add .form-input{flex:1;min-width:0}
 #scribe-hardline-add-btn{min-height:44px;flex-shrink:0}
@@ -3396,7 +4158,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .section-move-bar{display:flex;align-items:center;gap:8px;margin-bottom:6px;
   padding:2px 4px}
 .section-move-label{flex:1;min-width:0;font-family:'Oswald',sans-serif;font-size:.74rem;
-  font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--maroon);
+  font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--maroon-text);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .section-move-actions{display:flex;gap:6px;flex-shrink:0}
 /* 44×44 — the ideal, not the 40px floor. These sit directly above body text on
@@ -3404,7 +4166,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .section-move-btn{width:44px;height:44px;min-width:44px;min-height:44px;
   display:flex;align-items:center;justify-content:center;
   background:var(--bg-input);border:1.5px solid var(--border);
-  border-radius:var(--btn-radius);color:var(--maroon);font-size:.95rem;
+  border-radius:var(--btn-radius);color:var(--maroon-text);font-size:.95rem;
   line-height:1;cursor:pointer}
 .section-move-btn:hover:not(:disabled){border-color:var(--maroon)}
 /* Disabled at the ends, never hidden — a control that disappears reflows the
@@ -3445,7 +4207,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .release-entry:first-of-type{border-top:none}
 .release-summary{display:flex;align-items:center;flex-wrap:wrap;gap:8px;
   min-height:44px;padding:4px 0;cursor:pointer;font-family:'Oswald',sans-serif;
-  font-size:.82rem;font-weight:600;letter-spacing:.03em;color:var(--maroon);
+  font-size:.82rem;font-weight:600;letter-spacing:.03em;color:var(--maroon-text);
   list-style:none}
 /* F3 review finding 3 (2026-09-12) — the SAME three-line disclosure treatment
    .avail-group-header uses (≈861-864): the default OS triangle is suppressed and
@@ -3472,7 +4234,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    No hex literals: every colour is an existing :root token, so all seven
    themes are covered without adding a variable. */
 .gr-card-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px}
-.gr-title{color:var(--maroon);font-size:.95rem;margin:0}
+.gr-title{color:var(--maroon-text);font-size:.95rem;margin:0}
 .gr-count-chip{border:1px solid var(--gold);background:var(--gold-pale);color:var(--gold-text);
   border-radius:999px;padding:2px 9px;font-size:.68rem;font-weight:700;letter-spacing:.02em}
 .gr-day{margin-bottom:10px}
@@ -3484,7 +4246,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .gr-sat-chip{flex:0 0 auto;min-height:44px;border:1px solid var(--border-strong);background:var(--bg-card);
   border-radius:999px;padding:6px 14px;font-size:.78rem;font-weight:600;color:var(--text-secondary);
   cursor:pointer;box-sizing:border-box}
-.gr-sat-chip:active{background:var(--maroon-pale);border-color:var(--maroon-light);color:var(--maroon)}
+.gr-sat-chip:active{background:var(--maroon-pale);border-color:var(--maroon-light);color:var(--maroon-text)}
 .gr-check-row{display:flex;align-items:center;gap:10px;min-height:44px;cursor:pointer;
   font-size:.78rem;color:var(--text-secondary);margin:4px 0}
 .gr-check-text{display:flex;flex-direction:column;gap:1px}
@@ -3510,7 +4272,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .gr-status-withdrawn{color:var(--text-muted)}
 .gr-league{margin-top:10px;border-top:1px solid var(--border)}
 .gr-league-summary,.gr-comm-summary{display:flex;align-items:center;min-height:44px;cursor:pointer;
-  font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.03em;color:var(--maroon)}
+  font-family:'Oswald',sans-serif;font-size:.8rem;font-weight:600;letter-spacing:.03em;color:var(--maroon-text)}
 .gr-league-row{font-size:.78rem;color:var(--text-secondary);padding:5px 0;border-top:1px solid var(--border)}
 .gr-league-row:first-child{border-top:none}
 /* The count-only marker on the three existing Games-tab render paths. Names
@@ -3852,7 +4614,7 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 .coming-soon-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
   display:flex;flex-direction:column;gap:2px;transition:transform var(--motion-fast,150ms) ease-out}
 .coming-soon-card:active{transform:scale(.98)}
-.coming-soon-card-title{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;color:var(--maroon)}
+.coming-soon-card-title{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;color:var(--maroon-text)}
 .coming-soon-card-subtitle{font-size:.8rem}
 
 /* DI-314 — League Page: header (back + title), sport cards, League
@@ -3863,7 +4625,8 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
   border-radius:50%;transition:transform var(--motion-fast,150ms) ease-out,background var(--transition)}
 .league-page-back:active{transform:scale(.97);background:var(--bg-input)}
 .league-page-back svg{width:22px;height:22px}
-.league-page-title{font-family:'Cinzel',serif;font-weight:600;font-size:1.3rem;line-height:1.2}
+/* DI-347 — reverted from Cinzel back to Oswald, matching every other heading. */
+.league-page-title{font-family:'Oswald',sans-serif;font-weight:600;font-size:1.3rem;line-height:1.2}
 .league-page-body{display:flex;flex-direction:column;gap:var(--gap)}
 .sport-card{width:100%;text-align:left;cursor:pointer;font:inherit;color:inherit;
   display:flex;align-items:center;justify-content:space-between;gap:10px;
@@ -3871,7 +4634,7 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 .sport-card:active{transform:scale(.98)}
 .sport-card-label{display:flex;align-items:center;gap:8px;font-family:'Oswald',sans-serif;
   font-size:.95rem;font-weight:600;color:var(--text-primary)}
-.sport-card-icon{display:flex;align-items:center;color:var(--maroon)}
+.sport-card-icon{display:flex;align-items:center;color:var(--maroon-text)}
 .sport-card-icon svg{width:20px;height:20px}
 .sport-card-chevron{color:var(--text-muted);display:flex;align-items:center}
 .sport-card-chevron svg{width:18px;height:18px}
@@ -4081,7 +4844,28 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
    (2026-09-25); kept for the next row that needs it. */
 .control-center-row--inert{color:var(--text-muted);cursor:default}
 .control-center-row--inert:active{transform:none}
-.cc-row-label{flex:1;font-size:.92rem}
+/* DI-391 (2026-09-27, Drew: drawer rows read "bigger and bold... no
+   indication that they are buttons") — bigger/bolder primary text is the
+   direct fix for "no indication they're buttons": a plain-weight label at
+   the app's smallest common body size (.92rem) reads as inert list prose,
+   not a tappable control, regardless of the row's own press-state/44pt
+   floor (both already correct — Interaction Principles' Button Behavior —
+   the DEFECT was purely typographic weight/size, confirmed by reading this
+   rule). `flex-direction:column` turns this from a single text run into a
+   two-line STACK host (title + an optional `.cc-row-secondary` subtitle,
+   the common iOS Settings-row pattern) — `min-width:0` is required for
+   EITHER line to ever ellipsis-truncate inside the row's flex layout. */
+.cc-row-label{flex:1;display:flex;flex-direction:column;gap:1px;min-width:0;
+  font-weight:600;font-size:.96rem}
+/* The optional subtitle line — plain weight (resets the bold the label
+   wrapper above would otherwise pass down by inheritance) and the same
+   muted token `.cc-row-icon`/every other secondary-text use in this file
+   already reads, never a new color. No `background` of its own, so
+   contrastscan.mjs's rule (only fires on rules with a resolvable
+   background) correctly does not re-check `--text-muted` here — it is
+   already an audited, established pairing on `--bg-card`/the drawer panel
+   background, unchanged by this addition. */
+.cc-row-secondary{display:block;font-weight:400;font-size:.76rem;color:var(--text-muted)}
 .cc-row-icon{display:flex;align-items:center;color:var(--text-muted)}
 /* DI-340 (2026-09-25) — "Delete Account," visually separated from the
    ordinary preference rows above it (DI-340's own "Danger Zone" placement
@@ -4188,7 +4972,7 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 /* Footer. */
 .control-center-footer{padding:20px 16px calc(16px + env(safe-area-inset-bottom,0px));
   display:flex;flex-direction:column;gap:6px;font-size:.72rem}
-.control-center-footer a{color:var(--maroon);text-decoration:none}
+.control-center-footer a{color:var(--maroon-text);text-decoration:none}
 .control-center-footer a:hover{text-decoration:underline}
 
 /* Close control. */
@@ -4201,11 +4985,26 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 /* Full-app review Step 6 (2026-09-26) — the close glyph is icon('close'). */
 .control-center-close svg{width:18px;height:18px;display:block}
 
-/* DI-301 trigger — the header logo/mark that opens the drawer. */
+/* DI-301 trigger — the header logo/mark that opens the drawer. Coordinator
+   follow-up (2026-09-27, post app-shell pass): web now renders the Munera
+   mark + brand name here (was name+chevron), so a 50% border-radius drew an
+   oval press/focus outline around the wider content — border-radius:999px
+   (a true pill) reads correctly at any content width; native's icon-only
+   render stays visually circular at 44x44 since a pill and a circle are
+   identical on a square box. min-width/min-height:44px unchanged (tap
+   target, Interaction Principles). */
 .control-center-trigger{background:none;border:none;cursor:pointer;color:#fff;
   display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;
-  margin-left:-10px;border-radius:50%;transition:transform var(--motion-fast) ease-out}
+  margin-left:-10px;border-radius:999px;transition:transform var(--motion-fast) ease-out}
 .control-center-trigger:active{transform:scale(.97)}
+/* v0.27.0 fix — the trigger's content (it shipped empty in v0.26.0).
+   Native: the 24px Munera mark. Web: the shell brand name in the header's
+   own week-name type (.header-meta strong: Oswald .82rem #fff) plus a muted
+   chevron affordance at the header-meta text tint. */
+.control-center-trigger{gap:2px;padding:0 10px}
+.control-center-trigger-mark svg{width:24px;height:24px;display:block}
+.control-center-trigger-name{font-family:'Oswald',sans-serif;font-size:.82rem;font-weight:700;color:#fff;white-space:nowrap}
+.control-center-trigger-chevron svg{width:14px;height:14px;display:block;color:rgba(255,255,255,.75)}
 
 /* Reviewer R4 (3c fix window, third pass) — the visually-hidden utility.
    Content stays in the accessibility tree (never display:none) but takes no

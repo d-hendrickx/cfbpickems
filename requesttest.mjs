@@ -438,19 +438,21 @@ console.log('\n[12] Placement + the exact copy strings (DI-175a/g)…');
   // that module's own renderSettingsAccordion() defines, not by adjacency
   // in a Rules-page template literal. Re-verified here as an ABSENCE on the
   // Rules page rather than silently dropped.
+  // RE-UPDATED — DI-365 (2026-09-27, UX Revamp post-deploy pass) retires
+  // FEAT-3's own release-notes card OFF the Rules page too: it was a second,
+  // independent renderer of the same fact the drawer's "Version history"
+  // accordion row already shows (ctx.bodies.releaseNotesHTML, same
+  // renderReleaseNotesCardHTML(), unchanged function — only this ONE call
+  // site is gone). `renderRulesPage()`'s own template literal no longer
+  // contains that interpolation at all.
   const rulesSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-  const relIdx  = rulesSrc.indexOf('${renderReleaseNotesCardHTML()}');
-  assert(relIdx > 0, '…and FEAT-3\'s release-notes card still renders on the Rules page, above the version footer');
+  const rulesPageBody = rulesSrc.slice(rulesSrc.indexOf('export function renderRulesPage()'), rulesSrc.indexOf('export function renderRulesPage()') + 6000);
+  assert(!rulesPageBody.includes('${renderReleaseNotesCardHTML()}'),
+    'DI-365 — the release-notes card no longer renders on the Rules page (retired — already reachable via the drawer\'s Version history row)');
 
   clearSession();
   app.renderRulesPage();
   const rulesHtml = document.getElementById('page-rules').innerHTML;
-  // Matched on the CARD'S OWN markup marker, not the heading text — the
-  // release-notes card (renderReleaseNotesCardHTML(), still on Rules,
-  // unchanged) legitimately quotes "🙋 Request a Game" in its own changelog
-  // PROSE describing the historical feature (js/app.js:263's release-notes
-  // entry), which is not the card itself and must not read as a false
-  // positive here.
   assert(!rulesHtml.includes('class="card gr-card"') && !rulesHtml.includes('class="card feedback-card"'),
     'DI-304 — neither the game-request card nor the feedback card render on the Rules page anymore (both moved into the control-center drawer)');
 

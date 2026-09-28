@@ -61,10 +61,21 @@ export const ICONS = {
   // Replaces literal '‹' on the new league cards.
   chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>',
 
-  // A football outline: an ellipse rotated ~45° with a short lace line (one
-  // long diagonal stitch plus three short cross-ticks) — monochrome, stroke
-  // only, no fill, same 24-box/2px-stroke spec as every other entry here.
-  sportFootball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="12" rx="9" ry="5" transform="rotate(45 12 12)"/><line x1="8" y1="16" x2="16" y2="8"/><line x1="9.5" y1="14.5" x2="10.5" y2="13.5"/><line x1="11.5" y1="12.5" x2="12.5" y2="11.5"/><line x1="13.5" y1="10.5" x2="14.5" y2="9.5"/></svg>',
+  // DI-349 (2026-09-27, UN-307): scoreboard tile — replaces the original
+  // football-outline glyph (an ellipse rotated 45° + a diagonal lace line
+  // with 3 cross-ticks), which was the most detailed glyph in the family at
+  // the smallest render size in the app and read muddy at that scale. The
+  // new glyph is a rounded rect split by a vertical divider with a short
+  // tick in each half — reads as "two teams, a matchup, a score" rather
+  // than "a ball," reuses the same rect-based grammar the `tv` glyph above
+  // already established (visual-family consistency), and has a cleaner
+  // silhouette at 20px than any ellipse/diagonal-line composition. Concept
+  // B of three presented in the DI; Drew's coordinator-approved pick.
+  // KEY UNCHANGED — still `ICONS.sportFootball`, still read by Comm → Games
+  // tab (js/comm-panel-layout.js:62), Admin → Games tab
+  // (js/admin-panel.js:122), and Leagues Home's football sport-card glyph
+  // (js/leagues-home.js:440) — no call-site edits needed for this swap.
+  sportFootball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="6.5" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="17.5" y2="12"/></svg>',
 
   // ── Coordinator follow-up, 2026-09-25 (commissioner/admin panel tab
   // glyphs) — same convention as everything above. ─────────────────────────
@@ -157,6 +168,11 @@ export const ICONS = {
   // file header: "an owed glyph") and the backend-error banner's Dismiss. Two
   // strokes, the standard close silhouette.
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
+  // v0.27.0 fix (2026-09-27) — the Munera temple mark (pediment, three
+  // columns, stylobate), a stroke-outline reduction of the iOS app icon's
+  // temple mark to the family grid. Fills #control-center-trigger on the
+  // native shell (js/app.js renderControlCenterTrigger()).
+  munera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
 
   // Phase 2 entries added incrementally, same shape — see DI-330's backlog
   // table (design-matrix-pm's §6) for the ordered candidate list.

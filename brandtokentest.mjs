@@ -112,15 +112,27 @@ const rootVars = extractVars(cssText, ':root');
 const neutralVars = extractVars(cssText, 'body\\.theme-neutral');
 // `body.theme-aggie` — must hold the OLD literal Aggie values, unchanged.
 const aggieVars = extractVars(cssText, 'body\\.theme-aggie');
+// DI-360 night mode — the media-query block AND the manual-override block
+// (`body.theme-neutral[data-color-scheme="dark"]`) must carry the identical
+// token set (source-level "keep these two blocks in sync" contract).
+const nightMediaVars = extractVars(cssText, 'body\\.theme-neutral:not\\(\\[data-color-scheme="light"\\]\\)');
+const nightManualVars = extractVars(cssText, 'body\\.theme-neutral\\[data-color-scheme="dark"\\]');
 
 // ─────────────────────────────────────────────────────────────────────────────
-// [1] Token values match DI-328b's literal hex (source-of-truth check)
+// [1] Token values match DI-362's amended hex (source-of-truth check).
+//     DI-362 (2026-09-27, UN-320) amended the base --maroon/--gold values
+//     DI-328b originally shipped ("Deep Cardinal" #8C1515 / "Royal Gold"
+//     #D4A017) and recomputed --maroon-mid/--maroon-light proportionally
+//     from the new base (same HSL delta each stop held to the OLD base) —
+//     see css/styles.css's own DI-362 comment for the derivation. This
+//     table was #7A1F2B/#922536/#A83B4A/#C9A24B before that amendment.
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[1] :root and theme-neutral carry the exact Munera hex values…');
+console.log('\n[1] :root and theme-neutral carry the exact DI-362 Munera hex values…');
 {
   const expected = {
-    maroon: '#7A1F2B', 'maroon-mid': '#922536', 'maroon-light': '#A83B4A',
-    gold: '#C9A24B', 'gold-light': '#E8C96A', 'gold-text': '#6E5419',
+    maroon: '#8C1515', 'maroon-mid': '#A6191C', 'maroon-light': '#BF2C2D',
+    'maroon-pale': '#FBF2F3', 'maroon-tint': '#F5E2E2',
+    gold: '#D4A017', 'gold-light': '#E8C96A', 'gold-text': '#6E5419',
     bg: '#E8E4DC', 'bg-card': '#FFFFFF',
   };
   for (const [name, hex] of Object.entries(expected)) {
@@ -129,6 +141,14 @@ console.log('\n[1] :root and theme-neutral carry the exact Munera hex values…'
     assert(neutralVars[name] && neutralVars[name].toUpperCase() === hex.toUpperCase(),
       `[1b/theme-neutral] --${name} is ${hex} (found: ${neutralVars[name]})`);
   }
+  // --gold-light/--gold-text are DI-362's explicit "do NOT change" tokens —
+  // asserted here as UNCHANGED from the pre-DI-362 (and pre-DI-328b) values,
+  // not merely present, so a future edit that quietly rederives them from
+  // the new --gold gets caught.
+  assert(rootVars['gold-light'] && rootVars['gold-light'].toUpperCase() === '#E8C96A',
+    '[1a3/:root] --gold-light is UNCHANGED at #E8C96A — DI-362 verified it still clears AA on the new crimson rather than re-deriving it');
+  assert(rootVars['gold-text'] && rootVars['gold-text'].toUpperCase() === '#6E5419',
+    '[1a4/:root] --gold-text is UNCHANGED at #6E5419 — an independently-chosen dark value, not derived from --gold mathematically');
   // --text-primary/--text-secondary/--text-muted are DELIBERATELY not
   // redeclared per-theme (css/styles.css's own "each theme overrides only
   // the brand color variables" convention, unchanged by this DI) — every
@@ -141,35 +161,50 @@ console.log('\n[1] :root and theme-neutral carry the exact Munera hex values…'
   assert(!('text-primary' in neutralVars),
     '[1b2/theme-neutral] --text-primary is correctly NOT redeclared here — inherits from :root by design');
   // theme-aggie must hold the OLD literal maroon values, not the new ones —
-  // this is the "value moved, pixels didn't" guarantee (DI-328a).
+  // this is the "value moved, pixels didn't" guarantee (DI-328a), UNCHANGED
+  // by DI-362 (that DI only amends bare :root/theme-neutral, never a school
+  // theme's own literal palette).
   assert(aggieVars.maroon && aggieVars.maroon.toUpperCase() === '#500000',
     `[1c/theme-aggie] --maroon is the OLD literal #500000 (found: ${aggieVars.maroon})`);
-  assert(aggieVars.maroon && aggieVars.maroon.toUpperCase() !== '#7A1F2B',
-    '[1d/theme-aggie] --maroon is NOT the new Munera Oxblood value (no leak)');
+  assert(aggieVars.maroon && aggieVars.maroon.toUpperCase() !== '#7A1F2B' && aggieVars.maroon.toUpperCase() !== '#8C1515',
+    '[1d/theme-aggie] --maroon is NOT the Oxblood value NOR the new DI-362 crimson value (no leak either way)');
+  // --oxblood/--oxblood-on — the CONSTANT admin-panel marker — stays at the
+  // OLD literal Oxblood value on purpose, in EVERY theme block including
+  // theme-neutral, never repointed to DI-362's new crimson (css/styles.css's
+  // own comment on this token: "never repointed to this theme's own
+  // --maroon"). A leak here would mean an aggie-themed viewer's Admin panel
+  // marker silently changed color for a reason that has nothing to do with
+  // aggie's own palette.
+  assert(rootVars.oxblood && rootVars.oxblood.toUpperCase() === '#7A1F2B',
+    `[1e/:root] --oxblood (the constant admin marker) is UNCHANGED at #7A1F2B, not repointed to the new crimson (found: ${rootVars.oxblood})`);
+  assert(neutralVars.oxblood && neutralVars.oxblood.toUpperCase() === '#7A1F2B',
+    `[1f/theme-neutral] --oxblood is likewise UNCHANGED here (found: ${neutralVars.oxblood})`);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// [2] Computed WCAG contrast — every pairing in DI-328b's table, recomputed
-//     from the literal hex above, asserted against its documented verdict.
+// [2] Computed WCAG contrast — every pairing in DI-362's own candidate table,
+//     recomputed from the literal hex above, asserted against its documented
+//     verdict. (DI-328b's original Oxblood/Gold table is superseded by this
+//     one — the underlying formula is identical, only the base hexes moved.)
 // ─────────────────────────────────────────────────────────────────────────────
-console.log('\n[2] WCAG contrast — every DI-328b pairing, computed fresh…');
+console.log('\n[2] WCAG contrast — every DI-362 pairing, computed fresh…');
 {
   const ink = rootVars['text-primary'];
   const marble = rootVars['bg'];
   const white = rootVars['bg-card'];
-  const oxblood = rootVars['maroon'];
+  const crimson = rootVars['maroon'];
   const gold = rootVars['gold'];
   const goldText = rootVars['gold-text'];
   const goldLight = rootVars['gold-light'];
 
   const cases = [
     { label: 'Ink on Marble', a: ink, b: marble, min: 14.0, verdict: 'AAA' },
-    { label: 'Oxblood text on Marble', a: oxblood, b: marble, min: 7.0, verdict: 'AAA' },
-    { label: 'Oxblood text on white (--bg-card)', a: oxblood, b: white, min: 7.0, verdict: 'AAA' },
-    { label: 'White text on Oxblood bg', a: white, b: oxblood, min: 7.0, verdict: 'AAA' },
+    { label: 'Crimson text on Marble', a: crimson, b: marble, min: 7.0, verdict: 'AAA' },
+    { label: 'Crimson text on white (--bg-card)', a: crimson, b: white, min: 9.0, verdict: 'AAA' },
+    { label: 'White text on Crimson bg', a: white, b: crimson, min: 9.0, verdict: 'AAA' },
     { label: 'Gold text on Ink bg', a: gold, b: ink, min: 7.0, verdict: 'AAA' },
     { label: '--gold-text on Marble (the required variant)', a: goldText, b: marble, min: 4.5, verdict: 'AA' },
-    { label: '--gold-light on Oxblood (the required variant)', a: goldLight, b: oxblood, min: 4.5, verdict: 'AA' },
+    { label: '--gold-light on Crimson (the required variant)', a: goldLight, b: crimson, min: 4.5, verdict: 'AA' },
   ];
   for (const c of cases) {
     const ratio = contrastRatio(c.a, c.b);
@@ -180,11 +215,13 @@ console.log('\n[2] WCAG contrast — every DI-328b pairing, computed fresh…');
   // passing, so a future accidental "fix" that makes plain --gold usable as
   // text somewhere doesn't silently invalidate the documented guidance.
   const failCases = [
-    // Corrected 2026-09-25 (reviewer BLOCK round 1) — this was mis-stated as
-    // 1.39:1 in the original DI-328b comment table AND in this table before
-    // recomputation; the real value is ~1.89:1. Still a clear AA fail (<4.5).
-    { label: 'plain Gold text on Marble bg (must use --gold-text instead)', a: gold, b: marble, max: 4.5, expectAround: 1.89 },
-    { label: 'Ink text on Oxblood bg (a pairing to AVOID, nothing builds it)', a: ink, b: oxblood, max: 4.5, expectAround: 1.84 },
+    // DI-362 recomputed this against the NEW gold (#D4A017) — was ~1.89:1
+    // against the old gold (#C9A24B, itself a 2026-09-25 correction of a
+    // 1.39:1 mis-statement). Still a clear AA fail (<4.5) either way.
+    { label: 'plain Gold text on Marble bg (must use --gold-text instead)', a: gold, b: marble, max: 4.5, expectAround: 1.87 },
+    // Recomputed against the NEW crimson (#8C1515) — was ~1.84:1 against the
+    // old Oxblood (#7A1F2B).
+    { label: 'Ink text on Crimson bg (a pairing to AVOID, nothing builds it)', a: ink, b: crimson, max: 4.5, expectAround: 2.00 },
   ];
   for (const c of failCases) {
     const ratio = contrastRatio(c.a, c.b);
@@ -193,11 +230,189 @@ console.log('\n[2] WCAG contrast — every DI-328b pairing, computed fresh…');
       `[2/${c.label}] computed ratio ${ratio.toFixed(2)}:1 matches the documented figure (~${c.expectAround}:1)`);
   }
 
-  // Gold on Oxblood — passes AA-Large (3:1) but fails AA body text (4.5:1);
-  // both halves of that claim are asserted, not just one.
-  const goldOnOxblood = contrastRatio(gold, oxblood);
-  assert(goldOnOxblood >= 3.0, `[2/Gold on Oxblood] ${goldOnOxblood.toFixed(2)}:1 clears AA-Large (>= 3:1)`);
-  assert(goldOnOxblood < 4.5, `[2/Gold on Oxblood] ${goldOnOxblood.toFixed(2)}:1 correctly FAILS AA body text (< 4.5:1) — must use --gold-light for text`);
+  // Gold on Crimson — passes AA-Large (3:1) but fails AA body text (4.5:1);
+  // the SAME SHAPE as the old Gold-on-Oxblood finding (4.25:1) — both halves
+  // of that claim are asserted, not just one. This is the pairing DI-360's
+  // night mode explicitly depends on staying fixable via --gold-light.
+  const goldOnCrimson = contrastRatio(gold, crimson);
+  assert(goldOnCrimson >= 3.0, `[2/Gold on Crimson] ${goldOnCrimson.toFixed(2)}:1 clears AA-Large (>= 3:1)`);
+  assert(goldOnCrimson < 4.5, `[2/Gold on Crimson] ${goldOnCrimson.toFixed(2)}:1 correctly FAILS AA body text (< 4.5:1) — must use --gold-light for text`);
+  assert(Math.abs(goldOnCrimson - 3.96) < 0.05,
+    `[2/Gold on Crimson] ${goldOnCrimson.toFixed(2)}:1 matches DI-362's own documented figure (~3.96:1)`);
+
+  // --maroon-mid/--maroon-light are used as TEXT in several call sites
+  // (.live-pill, .dc-status.dc-live, .btn-primary:hover background is a
+  // fill not text, but .admin-section-title-toggle:hover uses --maroon-light
+  // as text) — usually against --maroon-pale or white. Re-verified fresh
+  // against the recomputed tint stops, not assumed to survive the rebase.
+  const maroonMid = rootVars['maroon-mid'];
+  const maroonLight = rootVars['maroon-light'];
+  const maroonPale = rootVars['maroon-pale'];
+  const midOnPale = contrastRatio(maroonMid, maroonPale);
+  const lightOnWhite = contrastRatio(maroonLight, white);
+  assert(midOnPale >= 4.5, `[2/--maroon-mid on --maroon-pale] ${midOnPale.toFixed(2)}:1 clears AA (>= 4.5:1) — used as text in .live-pill/.dc-status.dc-live/etc.`);
+  assert(lightOnWhite >= 4.5, `[2/--maroon-light on white] ${lightOnWhite.toFixed(2)}:1 clears AA (>= 4.5:1) — used as text in .admin-section-title-toggle:hover`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [2d] DI-393 (UN-353, 2026-09-27) — the header's `.header-sync-icon`. Every
+//     OTHER contrast pairing in this file/contrastscan.mjs is verified against
+//     `--bg-card` (a light card surface); this is the one icon in the app
+//     painted directly on `var(--maroon)` (the header bar), which is a
+//     GENUINELY different surface contrastscan.mjs cannot check at all (that
+//     scanner only fires on rules with their own `background:` — this icon's
+//     rule has none, it inherits the header's). By-hand audit, computed fresh
+//     from the literal hex/alpha values shipped in css/styles.css's own
+//     `.header-sync-icon[data-sync="..."]` rules, per the WCAG 1.4.11
+//     non-text/graphical-object floor (3.0:1 — the correct criterion for an
+//     ICON, not 1.4.3's 4.5:1 text floor).
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[2d] DI-393 — .header-sync-icon colours against var(--maroon), by hand…');
+{
+  const crimson = rootVars['maroon'];
+  const goldLight = rootVars['gold-light'];
+  const liveText = rootVars['live']; // light-mode --live-text is an alias of --live (see :root)
+
+  /** Composite an rgba(255,255,255,alpha) foreground over an opaque hex
+   *  background, returning the resulting opaque hex — the same math a
+   *  browser performs when painting semi-transparent text, so contrastRatio()
+   *  (which only accepts opaque hex) can be reused unmodified. */
+  function whiteOverHex(alpha, bgHex) {
+    const bg = hexToRgb(bgHex);
+    const mix = (b) => Math.round(255 * alpha + b * (1 - alpha));
+    const r = mix(bg.r), g = mix(bg.g), b = mix(bg.b);
+    return '#' + [r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('');
+  }
+
+  // The trap this DI's own CSS comment names explicitly: the file's usual
+  // "reuse the semantic --live/--live-text token" reflex fails badly on
+  // THIS surface — asserted as a genuine, documented FAIL, the same
+  // discipline section [2]'s failCases above already use.
+  const liveOnCrimson = contrastRatio(liveText, crimson);
+  assert(liveOnCrimson < 3.0,
+    `[2d/--live(-text) on var(--maroon)] ${liveOnCrimson.toFixed(2)}:1 correctly FAILS even the 3.0:1 icon floor — confirms why .header-sync-icon's refused/error state does NOT reuse this token`);
+
+  // The values the shipped CSS actually uses.
+  const syncedOffline = whiteOverHex(0.75, crimson); // synced / offline base
+  const offlineOnly = whiteOverHex(0.6, crimson);    // offline's own dimmer value
+  const refusedRatio = contrastRatio('#ffffff', crimson); // refused/error: opaque white
+
+  const syncedRatio = contrastRatio(syncedOffline, crimson);
+  const offlineRatioVal = contrastRatio(offlineOnly, crimson);
+  const goldOnCrimsonIcon = contrastRatio(goldLight, crimson);
+
+  assert(syncedRatio >= 3.0,
+    `[2d/synced: rgba(255,255,255,.75) on var(--maroon)] ${syncedRatio.toFixed(2)}:1 clears the 3.0:1 icon floor (matches .header-meta's own existing dim-white-on-this-exact-maroon convention)`);
+  assert(offlineRatioVal >= 3.0,
+    `[2d/offline: rgba(255,255,255,.6) on var(--maroon)] ${offlineRatioVal.toFixed(2)}:1 clears the 3.0:1 icon floor while reading visibly dimmer than synced (${syncedRatio.toFixed(2)}:1)`);
+  assert(offlineRatioVal < syncedRatio,
+    `[2d/offline vs synced] offline (${offlineRatioVal.toFixed(2)}:1) is genuinely dimmer than synced (${syncedRatio.toFixed(2)}:1) — the visual de-emphasis DI-393's own "reduced opacity" instruction asks for is real, not just claimed`);
+  assert(refusedRatio >= 3.0,
+    `[2d/refused+error: opaque #fff on var(--maroon)] ${refusedRatio.toFixed(2)}:1 clears the 3.0:1 icon floor with wide margin (matches .header-meta strong's own existing white-on-maroon convention)`);
+  assert(goldOnCrimsonIcon >= 3.0,
+    `[2d/syncing: --gold-light on var(--maroon)] ${goldOnCrimsonIcon.toFixed(2)}:1 clears the 3.0:1 icon floor — the SAME pairing already verified at 4.5:1+ in [2] above, reused here for a different call site, not re-derived from scratch`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [2c] DI-360 (UN-318) — Munera night mode, Phase 1. Source-level: both the
+//     automatic (`prefers-color-scheme: dark`) block and the manual-override
+//     (`[data-color-scheme="dark"]`) block exist, carry the IDENTICAL token
+//     set (the file's own "keep these two blocks in sync" contract — there
+//     is no CSS mixin without a build step), stay scoped to `body.theme-
+//     neutral` only (never leaking onto a school theme, and never bare
+//     `:root` either — the five non-aggie school themes inherit --bg/
+//     --text-primary from bare :root and would otherwise go dark too), and
+//     every new dark token clears AA against the other new dark tokens it
+//     pairs with.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[2c] DI-360 — night mode: scope, sync, and contrast…');
+{
+  assert(Object.keys(nightMediaVars).length > 0,
+    '[2c-pre] fixture: the `@media(prefers-color-scheme:dark){ body.theme-neutral:not([data-color-scheme="light"]) {...} }` block was found and parsed');
+  assert(Object.keys(nightManualVars).length > 0,
+    '[2c-pre] fixture: the `body.theme-neutral[data-color-scheme="dark"] {...}` manual-override block was found and parsed');
+
+  // The two blocks must declare the exact same set of variables, with the
+  // exact same values — a future edit to one without the other is exactly
+  // the defect this "keep in sync" contract exists to prevent.
+  const mediaKeys = Object.keys(nightMediaVars).sort();
+  const manualKeys = Object.keys(nightManualVars).sort();
+  assert(mediaKeys.length > 5 && mediaKeys.join(',') === manualKeys.join(','),
+    `[2c-a] the media-query and manual-override blocks declare the IDENTICAL variable set (media: ${mediaKeys.join(',')} | manual: ${manualKeys.join(',')})`);
+  let allMatch = true, mismatch = null;
+  for (const k of mediaKeys) {
+    if (nightMediaVars[k].toUpperCase() !== nightManualVars[k].toUpperCase()) { allMatch = false; mismatch = k; }
+  }
+  assert(allMatch, `[2c-b] every shared variable has the IDENTICAL value in both blocks${mismatch ? ` (mismatch on --${mismatch}: media=${nightMediaVars[mismatch]}, manual=${nightManualVars[mismatch]})` : ''}`);
+
+  // Scope: the dark override selector must never be bare `:root` (which
+  // would leak dark mode onto the five school themes that inherit --bg/
+  // --text-primary from :root — sooner/trojan/irish/boilermaker/razorback).
+  const bareRootInDarkMedia = /@media\s*\(prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{/.test(cssText);
+  assert(!bareRootInDarkMedia,
+    '[2c-c] the dark media query never targets bare :root directly — only body.theme-neutral, so the five non-aggie school themes (which inherit --bg/--text-primary from :root) never go dark');
+  // Every school theme selector must be ABSENT from both night-mode blocks.
+  const schoolThemes = ['theme-aggie', 'theme-sooner', 'theme-trojan', 'theme-irish', 'theme-boilermaker', 'theme-razorback'];
+  const mediaBlockMatch = cssText.match(/@media\s*\(prefers-color-scheme:\s*dark\)\s*\{([\s\S]*?)\n\}/);
+  assert(!!mediaBlockMatch, '[2c-pre] fixture: the dark-mode @media block\'s full body was located for the school-theme absence check below');
+  for (const theme of schoolThemes) {
+    assert(!!mediaBlockMatch && !mediaBlockMatch[1].includes(theme),
+      `[2c-d] the dark @media block never mentions body.${theme} — school themes stay light-only even with OS dark mode on`);
+  }
+
+  // Contrast — every new dark token against the ones it actually pairs with
+  // in the shipped CSS, computed fresh (mirrors [2]'s discipline).
+  const darkBg = nightMediaVars['bg'];
+  const darkCard = nightMediaVars['bg-card'];
+  const darkTextPrimary = nightMediaVars['text-primary'];
+  const darkTextSecondary = nightMediaVars['text-secondary'];
+  const darkTextMuted = nightMediaVars['text-muted'];
+  const darkWin = nightMediaVars['win'];
+  const darkWinBg = nightMediaVars['win-bg'];
+  const darkLoss = nightMediaVars['loss'];
+  const darkLossBg = nightMediaVars['loss-bg'];
+
+  const darkCases = [
+    { label: 'dark --text-primary on dark --bg', a: darkTextPrimary, b: darkBg, min: 7.0 },
+    { label: 'dark --text-primary on dark --bg-card', a: darkTextPrimary, b: darkCard, min: 7.0 },
+    { label: 'dark --text-secondary on dark --bg', a: darkTextSecondary, b: darkBg, min: 4.5 },
+    { label: 'dark --text-secondary on dark --bg-card', a: darkTextSecondary, b: darkCard, min: 4.5 },
+    { label: 'dark --text-muted on dark --bg', a: darkTextMuted, b: darkBg, min: 4.5 },
+    { label: 'dark --text-muted on dark --bg-card', a: darkTextMuted, b: darkCard, min: 4.5 },
+    { label: 'dark --win on dark --win-bg', a: darkWin, b: darkWinBg, min: 4.5 },
+    { label: 'dark --win on dark --bg', a: darkWin, b: darkBg, min: 4.5 },
+    { label: 'dark --loss on dark --loss-bg', a: darkLoss, b: darkLossBg, min: 4.5 },
+    { label: 'dark --loss on dark --bg', a: darkLoss, b: darkBg, min: 4.5 },
+  ];
+  for (const c of darkCases) {
+    assert(c.a && c.b, `[2c-pre] fixture: both sides of "${c.label}" were parsed from the CSS (a=${c.a}, b=${c.b})`);
+    if (!c.a || !c.b) continue;
+    const ratio = contrastRatio(c.a, c.b);
+    assert(ratio >= c.min, `[2c-e/${c.label}] ${ratio.toFixed(2)}:1 clears AA (>= ${c.min}:1)`);
+  }
+
+  // The hard requirement DI-360 carries forward from DI-362/DI-328b: Gold-on-
+  // Crimson text must clear AA via --gold-light, and this holds REGARDLESS
+  // of light/dark mode because --maroon/--gold/--gold-light are explicitly
+  // UNCHANGED by night mode (Oxblood/Crimson-as-fill is background-agnostic).
+  // Re-verified here rather than assumed to "still hold" from [2] above.
+  assert(!('maroon' in nightMediaVars) && !('gold' in nightMediaVars) && !('gold-light' in nightMediaVars),
+    '[2c-f] night mode does NOT redeclare --maroon/--gold/--gold-light — confirms they are inherited unchanged from body.theme-neutral\'s own (light-mode-computed) values, not silently overridden in the dark block');
+  const goldLightOnCrimsonDark = contrastRatio(neutralVars['gold-light'], neutralVars['maroon']);
+  assert(goldLightOnCrimsonDark >= 4.5,
+    `[2c-g] --gold-light on --maroon still clears AA (${goldLightOnCrimsonDark.toFixed(2)}:1 >= 4.5:1) even though night mode leaves both tokens untouched — the pairing DI-360 depends on holding in dark mode too`);
+
+  // Coordinator fix (2026-09-27, item 3) — `color-scheme:dark` in both dark
+  // blocks, so the browser paints native UI (scrollbars, form-control
+  // chrome, default focus ring) in dark styling too, not just our own
+  // tokens. Source-level: `extractVars()` only captures `--name:#hex`
+  // declarations, so this plain CSS property needs its own direct check.
+  const mediaBlockBody = mediaBlockMatch ? mediaBlockMatch[1] : '';
+  const manualBlockMatch = cssText.match(/body\.theme-neutral\[data-color-scheme="dark"\]\s*\{([^}]*)\}/);
+  assert(/color-scheme:\s*dark/.test(mediaBlockBody),
+    '[2c-h] the @media(prefers-color-scheme:dark) block sets color-scheme:dark on body.theme-neutral');
+  assert(!!manualBlockMatch && /color-scheme:\s*dark/.test(manualBlockMatch[1]),
+    '[2c-i] the manual-override block sets color-scheme:dark too — both triggers get native-UI dark styling, not just the automatic one');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

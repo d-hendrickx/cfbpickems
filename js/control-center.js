@@ -742,23 +742,33 @@ export function renderStarredPanels(ctx) {
 // RENDER — DI-303 settings accordion (Profile excluded — see note 2/amendment)
 // ═════════════════════════════════════════════════════════════════════════
 
-function accordionRow(ctx, state, { group, rowId, label, iconName, bodyHTML, openRowValue }) {
+/**
+ * `secondary` (carry-over, app-shell part 3A review, 2026-09-27) — an
+ * OPTIONAL short explanatory line under the row's own label, rendered as
+ * `<span class="cc-row-secondary">` (the CSS pass owns that class's styling —
+ * not added here, same "markup now, styling in the CSS pass" split DI-391's
+ * own label/secondary debt already uses). `undefined`/`''` renders nothing,
+ * so every existing accordionRow() call site is unaffected. First consumer:
+ * the Appearance row's "Night mode is available with the Munera theme" note
+ * when a school theme is active (finding 6, below).
+ */
+function accordionRow(ctx, state, { group, rowId, label, iconName, bodyHTML, openRowValue, secondary }) {
   requireFn(ctx.escHtml, 'escHtml', 'accordionRow');
   const open = openRowValue === rowId;
   const iconHTML = iconOrNothing(ctx, iconName);
   return `<div class="control-center-row-wrap" data-row="${rowId}">
       <button type="button" class="control-center-row" data-action="cc-toggle-row" data-group="${group}" data-row="${rowId}" aria-expanded="${open}">
         ${iconHTML ? `<span class="cc-row-icon">${iconHTML}</span>` : ''}
-        <span class="cc-row-label">${ctx.escHtml(label)}</span>
+        <span class="cc-row-label">${ctx.escHtml(label)}${secondary ? `<span class="cc-row-secondary">${ctx.escHtml(secondary)}</span>` : ''}</span>
         <span class="cc-row-chevron" data-expanded="${open}" aria-hidden="true">${iconOrNothing(ctx, 'chevronRight')}</span>
       </button>
       ${open ? `<div class="control-center-row-body" id="cc-body-${rowId}"><div class="control-center-row-body-inner">${bodyHTML}</div></div>` : ''}
     </div>`;
 }
 
-function selectBody(ctx, { field, options, current }) {
+function selectBody(ctx, { field, options, current, disabled }) {
   const opts = (options || []).map(o => `<option value="${ctx.escHtml(o.key ?? o.value)}"${(o.key ?? o.value) === current ? ' selected' : ''}>${ctx.escHtml(o.label)}</option>`).join('');
-  return `<select class="form-input" data-field="${field}">${opts}</select>`;
+  return `<select class="form-input" data-field="${field}"${disabled ? ' disabled' : ''}>${opts}</select>`;
 }
 
 function logoViewToggleRow(ctx) {
@@ -808,6 +818,29 @@ export function renderSettingsAccordion(ctx, state) {
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'theme', label: 'Theme', openRowValue: openRow,
       bodyHTML: selectBody(ctx, { field: 'theme', options: themes, current: currentTheme }),
+    }),
+    // DI-360 (2026-09-27) — Munera night mode, Phase 1: System/Light/Dark,
+    // same accordion-row/selectBody() shape as Theme just above (reuse, not
+    // a new control pattern). `ctx.currentColorScheme` defaults to 'system'
+    // — matching getColorScheme()'s own default-when-missing.
+    //
+    // Finding 6 (app-shell part 3A review, 2026-09-27) — night mode's own CSS
+    // is scoped to `body.theme-neutral[data-color-scheme]` (css/styles.css)
+    // ONLY; a school theme (`currentTheme !== 'neutral'`) paints zero visual
+    // difference for any colorScheme choice, so a live, undisabled control
+    // would be a dead one — no error, just silently no effect. EXPLAINED, not
+    // hidden: the control stays discoverable (a player who wants night mode
+    // now knows exactly what to switch), disabled so nothing gets "saved"
+    // that would never paint, with a secondary line naming the reason.
+    accordionRow(ctx, state, {
+      group: 'settings', rowId: 'appearance', label: 'Appearance', openRowValue: openRow,
+      secondary: (ctx.currentTheme || 'neutral') !== 'neutral' ? 'Night mode is available with the Munera theme' : undefined,
+      bodyHTML: selectBody(ctx, {
+        field: 'colorScheme',
+        options: [{ key: 'system', label: 'System' }, { key: 'light', label: 'Light' }, { key: 'dark', label: 'Dark' }],
+        current: ctx.currentColorScheme || 'system',
+        disabled: (ctx.currentTheme || 'neutral') !== 'neutral',
+      }),
     }),
   ];
   return `<div class="control-center-group">${rows.join('')}</div>`;
@@ -1118,6 +1151,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     if (!el) return;
     if (el.dataset.field === 'timezone') ctx.callbacks?.onSetTimeZone?.(el.value);
     else if (el.dataset.field === 'theme') ctx.callbacks?.onSetTheme?.(el.value);
+    else if (el.dataset.field === 'colorScheme') ctx.callbacks?.onSetColorScheme?.(el.value);
   }
 
   function focusableEls(container) {

@@ -43,6 +43,12 @@
  *       when native + plugin are both present (a minimal fake Capacitor).
  *   9   gesturesSuspended()/prefersReducedMotion()/isKeyboardUp() — safe with
  *       no DOM at all.
+ *   12  v0.27.x bugfix — chat composer tap jumped the thread to its OLDEST
+ *       messages (iOS home-screen app): 12a static guard on the unitless
+ *       `--nav-height:0` that made #page-chat.active's height calc() invalid,
+ *       12b the real bindKeyboardAvoid() + bindBottomAnchor() keeping the
+ *       thread pinned across keyboard up/down, 12c renderChatPage() wiring,
+ *       12d the "↓ latest" button and the anchor share BOTTOM_ANCHOR_PX.
  */
 
 let pass = 0, fail = 0;
@@ -451,6 +457,97 @@ console.log('\n[5] DI-325 T-27 — week-swipe resolve (pure index math)…');
   assert(_weekSwipeResolve(weeks, 'nope', 50) === null, '5h: an unknown current id never resolves');
   assert(_weekSwipeResolve(weeks, 'w2', -SWIPE_COMMIT_PX) === 'w3',
     '5i: exactly at the commit threshold still resolves (>= not >)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5j] v0.27.0 — ONE direction table on Picks AND Dashboard (Drew, 2026-09-27: "The right left swipe on the dashboard is backwards")…');
+// ═════════════════════════════════════════════════════════════════════════
+// ROOT CAUSE: _weekSwipeResolve()'s index math assumes an OLDEST→NEWEST list
+// (dx<0 → idx+1 = next week). picksNavWeeks() sorts ascending, so Picks was
+// right; selectableDashboardWeeks() sorts NEWEST FIRST (it feeds the week
+// <select>), and the Dashboard binder handed that list straight in — so on the
+// Dashboard swipe-left walked BACK a week. [5] above only ever tested an
+// already-ascending list; nothing asked what the two binders actually pass.
+//
+// This drives the REAL binder state getters out of js/app.js (extracted, the
+// [11n-real] technique — this file does not import app.js) with the REAL list
+// builders, through the REAL bindWeekSwipe() and synthetic touches.
+{
+  const { readFileSync } = await import('node:fs');
+  const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const fnSrc = (sig) => {
+    const at = appSrc.indexOf(sig);
+    if (at < 0) return null;
+    const end = appSrc.indexOf('\n}\n', at);
+    return appSrc.slice(at, end + 2);
+  };
+  const getterSrc = (pageId) => {
+    const at = appSrc.indexOf(`bindWeekSwipe(document.getElementById('${pageId}'), `);
+    if (at < 0) return null;
+    const from = at + `bindWeekSwipe(document.getElementById('${pageId}'), `.length;
+    const to = appSrc.indexOf(', (targetId) =>', from);
+    return to > from ? appSrc.slice(from, to) : null;
+  };
+  const picksNavSrc = fnSrc('function picksNavWeeks() {');
+  const dashSelSrc = fnSrc('export function selectableDashboardWeeks(').replace(/^export /, '');
+  const picksGetter = getterSrc('page-picks');
+  const dashGetter = getterSrc('page-dashboard');
+  assert(!!picksNavSrc && !!dashSelSrc && !!picksGetter && !!dashGetter,
+    '5j-pre: fixture — picksNavWeeks(), selectableDashboardWeeks() and both bindWeekSwipe() state getters were extracted from js/app.js');
+
+  // A season whose store order is deliberately scrambled — neither builder
+  // may lean on insertion order.
+  const WEEKS = [
+    { weekId: 'w3', season: 2026, weekNumber: 3, status: 'final' },
+    { weekId: 'w1', season: 2026, weekNumber: 1, status: 'final' },
+    { weekId: 'w4', season: 2026, weekNumber: 4, status: 'open' },
+    { weekId: 'w2', season: 2026, weekNumber: 2, status: 'final' },
+  ];
+  const WEEK_STATUS = { DRAFT: 'draft' };
+  const build = (getterBody, state) => new Function(
+    'getWeeks', 'getSession', 'getCurrentWeek', 'WEEK_STATUS', 'state', 'chronologicalWeekIds',
+    `${picksNavSrc}\n${dashSelSrc}\nreturn (${getterBody});`
+  )(() => WEEKS.slice(), () => ({ isAdmin: false }), () => WEEKS.find(w => w.weekId === 'w4'),
+    WEEK_STATUS, state, NG.chronologicalWeekIds);
+
+  const swipe = (getState, fromX, toX) => {
+    const handlers = {};
+    const root = { addEventListener: (t, fn) => { handlers[t] = fn; }, removeEventListener() {} };
+    let navigated = null;
+    const unbind = NG.bindWeekSwipe(root, getState, (id) => { navigated = id; });
+    handlers.touchstart({ touches: [{ clientX: fromX, clientY: 300 }] });
+    handlers.touchmove({ touches: [{ clientX: fromX + (toX - fromX) / 2, clientY: 300 }] });
+    handlers.touchmove({ touches: [{ clientX: toX, clientY: 300 }] });
+    handlers.touchend({});
+    unbind();
+    return navigated;
+  };
+  const LEFT = [260, 160];   // finger moves right→left
+  const RIGHT = [160, 260];  // finger moves left→right
+
+  let picksGet = null, dashGet = null;
+  try { picksGet = build(picksGetter, { picksWeekId: 'w2' }); } catch (e) { /* reported below */ }
+  try { dashGet = build(dashGetter, { dashboardWeekId: 'w2' }); } catch (e) { /* reported below */ }
+  assert(typeof picksGet === 'function' && typeof dashGet === 'function',
+    '5j-pre2: fixture — both extracted state getters compile against the real list builders');
+
+  const pl = picksGet && swipe(picksGet, ...LEFT), pr = picksGet && swipe(picksGet, ...RIGHT);
+  const dl = dashGet && swipe(dashGet, ...LEFT), dr = dashGet && swipe(dashGet, ...RIGHT);
+  assert(pl === 'w3', `5j-a: PICKS, viewing week 2, swipe LEFT → NEXT week (w3) (got ${pl})`);
+  assert(pr === 'w1', `5j-b: PICKS, viewing week 2, swipe RIGHT → PREVIOUS week (w1) (got ${pr})`);
+  assert(dl === 'w3', `5j-c: DASHBOARD, viewing week 2, swipe LEFT → NEXT week (w3) — the reported defect walked BACK to w1 (got ${dl})`);
+  assert(dr === 'w1', `5j-d: DASHBOARD, viewing week 2, swipe RIGHT → PREVIOUS week (w1) (got ${dr})`);
+  assert(pl === dl && pr === dr, '5j-e: the two tabs resolve the SAME gesture to the SAME week — one direction table');
+
+  // The shared normalizer itself: order-independent, season-aware.
+  const ids = NG.chronologicalWeekIds?.([
+    { weekId: 'b2', season: 2027, weekNumber: 2 }, { weekId: 'a9', season: 2026, weekNumber: 9 },
+    { weekId: 'b1', season: 2027, weekNumber: 1 },
+  ]);
+  assert(JSON.stringify(ids) === JSON.stringify(['a9', 'b1', 'b2']),
+    `5j-f: chronologicalWeekIds() orders OLDEST→NEWEST by season then weekNumber, whatever order it is handed (got ${JSON.stringify(ids)})`);
+  assert(/weekIds:\s*chronologicalWeekIds\(/.test(picksGetter || '') && /weekIds:\s*chronologicalWeekIds\(/.test(dashGetter || ''),
+    '5j-g: [structural] BOTH app.js binders hand bindWeekSwipe() their ids through chronologicalWeekIds() — neither passes its own list order raw');
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -950,6 +1047,449 @@ console.log('     League Page swipe-back + week wizard drag-to-dismiss, shared p
   }
 
   globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[12] v0.27.x bugfix (Drew, 2026-09-27, iOS home-screen app) — "When I click the chat box in the chat tab it … jumps to the top of the chat thread and not the bottom where the message box is"…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // ROOT CAUSE (reproduced in real Blink, headless Chrome 153, 390×844,
+  // against the shipped css/styles.css — scratch repro, figures below):
+  //
+  //   body[data-keyboard-up] #page-chat.active{--nav-height:0}
+  //
+  // zeroes the token with a UNITLESS 0. #page-chat.active's height is
+  // `calc(100dvh - var(--nav-height) - env(safe-area-inset-bottom,0px))`;
+  // after substitution that is `calc(100dvh - 0 - …)`, and a <number> minus
+  // a <length> is a TYPE ERROR in calc() (CSS Values 4 — unitless zero is
+  // not a length inside calc). A var()-substituted declaration that fails to
+  // parse is "invalid at computed-value time": `height` falls back to its
+  // initial value, `auto`. The bounded flex column is gone, #page-chat grows
+  // to its full content height, .chat-scroll stops overflowing (its
+  // scrollTop is clamped to 0 — the OLDEST messages), and the composer sits
+  // at the bottom of a document thousands of px tall. Measured:
+  //   before      page 697px  thread sT 6096/cH 574/sH 6670  composer top 621
+  //   keyboard-up page 6793px thread sT 0   /cH 6670        composer top 6717
+  //   kbd-down    page 697px  thread sT 0   (stays on the oldest messages)
+  // With `0px` the same run holds page 757px, thread pinned, composer 681.
+  // Node has no CSS engine, so 12a guards the CSS statically and 12b drives
+  // the JS half (the real keyboard binder + the real thread anchor).
+  const { readFileSync } = await import('node:fs');
+  const stripCssComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // A custom property declared as a bare unitless `0` and consumed via
+  // var() inside a calc() that also carries lengths is the exact defect
+  // class: every such calc() goes invalid-at-computed-value-time the moment
+  // the zero is in effect. Returns the offending property names.
+  function unitlessZeroTokensUsedInCalc(cssText) {
+    const css = stripCssComments(cssText);
+    const zeroDecl = /(?:^|[{;\s])(--[A-Za-z0-9_-]+)\s*:\s*0\s*(?:!important\s*)?(?=[;}])/g;
+    const zeroed = new Set();
+    for (let m; (m = zeroDecl.exec(css));) zeroed.add(m[1]);
+    const offenders = [];
+    for (const name of zeroed) {
+      const esc = name.replace(/[-]/g, '\\-');
+      // any declaration value holding calc( … var(--name …
+      const usedInCalc = new RegExp(`calc\\([^;{}]*var\\(\\s*${esc}\\s*[,)]`).test(css);
+      if (usedInCalc) offenders.push(name);
+    }
+    return offenders;
+  }
+
+  // 12a-control — the checker is not vacuous: it flags the defect shape and
+  // clears the fixed shape.
+  assert(unitlessZeroTokensUsedInCalc('a{--x:0}b{height:calc(100dvh - var(--x) - 2px)}').join() === '--x',
+    '12a-control-1: the checker FLAGS a unitless `--x:0` consumed inside calc() (the defect shape)');
+  assert(unitlessZeroTokensUsedInCalc('a{--x:0px}b{height:calc(100dvh - var(--x) - 2px)}').length === 0,
+    '12a-control-2: …and CLEARS `--x:0px` (the fixed shape)');
+  assert(unitlessZeroTokensUsedInCalc('a{--x:0}b{opacity:var(--x)}').length === 0,
+    '12a-control-3: …and does not flag a unitless 0 that is never used inside calc() (a legitimate <number> token)');
+
+  const shippedCss = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const offenders = unitlessZeroTokensUsedInCalc(shippedCss);
+  assert(offenders.length === 0,
+    `12a-1: css/styles.css zeroes NO custom property with a unitless 0 that a calc() consumes — found [${offenders.join(', ')}]; ` +
+    'the keyboard-up rule must read `body[data-keyboard-up] #page-chat.active{--nav-height:0px}` (a unitless 0 makes #page-chat.active\'s ' +
+    'height calc() invalid at computed-value time → height:auto → the thread stops scrolling and shows the oldest messages)');
+  const kbdRule = stripCssComments(shippedCss).match(/body\[data-keyboard-up\]\s*#page-chat\.active\s*\{([^}]*)\}/);
+  assert(!!kbdRule, '12a-2: fixture check — the T-25 keyboard-up override rule for #page-chat.active still exists');
+  // The token was renamed --nav-height → --nav-bar-clearance by the DI-397 pill
+  // CSS pass (2026-09-27); the pin accepts either name — what matters is the
+  // length UNIT on the zero (RG-275's root cause was the unitless 0).
+  assert(!!kbdRule && /--nav-(?:height|bar-clearance)\s*:\s*0(?:px|rem|em|vh|dvh)\s*(?:;|$)/.test(kbdRule[1].trim()),
+    `12a-3: that rule zeroes the nav clearance token WITH a length unit (got "${kbdRule ? kbdRule[1].trim() : '—'}")`);
+
+  // ── 12b — the JS half: the thread keeps its place across the keyboard
+  // layout change. Once the height is bounded again (12a), the thread's
+  // viewport still changes size twice per keyboard cycle: +--nav-height when
+  // the keyboard comes up (the browser clamps scrollTop, so a bottom-pinned
+  // thread stays pinned), and −--nav-height when it goes down — where
+  // scrollTop is simply kept, leaving the newest 60px hidden under the
+  // composer. Blink hides that with CSS scroll anchoring; WebKit (the
+  // home-screen app, WKWebView) has none — measured with overflow-anchor:none
+  // the dismissed thread sits at sT 6036/cH 574/sH 6670, 60px short.
+  // Driven through the REAL bindKeyboardAvoid() (fake visualViewport) and
+  // the REAL bindBottomAnchor(); the only modelled step is layout itself
+  // (thread clientHeight 574 ↔ 634 with the flag, the Chrome-measured values).
+  const bindBottomAnchor = NG.bindBottomAnchor;
+  assert(typeof bindBottomAnchor === 'function', '12b-0: nav-gestures.js exports bindBottomAnchor() (the thread\'s stick-to-bottom binder)');
+
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+  const savedRO = globalThis.ResizeObserver;
+
+  function makeTarget() {
+    const handlers = {};
+    return {
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev = {}) { (handlers[type] || []).slice().forEach(fn => fn(ev)); },
+      _count(type) { return (handlers[type] || []).length; },
+    };
+  }
+  const doc = Object.assign(makeTarget(), { body: { dataset: {} }, getElementById: () => null, querySelector: () => null });
+  const vv = Object.assign(makeTarget(), { height: 757 });
+  const win = Object.assign(makeTarget(), { innerHeight: 757, visualViewport: vv });
+  const observers = [];
+  class FakeResizeObserver {
+    constructor(cb) { this.cb = cb; this.targets = new Set(); observers.push(this); }
+    observe(el) { this.targets.add(el); }
+    unobserve(el) { this.targets.delete(el); }
+    disconnect() { this.targets.clear(); }
+  }
+  globalThis.document = doc;
+  globalThis.window = win;
+  globalThis.ResizeObserver = FakeResizeObserver;
+
+  // A bounded scroller with browser semantics: scrollTop clamps to
+  // [0, scrollHeight − clientHeight], and any change fires 'scroll'.
+  function makeThread({ scrollHeight, clientHeight }) {
+    const t = makeTarget();
+    let top = 0;
+    const el = Object.assign(t, { scrollHeight, clientHeight });
+    // defineProperty, not Object.assign — assign would flatten the accessor.
+    Object.defineProperty(el, 'scrollTop', {
+      get() { return top; },
+      set(v) {
+        const next = Math.max(0, Math.min(v, el.scrollHeight - el.clientHeight));
+        if (next !== top) { top = next; el._fire('scroll'); }
+      },
+    });
+    return el;
+  }
+  const pinned = (el) => Math.abs(el.scrollTop + el.clientHeight - el.scrollHeight) <= 1;
+  // The layout step Node cannot run: the flag toggles the thread's height,
+  // the browser re-clamps scrollTop, then ResizeObservers are notified.
+  function relayout(el) {
+    const want = 'keyboardUp' in doc.body.dataset ? 634 : 574;
+    if (el.clientHeight === want) return;
+    el.clientHeight = want;
+    el.scrollTop = el.scrollTop; // clamp (fires 'scroll' only if it moved)
+    for (const o of observers) if (o.targets.has(el)) o.cb([{ target: el }], o);
+  }
+  const composer = { tagName: 'TEXTAREA' };
+  function keyboardUp(el) {
+    doc._fire('focusin', { target: composer });
+    vv.height = 757 - 300; vv._fire('resize');
+    relayout(el);
+  }
+  function keyboardDown(el) {
+    doc._fire('focusout', { target: composer });
+    vv.height = 757; vv._fire('resize');
+    relayout(el);
+  }
+
+  const unbindKbd = NG.bindKeyboardAvoid();
+
+  // 12b-1…3 — the reported path: thread at the bottom, tap the composer,
+  // keyboard up, keyboard down.
+  {
+    const thread = makeThread({ scrollHeight: 6670, clientHeight: 574 });
+    thread.scrollTop = thread.scrollHeight;
+    if (typeof bindBottomAnchor === 'function') bindBottomAnchor(thread);
+    assert(pinned(thread) && thread.scrollTop === 6096, '12b-1: fixture — the thread opens pinned to the newest message (sT 6096 of 6670, cH 574)');
+    keyboardUp(thread);
+    assert('keyboardUp' in doc.body.dataset, '12b-2a: fixture — the REAL bindKeyboardAvoid() set body[data-keyboard-up] on focus + a 300px visualViewport drop');
+    assert(pinned(thread), `12b-2: keyboard UP — the thread is still pinned to the newest message (sT ${thread.scrollTop}, cH ${thread.clientHeight}, sH ${thread.scrollHeight})`);
+    keyboardDown(thread);
+    assert(!('keyboardUp' in doc.body.dataset), '12b-3a: fixture — blur cleared body[data-keyboard-up] (the nav comes back)');
+    assert(pinned(thread), `12b-3: keyboard DOWN — the thread is STILL pinned to the newest message, not left 60px short (sT ${thread.scrollTop}, cH ${thread.clientHeight}, sH ${thread.scrollHeight})`);
+    // Several cycles in a row (type, dismiss, re-tap) never drift.
+    for (let i = 0; i < 3; i++) { keyboardUp(thread); keyboardDown(thread); }
+    assert(pinned(thread), '12b-4: three more keyboard up/down cycles — still pinned (no cumulative drift)');
+  }
+
+  // 12b-5 — a deliberate scroll-up is preserved: a player reading history
+  // who taps the composer is not yanked to the bottom by the layout change.
+  {
+    const thread = makeThread({ scrollHeight: 6670, clientHeight: 574 });
+    thread.scrollTop = thread.scrollHeight;
+    if (typeof bindBottomAnchor === 'function') bindBottomAnchor(thread);
+    thread.scrollTop = 2000;                      // the player scrolls up to read
+    keyboardUp(thread);
+    assert(thread.scrollTop === 2000, `12b-5a: scrolled up to read history, keyboard UP leaves the position alone (sT ${thread.scrollTop})`);
+    keyboardDown(thread);
+    assert(thread.scrollTop === 2000, `12b-5b: …and keyboard DOWN leaves it alone too (sT ${thread.scrollTop})`);
+  }
+
+  // 12b-6/7 — binder hygiene, same shape as bindBottomBounce()/bindWeekSwipe().
+  if (typeof bindBottomAnchor === 'function') {
+    const thread = makeThread({ scrollHeight: 6670, clientHeight: 574 });
+    thread.scrollTop = thread.scrollHeight;
+    const u1 = bindBottomAnchor(thread);
+    const u2 = bindBottomAnchor(thread);
+    assert(u1 === u2 && thread._count('scroll') === 1,
+      '12b-6: binding the SAME thread twice returns the SAME unbind and attaches one scroll listener (WeakMap idempotency)');
+    u1();
+    assert(thread._count('scroll') === 0, '12b-7a: unbind removes the scroll listener');
+    keyboardUp(thread); keyboardDown(thread);
+    assert(!pinned(thread), '12b-7b: …and after unbind the anchor no longer acts (control: the unanchored thread IS left short — the WebKit drift this binder closes)');
+    const u3 = bindBottomAnchor(thread);
+    assert(u3 !== u1, '12b-7c: a fresh bind after unbind is a NEW binding (the WeakMap entry was cleared)');
+    u3();
+  } else {
+    assert(false, '12b-6/7: binder hygiene — skipped, bindBottomAnchor() does not exist');
+  }
+
+  // 12b-8 — no ResizeObserver (very old engine): a safe no-op, never throws.
+  {
+    globalThis.ResizeObserver = undefined;
+    let threw = false, unbind = null;
+    try { unbind = typeof bindBottomAnchor === 'function' ? bindBottomAnchor(makeThread({ scrollHeight: 100, clientHeight: 50 })) : null; } catch { threw = true; }
+    assert(!threw && typeof unbind === 'function', '12b-8: without ResizeObserver bindBottomAnchor() is a no-op returning an unbind, never a throw');
+    globalThis.ResizeObserver = FakeResizeObserver;
+  }
+
+  unbindKbd();
+
+  // 12c — wiring: renderChatPage() anchors the page thread it just rendered
+  // (comment-stripped source, same technique as 11n-real-6).
+  {
+    const chatSrc = readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    const start = chatSrc.indexOf('export function renderChatPage(');
+    const end = chatSrc.indexOf('\nfunction renderPillsOnly(', start);
+    const body = start >= 0 && end > start ? chatSrc.slice(start, end) : '';
+    assert(body.length > 0, '12c-0: fixture — renderChatPage() located in js/chat-ui.js');
+    assert(/import\s*\{[^}]*\bbindBottomAnchor\b[^}]*\}\s*from\s*'\.\/nav-gestures\.js'/.test(chatSrc),
+      '12c-1: chat-ui.js imports bindBottomAnchor from ./nav-gestures.js');
+    assert(/bindBottomAnchor\(\s*scroll\s*\)/.test(body),
+      '12c-2: renderChatPage() binds the anchor to the #chat-scroll it just rendered');
+  }
+  // 12d — ONE "at the latest" band (reviewer note on fbfab2a): the "↓ latest"
+  // button (chat-ui.js onChatScrollEvent) and the stick-to-bottom anchor
+  // (bindBottomAnchor) must read the SAME constant, or a reader could sit
+  // where the button says "you're at the latest" but the anchor lets the
+  // thread drift (or the reverse).
+  {
+    const CU = await import('./js/chat-ui.js');
+    const band = NG.BOTTOM_ANCHOR_PX;
+    assert(typeof band === 'number' && band > 0, `12d-0: fixture — nav-gestures.js exports BOTTOM_ANCHOR_PX (got ${band})`);
+    // Behavioural: the real onChatScrollEvent flips the button exactly at the band edge.
+    const jumpAt = (dist) => {
+      const jumpEl = { style: { display: '' } };
+      CU._onChatScrollEvent({ scrollHeight: 5000, clientHeight: 500, scrollTop: 5000 - 500 - dist }, jumpEl);
+      return jumpEl.style.display;
+    };
+    assert(jumpAt(band - 1) === 'none' && jumpAt(band) === 'block',
+      `12d-1: the "↓ latest" button hides at ${band - 1}px from the bottom and shows at ${band}px — the SAME edge as the anchor band (got ${jumpAt(band - 1)}/${jumpAt(band)})`);
+    // Source: the band is imported, not re-typed as a literal.
+    const src = readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    const fnStart = src.indexOf('function onChatScrollEvent(');
+    const fnBody = fnStart >= 0 ? src.slice(fnStart, src.indexOf('\n}', fnStart)) : '';
+    assert(/import\s*\{[^}]*\bBOTTOM_ANCHOR_PX\b[^}]*\}\s*from\s*'\.\/nav-gestures\.js'/.test(src),
+      '12d-2: chat-ui.js imports BOTTOM_ANCHOR_PX from ./nav-gestures.js');
+    assert(fnBody.length > 0 && /<\s*BOTTOM_ANCHOR_PX\b/.test(fnBody) && !/\b120\b/.test(fnBody),
+      '12d-3: onChatScrollEvent() compares against BOTTOM_ANCHOR_PX, with no hard-coded 120 left in it');
+  }
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+  globalThis.ResizeObserver = savedRO;
+}
+
+// ═══════════════════════════════════════
+console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill / DI-393 header)…');
+// ═════════════════════════════════════════════════════════════════════════
+// DI-397 (UN-357, 2026-09-27) — `.bottom-nav` is a floating, inset pill now,
+// not a full-bleed bar. Same discipline as headermetatest.mjs's own [css]/
+// [css2] blocks: a text-level pin on the shipped CSS, not a rendered-layout
+// assertion (the actual pixel result — backdrop-filter rendering, safe-area
+// behaviour in a real PWA/Capacitor shell — is a device-verify, named in the
+// handoff, not claimed here). Comments are STRIPPED before every check below
+// (contrastscan.mjs's own discipline) so a historical comment that quotes
+// the old `--nav-height` token by name, for context, cannot be mistaken for
+// a live consumer of it.
+{
+  const { readFileSync } = await import('node:fs');
+  const rawCss = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const css = rawCss.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // [13a] the compound clearance token — one formula, built from the pill's
+  // own three named parts, not a re-typed literal anywhere else.
+  const rootMatch = css.match(/:root\s*\{([^}]*)\}/);
+  assert(!!rootMatch, '12a-0: found a base :root{...} rule');
+  const rootBody = rootMatch ? rootMatch[1] : '';
+  assert(/--nav-pill-h:\s*48px/.test(rootBody), '12a-1: --nav-pill-h is 48px');
+  assert(/--nav-pill-gap:\s*8px/.test(rootBody), '12a-2: --nav-pill-gap is 8px (the bottom offset)');
+  assert(/--nav-pill-inset:\s*12px/.test(rootBody), '12a-3: --nav-pill-inset is 12px (the side inset)');
+  assert(/--nav-pill-radius:\s*24px/.test(rootBody), '12a-4: --nav-pill-radius is 24px (half the height — a true pill)');
+  assert(/--nav-bar-clearance:\s*calc\(var\(--nav-pill-h\)\s*\+\s*var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)/.test(rootBody),
+    '12a-5: --nav-bar-clearance = pill height + bottom gap + the safe-area inset, computed once');
+
+  // [13b] MUTATION-PROVEN completeness grep (per the reviewer's own
+  // instruction — not just "present," proven to actually discriminate): the
+  // old token is genuinely retired everywhere OUTSIDE prose. A regression
+  // that reintroduces even ONE live `var(--nav-height)` consumer must turn
+  // this red; a fixture proves the check can still see one.
+  assert(!/--nav-height/.test(css),
+    '12b-1: --nav-height does not appear anywhere in styles.css OUTSIDE comments — every real consumer repointed to --nav-bar-clearance, none left reading the retired token');
+  const fixtureWithOldToken = css + '\n.probe{height:var(--nav-height)}';
+  assert(/--nav-height/.test(fixtureWithOldToken),
+    '12b-2: fixture — the same check DOES flag a reintroduced --nav-height consumer (anti-vacuity: a guard that cannot detect its own removal is not coverage, RG-27\'s own precedent)');
+
+  // [13c] every real consumer reads the ONE new token — enumerated, not
+  // assumed (CONVENTIONS #21 discipline: one token, every consumer, no drift).
+  const consumerChecks = [
+    [/\.main-content\{[^}]*padding:[^;}]*calc\(var\(--nav-bar-clearance\)\s*\+\s*20px\)/, '.main-content padding (shorthand, bottom value)'],
+    [/\.submit-bar\{[^}]*bottom:\s*calc\(var\(--nav-bar-clearance\)\s*\+\s*8px\)/, '.submit-bar bottom'],
+    [/#auth-banner-stack\{[^}]*bottom:\s*var\(--nav-bar-clearance\)/, '#auth-banner-stack bottom'],
+    [/\.update-available-banner\{[^}]*bottom:\s*var\(--nav-bar-clearance\)/, '.update-available-banner bottom'],
+    [/#page-chat\.active\{[^}]*height:\s*calc\(100dvh - var\(--nav-bar-clearance\)\)/, '#page-chat.active height (100dvh)'],
+    [/@supports not \(height:100dvh\)\{#page-chat\.active\{height:calc\(100vh - var\(--nav-bar-clearance\)\)\}\}/, '#page-chat.active height (100vh fallback)'],
+    [/#page-chat \.chat-jump-latest\{bottom:calc\(var\(--nav-bar-clearance\)\s*\+\s*var\(--chat-composer-h,90px\)\s*\+\s*10px\)/, '.chat-jump-latest bottom'],
+  ];
+  for (const [re, label] of consumerChecks) {
+    assert(re.test(css), `12c: ${label} reads var(--nav-bar-clearance)`);
+  }
+
+  // [13d] the keyboard-up reset zeroes the COMPOUND token directly, as a
+  // <length> (0px), not a unitless 0 — the exact defect class (a bare `0`
+  // substituted into calc() is a <number>, not a <length>, so the whole
+  // calc() goes invalid at computed-value time) the 2026-09-27 coordinator
+  // fix closed under the OLD token name; this must never regress under the
+  // new one either.
+  assert(/body\[data-keyboard-up\] #page-chat\.active\{--nav-bar-clearance:0px\}/.test(css),
+    '12d: body[data-keyboard-up] #page-chat.active zeroes --nav-bar-clearance (0px, a <length>, not unitless 0)');
+
+  // [13e] the pill itself — inset OUTSIDE the box (position, not padding),
+  // fully rounded, 48px content-only height.
+  const pillMatch = css.match(/\.bottom-nav\{([^}]*)\}/);
+  assert(!!pillMatch, '12e-0: found the base .bottom-nav{...} rule');
+  const pillBody = pillMatch ? pillMatch[1] : '';
+  assert(/left:\s*var\(--nav-pill-inset\)/.test(pillBody) && /right:\s*var\(--nav-pill-inset\)/.test(pillBody),
+    '12e-1: .bottom-nav is inset var(--nav-pill-inset) from BOTH edges — a floating pill, not full-bleed');
+  assert(/bottom:\s*calc\(var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)/.test(pillBody),
+    '12e-2: .bottom-nav\'s bottom offset lives in its POSITION (gap + safe-area), not padded into its own box height');
+  assert(/height:\s*var\(--nav-pill-h\)/.test(pillBody), '12e-3: .bottom-nav height is var(--nav-pill-h) — content-only, no more padding-plus-height double count');
+  assert(/border-radius:\s*var\(--nav-pill-radius\)/.test(pillBody), '12e-4: .bottom-nav border-radius is var(--nav-pill-radius) — a true capsule');
+  assert(/border:\s*1px solid var\(--border\)/.test(pillBody), '12e-5: .bottom-nav carries a hairline border from tokens (var(--border)), not a hardcoded color');
+
+  // [13f] the material — a resolvable, SCANNABLE solid base (contrastscan.mjs
+  // can only assert on a rule with a resolvable background; an rgba()
+  // literal is skipped by design, per its own doc comment) with the
+  // translucent/backdrop-filter enhancement layered on TOP via a POSITIVE
+  // @supports feature query, never baked into the base — this is what makes
+  // "contrastscan stays green... material fallback included" true by
+  // construction, rather than an untested claim.
+  assert(/background:\s*var\(--bg-card\)/.test(pillBody),
+    '12f-1: .bottom-nav base background is var(--bg-card) — solid, resolvable, and the exact pairing that already cleared this selector\'s contrast check before this DI');
+  const supportsMatch = rawCss.match(/@supports\s*\(\(backdrop-filter:blur\(1px\)\)\s*or\s*\(-webkit-backdrop-filter:blur\(1px\)\)\)\{[\s\S]*?\n\}/);
+  assert(!!supportsMatch, '12f-2: found the positive @supports(backdrop-filter) enhancement block');
+  const supportsBody = supportsMatch ? supportsMatch[0] : '';
+  // Reviewer BLOCK (round 2, 2026-09-27) — was a HARDCODED
+  // `rgba(255,255,255,.72)`, unconditionally, in BOTH color schemes: a light
+  // glass on the dark app in dark mode, measured 1.9:1/1.6:1 for the icons
+  // painted on it. Now a TOKEN, `var(--nav-material)`, so it can flip per
+  // mode — [13i] below pins the token's own light/dark values.
+  assert(/background:\s*var\(--nav-material\)/.test(supportsBody),
+    '12f-3: inside @supports, .bottom-nav reads var(--nav-material) — a mode-aware token, not a hardcoded literal that was the same colour in both colour schemes');
+  assert(!/background:\s*rgba\(255,255,255,\.72\)/.test(supportsBody),
+    '12f-3b: the old hardcoded rgba(255,255,255,.72) literal is genuinely gone from this rule, not left as a second declaration alongside the token');
+  assert(/-webkit-backdrop-filter:\s*blur\(20px\) saturate\(180%\)/.test(supportsBody) && /(?<!-webkit-)backdrop-filter:\s*blur\(20px\) saturate\(180%\)/.test(supportsBody),
+    '12f-4: …with both prefixed and unprefixed backdrop-filter: blur(20px) saturate(180%)');
+
+  // [13i] Reviewer BLOCK (round 2, 2026-09-27) — --nav-material itself: a
+  // light value + BOTH dark blocks carrying the byte-identical dark value
+  // (same "keep the two dark blocks in sync" discipline every other
+  // dark-mode token pair in this file already follows).
+  const rootMatch2 = css.match(/:root\s*\{([^}]*)\}/);
+  assert(!!rootMatch2 && /--nav-material:\s*rgba\(255,255,255,\.72\)/.test(rootMatch2[1]),
+    '12i-1: :root --nav-material is the light rgba(255,255,255,.72) glass');
+  const mediaDarkMatch = css.match(/@media \(prefers-color-scheme:\s*dark\)\s*\{\s*body\.theme-neutral:not\(\[data-color-scheme="light"\]\)\s*\{([^}]*)\}/);
+  const manualDarkMatch = css.match(/body\.theme-neutral\[data-color-scheme="dark"\]\s*\{([^}]*)\}/);
+  assert(!!mediaDarkMatch && /--nav-material:\s*rgba\(31,27,23,\.72\)/.test(mediaDarkMatch[1]),
+    '12i-2: the prefers-color-scheme:dark block sets --nav-material to rgba(31,27,23,.72) (--bg-card\'s own dark hex at the same .72 alpha)');
+  assert(!!manualDarkMatch && /--nav-material:\s*rgba\(31,27,23,\.72\)/.test(manualDarkMatch[1]),
+    '12i-3: the manual [data-color-scheme="dark"] override carries the BYTE-IDENTICAL value — the two dark blocks cannot drift apart');
+
+  // [13j] Reviewer BLOCK (round 2, 2026-09-27) — a system "reduce
+  // transparency" preference drops the glass material back to the same
+  // solid, already-proven `--bg-card` the base rule already ships as its
+  // no-backdrop-filter fallback — one fallback shape, not two.
+  const reduceTranspMatch = css.match(/@media \(prefers-reduced-transparency:reduce\)\{\s*\.bottom-nav\{([^}]*)\}/);
+  assert(!!reduceTranspMatch, '12j-1: found @media(prefers-reduced-transparency:reduce){.bottom-nav{...}}');
+  assert(!!reduceTranspMatch && /background:\s*var\(--bg-card\)/.test(reduceTranspMatch[1]) && /backdrop-filter:\s*none/.test(reduceTranspMatch[1]) && /-webkit-backdrop-filter:\s*none/.test(reduceTranspMatch[1]),
+    `12j-2: prefers-reduced-transparency:reduce sets background:var(--bg-card);backdrop-filter:none;-webkit-backdrop-filter:none (got "${reduceTranspMatch?.[1]}")`);
+
+  // [13g] hide/show — the SAME binary slide (T-24, 240ms), but the translate
+  // distance now clears the pill's OWN bottom offset too. MUTATION-PROVEN:
+  // a regression back to the bare `translateY(100%)` this DI's own task
+  // brief named as the exact bug (a --nav-pill-gap-tall sliver left on
+  // screen) must turn this red, not silently keep matching a loose pattern.
+  const hiddenMatch = css.match(/\.bottom-nav\.nav-hidden\{([^}]*)\}/);
+  const fullOffsetTransform = /transform:\s*translateY\(calc\(100%\s*\+\s*var\(--nav-pill-gap\)\s*\+\s*env\(safe-area-inset-bottom,\s*0px\)\)\)/;
+  assert(!!hiddenMatch && fullOffsetTransform.test(hiddenMatch[1]),
+    '12g-1: .bottom-nav.nav-hidden translates the FULL offset (100% + gap + safe-area) — fully off-screen, no sliver left showing');
+  const mutatedHidden = '.bottom-nav.nav-hidden{transform:translateY(100%);transition:transform 240ms ease-in}';
+  assert(!fullOffsetTransform.test(mutatedHidden),
+    '12g-2 mutation proof: the SAME regex correctly goes RED against the old bare translateY(100%) — the exact sliver-leaving bug this DI closes, not a pattern loose enough to still match it');
+  const kbHiddenMatch = css.match(/body\[data-keyboard-up\] \.bottom-nav\{([^}]*)\}/);
+  assert(!!kbHiddenMatch && fullOffsetTransform.test(kbHiddenMatch[1]),
+    '12g-3: the keyboard-up hide uses the SAME full-offset transform, not the old bare 100%');
+
+  // [13k] Reviewer BLOCK (round 2, 2026-09-27) — .nav-unread's clip fix.
+  // .bottom-nav no longer declares its own overflow at all (border-radius
+  // clips the box's OWN background/border regardless of overflow; nothing
+  // else in this pill needs descendant clipping — .nav-item's own
+  // background is `none`) — the pill's base rule is re-matched here (same
+  // pattern as [13e]) and asserted NOT to carry overflow:hidden, which used
+  // to clip 2px off .nav-unread's -3px top offset.
+  assert(!!pillMatch && !/overflow:\s*hidden/.test(pillBody),
+    `12k: .bottom-nav no longer declares overflow:hidden — .nav-unread's -3px top offset (below) is no longer clipped by the pill's own box (got "${pillBody}")`);
+  const navUnreadMatch = css.match(/\.nav-unread\{([^}]*)\}/);
+  assert(!!navUnreadMatch && /top:\s*-3px/.test(navUnreadMatch[1]),
+    `12k-2: .nav-unread still sits 3px proud of the pill's own top edge (top:-3px) — only safe to leave un-clipped now that [13k] holds (got "${navUnreadMatch?.[1]}")`);
+
+  // [13l] Reviewer BLOCK (round 2, 2026-09-27) — the selected tab's
+  // non-colour cue: a 4px dot under the active icon, scoped to `.active`
+  // ONLY (never the shared `:active` touch-press state every tab gets on
+  // tap — a dot flashing on every press regardless of selection would be a
+  // worse signal than the colour-only one it replaces). Mutation-proven:
+  // the selector-scoping itself is what a regression would most likely get
+  // wrong (accidentally widening it to `.nav-item.active,.nav-item:active`,
+  // matching the sibling colour rule immediately above it in the file).
+  const activeDotMatch = css.match(/\.nav-item\.active::after\{([^}]*)\}/);
+  assert(!!activeDotMatch, '12l-1: found .nav-item.active::after{...} — the active-tab dot');
+  assert(!!activeDotMatch && /width:\s*4px/.test(activeDotMatch[1]) && /height:\s*4px/.test(activeDotMatch[1]) && /border-radius:\s*50%/.test(activeDotMatch[1]),
+    `12l-2: the dot is 4x4px, fully rounded (got "${activeDotMatch?.[1]}")`);
+  assert(!!activeDotMatch && /background:\s*var\(--maroon-text\)/.test(activeDotMatch[1]),
+    '12l-3: the dot reads var(--maroon-text) — the SAME token the colour cue already uses, not a new one-off value');
+  // The selector as WRITTEN in the file must be exactly `.nav-item.active::after`
+  // — not a comma-joined rule that also matches `.nav-item:active` (the
+  // regression this mutation proof targets).
+  const activeDotSelectorLine = (css.match(/^\.nav-item\.active::after\{[^}]*\}$/m) || [])[0];
+  assert(!!activeDotSelectorLine,
+    '12l-4: the dot rule\'s selector is EXACTLY .nav-item.active::after on its own — not comma-joined with .nav-item:active (a regression that would flash the dot on every tab\'s touch-press, not just the selected one)');
+
+  // [13m] Reviewer BLOCK (round 2, 2026-09-27) — the stale
+  // `.nav-item span:last-child{font-size:.58rem}` rule (used to size the
+  // OLD visible label span) is genuinely removed, not left as dead CSS now
+  // hitting `.sr-only` (a visually-hidden element a font-size can't affect,
+  // but which reads as a maintained, meaningful rule to the next editor).
+  assert(!/\.nav-item span:last-child/.test(css),
+    '12m: .nav-item span:last-child{font-size:.58rem} is gone from the file — it used to size the now-.sr-only label span, a dead declaration on an invisible element');
 }
 
 // ═════════════════════════════════════════════════════════════════════════

@@ -76,16 +76,17 @@ import { ESPN_SPORT_ENDPOINTS } from './data-model.js';
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * 'home' | 'skip' — the DI's §0 open question. The DI's OWN recommendation is
- * 'skip' (straight to the sport, zero added screens, matching today exactly);
- * the coordinator's build instruction for this pass defaults it to 'home'
- * (always show Leagues Home after sign-in, with a warm-relaunch fast path)
- * because Drew's literal brief reads as wanting the journey visible even with
- * one league today, and 'home' is the reversible-without-a-flash choice while
- * his ruling is pending. Flip this ONE token when he rules — nothing else in
- * this file, or in the DI, depends on which way it goes.
+ * 'home' | 'skip' — the DI's §0 open question, RULED by Drew 2026-09-27
+ * (DI-348, UN-306): "when I sign in from a different browser it immediately
+ * jumps to this league without letting me choose the league or sport" — a
+ * direct reversal of his 2026-09-25 ruling for option (b) 'skip', made once
+ * he felt the actual behavior live rather than read the spec. 'home' means a
+ * COLD sign-in (no remembered session/league on this device/browser) always
+ * lands on Leagues Home first, even with exactly one membership; a WARM
+ * relaunch (session + league already remembered) still fast-paths straight
+ * to the six-tab shell, unchanged — see the WARM PREDICATE CONTRACT above.
  */
-export const SINGLE_LEAGUE_ROUTE = 'skip';
+export const SINGLE_LEAGUE_ROUTE = 'home';
 
 /**
  * The §0 table — the ONE place this rule is encoded (reviewer gate,

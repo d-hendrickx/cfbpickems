@@ -2260,12 +2260,15 @@ let sharedBootHandler = null;
       // wiring pass 2, same day) adds #page-admin as an EIGHTH
       // (appMod._APP_PAGE_CONTAINER_IDS_FOR_TEST, read dynamically above,
       // already reflects both). SECURITY GATE S-6 (2026-09-25) — nine
-      // containers now, not eleven: #league-pill/#header-identity are no
+      // containers, not eleven: #league-pill/#header-identity are no
       // longer painted at all (see the fixture's own note, above — they
       // were removed from index.html entirely, and painting fake ones here
-      // tested a DOM shape production no longer has).
-      assert(Object.keys(r.paintedPages).length === 9,
-        `${reason}: fixture — nine containers were painted before the boot (eight page sections + week block), so the assertion above is about a real teardown`);
+      // tested a DOM shape production no longer has). UPDATED AGAIN —
+      // DI-397 (UN-357, 2026-09-27) retires #page-settings along with the
+      // Settings tab — EIGHT containers now (seven page sections + week
+      // block), not nine.
+      assert(Object.keys(r.paintedPages).length === 8,
+        `${reason}: fixture — eight containers were painted before the boot (seven page sections + week block), so the assertion above is about a real teardown`);
       assert(r.hydrateCalls.length === 0,
         `${reason}: and no hydrate runs behind the hold (${r.hydrateCalls.length} call(s)) — the hold is a real hold`);
       assert(storageMod.getSession().isAdmin === false,
@@ -3771,6 +3774,363 @@ let sharedBootHandler = null;
     });
   }
 
+  // ═════════════════════════════════════════════════════════════════════════
+  // [36] v0.27.0 FIX (Drew, 2026-09-27, live on v0.26.0): "I can't find
+  //      where to sign out and I see the settings tab but I don't see the logo
+  //      in the top left to open the control center."
+  //
+  // ROOT CAUSE: index.html ships `#control-center-trigger` EMPTY with a comment
+  // promising it is "Filled at boot" — and no code in js/ ever filled it. The
+  // CSS gives it background:none/border:none, so it painted as an invisible
+  // 44x44 box and the drawer (Sign Out / Switch League / Profile) was
+  // unreachable by tap on BOTH front ends. Every earlier gate bound the CLICK
+  // and none asserted the button had anything in it. This section is that
+  // missing assertion, on a REAL boot(): the trigger is a DOM element the
+  // stub registers exactly as index.html declares it (empty), and the claim is
+  // about what boot() leaves inside it.
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[36] v0.27.0 — the header trigger that opens the control center is FILLED at boot (web: brand name; native: the Munera mark)…');
+  {
+    const iconsMod36 = await import('./js/icons.js');
+    const brandMod36 = await import('./js/brand.js');
+    const SUPA36 = okConfig({ authMode: 'supabase', dataMode: 'supabase',
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    const sess36 = () => JSON.stringify({ access_token: 'tok-fresh', refresh_token: 'r-drew',
+      expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: 'u-drew', email: 'drew@example.com' } });
+    const DEVICE36 = () => ({ cfbp_auth_mode_last_known: 'supabase', cfbp_backend_config: BACKEND_CFG,
+      cfbp_supabase_session: sess36() });
+    const quiet36 = async (fn) => {
+      const e = console.error, w = console.warn, i = console.info, l = console.log;
+      console.error = () => {}; console.warn = () => {}; console.info = () => {}; console.log = () => {};
+      try { return await fn(); } finally { console.error = e; console.warn = w; console.info = i; console.log = l; }
+    };
+    // index.html:165, byte-for-byte in shape: an EMPTY button. Registered in
+    // beforeBoot so it exists before sharedBootHandler() runs, as in a browser.
+    const plantTrigger36 = ({ native }) => () => {
+      const t = new BEl('button');
+      t.id = 'control-center-trigger';
+      t.className = 'control-center-trigger';
+      t.setAttribute('aria-label', 'Open control center');
+      currentReg.set('control-center-trigger', t);
+      if (native) globalThis.window.Capacitor = { isNativePlatform: () => true };
+    };
+    const reset36 = async () => quiet36(async () => {
+      const sb36 = await import('./js/supabase-backend.js');
+      sb36._resetForTest();
+      appMod._resetSupabaseDataForTest();
+      appMod._resetAuthHoldForTest();
+      authMod._resetAuthForTest();
+      authMod.configureAuth({});
+      storageMod.setBackendMode('local');
+    });
+    const text36 = el => String(el?.innerHTML || '').replace(/<[^>]*>/g, '').trim();
+
+    // ── (a) WEB — the shell brand name, plus a tappable affordance glyph ─────
+    {
+      await reset36();
+      const r = await quiet36(() => runBoot({ config: SUPA36, seed: DEVICE36(), beforeBoot: plantTrigger36({ native: false }) }));
+      const t = r.reg.get('control-center-trigger');
+      assert(!!t, '[36a] fixture: the trigger element is in the DOM for the whole boot');
+      assert(brandMod36.getPlatform() === 'web' && brandMod36.getShellBrandName() === 'CFB Pickems',
+        '[36a] fixture: this is the WEB shell, and getShellBrandName() is still "CFB Pickems" (DI-213h/i — brand.js semantics untouched)');
+      assert(String(t?.innerHTML || '').trim().length > 0,
+        `[36a] RG — after a signed-in supabase boot on WEB, #control-center-trigger is NOT EMPTY (got ${JSON.stringify(t?.innerHTML)}). Empty is the v0.26.0 defect: an invisible 44x44 button and no way to reach Sign Out`);
+      assert(text36(t) === brandMod36.getShellBrandName(),
+        `[36a] …its visible text is exactly getShellBrandName() (${JSON.stringify(brandMod36.getShellBrandName())}), got ${JSON.stringify(text36(t))}`);
+      // REVIEWER note 4 (v0.27.0 APPROVE WITH NOTES, coordinator design ruling)
+      // — Drew expects a LOGO top-left: web is now the SAME Munera mark as
+      // native, plus the brand name, and NEVER a trailing chevron (a "›"
+      // reads as push-forward navigation on iOS, not "open a drawer").
+      assert(String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
+        '[36a] …and it carries the Munera mark glyph beside the brand name — the same logo affordance as native, not a bare text link');
+      assert(!String(t?.innerHTML || '').includes(iconsMod36.icon('chevronRight')),
+        '[36a] …and NOT a trailing chevron — that reads as push-forward navigation, not "open a drawer" (coordinator ruling replacing the chevron this trigger shipped with)');
+      // REVIEWER note 2 — the visible name is echoed in the accessible name.
+      assert(t?.getAttribute('aria-label') === `${brandMod36.getShellBrandName()}, open control center`,
+        `[36a] …and aria-label contains the visible name (got ${JSON.stringify(t?.getAttribute('aria-label'))})`);
+    }
+
+    // ── (b) NATIVE — the Munera mark SVG from js/icons.js, no text ───────────
+    {
+      await reset36();
+      let r = null;
+      try {
+        r = await quiet36(() => runBoot({ config: SUPA36, seed: DEVICE36(), beforeBoot: plantTrigger36({ native: true }) }));
+        assert(brandMod36.getPlatform() === 'native',
+          '[36b] fixture: window.Capacitor.isNativePlatform() is true for this boot, so isNativeShell() answers native');
+      } finally { delete globalThis.window.Capacitor; }
+      const t = r?.reg.get('control-center-trigger');
+      assert(typeof iconsMod36.ICONS.munera === 'string',
+        '[36b] fixture: js/icons.js carries a `munera` mark glyph');
+      assert(String(t?.innerHTML || '').trim().length > 0,
+        `[36b] RG — after a signed-in supabase boot on NATIVE, #control-center-trigger is NOT EMPTY (got ${JSON.stringify(t?.innerHTML)})`);
+      assert(/<svg\b/.test(String(t?.innerHTML || '')) && String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
+        '[36b] …it holds the icon(\'munera\') inline SVG (fill="none" stroke="currentColor", no external asset)');
+      assert(text36(t) === '',
+        `[36b] …and no text beside it — the mark alone is the logo (got ${JSON.stringify(text36(t))})`);
+      // REVIEWER note 2 — native's trigger is icon-only chrome with no
+      // visible name to echo, so it keeps index.html's plain default.
+      assert(t?.getAttribute('aria-label') === 'Open control center',
+        `[36b] …and aria-label stays the plain default — nothing visible to echo (got ${JSON.stringify(t?.getAttribute('aria-label'))})`);
+    }
+
+    // ── (c) UNDER A HOLD — filled all the same; the hold gates the CLICK ─────
+    // The brand name / mark is not league data, and the .app-header inert +
+    // the click handler's isContentWithheld() check are what keep the drawer
+    // shut. A trigger that only filled when nothing was held would reappear
+    // the same invisible box on every held boot.
+    //
+    // REWORKED (Finding 3, app-shell part 3A review, 2026-09-27) — the
+    // PREVIOUS version of this block was VACUOUS. It booted straight into a
+    // HOLD (`config: () => { throw ... }`), never planting
+    // `#control-center-root` — so `mountControlCenterDrawer()`
+    // (js/app.js:3644) hit its OWN `if (!root) return;` guard and NEVER
+    // bound the click listener at all, on EVERY boot, held or not. Firing
+    // `(t._listeners.click || []).forEach(...)` over an empty array does
+    // nothing, so `opened36c` stayed `false` — and would have stayed `false`
+    // even with `isContentWithheld()` deleted from mountControlCenterDrawer()
+    // entirely. The fix: boot to ACTIVE FIRST (root planted, listener really
+    // binds — proven by asserting `listeners.length >= 1` before touching
+    // anything else), THEN raise a hold on the ALREADY-BOOTED page via the
+    // real `showAuthHoldGate()` (js/app.js), THEN fire the real bound
+    // listener and assert `controlCenterApi.open` is never reached.
+    {
+      await reset36();
+      const plantTriggerAndRoot36 = ({ native }) => () => {
+        const t = new BEl('button');
+        t.id = 'control-center-trigger';
+        t.className = 'control-center-trigger';
+        t.setAttribute('aria-label', 'Open control center');
+        currentReg.set('control-center-trigger', t);
+        // The planted #control-center-root is what lets
+        // mountControlCenterDrawer() get PAST its own `if (!root) return;`
+        // guard and really call addEventListener('click', …) on the trigger
+        // above — without this, section (c) tests nothing at all (see the
+        // rework note just above).
+        const root = new BEl('div');
+        root.id = 'control-center-root';
+        currentReg.set('control-center-root', root);
+        if (native) globalThis.window.Capacitor = { isNativePlatform: () => true };
+      };
+      const r = await quiet36(() => runBoot({
+        config: SUPA36, seed: DEVICE36(), beforeBoot: plantTriggerAndRoot36({ native: false }),
+      }));
+      assert(!appMod.currentAuthHoldReason(),
+        `[36c] fixture: this boot lands ACTIVE, no hold, so mountControlCenterDrawer() runs its ordinary (non-held) path (got ${JSON.stringify(appMod.currentAuthHoldReason())})`);
+      const t = r.reg.get('control-center-trigger');
+      assert(!!t, '[36c] fixture: the trigger element is in the DOM for the whole boot');
+      const clickListeners36c = (t._listeners && t._listeners.click) || [];
+      assert(clickListeners36c.length >= 1,
+        `[36c] the click listener is REALLY bound on an ACTIVE boot (got ${clickListeners36c.length}) — the class of vacuous test this replaces had ZERO listeners here and could not have failed`);
+
+      // ── NOW raise a hold on the already-booted, already-wired page ───────
+      appMod.showAuthHoldGate('config-unreadable');
+      assert(appMod.currentAuthHoldReason() === 'config-unreadable',
+        '[36c] …a hold is raised on this same, already-active page (showAuthHoldGate(), the real function every 20s re-check and every hold path in js/app.js calls)');
+
+      // SECURITY N-1 (bug-pass audit, 2026-09-27) — filled is not the same
+      // as safe: a FILLED-but-clickable trigger under a hold would open the
+      // drawer over withheld content, the exact surface Security Gate
+      // Finding 1 already closed for showLeaguePageOverlay()/
+      // openWeekWizardSheet(). Proven here by INJECTING a spy
+      // controlCenterApi (_setControlCenterApiForTest()) and firing the
+      // trigger's own REALLY-BOUND click listener(s) directly — if the
+      // isContentWithheld() guard inside that listener (js/app.js,
+      // mountControlCenterDrawer()) were ever removed, `.open()` WOULD
+      // fire and this assertion would go red (mutation-proven on a scratch
+      // copy of js/app.js with that guard clause removed — see this batch's
+      // handoff report; not re-run automatically here, same as every other
+      // manual mutation proof this suite documents rather than scripts).
+      let opened36c = false;
+      const prevApi36c = appMod._setControlCenterApiForTest({ open: () => { opened36c = true; } });
+      clickListeners36c.forEach((fn) => fn({ target: t }));
+      appMod._setControlCenterApiForTest(prevApi36c);
+      assert(opened36c === false,
+        '[36c] …and CLICKING the filled, REALLY-bound trigger under the hold does NOT open the drawer — isContentWithheld() refuses the open before controlCenterApi.open() is ever reached');
+    }
+
+    await reset36();
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // [37] FINDING 9 (app-shell part 3A review, 2026-09-27) — three-state
+  //      colorScheme coverage was PIN-ONLY (a structural regex on boot()'s
+  //      own call-site text); nothing actually drove bootColorScheme()/
+  //      applyColorScheme() through the three real values, and
+  //      applyColorSchemeChoice() painted whatever raw value a caller handed
+  //      it even when setColorScheme() (js/storage.js) REFUSED to persist
+  //      it — a paint that disagreed with what was actually saved.
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[37] colorScheme — system/light/dark all paint correctly, and a REFUSED choice never paints an unpersisted value…');
+  {
+    const storageMod37 = await import('./js/storage.js');
+    const body37 = { dataset: {} };
+    const prevBody37 = globalThis.document && globalThis.document.body;
+    if (globalThis.document) globalThis.document.body = body37;
+
+    // Direct session/player seam — bootColorScheme()/applyColorScheme()/
+    // applyColorSchemeChoice() are pure once a player record exists, same
+    // seam _bootColorSchemeForTest/_applyColorSchemeForTest already export
+    // for exactly this purpose. authMode is non-supabase here (the LAST
+    // reset36() call above left it that way), so setSession() is live.
+    storageMod37.setBackendMode('local');
+    storageMod37.addPlayer({ playerId: 'p-drew37', name: 'Drew', active: true, preferences: {} });
+    storageMod37.setSession('p-drew37');
+
+    // ── (a) system — no attribute; the CSS's own @media rule decides ───────
+    storageMod37.setColorScheme('system');
+    assert(appMod._bootColorSchemeForTest() === 'system', '[37a] bootColorScheme() reads back "system"');
+    appMod._applyColorSchemeForTest(appMod._bootColorSchemeForTest());
+    assert(!('colorScheme' in body37.dataset), `[37a] …and applyColorScheme("system") REMOVES the attribute (got ${JSON.stringify(body37.dataset)})`);
+
+    // ── (b) light ────────────────────────────────────────────────────────
+    storageMod37.setColorScheme('light');
+    assert(appMod._bootColorSchemeForTest() === 'light', '[37b] bootColorScheme() reads back "light"');
+    appMod._applyColorSchemeForTest(appMod._bootColorSchemeForTest());
+    assert(body37.dataset.colorScheme === 'light', `[37b] …and applyColorScheme("light") sets the attribute (got ${JSON.stringify(body37.dataset.colorScheme)})`);
+
+    // ── (c) dark ─────────────────────────────────────────────────────────
+    storageMod37.setColorScheme('dark');
+    assert(appMod._bootColorSchemeForTest() === 'dark', '[37c] bootColorScheme() reads back "dark"');
+    appMod._applyColorSchemeForTest(appMod._bootColorSchemeForTest());
+    assert(body37.dataset.colorScheme === 'dark', `[37c] …and applyColorScheme("dark") sets the attribute (got ${JSON.stringify(body37.dataset.colorScheme)})`);
+
+    // ── (d) FINDING 9 — applyColorSchemeChoice() applies the VALIDATED
+    //      value, never the raw drawer input. setColorScheme() REFUSES
+    //      anything outside {system,light,dark} and persists nothing; before
+    //      this fix applyColorSchemeChoice(key) still called
+    //      applyColorScheme(key) with that SAME refused raw key, painting
+    //      data-color-scheme="evil-mode" on the body while storage silently
+    //      kept the prior (unpersisted) value.
+    body37.dataset = {};
+    storageMod37.setColorScheme('dark'); // known persisted baseline
+    const setOk37 = storageMod37.setColorScheme('evil-mode');
+    assert(setOk37 === false, '[37d] fixture: setColorScheme() refuses an out-of-enum value and does not persist it');
+    assert(storageMod37.getColorScheme() === 'dark', '[37d] fixture: …and the persisted value is UNCHANGED (still "dark")');
+    appMod._applyColorSchemeChoiceForTest('evil-mode');
+    assert(body37.dataset.colorScheme !== 'evil-mode',
+      `[37d] applyColorSchemeChoice("evil-mode") never paints the refused raw value (got ${JSON.stringify(body37.dataset.colorScheme)})`);
+    assert(body37.dataset.colorScheme === 'dark',
+      `[37d] …it re-derives from the ACTUAL persisted value instead (got ${JSON.stringify(body37.dataset.colorScheme)}, expected "dark" — the value setColorScheme() actually kept)`);
+
+    // ── (e) MUTATION GUARD — a legitimate, ACCEPTED choice still paints
+    //      as-is (this fix must not turn every choice into a re-derive,
+    //      only a refused one) ───────────────────────────────────────────
+    const setOk37e = storageMod37.setColorScheme('light');
+    assert(setOk37e === true, '[37e] fixture: a real, in-enum choice is accepted');
+    appMod._applyColorSchemeChoiceForTest('light');
+    assert(body37.dataset.colorScheme === 'light',
+      `[37e] …and applyColorSchemeChoice() still paints an ACCEPTED choice normally (got ${JSON.stringify(body37.dataset.colorScheme)})`);
+
+    if (globalThis.document) globalThis.document.body = prevBody37;
+    globalThis.localStorage.removeItem('cfbp_players');
+    storageMod37.clearSession();
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // [38] FINDING 4 (app-shell part 3A review, 2026-09-27) — the drawer's own
+  //      `ctx.bodies.scribeFileHTML` (buildControlCenterCtx(), js/app.js) is
+  //      pilot-gated (DI-365): the SCRIBE training archive concatenates on
+  //      only when isPilotLeague(leagueForCtx) is true. controlcentertest.mjs
+  //      only ever drives js/control-center.js's OWN render functions with a
+  //      hand-fed `scribeFileHTML` fixture string — it never exercises the
+  //      real WIRING in app.js that decides whether the archive is IN that
+  //      string at all. This is that missing integration test, through the
+  //      real buildControlCenterCtx() (exported here as a test seam).
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[38] Finding 4 — bodies.scribeFileHTML is pilot-gated for real, through buildControlCenterCtx()…');
+  {
+    const storageMod38 = await import('./js/storage.js');
+    storageMod38.setBackendMode('local');
+    storageMod38.addPlayer({ playerId: 'p-drew38', name: 'Drew', active: true, preferences: {} });
+    storageMod38.setSession('p-drew38');
+    storageMod38._setScribeReportsForTest([{ createdAt: new Date().toISOString() }]);
+    // Bypasses setActiveLeagueId()'s own side effects (_recomputeSynthesizedSession()/
+    // _notifyIdentityMaybeChanged() — real identity-change fan-out this
+    // narrow test has no need to exercise) — a direct write to the same key
+    // that function itself writes (js/auth.js's ACTIVE_LEAGUE_KEY).
+    globalThis.localStorage.setItem('cfbp_supabase_active_league', 'L-test38');
+
+    // ── (a) pilot:false — no archive, anywhere in the body ─────────────────
+    authMod._setMembershipsForTest([{ leagueId: 'L-test38', leagueName: 'Test League', pilot: false, status: 'active' }]);
+    const ctxA38 = appMod._buildControlCenterCtxForTest();
+    assert(!/scribe-report-row/.test(ctxA38.bodies.scribeFileHTML),
+      '[38a] pilot:false — bodies.scribeFileHTML carries no scribe-report-row markup');
+    assert(!/SCRIBE Training/.test(ctxA38.bodies.scribeFileHTML),
+      '[38a-2] pilot:false — …nor the "SCRIBE Training" heading at all (the whole card is absent, not just its rows)');
+    assert(ctxA38.flags.isPilotLeague === false, '[38a-3] fixture: flags.isPilotLeague genuinely reads false here');
+
+    // ── (b) pilot:true — the archive IS present, rows and all ─────────────
+    authMod._setMembershipsForTest([{ leagueId: 'L-test38', leagueName: 'Test League', pilot: true, status: 'active' }]);
+    const ctxB38 = appMod._buildControlCenterCtxForTest();
+    assert(/scribe-report-row/.test(ctxB38.bodies.scribeFileHTML),
+      '[38b] pilot:true — bodies.scribeFileHTML DOES carry the scribe-report-row markup (one report was seeded)');
+    assert(/SCRIBE Training/.test(ctxB38.bodies.scribeFileHTML),
+      '[38b-2] pilot:true — …and the "SCRIBE Training" heading');
+    assert(ctxB38.flags.isPilotLeague === true, '[38b-3] fixture: flags.isPilotLeague genuinely reads true here');
+
+    // ── (c) MUTATION GUARD — the two outputs actually differ, not a
+    //      coincidental identical render for both flag values ─────────────
+    assert(ctxA38.bodies.scribeFileHTML !== ctxB38.bodies.scribeFileHTML,
+      '[38c] pilot:false and pilot:true render genuinely DIFFERENT scribeFileHTML — not a vacuous same-string pass');
+    assert(ctxB38.bodies.scribeFileHTML.length > ctxA38.bodies.scribeFileHTML.length,
+      '[38c-2] …specifically, pilot:true is STRICTLY LONGER (the archive is appended, never swapped in place of something else)');
+
+    globalThis.localStorage.removeItem('cfbp_supabase_active_league');
+    storageMod38._setScribeReportsForTest([]);
+    globalThis.localStorage.removeItem('cfbp_players');
+    storageMod38.clearSession();
+    authMod._setMembershipsForTest([]);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  // [39] FINDING 5 (app-shell part 3A review, 2026-09-27) — the RENDERED
+  //      Rules page (renderRulesPage(), js/app.js) carries none of DI-365's
+  //      three retired cards (install-as-iPhone-app, the SCRIBE training
+  //      archive, the release-notes accordion) — checked against the REAL
+  //      innerHTML this function actually sets, on BOTH a pilot and a
+  //      non-pilot league (the page never branched on pilot status for these
+  //      three cards to begin with — they are gone unconditionally — so this
+  //      also proves that removal did not accidentally leave a pilot-only
+  //      backdoor to any of the three).
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[39] Finding 5 — the rendered Rules page carries none of the three DI-365-retired cards, pilot or not…');
+  {
+    const storageMod39 = await import('./js/storage.js');
+    storageMod39.setBackendMode('local');
+    storageMod39._setScribeReportsForTest([{ createdAt: new Date().toISOString() }]);
+    const pageRulesEl39 = new BEl('div');
+    pageRulesEl39.id = 'page-rules';
+    currentReg.set('page-rules', pageRulesEl39);
+
+    for (const pilotFlag of [false, true]) {
+      authMod._setMembershipsForTest([{ leagueId: 'L-test39', leagueName: 'Test League 39', pilot: pilotFlag, status: 'active' }]);
+      appMod.renderRulesPage();
+      const html39raw = String(pageRulesEl39.innerHTML || '');
+      assert(html39raw.length > 0, `[39] fixture (pilot:${pilotFlag}): renderRulesPage() actually painted #page-rules`);
+      // Stripped of HTML comments before the absence checks below — the
+      // function's own DI-365 explanatory note (`<!-- DI-365 (2026-09-27)…
+      // "Install as iPhone App" card… -->`) is a genuine `<!-- -->` HTML
+      // comment inside the returned template literal, invisible to a real
+      // browser, but a naive substring check would flag it as "the card is
+      // still there." Stripped here so this test checks what a PLAYER would
+      // see, matching the finding's own word "rendered."
+      const html39 = html39raw.replace(/<!--[\s\S]*?-->/g, '');
+      assert(!/Install as iPhone/.test(html39),
+        `[39] pilot:${pilotFlag} — no VISIBLE "Install as iPhone App" card on the Rules page (dev comments are stripped first)`);
+      assert(!/SCRIBE Training/.test(html39),
+        `[39] pilot:${pilotFlag} — no "SCRIBE Training" archive on the Rules page (it lives in the drawer now, pilot-gated — see [38])`);
+      assert(!/scribe-report-row/.test(html39),
+        `[39] pilot:${pilotFlag} — …and none of its rows either`);
+      assert(!/release-notes-foot/.test(html39),
+        `[39] pilot:${pilotFlag} — no release-notes accordion card (renderReleaseNotesCardHTML()'s own marker class) on the Rules page`);
+    }
+
+    currentReg.delete('page-rules');
+    authMod._setMembershipsForTest([]);
+    storageMod39._setScribeReportsForTest([]);
+  }
+
   }
 }
 
@@ -4516,7 +4876,11 @@ console.log('\n[25] RG-179 — the player\'s saved theme/timezone are re-applied
     // moved; the SOURCE has, because getTheme() at this point can only ever
     // answer 'neutral' on a Supabase device — which is the assertion two lines
     // above, and now also the reason bootThemeKey() exists.
-    assert(/applyTheme\(bootThemeKey\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
+    // Re-derived 2026-09-27 (DI-360, this pass) — applyColorScheme(bootColorScheme())
+    // now sits between the two, a second, independent axis added at the SAME
+    // boot-time position (never routed through applyTheme() itself — see that
+    // function's own header) — same site, text extended to match verbatim.
+    assert(/applyTheme\(bootThemeKey\(\)\); applyColorScheme\(bootColorScheme\(\)\); setupAutoRefresh\(\);/.test(bootBody25),
       '[25] fixture: boot() really does apply the theme at that point [structural]');
     assert(/const fromPlayer = getTheme\(\);/.test(appSrc25),
       '[25] …and bootThemeKey() still prefers the PLAYER record: the hint is a first-frame stand-in, never a second source of truth [structural]');
@@ -5597,27 +5961,32 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // S1-B's gate-notice helper and S2-3's drawer closes shifted the tail.
   // Re-derived by exact-text match (each text unique in the file), same
   // sites, same texts.
+  // Re-derived 2026-09-27 (v0.27.0 bugfix pass: the #control-center-trigger fill + week-swipe chronology + stamp): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (UX Revamp post-deploy pass, APP-SHELL slice) — the
+  // DI-348 warm-relaunch snapshot (boot()'s new leading capture + a new
+  // helper/test seam above `async function boot()`) shifted the last three
+  // sites; same six sites, no new ones, only their line numbers moved.
   const ENUMERATED_HVS_SITES = [
     // The import itself — not a "call site," but unavoidable to use the
     // function at all; excluded here rather than by file-level exemption
     // (rolestest's "the module itself" shape) so a SECOND import line
     // elsewhere in the file still gets caught.
-    { line: 519, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    { line: 535, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
     // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
     // place a raw token question is still the right question: no vendored
     // SDK means isSignedInForApp() cannot even be asked yet.
-    { line: 1247, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    { line: 1267, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
     // The deps object handed to other modules — a bare reference, never
     // called from here; whatever THAT module does with it is its own
     // concern, not this file's gate logic.
-    { line: 1675, text: "hasValidSupabaseSession," },
+    { line: 1695, text: "hasValidSupabaseSession," },
     // noIdentityEverProven() — deliberately asks the token question directly
     // (an identity that was never even attempted is a narrower, and correct,
     // question than "is the app-level identity signed in").
-    { line: 4528, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+    { line: 4610, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
     // isSignedInForApp() itself — the ONE place allowed to compose the raw
     // token question into the app-level answer everything else must use.
-    { line: 4550, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    { line: 4632, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
     // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
     // whether THIS payload proves the token is fresh; a narrower question
     // than "is the app signed in," and correctly so.
@@ -5625,7 +5994,17 @@ console.log('     every gate/release site the security probe reverted reads isSi
     // guard added to applyIdentityDeltaIfChanged() (above this site in
     // source order) shifted every line number below it; same site, only the
     // line number moved.
-    { line: 25120, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+    // Re-derived 2026-09-27 (this pass, DI-350…365/wizard reconciliation/
+    // Finalize-flow edits above this site) — line numbers only, same six
+    // sites, matched by text.
+    // Re-derived 2026-09-27 (app-shell part 3A review pass: escHtml(w.weekId)
+    // ×3, the wizard warning-box icon fix, tickAutoTransition()'s Finding-2
+    // rework — all above this site in source order) — line number only, same
+    // site, matched by text.
+    // Re-derived AGAIN 2026-09-27 (app-shell part 3A review, BLOCK fix (d)'s
+    // wizardSetActiveWeekId() call + comment, added inside tickAutoTransition()'s
+    // scan loop — above this site) — line number only, same site, matched by text.
+    { line: 25513, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
   ];
 
   // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
@@ -5676,18 +6055,38 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // The eight gate/release sites the security probe reverted one at a time
   // without any suite going red — pinned by exact line+text, so a FUTURE
   // revert (back to the token-only question) is caught the same way.
+  // Re-derived 2026-09-27 (v0.27.0 bugfix pass: the #control-center-trigger fill + week-swipe chronology + stamp): line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-27 (UX Revamp post-deploy pass, APP-SHELL slice: DI-348's
+  // warm-relaunch snapshot + needsLeagueFlowScreen() rewrite added code ahead of
+  // every one of these eight sites; same eight sites, no new ones, only their
+  // line numbers moved).
+  // Re-derived 2026-09-27 (this pass, DI-350…365/wizard reconciliation/
+  // Finalize-flow edits above these sites) — line numbers only, same eight
+  // sites, matched by exact text (each unique in the file).
+  // Re-derived 2026-09-27 (app-shell part 3A review pass: escHtml(w.weekId)
+  // ×3, the wizard warning-box icon fix, tickAutoTransition()'s Finding-2
+  // rework — all above every one of these eight sites) — line numbers only,
+  // same eight sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-27 (same pass, BLOCK fix (d)'s wizardSetActiveWeekId()
+  // call + comment, added inside tickAutoTransition()'s scan loop — above
+  // every one of these eight sites too) — line numbers only, same eight
+  // sites, matched by exact text.
+  // Re-derived 2026-09-28 (security F1 logo-backfill gate in doRefreshScores(), the
+  // sync-glyph wrapper + _updateSyncBadgeForTest seam, and the league pill's keydown/
+  // fit-to-room helpers — all above some of these sites) — line numbers only, same
+  // sites, same texts, matched by exact text.
   const ENUMERATED_ISFA_SITES = [
-    { line: 5042, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
-    { line: 22979, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
-    { line: 23045, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
-    { line: 23096, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    { line: 5231, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { line: 23372, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { line: 23438, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { line: 23489, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
     // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
     // the line numbers moved (see the note on the hasValidSupabaseSession
     // pin above).
-    { line: 24963, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
-    { line: 25269, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
-    { line: 25873, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
-    { line: 25903, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+    { line: 25356, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { line: 25662, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { line: 26284, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { line: 26314, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
   ];
   const linesN1 = srcN1raw.split('\n');
   const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);

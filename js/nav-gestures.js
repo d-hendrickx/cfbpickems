@@ -433,6 +433,66 @@ export function bindKeyboardAvoid() {
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+// v0.27.x bugfix (Drew, 2026-09-27) — T-25 companion: STICK-TO-BOTTOM for a
+// bounded message thread across the keyboard layout change.
+// ═════════════════════════════════════════════════════════════════════════
+
+/**
+ * "At the latest" band — ONE constant shared with the chat page's own
+ * "↓ latest" button (js/chat-ui.js imports it for onChatScrollEvent()'s
+ * `nearBottom`; navgesturestest [12d] pins both to it). Inside it, the thread follows the
+ * bottom edge when its viewport resizes; outside it (a deliberate scroll-up
+ * to read history) the position is left exactly where the player put it.
+ */
+export const BOTTOM_ANCHOR_PX = 120;
+
+const bottomAnchors = new WeakMap();
+
+/**
+ * Keeps a bounded scroller pinned to its bottom when ITS OWN height changes,
+ * if (and only if) the reader was within BOTTOM_ANCHOR_PX of the bottom just
+ * before the change.
+ *
+ * Why this exists: T-25's `body[data-keyboard-up]` grows #page-chat by
+ * --nav-height while the keyboard is up and shrinks it back on dismiss. On
+ * the grow the browser clamps scrollTop, so a bottom-pinned thread stays
+ * pinned; on the shrink scrollTop is simply kept and the newest
+ * --nav-height px of the thread end up hidden under the composer. Blink
+ * papers over that with CSS scroll anchoring; WebKit — the iOS home-screen
+ * app and the WKWebView shell — has none, so the thread must do it itself.
+ *
+ * The "was at the bottom" answer is recorded on every 'scroll' event (the
+ * browser's own clamp fires one too), never re-measured inside the
+ * ResizeObserver callback — by then the new size has already moved the
+ * bottom edge, and a shrink larger than the band would read as a
+ * deliberate scroll-up. Idempotent per element (WeakMap,
+ * same shape as bindBottomBounce()/bindWeekSwipe()); a safe no-op without
+ * ResizeObserver.
+ */
+export function bindBottomAnchor(scrollEl) {
+  if (!scrollEl || typeof scrollEl.addEventListener !== 'function') return () => {};
+  if (bottomAnchors.has(scrollEl)) return bottomAnchors.get(scrollEl);
+  if (typeof ResizeObserver !== 'function') return () => {};
+
+  const nearBottom = () => (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight) < BOTTOM_ANCHOR_PX;
+  let anchored = nearBottom();
+  const onScroll = () => { anchored = nearBottom(); };
+  const ro = new ResizeObserver(() => {
+    if (anchored) scrollEl.scrollTop = scrollEl.scrollHeight;
+  });
+  scrollEl.addEventListener('scroll', onScroll, { passive: true });
+  ro.observe(scrollEl);
+
+  const unbind = () => {
+    scrollEl.removeEventListener('scroll', onScroll);
+    ro.disconnect();
+    bottomAnchors.delete(scrollEl);
+  };
+  bottomAnchors.set(scrollEl, unbind);
+  return unbind;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 // DI-324 — T-26 PULL-TO-REFRESH
 // ═════════════════════════════════════════════════════════════════════════
 
@@ -650,6 +710,21 @@ export function _weekSwipeResolve(weekIds, currentId, dx) {
   const targetIdx = dx > 0 ? idx - 1 : idx + 1;
   if (targetIdx < 0 || targetIdx >= weekIds.length) return null;
   return weekIds[targetIdx];
+}
+
+/**
+ * v0.27.0 fix (Drew, 2026-09-27: "The right left swipe on the dashboard is
+ * backwards") — the ONE place a week list is put into the order
+ * `_weekSwipeResolve()` requires: OLDEST→NEWEST, by season then weekNumber
+ * (the same comparator `picksNavWeeks()` sorts with). Every bindWeekSwipe()
+ * state getter hands its ids through this, so no binder's own display order
+ * (the Dashboard's newest-first <select> list was the defect) can ever
+ * reach the direction table again. Pure; returns a new array of ids.
+ */
+export function chronologicalWeekIds(weeks) {
+  return (Array.isArray(weeks) ? weeks.slice() : [])
+    .sort((a, b) => String(a?.season).localeCompare(String(b?.season)) || (a?.weekNumber - b?.weekNumber))
+    .map(w => w?.weekId);
 }
 
 /**

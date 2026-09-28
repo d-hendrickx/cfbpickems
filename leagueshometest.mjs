@@ -123,7 +123,7 @@ console.log('\n[1] resolveLeagueEntryPath() — the full §0 table, including si
   // this function's own default matches SINGLE_LEAGUE_ROUTE ('home') and
   // warmRelaunch:false, so its bare default is 'leagues-home', NOT 'six-tab'
   // (that was true before this function took the route/warm parameters).
-  assert(resolveLeagueEntryPath({ membershipCount: 1, liveSportCount: 1 }) === 'six-tab', "1/1 cell, no overrides → module defaults (route='skip' per Drew's 2026-09-25 ruling, warm=false) → six-tab");
+  assert(resolveLeagueEntryPath({ membershipCount: 1, liveSportCount: 1 }) === 'leagues-home', "1/1 cell, no overrides → module defaults (route='home' per Drew's 2026-09-27 reversal, warm=false) → leagues-home");
   assert(resolveLeagueEntryPath({ membershipCount: 1, liveSportCount: 1, singleLeagueRoute: 'skip', warmRelaunch: false }) === 'six-tab', "1/1 cell, route='skip', cold → six-tab (the DI's own §0 recommendation)");
   assert(resolveLeagueEntryPath({ membershipCount: 1, liveSportCount: 1, singleLeagueRoute: 'skip', warmRelaunch: true }) === 'six-tab', "1/1 cell, route='skip', warm → six-tab");
   assert(resolveLeagueEntryPath({ membershipCount: 1, liveSportCount: 1, singleLeagueRoute: 'home', warmRelaunch: false }) === 'leagues-home', "1/1 cell, route='home', cold → leagues-home");
@@ -192,9 +192,9 @@ console.log('\n[2] resolvePostSignInRoute() — SINGLE_LEAGUE_ROUTE × warm/cold
   assert(resolvePostSignInRoute({ memberships: noSportCountField, warmRelaunch: false, singleLeagueRoute: 'skip' }).screen === 'six-tab', 'missing liveSportCount defaults to 1, not a throw');
 }
 
-console.log('\n[2b] SINGLE_LEAGUE_ROUTE is locked at the coordinator\'s held default');
+console.log('\n[2b] SINGLE_LEAGUE_ROUTE is locked at Drew\'s 2026-09-27 reversal (DI-348)');
 {
-  assert(SINGLE_LEAGUE_ROUTE === 'skip', "SINGLE_LEAGUE_ROUTE === 'skip' — Drew ruled §0 option (b) on 2026-09-25: a single-league player skips Leagues Home and the league page");
+  assert(SINGLE_LEAGUE_ROUTE === 'home', "SINGLE_LEAGUE_ROUTE === 'home' — Drew reversed his 2026-09-25 §0 option (b) ruling on 2026-09-27 ('when I sign in from a different browser it immediately jumps to this league without letting me choose the league or sport'): a cold sign-in always shows Leagues Home, even with one membership; a warm relaunch still fast-paths to six-tab");
 }
 
 console.log('\n[3] leagueCardHTML()');

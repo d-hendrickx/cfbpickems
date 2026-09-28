@@ -1175,8 +1175,8 @@ assert(/const cutoff = retentionCutoff\(\)/.test(unreadFn) && !/isHiddenByRetent
 // ── 11. Naming split — "Chat" at entry points, "Locker Room" inside the room ─
 console.log('\n[11] Naming split — Chat at entry points, Locker Room inside the room…');
 const indexHtmlSrc = await readFile(new URL('./index.html', import.meta.url), 'utf8');
-const navChatBlock = (indexHtmlSrc.match(/data-tab="chat">[\s\S]*?<\/button>/) || [''])[0];
-assert(/<span>Chat<\/span>/.test(navChatBlock), 'nav: the Chat tab label reads "Chat"');
+const navChatBlock = (indexHtmlSrc.match(/data-tab="chat"[^>]*>[\s\S]*?<\/button>/) || [""])[0];
+assert(/<span class="sr-only">Chat<\/span>/.test(navChatBlock), 'nav: the Chat tab accessible label (.sr-only) reads "Chat"');
 assert(!/Locker Room/.test(navChatBlock), 'nav: the Chat tab no longer reads "Locker Room"');
 
 // v0.17.4 (UN-104): the header row went from a two-line <h2>Chat</h2> +
@@ -1698,15 +1698,17 @@ assert(!!dims512 && dims512.width === 512 && dims512.height === 512,
 // ── 21. UN-97 — bottom nav SVG icon exception (CONVENTIONS #16) ──────────────
 console.log('\n[21] UN-97 — bottom nav SVG icon exception (the ONE named exception to "icons are emoji")…');
 
-const navBlock = (indexHtmlSrc.match(/<nav class="bottom-nav">[\s\S]*?<\/nav>/) || [''])[0];
+const navBlock = (indexHtmlSrc.match(/<nav class="bottom-nav"[^>]*>[\s\S]*?<\/nav>/) || [''])[0];
 const navItemBlocks = navBlock.match(/<button class="nav-item[^"]*"[^>]*>[\s\S]*?<\/button>/g) || [];
-assert(navItemBlocks.length === 6, `bottom nav has exactly 6 .nav-item buttons (got ${navItemBlocks.length})`);
+// DI-397 (UN-357, 2026-09-27) — FIVE buttons now, not six: the Settings tab
+// is retired (its content lives in the control-center drawer only).
+assert(navItemBlocks.length === 5, `bottom nav has exactly 5 .nav-item buttons (Settings retired, DI-397) (got ${navItemBlocks.length})`);
 navItemBlocks.forEach((block, i) => {
   assert(/<svg[^>]*>/.test(block), `nav item ${i + 1} contains an inline <svg>`);
   assert(/currentColor/.test(block), `nav item ${i + 1}'s <svg> uses currentColor — themed by the EXISTING .nav-item.active,.nav-item:active color rule with zero new CSS`);
 });
 
-// Every one of the six original emoji spans must be gone.
+// Every one of the original emoji spans must be gone.
 ['🏈', '📊', '💬', '🏆', '📋', '⚙️'].forEach(emoji => {
   assert(!navBlock.includes(`nav-icon">${emoji}`), `.nav-icon no longer renders ${emoji} directly (replaced by inline SVG)`);
 });
@@ -1720,21 +1722,28 @@ navItemBlocks.forEach((block, i) => {
 assert(!/class="app-logo-icon"/.test(indexHtmlSrc) && !/🏈/.test(indexHtmlSrc),
   'the header logo 🏈 emoji is GONE (UN-109) — no leftover instance anywhere in index.html');
 
-// Exactly 6 <svg> in the whole file — the six nav icons and nothing else
-// (favicon is a separate .svg FILE referenced via <link>, not an inline <svg>).
+// DI-397 — exactly 5 <svg> in the whole file now: the five nav icons and
+// nothing else (favicon is a separate .svg FILE referenced via <link>, not
+// an inline <svg>; the header's sync icon is injected at RUNTIME by
+// updateSyncBadge(), js/app.js, never present in this static markup).
 const totalSvgCount = (indexHtmlSrc.match(/<svg/g) || []).length;
-assert(totalSvgCount === 6, `index.html contains exactly 6 <svg> elements (the six nav icons, nothing leaked outside the nav) — got ${totalSvgCount}`);
+assert(totalSvgCount === 5, `index.html contains exactly 5 <svg> elements (the five nav icons, Settings retired, nothing else leaked outside the nav) — got ${totalSvgCount}`);
 
-// UPDATED — D-3 (2026-09-24, CLAUDE.md, amends UN-73): the bottom nav
-// becomes Picks · Dashboard · Chat · Standings · Settings · Comm. The
-// TAB ORDER (positions) is unchanged — only the fifth slot's key/label
-// moved from Rules to Settings (DI-307/308, wired this pass).
+// UPDATED — DI-397 (UN-357, 2026-09-27), Drew's own live ruling: the bottom
+// nav becomes Picks · Dashboard · Chat · Standings · Comm — Settings
+// retired entirely (amends D-3/UN-73 again; it superseded the prior "Rules ->
+// Settings" amendment this assertion used to pin).
 const navOrder = [...navBlock.matchAll(/data-tab="([a-z]+)"/g)].map(m => m[1]);
-assert(JSON.stringify(navOrder) === JSON.stringify(['picks', 'dashboard', 'chat', 'leaderboard', 'settings', 'commissioner']),
-  `nav tab order matches D-3's amended UN-73 (Rules -> Settings, same position) — got ${JSON.stringify(navOrder)}`);
-const navLabels = navItemBlocks.map(b => (b.match(/<span>([^<]+)<\/span>\s*<\/button>/) || [, ''])[1]);
-assert(JSON.stringify(navLabels) === JSON.stringify(['Picks', 'Dashboard', 'Chat', 'Standings', 'Settings', 'Comm.']),
-  `nav labels match D-3's amended UN-73 — got ${JSON.stringify(navLabels)}`);
+assert(JSON.stringify(navOrder) === JSON.stringify(['picks', 'dashboard', 'chat', 'leaderboard', 'commissioner']),
+  `nav tab order matches DI-397's amended UN-73 (Settings retired) — got ${JSON.stringify(navOrder)}`);
+// DI-397 — the pill is ICON-ONLY; the visible <span>Label</span> text is
+// gone, replaced by a `.sr-only` span (VoiceOver-only, never display:none)
+// carrying the SAME word — checked here instead.
+const navLabels = navItemBlocks.map(b => (b.match(/<span class="sr-only">([^<]+)<\/span>/) || [, ''])[1]);
+assert(JSON.stringify(navLabels) === JSON.stringify(['Picks', 'Dashboard', 'Chat', 'Standings', 'Comm.']),
+  `nav accessible labels (.sr-only) match DI-397's amended UN-73 — got ${JSON.stringify(navLabels)}`);
+assert(navItemBlocks.every(b => /aria-label="[^"]+"/.test(b)),
+  'every nav item ALSO carries its own aria-label (belt-and-suspenders with the .sr-only span — DI-397/the build brief both name a way to supply the accessible name)');
 const navItemRule = (cssSrc.match(/\.nav-item\{[^}]*\}/) || [''])[0];
 assert(/min-height:44px/.test(navItemRule), 'nav-item tap target (min-height:44px) is unchanged — the hit area stays the full button, not just the glyph');
 
@@ -1799,19 +1808,21 @@ const identityFnSrc = (appJsSrc.match(/export function renderHeaderIdentity\(\)[
 assert(identityFnSrc.length > 0 && !/\bweek\b/.test(identityFnSrc),
   'renderHeaderIdentity has no week-status dependency — renders identically in Draft/Open/Locked/Live/Final');
 
-// REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — #header-identity is
-// REMOVED from index.html entirely now (not merely repositioned/hidden): the
-// header declutter found renderHeaderIdentity() was still un-hiding it on
-// every session resolve, defeating the original "hidden" intent. The
-// FUNCTION itself is unchanged (every assertion above this one still drives
-// it against a manually-injected fake element, same as always) — this is
-// now an ABSENCE check on the real markup, replacing the old placement
-// check on markup that no longer exists.
-const headerRightBlock = (indexHtmlSrc.match(/<div class="header-right">[\s\S]*?<\/div>/) || [''])[0];
-assert(headerRightBlock.length > 0 && !headerRightBlock.includes('id="header-identity"'),
-  'F4 — .header-right carries NO id="header-identity" — removed entirely, so renderHeaderIdentity() is now permanently inert in production');
-assert(headerRightBlock.includes('id="sync-badge"'),
-  '…and #sync-badge is still there — the header keeps exactly trigger | #header-meta | #sync-badge per mockups/control-center.html:96-102');
+// DI-393 (UN-353, 2026-09-27) — SUPERSEDES REVIEWER F4 (2026-09-25) in
+// structure only: `.header-right` (the wrapper F4's own text still named)
+// is GONE — #sync-badge is a direct .app-header-inner child now, one of
+// DI-393's five zones. #header-identity stays absent (its identity/profile
+// job lives in the control-center drawer only, DI-302, unaffected by
+// either pass) — the FUNCTION itself is unchanged (every assertion above
+// this one still drives it against a manually-injected fake element, same
+// as always).
+const headerInnerBlockF4 = (indexHtmlSrc.match(/<div class="app-header-inner">[\s\S]*?<\/div>\s*<\/header>/) || [''])[0];
+assert(headerInnerBlockF4.length > 0 && !headerInnerBlockF4.includes('id="header-identity"'),
+  'DI-393 — .app-header-inner carries NO id="header-identity" — renderHeaderIdentity() stays permanently inert in production');
+assert(!indexHtmlSrc.includes('class="header-right"'),
+  'DI-393 — .header-right is gone entirely, not merely emptied — #sync-badge sits directly in .app-header-inner now');
+assert(headerInnerBlockF4.includes('id="sync-badge"'),
+  '…and #sync-badge is still there — the header\'s trailing zone (DI-393: trigger | #league-pill | spacer | #header-meta | #sync-badge)');
 assert(/renderHeaderIdentity\(\);/.test((appJsSrc.match(/function refreshHeader\(\)[\s\S]*?\n}/) || [''])[0]),
   'refreshHeader() calls renderHeaderIdentity() — covers boot + every week-driven re-render');
 // SIXTH GATE (2026-09-17) — matched by the opening PAREN. This function takes
@@ -2082,8 +2093,13 @@ const pageChatActiveRule = (cssSrc.match(/#page-chat\.active\{[^}]*\}/) || [''])
 assert(pageChatActiveRule.length > 0, '#page-chat.active rule located');
 assert(/display:\s*flex/.test(pageChatActiveRule) && /flex-direction:\s*column/.test(pageChatActiveRule),
   '#page-chat.active is a flex column — the bounding mechanism moved from .chat-scroll\'s own calc() to the PARENT\'s explicit height');
-assert(/height:\s*calc\(100dvh/.test(pageChatActiveRule) && /var\(--nav-height\)/.test(pageChatActiveRule) && /env\(safe-area-inset-bottom/.test(pageChatActiveRule),
-  '#page-chat.active has an explicit height budgeting for the nav and the bottom safe area (moved here from .chat-scroll)');
+// DI-397 (2026-09-27) — `--nav-height` is retired; the one compound token
+// `--nav-bar-clearance` (pill height + gap + env(safe-area-inset-bottom,0px),
+// computed once, css/styles.css's own :root comment) already bakes the
+// safe-area inset into itself, so this rule no longer needs a SEPARATE
+// env() term alongside it.
+assert(/height:\s*calc\(100dvh/.test(pageChatActiveRule) && /var\(--nav-bar-clearance\)/.test(pageChatActiveRule),
+  '#page-chat.active has an explicit height budgeting for the nav pill + safe area via --nav-bar-clearance (moved here from .chat-scroll)');
 assert(/padding-top:\s*env\(safe-area-inset-top/.test(pageChatActiveRule),
   '#page-chat.active supplies its own top safe-area clearance — the notch clearance .app-header used to supply before it was hidden on this tab');
 assert(/overflow:\s*hidden/.test(pageChatActiveRule),
@@ -2501,36 +2517,40 @@ assert(/<strong>\$\{escHtml\(getShellBrandName\(\)\)\}<\/strong>/.test(appJsSrc)
 assert(!/\.app-logo\{/.test(cssSrc) && !/\.app-logo-icon\{/.test(cssSrc) && !/\.app-logo-text/.test(cssSrc),
   'no .app-logo/.app-logo-icon/.app-logo-text CSS rule survives (including narrow-viewport overrides)');
 
-console.log('\n[27c] UN-108 — header balance: header-right is a ROW, header-meta is the left slot…');
+console.log('\n[27c] DI-393 (UN-353, 2026-09-27) — header balance: a true one-line row, —');
+console.log('   header-right retired, #league-pill/#header-spacer/#header-meta/#sync-badge are direct');
+console.log('   .app-header-inner children…');
 
-// Root cause, verified in the design input: .header-right was
-// flex-direction:column — a five-row vertical tower stacked against a single
-// small logo. THAT was the actual mechanism behind "unbalanced," not a
-// spacing nit. This is the literal fix.
-const headerRightRule27 = (cssSrc.match(/\.header-right\{[^}]*\}/) || [''])[0];
-assert(headerRightRule27.length > 0, '.header-right rule located');
-assert(/flex-direction:\s*row/.test(headerRightRule27),
-  `.header-right is flex-direction:row — the actual imbalance mechanism, fixed — got "${headerRightRule27}"`);
-assert(!/flex-direction:\s*column/.test(headerRightRule27),
-  '.header-right is no longer flex-direction:column (the five-row tower)');
-
-// #header-meta keeps its id (refreshHeader() targets it by id — no JS change
-// needed) but is now the LEFT slot, moved OUT of .header-right, ahead of it
-// in .app-header-inner so .app-header-inner's existing
-// justify-content:space-between creates a real left/right split.
+// DI-393 SUPERSEDES both UN-108 (.header-right as a ROW) and DI-361 (a
+// 3-column centred grid) in full: `.header-right` is GONE from the markup
+// entirely (checked above, §[21]/the F4 block) — there is no wrapper left
+// for a flex-direction rule to apply to. headermetatest.mjs's own [css2]/
+// [index.html] sections are the FOCUSED suite for the current one-line
+// contract (flex factors, zone order, truncation priority) — this section
+// only pins the two facts loadtest's own whole-tree sweep is positioned to
+// catch: the wrapper is really gone, and .header-meta is really a plain
+// row now (not DI-361's superseded centred column), so a future change
+// cannot quietly resurrect either without a failure somewhere in this file
+// too, not only in the focused suite.
+// NOTE: `.header-right{...}` itself is intentionally NOT asserted gone here —
+// app-shell part 3B's own scope is markup + the two named CSS items
+// (.warning-box svg, the header .badge flex-shrink); the now-unused CSS rule
+// is a follow-up cleanup for the CSS builder's own thread, not silently
+// claimed done by this suite.
+assert(!indexHtmlSrc.includes('class="header-right"'), '.header-right markup is gone from index.html — DI-393 retires the wrapper, not just the id it used to hold');
 const headerInnerBlock27 = (indexHtmlSrc.match(/<div class="app-header-inner">[\s\S]*?<\/header>/) || [''])[0];
 assert(headerInnerBlock27.length > 0, '.app-header-inner block located in index.html');
 assert(/id="header-meta"/.test(headerInnerBlock27), '#header-meta still exists with its id — refreshHeader() (app.js) targets it by id');
+const pillIdx27 = headerInnerBlock27.indexOf('id="league-pill"');
 const metaIdx27 = headerInnerBlock27.indexOf('id="header-meta"');
-const rightDivIdx27 = headerInnerBlock27.indexOf('class="header-right"');
-assert(metaIdx27 > -1 && rightDivIdx27 > -1 && metaIdx27 < rightDivIdx27,
-  '#header-meta is the LEFT slot — it appears BEFORE .header-right in the markup, not nested inside it');
-const headerRightMarkup27 = (indexHtmlSrc.match(/<div class="header-right">[\s\S]*?<\/div>\s*<\/div>\s*<\/header>/) || [''])[0];
-assert(!/id="header-meta"/.test(headerRightMarkup27),
-  '#header-meta is no longer INSIDE .header-right\'s markup — it moved out to become its own slot');
+const syncIdx27 = headerInnerBlock27.indexOf('id="sync-badge"');
+assert(pillIdx27 > -1 && metaIdx27 > -1 && syncIdx27 > -1 && pillIdx27 < metaIdx27 && metaIdx27 < syncIdx27,
+  'DI-393 zone order holds in the real markup: #league-pill, then #header-meta, then #sync-badge');
 const headerMetaRule27 = (cssSrc.match(/\.header-meta\{[^}]*\}/) || [''])[0];
-assert(/text-align:\s*left/.test(headerMetaRule27),
-  `.header-meta is text-align:left now that it's the left slot (was text-align:right when it lived inside .header-right) — got "${headerMetaRule27}"`);
+assert(!/text-align:\s*center/.test(headerMetaRule27),
+  `DI-361's text-align:center (the superseded centred-column treatment) is gone from .header-meta — got "${headerMetaRule27}"`);
+assert(/display:\s*flex/.test(headerMetaRule27) && !/flex-direction:\s*column/.test(headerMetaRule27),
+  `.header-meta is a plain flex ROW (not DI-A1's stacked column) — got "${headerMetaRule27}"`);
 
 console.log('\n[27d] UN-111 — tz/theme visibility uses the REAL tab keys, not "standings"…');
 
@@ -2540,7 +2560,7 @@ console.log('\n[27d] UN-111 — tz/theme visibility uses the REAL tab keys, not 
 // anywhere in styles.css must draw from the REAL key set.
 const dataTabRefs27 = [...cssSrc.matchAll(/body\[data-tab="([a-z]+)"\]/g)].map(m => m[1]);
 assert(dataTabRefs27.length > 0, 'at least one body[data-tab="..."] CSS rule exists (UN-110/UN-111)');
-const validTabKeys27 = new Set(navOrder);   // ['picks','dashboard','chat','leaderboard','settings','commissioner']
+const validTabKeys27 = new Set(navOrder);   // ['picks','dashboard','chat','leaderboard','commissioner'] // DI-397: settings retired
 assert(dataTabRefs27.every(k => validTabKeys27.has(k)),
   `every body[data-tab="..."] selector uses a REAL nav tab key — got ${JSON.stringify([...new Set(dataTabRefs27)])}, valid keys are ${JSON.stringify([...validTabKeys27])}`);
 assert(!dataTabRefs27.includes('standings'),
@@ -7973,20 +7993,21 @@ console.log('\n[60] UN-127 item 4 (relocated) — feedback shortcut moved under 
     assert(headerMetaChildren60.length === 1,
       'calling setup again (e.g. a second boot() in the same session) does not append a second button — idempotent');
 
-    // (e) Layout guarantee. AMENDED 2026-09-09 (DI-A1): UN-117's original
-    // "never a third stacked line" is narrowed to "unless explicitly
-    // requested." Drew explicitly requested the Feedback button on its own
-    // line beneath the week's date range, so #header-meta is now
-    // INTENTIONALLY flex-direction:column — the button IS the third stacked
-    // line. This assertion is flipped from the pre-amendment guarantee and
-    // now pins the column layout, so a silent revert to a row fails here.
+    // (e) Layout guarantee. SUPERSEDED (DI-393, UN-353, 2026-09-27): the
+    // header feedback shortcut this DI-A1 note describes no longer targets
+    // #header-meta in the boot path at all (setupHeaderFeedbackButton() is
+    // kept only for this suite's/headermetatest.mjs's own DOM-injection
+    // coverage above — see js/app.js's own boot-sequence comment) — DI-393's
+    // true one-line header makes #header-meta a plain flex ROW again, one
+    // child (#header-meta-week), never a three-line column. headermetatest.mjs's
+    // own [css]/[css2] sections are the focused suite for the current
+    // contract; this re-confirms it here too, next to the fixture that used
+    // to pin the opposite.
     const headerMetaRule60 = (cssSrc.match(/\.header-meta\{[^}]*\}/) || [''])[0];
     assert(/display:\s*flex/.test(headerMetaRule60),
       `[structural] #header-meta is display:flex — got "${headerMetaRule60}"`);
-    assert(/flex-direction:\s*column/.test(headerMetaRule60),
-      '[structural] #header-meta is flex-direction:column — DI-A1 (2026-09-09) intentionally stacks the Feedback button as a third line beneath the week text (UN-117 amended)');
-    assert(!/flex-wrap:\s*wrap\b/.test(headerMetaRule60),
-      '[structural] #header-meta does not set flex-wrap — the three stacked lines come from flex-direction:column (DI-A1), not from wrapping, so no unintended reflow of the stacked lines');
+    assert(!/flex-direction:\s*column/.test(headerMetaRule60),
+      '[structural] #header-meta is NOT flex-direction:column — DI-A1\'s column layout (built for a header feedback button since retired from the boot path) is superseded by DI-393\'s one-line row');
     // UN-117's own two-line internals (name+badge line, date-range line) are
     // untouched by this batch — re-confirmed here (suite [35] already proves
     // this in full) so a regression on THIS specific guarantee fails right
@@ -9572,7 +9593,7 @@ console.log('\n[73b] authtest.mjs — spawned as a subprocess, exit code + print
   if (summaryMatch73b) {
     assert(summaryMatch73b[1] === '✅ ALL PASS', `authtest.mjs itself reports ALL PASS (got: ${summaryMatch73b[0]})`);
     assert(Number(summaryMatch73b[3]) === 0, `authtest.mjs reports zero failed assertions (got ${summaryMatch73b[3]} failed, ${summaryMatch73b[2]} passed)`);
-    assert(Number(summaryMatch73b[2]) >= 1877, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1877, raised from 1870 by the 6178906 re-gate (2026-09-26): [44k4] tick — the ESPN score refresh runs while the round's re-hydrate is pending, the status tick runs off that hydrate (control), overlapping rounds are skipped (security N2); [44k5] refusal copy from the adapter's REAL emit — key-specific copy only when that key is the whole refusal; before that 1870, raised from 1864 by the f16d87c security pass (2026-09-26): [44k4] the auto-refresh tick awaits its own re-hydrate before tickAutoTransition() (security F1), [44k3] the reveal ledger goes through the storage seam (source scan); before that 1864, raised from 1846 by RG-256 (2026-09-26, reviewer F1 on f16d87c): [44k4] clicks the REAL Save Blurb / Save Tiebreaker / Save Week Settings / Admin Save Data Source Mode / Dismiss-pending handlers after the week LOCKED under a tab painted while OPEN and asserts no transition_week(open) is planned; [44k3] SEC-1 now also asserts the first hydrate that sees a week live does not unlock the reveal (reviewer F3); before that 1846, raised from 1828 by RG-253/RG-255 (2026-09-26): [44k3] drives the blind rule from the SERVER-confirmed status on a polluted mirror, the reveal post withheld until a hydrate has read the week as public (SEC-1), the tick standing down before the hydrate lands and for a week the server does not hold (reviewer F1), and the wizard Manage screen from a polluted mirror (reviewer note 2); [44k] now hydrates the commissioner control; [44k2] 5b narrows live>locked (SEC-4); before that 1828, raised from 1801 by RG-251 (2026-09-26): [44k2] drives the real tickAutoTransition() from a HYDRATED open base with the lock time and first kickoff both past and asserts exactly one status leg (lock_week) per tick, the live leg and pendingFinalization sequenced, no advance from an unconfirmed status, and the Week-tab buttons offered from the server-confirmed status and narrowed to the allow-list; before that 1801, tightened from 1782 by the final-gate fix (authtest [73], 2026-09-26); before that from 1745 at the v0.26.0 stamp 2026-09-26 — RAISED from 1649 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 1649 \u2014 raised from 1646 by [59] (3c fix window, B2, 2026-09-25): a cold-load runtime proof that verifyPasswordRecovery() fires exactly once, with the real token_hash, once a LATE-arriving vendored SDK actually loads. Earlier: 1646, raised from 1546 by [58] (3c fix window, security gate F1, 2026-09-25): the REAL listener chain (PASSWORD_RECOVERY, then SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED re-fired mid-recovery) proven to hold the gate and skip every membership read, with non-vacuity controls and the successful set-password path's explicit gate release. Earlier: 1546, raised from 1529 by [52] (2026-09-23, re-gate MUST-FIX): the commissioner-password RE-PROMPTS are retired in supabase mode. The panel login went at Step 3b but four in-panel prompts did not, and they compared btoa(pw) against a settings field the cutover importer had correctly STRIPPED \u2014 so the merge fell through to js/data-model.js\'s published btoa(\'admin123\') and a password in the public repo was guarding a paid Anthropic call. [52] drives commReauthMode() and commPasswordCardHTML() in BOTH modes (the positive control is the point: "supabase does not prompt" is satisfied by a build that removed the PIN-mode gate too), and adds the structural rule that every getSettings().adminPasswordHash comparison sits behind that gate plus the allow-list that stops it degrading into a truthiness test. Earlier: 1529 (merged v0.23.3: RG-196 + RG-197) — was 1528 — raised from 1520 by RG-197's [51] (2026-09-21, security A-3: the dead \"Logout Commissioner\" button); and from 1503 by RG-195's [50] (2026-09-21: the Picks page's PIN-era Log Out button is not rendered in supabase mode, and is byte-identical in PIN mode); before that from 1501 by RG-193's closure pass (2026-09-21): [49](j) now injects the card's clock and (j2)/(j3) pin both sides of the grace window, so the suite no longer goes red for six hours every Monday morning; before that from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
+    assert(Number(summaryMatch73b[2]) >= 1886, `authtest.mjs actually ran its full set (got ${summaryMatch73b[2]}, floor 1886, raised from 1877 by the UX Revamp post-deploy pass (2026-09-27): [10] DI-348's needsLeagueFlowScreen() single-membership branch now depends on a boot-time warm/cold snapshot — cold (Leagues Home) and warm (six-tab fast path) cases both driven explicitly via the new _setWarmRelaunchAtBootForTest() seam; [44k4] tickAutoTransition()'s new DRAFT→OPEN scheduled-open leg (DI-358) — due+gated opens, not-yet-due/blocked/never-scheduled all stay draft, and the blocked commissioner notice fires once, not every tick. Before that 1877, raised from 1870 by the 6178906 re-gate (2026-09-26): [44k4] tick — the ESPN score refresh runs while the round's re-hydrate is pending, the status tick runs off that hydrate (control), overlapping rounds are skipped (security N2); [44k5] refusal copy from the adapter's REAL emit — key-specific copy only when that key is the whole refusal; before that 1870, raised from 1864 by the f16d87c security pass (2026-09-26): [44k4] the auto-refresh tick awaits its own re-hydrate before tickAutoTransition() (security F1), [44k3] the reveal ledger goes through the storage seam (source scan); before that 1864, raised from 1846 by RG-256 (2026-09-26, reviewer F1 on f16d87c): [44k4] clicks the REAL Save Blurb / Save Tiebreaker / Save Week Settings / Admin Save Data Source Mode / Dismiss-pending handlers after the week LOCKED under a tab painted while OPEN and asserts no transition_week(open) is planned; [44k3] SEC-1 now also asserts the first hydrate that sees a week live does not unlock the reveal (reviewer F3); before that 1846, raised from 1828 by RG-253/RG-255 (2026-09-26): [44k3] drives the blind rule from the SERVER-confirmed status on a polluted mirror, the reveal post withheld until a hydrate has read the week as public (SEC-1), the tick standing down before the hydrate lands and for a week the server does not hold (reviewer F1), and the wizard Manage screen from a polluted mirror (reviewer note 2); [44k] now hydrates the commissioner control; [44k2] 5b narrows live>locked (SEC-4); before that 1828, raised from 1801 by RG-251 (2026-09-26): [44k2] drives the real tickAutoTransition() from a HYDRATED open base with the lock time and first kickoff both past and asserts exactly one status leg (lock_week) per tick, the live leg and pendingFinalization sequenced, no advance from an unconfirmed status, and the Week-tab buttons offered from the server-confirmed status and narrowed to the allow-list; before that 1801, tightened from 1782 by the final-gate fix (authtest [73], 2026-09-26); before that from 1745 at the v0.26.0 stamp 2026-09-26 — RAISED from 1649 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 1649 \u2014 raised from 1646 by [59] (3c fix window, B2, 2026-09-25): a cold-load runtime proof that verifyPasswordRecovery() fires exactly once, with the real token_hash, once a LATE-arriving vendored SDK actually loads. Earlier: 1646, raised from 1546 by [58] (3c fix window, security gate F1, 2026-09-25): the REAL listener chain (PASSWORD_RECOVERY, then SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED re-fired mid-recovery) proven to hold the gate and skip every membership read, with non-vacuity controls and the successful set-password path's explicit gate release. Earlier: 1546, raised from 1529 by [52] (2026-09-23, re-gate MUST-FIX): the commissioner-password RE-PROMPTS are retired in supabase mode. The panel login went at Step 3b but four in-panel prompts did not, and they compared btoa(pw) against a settings field the cutover importer had correctly STRIPPED \u2014 so the merge fell through to js/data-model.js\'s published btoa(\'admin123\') and a password in the public repo was guarding a paid Anthropic call. [52] drives commReauthMode() and commPasswordCardHTML() in BOTH modes (the positive control is the point: "supabase does not prompt" is satisfied by a build that removed the PIN-mode gate too), and adds the structural rule that every getSettings().adminPasswordHash comparison sits behind that gate plus the allow-list that stops it degrading into a truthiness test. Earlier: 1529 (merged v0.23.3: RG-196 + RG-197) — was 1528 — raised from 1520 by RG-197's [51] (2026-09-21, security A-3: the dead \"Logout Commissioner\" button); and from 1503 by RG-195's [50] (2026-09-21: the Picks page's PIN-era Log Out button is not rendered in supabase mode, and is byte-identical in PIN mode); before that from 1501 by RG-193's closure pass (2026-09-21): [49](j) now injects the card's clock and (j2)/(j3) pin both sides of the grace window, so the suite no longer goes red for six hours every Monday morning; before that from 1400 when REVIEWER R1/R2 sections [47]/[48] landed, then to 1501 by the coordinator's shared-foundation merge's [49] (trainer's low-frequency staleness rule); the ratchet only tightens)`);
   }
 }
 
@@ -9654,7 +9675,7 @@ console.log('\n[73h] xsstest.mjs — spawned as a subprocess, exit code + printe
   assert(!!m73h, `xsstest.mjs printed its own pass/fail summary line (fixture check — a summary-less run would make the assertions below vacuous)${m73h ? '' : '\n' + out.slice(-800)}`);
   if (m73h) {
     assert(Number(m73h[2]) === 0, `xsstest.mjs reports zero failed assertions (got ${m73h[2]} failed, ${m73h[1]} passed)`);
-    assert(Number(m73h[1]) >= 412, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 412, tightened from 395 at the v0.26.0 stamp 2026-09-26 — RAISED from 324 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 324 — RAISED from 297 by the UX Revamp wiring window (2026-09-25): [9c-2]'s js/app.js sweep now ALSO routes through EXEMPTIONS (same escape hatch [9c-1] already gave the other four files), and nine new EXEMPTIONS entries were added — four imported js/control-center.js render functions (renderStarredPanels/renderSettingsAccordion/renderFeedbackRulesGroup/renderHelpFooter, all requiring ctx.escHtml internally) for the new Settings page, plus icon('almaMater')'s four call sites (a hard-coded string-literal argument, no injection vector). Before that LOWERED from 298 by the Sheets retirement (2026-09-23): the pinned-backlog list lost its two Cloud Sync entries (the googleSheets status ternary and syncStatus.pendingWrites) because the card that interpolated them is deleted, and a STALE PIN hides the next regression — that list going DOWN is the rule working. Raised from 296 at v0.23.3's unread-count reconciliation, which added two swept interpolation sites to js/chat-ui.js) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
+    assert(Number(m73h[1]) >= 422, `xsstest.mjs actually ran its full set (got ${m73h[1]}, floor 422 — LOWERED from 427 by the UX Revamp post-deploy pass (2026-09-27, REVIEWER note 4): the icon('chevronRight') EXEMPTIONS entry was DELETED WITH THE TEXT IT TESTED — that call site (renderControlCenterTrigger()'s web chevron affordance) was removed entirely (the coordinator's design ruling: a trailing "›" reads as push-forward navigation, not "open a drawer"; the web trigger now carries icon('munera') + the brand name instead), so its own "still matches a real finding" assertion had nothing left to match — the one direction the ratchet is allowed to move, and only for this reason, matching the backendtest.mjs precedent above. Before that, 427, tightened from 412 by the v0.27.0 bugfix pass 2026-09-27 (icon('munera')/icon('chevronRight') classified) — tightened from 395 at the v0.26.0 stamp 2026-09-26 — RAISED from 324 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 324 — RAISED from 297 by the UX Revamp wiring window (2026-09-25): [9c-2]'s js/app.js sweep now ALSO routes through EXEMPTIONS (same escape hatch [9c-1] already gave the other four files), and nine new EXEMPTIONS entries were added — four imported js/control-center.js render functions (renderStarredPanels/renderSettingsAccordion/renderFeedbackRulesGroup/renderHelpFooter, all requiring ctx.escHtml internally) for the new Settings page, plus icon('almaMater')'s four call sites (a hard-coded string-literal argument, no injection vector). Before that LOWERED from 298 by the Sheets retirement (2026-09-23): the pinned-backlog list lost its two Cloud Sync entries (the googleSheets status ternary and syncStatus.pendingWrites) because the card that interpolated them is deleted, and a STALE PIN hides the next regression — that list going DOWN is the rule working. Raised from 296 at v0.23.3's unread-count reconciliation, which added two swept interpolation sites to js/chat-ui.js) — a FLOOR rather than a count, because the ratchet only tightens and a suite that shrank is a guard somebody removed`);
   }
 }
 
@@ -10167,7 +10188,7 @@ console.log('\n[76] boottest.mjs — spawned as a subprocess, exit code + printe
   if (summaryMatch76) {
     assert(summaryMatch76[1] === '✅ ALL PASS', `boottest.mjs itself reports ALL PASS (got: ${summaryMatch76[0]})`);
     assert(Number(summaryMatch76[3]) === 0, `boottest.mjs reports zero failed assertions (got ${summaryMatch76[3]} failed, ${summaryMatch76[2]} passed)`);
-    assert(Number(summaryMatch76[2]) >= 629, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 629, raised from 621 by the f16d87c review (2026-09-26): [26d] the status_moved banner copy — its own title and hint, the week named by label, no storage key or raw id — and the notice surviving the follow-up run's synced (reviewer F2/F5); before that 621, tightened from 612 at the v0.26.0 stamp 2026-09-26 — RAISED from 607 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 607 — RAISED from 588 by [33]/[34] (3c fix window, B2 + iOS shell parity, 2026-09-25): the password-recovery token-hash verify's boot-order proof (after the SDK load AND wireAuthUIEvents(), scrub-after-not-before) plus the no-@capacitor-literal static scan. Earlier: 588, RAISED from 567 by RG-246/B-03 (2026-09-25, UX Revamp wiring window): [31-D] added seven assertions through the real auth listener chain for the fourth mid-boot palette flash (resyncPlayerPreferences() delegating to bootThemeKey() when signed in, keeping the existing body class when signed out per Drew's 'keep' ruling), and the [31-C](iii) comment-matching pin at boottest.mjs:4597-4599 was retired (dated reason) in favor of [31-B]. Before that, LOWERED from 598 by the Sheets retirement (2026-09-23): [8] (BUG-E's transient-HTTP ladder), §8b (the transientHttpStatus predicate), [10]'s TIMING SIMULATION and [19]'s two setBackendConfig writes all describe a transport that is deleted. [10]'s boot ORDER — the half a future edit could actually undo — is kept and now anchors on the ADAPTER hydrate. Raised from 553 by SECURITY A-1-R + REVIEWER F1's §[30] (2026-09-21: the pre-config window is observed by PARKING the config fetch, and every terminal boot outcome either lifts the identity cover or paints a gate on top of it); before that from 530 by RG-198's §29 (2026-09-21: the first frame is the device's last-painted palette, Drew-approved); and from 494 by RG-196's §28 (2026-09-21, security A-1: the cached chat room is not readable before the device knows who it is); and from 474 by RG-194's §27 (a returning signed-in player is never shown the sign-in screen on a cold open); before that from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
+    assert(Number(summaryMatch76[2]) >= 642, `boottest.mjs actually ran its full set (got ${summaryMatch76[2]}, floor 642, raised from 629 by the v0.27.0 bugfix pass 2026-09-27 ([36] the #control-center-trigger is filled at boot, web/native/held) — raised from 621 by the f16d87c review (2026-09-26): [26d] the status_moved banner copy — its own title and hint, the week named by label, no storage key or raw id — and the notice surviving the follow-up run's synced (reviewer F2/F5); before that 621, tightened from 612 at the v0.26.0 stamp 2026-09-26 — RAISED from 607 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 607 — RAISED from 588 by [33]/[34] (3c fix window, B2 + iOS shell parity, 2026-09-25): the password-recovery token-hash verify's boot-order proof (after the SDK load AND wireAuthUIEvents(), scrub-after-not-before) plus the no-@capacitor-literal static scan. Earlier: 588, RAISED from 567 by RG-246/B-03 (2026-09-25, UX Revamp wiring window): [31-D] added seven assertions through the real auth listener chain for the fourth mid-boot palette flash (resyncPlayerPreferences() delegating to bootThemeKey() when signed in, keeping the existing body class when signed out per Drew's 'keep' ruling), and the [31-C](iii) comment-matching pin at boottest.mjs:4597-4599 was retired (dated reason) in favor of [31-B]. Before that, LOWERED from 598 by the Sheets retirement (2026-09-23): [8] (BUG-E's transient-HTTP ladder), §8b (the transientHttpStatus predicate), [10]'s TIMING SIMULATION and [19]'s two setBackendConfig writes all describe a transport that is deleted. [10]'s boot ORDER — the half a future edit could actually undo — is kept and now anchors on the ADAPTER hydrate. Raised from 553 by SECURITY A-1-R + REVIEWER F1's §[30] (2026-09-21: the pre-config window is observed by PARKING the config fetch, and every terminal boot outcome either lifts the identity cover or paints a gate on top of it); before that from 530 by RG-198's §29 (2026-09-21: the first frame is the device's last-painted palette, Drew-approved); and from 494 by RG-196's §28 (2026-09-21, security A-1: the cached chat room is not readable before the device knows who it is); and from 474 by RG-194's §27 (a returning signed-in player is never shown the sign-in screen on a cold open); before that from 471 by the RG-202 gate (2026-09-20, reviewer note 3: a 'syncing' status may not take the amber held-offline banner down while its keys are still queued); before that from 462 by §26's held-offline banner, 2026-09-19; and from a token 30 earlier that day, the adaptertest precedent: a floor of 30 against a suite of 462 would not notice four hundred assertions going missing)`);
   }
 }
 
@@ -10767,8 +10788,8 @@ for (const [label, file, floor, why] of [
   // imported for [73]'s reason — it replaces globalThis.fetch, setInterval and
   // localStorage.setItem wholesale, which would poison every suite after it in
   // this process.
-  ['88', 'refreshtest.mjs', 59,
-   'raised 54 -> 59 by RG-260 candidate (2026-09-26): [5j] — the BROWSER\'s ESPN fetches (refreshScoresByEventIds with no options, fetchCurrentCFBGames, fetchEspnTeamsList) send headers exactly {Accept} and no User-Agent; an empty userAgent adds nothing; a passed userAgent reaches the direct fetch. UN-192 / DI-T6.6 — the live-score tick: the fetch-on-every-tab regression, the demo/manual guards, the timer lifecycle, the scoresRefresh client gate in BOTH states, R1\'s display-only poll (liveStatusById + scribeLiveGameCheck + zero writes) and R2\'s idempotent kickoff/final catch-up'],
+  ['88', 'refreshtest.mjs', 77,
+   'raised 59 -> 61, then 61 -> 77 on 2026-09-28 for the [8] real-adapter player/commissioner cases by the UX Revamp post-deploy pass (2026-09-27): [7] logo backfill — a stored game with null homeLogo/awayLogo gains them from the SAME ESPN read a score refresh already makes (data-provider.js\'s refreshScoresByEventIds()), and a stored, already-set logo is never overwritten by a live poll (Drew, 2026-09-27: "I flipped the logos switch and didn\'t see any logos"). Before that, raised 54 -> 59 by RG-260 candidate (2026-09-26): [5j] — the BROWSER\'s ESPN fetches (refreshScoresByEventIds with no options, fetchCurrentCFBGames, fetchEspnTeamsList) send headers exactly {Accept} and no User-Agent; an empty userAgent adds nothing; a passed userAgent reaches the direct fetch. UN-192 / DI-T6.6 — the live-score tick: the fetch-on-every-tab regression, the demo/manual guards, the timer lifecycle, the scoresRefresh client gate in BOTH states, R1\'s display-only poll (liveStatusById + scribeLiveGameCheck + zero writes) and R2\'s idempotent kickoff/final catch-up'],
   // ═══ END STEP 6 PHASE 6 ═══════════════════════════════════════════════════
   // ── notifytest.mjs JOINS THE SPAWNED LIST (Release v0.23.0, 2026-09-20).
   //
@@ -11921,7 +11942,7 @@ console.log('\n[101] navgesturestest.mjs — spawned as a subprocess, exit code 
   assert(!!m101, `navgesturestest.mjs printed its own pass/fail summary line (fixture check)${m101 ? '' : '\n' + out.slice(-800)}`);
   if (m101) {
     assert(Number(m101[2]) === 0, `navgesturestest.mjs reports zero failed assertions (got ${m101[2]} failed, ${m101[1]} passed)`);
-    assert(Number(m101[1]) >= 121, `navgesturestest.mjs actually ran its full set (got ${m101[1]}, floor 121 — RAISED from 108 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 108 — RAISED from 90 at Step 2(b) (2026-09-26): section [11], bindSwipeToDismiss()/_resolveDismissSettle() — the League Page overlay's native swipe-back and the week wizard sheet's drag-to-dismiss, a shared primitive built to close out that deferral (real gesture, not the aspirational "free from the chat sheet's CSS" comment it replaced). Prior floor 90 — wiring pass 3c (2026-09-25): touched-screen-audit finding [10], gesturesSuspended() suspending for #league-page-overlay/#week-wizard-sheet-wrap. Raise the floor when the suite grows; the ratchet only tightens`);
+    assert(Number(m101[1]) >= 199, `navgesturestest.mjs actually ran its full set (got ${m101[1]}, floor 199 — merged chat [12] + CSS [13] sections 2026-09-27; was 157 — RAISED from 153 by the RG-275 (renumbered from RG-265 after the Social Platform collision) reviewer note 2026-09-27 ([12d] the ↓ latest button and bindBottomAnchor() share BOTTOM_ANCHOR_PX); earlier: floor 153 — RAISED from 130 by the v0.27.x chat-composer bugfix 2026-09-27 ([12] the unitless --nav-height:0 static guard, bindBottomAnchor() through the real bindKeyboardAvoid(), renderChatPage() wiring); earlier: floor 130 — RAISED from 121 by the v0.27.0 bugfix pass 2026-09-27 ([5j] one week-swipe direction on Picks and Dashboard) — RAISED from 108 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 108 — RAISED from 90 at Step 2(b) (2026-09-26): section [11], bindSwipeToDismiss()/_resolveDismissSettle() — the League Page overlay's native swipe-back and the week wizard sheet's drag-to-dismiss, a shared primitive built to close out that deferral (real gesture, not the aspirational "free from the chat sheet's CSS" comment it replaced). Prior floor 90 — wiring pass 3c (2026-09-25): touched-screen-audit finding [10], gesturesSuspended() suspending for #league-page-overlay/#week-wizard-sheet-wrap. Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -11956,7 +11977,7 @@ console.log('\n[103] iconstest.mjs — spawned as a subprocess, exit code + prin
   if (m103) {
     assert(m103[1] === '✅ ALL PASS', `iconstest.mjs itself reports ALL PASS (got: ${m103[0]})`);
     assert(Number(m103[3]) === 0, `iconstest.mjs reports zero failed assertions (got ${m103[3]} failed, ${m103[2]} passed)`);
-    assert(Number(m103[2]) >= 315, `iconstest.mjs actually ran its full set (got ${m103[2]}, floor 315, tightened from 286 at the v0.26.0 stamp 2026-09-26 — RAISED from 104 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 104 — the twelve-glyph D-1 Munera icon family (chevrons, sportFootball, calendarWeek, playersGroup, rulebook, scribeSpark, cloudData, shieldAdmin, settings, almaMater, plus the two nav glyphs already shipped) and the banned-emoji scanner over a dirty fixture. Note: scanSourceForBannedEmoji() is NOT yet run against js/app.js itself this pass — see the suite's own header — a follow-up pass must wire that scan against the real file once E's chrome-emoji-removal items land). Raise the floor when the suite grows; the ratchet only tightens`);
+    assert(Number(m103[2]) >= 326, `iconstest.mjs actually ran its full set (got ${m103[2]}, floor 326, tightened from 315 by the v0.27.0 bugfix pass 2026-09-27 (the munera glyph) — tightened from 286 at the v0.26.0 stamp 2026-09-26 — RAISED from 104 by the 3c fix window THIRD PASS (2026-09-26: R2-1..R2-4, security N1, F1–F3, reviewer B1–B5/R1–R4, STEP B); earlier: floor 104 — the twelve-glyph D-1 Munera icon family (chevrons, sportFootball, calendarWeek, playersGroup, rulebook, scribeSpark, cloudData, shieldAdmin, settings, almaMater, plus the two nav glyphs already shipped) and the banned-emoji scanner over a dirty fixture. Note: scanSourceForBannedEmoji() is NOT yet run against js/app.js itself this pass — see the suite's own header — a follow-up pass must wire that scan against the real file once E's chrome-emoji-removal items land). Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -11974,7 +11995,7 @@ console.log('\n[104] brandtokentest.mjs — spawned as a subprocess, exit code +
   if (m104) {
     assert(m104[1] === '✅ ALL PASS', `brandtokentest.mjs itself reports ALL PASS (got: ${m104[0]})`);
     assert(Number(m104[3]) === 0, `brandtokentest.mjs reports zero failed assertions (got ${m104[3]} failed, ${m104[2]} passed)`);
-    assert(Number(m104[2]) >= 56, `brandtokentest.mjs actually ran its full set (got ${m104[2]}, floor 56 — the Munera Ink/Marble/Gold/Oxblood palette rows, theme-neutral repointing, the Gold-on-Oxblood AA contrast fix, and the games.homeLogo/awayLogo persisted-at-parse-time round trip through toRows()/fromRows()). Raise the floor when the suite grows; the ratchet only tightens`);
+    assert(Number(m104[2]) >= 109, `brandtokentest.mjs actually ran its full set (got ${m104[2]}, floor 109 — RAISED from a stale 56 by the coordinator's CSS pass (2026-09-27): the floor had gone out of sync with the suite's own growth from earlier passes (DI-360/DI-362's dark-mode/palette sections, [2c]/[3]/[4]/[5]) well before this pass touched it; this pass's own contribution is section [2d], six new by-hand WCAG assertions for .header-sync-icon's colours against var(--maroon) — the one icon in the app painted directly on the header bar rather than a --bg-card surface, which contrastscan.mjs structurally cannot check (no resolvable background: on that rule). Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 
@@ -12147,6 +12168,66 @@ console.log('\n[112b] bgjobscardtest.mjs — spawned as a subprocess, exit code 
   if (m112b) {
     assert(m112b[1] === '✅ ALL PASS' && Number(m112b[3]) === 0, `bgjobscardtest.mjs reports ALL PASS with zero failed assertions (got: ${m112b[0]})`);
     assert(Number(m112b[2]) >= 29, `bgjobscardtest.mjs actually ran its full set (got ${m112b[2]}, floor 29 (25 -> 29 by [4b], an OK row with a failed bucket renders the class in words), 2026-09-26 — RG-253 and the ESPN-CLASS DI note). Raise the floor when the suite grows; the ratchet only tightens`);
+  }
+}
+
+// ── [112c] contrastscan.mjs — Reviewer BLOCK on d74286b (2026-09-27, item 5):
+// a Node-side rendered-contrast approximation for body.theme-neutral light
+// vs. dark, run TWICE — once against the live css/styles.css (must be
+// green) and once against a read-only `git show d74286b:...` copy of the
+// pre-fix commit (must reproduce the seven-class regression, i.e. also
+// "pass" its OWN mutation-proof assertions that the RED was found). ───────
+console.log('\n[112c] contrastscan.mjs (live mode) — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['contrastscan.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `contrastscan.mjs (live) exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m112c = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!m112c, `contrastscan.mjs (live) printed its own pass/fail summary line (fixture check)${m112c ? '' : '\n' + out.slice(-1200)}`);
+  if (m112c) {
+    assert(m112c[1] === '✅ ALL PASS' && Number(m112c[3]) === 0, `contrastscan.mjs (live) reports ALL PASS with zero failed assertions (got: ${m112c[0]})`);
+    assert(Number(m112c[2]) >= 25, `contrastscan.mjs (live) actually ran its full set (got ${m112c[2]}, floor 25 — RAISED from 22 by the reviewer BLOCK round 2 (2026-09-27): the [pill-material-mutation] RED-before/GREEN-after proof for .bottom-nav's @supports-gated backdrop-filter material (the "@supports blind spot" — @supports blocks are now extracted into the scan instead of discarded, and a translucent rgba() background can resolve via a named-allowlist compositing fix, scoped to .bottom-nav only after a broader attempt produced 12 false catches on unrelated card-scoped rgba tints); earlier: floor 22 — RAISED from 20 by the eed1d62 follow-up (2026-09-27): the .bottom-nav/.toast/.modal/.submit-bar hardcoded-#fff fix and the corrected 3-item allow-list; earlier: floor 20 — the seven named pale-tint classes, the reviewed dark-only-regression allow-list, and the item-1 token-retarget completeness audit). Raise the floor when the suite grows; the ratchet only tightens`);
+  }
+}
+
+console.log('\n[112c-prefix] contrastscan.mjs --prefix-proof — MUST reproduce the reviewer\'s own pre-fix finding on d74286b…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['contrastscan.mjs', '--prefix-proof'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `contrastscan.mjs --prefix-proof exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''}) — a non-zero exit here means the MUTATION PROOF ITSELF is broken (the scanner failed to reproduce the known-bad commit's regression), not that the live file is broken`);
+  const m112cp = out.match(/(✅ ALL PASS|❌ FAILURES) — (\d+) passed, (\d+) failed/);
+  assert(!!m112cp, `contrastscan.mjs --prefix-proof printed its own pass/fail summary line (fixture check)${m112cp ? '' : '\n' + out.slice(-1200)}`);
+  if (m112cp) {
+    assert(m112cp[1] === '✅ ALL PASS' && Number(m112cp[3]) === 0,
+      `contrastscan.mjs --prefix-proof correctly reproduces the seven-class dark-mode regression on d74286b, isolated to dark mode only (got: ${m112cp[0]}) — this is the mutation proof for item 2's fix: if a future edit ever regresses the pale-tint dark remap, THIS assertion (re-run manually against the live file's own git history) is how you'd know the scanner can still catch it`);
+    assert(Number(m112cp[2]) >= 15, `contrastscan.mjs --prefix-proof actually ran its full set (got ${m112cp[2]}, floor 15, RAISED from 9 by the eed1d62 follow-up's four extra named surfaces (.bottom-nav/.toast/.modal/.submit-bar) — the at-rule/comment stripping-order fix also let the scanner see .submit-bar for the first time, which was previously silently swallowed, not merely unasserted)`);
+  }
+}
+
+// ── [112d] headermetatest.mjs — spawned 2026-09-28. Until now this suite was
+// NOT spawned by loadtest (only named in comments), which is how it sat at
+// 46/1 on release/v0.27.0 without any sweep going red. Its summary line is the
+// bare "N passed, M failed" (no ALL PASS prefix), so the regex is its own.
+// Insert immediately after the [112c-prefix] block, before "BEGIN STEP 6 PHASE 5".
+console.log('\n[112d] headermetatest.mjs — spawned as a subprocess, exit code + printed pass/fail line both checked…');
+{
+  const { spawnSync } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = fileURLToPath(new URL('.', import.meta.url));
+  const result = spawnSync(process.execPath, ['headermetatest.mjs'], { cwd, encoding: 'utf8', timeout: SPAWNED_SUITE_TIMEOUT_MS });
+  const out = (result.stdout || '') + (result.stderr || '');
+  assert(result.status === 0, `headermetatest.mjs exits 0 (got ${result.status}${result.error ? ' — ' + result.error.message : ''})`);
+  const m112d = out.match(/^(\d+) passed, (\d+) failed$/m);
+  assert(!!m112d, `headermetatest.mjs printed its own pass/fail summary line (fixture check)${m112d ? '' : '\n' + out.slice(-800)}`);
+  if (m112d) {
+    assert(Number(m112d[2]) === 0, `headermetatest.mjs reports zero failed assertions (got ${m112d[2]} failed, ${m112d[1]} passed)`);
+    assert(Number(m112d[1]) >= 87, `headermetatest.mjs actually ran its full set (got ${m112d[1]}, floor 87 (raised 78 -> 87, reviewer BLOCK round 2 pins) set 2026-09-28 from its first green run after the header-overflow / sync-glyph / league-pill / copy pins landed). Raise the floor when the suite grows; the ratchet only tightens`);
   }
 }
 

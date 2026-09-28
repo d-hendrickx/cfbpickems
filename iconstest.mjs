@@ -76,7 +76,13 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
   // Raised 25 -> 26, full-app review Step 6 (2026-09-26) — `close` (the
   // drawer's close button and the backend-error banner's Dismiss, replacing ✕).
   assert(names.includes('close'), '[1b9] full-app review Step 6 set present: close (drawer close, banner Dismiss)');
-  assert(names.length === 26, `[1b6] ICONS carries exactly 26 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  // Raised 26 -> 27, v0.27.0 fix (2026-09-27) — `munera`, the temple mark
+  // that fills the header's #control-center-trigger on the native shell. It
+  // shipped EMPTY in v0.26.0 (an invisible button; the drawer's Sign Out was
+  // unreachable by tap). Same family shape as every other entry — the [1c-1i]
+  // loop below scans it like the rest.
+  assert(names.includes('munera'), '[1b10] v0.27.0 set present: munera (the native header mark that opens the control center)');
+  assert(names.length === 27, `[1b6] ICONS carries exactly 27 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
 
   for (const name of names) {
     const svg = ICONS[name];
@@ -99,6 +105,27 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
       + (svg.match(/\/>/g) || []).length;
     assert(opens > 0 && closes >= opens, `[1i/${name}] tag-balance smoke test (opens=${opens}, closes-or-self-closed=${closes})`);
   }
+
+  // ── [1j] DI-349 (2026-09-27) — Comm-panel Games-tab icon swap ───────────
+  // `ICONS.sportFootball` moved from the ellipse+diagonal-lace football
+  // glyph (concept: rotated ellipse, one diagonal seam line, three short
+  // cross-ticks) to the recommended "scoreboard tile" concept (rounded
+  // rect + vertical divider + a short tick in each half). Mutation-proven:
+  // the OLD glyph's distinguishing path data must be entirely gone, not
+  // just supplemented, and the new glyph's distinguishing shapes must be
+  // present and share the `tv` glyph's rect-based grammar.
+  const sf = ICONS.sportFootball;
+  assert(!sf.includes('ellipse'), '[1j-1] old football-ellipse element is gone from sportFootball');
+  assert(!sf.includes('rotate(45'), '[1j-2] old 45°-rotation transform (the ellipse\'s orientation) is gone');
+  assert(!sf.includes('x1="9.5" y1="14.5"') && !sf.includes('x1="11.5" y1="12.5"') && !sf.includes('x1="13.5" y1="10.5"'),
+    '[1j-3] old lace-tick coordinates are gone (all three cross-ticks removed, not just one)');
+  assert(sf.includes('<rect'), '[1j-4] new glyph draws the scoreboard-tile <rect>');
+  assert(sf.includes('rx="2"'), '[1j-5] the tile rect uses the family\'s rounded-corner radius (rx="2", matching the `tv`/`clipboard`/`lock` glyphs)');
+  const lineCount = (sf.match(/<line\b/g) || []).length;
+  assert(lineCount === 3, `[1j-6] exactly 3 <line> elements: the vertical divider + one tick per half (found ${lineCount})`);
+  assert(sf.includes('x1="12" y1="6" x2="12" y2="18"'), '[1j-7] the vertical divider line spans the tile\'s full height, centered');
+  // Shares the `tv` glyph's rect-based grammar (DI-349's stated rationale).
+  assert(ICONS.tv.includes('<rect') && sf.includes('<rect'), '[1j-8] sportFootball now shares the rect-based grammar the `tv` glyph already established');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,8 +313,13 @@ console.log('\n[7] STEP B(14) — week wizard: glyph + text status buttons, text
   const app = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
   assert(/week-wizard-status-btn" data-to="\$\{b\.to\}">\$\{wizardStatusIconHTML\(b\)\}\$\{escHtml\(b\.text\)\}<\/button>/.test(app),
     '[7c] the wizard renders wizardStatusIconHTML(b) + escHtml(b.text) — never the emoji label');
+  // DI-353 (UN-311, 2026-09-27) — the Data Source <select> is REMOVED from
+  // the wizard's commissioner-facing form entirely (Admin → Week's own
+  // 'data-source-mode' card is the one surviving control), so this pin now
+  // asserts the ABSENCE rather than an emoji-free presence — a stray future
+  // re-add of this field (with or without emoji) is still caught, either way.
   const cwMode = (app.match(/<select class="form-select" id="\$\{idPrefix\}cw-mode">[\s\S]*?<\/select>/) || [''])[0];
-  assert(!!cwMode && !EMOJI.test(cwMode), '[7d] the wizard\'s Data Source <select> options are text-only (no 📅 ✏️ 📋)');
+  assert(!cwMode, '[7d] the wizard\'s commissioner-facing form has NO Data Source <select> (DI-353 — Admin → Week is the one surviving control)');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -363,6 +363,590 @@ console.log('\n[9] WIZARD_STEPS / WIZARD_COPY — structural shape…');
     '9-5: OPEN_SUCCESS copy matches the DI\'s exact text');
 }
 
+console.log('\n[10] DI-353 — createWeekFromWizard() defaults dataSourceMode to \'espn_live\' now that the field is leaving the form…');
+{
+  const deps = {
+    createWeek: (season, weekNumber, startDate, endDate) => ({ weekId: 'w_di353', season, weekNumber, startDate, endDate, status: 'draft' }),
+    saveWeek: () => {}, setActiveWeekId: () => {},
+  };
+  const noMode = wizard.createWeekFromWizard({ fields: { season: '2026', weekNumber: 3 }, deps });
+  assert(noMode.dataSourceMode === 'espn_live',
+    `10-1: omitting dataSourceMode from fields defaults to 'espn_live', not 'manual' (got ${noMode.dataSourceMode})`);
+  const explicitMode = wizard.createWeekFromWizard({ fields: { season: '2026', weekNumber: 3, dataSourceMode: 'demo' }, deps });
+  assert(explicitMode.dataSourceMode === 'demo',
+    '10-2: a caller that DOES pass dataSourceMode is still honored — the default only fills a gap, never overrides');
+
+  // coordinator fix, item 2, REQUIRED — an EXISTING week's own dataSourceMode
+  // must never be silently overwritten by the 'espn_live' default once the
+  // field leaves the commissioner-facing form (so `fields` never carries it
+  // for a re-save). The exact scenario named: an existing DEMO week,
+  // re-saved (e.g. re-entering Step 1 to edit the round label) without the
+  // field present in `fields` at all.
+  const existingDemoWeek = { weekId: 'w_demo', season: '2026', weekNumber: 4, status: 'draft', dataSourceMode: 'demo', roundLabel: 'old' };
+  const reSavedNoField = wizard.createWeekFromWizard({
+    fields: { season: '2026', weekNumber: 4, roundLabel: 'Bowl Week' }, // no dataSourceMode key at all
+    deps, existingWeek: existingDemoWeek,
+  });
+  assert(reSavedNoField.dataSourceMode === 'demo',
+    `10-3 (REQUIRED, mutation guard): re-saving an existing DEMO week without dataSourceMode in fields must KEEP 'demo', never silently flip to 'espn_live' (got ${reSavedNoField.dataSourceMode})`);
+  assert(reSavedNoField.roundLabel === 'Bowl Week',
+    '10-4: …and the field that WAS actually edited (roundLabel) still applies — this is a real save, not a no-op');
+
+  // The same check for a MANUAL existing week, and confirmation that an
+  // explicit fields.dataSourceMode still wins over BOTH the existing week's
+  // mode and the default (three-tier precedence, exhaustively).
+  const existingManualWeek = { weekId: 'w_manual', season: '2026', weekNumber: 5, status: 'draft', dataSourceMode: 'manual' };
+  const reSavedManual = wizard.createWeekFromWizard({ fields: { season: '2026', weekNumber: 5 }, deps, existingWeek: existingManualWeek });
+  assert(reSavedManual.dataSourceMode === 'manual',
+    `10-5 (mutation guard): an existing MANUAL week's mode is preserved the same way (got ${reSavedManual.dataSourceMode})`);
+  const explicitOverridesExisting = wizard.createWeekFromWizard({
+    fields: { season: '2026', weekNumber: 5, dataSourceMode: 'espn_historical' },
+    deps, existingWeek: existingManualWeek,
+  });
+  assert(explicitOverridesExisting.dataSourceMode === 'espn_historical',
+    `10-6: an EXPLICIT fields.dataSourceMode still wins over the existing week's own mode — the caller's deliberate choice, not silently ignored (got ${explicitOverridesExisting.dataSourceMode})`);
+}
+
+console.log('\n[11] DI-354 — stepBackTarget() / shouldConfirmAnnouncementDiscard(), shared by both step machines…');
+{
+  assert(wizard.stepBackTarget(1) === null, '11-1: step 1 has no Back target');
+  for (let s = 2; s <= 6; s++) {
+    assert(wizard.stepBackTarget(s) === s - 1, `11-2: step ${s} of the create-flow backs to step ${s - 1} (got ${wizard.stepBackTarget(s)})`);
+  }
+  // The exact gap DI-354 names: Step 5 (Announce) previously had no Back at
+  // all — proving the primitive covers step 5 specifically closes that gap.
+  assert(wizard.stepBackTarget(5) === 4, '11-3: step 5 (Announce) — the actual named gap — now resolves a Back target of 4');
+  // Same primitive, reused for the Finalize flow's 4 steps (DI-359) — proof
+  // this is genuinely ONE shared function, not a per-flow copy.
+  for (let s = 2; s <= 4; s++) {
+    assert(wizard.stepBackTarget(s) === s - 1, `11-4: Finalize-flow step ${s} backs to step ${s - 1} — same function, second flow`);
+  }
+
+  assert(wizard.shouldConfirmAnnouncementDiscard('Week 5 kicks off Saturday!') === true,
+    '11-5: real drafted text ⇒ confirm before discarding');
+  assert(wizard.shouldConfirmAnnouncementDiscard('') === false, '11-6: empty string ⇒ no confirm needed');
+  assert(wizard.shouldConfirmAnnouncementDiscard('   ') === false, '11-7: whitespace-only ⇒ no confirm needed (not real content)');
+  assert(wizard.shouldConfirmAnnouncementDiscard(undefined) === false, '11-8: undefined (never typed anything) ⇒ no confirm needed, never a throw');
+  assert(wizard.shouldConfirmAnnouncementDiscard(null) === false, '11-9: null ⇒ no confirm needed, never a throw');
+}
+
+console.log('\n[12] DI-357 — tiebreakerWizardStepSummary() / applyTiebreakerQuestion() — visible + editable, NEVER a gate…');
+{
+  const blank = wizard.tiebreakerWizardStepSummary({ weekId: 'w1' });
+  assert(blank.question === '' && blank.hasQuestion === false,
+    '12-1: no question on the week ⇒ blank, hasQuestion false — a real, valid state, not an error');
+  assert(blank.calculationMode === 'selectedSlateOnly' && blank.calculationModeCaption.includes('slate'),
+    `12-2: defaults to selectedSlateOnly with a human caption (got ${JSON.stringify(blank)})`);
+
+  const withQuestion = wizard.tiebreakerWizardStepSummary({ tiebreakerQuestion: 'Total points in the Alabama game?', tiebreakerCalculationMode: 'selectedSlateOnly' });
+  assert(withQuestion.hasQuestion === true && withQuestion.question === 'Total points in the Alabama game?',
+    '12-3: an existing question is surfaced verbatim');
+
+  const whitespaceOnly = wizard.tiebreakerWizardStepSummary({ tiebreakerQuestion: '   ' });
+  assert(whitespaceOnly.hasQuestion === false, '12-4: whitespace-only question counts as blank, not "has a question"');
+
+  const unknownMode = wizard.tiebreakerWizardStepSummary({ tiebreakerCalculationMode: 'somethingNew' });
+  assert(unknownMode.calculationModeCaption === wizard.TIEBREAKER_CALC_MODE_CAPTIONS.selectedSlateOnly,
+    '12-5: an unrecognised calc mode falls back to the selectedSlateOnly caption rather than showing nothing');
+
+  // data-model.js's TIEBREAKER_CALC_MODE enum actually has THREE values
+  // (selectedSlateOnly/allAlmaMaterGames/manual), not the "only one mode"
+  // the DI's own text assumed — both non-selectedSlateOnly modes get their
+  // OWN caption, distinct from selectedSlateOnly's.
+  //
+  // coordinator fix (review round on ddf9e4f) — the ORIGINAL caption text
+  // ("not just the slate") was factually wrong: `calculateAlmaMaterTotal()`
+  // NEVER leaves the slate in any mode (its `games` argument is always this
+  // week's slate only). What the modes actually distinguish is the
+  // `isAlmaMaterGame` FLAG — a commissioner-curated subset of the slate
+  // (`selectedSlateOnly`) vs. every slate game that merely involves a
+  // claimed alma mater (`allAlmaMaterGames`/`manual`).
+  assert(wizard.TIEBREAKER_CALC_MODE_CAPTIONS.selectedSlateOnly === 'Based on: the alma mater games you flagged on this slate',
+    `12-5a: selectedSlateOnly's exact caption (got "${wizard.TIEBREAKER_CALC_MODE_CAPTIONS.selectedSlateOnly}")`);
+  const allGamesMode = wizard.tiebreakerWizardStepSummary({ tiebreakerCalculationMode: 'allAlmaMaterGames' });
+  assert(allGamesMode.calculationModeCaption === 'Based on: every game on this slate involving an alma mater',
+    `12-5b: allAlmaMaterGames mode gets its OWN, factually-correct caption (got "${allGamesMode.calculationModeCaption}")`);
+  assert(!allGamesMode.calculationModeCaption.toLowerCase().includes('not just the slate'),
+    '12-5b2 (mutation guard): the retired, factually-wrong "not just the slate" phrasing must never reappear');
+  assert(allGamesMode.calculationModeCaption !== wizard.TIEBREAKER_CALC_MODE_CAPTIONS.selectedSlateOnly,
+    '12-5c (mutation guard): confirms this is a REAL second caption, not the fallback silently reused');
+  const manualMode = wizard.tiebreakerWizardStepSummary({ tiebreakerCalculationMode: 'manual' });
+  assert(manualMode.calculationModeCaption === allGamesMode.calculationModeCaption,
+    '12-5d: manual mode shares allAlmaMaterGames\' caption — calculateAlmaMaterTotal() treats them identically, no invented three-way distinction');
+
+  const updated = wizard.applyTiebreakerQuestion({ weekId: 'w1', tiebreakerQuestion: 'old' }, 'new question');
+  assert(updated.tiebreakerQuestion === 'new question' && updated.weekId === 'w1',
+    '12-6: applyTiebreakerQuestion() layers the new question onto the SAME week object, nothing else touched');
+
+  // Ruling 4, mutation-proven: gatingChecklist() itself must remain
+  // COMPLETELY blind to the tiebreaker question — a blank question must
+  // never flip canOpen to false. This directly guards against the exact
+  // regression the DI itself named as a live risk (touching the existing
+  // gatingChecklist() contract other tests pin).
+  const gateWithNoTiebreakerContext = wizard.gatingChecklist({ gamesCount: 10, missingSpreadCount: 0, timingConfigured: true });
+  assert(gateWithNoTiebreakerContext.canOpen === true,
+    '12-7 (ruling 4 mutation guard): gatingChecklist() has no tiebreaker parameter at all — a blank question cannot block Open because there is no code path for it to block through');
+  assert(Object.keys(gateWithNoTiebreakerContext).every((k) => !/tiebreak/i.test(k)),
+    '12-8: gatingChecklist()\'s return shape carries no tiebreaker-named field whatsoever — confirms this DI added a SECOND surface, never touched the first');
+}
+
+console.log('\n[13] DI-358 — finishWeekSetupFromWizard(): Now / Scheduled / Draft, one function, three modes…');
+{
+  const week = { weekId: 'w1', weekNumber: 5, status: 'draft' };
+  const goodArgs = { week, gamesCount: 10, missingSpreadCount: 0, timingConfigured: true };
+
+  // ── NOW — delegates to openForPicksFromWizard(), unchanged behavior ──
+  {
+    let statusChangeCalls = 0, toastCalls = 0;
+    const deps = {
+      applyWeekStatusChange: (w, to) => { statusChangeCalls++; return { ...w, status: to }; },
+      showToast: () => { toastCalls++; },
+      isNativeShell: () => false, nativeHapticImpact: () => {},
+    };
+    const result = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.NOW, deps });
+    assert(result.ok === true && result.mode === 'now' && result.week.status === 'open',
+      `13-1: NOW opens immediately (got ${JSON.stringify(result)})`);
+    assert(statusChangeCalls === 1 && toastCalls === 1, '13-2: NOW calls applyWeekStatusChange + toast exactly once each');
+
+    const blockedGate = wizard.finishWeekSetupFromWizard({ week, gamesCount: 0, missingSpreadCount: 0, timingConfigured: true, mode: wizard.OPEN_MODES.NOW, deps });
+    assert(blockedGate.ok === false && blockedGate.gate.canOpen === false,
+      '13-3 (mutation guard): NOW with an unmet checklist item is refused, exactly like the direct openForPicks() gate');
+  }
+
+  // ── SCHEDULED — saves picksOpenAt, week STAYS draft, never calls applyWeekStatusChange ──
+  {
+    let statusChangeCalls = 0, savedWeek = null, toastCalls = 0;
+    const deps = {
+      applyWeekStatusChange: () => { statusChangeCalls++; },
+      saveWeek: (w) => { savedWeek = w; },
+      showToast: () => { toastCalls++; },
+    };
+    const future = new Date(Date.now() + 86400000).toISOString();
+    const result = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, deps });
+    assert(result.ok === true && result.week.status === 'draft' && result.week.picksOpenAt === new Date(future).toISOString(),
+      `13-4: SCHEDULED saves picksOpenAt and leaves status at draft (got ${JSON.stringify(result)})`);
+    assert(statusChangeCalls === 0, '13-5 (mutation guard): SCHEDULED never calls applyWeekStatusChange — the tick, not this function, flips status later');
+    assert(savedWeek && savedWeek.picksOpenAt, '13-6: saveWeek() was actually called with the scheduled timestamp');
+    assert(toastCalls === 1, '13-7: a success toast fires once');
+
+    const noDatetime = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: '', deps });
+    assert(noDatetime.ok === false && noDatetime.reason === 'missing_scheduled_at',
+      '13-8: SCHEDULED with no datetime refuses cleanly, never saves');
+
+    const badDatetime = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: 'not-a-date', deps });
+    assert(badDatetime.ok === false && badDatetime.reason === 'invalid_scheduled_at',
+      '13-9: SCHEDULED with an unparseable datetime refuses cleanly, never saves garbage');
+
+    const blockedGate = wizard.finishWeekSetupFromWizard({ week, gamesCount: 10, missingSpreadCount: 2, timingConfigured: true, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, deps });
+    assert(blockedGate.ok === false && blockedGate.gate.canOpen === false,
+      '13-10 (mutation guard): SCHEDULED is gated by the SAME three-item checklist as an immediate open — missing spreads refuses it too');
+
+    // coordinator fix, item 7 — SCHEDULED requires week.status === 'draft'.
+    const notDraftWeek = { ...week, status: 'open' };
+    const notDraftResult = wizard.finishWeekSetupFromWizard({ ...goodArgs, week: notDraftWeek, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, deps });
+    assert(notDraftResult.ok === false && notDraftResult.reason === 'week_not_draft',
+      `13-14 (mutation guard): SCHEDULED on a non-draft (already OPEN) week refuses cleanly, before even looking at the datetime (got ${JSON.stringify(notDraftResult)})`);
+    const noWeekResult = wizard.finishWeekSetupFromWizard({ ...goodArgs, week: null, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, deps });
+    assert(noWeekResult.ok === false && noWeekResult.reason === 'week_not_draft', '13-14b: no week at all ⇒ same refusal, never a throw');
+
+    // coordinator fix, item 7 — SCHEDULED rejects a datetime that has already passed.
+    const pastAt = new Date(Date.now() - 60000).toISOString();
+    const pastResult = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: pastAt, deps });
+    assert(pastResult.ok === false && pastResult.reason === 'past_scheduled_at',
+      `13-15: a scheduled time already in the past refuses cleanly, distinct reason from "invalid" (got ${JSON.stringify(pastResult)})`);
+    assert(wizard.WIZARD_COPY.SCHEDULE_PAST_DATETIME === 'That time has passed. Choose Open now or a later time.',
+      '13-15b: the exact inline copy for this refusal');
+
+    // The boundary, deterministically, via the explicit `now` param — a
+    // scheduled time exactly AT "now" counts as passed (<=, not <): waiting
+    // for the real clock to catch up would make this test flaky, and a
+    // `<` mutation would let an already-arrived moment silently "schedule."
+    const fixedNow = Date.now();
+    const exactlyNow = new Date(fixedNow).toISOString();
+    const exactResult = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: exactlyNow, now: fixedNow, deps });
+    assert(exactResult.ok === false && exactResult.reason === 'past_scheduled_at',
+      '13-16 (mutation guard): a scheduled time exactly equal to "now" counts as already passed');
+    const oneSecondFutureResult = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: new Date(fixedNow + 1000).toISOString(), now: fixedNow, deps });
+    assert(oneSecondFutureResult.ok === true,
+      '13-17: one second later than the same "now" succeeds — confirms this is a real boundary check, not an always-refuse regression');
+  }
+
+  // ── DRAFT — no gate check, no status change, no write of any kind ──
+  {
+    let anyDepCalled = false;
+    const deps = {
+      applyWeekStatusChange: () => { anyDepCalled = true; },
+      saveWeek: () => { anyDepCalled = true; },
+      showToast: () => { anyDepCalled = true; },
+    };
+    // Deliberately pass a FAILING gate (0 games) — DRAFT must succeed anyway,
+    // proving it truly never consults the checklist.
+    const result = wizard.finishWeekSetupFromWizard({ week, gamesCount: 0, missingSpreadCount: 0, timingConfigured: false, mode: wizard.OPEN_MODES.DRAFT, deps });
+    assert(result.ok === true && result.week === week,
+      `13-11: DRAFT always succeeds, gate or no gate (got ${JSON.stringify(result)})`);
+    assert(anyDepCalled === false, '13-12 (mutation guard): DRAFT calls NOTHING in deps — no status change, no save, no toast');
+  }
+
+  const unknown = wizard.finishWeekSetupFromWizard({ ...goodArgs, mode: 'bogus', deps: {} });
+  assert(unknown.ok === false && unknown.reason === 'unknown_mode', '13-13: an unrecognised mode refuses cleanly, never a throw');
+}
+
+console.log('\n[14] DI-358 — dueForScheduledOpen(): {due, blocked, gate} for the tickAutoTransition() draft→open leg…');
+{
+  const now = Date.now();
+  const past = new Date(now - 60000).toISOString();
+  const future = new Date(now + 60000).toISOString();
+  const okArgs = { gamesCount: 10, missingSpreadCount: 0, timingConfigured: true };
+
+  // coordinator fix, item 6 — a bare boolean conflated "not due yet" with
+  // "due, but the week can't actually open," leaving the tick with no way
+  // to raise a notice for the second case. Now {due, blocked, gate}.
+  const dueResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: past }, now, ...okArgs });
+  assert(dueResult.due === true && dueResult.blocked === false && !!dueResult.gate && dueResult.gate.canOpen === true,
+    `14-1: draft, scheduled time in the past, checklist clear ⇒ due:true, blocked:false, gate present and canOpen (got ${JSON.stringify(dueResult)})`);
+
+  const futureResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: future }, now, ...okArgs });
+  assert(futureResult.due === false && futureResult.blocked === false && futureResult.gate === null,
+    `14-2 (mutation guard): scheduled time still in the FUTURE ⇒ due:false, blocked:false, gate:null — nothing to check yet (catches a flipped >= / < comparison) (got ${JSON.stringify(futureResult)})`);
+
+  const openWeekResult = wizard.dueForScheduledOpen({ week: { status: 'open', picksOpenAt: past }, now, ...okArgs });
+  assert(openWeekResult.due === false && openWeekResult.blocked === false && openWeekResult.gate === null,
+    '14-3 (mutation guard): week is already OPEN (not draft) ⇒ never due, never blocked — this predicate is draft→open ONLY');
+
+  const noScheduleResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: null }, now, ...okArgs });
+  assert(noScheduleResult.due === false && noScheduleResult.blocked === false,
+    '14-4: no picksOpenAt at all ⇒ due:false, blocked:false (nothing was scheduled)');
+
+  const noWeekResult = wizard.dueForScheduledOpen({ week: null, now, ...okArgs });
+  assert(noWeekResult.due === false && noWeekResult.blocked === false,
+    '14-5: no week ⇒ due:false, blocked:false, never a throw');
+
+  const badDateResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: 'not-a-date' }, now, ...okArgs });
+  assert(badDateResult.due === false && badDateResult.blocked === false,
+    '14-6: an unparseable picksOpenAt ⇒ due:false, blocked:false, never a throw or a false positive');
+
+  // THE case this fix exists for: the scheduled time has passed but the
+  // checklist doesn't clear — the tick's cue to raise a commissioner
+  // notice instead of silently never opening.
+  const blockedResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: past }, now, gamesCount: 0, missingSpreadCount: 0, timingConfigured: true });
+  assert(blockedResult.due === false && blockedResult.blocked === true && !!blockedResult.gate && blockedResult.gate.canOpen === false,
+    `14-7 (REQUIRED mutation guard): scheduled time has passed but the checklist is UNMET (no games) ⇒ due:false, BLOCKED:true, gate present and NOT canOpen (got ${JSON.stringify(blockedResult)})`);
+  assert(blockedResult.gate.gamesLabel === 'No games on slate yet',
+    '14-8: the returned gate names EXACTLY which check failed, verbatim from gatingChecklist(), for a real commissioner-facing notice');
+
+  const missingSpreadsBlocked = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: past }, now, gamesCount: 10, missingSpreadCount: 3, timingConfigured: true });
+  assert(missingSpreadsBlocked.due === false && missingSpreadsBlocked.blocked === true,
+    '14-9: past due + missing spreads specifically ⇒ also blocked, not silently treated as due');
+
+  // due and blocked are mutually exclusive, exhaustively, once the time has passed.
+  for (const [gamesOk, spreadsOk, timingOk, expectDue] of [
+    [true, true, true, true], [false, true, true, false], [true, false, true, false], [true, true, false, false],
+  ]) {
+    const r = wizard.dueForScheduledOpen({
+      week: { status: 'draft', picksOpenAt: past }, now,
+      gamesCount: gamesOk ? 5 : 0, missingSpreadCount: spreadsOk ? 0 : 2, timingConfigured: timingOk,
+    });
+    assert(r.due === expectDue && r.blocked === !expectDue,
+      `14-10: games=${gamesOk} spreads=${spreadsOk} timing=${timingOk} ⇒ due=${expectDue}, blocked=${!expectDue} (got due=${r.due} blocked=${r.blocked})`);
+  }
+}
+
+console.log('\n[15] DI-359 — Finalize Week guided flow: FINALIZE_STEPS shape, and every step\'s action…');
+{
+  assert(wizard.FINALIZE_STEPS.length === 4 && wizard.FINALIZE_STEP_COUNT === 4,
+    '15-1: four steps — Approve Scores, Confirm Tiebreaker, Confirm Extra Point, Finalize');
+  assert(wizard.FINALIZE_STEPS.every((s, i) => s.step === i + 1),
+    '15-2: numbered 1..4 in order');
+  assert(wizard.FINALIZE_STEPS.map((s) => s.id).join(',') === 'approve-scores,confirm-tiebreaker,confirm-extra-point,finalize',
+    '15-3: step ids match the DI\'s own sequence exactly');
+
+  console.log('  -- Step 1: Approve Scores --');
+  {
+    const readyGames = [{ status: 'final', lockedSpread: -3.5 }, { status: 'final', lockedSpread: 0 }];
+    const readySummary = wizard.finalizeApproveScoresSummary(readyGames);
+    assert(readySummary.blocked === false, '15-4: all games final + locked-spread ⇒ not blocked');
+
+    const notFinalGames = [{ status: 'live', lockedSpread: -3.5 }];
+    assert(wizard.finalizeApproveScoresSummary(notFinalGames).blocked === true,
+      '15-5 (mutation guard): a non-final game ⇒ blocked');
+    const missingLockGames = [{ status: 'final', lockedSpread: null }];
+    assert(wizard.finalizeApproveScoresSummary(missingLockGames).blocked === true,
+      '15-6 (mutation guard): a final game with no locked spread ⇒ blocked');
+    assert(wizard.finalizeApproveScoresSummary([]).blocked === true,
+      '15-7: an empty slate ⇒ blocked (nothing to approve)');
+    // PK=0 must not be confused with "missing" (=== null/undefined check, not truthiness).
+    const pkGame = [{ status: 'final', lockedSpread: 0 }];
+    assert(wizard.finalizeApproveScoresSummary(pkGame).blocked === false,
+      '15-8 (mutation guard): lockedSpread:0 (a real PK) is NOT "missing" — a falsy-check regression would wrongly block this');
+
+    // coordinator fix, item 1, REQUIRED (review round on ddf9e4f) —
+    // finalizeApproveScores() must NEVER call finalizeWeek(): that function
+    // publishes permanent chat posts and raises the obligation off
+    // actualTiebreakerValue, which is still null this early in the flow.
+    // `finalizeWeek` is deliberately still PRESENT in `deps` below (proving
+    // the guard is "never call it," not "the dep happens to be absent").
+    let gradedCalls = 0, finalizeWeekCalls = 0;
+    const deps = {
+      calculateAtsWinner: (g) => 'home',
+      saveGame: () => { gradedCalls++; },
+      finalizeWeek: () => { finalizeWeekCalls++; },
+    };
+    const blockedResult = wizard.finalizeApproveScores({ week: { weekId: 'w1' }, games: notFinalGames, deps });
+    assert(blockedResult.ok === false && gradedCalls === 0 && finalizeWeekCalls === 0,
+      '15-9 (mutation guard/confirm gate): a BLOCKED slate refuses to grade at all — this is the step\'s own confirm gate');
+
+    const okResult = wizard.finalizeApproveScores({ week: { weekId: 'w1' }, games: readyGames, deps });
+    assert(okResult.ok === true && gradedCalls === 2,
+      `15-10: a ready slate grades every eligible game once (got graded=${gradedCalls})`);
+    assert(finalizeWeekCalls === 0,
+      `15-10b (REQUIRED, mutation guard): finalizeApproveScores() NEVER calls finalizeWeek(), even on a fully-ready, successfully-graded slate — finalizeWeek() posts permanent chat and computes the obligation, and runs exactly once, at Step 4 only (got finalizeWeekCalls=${finalizeWeekCalls})`);
+  }
+
+  console.log('  -- Step 2: Confirm Tiebreaker --');
+  {
+    const noExisting = wizard.tiebreakerConfirmSummary({ week: { tiebreakerQuestion: 'Total points?' }, autoCalcValue: 47 });
+    assert(noExisting.prefillValue === 47 && noExisting.alreadySet === false,
+      '15-11: no actualTiebreakerValue on file ⇒ prefill is the Auto-Calc value');
+    const existing = wizard.tiebreakerConfirmSummary({ week: { actualTiebreakerValue: 52 }, autoCalcValue: 47 });
+    assert(existing.prefillValue === 52 && existing.alreadySet === true,
+      '15-12 (mutation guard): an EXISTING actual value takes priority over the fresh Auto-Calc — never force re-entry');
+
+    let autoCalcArgsUsed = null;
+    const autoCalcDeps = {
+      calculateAlmaMaterTotal: (games, roster, mode) => { autoCalcArgsUsed = { games, roster, mode }; return 55; },
+      almaMatersForAutoCalc: (week) => ['Alabama', 'Georgia'],
+      getGames: (weekId) => [{ weekId, homeTeam: 'Alabama' }],
+    };
+    const autoCalc = wizard.finalizeAutoCalcTiebreaker({ week: { weekId: 'w1', tiebreakerCalculationMode: 'selectedSlateOnly' }, deps: autoCalcDeps });
+    assert(autoCalc.ok === true && autoCalc.value === 55, '15-13: Auto-Calc runs and returns the total');
+    assert(autoCalcArgsUsed.roster.length === 2 && autoCalcArgsUsed.mode === 'selectedSlateOnly',
+      '15-14: Auto-Calc is called with the FROZEN roster (almaMatersForAutoCalc) and the week\'s own calc mode, not re-derived');
+
+    const noScoresYet = wizard.finalizeAutoCalcTiebreaker({
+      week: { weekId: 'w1' },
+      deps: { calculateAlmaMaterTotal: () => null, almaMatersForAutoCalc: () => [], getGames: () => [] },
+    });
+    assert(noScoresYet.ok === false && noScoresYet.value === null,
+      '15-15 (mutation guard): calculateAlmaMaterTotal() returning null (no final alma-mater scores yet) surfaces as ok:false, never a fake 0');
+
+    // coordinator fix, item 3, REQUIRED (RG-256 class) — confirmFinalizeTiebreaker()
+    // must re-read deps.getWeek(week.weekId) || week before spreading;
+    // `getWeek` is now a required dep, backed by a real store so the
+    // re-read is meaningfully exercised, not just a pass-through no-op.
+    const store15 = new Map();
+    let finalizeWeekCalls = 0;
+    const confirmDeps = {
+      saveWeek: (w) => store15.set(w.weekId, w),
+      finalizeWeek: () => { finalizeWeekCalls++; },
+      getWeek: (weekId) => store15.get(weekId) || null,
+    };
+    store15.set('w1', { weekId: 'w1', status: 'live' });
+    const liveWeekResult = wizard.confirmFinalizeTiebreaker({ week: store15.get('w1'), actualValue: 55, deps: confirmDeps });
+    assert(liveWeekResult.week.actualTiebreakerValue === 55 && liveWeekResult.week.tiebreakerFinalized === true,
+      '15-16: actualTiebreakerValue + tiebreakerFinalized are written together, one save');
+    assert(finalizeWeekCalls === 0,
+      '15-17 (mutation guard): a LIVE (not-yet-final) week does NOT trigger a finalizeWeek() recompute here — that happens once, at Step 4');
+
+    store15.set('w1', { ...store15.get('w1'), status: 'final' });
+    const finalWeekResult = wizard.confirmFinalizeTiebreaker({ week: store15.get('w1'), actualValue: 60, deps: confirmDeps });
+    assert(finalizeWeekCalls === 1,
+      '15-18 (mutation guard): editing the tiebreaker on an ALREADY-FINAL week DOES trigger the recompute, matching the standalone card\'s own conditional exactly');
+    assert(finalWeekResult.week.weekId === 'w1', '15-19: saveWeek was actually called');
+
+    // RG-256 mutation guard — a STALE `week` argument (the caller never
+    // re-fetched after some OTHER write already landed on the mirror) must
+    // not roll that write back when this function spreads its own base.
+    const staleStore = new Map();
+    staleStore.set('w2', { weekId: 'w2', status: 'live', extraPointActual: 41 }); // some earlier step already wrote this
+    const staleDeps = {
+      saveWeek: (w) => staleStore.set(w.weekId, w),
+      finalizeWeek: () => {},
+      getWeek: (weekId) => staleStore.get(weekId) || null,
+    };
+    const staleOriginalWeek = { weekId: 'w2', status: 'live' }; // the caller's OWN, pre-write snapshot
+    const staleResult = wizard.confirmFinalizeTiebreaker({ week: staleOriginalWeek, actualValue: 55, deps: staleDeps });
+    assert(staleResult.week.extraPointActual === 41,
+      `15-19b (REQUIRED, RG-256 mutation guard): called with a STALE week object, this must not lose a field the mirror already has (extraPointActual) — got ${JSON.stringify(staleResult.week)}`);
+    assert(staleResult.week.actualTiebreakerValue === 55,
+      '15-19c: …and still applies its OWN write correctly on top of the fresh base');
+
+    // coordinator fix, item 5 — refuses NaN/Infinity; null STAYS LEGAL.
+    const nanResult = wizard.confirmFinalizeTiebreaker({ week: { weekId: 'w3' }, actualValue: NaN, deps: confirmDeps });
+    assert(nanResult.ok === false, '15-19d (mutation guard): NaN actualValue is refused, never written');
+    const infResult = wizard.confirmFinalizeTiebreaker({ week: { weekId: 'w3' }, actualValue: Infinity, deps: confirmDeps });
+    assert(infResult.ok === false, '15-19e: Infinity is refused too');
+    const strResult = wizard.confirmFinalizeTiebreaker({ week: { weekId: 'w3' }, actualValue: 'fifty-five', deps: confirmDeps });
+    assert(strResult.ok === false, '15-19f: a non-numeric string is refused too');
+    const nullDeps = { ...confirmDeps, getWeek: () => null };
+    const nullResult = wizard.confirmFinalizeTiebreaker({ week: { weekId: 'w4', status: 'live' }, actualValue: null, deps: nullDeps });
+    assert(nullResult.ok === true && nullResult.week.actualTiebreakerValue === null && nullResult.week.tiebreakerFinalized === false,
+      `15-19g: null STAYS LEGAL for the tiebreaker — a real "no value yet" state, never refused (got ${JSON.stringify(nullResult)})`);
+  }
+
+  console.log('  -- Step 3: Confirm Extra Point --');
+  {
+    const noActual = wizard.finalizeExtraPointSummary({ week: { weekId: 'w1' }, players: [], deps: { gradeWeekExtraPoint: () => { throw new Error('should not be called'); } } });
+    assert(noActual.hasActual === false && noActual.graded === null,
+      '15-20 (mutation guard): no extraPointActual on file ⇒ never calls gradeWeekExtraPoint at all');
+
+    let gradeArgsUsed = null;
+    const withActual = wizard.finalizeExtraPointSummary({
+      week: { weekId: 'w1', extraPointActual: 42 }, players: [{ playerId: 'p1' }],
+      deps: { gradeWeekExtraPoint: (w, players) => { gradeArgsUsed = { w, players }; return { actual: 42, rows: [] }; } },
+    });
+    assert(withActual.hasActual === true && withActual.actualValue === 42 && withActual.graded.actual === 42,
+      '15-21: an existing actual value is graded via the injected gradeWeekExtraPoint(), unchanged');
+    assert(gradeArgsUsed.players.length === 1, '15-22: the caller\'s player list is passed through untouched');
+
+    // coordinator fix, item 3, REQUIRED (RG-256 class) — confirmFinalizeExtraPoint()
+    // must re-read deps.getWeek(week.weekId) || week before spreading.
+    const store3 = new Map();
+    store3.set('w1', { weekId: 'w1', status: 'live' });
+    const confirmEpDeps = { saveWeek: (w) => store3.set(w.weekId, w), getWeek: (weekId) => store3.get(weekId) || null };
+    const confirmed = wizard.confirmFinalizeExtraPoint({ week: store3.get('w1'), actualValue: 38, deps: confirmEpDeps });
+    assert(confirmed.ok === true && confirmed.week.extraPointActual === 38 && store3.get('w1').extraPointActual === 38,
+      '15-23: confirming writes extraPointActual via saveWeek(), the same field the standalone card writes');
+
+    // coordinator fix, item 5 — refuses non-finite (including null/undefined
+    // — unlike the tiebreaker, ep-save-btn NEVER accepts a blank value).
+    assert(wizard.confirmFinalizeExtraPoint({ week: { weekId: 'w1' }, actualValue: NaN, deps: confirmEpDeps }).ok === false,
+      '15-23b (mutation guard): NaN is refused, matching ep-save-btn\'s own Number.isFinite guard (app.js:19752-19754)');
+    assert(wizard.confirmFinalizeExtraPoint({ week: { weekId: 'w1' }, actualValue: Infinity, deps: confirmEpDeps }).ok === false,
+      '15-23c: Infinity is refused too');
+    assert(wizard.confirmFinalizeExtraPoint({ week: { weekId: 'w1' }, actualValue: null, deps: confirmEpDeps }).ok === false,
+      '15-23d (mutation guard): null is ALSO refused for Extra Point — unlike the tiebreaker, this button never has a legal blank state');
+    assert(wizard.confirmFinalizeExtraPoint({ week: { weekId: 'w1' }, actualValue: undefined, deps: confirmEpDeps }).ok === false,
+      '15-23e: undefined is refused too');
+
+    // THE EXACT SEQUENCE the coordinator specified (review round on ddf9e4f,
+    // item 3): Step 2 (Confirm Tiebreaker) saves onto the mirror; Step 3
+    // (Confirm Extra Point) is then called with the ORIGINAL, pre-Step-2
+    // week object (the shape a stale render closure could hold) — this
+    // must NOT null out the tiebreaker Step 2 already wrote.
+    const seqStore = new Map();
+    const originalWeek = { weekId: 'w5', status: 'live' };
+    seqStore.set('w5', originalWeek);
+    const seqDeps = {
+      saveWeek: (w) => seqStore.set(w.weekId, w),
+      getWeek: (weekId) => seqStore.get(weekId) || null,
+      finalizeWeek: () => {},
+    };
+    wizard.confirmFinalizeTiebreaker({ week: originalWeek, actualValue: 55, deps: seqDeps }); // "Step 2 saves"
+    assert(seqStore.get('w5').actualTiebreakerValue === 55,
+      '15-23f fixture check: Step 2 really did write the tiebreaker onto the mirror');
+    const step3Result = wizard.confirmFinalizeExtraPoint({ week: originalWeek, actualValue: 40, deps: seqDeps }); // "Step 3 called with the ORIGINAL object"
+    assert(step3Result.week.actualTiebreakerValue === 55,
+      `15-23g (REQUIRED, RG-256 mutation guard): Step 3 called with the ORIGINAL (pre-Step-2) week object must NOT null the tiebreaker Step 2 already saved (got ${JSON.stringify(step3Result.week)})`);
+    assert(step3Result.week.extraPointActual === 40,
+      '15-23h: …and still applies Step 3\'s own write correctly on top of the fresh base');
+  }
+
+  console.log('  -- Step 4: Finalize --');
+  {
+    const tieShown = wizard.unresolvedTieWarning({
+      week: { weekId: 'w1' }, players: [], picks: [], games: [],
+      deps: { weekHasUnresolvedTie: () => true },
+    });
+    assert(tieShown.show === true && tieShown.text === wizard.WIZARD_COPY.UNRESOLVED_TIE_WARNING,
+      '15-24: an unresolved tie shows the inline warning, exact copy — never a browser confirm()');
+
+    const noTie = wizard.unresolvedTieWarning({
+      week: { weekId: 'w1' }, players: [], picks: [], games: [],
+      deps: { weekHasUnresolvedTie: () => false },
+    });
+    assert(noTie.show === false && noTie.text === '', '15-25 (mutation guard): no tie ⇒ show:false and empty text, not a truthy leftover');
+
+    const noDepAtAll = wizard.unresolvedTieWarning({ week: { weekId: 'w1' }, players: [], picks: [], games: [], deps: {} });
+    assert(noDepAtAll.show === false, '15-26: missing the weekHasUnresolvedTie dep entirely ⇒ defaults to false, never a throw');
+
+    // coordinator fix, item 3, REQUIRED (RG-256 class) — confirmFinalizeWeek()
+    // must re-read deps.getWeek(week.weekId) || week before spreading, so
+    // this step's base carries whatever Steps 1-3 already wrote onto the
+    // mirror (graded ATS, actualTiebreakerValue, extraPointActual) even if
+    // the caller's own `week` reference is stale.
+    const store4 = new Map();
+    store4.set('w1', { weekId: 'w1', status: 'live', pendingFinalization: true, actualTiebreakerValue: 55, extraPointActual: 40 });
+    let finalizeWeekCalls = 0, finalizeWeekArg = null;
+    const deps = {
+      saveWeek: (w) => store4.set(w.weekId, w),
+      getWeek: (weekId) => store4.get(weekId) || null,
+      finalizeWeek: (w) => { finalizeWeekCalls++; finalizeWeekArg = w; },
+    };
+    const result = wizard.confirmFinalizeWeek({ week: store4.get('w1'), deps });
+    assert(result.week.status === 'final' && result.week.pendingFinalization === false && result.week.finalizedAt,
+      `15-27: status flips to final, pendingFinalization clears, finalizedAt is stamped (got ${JSON.stringify(result.week)})`);
+    assert(result.week.actualTiebreakerValue === 55 && result.week.extraPointActual === 40,
+      '15-27b: the finalized week still carries everything Steps 2/3 wrote — nothing lost by re-reading the mirror first');
+    assert(finalizeWeekCalls === 1, '15-28: finalizeWeek() is called exactly once');
+    assert(finalizeWeekArg.status === 'final' && finalizeWeekArg === store4.get('w1'),
+      '15-29 (mutation guard): finalizeWeek() receives the PERSISTED (post-save) object, never the pre-transition snapshot — same invariant confirm-finalize-btn\'s own handler documents');
+
+    // RG-256 mutation guard, stale-object variant for this step too.
+    const staleStore4 = new Map();
+    staleStore4.set('w6', { weekId: 'w6', status: 'live', pendingFinalization: true, actualTiebreakerValue: 70 });
+    const staleOriginal4 = { weekId: 'w6', status: 'live', pendingFinalization: true }; // caller's stale snapshot
+    const staleDeps4 = {
+      saveWeek: (w) => staleStore4.set(w.weekId, w),
+      getWeek: (weekId) => staleStore4.get(weekId) || null,
+      finalizeWeek: () => {},
+    };
+    const staleFinalizeResult = wizard.confirmFinalizeWeek({ week: staleOriginal4, deps: staleDeps4 });
+    assert(staleFinalizeResult.week.actualTiebreakerValue === 70,
+      `15-29b (REQUIRED, RG-256 mutation guard): Finalize called with a stale week object must not lose the tiebreaker already on the mirror (got ${JSON.stringify(staleFinalizeResult.week)})`);
+  }
+}
+
+console.log('\n[16] createWeekWizard() factory — every DI-353/354/357/358/359 function is exposed and behaves identically bound…');
+{
+  const factoryStore = new Map();
+  factoryStore.set('w1', { weekId: 'w1', status: 'live' });
+  const w = wizard.createWeekWizard({
+    applyWeekStatusChange: (wk, to) => ({ ...wk, status: to }),
+    showToast: () => {}, saveWeek: (wk) => factoryStore.set(wk.weekId, wk),
+    // coordinator fix, item 3 — getWeek is now part of the factory dep bag.
+    getWeek: (weekId) => factoryStore.get(weekId) || null,
+    isNativeShell: () => false, nativeHapticImpact: () => {},
+    calculateAtsWinner: () => 'home', saveGame: () => {}, finalizeWeek: () => {},
+    calculateAlmaMaterTotal: () => 50, almaMatersForAutoCalc: () => [], getGames: () => [],
+    gradeWeekExtraPoint: () => null, weekHasUnresolvedTie: () => false,
+  });
+  assert(typeof w.stepBackTarget === 'function' && w.stepBackTarget(3) === 2,
+    '16-1: stepBackTarget exposed and bound correctly');
+  assert(typeof w.shouldConfirmAnnouncementDiscard === 'function' && w.shouldConfirmAnnouncementDiscard('x') === true,
+    '16-2: shouldConfirmAnnouncementDiscard exposed');
+  assert(typeof w.tiebreakerStepSummary === 'function' && w.tiebreakerStepSummary({}).hasQuestion === false,
+    '16-3: tiebreakerStepSummary exposed');
+  assert(typeof w.applyTiebreakerQuestion === 'function' && w.applyTiebreakerQuestion({}, 'q').tiebreakerQuestion === 'q',
+    '16-4: applyTiebreakerQuestion exposed');
+  assert(typeof w.finishWeekSetup === 'function'
+    && w.finishWeekSetup({ week: { weekId: 'w1', status: 'draft' }, mode: 'draft', gamesCount: 0, missingSpreadCount: 0, timingConfigured: false }).ok === true,
+    '16-5: finishWeekSetup exposed and bound to deps');
+  // coordinator fix, item 6 — dueForScheduledOpen() now returns an object.
+  const dueResult16 = w.dueForScheduledOpen({ week: null });
+  assert(typeof w.dueForScheduledOpen === 'function' && dueResult16.due === false && dueResult16.blocked === false,
+    `16-6: dueForScheduledOpen exposed, returns {due, blocked, gate} (got ${JSON.stringify(dueResult16)})`);
+  assert(typeof w.finalizeApproveScores === 'function'
+    && w.finalizeApproveScores({ week: { weekId: 'w1' }, games: [{ status: 'final', lockedSpread: 0 }] }).ok === true,
+    '16-7: finalizeApproveScores exposed and bound to deps');
+  assert(typeof w.finalizeAutoCalcTiebreaker === 'function' && w.finalizeAutoCalcTiebreaker({ weekId: 'w1' }).value === 50,
+    '16-8: finalizeAutoCalcTiebreaker exposed and bound to deps');
+  assert(typeof w.confirmFinalizeTiebreaker === 'function'
+    && w.confirmFinalizeTiebreaker({ week: factoryStore.get('w1'), actualValue: 10 }).ok === true,
+    '16-9: confirmFinalizeTiebreaker exposed and bound to deps (incl. the new getWeek dep)');
+  assert(typeof w.finalizeExtraPointSummary === 'function'
+    && w.finalizeExtraPointSummary({ week: { weekId: 'w1' }, players: [] }).hasActual === false,
+    '16-10: finalizeExtraPointSummary exposed and bound to deps');
+  assert(typeof w.confirmFinalizeExtraPoint === 'function'
+    && w.confirmFinalizeExtraPoint({ week: factoryStore.get('w1'), actualValue: 5 }).ok === true,
+    '16-11: confirmFinalizeExtraPoint exposed and bound to deps (incl. the new getWeek dep)');
+  assert(typeof w.unresolvedTieWarning === 'function'
+    && w.unresolvedTieWarning({ week: {}, players: [], picks: [], games: [] }).show === false,
+    '16-12: unresolvedTieWarning exposed and bound to deps');
+  assert(typeof w.confirmFinalizeWeek === 'function'
+    && w.confirmFinalizeWeek(factoryStore.get('w1')).week.status === 'final',
+    '16-13: confirmFinalizeWeek exposed and bound to deps (incl. the new getWeek dep)');
+}
+
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 process.stdout.write('', () => process.stderr.write('', () => process.exit(fail === 0 ? 0 : 1)));
 setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

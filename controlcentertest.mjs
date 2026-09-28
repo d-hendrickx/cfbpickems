@@ -991,5 +991,49 @@ console.log('\n[11] mountControlCenter() — FIX ROUND 1 findings 1, 2, 8, 9…'
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+console.log('\n[12] Finding 6 (app-shell part 3A review, 2026-09-27) — accordionRow() `secondary`, and the Appearance row explained (not silently dead) under a school theme…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // 12a — accordionRow()'s new `secondary` param, via renderSettingsAccordion()
+  // (no direct export of accordionRow() itself — same "test the real render
+  // path" discipline this file already uses elsewhere). The row's BODY
+  // (including the <select>) only paints while its own row is the open one
+  // (accordionRow()'s `${open ? ... : ''}`, unchanged by this fix) — opened
+  // here so 12a-2/12b-3 can see the control at all.
+  const neutralHTML = renderSettingsAccordion(baseCtx({ currentTheme: 'neutral' }), { settingsOpenRow: 'appearance' });
+  assert(!/cc-row-secondary/.test(neutralHTML),
+    '12a: the Munera theme (\'neutral\') — no secondary explanation rendered, and the colorScheme <select> is NOT disabled');
+  assert(!/data-field="colorScheme"[^>]*disabled/.test(neutralHTML),
+    '12a-2: …the colorScheme <select> carries no disabled attribute under the Munera theme');
+
+  // 12b — a school theme: FINDING 6 — explained, not hidden. The Appearance
+  // row itself still renders (discoverable); its control is disabled and a
+  // secondary line names why.
+  const schoolHTML = renderSettingsAccordion(baseCtx({ currentTheme: 'aggie' }), { settingsOpenRow: 'appearance' });
+  assert(/data-row="appearance"/.test(schoolHTML),
+    '12b: the Appearance row STILL renders under a school theme — explained, not hidden (Ruling 6 offered either; this pass chose "explained")');
+  assert(/cc-row-secondary">Night mode is available with the Munera theme</.test(schoolHTML),
+    `12b-2: …with the exact secondary copy named in the finding (got: ${(schoolHTML.match(/cc-row-secondary">[^<]*/) || [''])[0]})`);
+  assert(/data-field="colorScheme"[^>]*disabled/.test(schoolHTML),
+    '12b-3: …and the colorScheme <select> IS disabled — a dead control (school themes carry no dark-mode CSS branch) never looks live');
+
+  // 12c — every OTHER accordion row is unaffected (no secondary text leaked
+  // onto Time zone/Notifications/etc. just because a school theme is active).
+  const otherRowsSecondary = (schoolHTML.match(/data-row="(timezone|notifications|scribe|chat|game-settings|theme)"[\s\S]{0,400}?cc-row-secondary/g) || []);
+  assert(otherRowsSecondary.length === 0,
+    `12c: no OTHER settings row picked up a secondary line as a side effect (got: ${JSON.stringify(otherRowsSecondary)})`);
+
+  // 12d — MUTATION GUARD: prove 12b/12b-2/12b-3 are not vacuous by checking
+  // the school-theme markup actually DIFFERS from the neutral-theme markup at
+  // the Appearance row (a copy-paste that rendered the same body for both
+  // would still pass a same-string-shape test).
+  const apptRe = /<div class="control-center-row-wrap" data-row="appearance">[\s\S]*?<\/div>\s*<\/div>/;
+  const neutralAppearance = (neutralHTML.match(apptRe) || [''])[0];
+  const schoolAppearance = (schoolHTML.match(apptRe) || [''])[0];
+  assert(neutralAppearance.length > 0 && schoolAppearance.length > 0 && neutralAppearance !== schoolAppearance,
+    '12d: the Appearance row\'s own markup genuinely differs between the Munera theme and a school theme (not a coincidental pass)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 console.log(`\n[control-center] ${pass} passed, ${fail} failed\n`);
 if (fail > 0) process.exit(1);

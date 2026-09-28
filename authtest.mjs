@@ -406,6 +406,17 @@ function resetAll(overrides = {}) {
   // it false also keeps storage.save() usable inside resyncPlayerPreferences(),
   // which the chokepoint assertions need to actually run.
   auth._setHasSupabaseDataBackendForTest(true);
+  // DI-348 (2026-09-27) — `needsLeagueFlowScreen()`'s single-membership
+  // branch now depends on a boot-time warm/cold snapshot that only the real
+  // boot() captures (js/app.js's `isWarmRelaunchAtBoot()`), and none of this
+  // file's sections call boot(). Defaulted WARM here — every section in this
+  // file that sets up an active single-league membership already assumes the
+  // OLD "exactly one membership always reaches the tab directly" behavior,
+  // which DI-348 keeps for the warm case (device already remembers this
+  // league). Section [10] is the one place that specifically exercises the
+  // NEW cold behavior, and it overrides this explicitly, per-case, with the
+  // same test-only seam.
+  app._setWarmRelaunchAtBootForTest(true);
 }
 
 /** Drives the REAL listener chain: auth.js -> its listener set -> app.js's
@@ -541,17 +552,18 @@ console.log('\n[3] DI-184 — the active-league pill + DI-184d\'s single-source 
   assert(/const name = getActiveLeagueName\(\)/.test(fnMatch[0]), 'the call result is captured into `name`');
   assert(/escHtml\(name/.test(fnMatch[0]), 'the rendered pill text is escHtml() of that same `name` — one source, provably (DI-184d)');
   assert(!/document\.title/.test(fnMatch[0]), 'and nothing in the function assigns document.title');
-  // REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — index.html no
-  // longer carries #league-pill AT ALL (removed entirely, not merely a tag
-  // shape — the header declutter found renderLeaguePill() was still
-  // un-hiding it on every session resolve, defeating the "hidden" intent).
-  // renderLeaguePill() ITSELF is unchanged (every assertion above this one
-  // still drives it against a manually-injected fake element, same as
-  // always) — this is now an ABSENCE check on the real markup, not a tag-
-  // shape check on markup that no longer exists.
+  // DI-393 (UN-353, 2026-09-27) — SUPERSEDES REVIEWER F4 (2026-09-25):
+  // index.html carries #league-pill AGAIN, as the header's own league zone
+  // (Drew's live ruling on the shipped one-line header). renderLeaguePill()
+  // ITSELF is unchanged by either pass (every assertion above this one still
+  // drives it against a manually-injected fake element, same as always) —
+  // this is a PRESENCE + tag-shape check on the real markup, not the F4-era
+  // absence check.
   const htmlSrc = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
-  assert(!htmlSrc.includes('id="league-pill"'),
-    'index.html carries NO id="league-pill" anywhere — removed entirely (F4), so renderLeaguePill() is now permanently inert in production, not merely hidden');
+  assert(htmlSrc.includes('id="league-pill"'),
+    'index.html carries id="league-pill" — DI-393 re-adds it as the header\'s league zone, so renderLeaguePill() has a real anchor again in production');
+  assert(/<span id="league-pill"/.test(htmlSrc),
+    'and it is a <span>, never a <button> — a tag cannot change at runtime, so the non-interactive (single-league) case has to be the element\'s default shape (DI-184b)');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -910,7 +922,21 @@ console.log('\n[10] DI-181 — needsLeagueFlowScreen() / renderLeagueFlowScreen(
   assert(landing.innerHTML.includes('Ask your commissioner for this'), 'DI-181d join reassurance line present (adjacent need #2)');
 
   auth._setMembershipsForTest([{ leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'League A' }]);
-  assert(app.needsLeagueFlowScreen() === false, 'exactly ONE membership -> false, dashboard reachable directly (DI-181g, hard constraint #1)');
+  // DI-348 (UN-306, Drew's 2026-09-27 reversal) — DI-181g's original "hard
+  // constraint #1" (exactly one membership always skips straight to the
+  // six-tab shell) is AMENDED, not dropped: it now holds only on a WARM
+  // relaunch (session + league already remembered on this device). A COLD
+  // evaluation (no boot-time warm snapshot — the state every authtest
+  // section starts in, since none of them call the real boot()) now shows
+  // Leagues Home even with one membership, per Drew's own words ("I sign in
+  // from a different browser... without letting me choose the league").
+  app._setWarmRelaunchAtBootForTest(false);
+  assert(app.needsLeagueFlowScreen() === true,
+    'exactly ONE membership, COLD (no remembered session/league on this device) -> true, Leagues Home shows once (DI-348 amends DI-181g\'s old hard constraint #1)');
+  app._setWarmRelaunchAtBootForTest(true);
+  assert(app.needsLeagueFlowScreen() === false,
+    'exactly ONE membership, WARM (device already remembered this league) -> false, dashboard reachable directly — the DI-181g fast path Drew\'s own "opens as fast as today" case preserves');
+  app._setWarmRelaunchAtBootForTest(false);
 
   auth._setMembershipsForTest([
     { leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'League A' },
@@ -2439,9 +2465,15 @@ console.log('\n[20] Reviewer N5 — the auth banner\'s z-order and nav clearance
   assert(zStack > zNav, `…and above .bottom-nav (${zNav})`);
 
   const stackRule = ruleOf('#auth-banner-stack');
-  assert(/bottom:\s*calc\([^)]*var\(--nav-height\)/.test(stackRule),
-    'and it is offset upward by var(--nav-height), so when no gate is up it sits ABOVE the bottom nav rather than covering it');
-  assert(/env\(safe-area-inset-bottom/.test(stackRule), '…including the iOS home-indicator inset');
+  // DI-397 (2026-09-27) — `--nav-height` is retired; every nav-adjacent
+  // offset (this one included) now reads the ONE compound token,
+  // `--nav-bar-clearance`, which already bakes env(safe-area-inset-bottom,
+  // 0px) into itself (see css/styles.css's own :root comment) — there is no
+  // longer a separate env() term alongside it in THIS rule specifically.
+  assert(/bottom:\s*var\(--nav-bar-clearance\)/.test(stackRule),
+    'and it is offset upward by var(--nav-bar-clearance) (pill height + gap + the safe-area inset, computed once), so when no gate is up it sits ABOVE the floating nav pill rather than covering it');
+  assert(/env\(safe-area-inset-bottom/.test(css.match(/:root\s*\{[^}]*\}/)[0]),
+    '…the iOS home-indicator inset is still accounted for — baked into --nav-bar-clearance itself now (:root), rather than repeated at every consumer');
   assert(!/position:\s*fixed/.test(ruleOf('.session-expired-banner')),
     'the individual banners are no longer independently position:fixed — they are children of the one stack, which is why two of them can be on screen without overlapping');
   const zBackend = zOf('.backend-error-banner');
@@ -4128,9 +4160,13 @@ console.log('\n[32] DI-180l — the fail-closed HOLD GATE (A1/A2/A6), on all thr
     // are absent from the registry at all — the realistic case now.
     // UPDATED — DI-308 (T-16, 2026-09-25, UX Revamp wiring pass 1) added
     // #page-settings as a SEVENTH page container; DI-320/344/345 (wiring
-    // pass 2, same day) adds #page-admin as an EIGHTH.
-    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 8,
-      'fixture: the teardown list names all eight page containers, including page-settings and page-admin (a shorter list would leave a tab painted behind the gate)');
+    // pass 2, same day) adds #page-admin as an EIGHTH. UPDATED AGAIN —
+    // DI-397 (UN-357, 2026-09-27) RETIRES the Settings tab/page entirely
+    // (its content lives in the control-center drawer only), so the list
+    // is back down to SEVEN: picks, dashboard, leaderboard, commissioner,
+    // admin, rules, chat.
+    assert(app._APP_PAGE_CONTAINER_IDS_FOR_TEST.length === 7,
+      'fixture: the teardown list names all seven page containers (page-settings retired by DI-397) — a shorter list would leave a tab painted behind the gate');
     assert(Object.values(painted).every(el => /Kihoon/.test(el.innerHTML)),
       'fixture: every page container really is painted with league data before the hold fires');
 
@@ -4141,7 +4177,7 @@ console.log('\n[32] DI-180l — the fail-closed HOLD GATE (A1/A2/A6), on all thr
       `A6 — every page container is EMPTIED before the gate paints (${leftover.length} still holding markup: ${JSON.stringify(leftover.map(([id]) => id))}) — no mirror-derived markup is left in the DOM, not merely covered by an overlay`);
     assert(week.innerHTML === '', 'A6 — …and the header week block (a week NAME is league data)');
     assert(!!document.getElementById('site-gate-overlay') || app.currentAuthHoldReason() === 'config-unreadable',
-      'A6 — …and the teardown completes and paints the hold gate even with no #league-pill/#header-identity in the DOM (S-6: the dead branches targeting those removed ids were deleted, not left to silently no-op forever)');
+      'A6 — …and the teardown completes and paints the hold gate even with no #header-identity in the DOM (S-6: the dead branch targeting that removed id was deleted, not left to silently no-op forever — #league-pill is back in the DOM per DI-393, and unaffected by this teardown either way since it never carries league data of its own)');
   }
 
   // ── A2 — THE 20s SILENT RE-CHECK, on a controllable clock ───────────────
@@ -8742,8 +8778,17 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
       try { return fn(); } finally { console.log = l; console.warn = w; console.error = e; console.info = i; } };
 
     const appSrcK = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+    // Re-derived 2026-09-27 (coordinator fix, this pass) — the scan-all-
+    // drafts DRAFT→OPEN loop (dueForScheduledOpen() per week, not just
+    // getCurrentWeek()) now sits ABOVE `const week = getCurrentWeek()` in
+    // source order, pushing that read well past the old 3000-char window;
+    // widened to 8000 so the slice still reaches it. Same site, same text.
+    // Re-derived AGAIN 2026-09-27 (app-shell part 3A review — Finding 2's
+    // rework comment + BLOCK fix (d)'s wizardSetActiveWeekId() call, both
+    // inside this same scan loop, ABOVE the read) — widened to 9000; same
+    // site, same text, only the distance grew.
     const fnK = appSrcK.slice(appSrcK.indexOf('export function tickAutoTransition()'),
-      appSrcK.indexOf('export function tickAutoTransition()') + 3000);
+      appSrcK.indexOf('export function tickAutoTransition()') + 9000);
     const codeK = fnK.replace(/\/\*[\s\S]*?\*\//g, ' ').split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
     const gateAt = codeK.indexOf('isSupabaseDataMode()');
     const weekAt = codeK.indexOf('const week = getCurrentWeek()');
@@ -8851,6 +8896,402 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     quietK(() => sb._resetForTest());
   }
 
+  // ── (k4) DI-358 (coordinator Part-5 ruling 5, 2026-09-27, amended after the
+  //      wizard-contract review same day) — THE DRAFT→OPEN SCHEDULED-OPEN LEG ──
+  //
+  // tickAutoTransition() gained a new leg this pass: a DRAFT week with a past
+  // `picksOpenAt` and a satisfied gating checklist (games/spreads/timing)
+  // flips to OPEN through applyWeekStatusChange() — never a raw status write
+  // — so the picks-opened notice still posts, exactly as a manual "Open for
+  // Picks" tap does. Local (non-supabase) data mode throughout — resetAll()
+  // configures `authMode:'supabase'` but never `dataMode`, so
+  // isSupabaseDataMode() is false and the §7.2 admin gate above is out of
+  // scope entirely; this is a fresh leg below it, not a re-test of that gate.
+  {
+    console.log('\n[44k4] tickAutoTransition() — DRAFT → OPEN at a scheduled picksOpenAt (DI-358)…');
+    const scheduledWeek = (id, overrides = {}) => ({
+      weekId: id, season: '2026', weekNumber: 9, label: 'Week 9',
+      status: 'draft', dataSourceMode: 'espn',
+      picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
+      picksLockAt: new Date(Date.now() + 3600e3).toISOString(), // timingConfigured resolves (rule 1)
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false,
+      lockedAt: null, lockedAlmaMaters: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+      ...overrides,
+    });
+    const scheduledGame = (id, weekId, overrides = {}) => ({
+      gameId: id, weekId, homeTeam: 'Home', awayTeam: 'Away',
+      kickoffAt: new Date(Date.now() + 3600e3).toISOString(),
+      spread: -3, status: 'scheduled', homeScore: null, awayScore: null,
+      lockedSpread: null, multiplier: 1, ...overrides,
+    });
+
+    // ── POSITIVE — due, fully gated: opens ────────────────────────────────
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(scheduledWeek('wk_sched1'));
+    storage.saveGame(scheduledGame('g_sched1', 'wk_sched1'));
+    storage.setActiveWeekId('wk_sched1');
+    assert(storage.getCurrentWeek()?.status === 'draft', '[44k4] fixture: a DRAFT week, due to open, is current');
+    let threw44k4 = null;
+    try { app.tickAutoTransition(); } catch (e) { threw44k4 = e; }
+    assert(threw44k4 === null, `[44k4] the tick returns cleanly (got ${threw44k4 && threw44k4.name})`);
+    assert(storage.getCurrentWeek()?.status === 'open',
+      `[44k4] a due, fully-gated DRAFT week reaches OPEN through the new leg (got ${storage.getCurrentWeek()?.status})`);
+
+    // ── MUTATION-PROOF NEGATIVE 1 — not yet due (picksOpenAt in the future) ─
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(scheduledWeek('wk_sched2', { picksOpenAt: new Date(Date.now() + 3600e3).toISOString() }));
+    storage.saveGame(scheduledGame('g_sched2', 'wk_sched2'));
+    storage.setActiveWeekId('wk_sched2');
+    app.tickAutoTransition();
+    assert(storage.getCurrentWeek()?.status === 'draft',
+      '[44k4] …a DRAFT week whose picksOpenAt has NOT arrived yet stays draft — the leg is time-gated, not unconditional');
+
+    // ── MUTATION-PROOF NEGATIVE 2 — due, but gating fails: stays draft, warns
+    //    ONCE (the amended {due,blocked,gate} shape — a blocked week must not
+    //    sit silently in draft with no visible reason) ───────────────────────
+    resetAll();
+    storage.setBackendMode('local');
+    // showToast() renders into #toast-container (document.getElementById) and
+    // is not exported — the SAME seam [7336]/[11028]'s toast assertions
+    // already use ("appendChild is RECORDED... an assertion about 'what the
+    // app told the player' had nothing to read" otherwise), not a spy on
+    // app.showToast (module namespace exports are read-only in ESM).
+    const toastHost44k4 = new FakeEl(); toastHost44k4.id = 'toast-container'; registry.set('toast-container', toastHost44k4);
+    storage.saveWeek(scheduledWeek('wk_sched3'));
+    storage.saveGame(scheduledGame('g_sched3', 'wk_sched3', { spread: null }));   // missing spread -> gate fails
+    storage.setActiveWeekId('wk_sched3');
+    app.tickAutoTransition();
+    assert(storage.getCurrentWeek()?.status === 'draft',
+      '[44k4] …a due DRAFT week that fails the gating checklist (a game with no spread) stays draft — the same three-item gate the manual "Open for Picks" path uses, never bypassed here');
+    assert((toastHost44k4.children || []).length === 1 && /Scheduled open is blocked/.test(toastHost44k4.children[0].textContent),
+      `[44k4] …and raises ONE commissioner notice naming the block (got ${JSON.stringify((toastHost44k4.children || []).map(c => c.textContent))})`);
+    app.tickAutoTransition();
+    app.tickAutoTransition();
+    assert((toastHost44k4.children || []).length === 1,
+      `[44k4] …and does NOT repeat the notice on every subsequent tick while still blocked (got ${(toastHost44k4.children || []).length} toasts after 3 ticks)`);
+
+    // ── MUTATION-PROOF NEGATIVE 3 — no picksOpenAt at all (never scheduled) ─
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(scheduledWeek('wk_sched4', { picksOpenAt: null }));
+    storage.saveGame(scheduledGame('g_sched4', 'wk_sched4'));
+    storage.setActiveWeekId('wk_sched4');
+    app.tickAutoTransition();
+    assert(storage.getCurrentWeek()?.status === 'draft',
+      '[44k4] …a DRAFT week that was never scheduled (`picksOpenAt` unset) is untouched — this leg only fires for a week the commissioner explicitly chose "Open at a scheduled time" for');
+
+    storage.setBackendMode('local');
+  }
+
+  // ── (k4b) FINDING 2 (app-shell part 3A review, 2026-09-27) — TWO due
+  //      drafts in the same tick: only the FIRST opens; the second waits for
+  //      the NEXT tick. Before this fix the scan loop `continue`d after
+  //      firing an open, so BOTH would have flipped to OPEN in one single
+  //      tickAutoTransition() call — Ruling 5's whole-tick ceiling, read
+  //      literally, refuses that. ────────────────────────────────────────
+  {
+    console.log('\n[44k4b] tickAutoTransition() — two due drafts, ONE tick: only the first opens (Finding 2)…');
+    const scheduledWeekB = (id, num, overrides = {}) => ({
+      weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`,
+      status: 'draft', dataSourceMode: 'espn',
+      picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
+      picksLockAt: new Date(Date.now() + 3600e3).toISOString(),
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false,
+      lockedAt: null, lockedAlmaMaters: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+      ...overrides,
+    });
+    const scheduledGameB = (id, weekId) => ({
+      gameId: id, weekId, homeTeam: 'Home', awayTeam: 'Away',
+      kickoffAt: new Date(Date.now() + 3600e3).toISOString(),
+      spread: -3, status: 'scheduled', homeScore: null, awayScore: null,
+      lockedSpread: null, multiplier: 1,
+    });
+
+    resetAll();
+    storage.setBackendMode('local');
+    // Saved in this order — getWeeks() (storage.js) returns push order for
+    // local mode, so 'wk_b1' is scanned before 'wk_b2', deterministically.
+    storage.saveWeek(scheduledWeekB('wk_b1', 10));
+    storage.saveGame(scheduledGameB('g_b1', 'wk_b1'));
+    storage.saveWeek(scheduledWeekB('wk_b2', 11));
+    storage.saveGame(scheduledGameB('g_b2', 'wk_b2'));
+    storage.setActiveWeekId('wk_b1');
+    assert(storage.getWeek('wk_b1')?.status === 'draft' && storage.getWeek('wk_b2')?.status === 'draft',
+      '[44k4b] fixture: both weeks are due drafts before any tick');
+
+    let threw44k4b = null;
+    try { app.tickAutoTransition(); } catch (e) { threw44k4b = e; }
+    assert(threw44k4b === null, `[44k4b] the tick returns cleanly (got ${threw44k4b && threw44k4b.name})`);
+    assert(storage.getWeek('wk_b1')?.status === 'open',
+      `[44k4b] the FIRST candidate (scan order) opens on this tick (got ${storage.getWeek('wk_b1')?.status})`);
+    assert(storage.getWeek('wk_b2')?.status === 'draft',
+      `[44k4b] …but the SECOND due draft does NOT also open in the SAME tick — Ruling 5's whole-tick ceiling (got ${storage.getWeek('wk_b2')?.status})`);
+
+    // ── the second candidate takes ITS leg on the NEXT tick ───────────────
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_b2')?.status === 'open',
+      `[44k4b] …and opens on the NEXT tick, one leg later, exactly as every other queued leg in this function already works (got ${storage.getWeek('wk_b2')?.status})`);
+
+    // ── MUTATION GUARD — a `continue`-shaped regression would open BOTH in
+    //    the first tick; prove this test would have caught it by checking
+    //    the fixture is truly independent (neither week depends on the
+    //    other's state to individually qualify as "due" per the checklist).
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(scheduledWeekB('wk_b3', 12));
+    storage.saveGame(scheduledGameB('g_b3', 'wk_b3'));
+    storage.setActiveWeekId('wk_b3');
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_b3')?.status === 'open',
+      '[44k4b] mutation-guard fixture: a LONE due draft (no sibling) still opens on one tick — so the two-week test above is exercising the scan\'s multi-candidate path, not some unrelated single-week gate');
+
+    storage.setBackendMode('local');
+  }
+
+  // ── (k4c) BLOCK (app-shell part 3A review, 2026-09-27) — DI-355 retired
+  //      the duplicate "New Week" button, leaving `week-wizard-entry-btn` as
+  //      the ONE way in; once the current week is anything but a draft, that
+  //      entry landed on Manage-for-the-old-week with no way through to set
+  //      up the next one. Fix (d)'s half of the walk: the scheduled-open leg
+  //      (this same tick loop) now also moves the ACTIVE pointer via
+  //      wizardSetActiveWeekId() — which refuses when a genuinely
+  //      in-progress week (open/locked/live) is still active, and moves it
+  //      otherwise (final, or nothing active at all). Two walks, per the
+  //      review's own required test:
+  //        1. Week 5 FINAL → create Week 6 (scheduled) → tick opens it →
+  //           Week 6 becomes current (final is not "in progress").
+  //        2. Week 5 LIVE → same → Week 6 opens for picks, but Week 5 STAYS
+  //           current until it is actually final.
+  // ─────────────────────────────────────────────────────────────────────
+  {
+    console.log('\n[44k4c] BLOCK fix (d) — the scheduled-open leg moves the active pointer off a FINAL week, never off a LIVE one…');
+    const finalOrLiveWeek5 = (status) => ({
+      weekId: 'wk_5', season: '2026', weekNumber: 5, label: 'Week 5',
+      status, dataSourceMode: 'espn',
+      picksOpenAt: new Date(Date.now() - 7 * 24 * 3600e3).toISOString(),
+      picksLockAt: new Date(Date.now() - 6 * 24 * 3600e3).toISOString(),
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false,
+      lockedAt: status !== 'draft' ? new Date(Date.now() - 6 * 24 * 3600e3).toISOString() : null,
+      lockedAlmaMaters: [], pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+      finalizedAt: status === 'final' ? new Date().toISOString() : null,
+    });
+    const week6Scheduled = () => ({
+      weekId: 'wk_6', season: '2026', weekNumber: 6, label: 'Week 6',
+      status: 'draft', dataSourceMode: 'espn',
+      picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
+      picksLockAt: new Date(Date.now() + 3600e3).toISOString(),
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false,
+      lockedAt: null, lockedAlmaMaters: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+    });
+    const week6Game = () => ({
+      gameId: 'g_6', weekId: 'wk_6', homeTeam: 'Home', awayTeam: 'Away',
+      kickoffAt: new Date(Date.now() + 3600e3).toISOString(),
+      spread: -3, status: 'scheduled', homeScore: null, awayScore: null,
+      lockedSpread: null, multiplier: 1,
+    });
+
+    // ── WALK 1 — Week 5 FINAL → create Week 6 → schedule → tick opens it →
+    //    it becomes current ─────────────────────────────────────────────
+    // "create Week 6, then schedule it" is driven as two direct storage
+    // writes (the SAME end state createWeekFromWizard() + Step 6's SCHEDULED
+    // mode leave on the mirror — both already covered end-to-end by
+    // weekwizardtest.mjs [16-5]/[16-6] and this file's own [44k4]; this walk
+    // is specifically about tickAutoTransition()'s ACTIVE-POINTER behavior
+    // once the scheduled leg fires, not a second test of week creation).
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(finalOrLiveWeek5('final'));
+    storage.setActiveWeekId('wk_5');
+    assert(storage.getCurrentWeek()?.weekId === 'wk_5' && storage.getCurrentWeek()?.status === 'final',
+      '[44k4c] fixture (walk 1): Week 5 is FINAL and current before anything else happens');
+    storage.saveWeek(week6Scheduled());
+    storage.saveGame(week6Game());
+    assert(storage.getCurrentWeek()?.weekId === 'wk_5',
+      '[44k4c] fixture (walk 1): creating/scheduling Week 6 alone does NOT move the active pointer — only the tick\'s own leg does, below');
+    let threw44k4c1 = null;
+    try { app.tickAutoTransition(); } catch (e) { threw44k4c1 = e; }
+    assert(threw44k4c1 === null, `[44k4c] walk 1: the tick returns cleanly (got ${threw44k4c1 && threw44k4c1.name})`);
+    assert(storage.getWeek('wk_6')?.status === 'open',
+      `[44k4c] walk 1: the scheduled leg opened Week 6 (got ${storage.getWeek('wk_6')?.status})`);
+    assert(storage.getCurrentWeek()?.weekId === 'wk_6',
+      `[44k4c] walk 1: …and Week 6 BECAME CURRENT — the active pointer moved off FINAL Week 5 (got current=${storage.getCurrentWeek()?.weekId})`);
+
+    // ── WALK 2 — same, but Week 5 is LIVE: Week 6 still opens, but the
+    //    active pointer STAYS on Week 5 until it is actually final ───────
+    resetAll();
+    storage.setBackendMode('local');
+    storage.saveWeek(week6Scheduled());
+    storage.saveGame(week6Game());
+    storage.saveWeek(finalOrLiveWeek5('live'));
+    storage.setActiveWeekId('wk_5');
+    assert(storage.getCurrentWeek()?.weekId === 'wk_5' && storage.getCurrentWeek()?.status === 'live',
+      '[44k4c] fixture (walk 2): Week 5 is LIVE and current before the tick');
+    let threw44k4c2 = null;
+    try { app.tickAutoTransition(); } catch (e) { threw44k4c2 = e; }
+    assert(threw44k4c2 === null, `[44k4c] walk 2: the tick returns cleanly (got ${threw44k4c2 && threw44k4c2.name})`);
+    assert(storage.getWeek('wk_6')?.status === 'open',
+      `[44k4c] walk 2: Week 6 still opens for picks (got ${storage.getWeek('wk_6')?.status})`);
+    assert(storage.getCurrentWeek()?.weekId === 'wk_5',
+      `[44k4c] walk 2: …but the active pointer STAYS on LIVE Week 5 — wizardSetActiveWeekId() refuses to move it off a genuinely in-progress week (got current=${storage.getCurrentWeek()?.weekId})`);
+    // Now finalize Week 5 by hand (out of scope of this walk's own claim —
+    // just proving the "until it is final" clause is not vacuous: the
+    // pointer really is still movable once the block clears).
+    storage.saveWeek({ ...storage.getWeek('wk_5'), status: 'final' });
+    assert(storage.getCurrentWeek()?.weekId === 'wk_5',
+      '[44k4c] walk 2 fixture: Week 5 is now final but is STILL current — nothing auto-moves the pointer on its own; a later tick or manual action would (matching walk 1\'s own mechanism, not re-tested here)');
+
+    storage.setBackendMode('local');
+  }
+
+  // ── (k4d) coordinator note (3A re-gate, 2026-09-27) ─ the SCHEDULED-OPEN scan
+  //      loop's own confirmation guards (app.js, the two `continue`s immediately
+  //      inside `for (const w of getWeeks())`, ABOVE `dueForScheduledOpen()`)
+  //      were untested in SUPABASE mode ─ every [44k4]/[44k4b]/[44k4c] case
+  //      above runs in LOCAL mode, where serverHasConfirmedWeek()/
+  //      serverConfirmedWeekStatus() are unconditionally true (no adapter,
+  //      nothing to disagree with). Driven here from a HYDRATED base, the
+  //      [44k2]/[44k4] pattern: a due draft the server does not hold at all
+  //      (a), and a due draft whose mirror status the server does not
+  //      confirm (b), must NOT open.
+  {
+    console.log('\n[44k4d] tickAutoTransition() scheduled-open scan ─ the confirmation guards, in supabase mode…');
+    const quietD = (fn) => { const l = console.log, w = console.warn, e = console.error, i = console.info;
+      console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+      try { return fn(); } finally { console.log = l; console.warn = w; console.error = e; console.info = i; } };
+    const LG = 'L-k4d';
+    const WK = 'wk_k4d';
+    const T0 = Date.now();
+    const weekRowD = (status, over = {}) => ({
+      extra: {}, league_id: LG, id: WK, sport: 'cfb', season: '2026', week_number: 9, label: 'Week 9',
+      status, data_source_mode: 'espn',
+      picks_open_at: new Date(T0 - 60e3).toISOString(),          // due
+      picks_lock_at: new Date(T0 + 3600e3).toISOString(),
+      auto_lock_offset_minutes: 30, auto_live_enabled: true, auto_finalize_enabled: false,
+      pending_finalization: false, locked_at: null, locked_alma_maters: null, revealed_at: null,
+      ...over,
+    });
+    const gameRowD = () => ({
+      extra: {}, league_id: LG, id: 'g_k4d', week_id: WK, home_team: 'Home', away_team: 'Away',
+      status: 'scheduled', kickoff: new Date(T0 + 3600e3).toISOString(),
+      spread: -3, favorite: 'Home', multiplier: 1, home_score: null, away_score: null,
+      locked_spread: null, ats_winner: null,
+    });
+    // The LOCAL/mirror shape tickAutoTransition()'s scan actually reads ─ same
+    // field names [44k4]'s own `scheduledWeek()`/`scheduledGame()` fixtures use,
+    // so every OTHER due-condition (games present, a real spread, a resolvable
+    // lock time) is already satisfied and the guard is the only thing standing
+    // between this fixture and an open ─ which is what the mutation-proof below
+    // depends on.
+    const draftWeekLocal = (over = {}) => ({
+      weekId: WK, season: '2026', weekNumber: 9, label: 'Week 9', status: 'draft', dataSourceMode: 'espn',
+      picksOpenAt: new Date(T0 - 60e3).toISOString(), picksLockAt: new Date(T0 + 3600e3).toISOString(),
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false,
+      lockedAt: null, lockedAlmaMaters: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+      ...over,
+    });
+    const draftGameLocal = () => ({
+      gameId: 'g_k4d', weekId: WK, homeTeam: 'Home', awayTeam: 'Away',
+      kickoffAt: new Date(T0 + 3600e3).toISOString(),
+      spread: -3, status: 'scheduled', homeScore: null, awayScore: null,
+      lockedSpread: null, multiplier: 1,
+    });
+    const tickD = () => { let threw = null; quietD(() => { try { app.tickAutoTransition(); } catch (e) { threw = e; } }); return threw; };
+
+    resetAll();
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    auth._setMembershipsForTest([{ leagueId: LG, memberId: 'm-k4d', role: 'commissioner', displayName: 'Drew', leagueName: 'League K4D' }]);
+    quietD(() => auth.setActiveLeagueId(LG));
+    auth._setAccountUserIdForTest('u-k4d');
+    storeValidSession();
+    const modeD = storage.getBackendMode();
+    storage.setBackendMode('supabase');
+
+    // ── (a) the server does not hold this week AT ALL ─ serverHasConfirmedWeek() false ──
+    wireAdapter({ client: fakeClient({ rows: { weeks: [], games: [] } }), league: () => LG });
+    quietD(() => auth.registerSupabaseDataBackend(sb.probe));
+    await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+    quietD(() => {
+      sb._seedMirrorForTest('cfbp_active_week', WK);
+      sb._seedMirrorForTest('cfbp_settings', { autoRefreshInterval: 60 });
+      sb._seedMirrorForTest('cfbp_lock_overrides', {});
+      storage.saveWeek(draftWeekLocal());
+      storage.saveGame(draftGameLocal());
+    });
+    assert(sb.getState() === 'ACTIVE', '[44k4d] (a) fixture: the adapter is ACTIVE over an empty hydrated base');
+    assert(storage.getWeek(WK)?.status === 'draft' && storage.getGames(WK).length === 1,
+      '[44k4d] (a) fixture: a DRAFT week, due to open, fully gated (games + spread + timing) ─ the ONLY thing missing is server confirmation');
+    const threwA = tickD();
+    assert(threwA === null, `[44k4d] (a) the tick returns cleanly (got ${threwA && threwA.name})`);
+    assert(storage.getWeek(WK)?.status === 'draft',
+      `[44k4d] (a) a due draft the server does NOT hold at all stays draft ─ serverHasConfirmedWeek() refuses it (got ${storage.getWeek(WK)?.status})`);
+
+    // ── (b) the server holds it, but at a DIFFERENT status than the mirror ──
+    // serverConfirmedWeekStatus(w) !== w.status ─ the RG-251 "polluted mirror"
+    // shape, applied to the scheduled-open leg specifically: the server already
+    // confirms OPEN (a leg from another device landed, or this one's own earlier
+    // attempt did), while THIS device's mirror still shows a due DRAFT.
+    wireAdapter({ client: fakeClient({ rows: { weeks: [weekRowD('open')], games: [gameRowD()] } }), league: () => LG });
+    quietD(() => auth.registerSupabaseDataBackend(sb.probe));
+    await quiet(() => sb.hydrate(LG, { epoch: auth.getIdentityEpoch() }));
+    quietD(() => {
+      sb._seedMirrorForTest('cfbp_active_week', WK);
+      sb._seedMirrorForTest('cfbp_settings', { autoRefreshInterval: 60 });
+      sb._seedMirrorForTest('cfbp_lock_overrides', {});
+      storage.saveWeek(draftWeekLocal());
+    });
+    assert(sb.getConfirmedWeekStatus(WK) === 'open' && storage.getWeek(WK)?.status === 'draft',
+      `[44k4d] (b) fixture: the server confirms OPEN while this device's mirror still shows a due DRAFT (confirmed ${sb.getConfirmedWeekStatus(WK)}, mirror ${storage.getWeek(WK)?.status})`);
+    const threwB = tickD();
+    assert(threwB === null, `[44k4d] (b) the tick returns cleanly (got ${threwB && threwB.name})`);
+    assert(storage.getWeek(WK)?.status === 'draft',
+      `[44k4d] (b) a due draft whose mirror status disagrees with the server-confirmed status stays put ─ the tick never acts from a status the server hasn't confirmed (got ${storage.getWeek(WK)?.status})`);
+
+    // ── MUTATION-PROOF ─ same shape as this file's other MUTANT checks (e.g. §3727,
+    //    §8614): a STRING copy of the scan loop's own source, never a git operation
+    //    and never a second live import of the 28k-line module ─ with the two
+    //    guard lines deleted, so the CURRENT test's non-vacuity is checked
+    //    against the actual shipped text, not a hand-copied stand-in that could
+    //    quietly drift from it. ───────────────────────────────────────────────────────
+    const appSrcD = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+    // Two loops in this file share the literal text `for (const w of getWeeks())
+    // {` ─ scoped to the one inside tickAutoTransition() specifically, the same
+    // way §8614's fnK slice scopes its own read to that function.
+    const tickFnStartD = appSrcD.indexOf('export function tickAutoTransition()');
+    assert(tickFnStartD > -1, '[44k4d] mutation-proof fixture: found tickAutoTransition()');
+    const loopStartD = appSrcD.indexOf('for (const w of getWeeks()) {', tickFnStartD);
+    assert(loopStartD > -1, '[44k4d] mutation-proof fixture: found the scan loop to extract');
+    // Balanced-brace scan for the loop's own body, matching this file's other
+    // brace-balanced extractions (e.g. §8614's fnK slice uses a fixed window;
+    // this one is exact, since the loop's own closing brace is unambiguous).
+    let depthD = 0, endD = -1;
+    for (let idx = loopStartD; idx < appSrcD.length; idx++) {
+      if (appSrcD[idx] === '{') depthD++;
+      else if (appSrcD[idx] === '}') { depthD--; if (depthD === 0) { endD = idx + 1; break; } }
+    }
+    assert(endD > loopStartD, '[44k4d] mutation-proof fixture: the loop body braces balance');
+    const loopBodyD = appSrcD.slice(loopStartD, endD);
+    const GUARD_1 = 'if (!serverHasConfirmedWeek(w)) continue;';
+    const GUARD_2 = 'if (serverConfirmedWeekStatus(w) !== w.status) continue;';
+    const dueCallAt = loopBodyD.indexOf('dueForScheduledOpen(');
+    assert(loopBodyD.includes(GUARD_1) && loopBodyD.includes(GUARD_2)
+      && loopBodyD.indexOf(GUARD_1) < dueCallAt && loopBodyD.indexOf(GUARD_2) < dueCallAt,
+      '[44k4d] the real source: both confirmation guards sit inside the scan loop, BEFORE dueForScheduledOpen() is ever consulted');
+    const mutatedLoopD = loopBodyD.replace(GUARD_1 + '\n      ', '').replace(GUARD_2 + '\n      ', '');
+    assert(mutatedLoopD !== loopBodyD, '[44k4d] mutation-proof sanity: the deletion actually changed the source text');
+    assert(!mutatedLoopD.includes(GUARD_1) && !mutatedLoopD.includes(GUARD_2),
+      '[44k4d] MUTANT: with both guard lines deleted from a STRING copy, neither survives a re-scan ─ which is exactly the class of change (a) and (b) above would have gone red against, had it shipped: nothing left inside the loop would ever refuse a due, ungated draft the mirror alone thinks is ready');
+
+    storage.setBackendMode(modeD);
+    quietD(() => sb._resetForTest());
+  }
 
   // ── (k2) RG-251 — ONE STATUS LEG PER TICK, AND NEVER FROM A STATUS THE SERVER NEVER CONFIRMED ──
   //
@@ -9162,6 +9603,15 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
       const tos = [...html.matchAll(/week-wizard-status-btn" data-to="([a-z]+)"/g)].map((m) => m[1]).join(',');
       assert(tos === 'locked,draft',
         `[44k3] reviewer 2: with the server at OPEN and the mirror claiming LIVE, the wizard Manage screen offers OPEN's legs (Lock Week, Back to Draft) — not LIVE's (got ${tos || html.slice(0, 120)})`);
+      // BLOCK fix (a) (app-shell part 3A review, 2026-09-27) — the Manage
+      // screen carries a "Set up Week N+1" button unconditionally (this is
+      // the one Manage state that exists in this fixture — see
+      // weekWizardContinuableDrafts()'s own comment on why Manage never
+      // naturally renders when a continuable draft already exists).
+      assert(/id="wiz-manage-setup-next"/.test(html),
+        `[44k3] BLOCK fix (a): the rendered Manage screen carries the "Set up Week N+1" button (got ${html.slice(0, 200)})`);
+      assert(/Set up Week \d+/.test(html),
+        '[44k3] BLOCK fix (a): …with a real week number in its own label, not a placeholder');
     }
 
     // ── (k4) RG-256 — A COMM/ADMIN SAVE SPREADS THE WEEK AS IT IS NOW, NOT AS IT WAS PAINTED ──────
@@ -9200,7 +9650,14 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
       };
       await drive('Save Blurb', 'save-blurb-btn', { 'blurb-input': 'Rivalry week.' }, 'blurb');
       await drive('Save Tiebreaker', 'save-tb-btn', { 'tb-question': 'Total points in the late game?', 'tb-actual': '' }, 'tiebreaker_question');
-      await drive('Save Week Settings', 'save-week-settings-btn', { 'week-round-label': 'Rivalry' }, 'round_label');
+      // Re-derived 2026-09-27 (DI-356, this pass) — the standalone "Week
+      // Settings" card (and its `save-week-settings-btn` handler) is
+      // retired; round label now saves ONLY through the wizard's own Step 1
+      // (a different button/handler, out of this RG-256 drive harness's
+      // scope). This same staleness guard now covers the relocated
+      // admin-only fields (ESPN Week #, grouping, Show in History) via
+      // `admin-save-week-settings-btn` — same site, same guard, new field.
+      await drive('Admin Save Week Settings', 'admin-save-week-settings-btn', { 'admin-week-espn-num': '7' }, 'espn_week_number');
       await drive('Admin Save Data Source Mode', 'admin-save-data-source-mode-btn', { 'admin-data-source-mode': 'espn' }, 'data_source_mode');
       // Dismiss-pending: the painted week carried pendingFinalization; the server's copy still does.
       {
@@ -12003,6 +12460,196 @@ console.log('     native window: a downward drag on .chat-sheet-header dismisses
     delete globalThis.window.Capacitor;
     FakeEl.classQueries = false;
     console.warn = realWarn; console.info = realInfo;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64b] BLOCK fix (b) — weekWizardEntryLabel()/weekWizardContinuableDrafts(): 0/1/2+ continuable drafts…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const label = app._weekWizardEntryLabelForTest;
+  const drafts = app._weekWizardContinuableDraftsForTest;
+  assert(typeof label === 'function' && typeof drafts === 'function',
+    '[64b] fixture: both BLOCK fix (b) test seams are exported');
+
+  const finalWeek = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'final',
+    dataSourceMode: 'espn', lockedAt: new Date().toISOString(), finalizedAt: new Date().toISOString(),
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  const draftWeek = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'draft',
+    dataSourceMode: 'espn', lockedAt: null, finalizedAt: null,
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+
+  // ── 0 continuable drafts — unchanged "Manage This Week" ───────────────
+  // resetAll() does not clear cfbp_weeks (other sections' fixture weeks
+  // persist across this whole file by DESIGN — each section uses its own
+  // unique weekIds instead of wiping shared state). This section's own
+  // claims ARE about the total draft count, so it clears explicitly.
+  resetAll();
+  storage.setBackendMode('local');
+  globalThis.localStorage.removeItem('cfbp_weeks');
+  storage.saveWeek(finalWeek('wk_lbl1', 1));
+  storage.setActiveWeekId('wk_lbl1');
+  assert(drafts().length === 0, '[64b] fixture: zero other drafts exist');
+  assert(label(storage.getCurrentWeek()) === 'Manage This Week',
+    `[64b] 0 drafts: label is unchanged, "Manage This Week" (got ${JSON.stringify(label(storage.getCurrentWeek()))})`);
+
+  // ── exactly 1 continuable draft — names it specifically ────────────────
+  storage.saveWeek(draftWeek('wk_lbl2', 2));
+  const oneDraft = drafts();
+  assert(oneDraft.length === 1 && oneDraft[0].weekId === 'wk_lbl2', '[64b] fixture: exactly one other draft exists');
+  assert(label(storage.getCurrentWeek()) === 'Continue set up: Week 2',
+    `[64b] 1 draft: label names the specific week (got ${JSON.stringify(label(storage.getCurrentWeek()))})`);
+
+  // ── 2+ continuable drafts — the picker label, an ellipsis ──────────────
+  storage.saveWeek(draftWeek('wk_lbl3', 3));
+  const twoDrafts = drafts();
+  assert(twoDrafts.length === 2 && twoDrafts[0].weekId === 'wk_lbl2' && twoDrafts[1].weekId === 'wk_lbl3',
+    `[64b] fixture: two other drafts, oldest weekNumber first (got ${JSON.stringify(twoDrafts.map((w) => w.weekId))})`);
+  assert(label(storage.getCurrentWeek()) === 'Continue set up…',
+    `[64b] 2+ drafts: the picker label, an ellipsis — never names one arbitrarily (got ${JSON.stringify(label(storage.getCurrentWeek()))})`);
+
+  // ── the CURRENT draft week itself is never counted as "continuable" ────
+  resetAll();
+  storage.setBackendMode('local');
+  globalThis.localStorage.removeItem('cfbp_weeks');
+  storage.saveWeek(draftWeek('wk_lbl4', 4));
+  storage.setActiveWeekId('wk_lbl4');
+  assert(drafts().length === 0,
+    '[64b] the current week, even though it IS a draft, is excluded from its own "other drafts to continue" list');
+  assert(label(storage.getCurrentWeek()) === 'Continue set up',
+    `[64b] …and a draft current week keeps its ORIGINAL label path entirely, untouched by this fix (got ${JSON.stringify(label(storage.getCurrentWeek()))})`);
+
+  storage.setBackendMode('local');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64c] BLOCK fix (b)/(c) — the REAL openWeekWizardSheet(): routes straight to a lone continuable');
+console.log('       draft, shows a picker for 2+, and Duplicate no longer steals the active pointer…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const realWarn64c = console.warn; const realInfo64c = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM64c = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  // Class-selector queries (`.wiz-continue-pick`) are opt-in per section —
+  // same flag/reasoning [64] uses just above.
+  FakeEl.classQueries = true;
+  const signIn64c = async () => {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uW2' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uW2', email: 'w2@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+  const finalWeek64c = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'final',
+    dataSourceMode: 'espn', lockedAt: new Date().toISOString(), finalizedAt: new Date().toISOString(),
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  const draftWeek64c = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'draft',
+    dataSourceMode: 'espn', lockedAt: null, finalizedAt: null,
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  try {
+    // ── (a) exactly ONE continuable draft — the sheet opens DIRECTLY on it,
+    //      never on Manage-for-the-final-week ───────────────────────────
+    await signIn64c();
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    storage.saveWeek(finalWeek64c('wk_c1', 20));
+    storage.setActiveWeekId('wk_c1');
+    storage.saveWeek(draftWeek64c('wk_c2', 21));
+    app._openWeekWizardSheetForTest();
+    const wrapC1 = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrapC1, '[64c] fixture: the wizard sheet opened');
+    assert(wrapC1.querySelector('#week-wizard-title')?.textContent !== 'Manage Week 20',
+      '[64c] (a): the sheet did NOT land on "Manage Week 20" — it routed straight into the one continuable draft');
+    // FakeEl.querySelector('#id') always returns a memoized stand-in
+    // regardless of real content (this file's own [64] comment on the
+    // `_subEls` cache); the fixture's own convention for "is this really in
+    // the rendered markup" is a STRING check against the body's innerHTML
+    // (matching [44k3]'s html.matchAll() pattern, above).
+    const bodyC1 = wrapC1.querySelector('#week-wizard-body');
+    assert(!/id="wiz-continue-pick-new"/.test(bodyC1.innerHTML),
+      `[64c] (a): …and did not show the picker either — exactly one candidate has no ambiguity to ask about (body: ${bodyC1.innerHTML.slice(0, 160)})`);
+
+    // ── (b) TWO continuable drafts — the picker shows, listing both ───────
+    storage.saveWeek(draftWeek64c('wk_c3', 22));
+    app._openWeekWizardSheetForTest();
+    const wrapC2 = document.getElementById('week-wizard-sheet-wrap');
+    const bodyC2 = wrapC2.querySelector('#week-wizard-body');
+    const pickRowCount = (bodyC2.innerHTML.match(/class="week-wizard-check-row wiz-continue-pick"/g) || []).length;
+    assert(pickRowCount === 2,
+      `[64c] (b): the picker lists BOTH continuable drafts (got ${pickRowCount}, body: ${bodyC2.innerHTML.slice(0, 300)})`);
+    assert(/id="wiz-continue-pick-new"/.test(bodyC2.innerHTML),
+      '[64c] (b): …plus the "Set up Week N+1 instead" escape hatch');
+    // "tapping a picker row" itself (bindWeekWizardContinuePicker()'s
+    // querySelectorAll('.wiz-continue-pick').forEach(...) binding) is NOT
+    // reachable through THIS file's FakeEl — element-level querySelectorAll()
+    // is hard-coded to return [] here (this file's own "FIFTH GATE" comment:
+    // only document.querySelectorAll() is real, and only for pre-registered
+    // class->elements maps, which a dynamically-rendered row count can't
+    // pre-register without defeating the point of counting it). The row's
+    // OWN routing logic (weekWizardContinuableDrafts() ordering/selection)
+    // is proven directly in [64b], above; here the "instead" escape hatch
+    // is proven instead — id-based, so document.getElementById() DOES see
+    // it for real (FakeEl's innerHTML setter regex-registers every id="…"
+    // it finds into the real registry, this file's own header comment,
+    // ~line 68).
+    // bindWeekWizardContinuePicker(bodyEl) binds via `bodyEl.querySelector(
+    // '#wiz-continue-pick-new')` — the ELEMENT-level, `_subEls`-memoized
+    // lookup, a SEPARATE registry from document.getElementById()'s global
+    // one. Firing the click on the SAME `bodyC2` object the app itself was
+    // handed is what reaches the REAL listener (not a same-id lookalike).
+    const pickNewBtn = bodyC2.querySelector('#wiz-continue-pick-new');
+    assert(!!pickNewBtn && pickNewBtn.listenerCount('click') === 1,
+      `[64c] (b) fixture: the "instead" button really has ITS OWN bound click listener (got ${pickNewBtn?.listenerCount?.('click')})`);
+    pickNewBtn.dispatch('click', { target: pickNewBtn });
+    const bodyC2b = document.getElementById('week-wizard-sheet-wrap')?.querySelector('#week-wizard-body');
+    assert(!!bodyC2b && !/id="wiz-continue-pick-new"/.test(bodyC2b.innerHTML),
+      '[64c] (b): tapping "Set up Week N+1 instead" closes the picker — no longer showing its own list');
+    assert(/Create Week|Save & Continue/.test(bodyC2b.innerHTML),
+      '[64c] (b): …and lands on Step 1\'s create form (BLOCK fix (a)\'s _weekWizardForceNewWeek path, reused)');
+
+    // ── (c) Duplicate never steals the active pointer from a LIVE week ────
+    resetAll();
+    await signIn64c();
+    // renderCommPage() renders the "Commissioner Only" denied card, not the
+    // Week Manager card the Duplicate button lives on, unless getSession()
+    // .isAdmin is true — a real commissioner MEMBERSHIP, same fixture shape
+    // as this file's earlier "paint the Comm page for real" section
+    // (~line 11378).
+    auth._setMembershipsForTest([{ leagueId: 'L-64c', memberId: 'm64c', role: 'commissioner', displayName: 'Drew', leagueName: 'League 64c' }]);
+    auth.setActiveLeagueId('L-64c');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    storage.saveWeek({ ...finalWeek64c('wk_c4', 23), status: 'live', lockedAt: new Date().toISOString(), finalizedAt: null });
+    storage.setActiveWeekId('wk_c4');
+    assert(storage.getSession()?.isAdmin === true, '[64c] (c) fixture: this device resolves as commissioner');
+    // Reaches the REAL duplicate-week-btn handler through renderCommPage()'s
+    // own DOM wiring, exactly as a commissioner tapping the button would —
+    // not a hand-called storage mutation. Same fixture shape as the earlier
+    // "paint the Comm page for real" section of this file (~line 11382).
+    const commEl64c = new FakeEl(); commEl64c.id = 'page-commissioner'; registry.set('page-commissioner', commEl64c);
+    app.state.currentTab = 'commissioner';
+    app.renderCommPage();
+    const dupBtn = document.getElementById('duplicate-week-btn');
+    assert(!!dupBtn, '[64c] (c) fixture: the real Duplicate button is on the rendered Commissioner panel');
+    dupBtn.dispatch('click', { target: dupBtn });
+    assert(storage.getCurrentWeek()?.weekId === 'wk_c4',
+      `[64c] (c): duplicating a week does NOT move the active pointer off a genuinely LIVE week (got current=${storage.getCurrentWeek()?.weekId})`);
+    const dupedWeeks = storage.getWeeks().filter((w) => w.weekId !== 'wk_c4');
+    assert(dupedWeeks.length === 1 && dupedWeeks[0].status === 'draft',
+      '[64c] (c): …but the duplicate itself WAS created, as a new draft — the fix refuses to steal the pointer, not to duplicate at all');
+  } finally {
+    globalThis.matchMedia = savedMM64c;
+    FakeEl.classQueries = false;
+    console.warn = realWarn64c; console.info = realInfo64c;
   }
 }
 

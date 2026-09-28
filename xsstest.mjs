@@ -1413,6 +1413,46 @@ const EXEMPTIONS = [
   // (was a literal ✕). Same reasoning: a hard-coded name, no label, no data.
   { file: 'js/app.js', expr: "icon('close')",
     why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // v0.27.0 fix (2026-09-27) — the header #control-center-trigger fill
+  // (renderControlCenterTrigger()): the native Munera mark and the web
+  // chevron affordance. Same triviality as icon('close') above.
+  { file: 'js/app.js', expr: "icon('munera')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // DI-393 (UN-353, 2026-09-27) — updateSyncBadge()'s header sync icon.
+  // `iconName`/`label` are read from SYNC_ICON_BY_STATUS/SYNC_LABEL_BY_STATUS
+  // (js/app.js, module scope) — two lookup tables whose every value is a
+  // hard-coded string literal, keyed by `status`, which itself is never
+  // user-typed text: it arrives from the backend adapter's own small,
+  // enumerated vocabulary (synced/syncing/error/refused/offline — the same
+  // five states this function's own `SYNC_LABEL_BY_STATUS`/map bodies
+  // enumerate). No player-authored data flows through either variable.
+  { file: 'js/app.js', expr: "icon(iconName, { label })",
+    why: "iconName/label both resolve through SYNC_ICON_BY_STATUS/SYNC_LABEL_BY_STATUS, literal-valued lookup tables keyed on the backend adapter's own small enumerated status vocabulary — never user data" },
+  // DI-394 (UN-354, 2026-09-27) — weekNavCardHTML()'s shared viewing-week
+  // card (js/app.js), reused by both Picks (renderPicksWeekNav()) and
+  // Dashboard (renderDashboardWeekNav()). `dataAttr` is a function
+  // PARAMETER, never assigned from data — both call sites in this file pass
+  // a hard-coded string literal ('picks-week' / 'dashboard-week'). `prevBtn`/
+  // `nextBtn` are markup fragments this SAME function builds two lines
+  // above their interpolation site; the only real value either carries
+  // (`prevId`/`nextId`, a week id) is already routed through `escHtml()`
+  // at the point the fragment itself is built — re-interpolating the
+  // already-escaped fragment into the outer template carries nothing raw.
+  { file: 'js/app.js', expr: "dataAttr",
+    why: "a function parameter of weekNavCardHTML(), never assigned from data — both call sites (renderPicksWeekNav()/renderDashboardWeekNav()) pass a hard-coded string literal" },
+  { file: 'js/app.js', expr: "prevBtn",
+    why: "a markup fragment weekNavCardHTML() builds two lines above this interpolation; its only real value (prevId) is already escHtml()-wrapped where the fragment itself is constructed" },
+  { file: 'js/app.js', expr: "nextBtn",
+    why: "same shape as prevBtn immediately above — a markup fragment weekNavCardHTML() builds two lines above this interpolation, its only real value (nextId) already escHtml()-wrapped where the fragment itself is constructed" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, REVIEWER note 4) — the
+  // `icon('chevronRight')` exemption above/below this comment's old location
+  // is REMOVED, not left dead: it existed only for the web trigger's chevron
+  // affordance (renderControlCenterTrigger()), and that trailing chevron is
+  // gone — a "›" reads as push-forward navigation on iOS, not "open a
+  // drawer" (the coordinator's design ruling). `icon('chevronRight')` as a
+  // literal string has zero remaining hits in js/app.js (confirmed by grep);
+  // a dead exemption pre-approves whatever lands on that exact text next, so
+  // it is deleted here rather than kept "just in case."
   // renderWeekStatusButtons() (2026-09-26, reviewer round 3 item 5) — same
   // reasoning as wizardStatusIconHTML(b) immediately above: `x.icon` is a
   // name from THIS function's own frozen-shape local table `t` (never
@@ -1565,6 +1605,10 @@ const NEW_SWEPT_BACKLOG = {
     { d: "e1f7419945", n: 1, t: "almaIcon" },
     { d: "aae7f26412", n: 1, t: "ctx.escHtml(player.almaMater || '')" },
     { d: "2920cdbf16", n: 2, t: "ctx.escHtml(label)" },
+    // Finding 6 (app-shell part 3A review, 2026-09-27) — accordionRow()'s new
+    // OPTIONAL `secondary` line, escaped through the SAME injected
+    // `ctx.escHtml(...)` every other row-text site in this file already uses.
+    { d: "06b13ef1a8", n: 1, t: "ctx.escHtml(secondary)" },
     { d: "b55ac8822f", n: 3, t: "chevron" },
     { d: "e14d65d016", n: 1, t: "ctx.escHtml(p.target)" },
     { d: "2c7c720cbc", n: 1, t: "ctx.escHtml(p.label)" },
@@ -1746,8 +1790,19 @@ function __xssAdminPanelCanary(evil) { return \`<div title="\${evil.apAttr}">\${
 // suite stayed green. Both release gates reproduced it (reviewer F1 /
 // security-reviewer F3-2a).
 const APP_BACKLOG = [
-  { d: "dbf27805ae", n: 1, t: "(() => { // UN-118/UN-125 — multi-part week grouping (DI-126b). A week // RECORD is a scheduling…" },
-  { d: "2da1dec4f4", n: 1, t: "(() => { const games = getGames(week.weekId); const lockAt = computeEffectiveLockAt(week, games)…" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-356) — REMOVED, not
+  // left stale: this IIFE's only site was the standalone "Week Settings"
+  // card's own multi-part-grouping block, which is retired wholesale (the
+  // fields moved to Admin → Week's own `renderDataSourceModeBody()`, a
+  // plain interpolation-per-field body, not the same IIFE shape). Zero hits
+  // now; a stale pin would hide the next regression.
+  // (was "dbf27805ae")
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-356) — REMOVED, not
+  // left stale: this IIFE's only site was the standalone Week Settings
+  // card's own effective-lock/live-time preview, retired along with the
+  // card (the wizard's own Timing fields render the equivalent preview
+  // through a different, already-pinned/exempt path). Zero hits now.
+  // (was "2da1dec4f4")
   { d: "df4408a77e", n: 1, t: "(game.suggestionReasons||[]).map(r=>`<span class=\"candidate-reason\">${escHtml(r)}</span>`).join(…" },
   { d: "b0d5bd34ee", n: 1, t: "(r.headHit||0)+(r.headMiss||0)" },
   { d: "fb687a947c", n: 1, t: "FREQUENCY_LEVELS[level]" },
@@ -1771,16 +1826,40 @@ const APP_BACKLOG = [
   { d: "648cec5be4", n: 1, t: "g.status" },
   { d: "a4123a3327", n: 1, t: "game.espnEventId ? `<a class=\"espn-link\" href=\"https://www.espn.com/${game.isManual && game.espn…" },
   { d: "ac8c754b7b", n: 6, t: "game.gameId" },
-  { d: "60a52e8c9d", n: 2, t: "game.status" },
+  // "60a52e8c9d" game.status (n 2) RETIRED fix-final-v0270 (2026-09-28) — the
+  // one site (game row status badge, class + text) is escHtml()'d now.
   { d: "86c3e75df5", n: 1, t: "gameId" },
-  // n bumped 1 -> 2, UX Revamp wiring pass 3b (2026-09-25) — Group C's
-  // renderWeekWizardTimingFieldsHTML() adds a SECOND site reusing this
-  // exact expression (shared by Step 4 and the Manage screen); same
-  // number, same source function, not a new expression.
-  { d: "b544a9db4c", n: 2, t: "getAutoLockOffsetMinutes(week)" },
-  { d: "f5256fe858", n: 1, t: "getSettings().season||'2026'" },
+  // n LOWERED 2 -> 1, v0.27.0 UX Revamp post-deploy pass (2026-09-27,
+  // DI-356) — the standalone Week Settings card's own second site is
+  // retired along with the card; the ONE surviving site is
+  // renderWeekWizardTimingFieldsHTML()'s (shared by Step 4 and the Manage
+  // screen, unchanged), same expression the "n bumped 1 -> 2" note below
+  // originally added.
+  { d: "b544a9db4c", n: 1, t: "getAutoLockOffsetMinutes(week)" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-355) — REMOVED, not
+  // left stale: this expression's only site was showCreateWeekModal()'s own
+  // markup (Season field default), and that whole function is retired (its
+  // one caller, "➕ New Week", was a duplicate entry point for the wizard's
+  // own week-wizard-entry-btn — see js/app.js's DI-355 comment at its old
+  // location). Zero hits now; a stale pin would hide the next regression.
   { d: "767e85a142", n: 1, t: "groupRows.map(({gid,label,winner,loser})=>{ // UN-126 — presence of an obligation for this gid n…" },
   { d: "81d121bc48", n: 1, t: "guesses || '<span class=\"text-muted\">none yet</span>'" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-359) —
+  // renderFinalizeStep1HTML()'s (js/app.js) no-games fallback: `rows` is
+  // ALREADY escHtml()-safe HTML by the time it reaches this point (every
+  // piece of user data folded into it — team names, the block reason — is
+  // escHtml()'d at its own construction site, same shape as
+  // "guesses || ..." immediately above); this is the static fallback
+  // string when the slate is empty, never user data.
+  { d: "1fce769112", n: 1, t: "rows || '<p class=\"text-muted text-sm\">No games on this slate.</p>'" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-359) —
+  // renderFinalizeTrackerHTML()'s (js/app.js) step-tracker label, the
+  // guided Finalize Week flow's own copy of the create-flow tracker's
+  // already-pinned/exempt shape. `step` is `_finalizeStep`, always an
+  // integer 1-4 from FINALIZE_STEPS; never user data.
+  { d: "3e64cc41cf", n: 1, t: "step" },
+  // Same tracker, the frozen step-count constant (FINALIZE_STEPS.length).
+  { d: "715b6c04ad", n: 1, t: "FINALIZE_STEP_COUNT" },
   { d: "f6cf98c106", n: 1, t: "hardHTML" },
   { d: "01dbd80507", n: 1, t: "hasAny?`${count} comment${count>1?'s':''} on this game`:'Add a comment'" },
   { d: "378f37b1fb", n: 1, t: "headers" },
@@ -1799,7 +1878,13 @@ const APP_BACKLOG = [
   { d: "e46b320165", n: 1, t: "msg" },
   { d: "1119094d5a", n: 1, t: "multiDay && day.name ? `${escHtml(day.name)} · ${wl}` : wl" },
   { d: "1b16b1df53", n: 1, t: "n" },
-  { d: "0a43bd0696", n: 1, t: "o.level" },
+  // n bumped 1 -> 2, v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-358)
+  // — Step 6's new three-way open-mode dial (renderWeekWizardStep6HTML())
+  // reuses the exact `${o.level}` shape the SCRIBE settings dials already
+  // pin here (same reuse-the-pattern precedent those dials themselves
+  // followed) — a level string from a frozen local array literal, never
+  // user data.
+  { d: "0a43bd0696", n: 2, t: "o.level" },
   { d: "bd481ab67e", n: 1, t: "o.value" },
   { d: "65082ecc44", n: 1, t: "ob.obligationId" },
   { d: "46f8adf6c9", n: 2, t: "obClass" },
@@ -1824,7 +1909,12 @@ const APP_BACKLOG = [
   { d: "633ed3870b", n: 1, t: "players.filter(p=>p.active).map(p=>{ const nick=getNickname(week.weekId,p.playerId)||''; return`…" },
   { d: "2db8bd1d98", n: 1, t: "players.map(p => { const sub = week ? hasPlayerSubmitted(week.weekId, p.playerId) : false; const…" },
   { d: "69fedf42f3", n: 1, t: "players.map(p=>{ const pin = getPlayerPin(p.playerId); return ` <div class=\"player-admin-row\" da…" },
-  { d: "9660149ca9", n: 1, t: "ps.lastRawEventCount" },
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-352) — n bumped 1 -> 2:
+  // the Commissioner "Build Slate" card and Admin → Games' 'espn-source' card
+  // (renderEspnSourceBody(), now folding in the raw fetch/demo actions) both
+  // show the same "Last fetch: … · N events" line; same source field, not a
+  // new expression.
+  { d: "9660149ca9", n: 2, t: "ps.lastRawEventCount" },
   { d: "bc9d631384", n: 1, t: "ps.lastRawEventCount||'—'" },
   { d: "dcac36c039", n: 1, t: "r.appendCount||0" },
   { d: "600be826bf", n: 1, t: "r.headHit||0" },
@@ -1881,12 +1971,43 @@ const APP_BACKLOG = [
   { d: "11239872d1", n: 2, t: "total" },
   { d: "153c0369aa", n: 1, t: "totalUnfiltered" },
   { d: "1a08b06f0b", n: 2, t: "tz.key" },
+  // Carry-over fix (app-shell part 3A review, 2026-09-27) — the Finalize
+  // Step 4 warning box's icon('warning') prefix, hoisted to a local const
+  // (`warningIconHTML`) right above the template literal that interpolates
+  // it (renderFinalizeStep4HTML()) — provably safe (icon() returns a
+  // hand-authored SVG string off a frozen glyph-name table, never user
+  // data), same shape as this file's other bare-identifier icon-HTML
+  // entries (e.g. "iconHTML"/"almaIcon"/"backIcon" in the control-center.js
+  // backlog above).
+  { d: "d39dbab353", n: 1, t: "warningIconHTML" },
+  // security note (full-branch audit, 2026-09-28) — REMOVED, not left stale:
+  // weekNavCardHTML()'s status-pill CLASS interpolation now reads
+  // `badge-${escHtml(viewWeek.status)}`, matching the escaped label beside it
+  // in the same span. Zero hits now; a stale pin would hide the next
+  // regression. (was "c5254ec60b", t: "viewWeek.status", DI-394)
   { d: "50e721e49c", n: 1, t: "w" },
-  { d: "2eb640a6cf", n: 2, t: "w.status" },
-  { d: "d2eee88ee9", n: 3, t: "w.weekId" },
-  { d: "7f15b7110a", n: 1, t: "week.pendingFinalization ? ` <div class=\"pending-final-banner\"> <div><strong>⏰ All games are fin…" },
-  { d: "a61321bcae", n: 3, t: "week.status" },
-  { d: "33d65aca32", n: 1, t: "week.status.toUpperCase()" },
+  { d: "2eb640a6cf", n: 1, t: "w.status" },
+  // security F3 (app-shell part 3A, 2026-09-27) — REMOVED, not left stale:
+  // all three `w.weekId` sites (app.js's #week-selector, #active-week-selector
+  // and #admin-week-group-partner option `value="…"` attributes) now wrap the
+  // interpolation in escHtml(), matching every other option-value site in the
+  // file. w.weekId is a commissioner-authored string (createWeek()'s
+  // `w_${Date.now()}` shape today, but nothing enforces that going forward),
+  // so an unescaped `"` inside it could break out of the attribute — the same
+  // class of hole this file's own EXEMPTIONS logic exists to catch. The
+  // backlog count for this digest is now 0; entry REMOVED per this file's own
+  // rule (d) rather than left at a stale n.
+  // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-356/359) — REMOVED,
+  // not left stale: the standalone card's inline pending-finalization
+  // banner is retired; the equivalent banner now lives inside
+  // renderWeekWizardManageHTML() (js/app.js), a DIFFERENT, already-safe
+  // template literal (every interpolation inside it is either a frozen
+  // constant or already escHtml()'d — see renderFinalizeStep4HTML's own
+  // entries below for the guided flow this banner opens into). Zero hits
+  // on this exact expression now. (was "7f15b7110a")
+  // "a61321bcae" week.status / "33d65aca32" week.status.toUpperCase() (n 1
+  // each) RETIRED fix-final-v0270 (2026-09-28) — the header's own status badge
+  // (refreshHeader(), class + text) is escHtml()'d now, same as viewWeek's.
   { d: "a5d9936b85", n: 1, t: "week.weekId" },
   { d: "7cc1eb0858", n: 1, t: "weekId" },
   { d: "04176e6538", n: 1, t: "wkNames.map(n=>{ const arr=SEASON_2025.weeklyScores[n]; return `<tr><td class=\"player-name-cell\"…" },
@@ -2278,12 +2399,23 @@ assert(/value="52"/.test(app._extraPointInputHTMLForTest({ ...wk, extraPointEnab
 app.state.draftTiebreaker = null; app.state.draftExtraPoint = null;
 
 // [14h] THE WEEK DATE ATTRIBUTES (reviewer note). week.startDate/endDate are
-// commissioner-entered and travel through the same synced blob; they land in
-// `<input type="date" value="…">` in renderCommPage(), which is private and
-// wants a live container, so this is a SOURCE assertion in the [6] style.
+// commissioner-entered and travel through the same synced blob. RE-DERIVED
+// (v0.27.0 UX Revamp post-deploy pass, 2026-09-27, DI-356) — renderCommPage()
+// itself no longer renders these two fields at all: the standalone "Week
+// Settings" card that used to (the `week.startDate`/`week.endDate` site this
+// test originally pinned) is retired wholesale, and the ONE surviving
+// commissioner-facing render site is `weekCreateFormFieldsHTML()`'s own Start
+// Date/End Date inputs (the wizard's Step 1 form, reused by both the create
+// flow and re-entering Step 1 on an existing draft) — same escHtml() call,
+// same `value="…"` attribute shape, read off `defaults.startDate`/
+// `defaults.endDate` (that function's own parameter, populated FROM
+// `week.startDate`/`week.endDate` by its one caller, `renderWeekWizardStep1HTML()`)
+// rather than `week.` directly. Still a SOURCE assertion (private function,
+// wants a live container, same reasoning as before) — just re-pointed at the
+// function that now actually owns this render.
 for (const field of ['startDate', 'endDate']) {
-  assert(new RegExp(`value="\\$\\{escHtml\\(week\\.${field}\\s*\\|\\|\\s*''\\)\\}"`).test(appSrc),
-    `[14h] renderCommPage: week.${field} is escaped inside its value="" attribute`);
+  assert(new RegExp(`value="\\$\\{escHtml\\(defaults\\.${field}\\s*\\|\\|\\s*''\\)\\}"`).test(appSrc),
+    `[14h] weekCreateFormFieldsHTML(): defaults.${field} (sourced from week.${field}) is escaped inside its value="" attribute`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════

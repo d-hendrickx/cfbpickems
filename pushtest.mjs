@@ -566,7 +566,7 @@ console.log('\n[11] DI-204/205/206/218 — the push self-test client…');
     const failed = l({ memberId: 'p1', deviceCount: null, kinds: [], lookupOk: false }, null);
     assert(/couldn't check/.test(failed.text) && !/no device/.test(failed.text),
       '11-31: C1 — a FAILED LOOKUP renders as "couldn\'t check" and NEVER as "no device". Telling Drew that Kevin has no phone when OneSignal simply did not answer sends him to Kevin with the wrong instruction');
-    assert(/turned off in Settings/.test(l({ memberId: 'p1', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, { reason: 'master_off' }).text),
+    assert(/push turned off in the menu \(top left\) → Notifications/.test(l({ memberId: 'p1', deviceCount: 1, kinds: ['iPhone'], lookupOk: true }, { reason: 'master_off' }).text),
       '11-32: a registered device with push off is a DIFFERENT line from no device, and a different instruction');
     assert(/2 devices \(iPhone, Web\)/.test(l({ memberId: 'p1', deviceCount: 2, kinds: ['iPhone', 'Web'], lookupOk: true }, { reason: null }).text),
       '11-33: multiple devices, mixed kinds');

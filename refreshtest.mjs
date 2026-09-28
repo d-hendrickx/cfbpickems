@@ -728,6 +728,258 @@ console.log('\n[6] Reviewer note 1 — a player phone no longer attempts the ref
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[7] Logo backfill (Drew, 2026-09-27: "I flipped the logos switch and');
+console.log('    didn\'t see any logos") — a null stored logo is filled from the same');
+console.log('    ESPN read a score refresh already makes; a set one is never overwritten…');
+{
+  // A raw ESPN event WITH team.logo URLs — espnEvent() (section [1]-[6]'s own
+  // fixture) never sets this field, so this is a local, self-contained
+  // payload rather than widening that shared helper's shape for every other
+  // section in this file.
+  function espnEventWithLogos({ id = '401520200', homeLogo = 'https://a.espncdn.com/i/teamlogos/ncaa/500/1.png', awayLogo = 'https://a.espncdn.com/i/teamlogos/ncaa/500/2.png' } = {}) {
+    return {
+      id, date: '2026-09-08T18:00Z',
+      status: { type: { name: 'STATUS_IN_PROGRESS', detail: 'Q2', shortDetail: 'Q2' } },
+      competitions: [{
+        timeValid: true, neutralSite: false,
+        competitors: [
+          { homeAway: 'home', id: '1', score: '10', curatedRank: { current: 99 }, team: { id: '1', location: 'Home', name: 'Hosts', shortDisplayName: 'Home', logo: homeLogo } },
+          { homeAway: 'away', id: '2', score: '3', curatedRank: { current: 99 }, team: { id: '2', location: 'Away', name: 'Visitors', shortDisplayName: 'Away', logo: awayLogo } },
+        ],
+        odds: [], broadcasts: [], notes: [],
+        venue: { fullName: 'Test Stadium', address: { city: 'Testville', state: 'TS' } },
+      }],
+    };
+  }
+
+  // FIXTURE (2026-09-28, security F1): this section is the LOCAL / non-supabase
+  // world — every device may write every column, so mayPersistGameGrading() is
+  // true. Stated explicitly, because until now it inherited section [6]'s last
+  // supabase-mode COMMISSIONER session by accident, and a reorder of [6] would
+  // have turned 7-1 red for a reason unrelated to the backfill. The player and
+  // commissioner halves in supabase mode are section [8].
+  (await import('./js/auth.js'))._resetAuthForTest();
+  assert((await import('./js/auth.js')).isSupabaseDataMode() === false,
+    '7-0: fixture check — section [7] runs in the non-supabase (local) data mode, where every device persists');
+
+  // ── (a) a stored game with NULL logos gains them on refresh ──────────────
+  localStorage.clear();
+  storage.saveWeek(liveWeek());
+  storage.saveGame(refreshableGame({ gameId: 'rg_logo_null', espnEventId: '401520200', homeLogo: null, awayLogo: null }));
+  installEspnStub([espnEventWithLogos()]);
+  await app.doRefreshScores(storage.getCurrentWeek(), storage.getGames('rw1'));
+  const filled = storage.getGame('rg_logo_null');
+  assert(filled.homeLogo === 'https://a.espncdn.com/i/teamlogos/ncaa/500/1.png' && filled.awayLogo === 'https://a.espncdn.com/i/teamlogos/ncaa/500/2.png',
+    `7-1: a stored game with null homeLogo/awayLogo gains them from this same ESPN read (got ${JSON.stringify({ h: filled.homeLogo, a: filled.awayLogo })})`);
+
+  // ── (b) a stored, already-set logo is NEVER overwritten by a live poll ───
+  localStorage.clear();
+  storage.saveWeek(liveWeek());
+  storage.saveGame(refreshableGame({ gameId: 'rg_logo_set', espnEventId: '401520200', homeLogo: 'https://irbfootball.example/custom-home.png', awayLogo: 'https://irbfootball.example/custom-away.png' }));
+  installEspnStub([espnEventWithLogos()]);
+  await app.doRefreshScores(storage.getCurrentWeek(), storage.getGames('rw1'));
+  const kept = storage.getGame('rg_logo_set');
+  assert(kept.homeLogo === 'https://irbfootball.example/custom-home.png' && kept.awayLogo === 'https://irbfootball.example/custom-away.png',
+    `7-2: a game whose logos are already set is UNCHANGED by a live poll — never silently overwritten (got ${JSON.stringify({ h: kept.homeLogo, a: kept.awayLogo })})`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// [8] SECURITY-REVIEWER F1 (full-branch audit, 2026-09-28) — THE LOGO BACKFILL
+//     THREW overlay_only ON EVERY PLAYER DEVICE.
+//
+// Section [7] runs with storage in LOCAL mode, where every write succeeds, so it
+// could not see this. In supabase data mode a player device's saveGame() of
+// `cfbp_games` is routed to the adapter's `_setOverlay()`, whose contract is
+// that a player may change ONLY GAME_SCORE_FIELDS — homeLogo/awayLogo are not
+// on it (8-C proves the adapter refuses them, code 'overlay_only'). The
+// backfill merged them into the player's write regardless.
+//
+// WHAT THE REAL SEAM ACTUALLY DOES WITH THAT WRITE (measured here, 2026-09-28,
+// not predicted): with the overlay empty — the state every player device is in
+// after a hydrate — `sb.get('cfbp_games')` hands back the mirror array BY
+// REFERENCE, saveGame() replaces the row inside it in place, and `_setOverlay()`
+// then diffs the mirror against itself and finds nothing to refuse. So the
+// audit's predicted throw does not fire; instead the logo fields land in the
+// player's mirror — the copy that is supposed to hold SERVER TRUTH — through a
+// path that never consulted the allow-list. (Not pushed: no dirty mark.) The
+// aliasing is a separate, pre-existing adapter defect reported for its own fix;
+// this section pins the part that is this change's: the player path must not
+// carry logo fields at all, so it no longer depends on the aliasing to survive.
+//
+// Driven through the REAL adapter (js/supabase-backend.js) over an ACTIVE
+// hydrated base, with the REAL role resolution (storage.getSession() ->
+// auth.js memberships).
+console.log('\n[8] Security F1 — a player device\'s refresh never sends logo fields (the real adapter)…');
+{
+  const auth8 = await import('./js/auth.js');
+  const sb8 = await import('./js/supabase-backend.js');
+  const LEAGUE8 = 'L-LOGO';
+  const LOGO_H = 'https://a.espncdn.com/i/teamlogos/ncaa/500/31.png';
+  const LOGO_A = 'https://a.espncdn.com/i/teamlogos/ncaa/500/32.png';
+  const quiet8 = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  /** A live event carrying team logos — the ESPN shape that triggers
+   *  data-provider.js's backfill for any stored row whose logo is null. */
+  const ev8 = (id, home, away) => ({
+    id, date: '2026-09-08T18:00Z',
+    status: { type: { name: 'STATUS_IN_PROGRESS', detail: 'Q2', shortDetail: 'Q2' } },
+    competitions: [{
+      timeValid: true, neutralSite: false,
+      competitors: [
+        { homeAway: 'home', id: '31', score: String(home), curatedRank: { current: 99 }, team: { id: '31', location: 'Home', name: 'Hosts', shortDisplayName: 'Home', logo: LOGO_H } },
+        { homeAway: 'away', id: '32', score: String(away), curatedRank: { current: 99 }, team: { id: '32', location: 'Away', name: 'Visitors', shortDisplayName: 'Away', logo: LOGO_A } },
+      ],
+      odds: [], broadcasts: [], notes: [],
+      venue: { fullName: 'Test Stadium', address: { city: 'Testville', state: 'TS' } },
+    }],
+  });
+  // Game 1 has NULL logos (a pre-v0.26.0 row — the backfill's target) and comes
+  // FIRST, so on the defect it throws before game 2 is ever reached. Game 2's
+  // logos are already set, so it never backfills — it is the "remaining game".
+  const games8 = () => ([
+    refreshableGame({ gameId: 'rg_f1_null', espnEventId: '401520301', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, homeLogo: null, awayLogo: null }),
+    refreshableGame({ gameId: 'rg_f1_set', espnEventId: '401520302', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, homeLogo: 'https://irbfootball.example/h.png', awayLogo: 'https://irbfootball.example/a.png' }),
+  ]);
+  const fakeClient8 = () => {
+    const thenable = () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } });
+    return { from: () => thenable(), rpc: async () => ({ data: [], error: null }) };
+  };
+
+  async function runAs(role) {
+    localStorage.clear();
+    auth8._resetAuthForTest?.();
+    auth8.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    auth8._setMembershipsForTest([{ leagueId: LEAGUE8, memberId: 'p1', role, displayName: 'Tester', leagueName: 'IRB' }]);
+    await quiet8(() => auth8.setActiveLeagueId(LEAGUE8));
+    auth8._setAccountUserIdForTest('u-logo');
+    auth8._setStoredSessionForTest?.({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    auth8._setHasSupabaseDataBackendForTest(true);
+    sb8._resetForTest();
+    sb8.init({
+      register: auth8.registerSupabaseDataBackend,
+      getClient: () => fakeClient8(),
+      getActiveLeagueId: () => LEAGUE8,
+      getIdentityEpoch: auth8.getIdentityEpoch,
+      getAccountUserId: auth8.getAccountUserId,
+      getDeviceDataOwnerTuple: auth8.getDeviceDataOwnerTuple,
+      getDeviceDataOwner: auth8.getDeviceDataOwner,
+      getLeagueName: auth8._switchBannerLeagueName,
+      getLeagueNameById: auth8._leagueNameById,
+      getSession: storage.getSession,          // the REAL role resolution
+      hasValidSupabaseSession: auth8.hasValidSupabaseSession,
+      isPrivilegeHeld: auth8.isPrivilegeHeld,
+      hasSheetMirror: auth8.hasSheetMirrorOnDevice,
+      isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    await quiet8(() => sb8.hydrate(LEAGUE8, { epoch: auth8.getIdentityEpoch() }));
+    storage.setBackendMode('supabase');
+    // The hydrated base: what the server last wrote, i.e. the mirror the
+    // overlay diffs against.
+    sb8._seedMirrorForTest('cfbp_weeks', [liveWeek()]);
+    sb8._seedMirrorForTest('cfbp_active_week', 'rw1');
+    sb8._seedMirrorForTest('cfbp_games', games8());
+    sb8._seedMirrorForTest('cfbp_settings', { serverJobs: { scoresRefresh: false } });   // server job OFF: the client is the writer
+    sb8._seedMirrorForTest('cfbp_picks', []);
+    sb8._seedMirrorForTest('cfbp_lock_overrides', {});
+    installEspnStub([ev8('401520301', 14, 7), ev8('401520302', 21, 3)]);
+    let threw = null;
+    await quiet8(async () => {
+      try { await app.doRefreshScores(storage.getCurrentWeek(), storage.getGames('rw1')); }
+      catch (e) { threw = e; }
+    });
+    // THE PLANNED WRITE, as a field diff against the hydrated base: every field
+    // of every row that the refresh changed. Whatever reached the adapter is in
+    // here (the aliased mirror, or the overlay on top of it — storage.getGame()
+    // reads both), so this is the write, not a flag about the write.
+    const base = new Map(games8().map(g => [g.gameId, g]));
+    const changed = [];
+    for (const g of storage.getGames('rw1')) {
+      const b = base.get(g.gameId) || {};
+      for (const k of new Set([...Object.keys(g), ...Object.keys(b)])) {
+        if (JSON.stringify(g[k]) !== JSON.stringify(b[k])) changed.push(`${g.gameId}.${k}`);
+      }
+    }
+    const out = {
+      threw, changed,
+      state: sb8.getState(),
+      isAdmin: storage.getSession().isAdmin,
+      overlay: new Map(sb8._overlayForTest()),
+      dirty: sb8._dirtyKeysForTest(),
+      g1: storage.getGame('rg_f1_null'),
+      g2: storage.getGame('rg_f1_set'),
+    };
+    storage.setBackendMode('local');
+    await quiet8(() => sb8._resetForTest());
+    return out;
+  }
+
+  // ── (a) THE PLAYER PHONE — the defect ────────────────────────────────────
+  const p = await runAs('player');
+  assert(p.state === 'ACTIVE' && p.isAdmin === false,
+    `8-0: fixture check — a PLAYER session over an ACTIVE hydrated adapter (state=${p.state}, isAdmin=${p.isAdmin}); anything else and the overlay route is not the one under test`);
+  assert(p.threw === null,
+    `8-1: a player device's refresh does NOT throw (got ${p.threw ? `${p.threw.name} code=${p.threw.code || (p.threw.detail && p.threw.detail.code)}: ${String(p.threw.message).slice(0, 160)}` : 'no throw'}) — saveGame() sits outside any try in doRefreshScores(), so a refusal here would abort the loop for every later game`);
+  assert(p.g1 && p.g1.homeScore === 14 && p.g1.awayScore === 7,
+    `8-2: the null-logo game's live SCORE still reaches this phone (got ${JSON.stringify(p.g1 && { h: p.g1.homeScore, a: p.g1.awayScore })})`);
+  assert(p.g2 && p.g2.homeScore === 21 && p.g2.awayScore === 3,
+    `8-3: …and so does the NEXT game's — the loop completed for every game on the slate (got ${JSON.stringify(p.g2 && { h: p.g2.homeScore, a: p.g2.awayScore })}); the score the audit feared would stop updating`);
+  const fieldsOf = list => [...new Set(list.map(x => x.slice(x.indexOf('.') + 1)))].sort();
+  assert(p.changed.some(x => x === 'rg_f1_null.homeScore') && p.changed.some(x => x === 'rg_f1_set.homeScore'),
+    `8-4a: fixture check — the refresh really wrote both games (changed: ${JSON.stringify(p.changed)}); a diff of nothing would make 8-4 vacuous`);
+  assert(!p.changed.some(x => /\.(homeLogo|awayLogo)$/.test(x)),
+    `8-4: NO logo field in the player's planned write (changed fields: ${JSON.stringify(fieldsOf(p.changed))}) — before the fix rg_f1_null.homeLogo/awayLogo were in it, off the adapter's allow-list`);
+  // `updatedAt` is saveGame()'s own stamp (js/storage.js saveGame) and was on
+  // the player path before the backfill existed; it is named here so this
+  // assertion states the pre-backfill write exactly rather than approximately.
+  const allowed = [...sb8._gameScoreFieldsForTest(), 'updatedAt'];
+  assert(fieldsOf(p.changed).every(f => allowed.includes(f)),
+    `8-5: …every changed field is a GAME_SCORE_FIELDS field (or saveGame's updatedAt stamp) — the player path is byte-identical to before the backfill (fields: ${JSON.stringify(fieldsOf(p.changed))})`);
+  assert(p.dirty.length === 0,
+    `8-6: …and a player phone queued NO push (dirty: ${JSON.stringify(p.dirty)})`);
+  assert(p.g1 && p.g1.homeLogo == null && p.g1.awayLogo == null,
+    `8-7: …and the null logo stays null on the player's copy — the commissioner device is the one that backfills it (got ${JSON.stringify(p.g1 && { h: p.g1.homeLogo, a: p.g1.awayLogo })})`);
+
+  // ── (c) THE CONTRACT THE GATE PROTECTS — the adapter REFUSES a player's logo
+  //    write when it can see it (a non-aliased value, i.e. a real diff). This is
+  //    what makes 8-4 a security property and not a style preference.
+  {
+    localStorage.clear();
+    auth8._resetAuthForTest?.();
+    auth8.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    auth8._setMembershipsForTest([{ leagueId: LEAGUE8, memberId: 'p1', role: 'player', displayName: 'Tester', leagueName: 'IRB' }]);
+    await quiet8(() => auth8.setActiveLeagueId(LEAGUE8));
+    sb8._resetForTest();
+    sb8.init({ getSession: storage.getSession, getActiveLeagueId: () => LEAGUE8, isPrivilegeHeld: () => false });
+    sb8._seedMirrorForTest('cfbp_games', games8());
+    let refused = null;
+    try { sb8.set('cfbp_games', games8().map(g => (g.gameId === 'rg_f1_null' ? { ...g, homeLogo: LOGO_H } : g))); }
+    catch (e) { refused = e; }
+    const code = refused && (refused.code || (refused.detail && refused.detail.code));
+    assert(storage.getSession().isAdmin === false && code === 'overlay_only' && /rg_f1_null\.homeLogo/.test(String(refused.message)),
+      `8-C: the adapter REFUSES a player's homeLogo change with overlay_only when handed a real diff (got ${refused ? `${refused.name} ${code}` : 'no refusal'}) — logos are not player-writable, so the player path must never carry them`);
+    await quiet8(() => sb8._resetForTest());
+  }
+
+  // ── (b) THE COMMISSIONER DEVICE — backfills, never overwrites ────────────
+  const c = await runAs('commissioner');
+  assert(c.state === 'ACTIVE' && c.isAdmin === true,
+    `8-8: fixture check — the SAME fixture as a COMMISSIONER session (state=${c.state}, isAdmin=${c.isAdmin})`);
+  assert(c.threw === null && c.dirty.includes('cfbp_games'),
+    `8-9: the commissioner's refresh completes and queues the games write (threw=${c.threw && c.threw.name}, dirty=${JSON.stringify(c.dirty)})`);
+  assert(c.g1 && c.g1.homeLogo === LOGO_H && c.g1.awayLogo === LOGO_A,
+    `8-10: …and BACKFILLS the null logo from the same ESPN read (got ${JSON.stringify(c.g1 && { h: c.g1.homeLogo, a: c.g1.awayLogo })})`);
+  assert(c.g2 && c.g2.homeLogo === 'https://irbfootball.example/h.png' && c.g2.awayLogo === 'https://irbfootball.example/a.png',
+    `8-11: …and NEVER overwrites a stored logo (got ${JSON.stringify(c.g2 && { h: c.g2.homeLogo, a: c.g2.awayLogo })})`);
+  assert(c.g1 && c.g2 && c.g1.homeScore === 14 && c.g2.homeScore === 21,
+    '8-12: …and still writes both scores (the commissioner path is unchanged apart from the gate)');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log(`\n[refreshtest] ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

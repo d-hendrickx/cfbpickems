@@ -236,7 +236,7 @@ export function testPushResultCopy(run, { sentAgo = 'just now', serverPushOff = 
     return { tone: 'bad', text: "Not sent — the server couldn't work out who the test was for. Nothing was sent to anyone else." };
   }
   if (mine && mine.reason === 'master_off') {
-    return { tone: 'warn', text: 'Not sent as a push — your push notifications are turned off (Settings → Notifications). It still posted to chat so you can confirm the rest of the pathway short of the phone buzz.' };
+    return { tone: 'warn', text: 'Not sent as a push: your push notifications are turned off. Turn them on in the menu (top left) → Notifications. It still posted to chat so you can confirm the rest of the pathway short of the phone buzz.' };
   }
   if (mine && mine.reason === 'category_off') {
     return { tone: 'warn', text: "Not sent as a push — you've muted the Chat category. It still posted to chat." };
@@ -264,7 +264,7 @@ export function testPushResultCopy(run, { sentAgo = 'just now', serverPushOff = 
     };
   }
   if (recorded > 0) {
-    return { tone: 'warn', text: `Sent ${sentAgo} · OneSignal found no subscribed device for your account — reinstall or re-enable push in Settings, then try again. The message still posted to your Locker Room.` };
+    return { tone: 'warn', text: `Sent ${sentAgo} · OneSignal found no subscribed device for your account — reinstall or re-enable push in the menu (top left) → Notifications, then try again. The message still posted to your Locker Room.` };
   }
   return { tone: 'warn', text: `Sent ${sentAgo}, but the server reported no recipients. Check Background jobs.` };
 }
@@ -462,15 +462,15 @@ export function reachLine(result, eligibility, nameOf) {
   if (reason === 'master_off' || reason === 'push_off') {
     return {
       icon: '⛔', tone: 'bad',
-      text: `${name} — ${devices}${kindPhrase} registered, but they have push turned off in Settings.`,
-      action: `Tell ${name} to open the app, go to Settings → Notifications, and turn push back on.`,
+      text: `${name} — ${devices}${kindPhrase} registered, but they have push turned off in the menu (top left) → Notifications.`,
+      action: `Tell ${name} to open the app, go to the menu (top left) → Notifications, and turn push back on.`,
     };
   }
   if (reason === 'category_off') {
     return {
       icon: '⛔', tone: 'bad',
       text: `${name} — ${devices}${kindPhrase} registered, but they've muted the Chat category.`,
-      action: `Tell ${name} to re-enable Chat notifications in Settings if they want pushes for messages.`,
+      action: `Tell ${name} to re-enable Chat notifications in the menu (top left) → Notifications if they want pushes for messages.`,
     };
   }
   if (!eligibility) {

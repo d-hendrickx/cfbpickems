@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.26.0';
-export const APP_VERSION_DATE = '2026-09-26';
+export const APP_VERSION = 'v0.27.0';
+export const APP_VERSION_DATE = '2026-09-27';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -88,7 +88,35 @@ export const APP_VERSION_DATE = '2026-09-26';
 // six oldest — v0.22.4, v0.22.3, v0.22.0, v0.21.2, v0.21.1, v0.21.0 (the
 // last carrying the retired `expanded` flag). Their copy is preserved in
 // git history; the Release notes card's own foot line names the new oldest.
+// Release v0.27.0 (2026-09-27) — ONE release for the v0.26.0 live-bug fixes
+// and the design batch (Drew's ruling). The bugfix half: the header control-
+// center trigger shipped EMPTY in v0.26.0 (Drew: "I don't see the logo in the
+// top left to open the control center") and the Dashboard's week swipe ran
+// backwards. `added` (this pass, DI-350…362 batch): night mode, the deeper
+// Munera palette + type, Leagues Home on a fresh sign-in, Build Slate's
+// guided week setup with a scheduled-open option, and the guided Finalize
+// Week flow. Six bullets, plain player-facing copy per the DI's own cap; the
+// FIRST item is SCRIBE's chat-post headline (whatsNewHeadline()'s 90-char
+// cut). CAP: v0.22.5, the oldest, drops to keep 12.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.27.0',
+    date: '2026-09-27',
+    added: [
+      'Night mode — turn it on for yourself in the menu, or let it follow your phone.',
+      'A deeper crimson and a richer gold across the app.',
+      'Every league you belong to opens to a home screen on a fresh sign-in — pick where you\'re headed.',
+      'Build Slate now walks you through setting up a week, step by step.',
+      'Open a week now, schedule it to open later, or leave it as a draft — your call, at setup.',
+      'Finalizing a week is now one guided flow: approve scores, confirm the tiebreaker and Extra Point, done.',
+      'A lighter, floating bottom bar and a slimmer one-line header — more room for the games.',
+      'The Settings tab is gone — everything it held (profile, notifications, night mode, time zone, rules, feedback) lives in the menu, top left.',
+    ],
+    fixed: [
+      'Fixed: the header logo that opens the control center was missing.',
+      'Swiping between weeks on the Dashboard now goes the same way as on Picks.',
+    ],
+  },
   {
     version: 'v0.26.0',
     date: '2026-09-26',
@@ -208,21 +236,6 @@ const WHATS_NEW_RELEASES = [
       "Final score results now post to the Locker Room no matter whose phone has the app open. Before this, if nobody happened to have the app open when a game went final, that result never posted at all.",
       'Live scores, lock reminders, and SCRIBE are moving to run on our server instead of on a player’s phone, so they keep working even with the app closed. Rolling out over the next few days — not all on yet.',
       '📲 Commissioner: send yourself a real test push, see who can actually receive one, and check which app version each phone is on — all from Comm → Data.',
-    ],
-  },
-  {
-    // v0.22.5 — RG-174 (chat composer draft wiped by every re-render; constant under Realtime) + Phase III
-    // Step 6 Phase 1 shipped DORMANT (notify-fanout stand-down gate in js/notifications.js, serverJobs OFF).
-    // Fix-only; the FIRST `fixed` item is SCRIBE's chat-post headline.
-    version: 'v0.22.5',
-    date: '2026-09-19',
-    added: [],
-    fixed: [
-      'Chat no longer wipes what you are typing when a new message or a score update arrives. Your draft, and your place in it, stay put.',
-      'Typing anywhere else in the app — the chat nickname panel, feedback, commissioner fields — is no longer wiped by a background update either.',
-      'On phones with push notifications on, the in-app banner no longer doubles up the notification you already got.',
-      'Your color scheme and time zone now come back when you reopen the app, and a change made just before closing it is no longer lost.',
-      'Groundwork so push notifications can be sent by the server instead of whichever phone happens to be open. Switched off for now; nothing about notifications changes today.',
     ],
   },
 ];
@@ -439,6 +452,9 @@ import {
   saveFetchProof, getFetchProof,
   getTimezone, setTimezone,
   getTheme, setTheme,
+  // DI-360 (2026-09-27) — Munera night mode's per-player System/Light/Dark
+  // preference, same seam pattern as getTheme/setTheme just above.
+  getColorScheme, setColorScheme,
   // DI-331c (UX Revamp Group E) — read side for renderGameCard()/
   // renderDashboardCompact()'s logo-view branch below.
   getLogoView,
@@ -767,7 +783,7 @@ import { getShellBrandName, getShellWordmark, getShellTagline } from './brand.js
 import { icon } from './icons.js';
 import { haptic } from './haptics.js';
 import {
-  bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe,
+  bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe, chronologicalWeekIds,
   bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
 } from './nav-gestures.js';
 import {
@@ -782,7 +798,11 @@ import {
 } from './leagues-home.js';
 import {
   createWeekWizard, WIZARD_STEPS, WIZARD_STEP_COUNT, WIZARD_COPY, countMissingSpreads,
-  narrowedWeekStatusButtons,
+  narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, FINALIZE_STEP_COUNT,
+  // DI-359 — the two Finalize-flow summary functions NOT wrapped in
+  // createWeekWizard()'s deps-bound instance (they take no deps at all —
+  // pure reads over `games`/`week`), so they're imported directly.
+  finalizeApproveScoresSummary, tiebreakerConfirmSummary,
 } from './week-wizard.js';
 import {
   getIsPlatformAdmin, getIsSuperAdmin, refreshPlatformAdminFlags,
@@ -2202,7 +2222,7 @@ function _repaintForSupabaseData(reason) {
   // The player record still wins the moment it is readable (bootThemeKey()'s
   // first two lines), so this is strictly "do not repaint neutral over a
   // palette we already know is right" — not a second source of truth.
-  try { applyTheme(bootThemeKey()); renderThemeToggle(); renderTzToggle(); }
+  try { applyTheme(bootThemeKey()); renderThemeToggle(); renderTzToggle(); applyColorScheme(bootColorScheme()); }
   catch (e) { console.warn(`[sb] could not re-apply player preferences after ${reason}`, e); }
   try { navigateTo(state.currentTab || 'dashboard'); }
   catch (e) { console.warn(`[sb] repaint after ${reason} failed`, e); }
@@ -2232,6 +2252,34 @@ export const _onSupabaseDataStatusForTest = onSupabaseDataStatus;
 
 document.addEventListener('DOMContentLoaded', () => { boot(); });
 
+// ── DI-348 (UN-306, Drew's 2026-09-27 reversal) — THE WARM-RELAUNCH SNAPSHOT ─
+// `js/leagues-home.js`'s WARM PREDICATE CONTRACT is explicit: warmRelaunch
+// means "an existing stored session AND a remembered league id already exist
+// for THIS DEVICE" — a fact about what was true BEFORE this boot did
+// anything, not a live re-read of `getActiveLeagueId()` at render time.
+// `refreshMembershipsAndSession()` (js/auth.js) auto-resolves the active-
+// league pointer to a lone membership's leagueId the MOMENT its membership
+// read lands — including on a genuinely cold, first-time sign-in on a new
+// device, where the pointer was null a moment earlier. A live re-read at
+// render time therefore cannot distinguish "this device already knew this
+// league" from "the server just told us there is only one and the pointer
+// got auto-set" — both look identical by the time `needsLeagueFlowScreen()`
+// runs. Captured here, as the FIRST thing `boot()` does (before
+// `wireSupabaseAdapter()` or anything else can trigger a membership fetch),
+// so it reflects the PERSISTED value from a prior session, immune to this
+// boot's own auto-resolve. `needsLeagueFlowScreen()`/`renderLeagueFlowScreen()`
+// read this snapshot, never a live `getActiveLeagueId()` call, for the
+// single-membership warm/cold decision.
+let _warmRelaunchAtBoot = false;
+function isWarmRelaunchAtBoot() { return _warmRelaunchAtBoot; }
+/** Test-only seam (DI-348, 2026-09-27) — `boot()` never runs inside most
+ *  authtest.mjs sections (they drive `needsLeagueFlowScreen()`/
+ *  `renderLeagueFlowScreen()` directly against a scripted fixture), so there
+ *  is no real boot to capture a warm/cold snapshot from. Same
+ *  `_setXForTest` convention as `auth._setMembershipsForTest()` etc. —
+ *  production never calls this. */
+export function _setWarmRelaunchAtBootForTest(v) { _warmRelaunchAtBoot = !!v; }
+
 async function boot() {
   // ══ DI-T4.12 — THE CHAT-TRANSPORT PREDICATE IS INSTALLED FIRST, AND THE
   //    INSTALL IS DELIBERATELY NOT IN A try/catch ═══════════════════════════
@@ -2259,6 +2307,14 @@ async function boot() {
   // object), which matters because once a real predicate is installed a
   // THROWING predicate fails CLOSED and would take chat off every device.
   setSupabaseDataModePredicate(isSupabaseDataMode);
+  // DI-348 (UN-306) — the warm-relaunch snapshot (see its own header comment
+  // above, before this function). Captured as early as boot() allows without
+  // disturbing the pinned "setSupabaseDataModePredicate() is literally the
+  // FIRST statement" invariant (boottest [22]) — this has no ordering
+  // dependency on the chat-transport predicate itself, it only needs to run
+  // before anything that could touch the active-league pointer (the earliest
+  // of which, `wireSupabaseAdapter()`, is still several lines below).
+  _warmRelaunchAtBoot = !!getActiveLeagueId();
   wireMigrationPendingBanner();
   // ── PHASE III STEP 5 (DI-T5.1) — the chat context, beside the predicate and for the same
   //    reason. The predicate says whether THIS LEAGUE's data has moved; this says whether this
@@ -2365,7 +2421,7 @@ async function boot() {
   // renderTzToggle()/renderThemeToggle() below — headermetatest.mjs's own
   // idempotency/DOM-injection coverage calls it directly and is unaffected
   // by this boot-time removal.
-  setupNav(); setupHeaderIdentity(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(bootThemeKey()); setupAutoRefresh();
+  setupNav(); setupHeaderIdentity(); refreshHeader(); renderTzToggle(); renderThemeToggle(); applyTheme(bootThemeKey()); applyColorScheme(bootColorScheme()); setupAutoRefresh();
   // UX Revamp wiring pass 1 (2026-09-25) — the control-center drawer mounts
   // once, at boot, same as every other one-time chrome setup on this line.
   // bindKeyboardAvoid() is GLOBAL (DI-323's feature half), not per-tab —
@@ -2386,6 +2442,15 @@ async function boot() {
   // token's own 300ms range (css/styles.css's .dash-layout-fading rule),
   // honoring prefers-reduced-motion (instant swap, no fade).
   if (typeof window !== 'undefined') {
+    // fix-final-v0270 (reviewer finding 5, 2026-09-28) — the league pill's
+    // fit is measured, so a resize/rotation has to re-measure it: unhide
+    // first (a wider row may have room again), then let _fitLeaguePill()
+    // hide it again if not. Bound once here; renderLeaguePill() itself
+    // still refits on every render.
+    window.addEventListener('resize', () => {
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(_refitLeaguePill);
+      else _refitLeaguePill();
+    });
     let _dashLayoutResizeTimer = null;
     window.addEventListener('resize', () => {
       if (state.currentTab !== 'dashboard') return;
@@ -3315,27 +3380,56 @@ export const SW_FETCH_BYTE_CAP_FOR_TEST = SW_FETCH_BYTE_CAP;
 // only surfaces text for 'error' (keeps chat chrome minimal in the normal
 // case) but the hard loud-fail rule still holds — sync failures are visible
 // on chat too, just quieter than the persistent red page banner.
+// DI-393 (UN-353, 2026-09-27) — the header's sync slot is now an ICON
+// (js/icons.js), not emoji text: `.header-sync-icon` + `data-sync="…"`
+// (css/styles.css owns the per-state color/animation). Five states map to
+// three already-shipped icons — `error` and `refused` share `warning`'s
+// visual treatment (both are already-failed states; the loud-fail banner
+// uses the SAME icon/color so the small icon and the big banner never
+// disagree about what "bad" looks like), and `offline` reuses `cloudData`
+// at reduced opacity (css) rather than commissioning a fourth glyph this
+// pass (AD-93 — the icon-family inventory is phased). The aria-label
+// changes with the state, satisfying VoiceOver with no visible text.
+const SYNC_ICON_BY_STATUS = {
+  synced: 'cloudData',
+  syncing: 'refresh',
+  error: 'warning',
+  refused: 'warning',
+  offline: 'cloudData',
+};
+const SYNC_LABEL_BY_STATUS = {
+  synced: 'Synced',
+  syncing: 'Syncing…',
+  error: 'Sync problem',
+  refused: 'Sync problem',
+  offline: 'Offline',
+};
 function updateSyncBadge(status) {
-  const map = {
-    syncing: '☁️ Syncing…',
-    synced:  '☁️ Synced',
-    error:   '⚠️ Sync error',
-    // DI §5.2 — ONE map entry, and it is the difference between "we could not
-    // reach the server" and "the server read your request and said no". A
-    // refusal is an ANSWER; calling it a sync error sends the player (and Drew)
-    // looking for a connection problem that is not there, which is exactly the
-    // misdirection BUG-A's "Sync refused…" toast caused once already.
-    refused: '⛔ Refused',
-    // supabase-backend.js maps IDLE and OFFLINE-READONLY to 'offline': no
-    // league is loaded, which is not a failure — it is the state a handover
-    // clear deliberately leaves behind, and the state an aeroplane leaves.
-    offline: '📴 Offline',
-  };
   const el = document.getElementById('sync-badge');
   if (el) {
-    el.textContent = map[status] || '';
-    el.className = 'sync-badge sync-' + status;
+    const iconName = SYNC_ICON_BY_STATUS[status] || 'cloudData';
+    const label = SYNC_LABEL_BY_STATUS[status] || 'Sync status';
+    // iconstest [8d] resolves an icon() host from the STATIC template text
+    // around the call, not the `el.className` assignment below (a separate
+    // statement it cannot see as this element's ancestor) — so the glyph
+    // keeps a literal wrapper class, sized by `.header-sync-glyph svg`.
+    // 2026-09-28: that wrapper used to be a SECOND `.header-sync-icon`, whose
+    // base `color` beat the state colour it would otherwise inherit from
+    // #sync-badge[data-sync="…"], so no state colour ever reached the svg.
+    // Exactly one `.header-sync-icon` now: #sync-badge itself, carrying
+    // data-sync (headermetatest [sync]).
+    el.innerHTML = `<span class="header-sync-glyph">${icon(iconName, { label })}</span>`;
+    el.className = 'header-sync-icon';
+    if (el.dataset) el.dataset.sync = status;
+    else el.setAttribute('data-sync', status);
   }
+  // DI §5.2 — kept for #chat-sync-badge below: the difference between "we
+  // could not reach the server" and "the server read your request and said
+  // no". A refusal is an ANSWER; calling it a sync error sends the player
+  // (and Drew) looking for a connection problem that is not there, which is
+  // exactly the misdirection BUG-A's "Sync refused…" toast caused once
+  // already.
+  const map = { error: '⚠️ Sync error' };
   // Track last-known status so a FRESH renderChatPage() — which replaces
   // #page-chat's entire innerHTML, including any live badge node — reflects
   // it immediately rather than waiting for the next onBackendStatus event.
@@ -3347,6 +3441,7 @@ function updateSyncBadge(status) {
     chatEl.className = 'sync-badge' + (isError ? ' sync-error' : '');
   }
 }
+export const _updateSyncBadgeForTest = updateSyncBadge;   // headermetatest [sync]
 
 function setupNav() {
   document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.tab)));
@@ -3401,6 +3496,16 @@ function buildControlCenterCtx() {
   const memberships = getCachedMemberships();
   const activeMembership = memberships.find(m => m.leagueId === activeLeagueId) || null;
   const isCommissioner = !!session?.isAdmin;
+  // Hoisted above the return (was inline in `league:` below) so
+  // `bodies.scribeFileHTML`'s DI-365 pilot gate can call the SAME
+  // isPilotLeague(leagueForCtx) rather than re-deriving the boolean a third
+  // time (flags.isPilotLeague, just below, already avoids a second copy —
+  // this makes it three call sites reading ONE object, not three guesses).
+  const leagueForCtx = activeMembership
+    ? { id: activeMembership.leagueId, name: activeMembership.leagueName,
+        pilot: activeMembership.pilot === true,
+        status: activeMembership.status || 'active' }
+    : null;
   return {
     session: {
       player: {
@@ -3421,11 +3526,7 @@ function buildControlCenterCtx() {
     // `status: 'active'`, js/auth.js's own map()) — read straight through
     // here rather than re-derived, so isPilotLeague(league)/isLeaguePaused(league)
     // (js/roles.js) see real values instead of an honest-but-permanent false.
-    league: activeMembership
-      ? { id: activeMembership.leagueId, name: activeMembership.leagueName,
-          pilot: activeMembership.pilot === true,
-          status: activeMembership.status || 'active' }
-      : null,
+    league: leagueForCtx,
     escHtml, icon, isNativeShell,
     flags: {
       isCommissioner,
@@ -3437,18 +3538,25 @@ function buildControlCenterCtx() {
     bodies: {
       notifSettingsHTML: _lastNotifSettingsHTML || '<p class="text-muted text-sm">Checking…</p>',
       chatPrefsHTML: prefsPanelHTML(),
+      // DI-365 (2026-09-27) — the SCRIBE training archive, RETIRED off the
+      // Rules page (renderRulesPage() no longer calls
+      // renderScribeTrainingCardHTML() at all) and appended here instead,
+      // inside the drawer/Settings-shared "SCRIBE settings" accordion row,
+      // gated on isPilotLeague(leagueForCtx) — pilot leagues only. Same
+      // function, unchanged output; only WHERE it's shown moved.
       scribeFileHTML: renderScribeFileBodyHTML({
         profile: session?.playerId ? getPlayerProfile(session.playerId) : null,
         loading: scribeMemoryCache.loading,
         error: scribeMemoryCache.error,
         rowError: scribeFileRowError,
-      }),
+      }) + (isPilotLeague(leagueForCtx) ? renderScribeTrainingCardHTML() : ''),
       feedbackCardHTML: renderFeedbackCardHTML(),
       gameRequestHTML: renderGameRequestCardHTML(),
       releaseNotesHTML: renderReleaseNotesCardHTML(),
     },
     timeZones: TIME_ZONES, currentTimeZone: getTimezone() || DEFAULT_TZ,
     themes: THEMES, currentTheme: getTheme() || 'neutral',
+    currentColorScheme: getColorScheme() || 'system',
     logoView: player?.preferences?.logoView === true,
     // STEP B(7) / N4 (third pass) — the Password / Delete Account rows act on
     // a Supabase account; in any other auth mode they could only fail.
@@ -3478,6 +3586,7 @@ function buildControlCenterCtx() {
       onSaveAlmaMater: (v) => { if (session?.playerId) patchPlayer(session.playerId, { almaMater: v }); },
       onSetTimeZone: (v) => { setTimezone(v); refreshControlCenterAndSettingsPage(); },
       onSetTheme: (v) => { applyThemeChoice(v); refreshControlCenterAndSettingsPage(); },
+      onSetColorScheme: (v) => { applyColorSchemeChoice(v); refreshControlCenterAndSettingsPage(); },
       onSetLogoView: (v) => {
         if (!session?.playerId) return;
         const p = getPlayer(session.playerId);
@@ -3491,10 +3600,22 @@ function buildControlCenterCtx() {
     },
   };
 }
+// Finding 4 test seam (app-shell part 3A review, 2026-09-27) — the SAME
+// "_xForTest" convention already used throughout this file (e.g.
+// `_renderWeekWizardManageHTMLForTest`, `_openWeekWizardSheetForTest`); lets
+// boottest.mjs [38] drive the REAL DI-365 pilot-gate wiring (`bodies.scribeFileHTML`'s
+// `isPilotLeague(leagueForCtx) ? renderScribeTrainingCardHTML() : ''`)
+// through actual session/membership state, rather than only through
+// controlcentertest.mjs's hand-fed `scribeFileHTML` fixture string, which
+// cannot see a wiring regression in THIS function at all.
+export const _buildControlCenterCtxForTest = buildControlCenterCtx;
 
+// DI-397 (UN-357, 2026-09-27) — the Settings TAB is retired (its content
+// lives in the control-center drawer only, DI-350's Settings-tab identity
+// block retired with it). Name kept (many call sites below reference it) —
+// it now updates the drawer alone; there is no second host to repaint.
 function refreshControlCenterAndSettingsPage() {
   if (controlCenterApi) controlCenterApi.update(buildControlCenterCtx());
-  if (state.currentTab === 'settings') renderSettingsPage();
 }
 
 /**
@@ -3541,9 +3662,10 @@ function bindComingSoonDispatcher() {
 
 /** Binds whatever's actually present in the given scope — every bind
  *  function here no-ops safely (via bindOnceIn's own null-check) when its
- *  row isn't the one currently open. Shared by the drawer's onAfterPaint
- *  and renderSettingsPage() (DI-308's "one render function, two hosts"
- *  extended to binding, not just rendering). */
+ *  row isn't the one currently open. Called from the drawer's onAfterPaint
+ *  only now (DI-397, 2026-09-27) — the Settings-tab host this was once
+ *  ALSO shared with (DI-308's "one render function, two hosts") is
+ *  retired. */
 function bindControlCenterBodies(scopeEl, rowState) {
   bindOnceIn(scopeEl, 'cc-body-game-settings', () => bindGameRequestCard());
   bindOnceIn(scopeEl, 'cc-body-feedback', (el) => {
@@ -3621,55 +3743,15 @@ function mountControlCenterDrawer() {
   // (the 20-second hold re-check that made this fetch need a ceiling at all).
 }
 
-/**
- * DI-308 (T-16) — the Settings TAB's own page host. A THIN WRAPPER reusing
- * js/control-center.js's SAME accordion-row render functions the drawer
- * uses ("one render function, two hosts") — never a second, independently-
- * written settings implementation. Accordion open/closed state is
- * `_ccSettingsPageState`, a SEPARATE object from the drawer's own.
- */
-function renderSettingsPage() {
-  const c = document.getElementById('page-settings');
-  if (!c) return;
-  const ctx = buildControlCenterCtx();
-  c.innerHTML = `
-    <div class="section-header"><h2>Settings</h2></div>
-    ${renderStarredPanels(ctx)}
-    ${renderSettingsAccordion(ctx, _ccSettingsPageState)}
-    ${renderFeedbackRulesGroup(ctx, _ccSettingsPageState)}
-    ${renderHelpFooter(ctx)}`;
-  c.querySelectorAll('[data-action="cc-toggle-row"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const group = btn.dataset.group, rowId = btn.dataset.row;
-      if (group === 'settings') {
-        _ccSettingsPageState.settingsOpenRow = _ccSettingsPageState.settingsOpenRow === rowId ? null : rowId;
-      } else if (group === 'feedback') {
-        _ccSettingsPageState.feedbackGroupOpenRow = _ccSettingsPageState.feedbackGroupOpenRow === rowId ? null : rowId;
-      }
-      haptic('selection');
-      renderSettingsPage();
-    });
-  });
-  c.querySelectorAll('[data-action="cc-toggle-logo-view"]').forEach(btn => {
-    btn.addEventListener('click', () => { ctx.callbacks.onSetLogoView(!(ctx.logoView === true)); haptic('selection'); });
-  });
-  c.querySelectorAll('[data-field]').forEach(el => {
-    el.addEventListener('change', (e) => {
-      if (el.dataset.field === 'timezone') ctx.callbacks.onSetTimeZone(e.target.value);
-      else if (el.dataset.field === 'theme') ctx.callbacks.onSetTheme(e.target.value);
-    });
-  });
-  c.querySelectorAll('[data-action="cc-navigate"]').forEach(btn => {
-    btn.addEventListener('click', () => ctx.callbacks.onNavigate(btn.dataset.target));
-  });
-  bindControlCenterBodies(c, _ccSettingsPageState);
-  // SECURITY GATE, S-5 (2026-09-25) — the maintenance banner is platform-
-  // wide, not league-scoped (unlike the paused-league banner, which Settings
-  // deliberately never gets). `MAINTENANCE_BANNER_PAGE_IDS` now carries
-  // `settings`; this is the ordinary (non-league-flow) render path's own
-  // call, matching the other five page renderers' end-of-render pattern.
-  renderMaintenanceBannerIfNeeded('settings');
-}
+// DI-397 (UN-357, 2026-09-27) — renderSettingsPage() (DI-308, T-16) is
+// RETIRED along with the Settings tab it painted into: the drawer
+// (js/control-center.js's mountControlCenterDrawer(), reusing the exact same
+// accordion-row render functions this wrapper used to) is the one home for
+// every row it used to duplicate here — "one render function, two hosts"
+// (DI-308) is now "one render function, one host". Deleted rather than left
+// as a dead, unreachable function per DI-397's own instruction — there is
+// no #page-settings container left in index.html for it to target.
+
 
 /** v0.17.0 — THE PICK REVEAL RITUAL. One system event posts everyone's picks
  *  to the room simultaneously. Local ledger prevents outbox spam; the
@@ -4744,7 +4826,14 @@ function navigateTo(tab) {
   // is the one that actually opened 'admin' for an admin-only viewer (the
   // redirect above); it must still read as the active nav item, not neither.
   const navActiveTab = tab === 'admin' ? 'commissioner' : tab;
-  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.tab === navActiveTab));
+  // DI-397 — `aria-current="page"` tracks `.active` exactly (Interaction
+  // Principles' Accessibility: never rely on colour/state alone) — one
+  // pass, both attributes, so they cannot drift apart on a future edit.
+  document.querySelectorAll('.nav-item').forEach(el => {
+    const isActive = el.dataset.tab === navActiveTab;
+    el.classList.toggle('active', isActive);
+    if (isActive) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
+  });
   document.querySelectorAll('.page-section').forEach(el => el.classList.toggle('active', el.id === `page-${tab}`));
   applyChatNavVisibility();
   // DI-181a — a signed-in supabase account with zero (or unresolved,
@@ -4761,7 +4850,7 @@ function navigateTo(tab) {
   } else if (leagueFlow) {
     renderLeagueFlowScreen(tab);
   } else {
-    ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, admin: renderAdminPage, rules: renderRulesPage, chat: renderChatPage, settings: renderSettingsPage })[tab]?.();
+    ({ picks: renderPicksPage, dashboard: renderDashboard, leaderboard: renderLeaderboard, commissioner: renderCommPage, admin: renderAdminPage, rules: renderRulesPage, chat: renderChatPage })[tab]?.();
   }
   // DI-344/345 §Render paths — "isLeaguePaused(league) gates the banner
   // identically across all six nav destinations — one function, six call
@@ -4868,7 +4957,7 @@ function navigateTo(tab) {
       bindWeekSwipe(document.getElementById('page-picks'), () => {
         const weeks = picksNavWeeks();
         const cur = getCurrentWeek();
-        return { weekIds: weeks.map(w => w.weekId), currentWeekId: state.picksWeekId || cur?.weekId || null };
+        return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.picksWeekId || cur?.weekId || null };
       }, (targetId) => {
         const cur = getCurrentWeek();
         state.picksWeekId = (targetId === cur?.weekId) ? null : targetId;
@@ -4877,8 +4966,25 @@ function navigateTo(tab) {
       });
     } else if (tab === 'dashboard') {
       bindWeekSwipe(document.getElementById('page-dashboard'), () => {
-        const weeks = selectableDashboardWeeks(getWeeks(), !!getSession()?.isAdmin);
-        return { weekIds: weeks.map(w => w.weekId), currentWeekId: state.dashboardWeekId || weeks[0]?.weekId || null };
+        const isCommissioner = !!getSession()?.isAdmin;
+        const weeks = selectableDashboardWeeks(getWeeks(), isCommissioner);
+        // v0.27.0 — `weeks` is NEWEST-FIRST (it feeds the week <select>);
+        // chronologicalWeekIds() is what the direction table requires. Passing
+        // this list raw is what made Dashboard swipes run backwards.
+        // REVIEWER note 1 (v0.27.0 APPROVE WITH NOTES) — this used to fall
+        // back straight to `weeks[0]?.weekId` whenever `state.dashboardWeekId`
+        // was unset, ignoring the CURRENT week entirely.
+        // `renderDashboardInner()`'s own `displayWeekId` is
+        // `state.dashboardWeekId||(currentWeekVisible?currentWeek?.weekId:null)
+        // ||allWeeks[0]?.weekId` — with a draft/newer week created after the
+        // current one, `weeks[0]` (newest) is that draft, not the week the
+        // Dashboard is actually showing, so the swipe started from a week with
+        // nothing on screen and a swipe appeared to do nothing. Mirrored here,
+        // exactly, so the swipe always starts from the SAME week the Dashboard
+        // displays.
+        const cur = getCurrentWeek();
+        const curVisible = cur && (cur.dataSourceMode !== 'demo' || isCommissioner);
+        return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.dashboardWeekId || (curVisible ? cur?.weekId : null) || weeks[0]?.weekId || null };
       }, (targetId) => {
         state.dashboardWeekId = targetId;
         renderDashboard();
@@ -4896,6 +5002,7 @@ function refreshHeader() {
   const el   = document.getElementById('header-meta-week');
   renderHeaderIdentity();
   renderLeaguePill();
+  renderControlCenterTrigger();
   if (!el) return;
   // ── SECURITY F-4 (sixth gate, 2026-09-17) — THE WEEK BLOCK IS LEAGUE DATA ──
   // A6's teardown empties `#header-meta-week` because a week's NAME and DATES
@@ -4911,25 +5018,64 @@ function refreshHeader() {
   // there, and on the DI-180m banner path (post-identity, no hold) the element
   // legitimately holds the previous week. One assignment, no ambiguity.
   if (isContentWithheld()) { el.innerHTML = ''; return; }
-  // UN-117 — name and dates each own a line; the status badge rides with the
-  // name so a wrapped date range can never orphan it onto a third line.
-  // DI-A2 (2026-09-09): this is the ONE caller that passes collapseYear:true —
-  // the header is a tight strip where "Sep 3, 2026–Sep 7, 2026" repeats the
-  // year for no reason; renderWeekBanner() and renderCommPage() below omit
-  // the option on purpose and stay byte-identical (headermetatest.mjs).
+  // DI-393 (UN-353, 2026-09-27) — the header is now a ONE-LINE row: name +
+  // status badge only, no date line. The date moved to DI-394's viewing-week
+  // card (Picks/Dashboard, renderPicksWeekNav()) — this is no longer the
+  // caller that needs collapseYear:true (there is no date string left to
+  // collapse here at all), so formatWeekLabelParts() is called with no
+  // options, matching renderWeekBanner()/renderCommPage()'s own plain call
+  // shape. UN-117's original two-line guarantee is moot for this element now
+  // that it is structurally one line (headermetatest.mjs [css2]).
   if (week) {
-    const wl = formatWeekLabelParts(week, { collapseYear: true });
+    const wl = formatWeekLabelParts(week);
     el.innerHTML = `<span class="week-heading week-heading-inline">
-      <span class="week-heading-name"><strong>${escHtml(wl.name)}</strong><span class="badge badge-${week.status} ml-sm">${week.status.toUpperCase()}</span></span>
-      ${wl.dates ? `<span class="week-heading-dates">${escHtml(wl.dates)}</span>` : ''}
+      <span class="week-heading-name"><strong>${escHtml(wl.name)}</strong><span class="badge badge-${escHtml(week.status)} ml-sm">${escHtml(week.status.toUpperCase())}</span></span>
     </span>`;
-  } else {
-    // DI-213a (PASS 1b) — shell brand, not league name: web says "CFB
-    // Pickems" (byte-identical to the literal it replaces, brandtest.mjs
-    // proves this), native says "Munera." escHtml around every interpolated
-    // value, per S-C2 — even a today-static string, once it is a variable.
+  } else if (isNativeShell()) {
+    // DI-213a (PASS 1b) — shell brand, not league name: native says
+    // "Munera." escHtml around every interpolated value, per S-C2 — even a
+    // today-static string, once it is a variable. Native's trigger (below)
+    // is icon-only, so no duplication risk here.
     el.innerHTML = `<strong>${escHtml(getShellBrandName())}</strong>`;
+  } else {
+    // REVIEWER note 3 (v0.27.0 APPROVE WITH NOTES) — this used to repeat
+    // `getShellBrandName()` here too, but the web trigger (renderControlCenterTrigger(),
+    // below) now ALSO shows the brand name right beside it (reviewer note 4)
+    // — the same word twice in the same header strip reads as a mistake, not
+    // chrome. "No week yet" names the actual state instead.
+    el.innerHTML = `<span class="text-muted">No week yet</span>`;
   }
+}
+
+// v0.27.0 FIX (Drew, 2026-09-27: "I don't see the logo in the top left to
+// open the control center") — index.html ships #control-center-trigger EMPTY
+// and promises it is "Filled at boot"; v0.26.0 had no code that filled it, so
+// the drawer (Sign Out / Switch League / Profile) sat behind an invisible
+// 44x44 button. Filled here because refreshHeader() is the boot step that
+// already fills the header (and re-runs on every auth resolution). Content is
+// per SHELL only — never league data — so it renders under a hold too; the
+// hold gates the CLICK (.app-header inert + the handler's isContentWithheld()).
+// Native: the Munera temple mark, icon only. Web: the SAME Munera mark plus
+// the brand name — no trailing chevron (REVIEWER note 4, v0.27.0 APPROVE
+// WITH NOTES: Drew expects a LOGO top-left, and a trailing "›" reads as
+// push-forward navigation on iOS, not "open a drawer" — the coordinator's
+// design ruling replacing the chevron this trigger shipped with). Idempotent:
+// rewritten only when missing or the shell changed.
+function renderControlCenterTrigger() {
+  const el = document.getElementById('control-center-trigger');
+  if (!el) return;
+  const kind = isNativeShell() ? 'native' : 'web';
+  if (el.dataset?.filled === kind && el.innerHTML) return;
+  const brandName = getShellBrandName();
+  el.innerHTML = kind === 'native'
+    ? `<span class="control-center-trigger-mark">${icon('munera')}</span>`
+    : `<span class="control-center-trigger-mark">${icon('munera')}</span><span class="control-center-trigger-name">${escHtml(brandName)}</span>`;
+  // REVIEWER note 2 — the web trigger's visible name should be in its
+  // accessible name too (Interaction Principles' Accessibility: "Support
+  // VoiceOver"). Native's trigger is icon-only chrome with no visible name to
+  // echo, so it keeps index.html's plain "Open control center" default.
+  if (kind === 'web') el.setAttribute('aria-label', `${brandName}, open control center`);
+  if (el.dataset) el.dataset.filled = kind;
 }
 
 // ─── HEADER IDENTITY (UN-106) ─────────────────────────────────────────────────
@@ -5014,11 +5160,54 @@ export function setupHeaderIdentity() {
  * Inert (hidden, empty) in 'pins'/'prelink'.
  */
 function _leaguePillClick() { showLeagueSelectorSheet(); }
+// 2026-09-28 — the multi-league pill carries role="button" + tabindex="0", and
+// a role="button" element must activate on Enter AND Space the way a native
+// <button> does (ARIA APG button pattern); a click listener alone only covers
+// pointer and Enter-on-a-real-button. Same handler, so the two can't drift.
+function _leaguePillKeydown(e) {
+  if (e && (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar')) {
+    e.preventDefault?.();
+    _leaguePillClick();
+  }
+}
+// Hide the pill when the one-line header leaves it less room than this — a
+// bordered sliver with an ellipsis is not a readable label (css #league-pill).
+const LEAGUE_PILL_MIN_PX = 48;
+/**
+ * 2026-09-28 (web header overflow fix) — measured AFTER the header has laid
+ * out, so the week name refreshHeader() writes after renderLeaguePill() is
+ * already in the row. Skipped when the pill is not being rendered at all
+ * (hidden, or the header is display:none on the chat tab), where a 0 width
+ * means "not laid out", not "no room". Re-evaluated on every
+ * renderLeaguePill(), which unhides first, so a wider row brings it back.
+ */
+function _fitLeaguePill(el) {
+  if (!el || el.hidden) return;
+  if (typeof el.getClientRects !== 'function' || typeof el.getBoundingClientRect !== 'function') return;
+  if (!el.getClientRects().length) return;
+  if (el.getBoundingClientRect().width < LEAGUE_PILL_MIN_PX) el.hidden = true;
+}
+export const _fitLeaguePillForTest = _fitLeaguePill;
+/**
+ * Resize/orientation re-fit. A pill _clearLeaguePill() emptied stays hidden
+ * (nothing to show); one that has a label is unhidden and re-measured, so a
+ * rotation to landscape brings it back and a rotation to portrait hides it
+ * again — without waiting for the next refreshHeader().
+ */
+function _refitLeaguePill() {
+  const el = typeof document !== 'undefined' && document.getElementById ? document.getElementById('league-pill') : null;
+  if (!el) return;
+  if (!(el.textContent || '').trim()) return;
+  el.hidden = false;
+  _fitLeaguePill(el);
+}
+export const _refitLeaguePillForTest = _refitLeaguePill;
 
 function _clearLeaguePill(el) {
   el.hidden = true;
   el.innerHTML = '';
   el.removeEventListener('click', _leaguePillClick);
+  el.removeEventListener('keydown', _leaguePillKeydown);
   el.removeAttribute?.('role');
   el.removeAttribute?.('tabindex');
   // DI-184j (approved 2026-09-17) — AND THE ACCESSIBLE NAME. Every attribute
@@ -5057,6 +5246,7 @@ export function renderLeaguePill() {
   // handler" half of DI-184b is a fact about the element a test can read, not
   // a claim about a code path — and so a re-render can never stack listeners.
   el.removeEventListener('click', _leaguePillClick);
+  el.removeEventListener('keydown', _leaguePillKeydown);
   el.hidden = false;
   if (memberships.length > 1) {
     el.setAttribute('role', 'button');
@@ -5064,12 +5254,17 @@ export function renderLeaguePill() {
     el.setAttribute('aria-label', `Active league: ${name}. Tap to switch.`);
     el.innerHTML = `${escHtml(name)} <span aria-hidden="true">▾</span>`;
     el.addEventListener('click', _leaguePillClick);
+    el.addEventListener('keydown', _leaguePillKeydown);
   } else {
     el.removeAttribute?.('role');
     el.removeAttribute?.('tabindex');
     el.setAttribute('aria-label', `Active league: ${name}`);
     el.innerHTML = `${escHtml(name)}`;
   }
+  // After this frame's synchronous header writes (refreshHeader() fills the
+  // week name AFTER calling this), before paint — so no visible flash.
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => _fitLeaguePill(el));
+  else _fitLeaguePill(el);
 }
 
 /**
@@ -5370,6 +5565,52 @@ function applyThemeChoice(key) {
   applyTheme(key);
 }
 
+/**
+ * DI-360 (2026-09-27) — Munera night mode, Phase 1. A DELIBERATELY separate,
+ * independent axis from applyTheme()/applyThemeChoice() above — never routed
+ * through applyTheme() itself, so boottest [25]'s pinned `applyTheme()`
+ * call-site count (exactly four) is untouched by this addition. `'system'`
+ * removes the attribute entirely, which is what lets the brand branch's CSS
+ * `@media (prefers-color-scheme: dark)` rule decide on its own with zero JS
+ * involvement — the attribute only needs to exist at all for the two
+ * EXPLICIT overrides (`'light'`/`'dark'`), which win over the OS setting.
+ */
+function applyColorScheme(scheme) {
+  const key = scheme || getColorScheme() || 'system';
+  const body = document.body;
+  // Defensive against a test-harness `document.body` stub missing `dataset`
+  // (loadtest.mjs's fake document does not define one) — a real DOM body
+  // always has one, so this never fires in the browser.
+  if (!body) return;
+  if (!body.dataset) body.dataset = {};
+  if (key === 'system') delete body.dataset.colorScheme;
+  else body.dataset.colorScheme = key;
+}
+function bootColorScheme() {
+  try { return getColorScheme(); } catch { return 'system'; }
+}
+export const _bootColorSchemeForTest = bootColorScheme;
+export const _applyColorSchemeForTest = applyColorScheme;
+/**
+ * Finding 9 (app-shell part 3A review, 2026-09-27) — `setColorScheme()`
+ * (js/storage.js) VALIDATES its input against the three-value allow-list and
+ * REFUSES (returns false, writes nothing) anything else. Before this fix,
+ * this function still handed that SAME raw, refused `key` straight to
+ * applyColorScheme(key) regardless — painting whatever garbage the caller
+ * passed onto `body.dataset.colorScheme` while storage silently kept the
+ * PRIOR value. A paint that disagrees with what is actually persisted is
+ * exactly the class of bug RG-198 exists to prevent for theme/timezone; this
+ * is the same discipline applied to the newer colorScheme axis. Now: only a
+ * value setColorScheme() actually accepted is ever painted as-is; a refused
+ * value re-derives the paint from getColorScheme() — the real, validated,
+ * persisted state — instead.
+ */
+function applyColorSchemeChoice(key) {
+  const accepted = setColorScheme(key);
+  applyColorScheme(accepted ? key : getColorScheme());
+}
+export const _applyColorSchemeChoiceForTest = applyColorSchemeChoice;
+
 function applyTheme(themeKey) {
   const key = themeKey || getTheme() || 'neutral';
   const body = document.body;
@@ -5539,6 +5780,12 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // a correct first frame. See resyncThemeKey() directly above for the
   // signed-out half (Drew's "keep" ruling, 2026-09-25).
   applyTheme(resyncThemeKey());
+  // DI-360 (2026-09-27) — same chokepoint, independent axis (see
+  // applyColorScheme()'s own header for why this is never routed through
+  // applyTheme() itself). No hint-based first-frame reader like
+  // resyncThemeKey() exists for this yet — bootColorScheme() reads the
+  // player record directly, same as bootThemeKey()'s own first two lines.
+  applyColorScheme(bootColorScheme());
   renderTzToggle();
   renderThemeToggle();
   renderHeaderIdentity();
@@ -5947,7 +6194,7 @@ function renderPrimingCardHTML(pushState, device = null) {
   if (pushState === 'native-not-asked') {
     return `<div class="card notif-priming-card" id="notif-priming-card">
     <div class="notif-priming-title">Turn on notifications</div>
-    <p class="text-muted text-sm">We'll let you know when picks are about to lock and when games go final. You can turn this off anytime in Settings.</p>
+    <p class="text-muted text-sm">We'll let you know when picks are about to lock and when games go final. You can turn this off anytime in the menu (top left) → Notifications.</p>
     <button class="btn btn-primary btn-sm" id="notif-priming-btn">Turn on notifications</button>
   </div>`;
   }
@@ -7243,6 +7490,15 @@ function bindScribeFileBody(ov) {
     await scribeFileSetTolerance(btn.dataset.tolerance);
     repaintScribeFileBody(ov);
   }));
+  // DI-365 (2026-09-27) — the training-archive rows, now appended to this
+  // SAME body (pilot leagues only — see buildControlCenterCtx()'s
+  // `scribeFileHTML` construction). Reuses openScribeReportModal() verbatim,
+  // same as the retired Rules-page binder (bindScribeReportRowHandlers(),
+  // now dead code, removed) used to.
+  ov.querySelectorAll('.scribe-report-row').forEach(btn => btn.addEventListener('click', () => {
+    const idx = Number(btn.dataset.scribeReportIdx);
+    openScribeReportModal(getScribeReports()[idx]);
+  }));
 }
 
 /**
@@ -8021,20 +8277,59 @@ function picksNavWeeks() {
   return weeks.sort((a, b) => String(a.season).localeCompare(String(b.season)) || a.weekNumber - b.weekNumber);
 }
 
-function renderPicksWeekNav(viewWeek, currentWeek) {
+/**
+ * DI-394 (UN-354, 2026-09-27) — the shared viewing-week card: one status
+ * pill, 8-pt rhythm, the date living here now that DI-393 drops it from the
+ * header. ONE markup function, reused by BOTH Picks (renderPicksWeekNav(),
+ * below) and Dashboard (renderDashboardWeekNav(), js/app.js's dashboard
+ * section) — a change here reaches both pages by construction, never two
+ * independently-drifting card implementations.
+ *
+ * Ordering is resolved via `chronologicalWeekIds()` (js/nav-gestures.js),
+ * the SAME oldest→newest normalization RG-264's fix made the one source of
+ * truth for week-arrow/swipe direction — Picks' and Dashboard's own week
+ * LISTS stay their own separate, already-correct filters
+ * (picksNavWeeks()/selectableDashboardWeeks(), deliberately different: Picks
+ * excludes every draft outright, Dashboard shows drafts to the commissioner)
+ * but neither list's raw sort order is trusted for prev/next math again.
+ *
+ * Renders even with fewer than two navigable weeks (a genuine, if small,
+ * fix over the card's own pre-DI-394 shape, which returned '' entirely
+ * below two weeks): the header no longer carries a date at all after
+ * DI-393, so a single-week league losing this card too would leave NO week
+ * identification anywhere on Picks/Dashboard — arrows simply do not render
+ * when there is nothing to navigate to.
+ */
+function weekNavCardHTML(viewWeek, currentWeek, weeksForOrder, { dataAttr }) {
   if (!viewWeek) return '';
-  const weeks = picksNavWeeks();
-  if (weeks.length < 2) return '';
-  const idx = weeks.findIndex(w => w.weekId === viewWeek.weekId);
-  const prev = idx > 0 ? weeks[idx - 1] : null;
-  const next = idx >= 0 && idx < weeks.length - 1 ? weeks[idx + 1] : null;
+  const orderedIds = chronologicalWeekIds(weeksForOrder);
+  const idx = orderedIds.indexOf(viewWeek.weekId);
+  const hasMultiple = orderedIds.length > 1;
+  const prevId = hasMultiple && idx > 0 ? orderedIds[idx - 1] : null;
+  const nextId = hasMultiple && idx >= 0 && idx < orderedIds.length - 1 ? orderedIds[idx + 1] : null;
   const isCurrent = viewWeek.weekId === currentWeek?.weekId;
+  const wl = formatWeekLabelParts(viewWeek, { collapseYear: true });
+  const annotation = isCurrent ? 'current' : 'past week (read-only)';
+  const dateLine = wl.dates ? `${escHtml(wl.dates)} · ${annotation}` : annotation;
+  const prevBtn = hasMultiple
+    ? `<button class="btn btn-ghost btn-sm" data-${dataAttr}="${prevId ? escHtml(prevId) : ''}" ${prevId ? '' : 'disabled'} aria-label="Previous week">‹</button>`
+    : '';
+  const nextBtn = hasMultiple
+    ? `<button class="btn btn-ghost btn-sm" data-${dataAttr}="${nextId ? escHtml(nextId) : ''}" ${nextId ? '' : 'disabled'} aria-label="Next week">›</button>`
+    : '';
   return `
     <div class="picks-week-nav">
-      <button class="btn btn-ghost btn-sm" data-picks-week="${prev ? escHtml(prev.weekId) : ''}" ${prev ? '' : 'disabled'}>‹</button>
-      <div class="picks-week-nav-label">${escHtml(formatWeekLabel(viewWeek))}${isCurrent ? ' <span class="picks-week-current">· current</span>' : ' <span class="picks-week-past">· past week (read-only)</span>'}</div>
-      <button class="btn btn-ghost btn-sm" data-picks-week="${next ? escHtml(next.weekId) : ''}" ${next ? '' : 'disabled'}>›</button>
+      ${prevBtn}
+      <div class="week-heading">
+        <span class="picks-week-nav-label">${escHtml(wl.name)}</span> <span class="badge badge-${escHtml(viewWeek.status)}">${escHtml(String(viewWeek.status || '').toUpperCase())}</span>
+        <span class="week-heading-dates">${dateLine}</span>
+      </div>
+      ${nextBtn}
     </div>`;
+}
+
+function renderPicksWeekNav(viewWeek, currentWeek) {
+  return weekNavCardHTML(viewWeek, currentWeek, picksNavWeeks(), { dataAttr: 'picks-week' });
 }
 
 function bindPicksWeekNav() {
@@ -8043,6 +8338,28 @@ function bindPicksWeekNav() {
     const cur = getCurrentWeek();
     state.picksWeekId = (b.dataset.picksWeek === cur?.weekId) ? null : b.dataset.picksWeek;
     renderPicksPage();
+    window.scrollTo({ top: 0 });
+  }));
+}
+
+/** DI-394 — Dashboard's own copy of the SAME card (weekNavCardHTML() above),
+ *  fed selectableDashboardWeeks() (drafts visible to the commissioner,
+ *  unlike Picks' own list) instead of picksNavWeeks(). Retires the
+ *  redundant `<select id="week-selector">` renderDashboardInner() used to
+ *  render alongside this exact card — one control doing the job, not two
+ *  (the "web app smell" DI-394's own research flagged). */
+function renderDashboardWeekNav(viewWeek, currentWeek) {
+  const isCommissioner = !!getSession()?.isAdmin;
+  const weeks = selectableDashboardWeeks(getWeeks(), isCommissioner);
+  return weekNavCardHTML(viewWeek, currentWeek, weeks, { dataAttr: 'dashboard-week' });
+}
+
+function bindDashboardWeekNav() {
+  document.querySelectorAll('[data-dashboard-week]').forEach(b => b.addEventListener('click', () => {
+    if (!b.dataset.dashboardWeek) return;
+    const cur = getCurrentWeek();
+    state.dashboardWeekId = (b.dataset.dashboardWeek === cur?.weekId) ? null : b.dataset.dashboardWeek;
+    renderDashboard();
     window.scrollTo({ top: 0 });
   }));
 }
@@ -9827,10 +10144,17 @@ function bindLayoutEditHandlers(c, pageKey, visible, rerender) {
  * and the commissioner panel's own (unfiltered) active-week selector.
  */
 export function selectableDashboardWeeks(weeks, isCommissioner) {
+  // REVIEWER note 6 (v0.27.0 APPROVE WITH NOTES) — was `b.weekNumber -
+  // a.weekNumber` alone, ignoring `season`. Sorted newest-season-first, then
+  // newest-week-first within a season — the same season-then-weekNumber
+  // comparator `chronologicalWeekIds()`/`picksNavWeeks()` already use
+  // (js/nav-gestures.js), just reversed for this list's newest-first
+  // (dropdown/fallback) order, so a low week number in a newer season can
+  // never sort above a high week number from an older one.
   return (weeks || []).filter(w =>
     (w.status !== WEEK_STATUS.DRAFT || isCommissioner) &&
     (w.dataSourceMode !== 'demo' || isCommissioner)
-  ).sort((a, b) => b.weekNumber - a.weekNumber);
+  ).sort((a, b) => String(b.season).localeCompare(String(a.season)) || (b.weekNumber - a.weekNumber));
 }
 
 /**
@@ -9956,13 +10280,6 @@ function renderDashboardInner() {
   const weeklyResults=calculateWeeklyResults(week.weekId,players,allPicks,games,actualTB);
   const ps=getProviderState();
 
-  const weekSelector=allWeeks.length>1?`<div class="form-group mb-md">
-    <label class="form-label">Viewing Week</label>
-    <select class="form-select" id="week-selector">
-      ${allWeeks.map(w=>`<option value="${w.weekId}"${w.weekId===week.weekId?' selected':''}>${escHtml(formatWeekLabel(w))} — ${w.status}</option>`).join('')}
-    </select>
-  </div>`:'';
-
   // FEAT-8a / UN-179 — the four reorderable Dashboard sections, built into a
   // map keyed by their PERSISTED data-section-id and composed in the player's
   // own order below. The markup inside each is byte-identical to v0.21.0; the
@@ -10065,23 +10382,22 @@ function renderDashboardInner() {
   c.innerHTML=`
     <div class="section-header section-header-layout">
       <div class="section-header-main">
-        <h2 class="week-heading">${escHtml(formatWeekLabelParts(week).name)}${
-          formatWeekLabelParts(week).dates
-            ? `<span class="week-heading-dates">${escHtml(formatWeekLabelParts(week).dates)}</span>`
-            : ''}</h2>
-        <div class="subtitle">Dashboard · <span class="badge badge-${week.status}">${week.status}</span></div>
+        <h2>Dashboard</h2>
       </div>
       ${layoutEditButtonHTML('dashboard')}
     </div>
     ${layoutEditStripHTML('dashboard')}
-    ${/* PINNED, and not by omission (DI-179c): the week selector decides WHICH
-          week everything below it describes, and the refresh bar stamps the
-          freshness of those same scores. Either one below its own data is a
-          defect, not a preference. The chat teaser is pinned above all of this
-          by renderDashboard(), because chat-ui.js replaces that node in place
-          on live activity and would otherwise have to know where the player
-          moved it. */''}
-    ${weekSelector}
+    ${/* DI-394 (UN-354, 2026-09-27) — the shared viewing-week card
+          (renderDashboardWeekNav(), the SAME weekNavCardHTML() Picks uses)
+          replaces the old `<select id="week-selector">` here: one control
+          decides WHICH week everything below it describes, not two doing the
+          identical job (the redundant-control finding DI-394's own research
+          flagged). PINNED, not by omission (DI-179c) — the refresh bar
+          stamps the freshness of the SAME week this card names. The chat
+          teaser is pinned above all of this by renderDashboard(), because
+          chat-ui.js replaces that node in place on live activity and would
+          otherwise have to know where the player moved it. */''}
+    ${renderDashboardWeekNav(week, currentWeek)}
     <div class="refresh-bar">
       <span>${ps.lastScoreRefresh?`Scores: ${new Date(ps.lastScoreRefresh).toLocaleTimeString()}`:'Not refreshed'}</span>
       <button class="refresh-btn-mini" id="manual-refresh-btn">↻ Refresh</button>
@@ -10090,7 +10406,7 @@ ${dashComposed.html}
 `;
 
   bindLayoutEditHandlers(c, 'dashboard', dashComposed.visible, renderDashboard);
-  document.getElementById('week-selector')?.addEventListener('change',e=>{state.dashboardWeekId=e.target.value;renderDashboard();});
+  bindDashboardWeekNav();
   // DI-311 (T-32) — Standard / Compact view toggle for the All-Picks-by-Game
   // card. The EXPLICIT override now writes to player.preferences.dashboardLayout
   // (Architecture bullet 4 — follows the player across devices) when signed
@@ -11611,7 +11927,8 @@ export function renderCommPage() {
     sections.push(renderCommTabBar({ activeTab: state.commTab, icon }));
 
     // DI-C1 §2.1 — the Week Setup Wizard's entry point, the FIRST card in
-    // the Week tab (above Week Manager / Week Settings / Available Games).
+    // the Week tab (above Week Manager / Weekly Blurb — "Week Settings" is
+    // retired, DI-356).
     sections.push(weekWizardEntryCardHTML(week));
 
     // Week Manager
@@ -11622,13 +11939,17 @@ export function renderCommPage() {
           <div class="form-group">
             <label class="form-label">Active Week</label>
             <select class="form-select" id="active-week-selector">
-              ${allWeeks.map(w=>`<option value="${w.weekId}"${w.weekId===week?.weekId?' selected':''}>
+              ${allWeeks.map(w=>`<option value="${escHtml(w.weekId)}"${w.weekId===week?.weekId?' selected':''}>
                 ${escHtml(formatWeekLabel(w))} — ${w.status}${w.dataSourceMode==='demo'?' · DEMO':''}
               </option>`).join('')}
             </select>
           </div>
+          <!-- DI-355 (UN-313) — "➕ New Week" retired from this card. The
+               wizard's own entry button (weekWizardEntryCardHTML(), above
+               this card) is the ONE "start/continue/manage a week" action;
+               it already opens the wizard/manage sheet correctly for every
+               week state, which this card's own button bypassed. -->
           <div class="flex gap-sm flex-wrap">
-            <button class="btn btn-primary btn-sm" id="create-week-btn">➕ New Week</button>
             <button class="btn btn-ghost btn-sm" id="duplicate-week-btn">📋 Duplicate</button>
             ${week?`<button class="btn btn-danger btn-sm" id="delete-week-btn">🗑 Delete</button>`:''}
           </div>
@@ -11652,138 +11973,24 @@ export function renderCommPage() {
         </div>
       </div>`);
 
-    // Week Settings
+    // DI-356 (UN-314, 2026-09-27) — the standalone "Week Settings" card is
+    // RETIRED. Field-by-field disposition (this batch's DI): status
+    // buttons/round label/dates/auto-open+lock/auto-transitions are already
+    // duplicated in the wizard's own Step 1/Timing fields, reachable via
+    // the "Set up Week"/"Continue set up"/"Manage This Week" entry card
+    // above; ESPN Week #, the multi-part grouping + tiebreaker-of-record
+    // checkbox, and Show in Standings/Weekly History are admin-only and
+    // moved to Admin → Week (below, `admin-week-settings` card); the
+    // pending-finalization banner moves into the wizard's own Manage
+    // screen as the guided "Finalize Week" entry (DI-359). Only the Weekly
+    // Blurb has no existing home in either surface (routine player-facing
+    // messaging content, not setup and not admin infrastructure) — it
+    // keeps its own small card here, unchanged in behavior.
     if (week) {
       sections.push(`
         <div class="admin-section" data-comm-tab="week">
-          <div class="admin-section-title">Week Settings — ${escHtml(formatWeekLabel(week))}</div>
           <div class="card">
-            ${week.dataSourceMode==='demo'?'<div class="warning-box mb-md">📋 This is the Demo Week with fictional games. Do not use for real picks.</div>':''}
-            <div class="flex gap-sm flex-wrap mb-sm">${renderWeekStatusButtons(week)}</div>
-            <div class="flex gap-sm flex-wrap mb-md">
-              <div class="form-group" style="flex:1;min-width:120px;margin:0">
-                <label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" → "Week 1, Part 2")</span></label>
-                <input class="form-input" id="week-round-label" placeholder="e.g. Part 2" value="${escHtml(week.roundLabel||'')}" />
-              </div>
-              <div class="form-group" style="flex:1;min-width:80px;margin:0">
-                <label class="form-label">ESPN Week # <span class="text-muted text-xs">(overrides the DISPLAYED number only, e.g. "3" → "Week 3" — does not change this week's internal order)</span></label>
-                <input class="form-input" id="week-espn-num" type="number" placeholder="1" value="${escHtml(String(week.espnWeekNumber||''))}" />
-              </div>
-            </div>
-            ${(() => {
-              // UN-118/UN-125 — multi-part week grouping (DI-126b). A week
-              // RECORD is a scheduling unit; the group is the COMPETITIVE
-              // week players actually compete over and win a prize for. Use
-              // this when one real week's games can't share a lock time (a
-              // split slate, bowls, CFP).
-              const groupWeeksNow = weeksInGroup(allWeeks, week);
-              const otherMembers = groupWeeksNow.filter(w => w.weekId !== week.weekId);
-              const currentPartnerId = otherMembers[0]?.weekId || '';
-              const partnerOptions = allWeeks.filter(w =>
-                w.weekId !== week.weekId && w.season === week.season && w.dataSourceMode !== 'demo');
-              return `
-            <div class="form-group">
-              <label class="form-label">Part of the Same Competitive Week As <span class="text-muted text-xs">(optional — splits/bowls/CFP)</span></label>
-              <select class="form-select" id="week-group-partner">
-                <option value="">— Not grouped —</option>
-                ${partnerOptions.map(w=>`<option value="${w.weekId}"${w.weekId===currentPartnerId?' selected':''}>${escHtml(formatWeekLabel(w))}</option>`).join('')}
-              </select>
-              <p class="text-muted text-xs mt-sm">Both parts still lock and score independently — this only tells Standings, Weekly History and the weekly prize to treat them as ONE competitive week instead of two.</p>
-            </div>
-            ${otherMembers.length ? `
-            <div class="form-group">
-              <div class="text-xs text-muted mb-xs">This group: ${groupWeeksNow.map(w=>escHtml(formatWeekLabel(w))).join(' · ')}</div>
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                <input type="checkbox" id="week-group-tiebreaker" ${week.isGroupTiebreaker?'checked':''} />
-                <span class="form-label" style="margin:0">This part's tiebreaker breaks ties for the whole group</span>
-              </label>
-              ${isGroupTiebreakerAmbiguous(groupWeeksNow) ? `<p class="warning-box mt-sm">⚠️ No part of this group is marked as the tiebreaker of record — falling back to the highest week number (${escHtml(formatWeekLabel(getGroupTiebreakerWeek(groupWeeksNow)))}). Tick the box on exactly one part to make this explicit.</p>` : ''}
-            </div>` : ''}`;
-            })()}
-            <div class="form-group">
-              <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                <input type="checkbox" id="week-show-history" ${week.showInHistory!==false?'checked':''} />
-                <span class="form-label" style="margin:0">Show in Standings / Weekly History</span>
-              </label>
-              <p class="text-muted text-xs mt-sm">Uncheck to hide demo/test weeks from standings.</p>
-            </div>
-            <div class="flex gap-sm flex-wrap mb-md">
-              <div class="form-group" style="flex:1;min-width:120px;margin:0">
-                <label class="form-label">Start Date</label>
-                <input class="form-input" type="date" id="week-start" value="${escHtml(week.startDate||'')}" />
-              </div>
-              <div class="form-group" style="flex:1;min-width:120px;margin:0">
-                <label class="form-label">End Date</label>
-                <input class="form-input" type="date" id="week-end" value="${escHtml(week.endDate||'')}" />
-              </div>
-            </div>
-            <div class="flex gap-sm flex-wrap mb-md">
-              <div class="form-group" style="flex:1;min-width:180px;margin:0">
-                <label class="form-label">Auto-Open At</label>
-                <input class="form-input" type="datetime-local" id="picks-open-at"
-                  value="${week.picksOpenAt?new Date(week.picksOpenAt).toISOString().slice(0,16):''}" />
-              </div>
-              <div class="form-group" style="flex:1;min-width:180px;margin:0">
-                <label class="form-label">Auto-Lock At (override)
-                  <span class="text-muted text-xs">— blank = auto-derive</span>
-                </label>
-                <input class="form-input" type="datetime-local" id="picks-lock-at"
-                  value="${week.picksLockAt?new Date(week.picksLockAt).toISOString().slice(0,16):''}" />
-              </div>
-            </div>
-            <!-- Auto-transition config: how long before first kickoff to lock,
-                 and whether to auto-transition to LIVE/pending-FINAL. -->
-            <div class="auto-transition-config">
-              <div class="card-title mb-sm">🔄 Auto-Transitions</div>
-              <div class="flex gap-sm flex-wrap mb-sm">
-                <div class="form-group" style="flex:1;min-width:180px;margin:0">
-                  <label class="form-label">Lock N minutes before first kickoff
-                    <span class="text-muted text-xs">— default 30</span>
-                  </label>
-                  <input class="form-input" type="number" min="0" max="720"
-                    id="auto-lock-offset" value="${getAutoLockOffsetMinutes(week)}" />
-                </div>
-              </div>
-              <div class="form-group">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                  <input type="checkbox" id="auto-live-enabled" ${getAutoLiveEnabled(week)?'checked':''} />
-                  <span class="form-label" style="margin:0">Auto-transition LOCKED → LIVE at first kickoff</span>
-                </label>
-              </div>
-              <div class="form-group">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                  <input type="checkbox" id="auto-final-enabled" ${getAutoFinalizeEnabled(week)?'checked':''} />
-                  <span class="form-label" style="margin:0">Prompt for finalization when all games are final</span>
-                </label>
-                <p class="text-muted text-xs mt-sm">Auto-finalize never happens without a commissioner click — it just shows a confirm prompt.</p>
-              </div>
-              ${(() => {
-                const games = getGames(week.weekId);
-                const lockAt = computeEffectiveLockAt(week, games);
-                const liveAt = computeEffectiveLiveAt(week, games);
-                if (!lockAt && !liveAt) return '<p class="text-muted text-xs">Effective times will show once games are on the slate.</p>';
-                const tz = getTimezone();
-                const fmt = (d) => d ? formatGameTime(d.toISOString(), tz) : '—';
-                return `<div class="effective-times-preview">
-                  <div><strong>Effective lock:</strong> ${escHtml(fmt(lockAt))}</div>
-                  <div><strong>Effective live:</strong> ${escHtml(fmt(liveAt))}</div>
-                </div>`;
-              })()}
-            </div>
-            ${week.pendingFinalization ? `
-              <div class="pending-final-banner">
-                <div><strong>⏰ All games are final.</strong> Ready to close this week and lock standings?</div>
-                ${weekHasUnresolvedTie(week, players.filter(p=>p.active), picks, games) ? `
-                  <div class="warning-box mt-sm">⚠️ This week has a tie in correct picks and no tiebreaker entered. The winner/loser will be decided arbitrarily until you enter one — do that on this tab, then Confirm Finalization.</div>
-                ` : ''}
-                <div class="flex gap-sm mt-sm">
-                  <button class="btn btn-primary btn-sm" id="confirm-finalize-btn">✅ Confirm Finalization</button>
-                  <button class="btn btn-ghost btn-sm" id="dismiss-pending-btn">Not yet</button>
-                </div>
-              </div>
-            ` : ''}
-            <button class="btn btn-primary btn-sm" id="save-week-settings-btn">Save Week Settings</button>
-            <div class="form-group mt-md">
+            <div class="form-group mb-0">
               <label class="form-label">Weekly Blurb</label>
               <textarea class="form-textarea" id="blurb-input">${escHtml(week.blurb||'')}</textarea>
               <button class="btn btn-secondary btn-sm mt-sm" id="save-blurb-btn">Save Blurb</button>
@@ -11792,19 +11999,26 @@ export function renderCommPage() {
         </div>`);
     }
 
-    // Populate Games — DI-319 §Games: "should only be able to press one
-    // button to populate the available games." Split from the old "ESPN
-    // Data Fetch" card (UX Revamp wiring pass 3a) — the URL preview/copy/
-    // open controls moved to Admin → Games ('espn-source'); Data Proof
-    // moved there too. This card keeps only the fetch action + timestamp.
+    // Build Slate — DI-352 (UN-310, Drew's 2026-09-27 amendment: "there
+    // should still be a button in the com panel to build the slate and
+    // effectively do what the fetch espn button does, but I don't want it
+    // to say fetch espn in the com panel"). ONE commissioner-facing action,
+    // league language only ("ESPN"/"fetch" never appear in this card's
+    // chrome), wired to the SAME combined fetch+apply the week-setup
+    // wizard's Step 2 uses (weekWizardApi().fetchAndApplySuggestedSlate()) —
+    // not a second implementation. The raw, diagnostic "Fetch ESPN Data" /
+    // "Load Historical Demo Week" actions moved to Admin → Games (folded
+    // into the 'espn-source' card — see renderEspnSourceBody()'s own header
+    // for why a new admin card key wasn't used).
     sections.push(`
       <div class="admin-section" data-comm-tab="games">
-        <div class="admin-section-title">Populate Games</div>
+        <div class="admin-section-title">Build Slate</div>
         <div class="card">
           <div class="flex gap-sm flex-wrap">
-            <button class="btn btn-primary btn-sm" id="fetch-espn-btn">📥 Fetch ESPN Data</button>
-            <button class="btn btn-ghost btn-sm" id="load-hist-demo-btn">📅 Load Historical Demo Week</button>
+            <button class="btn btn-primary btn-sm" id="comm-build-slate-btn">Build slate</button>
           </div>
+          <p class="text-muted text-xs mt-sm">Pull this week's games and spreads</p>
+          <div id="comm-build-slate-status" class="text-sm mt-sm"></div>
           ${ps.lastFetchTimestamp?`<p class="text-muted text-xs mt-sm">Last fetch: ${new Date(ps.lastFetchTimestamp).toLocaleString()} · ${ps.lastRawEventCount} events</p>`:''}
         </div>
       </div>`);
@@ -12287,7 +12501,11 @@ function renderPausedLeagueBannerIfNeeded(tab) {
 export const _renderPausedLeagueBannerIfNeededForTest = renderPausedLeagueBannerIfNeeded;
 export const _updateSubmitEnabledForTest = updateSubmitEnabled;
 
-const MAINTENANCE_BANNER_PAGE_IDS = { ...PAUSED_BANNER_PAGE_IDS, settings: 'page-settings' };
+// DI-397 (UN-357, 2026-09-27) — the `settings` alias this map used to carry
+// (Settings had no league-scoped content, so it was never in
+// PAUSED_BANNER_PAGE_IDS, but DID need the platform-wide maintenance banner)
+// is retired along with the Settings tab/page itself.
+const MAINTENANCE_BANNER_PAGE_IDS = { ...PAUSED_BANNER_PAGE_IDS };
 
 /** Static container, user-authored TEXT interpolated — routed through
  *  escHtml() (CLAUDE.md's blanket rule; this is a genuinely new render site,
@@ -12820,7 +13038,7 @@ export function renderAdminPage() {
     'feedback-bug-reports': () => renderFeedbackAdminSectionHTML(),
     'scribe-training': () => renderScribeTrainerAdminSectionHTML(),
     'espn-source': () => renderEspnSourceBody({ ps }),
-    'data-source-mode': () => renderDataSourceModeBody({ week }),
+    'data-source-mode': () => renderDataSourceModeBody({ week, allWeeks }),
     'demo-simulation': () => renderDemoSimulationBody({ week, games }),
     'auto-refresh': () => renderAutoRefreshBody({ settings }),
     'randomize-picks-shortcut': () => renderRandomizePicksBody({ settings }),
@@ -13387,7 +13605,7 @@ export function renderAdminGamesList(games, week, overrides) {
         <span>${fmtTime(game.kickoff, game)}</span>
         <span>Spread: <strong style="color:${sv!==null?'inherit':'var(--text-muted)'}">${spreadStr}</strong>
           <em class="text-muted text-xs">${game.spreadSource==='espn'?'ESPN':'Manual'}</em></span>
-        <span class="badge badge-${game.status}">${game.status}</span>
+        <span class="badge badge-${escHtml(game.status)}">${escHtml(game.status)}</span>
         ${game.status===GAME_STATUS.FINAL&&game.homeScore!==null?`<span>FINAL ${numHtml(game.awayScore)}–${numHtml(game.homeScore)}</span>`:''}
         ${game.espnEventId?`<code style="font-size:.65rem">ESPN:${escHtml(game.espnEventId)}</code>`:''}
         ${mu?'<span class="badge badge-open">🔓 Unlocked</span>':''}
@@ -13543,7 +13761,7 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('active-week-selector')?.addEventListener('change', e => {
     setActiveWeekId(e.target.value); refreshHeader(); renderCommPage();
   });
-  document.getElementById('create-week-btn')?.addEventListener('click', ()=>showCreateWeekModal());
+  // DI-355 (UN-313) — "create-week-btn" retired along with showCreateWeekModal().
   // DI-C1 §2.1 — the Week Setup Wizard's entry point.
   document.getElementById('week-wizard-entry-btn')?.addEventListener('click', () => openWeekWizardSheet());
   // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcement send control.
@@ -13592,8 +13810,15 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       roundLabel:'', espnWeekNumber:'',
       createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),
     };
-    saveWeek(newW); setActiveWeekId(newW.weekId);
-    showToast(`✅ Week ${newW.weekNumber} created`,'success'); renderCommPage();
+    // BLOCK fix (c) (app-shell part 3A review, 2026-09-27) — wizardSetActiveWeekId(),
+    // not the raw setActiveWeekId(): this call used to unconditionally steal
+    // the active-week pointer away from whatever week is actually IN
+    // PROGRESS (open/locked/live) — the exact hazard wizardSetActiveWeekId()
+    // exists to refuse (see its own header, above). Duplicating a past week
+    // for next-week setup must not silently move players' Picks/Dashboard
+    // onto the brand-new draft while the real current week is still live.
+    saveWeek(newW); wizardSetActiveWeekId(newW.weekId);
+    showToast(`✅ Week ${newW.weekNumber} created`,'success'); refreshHeader(); renderCommPage();
   });
   document.getElementById('delete-week-btn')?.addEventListener('click', ()=>{
     if(!week)return;
@@ -13641,85 +13866,16 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     });
   });
 
-  // Week settings save
-  document.getElementById('save-week-settings-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
-    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
-    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
-    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
-    const cur=getWeek(week.weekId)||week;
-    const mode=document.getElementById('data-source-mode')?.value||cur.dataSourceMode;
-    const startDate=document.getElementById('week-start')?.value||'';
-    const endDate=document.getElementById('week-end')?.value||'';
-    const openRaw=document.getElementById('picks-open-at')?.value;
-    const lockRaw=document.getElementById('picks-lock-at')?.value;
-    const roundLabel=document.getElementById('week-round-label')?.value.trim()||'';
-    const espnWeekNumber=document.getElementById('week-espn-num')?.value.trim()||'';
-    const showInHistory=document.getElementById('week-show-history')?.checked!==false;
-    // Auto-transition config
-    const autoLockOffsetRaw = parseInt(document.getElementById('auto-lock-offset')?.value);
-    const autoLockOffsetMinutes = Number.isFinite(autoLockOffsetRaw) && autoLockOffsetRaw >= 0 ? autoLockOffsetRaw : 30;
-    const autoLiveEnabled = document.getElementById('auto-live-enabled')?.checked !== false;
-    const autoFinalizeEnabled = document.getElementById('auto-final-enabled')?.checked !== false;
-
-    // ── UN-118/UN-125 — multi-part week grouping (DI-126a/b) ────────────────
-    const partnerId = document.getElementById('week-group-partner')?.value || '';
-    const wantsTiebreaker = document.getElementById('week-group-tiebreaker')?.checked === true;
-    let groupId = cur.groupId || null;
-    if (!partnerId) {
-      // DI-126a — clearing one member's field removes only THAT member; any
-      // other existing members stay grouped with each other, untouched.
-      groupId = null;
-    } else {
-      const partnerWeek = getWeek(partnerId);
-      if (!partnerWeek) {
-        showToast('⚠️ Selected partner week no longer exists — grouping not saved.', 'error');
-      } else {
-        const partnerIsDemo = partnerWeek.dataSourceMode === 'demo';
-        const currentIsDemo = mode === 'demo';
-        if (partnerIsDemo !== currentIsDemo) {
-          // Drew's ruling (DI-126d) — grouping a demo week with a real week
-          // is rejected outright, not merged.
-          showToast('⚠️ Cannot group a demo week with a real week — grouping not saved.', 'error');
-        } else {
-          // DI-126a canonicalization — the group's id is always an EXISTING
-          // canonical id if the partner already has one (so joining a
-          // 3rd+ member finds the true founder, not the immediate partner),
-          // otherwise the partner's own weekId becomes the new founder.
-          groupId = partnerWeek.groupId || partnerWeek.weekId;
-        }
-      }
-    }
-    const isGroupTiebreaker = !!groupId && wantsTiebreaker;
-
-    const upd = {...cur,dataSourceMode:mode,startDate,endDate,roundLabel,espnWeekNumber,showInHistory,
-      picksOpenAt:openRaw?new Date(openRaw).toISOString():null,
-      picksLockAt:lockRaw?new Date(lockRaw).toISOString():null,
-      autoLockOffsetMinutes, autoLiveEnabled, autoFinalizeEnabled,
-      groupId, isGroupTiebreaker,
-    };
-    saveWeek(upd);
-
-    // Canonicalize + propagate to every OTHER current member of the
-    // resulting group (DI-126a canonicalization; DI-126d — showInHistory and
-    // dataSourceMode propagate to every member atomically). Runs whenever
-    // this week is (still) grouped, not only at join time, so a LATER edit
-    // to mode/showInHistory can't leave the group disagreeing with itself.
-    if (groupId) {
-      weeksInGroup(getWeeks(), upd)
-        .filter(w => w.weekId !== upd.weekId)
-        .forEach(w => {
-          const wUpd = { ...w, groupId, dataSourceMode: mode, showInHistory };
-          // Exactly one tiebreaker-of-record per group — this save flagging
-          // THIS week un-flags every other current member.
-          if (isGroupTiebreaker) wUpd.isGroupTiebreaker = false;
-          saveWeek(wUpd);
-        });
-    }
-
-    refreshHeader(); showToast('Week settings saved ✅','success'); renderCommPage();
-  });
+  // DI-356 (2026-09-27) — the "Week settings save" handler that used to live
+  // here is RETIRED along with the standalone card (see this file's own
+  // "DI-356" note above `weekWizardEntryCardHTML`'s render block): every
+  // field it wrote is either already duplicated in the wizard (round label,
+  // dates, open/lock, auto-transitions — all save through their own wizard
+  // Step 1/Timing handlers now) or moved to the new Admin → Week
+  // `admin-week-settings` card just below, which owns ESPN Week #, the
+  // multi-part grouping + tiebreaker-of-record checkbox, and Show in
+  // Standings/Weekly History — the SAME write logic, relocated wholesale,
+  // not reimplemented.
 
   // Admin → Week "Data Source Mode" card (DI-320 §Week) — extracted from
   // Week Settings, its own small save action (UX Revamp wiring pass 3a).
@@ -13741,25 +13897,73 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     if (state.currentTab === 'admin') renderAdminPage();
   });
 
-  // Pending-finalization prompt handlers (auto-transition ready → commissioner confirms)
-  document.getElementById('confirm-finalize-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
-    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
-    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
-    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
+  // DI-356 (2026-09-27) — Admin → Week "Week Settings" card: ESPN Week #,
+  // multi-part grouping + tiebreaker-of-record, Show in Standings/Weekly
+  // History. Same write logic the retired standalone card's own
+  // save-week-settings-btn handler used for these three fields, relocated
+  // wholesale — not reimplemented. Reuses bindCommEventListeners the same
+  // way admin-save-data-source-mode-btn, just above, does.
+  document.getElementById('admin-save-week-settings-btn')?.addEventListener('click', () => {
+    if (!week) return;
+    // RG-256 — same staleness guard as every other handler in this file.
     const cur = getWeek(week.weekId) || week;
-    const upd = { ...cur, status: WEEK_STATUS.FINAL, finalizedAt: new Date().toISOString(), pendingFinalization: false };
+    const espnWeekNumber = document.getElementById('admin-week-espn-num')?.value.trim() || '';
+    const showInHistory = document.getElementById('admin-week-show-history')?.checked !== false;
+    const partnerId = document.getElementById('admin-week-group-partner')?.value || '';
+    const wantsTiebreaker = document.getElementById('admin-week-group-tiebreaker')?.checked === true;
+    let groupId = cur.groupId || null;
+    if (!partnerId) {
+      // DI-126a — clearing one member's field removes only THAT member; any
+      // other existing members stay grouped with each other, untouched.
+      groupId = null;
+    } else {
+      const partnerWeek = getWeek(partnerId);
+      if (!partnerWeek) {
+        showToast('⚠️ Selected partner week no longer exists — grouping not saved.', 'error');
+      } else {
+        const partnerIsDemo = partnerWeek.dataSourceMode === 'demo';
+        const currentIsDemo = cur.dataSourceMode === 'demo';
+        if (partnerIsDemo !== currentIsDemo) {
+          // Drew's ruling (DI-126d) — grouping a demo week with a real week
+          // is rejected outright, not merged.
+          showToast('⚠️ Cannot group a demo week with a real week — grouping not saved.', 'error');
+        } else {
+          // DI-126a canonicalization — the group's id is always an EXISTING
+          // canonical id if the partner already has one (so joining a
+          // 3rd+ member finds the true founder, not the immediate partner),
+          // otherwise the partner's own weekId becomes the new founder.
+          groupId = partnerWeek.groupId || partnerWeek.weekId;
+        }
+      }
+    }
+    const isGroupTiebreaker = !!groupId && wantsTiebreaker;
+    const upd = { ...cur, espnWeekNumber, showInHistory, groupId, isGroupTiebreaker };
     saveWeek(upd);
-    // Hand finalizeWeek the PERSISTED week, not the pre-transition snapshot —
-    // same invariant as applyWeekStatusChange(). The save already came first
-    // here, so this path was never broken; passing `week` was a latent trap of
-    // exactly the shape that cost the Week-tab button its Extra Point reveal.
-    finalizeWeek(upd);
+    // Canonicalize + propagate to every OTHER current member of the
+    // resulting group (DI-126a canonicalization; DI-126d — showInHistory
+    // propagates to every member atomically). Runs whenever this week is
+    // (still) grouped, not only at join time, so a LATER edit to
+    // showInHistory can't leave the group disagreeing with itself.
+    if (groupId) {
+      weeksInGroup(getWeeks(), upd)
+        .filter(w => w.weekId !== upd.weekId)
+        .forEach(w => {
+          const wUpd = { ...w, groupId, showInHistory };
+          if (isGroupTiebreaker) wUpd.isGroupTiebreaker = false;
+          saveWeek(wUpd);
+        });
+    }
     refreshHeader();
-    showToast('Week finalized — standings locked ✅','success');
-    renderCommPage();
+    showToast('Week settings saved ✅', 'success');
+    if (state.currentTab === 'admin') renderAdminPage();
   });
+
+  // "Not yet" (dismiss the pending-finalization prompt without finalizing) —
+  // DI-359 relocates the ENTRY POINT to the wizard's Manage screen
+  // (bindWeekWizardManage()), but reuses this SAME id/handler unchanged;
+  // "Confirm Finalization" itself is retired here — DI-359's guided
+  // Finalize Week flow (weekWizardApi().confirmFinalizeWeek(), Step 4)
+  // replaces it, never a raw status write from this file directly.
   document.getElementById('dismiss-pending-btn')?.addEventListener('click', ()=>{
     if(!week)return;
     // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
@@ -13831,11 +14035,47 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
       .catch(() => showToast('Unable to save. Try again.', 'error'));
   });
 
-  // ESPN Fetch — uses week start/end date as the source of truth
+  // DI-352 (UN-310, Drew's 2026-09-27 amendment) — Commissioner → Games'
+  // "Build slate" button. SAME orchestration the wizard's Step 2 uses
+  // (weekWizardApi().fetchAndApplySuggestedSlate()) — fetch ESPN games for
+  // this week's dates, then score + apply the suggested 10, all in one tap.
+  // No "ESPN"/"fetch" in any user-visible copy this handler writes.
+  document.getElementById('comm-build-slate-btn')?.addEventListener('click', async () => {
+    if (!week) { showToast('Select a week first', 'error'); return; }
+    const btn = document.getElementById('comm-build-slate-btn');
+    const status = document.getElementById('comm-build-slate-status');
+    if (btn) btn.disabled = true;
+    if (status) status.textContent = "Building this week's slate…";
+    try {
+      const result = await weekWizardApi().fetchAndApplySuggestedSlate(week);
+      if (!result.ok) {
+        if (status) status.textContent = result.reason === 'no_games' ? WIZARD_COPY.FETCH_ZERO : WIZARD_COPY.FETCH_FAILED;
+        if (btn) btn.disabled = false;
+        return;
+      }
+      if (status) status.textContent = result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added);
+      renderCommPage();
+    } catch (e) {
+      console.warn('[comm] build slate failed', e);
+      if (status) status.textContent = WIZARD_COPY.FETCH_FAILED;
+      if (btn) btn.disabled = false;
+    }
+  });
+
+  // ESPN Fetch — uses week start/end date as the source of truth (moved to
+  // Admin → Games' 'espn-source' card, DI-352 — ids/handler unchanged, only
+  // the markup hosting the button moved; see renderEspnSourceBody()).
+  // DI-356 (2026-09-27) — the `#week-start`/`#week-end` DOM fallback below
+  // is retired: it read the now-deleted standalone "Week Settings" card's
+  // own start/end date inputs, which no longer exist anywhere (the wizard's
+  // own Step 1 form is the one surviving place those dates are set, and it
+  // always writes through to `week.startDate`/`week.endDate` directly).
+  // `week.startDate`/`week.endDate` were already the PRIMARY source per this
+  // comment's own claim — the fallback was dead weight even before this DI.
   document.getElementById('fetch-espn-btn')?.addEventListener('click', async()=>{
     if(!week){showToast('Select a week first','error');return;}
-    const startDate=week.startDate||document.getElementById('week-start')?.value||'';
-    const endDate=week.endDate||document.getElementById('week-end')?.value||'';
+    const startDate=week.startDate||'';
+    const endDate=week.endDate||'';
     if(!startDate){showToast('Set a Start Date for the week first, then fetch','error');return;}
     const rangeLabel = endDate && endDate!==startDate ? `${startDate} to ${endDate}` : startDate;
     showToast(`⏳ Fetching ESPN games for ${rangeLabel}…`,'warning');
@@ -15291,9 +15531,27 @@ function renderDataManagementBody() {
  * small save action, see bindCommEventListeners()'s
  * `admin-save-data-source-mode-btn` handler. Bare content — the wrapper
  * comes from js/admin-panel.js's cardShell().
+ *
+ * DI-356 (2026-09-27) — this card also carries the three remaining
+ * admin-only fields off the now-retired standalone "Week Settings" card:
+ * ESPN Week # (display override), the multi-part grouping + tiebreaker-of-
+ * record checkbox, and Show in Standings/Weekly History. Folded into THIS
+ * body (own divider, own Save button, `admin-save-week-settings-btn`)
+ * rather than a second admin card — `js/admin-panel.js`'s card registry
+ * (`ADMIN_CARD_TAB`/`ADMIN_CARD_TITLE`) is out of this pass's write scope,
+ * and DI-356's own text already names this card as "near" the right home
+ * for the ESPN Week # field; the other two admin-only fields have no more
+ * specific home named, so they land here too rather than inventing a new
+ * card shell this pass cannot register.
  */
-function renderDataSourceModeBody({ week }) {
+function renderDataSourceModeBody({ week, allWeeks }) {
   if (!week) return `<p class="text-muted text-xs">Create a week from the Commissioner panel first.</p>`;
+  const weeks = allWeeks || [];
+  const groupWeeksNow = weeksInGroup(weeks, week);
+  const otherMembers = groupWeeksNow.filter(w => w.weekId !== week.weekId);
+  const currentPartnerId = otherMembers[0]?.weekId || '';
+  const partnerOptions = weeks.filter(w =>
+    w.weekId !== week.weekId && w.season === week.season && w.dataSourceMode !== 'demo');
   return `
     <div class="form-group">
       <label class="form-label">Data Source Mode</label>
@@ -15304,7 +15562,37 @@ function renderDataSourceModeBody({ week }) {
         <option value="demo"            ${week.dataSourceMode==='demo'?'selected':''}>Demo</option>
       </select>
     </div>
-    <button class="btn btn-primary btn-sm" id="admin-save-data-source-mode-btn">Save</button>`;
+    <button class="btn btn-primary btn-sm" id="admin-save-data-source-mode-btn">Save</button>
+    <div class="divider"></div>
+    <div class="form-group">
+      <label class="form-label">ESPN Week # <span class="text-muted text-xs">(overrides the DISPLAYED number only, e.g. "3" → "Week 3" — does not change this week's internal order)</span></label>
+      <input class="form-input" id="admin-week-espn-num" type="number" placeholder="1" value="${escHtml(String(week.espnWeekNumber||''))}" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Part of the Same Competitive Week As <span class="text-muted text-xs">(optional — splits/bowls/CFP)</span></label>
+      <select class="form-select" id="admin-week-group-partner">
+        <option value="">— Not grouped —</option>
+        ${partnerOptions.map(w=>`<option value="${escHtml(w.weekId)}"${w.weekId===currentPartnerId?' selected':''}>${escHtml(formatWeekLabel(w))}</option>`).join('')}
+      </select>
+      <p class="text-muted text-xs mt-sm">Both parts still lock and score independently — this only tells Standings, Weekly History and the weekly prize to treat them as ONE competitive week instead of two.</p>
+    </div>
+    ${otherMembers.length ? `
+    <div class="form-group">
+      <div class="text-xs text-muted mb-xs">This group: ${groupWeeksNow.map(w=>escHtml(formatWeekLabel(w))).join(' · ')}</div>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="admin-week-group-tiebreaker" ${week.isGroupTiebreaker?'checked':''} />
+        <span class="form-label" style="margin:0">This part's tiebreaker breaks ties for the whole group</span>
+      </label>
+      ${isGroupTiebreakerAmbiguous(groupWeeksNow) ? `<p class="warning-box mt-sm">⚠️ No part of this group is marked as the tiebreaker of record — falling back to the highest week number (${escHtml(formatWeekLabel(getGroupTiebreakerWeek(groupWeeksNow)))}). Tick the box on exactly one part to make this explicit.</p>` : ''}
+    </div>` : ''}
+    <div class="form-group">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" id="admin-week-show-history" ${week.showInHistory!==false?'checked':''} />
+        <span class="form-label" style="margin:0">Show in Standings / Weekly History</span>
+      </label>
+      <p class="text-muted text-xs mt-sm">Uncheck to hide demo/test weeks from standings.</p>
+    </div>
+    <button class="btn btn-primary btn-sm" id="admin-save-week-settings-btn">Save</button>`;
 }
 
 /**
@@ -15365,9 +15653,23 @@ function renderDemoSimulationBody({ week, games }) {
 /**
  * Admin → Games "ESPN Source" card (DI-320 §Games) — the URL preview/Copy/
  * Open half of the old "ESPN Data Fetch" card, split out (UX Revamp wiring
- * pass 3a). Read-only display; the fetch action itself stays on
- * Commissioner → Games ("Populate Games"). Bare content — the wrapper
- * `.admin-section`/title/`.card` comes from js/admin-panel.js's cardShell().
+ * pass 3a). Bare content — the wrapper `.admin-section`/title/`.card` comes
+ * from js/admin-panel.js's cardShell().
+ *
+ * DI-352 (UN-310, 2026-09-27) — the raw fetch/demo-load actions FOLD INTO
+ * this card rather than a new sibling card: `ADMIN_CARD_TAB` carries a
+ * pinned, exact-count (22) invariant matched 1:1 against js/roles.js's
+ * `CARD_OPERABILITY` (adminpaneltest.mjs [1k]/[9c]), and that module is
+ * frozen this wave except one already-approved row — adding a NEW card key
+ * would need a matching new CARD_OPERABILITY row there too, which is a
+ * security-scope decision outside this file's ownership/this pass's
+ * authorization. Folding into the existing 'espn-source' key needs neither.
+ * `fetch-espn-btn`/`load-hist-demo-btn` keep their EXACT existing ids — the
+ * handlers already bound to them in bindCommEventListeners() (never
+ * duplicated) bind by id regardless of which page's DOM the button is
+ * actually in (renderAdminPage() already reuses that same binder — see its
+ * own header comment), so moving the MARKUP here is the whole move; no new
+ * or copied handler logic anywhere.
  */
 function renderEspnSourceBody({ ps }) {
   return `
@@ -15380,7 +15682,13 @@ function renderEspnSourceBody({ ps }) {
         <button class="btn btn-ghost btn-sm" id="copy-url-btn">📋 Copy</button>
         <button class="btn btn-ghost btn-sm" id="open-url-btn">🔗 Open in Tab</button>
       </div>
-    </div>`;
+    </div>
+    <div class="admin-section-title mt-md">Raw Fetch / Demo Load</div>
+    <div class="flex gap-sm flex-wrap">
+      <button class="btn btn-primary btn-sm" id="fetch-espn-btn">📥 Fetch ESPN Data</button>
+      <button class="btn btn-ghost btn-sm" id="load-hist-demo-btn">📅 Load Historical Demo Week</button>
+    </div>
+    ${ps.lastFetchTimestamp ? `<p class="text-muted text-xs mt-sm">Last fetch: ${new Date(ps.lastFetchTimestamp).toLocaleString()} · ${ps.lastRawEventCount} events</p>` : ''}`;
 }
 
 function renderDataProofPanel(proof, ps, week, games) {
@@ -16107,41 +16415,16 @@ export const _renderWeekStatusButtonsForTest = renderWeekStatusButtons;
 
 // ─── MODALS ───────────────────────────────────────────────────────────────────
 
-function showCreateWeekModal() {
-  const allWeeks=getWeeks();
-  const nextNum=allWeeks.length?Math.max(...allWeeks.map(w=>w.weekNumber))+1:1;
-  const ov=document.createElement('div'); ov.className='modal-overlay centered';
-  ov.innerHTML=`<div class="modal">
-    <div class="modal-header"><h3>Create New Week</h3><button class="modal-close" id="cw-c">✕</button></div>
-    <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="cw-season" value="${getSettings().season||'2026'}" /></div>
-    <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="cw-num" type="number" value="${nextNum}" /></div>
-    <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="cw-round" placeholder="e.g. Part 2" /></div>
-    <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" id="cw-start" type="date" /></div>
-    <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="cw-end" type="date" /></div>
-    <div class="form-group"><label class="form-label">Data Source</label>
-      <select class="form-select" id="cw-mode">
-        <option value="espn_live">ESPN Live</option>
-        <option value="espn_historical">ESPN Historical</option>
-        <option value="manual">Manual</option>
-        <option value="demo">Demo</option>
-      </select></div>
-    <button class="btn btn-primary btn-block" id="cw-save">Create Week</button>
-  </div>`;
-  document.body.appendChild(ov);
-  ov.querySelector('#cw-c')?.addEventListener('click',()=>ov.remove());
-  ov.addEventListener('click',e=>{if(e.target===ov)ov.remove();});
-  ov.querySelector('#cw-save')?.addEventListener('click',()=>{
-    const season=document.getElementById('cw-season')?.value||'2026';
-    const weekNum=parseInt(document.getElementById('cw-num')?.value)||nextNum;
-    const roundLabel=document.getElementById('cw-round')?.value.trim()||'';
-    const startDate=document.getElementById('cw-start')?.value||'';
-    const endDate=document.getElementById('cw-end')?.value||'';
-    const mode=document.getElementById('cw-mode')?.value||'manual';
-    const newW={...createWeek(season,weekNum,startDate,endDate),dataSourceMode:mode,roundLabel};
-    saveWeek(newW);setActiveWeekId(newW.weekId);
-    showToast(`✅ Week ${weekNum} created`,'success');ov.remove();refreshHeader();renderCommPage();
-  });
-}
+// DI-355 (UN-313, 2026-09-27) — showCreateWeekModal() RETIRED. It was a
+// pre-wizard standalone modal never retired when the wizard shipped, reached
+// only through the "📅 Week Manager" card's own "➕ New Week" button — a
+// SECOND, competing entry point for "start a new week" beside the wizard's
+// own `week-wizard-entry-btn` (which already opens the correct sheet, at the
+// correct step, for a new/draft/active week — `weekWizardEntryLabel()`).
+// That button is deleted below (with it, this function's only caller), so a
+// commissioner reaching for "New Week" always lands in the wizard sheet, not
+// this legacy modal by accident. Confirmed by grep before deleting: no other
+// call site anywhere in this file.
 
 /**
  * DI-8 — the manual Game Modal has no way to derive nationalTV from a
@@ -17236,36 +17519,22 @@ export function renderRulesPage() {
         </ul>
       </div>
     </div>
-    <div class="card"><h3 style="color:var(--maroon);margin-bottom:8px">📱 Install as iPhone App</h3>
-      <p class="text-secondary text-sm">Open in Safari → Share → <strong>Add to Home Screen</strong>.</p>
-    </div>
-
-    <!-- Priority 13: low-profile feedback / feature-request form.
-         UN-127 (item 3, 2026-08-27): submitting used to ALWAYS fire a mailto:
-         — the record itself now syncs through the storage seam and is
-         reviewable in the Commissioner panel (UN-123), so email is no longer
-         required to "count." The checkbox below is the explicit, opt-IN,
-         defaulted-OFF escape hatch for the genuinely urgent case; it does not
-         remove the ability to email, it just stops forcing it every time. -->
-    <!-- Build 2b, E5a (2026-09-10, UN-163): the Training-archive card, at the
-         end of the Rules page per the DI — a new card, not a new nav tab, not
-         posted into the Locker Room (an out-of-character report would
-         collide with the locked Chat/Locker-Room split otherwise). -->
-    ${renderScribeTrainingCardHTML()}
-
-    ${/* FEAT-3 / DI-201a (UN-201) — the release history, immediately above the
-         version/date footer: the number and its history belong within a thumb's
-         reach of each other, at the bottom of a tab players reach deliberately.
-         Not on the Picks tab — FEAT-8b already puts the CURRENT release at the
-         top of that page, and a growing accordion under a week blurb fights it
-         for the same job. */''}
-    ${renderReleaseNotesCardHTML()}
+    <!-- DI-365 (2026-09-27) — three items retired from this page, each
+         already reachable one tap away through the control center: the
+         "Install as iPhone App" card (a PWA-era instruction with no native-
+         shell equivalent, and the app is installed from TestFlight there);
+         the SCRIBE training archive (moved into the drawer/Settings-shared
+         "SCRIBE settings" accordion row, pilot leagues only — see
+         buildControlCenterCtx()'s scribeFileHTML construction); and the
+         release-notes accordion (already under the drawer's "Version
+         history" row — this page's own copy was a second, independent
+         renderer of the same fact). None of the three is a new capability
+         lost, only a page it no longer also lives on. -->
 
     <div class="app-version-footer" title="Build version">
       ${escHtml(getShellBrandName())} ${escHtml(APP_VERSION)} · ${escHtml(APP_VERSION_DATE)}
     </div>`;
 
-  bindScribeReportRowHandlers();   // Build 2b, E5a
   // BLOCK 3 (2026-09-25) — see renderPausedLeagueBannerIfNeeded()'s own doc
   // comment; structural repaint coverage for Rules.
   renderPausedLeagueBannerIfNeeded('rules');
@@ -17530,18 +17799,6 @@ function openScribeReportModal(entry) {
   document.body.appendChild(ov);
   ov.querySelector('#scribe-report-close')?.addEventListener('click', () => ov.remove());
   ov.addEventListener('click', e => { if (e.target === ov) ov.remove(); });
-}
-
-/** Wired from `renderRulesPage()` — event delegation over the archive list,
- *  since rows are re-rendered on every page open (same pattern the feedback
- *  form's handlers use, just delegated instead of per-row bound). */
-function bindScribeReportRowHandlers() {
-  document.querySelectorAll('.scribe-report-row').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const idx = Number(btn.dataset.scribeReportIdx);
-      openScribeReportModal(getScribeReports()[idx]);
-    });
-  });
 }
 
 /**
@@ -18876,7 +19133,7 @@ const SERVER_JOB_ON_WARNING = Object.freeze({
   scribeAutonomous: 'This spends money per unprompted post (Anthropic) and posts to the room without being asked. A STALE cached device has no knowledge of this switch or of the Edge Function’s cooldown — it can independently score the same event and post a SECOND unprompted SCRIBE reply within the same ten minutes, which is the exact double-post this switch exists to prevent. Before flipping this on, close the Apps Script scribeAutonomous/scribeClassify action (§S6F5-P0(a)) — a stale device’s legacy call then returns skipped, so no device’s app version matters.',
   // ═══ END STEP 6 PHASE 5 ═══
   // ═══ SCRIBE v3 PACKAGE C (DI-273) ═══
-  scribeLearn: 'This spends money PER PIECE OF FEEDBACK (Anthropic, drawn on the same monthly cap) and, at Fast, WRITES A RULE SCRIBE STARTS OBEYING WITHIN SECONDS with nobody clicking Approve. Two things must already be true or this switch does nothing: migration 0024 pasted (the function inserts a column it creates), and the cfbp_scribe_learn Database Webhook created (runbook §S6F1-W2) — without the webhook nothing ever calls the function at all. Every auto-applied rule is announced in the chat and can be switched off in this card; the Learning Rate dial in Settings is the throttle, and Locked stops the instant path entirely.',
+  scribeLearn: 'This spends money PER PIECE OF FEEDBACK (Anthropic, drawn on the same monthly cap) and, at Fast, WRITES A RULE SCRIBE STARTS OBEYING WITHIN SECONDS with nobody clicking Approve. Two things must already be true or this switch does nothing: migration 0024 pasted (the function inserts a column it creates), and the cfbp_scribe_learn Database Webhook created (runbook §S6F1-W2) — without the webhook nothing ever calls the function at all. Every auto-applied rule is announced in the chat and can be switched off in this card; the Learning Rate dial on the Comm panel SCRIBE tab is the throttle, and Locked stops the instant path entirely.',
 });
 
 /** Module-level cache — `job_runs` is not part of the synchronous storage
@@ -19873,8 +20130,13 @@ function weekOutcomeChanged(before, after) {
  * side effects. Shared by both of the only two paths that reach 'final'
  * (renderWeekStatusButtons, ~5810 — 'final' is reachable only from 'live')
  * so they can't disagree about when to warn.
+ *
+ * EXPORTED (2026-09-27, DI-359) — the guided Finalize Week flow's Step 4
+ * (`unresolvedTieWarning()`, js/week-wizard.js) needs this exact function as
+ * a dep, so its own inline warning can never drift from the manual status
+ * button's judgment about when a tie is unresolved.
  */
-function weekHasUnresolvedTie(week, players, picks, games) {
+export function weekHasUnresolvedTie(week, players, picks, games) {
   if (!week || week.actualTiebreakerValue!=null) return false;
   const rows = calculateWeeklyResults(week.weekId, players, picks, games, null);
   if (rows.length<2) return false;
@@ -20611,8 +20873,109 @@ export function tickAutoTransition() {
       try { isAdmin = getSession()?.isAdmin === true; } catch { isAdmin = false; }
       if (!isAdmin) return;
     }
+    // ══ DRAFT → OPEN (DI-358, coordinator Part-5 ruling 5, 2026-09-27; ══
+    // ══ scan fix, coordinator, 2026-09-27) ═════════════════════════════
+    // The scheduled-open leg from Step 6's "Open at a scheduled time" mode
+    // (`finishWeekSetupFromWizard()`, js/week-wizard.js, saves `picksOpenAt`
+    // on a still-draft week and relies on THIS tick to flip it). Routed
+    // through `applyWeekStatusChange()`, never a raw status write, so the
+    // picks-opened notice still posts — exactly as a manual "Open for
+    // Picks" tap does. Uses `dueForScheduledOpen()` (js/week-wizard.js) as
+    // the single source of truth for the decision, shared with
+    // weekwizardtest.mjs [14]/[16-6] and authtest.mjs [44k4].
+    //
+    // SCANS EVERY WEEK, not just getCurrentWeek() — wizardSetActiveWeekId()
+    // (above) can correctly leave a newly-created/continued draft OUT of the
+    // active-week pointer while a DIFFERENT week is genuinely in progress
+    // (open/locked/live), so getCurrentWeek() alone would never resolve to
+    // that draft at all and its own scheduled-open leg would silently never
+    // fire. Each candidate is independently gated by the SAME RG-251/RG-253
+    // server-confirmation checks the single-week logic below applies to its
+    // own week.
+    //
+    // Finding 2 (app-shell part 3A review, 2026-09-27) — CORRECTED. This
+    // block used to `continue` after firing an open, reasoning that "one leg
+    // per tick" held PER WEEK (nothing chains a second transition for the
+    // SAME week in one pass) and so scanning on to open OTHER due drafts in
+    // the same tick was not a violation. The reviewer disagreed, and
+    // Ruling 5 is unambiguous on the point it actually traces to: "the
+    // commissioner-device tick takes the draft→open leg... under the
+    // ONE-LEG-PER-TICK RULE FROM RG-251" — RG-251's rule, read in full
+    // (this function's own comment on the OPEN→LOCKED/LOCKED→LIVE legs,
+    // below), is a WHOLE-TICK ceiling: one status transition, full stop, no
+    // matter how many weeks are candidates, so that a device closed across
+    // a boundary takes exactly one step per wake rather than racing itself
+    // across several weeks' worth of state at once. `return` immediately
+    // after the first open, rather than `continue`, so no OTHER candidate in
+    // this loop — and no leg below, for getCurrentWeek() either — can also
+    // fire in the same call. Any other due draft is picked up on the NEXT
+    // tick, one autoRefreshInterval later, same as every other queued leg
+    // in this function already works.
+    const openedThisTick = new Set();
+    for (const w of getWeeks()) {
+      if (w.status !== WEEK_STATUS.DRAFT || !w.picksOpenAt || w.dataSourceMode === 'demo') continue;
+      if (!serverHasConfirmedWeek(w)) continue;
+      if (serverConfirmedWeekStatus(w) !== w.status) continue;
+      const wGames = getGames(w.weekId);
+      if (!wGames?.length) continue;
+      const missingForOpen = countMissingSpreads(wGames);
+      const timingConfiguredForOpen = !!computeEffectiveLockAt(w, wGames);
+      const { due, blocked, gate: gateForOpen } = dueForScheduledOpen({
+        week: w, now: Date.now(), gamesCount: wGames.length, missingSpreadCount: missingForOpen, timingConfigured: timingConfiguredForOpen,
+      });
+      if (due) {
+        applyWeekStatusChange(w, WEEK_STATUS.OPEN);
+        // BLOCK fix (d) (app-shell part 3A review, 2026-09-27) —
+        // wizardSetActiveWeekId() (above) ALREADY implements exactly the
+        // rule this fix asks for: it moves the active pointer to `w` when
+        // nothing is currently active, or the current active week is
+        // anything OTHER than open/locked/live (final, most commonly, here)
+        // — and REFUSES to move it when a genuinely in-progress week is
+        // still active. Before this call, a draft that opened via the
+        // schedule never became "current" on its own — a commissioner who
+        // scheduled Week 6 to open while Week 5 was already final would see
+        // Week 6 open for picks but the app still showing Week 5 everywhere
+        // until someone manually flipped the Active Week selector.
+        wizardSetActiveWeekId(w.weekId);
+        openedThisTick.add(w.weekId);
+        _scheduledOpenBlockedNoticeSent.delete(w.weekId);
+        _scheduledOpenBlockedReason.delete(w.weekId);
+        if (state.currentTab === 'picks') renderPicksPage();
+        else if (state.currentTab === 'dashboard') renderDashboard();
+        else if (state.currentTab === 'commissioner') renderCommPage();
+        refreshHeader();
+        // Finding 2 — ONE LEG, WHOLE TICK: stop scanning (any other due
+        // draft waits for the next tick) AND never fall through to the
+        // single-week legs below for getCurrentWeek() in this SAME call.
+        return;
+      }
+      if (blocked) {
+        const failing = [gateForOpen.gamesOk ? null : gateForOpen.gamesLabel, gateForOpen.spreadsOk ? null : gateForOpen.spreadsLabel, gateForOpen.timingOk ? null : gateForOpen.timingLabel].filter(Boolean).join('; ');
+        // Coordinator note 4 (2026-09-27) — PERSISTENT, not only a toast:
+        // renderWeekWizardStep6HTML() reads this map and shows an inline
+        // warning box whenever the commissioner reopens this still-draft
+        // week, so the reason survives past the toast's own lifetime.
+        _scheduledOpenBlockedReason.set(w.weekId, failing);
+        if (!_scheduledOpenBlockedNoticeSent.has(w.weekId)) {
+          _scheduledOpenBlockedNoticeSent.add(w.weekId);
+          showToast(`Scheduled open is blocked: ${failing}`, 'error');
+        }
+      } else {
+        _scheduledOpenBlockedReason.delete(w.weekId);
+      }
+    }
+
     const week = getCurrentWeek();
     if (!week) return;
+    // RG-251 / Finding 2 — the scan loop above now `return`s the WHOLE
+    // function the instant it opens any week, so control only ever reaches
+    // this line when NOTHING opened this tick and `openedThisTick` is
+    // necessarily empty. Kept as an explicit, named belt-and-suspenders
+    // check (not dead code by accident) — if a future edit to the scan loop
+    // above ever reintroduces a `continue`-shaped path, this is what would
+    // catch it, exactly as it used to catch the original single-candidate
+    // version of this same bug.
+    if (openedThisTick.has(week.weekId)) return;
     if (week.dataSourceMode === 'demo') return;
 
     // ══ RG-251 (2026-09-26) — NEVER ACT FROM A STATUS THE SERVER NEVER CONFIRMED ══
@@ -20648,6 +21011,11 @@ export function tickAutoTransition() {
     const now = Date.now();
     let changed = false;
     let next = { ...week };
+
+    // DRAFT → OPEN handled in the scan loop above this function's
+    // `getCurrentWeek()` read — see that block's own header. `week` here can
+    // no longer be a draft with a due `picksOpenAt` (the scan already took
+    // that leg, or it isn't due yet), so there is nothing left to check here.
 
     // OPEN → LOCKED
     if (week.status === WEEK_STATUS.OPEN) {
@@ -20926,7 +21294,9 @@ function anyRedZoneOnScreen(games) {
 /**
  * May THIS session write the graded columns of a game row?
  *
- * Only `atsWinner` is asked about today (reviewer note 1). The score/status
+ * Asked about `atsWinner` (reviewer note 1) and, since 2026-09-28, the
+ * homeLogo/awayLogo backfill (security F1) — neither is on the adapter's
+ * overlay allow-list. The score/status
  * fields are a different question with a different answer — they ARE on the
  * adapter's `GAME_SCORE_FIELDS` allow-list, so a player device's write of those
  * is an accepted render-only overlay, and standing them down would take the
@@ -21002,7 +21372,27 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
     // INTENTIONALLY NOT included — they're transient (liveStatusById, above)
     // and must never round-trip to the Sheet on every 30-60s live poll. Do
     // NOT "simplify" this to `{...stored, ...upd}` or add those keys here.
-    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated});
+    // Logo backfill (Drew, 2026-09-27) — `upd.homeLogo`/`upd.awayLogo` are
+    // present ONLY when refreshScoresByEventIds() backfilled a null stored
+    // logo from this same ESPN read (data-provider.js's own conditional
+    // spread); `undefined` on every ordinary poll, so this never widens the
+    // allow-list comment's own rule for the transient fields above — a
+    // stored, already-set logo is never touched.
+    //
+    // SECURITY F1 (full-branch audit, 2026-09-28) — COMMISSIONER ONLY, the same
+    // gate as the atsWinner persist below. homeLogo/awayLogo are NOT in the
+    // adapter's GAME_SCORE_FIELDS (js/supabase-backend.js), so on a player
+    // device in supabase data mode they are off the overlay allow-list: the
+    // player path must never carry them. There the logo fields on `upd` are
+    // simply dropped — nothing else reads them (the display-only merge above
+    // builds its own object; scores-refresh writes explicit columns only), and
+    // the commissioner's device backfills the row for everyone. With the gate
+    // closed the object below is byte-identical to the pre-backfill write.
+    // Guards: refreshtest.mjs [8] (player, real adapter) and [7] (backfill).
+    const logoBackfill = mayPersistGameGrading()
+      ? {...(upd.homeLogo!==undefined?{homeLogo:upd.homeLogo}:{}),...(upd.awayLogo!==undefined?{awayLogo:upd.awayLogo}:{})}
+      : {};
+    saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated,...logoBackfill});
     // v0.17.0 — kickoff system event + SCRIBE live observations
     try {
       const fresh0=getGame(upd.gameId);
@@ -22239,7 +22629,10 @@ export const _AUTH_HOLD_RECOVERY_FOR_TEST = AUTH_HOLD_RECOVERY;
 // It paints league data too (a selected league's Week/Games cards, cross-
 // league membership rows) and must be torn down at the same security
 // chokepoint (A6) as every other page container.
-const APP_PAGE_CONTAINER_IDS = ['page-picks', 'page-dashboard', 'page-leaderboard', 'page-commissioner', 'page-admin', 'page-rules', 'page-chat', 'page-settings'];
+// DI-397 (UN-357, 2026-09-27) — 'page-settings' RETIRED along with the
+// Settings tab; seven containers now, not eight (its content lives in the
+// control-center drawer only).
+const APP_PAGE_CONTAINER_IDS = ['page-picks', 'page-dashboard', 'page-leaderboard', 'page-commissioner', 'page-admin', 'page-rules', 'page-chat'];
 export const _APP_PAGE_CONTAINER_IDS_FOR_TEST = APP_PAGE_CONTAINER_IDS;
 
 const AUTH_HOLD_RECHECK_MS = 20000;
@@ -25278,9 +25671,26 @@ export function needsLeagueFlowScreen() {
   if (!hasResolvedMemberships()) return false;       // loading — hold empty
   const memberships = getCachedMemberships();
   if (memberships.length === 0) return true;          // DI-181a landing
+  if (memberships.length === 1) {
+    // DI-348 (UN-306, Drew's 2026-09-27 reversal) — a LIVE getActiveLeagueId()
+    // re-read here cannot distinguish "cold" from "warm": auth.js's
+    // refreshMembershipsAndSession() auto-resolves the active-league pointer
+    // to this lone membership's id the MOMENT its read lands — including on a
+    // genuinely first-time sign-in, where the pointer was null a moment
+    // earlier and hasResolvedMemberships() only just became true above. The
+    // boot-time snapshot (isWarmRelaunchAtBoot(), captured before this boot's
+    // own membership fetch could run — see its header) is the one true
+    // "did this device already know this league" signal. Delegate to the ONE
+    // ROUTER with it, rather than re-deriving warmth from a pointer this
+    // function's own caller chain already clobbered.
+    const { screen } = resolvePostSignInRoute({
+      memberships, lastLeagueId: getActiveLeagueId(), warmRelaunch: isWarmRelaunchAtBoot(),
+    });
+    return screen === 'leagues-home';
+  }
   const activeId = getActiveLeagueId();
   if (!activeId || !memberships.some(m => m.leagueId === activeId)) {
-    return memberships.length > 1;                    // DI-181c selector (never true for 1)
+    return memberships.length > 1;                    // DI-181c selector
   }
   return false;
 }
@@ -25538,13 +25948,14 @@ export function renderLeagueFlowScreen(tab) {
   // DI-312's ONE ROUTER — `resolvePostSignInRoute()` delegates to
   // `resolveLeagueEntryPath()` (js/leagues-home.js) rather than this file
   // re-deriving the same §0 table, so the two can never disagree
-  // (leagueshometest.mjs's agreement sweep). `needsLeagueFlowScreen()` only
-  // ever calls this function for 0 or >1 memberships (its own body returns
-  // false for exactly one, `SINGLE_LEAGUE_ROUTE:'skip'`'s single-membership
-  // fast path — Drew's ruling, 2026-09-25) — so `screen` here is always
-  // `'landing'` or `'leagues-home'`; the single-membership branches
-  // (`'six-tab'`/`'league-page'`) are handled upstream, unchanged.
-  const { screen } = resolvePostSignInRoute({ memberships, lastLeagueId: getActiveLeagueId() });
+  // (leagueshometest.mjs's agreement sweep). DI-348 (2026-09-27) — this is
+  // now ALSO reached for exactly one membership, on a cold sign-in
+  // (`needsLeagueFlowScreen()`'s own updated body); `warmRelaunch` is passed
+  // here too, from the SAME boot-time snapshot that gate used, so the two
+  // calls can never disagree about which cell of the table applies.
+  const { screen } = resolvePostSignInRoute({
+    memberships, lastLeagueId: getActiveLeagueId(), warmRelaunch: isWarmRelaunchAtBoot(),
+  });
   c.innerHTML = screen === 'landing' ? leagueFlowLandingHTML() : leagueSelectorHTML();
   bindLeagueFlowScreen(c);
   // NOTE 6 / BLOCK 4 (2026-09-25) — DI-345 §Verification step 5: "a signed-in
@@ -26949,17 +27360,148 @@ let _weekWizardApi = null;
 function weekWizardApi() {
   if (_weekWizardApi) return _weekWizardApi;
   _weekWizardApi = createWeekWizard({
-    createWeek, saveWeek, setActiveWeekId,
+    createWeek, saveWeek,
+    // Coordinator fix (2026-09-27) — wizardSetActiveWeekId(), not the raw
+    // setActiveWeekId, so createWeekFromWizard()'s own call never steals the
+    // active-week pointer away from an in-progress week (see that
+    // function's own header above).
+    setActiveWeekId: wizardSetActiveWeekId,
     applyWeekStatusChange, showGameModal, buildSuggestedSlate,
     scoreCandidateGames, fetchByDateRange, saveAvailableGames,
     clearAvailableGames, getAvailableGames, getGames, saveGame, createGame,
     claimedAlmaMaters, saveFetchProof, isSuggestionRejected, showToast,
     nativeHapticImpact, isNativeShell,
+    // Coordinator fix (2026-09-27) — `getWeek` re-reads the mirror's CURRENT
+    // row rather than a caller's possibly-stale `week` closure (RG-256
+    // class); `confirmFinalizeTiebreaker`/`confirmFinalizeExtraPoint`/
+    // `confirmFinalizeWeek` all guard on it (`getWeek && getWeek(...)`) but
+    // the guide's own header calls it a REQUIRED dep once wired for real.
+    getWeek,
+    // DI-359 — the guided Finalize Week flow's remaining deps, each the
+    // exact function today's three separate cards already call (no new
+    // math anywhere — see week-wizard.js's own DI-359 header).
+    calculateAtsWinner, calculateAlmaMaterTotal, almaMatersForAutoCalc,
+    gradeWeekExtraPoint, weekHasUnresolvedTie, finalizeWeek,
   });
   return _weekWizardApi;
 }
 
 let _weekWizardStep = 1;
+/**
+ * Coordinator fix (2026-09-27) — the wizard used to resolve EVERY step's
+ * `week` via `getCurrentWeek()`, which meant continuing/creating a draft
+ * while a DIFFERENT week was open/locked/live would either (a) never reach
+ * Step 1 at all (getCurrentWeek() keeps returning the in-progress week,
+ * since nothing here ever pointed the active-week pointer away from it), or
+ * — if something upstream DID re-point it — silently pull players' Picks/
+ * Dashboard onto the brand-new draft mid-flow. This tracks the week the
+ * WIZARD SHEET is actually building/managing, independent of the global
+ * "current week" pointer: set on open (openWeekWizardSheet()) and updated
+ * the moment Step 1 creates/edits a week (bindWeekWizardStep1()) — never
+ * derived from setActiveWeekId()/getActiveWeekId() at all. `null` means
+ * "no week yet" (a genuinely first-ever week — the wizard's Step 1 create
+ * path still works with `existingWeek: undefined`, unaffected).
+ */
+let _weekWizardTargetWeekId = null;
+/**
+ * BLOCK fix (a) (app-shell part 3A review, 2026-09-27) — once the current
+ * week is anything but a draft, `weekWizardTargetWeek()` (below) would
+ * otherwise ALWAYS fall back to `getCurrentWeek()` — that finalized/live/
+ * locked/open week — with no way to ask for a genuinely NEW one instead.
+ * Setting this true is the one signal that overrides that fallback: the
+ * commissioner explicitly asked (Manage screen's "Set up Week N+1" button,
+ * `bindWeekWizardManage()` below) to start a brand-new draft, independent of
+ * whatever week is current. Cleared the instant a real target exists again
+ * (Step 1's own create handler, `bindWeekWizardStep1()`) or the sheet opens
+ * fresh (`openWeekWizardSheet()`) or closes (`closeWeekWizardSheet()`).
+ */
+let _weekWizardForceNewWeek = false;
+/**
+ * BLOCK fix (b) — set by `openWeekWizardSheet()` when the top-level entry
+ * button is tapped, the CURRENT week is not a draft, and MORE THAN ONE other
+ * draft exists to continue. `renderWeekWizardSheetBody()` checks this FIRST
+ * and renders a small selection list (existing drafts + "Set up Week N+1")
+ * rather than guessing which one the commissioner meant. Exactly one other
+ * draft skips the picker entirely (openWeekWizardSheet() targets it
+ * directly) — the picker exists only for genuine ambiguity.
+ */
+let _weekWizardShowContinuePicker = false;
+/**
+ * The week the wizard sheet's body should render for a given render pass —
+ * the target id if it still resolves to a real week, else `getCurrentWeek()`
+ * (covers a target week that got deleted mid-flow, and every call site that
+ * ran before openWeekWizardSheet() ever set a target). BLOCK fix (a) —
+ * `_weekWizardForceNewWeek` overrides the getCurrentWeek() fallback with
+ * `null` ("no week yet"), which `selectWizardEntry()`/Step 1 already treat
+ * as the genuine first-time-create case.
+ */
+function weekWizardTargetWeek() {
+  if (_weekWizardForceNewWeek) return null;
+  if (_weekWizardTargetWeekId) {
+    const w = getWeek(_weekWizardTargetWeekId);
+    if (w) return w;
+  }
+  return getCurrentWeek();
+}
+/**
+ * BLOCK fix (b) — every DRAFT week other than getCurrentWeek(), oldest
+ * (lowest weekNumber) first. These are the candidates the top-level entry
+ * button can "continue set up" on when the current week itself is not a
+ * draft — a draft created via Manage's "Set up Week N+1" (or the standalone
+ * Duplicate button) that the commissioner has not yet finished setting up.
+ */
+function weekWizardContinuableDrafts() {
+  const current = getCurrentWeek();
+  return getWeeks()
+    .filter((w) => w.status === WEEK_STATUS.DRAFT && (!current || w.weekId !== current.weekId))
+    .sort((a, b) => (a.weekNumber || 0) - (b.weekNumber || 0));
+}
+/**
+ * Coordinator fix (2026-09-27) — the ONE call site `createWeekFromWizard()`
+ * uses to point the app's global "current week" at whatever it just
+ * created/edited (`js/week-wizard.js:364`). Creating or continuing a draft
+ * through the wizard must never steal that pointer away from a week that is
+ * actually IN PROGRESS (open/locked/live) — that week's own auto-lock/
+ * go-live/pendingFinalization legs (tickAutoTransition()) and every player-
+ * facing Picks/Dashboard render depend on getCurrentWeek() still resolving
+ * to it. The wizard does not need this pointer moved to do its own job at
+ * all — weekWizardTargetWeek() (above) tracks the week it is building
+ * independently — so this only ADOPTS the new/edited week as "current" when
+ * nothing else genuinely is one.
+ */
+function wizardSetActiveWeekId(weekId) {
+  const activeNow = getActiveWeekId();
+  if (activeNow && activeNow !== weekId) {
+    const cur = getWeek(activeNow);
+    if (cur && ['open', 'locked', 'live'].includes(cur.status)) return;
+  }
+  setActiveWeekId(weekId);
+}
+// DI-358 (amended 2026-09-27) — the scheduled-open BLOCKED notice's
+// once-per-week dedup, so `tickAutoTransition()`'s new DRAFT→OPEN leg warns
+// the commissioner once (not every tick, ~once a minute) when a week's
+// scheduled open time has arrived but the gating checklist still fails.
+// Cleared when the week finally opens successfully, so a re-scheduled week
+// that becomes blocked again can warn again.
+const _scheduledOpenBlockedNoticeSent = new Set();
+// Coordinator note 4 (2026-09-27) — the PERSISTENT half of the same signal:
+// weekId -> the human-readable "failing" string, read by
+// renderWeekWizardStep6HTML() so the reason a scheduled open is blocked
+// survives past the one-shot toast's own lifetime. Cleared the moment the
+// week opens or the block clears (tickAutoTransition()'s scan, above).
+const _scheduledOpenBlockedReason = new Map();
+// DI-358 — Step 6's three-way open-mode selection, held between repaints the
+// same way _weekWizardStep is (module-level, reset per wizard session by
+// openWeekWizardSheet() below). `null` scheduledAt means the datetime field
+// has not been touched yet this session.
+let _weekWizardOpenMode = null;
+let _weekWizardScheduleAt = null;
+// DI-359 — the guided Finalize Week flow's current step. `null` = not in the
+// flow at all (renderWeekWizardSheetBody() falls through to Manage/steps as
+// today); 1-4 = FINALIZE_STEPS.step. Entered from the Manage screen's
+// "Finalize Week" button (bindWeekWizardManage(), above) and cleared on
+// Back-past-Step-1, successful Finalize, or the sheet closing.
+let _finalizeStep = null;
 /** Manual-reminder "last sent" stamp — THIS DEVICE, THIS SESSION ONLY.
  *  §4.3's own copy ("Last reminded 2h ago") describes a value read from
  *  `scribe_rate.last_post_at` server-side; that table carries NO grant to
@@ -26972,9 +27514,35 @@ let _weekWizardStep = 1;
  *  explicitly, not silently presented as the full DI-343 stamp. */
 let _lastManualReminderAt = null;
 
+/**
+ * BLOCK fix (b) — once `week` (getCurrentWeek()) is not a draft, this used
+ * to say "Manage This Week" unconditionally, even when a newer draft the
+ * commissioner already started (Duplicate, or a prior "Set up Week N+1")
+ * was sitting untouched with no visible way back into it. Now names the
+ * SPECIFIC continuable draft when there is exactly one; "Continue set up…"
+ * (an ellipsis, matching this app's own convention for "opens a picker,"
+ * e.g. Alma Mater's "Assign…") when there is more than one; otherwise
+ * unchanged.
+ *
+ * Coordinator copy nit (3A re-gate, 2026-09-27) — sentence case
+ * throughout ("Set up"/"Continue set up", not "Set Up"/"Continue Set
+ * Up"), matching the wizard's own "Set up Week N+1" button copy.
+ */
 function weekWizardEntryLabel(week) {
-  return week && week.status !== 'draft' ? 'Manage This Week' : (week ? 'Continue Set Up' : 'Set Up Week');
+  if (week && week.status !== 'draft') {
+    const drafts = weekWizardContinuableDrafts();
+    if (drafts.length === 1) return `Continue set up: ${formatWeekLabel(drafts[0])}`;
+    if (drafts.length > 1) return 'Continue set up…';
+    return 'Manage This Week';
+  }
+  return week ? 'Continue set up' : 'Set up Week';
 }
+// BLOCK fix (b) test seams (app-shell part 3A review, 2026-09-27) — both are
+// pure functions of storage state (no DOM, no auth), so a test can drive the
+// 0/1/2+-continuable-drafts label logic directly rather than only through a
+// full signed-in openWeekWizardSheet() DOM flow.
+export const _weekWizardEntryLabelForTest = weekWizardEntryLabel;
+export const _weekWizardContinuableDraftsForTest = weekWizardContinuableDrafts;
 
 /** DI-C1 §2.1 — a single primary button at the TOP of the Week tab, above
  *  the existing Week Manager / Week Settings / Available Games cards. */
@@ -27005,23 +27573,22 @@ function renderWeekWizardTrackerHTML(activeStep) {
  *  rather than the literal same DOM nodes). `idPrefix` keeps this markup's
  *  ids distinct from that modal's, defensively, even though the two never
  *  render at the same time. */
+// DI-353 (UN-311, 2026-09-27) — the Data Source `<select>` is REMOVED from
+// this commissioner-facing form entirely. Admin → Week's existing
+// `data-source-mode` card (ADMIN_CARD_TAB['data-source-mode'] = 'week') is
+// the one surviving control; a week created here now always defaults to
+// 'espn_live' (see bindWeekWizardStep1()'s own read of this form), matching
+// this function's own prior in-form default — the commissioner can change it
+// afterward only via Admin → Week if genuinely needed.
 function weekCreateFormFieldsHTML(nextNum, { idPrefix = 'wiz-', defaults = {} } = {}) {
   const season = defaults.season ?? (getSettings().season || '2026');
   const weekNumber = defaults.weekNumber ?? nextNum;
-  const mode = defaults.dataSourceMode || 'espn_live';
   return `
     <div class="form-group"><label class="form-label">Season</label><input class="form-input" id="${idPrefix}cw-season" value="${escHtml(String(season))}" /></div>
     <div class="form-group"><label class="form-label">Week Number</label><input class="form-input" id="${idPrefix}cw-num" type="number" value="${escHtml(String(weekNumber))}" /></div>
     <div class="form-group"><label class="form-label">Custom Round Label <span class="text-muted text-xs">(added after the week number, e.g. "Part 2" — leave blank to use week number)</span></label><input class="form-input" id="${idPrefix}cw-round" placeholder="e.g. Part 2" value="${escHtml(defaults.roundLabel || '')}" /></div>
     <div class="form-group"><label class="form-label">Start Date</label><input class="form-input" id="${idPrefix}cw-start" type="date" value="${escHtml(defaults.startDate || '')}" /></div>
-    <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="${idPrefix}cw-end" type="date" value="${escHtml(defaults.endDate || '')}" /></div>
-    <div class="form-group"><label class="form-label">Data Source</label>
-      <select class="form-select" id="${idPrefix}cw-mode">
-        <option value="espn_live"${mode === 'espn_live' ? ' selected' : ''}>ESPN Live</option>
-        <option value="espn_historical"${mode === 'espn_historical' ? ' selected' : ''}>ESPN Historical</option>
-        <option value="manual"${mode === 'manual' ? ' selected' : ''}>Manual</option>
-        <option value="demo"${mode === 'demo' ? ' selected' : ''}>Demo</option>
-      </select></div>`;
+    <div class="form-group"><label class="form-label">End Date</label><input class="form-input" id="${idPrefix}cw-end" type="date" value="${escHtml(defaults.endDate || '')}" /></div>`;
 }
 
 function renderWeekWizardStep1HTML(week) {
@@ -27049,9 +27616,28 @@ function bindWeekWizardStep1(bodyEl, week) {
       roundLabel: bodyEl.querySelector('#wiz-cw-round')?.value.trim() || '',
       startDate: bodyEl.querySelector('#wiz-cw-start')?.value || '',
       endDate: bodyEl.querySelector('#wiz-cw-end')?.value || '',
-      dataSourceMode: bodyEl.querySelector('#wiz-cw-mode')?.value || 'manual',
+      // DI-353 (UN-311) — the Data Source field is gone from this form
+      // entirely (Admin → Week's own control is the one surviving place to
+      // change it); the key is left OUT of `fields` (not read from the DOM
+      // — there is nothing left to read), not hard-coded to 'espn_live',
+      // so `createWeekFromWizard()`'s own precedence chain
+      // (`fields.dataSourceMode ?? existingWeek?.dataSourceMode ??
+      // 'espn_live'`) decides: a genuinely new week gets the sane default,
+      // but re-saving Step 1 on an existing draft (demo or manual) keeps
+      // that week's own mode rather than silently overwriting it every
+      // time this handler fires (coordinator fix, 2026-09-27).
     };
-    weekWizardApi().createWeek(fields, week);
+    const created = weekWizardApi().createWeek(fields, week);
+    // Coordinator fix (2026-09-27) — the wizard now points itself at the
+    // week it just created/edited directly, never by reading back
+    // getCurrentWeek() (which wizardSetActiveWeekId() may correctly have
+    // refused to move — see that function's header).
+    _weekWizardTargetWeekId = created?.weekId || null;
+    // BLOCK fix (a) — a real target now exists (whether this was a genuine
+    // new week from "Set up Week N+1"/the picker's "instead" button, or an
+    // ordinary re-save); the forced-new-week override has done its one job
+    // and must not keep masking getCurrentWeek() on every future repaint.
+    _weekWizardForceNewWeek = false;
     refreshHeader();
     _weekWizardStep = 2;
     renderWeekWizardSheetBody();
@@ -27254,12 +27840,22 @@ function sendWizardAnnouncement(text) {
 function renderWeekWizardStep5HTML() {
   return `<div class="admin-section-title">Announce (optional)</div>
     ${renderWeekWizardAnnounceFieldsHTML()}
-    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-skip">Skip</button><button type="button" class="btn btn-primary" id="wiz-step5-send" disabled>Send announcement</button></div>`;
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-back">Back</button><button type="button" class="btn btn-ghost" id="wiz-step5-skip">Skip</button><button type="button" class="btn btn-primary" id="wiz-step5-send" disabled>Send announcement</button></div>`;
 }
 function bindWeekWizardStep5(bodyEl) {
   const body = bodyEl.querySelector('#wiz-announce-body');
   const sendBtn = bodyEl.querySelector('#wiz-step5-send');
   body?.addEventListener('input', () => { if (sendBtn) sendBtn.disabled = !body.value.trim(); });
+  // DI-354 (UN-312) — Step 5 was the one step in the create-flow with no Back
+  // button (verified: Steps 2/3/4/6 already have one). Same discard-confirm
+  // judgment Skip already uses (`WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM`) — a
+  // drafted-but-unsent announcement is never silently discarded, whichever
+  // button leaves the step.
+  bodyEl.querySelector('#wiz-step5-back')?.addEventListener('click', () => {
+    if (body && body.value.trim() && !confirm(WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM)) return;
+    _weekWizardStep = 4;
+    renderWeekWizardSheetBody();
+  });
   bodyEl.querySelector('#wiz-step5-skip')?.addEventListener('click', () => {
     if (body && body.value.trim() && !confirm(WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM)) return;
     _weekWizardStep = 6;
@@ -27280,16 +27876,85 @@ function bindWeekWizardStep5(bodyEl) {
   });
 }
 
+/** DI-357/358 — Step 6 now also confirms the tiebreaker question and offers
+ *  the explicit Now/Scheduled/Draft choice, above the existing gating
+ *  checklist. Neither addition touches `gatingChecklist()` itself (Ruling 4:
+ *  a blank tiebreaker question is visible/editable, never a gate). */
 function renderWeekWizardStep6HTML(week, games) {
   const missing = countMissingSpreads(games);
   const timingConfigured = !!computeEffectiveLockAt(week, games);
   const gate = weekWizardApi().gatingChecklist({ gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
   const row = (ok, label) => `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(label)}</div>`;
+
+  // DI-357 — tiebreaker question + calc-basis caption, reusing the exact
+  // field the standalone Tiebreaker card already writes.
+  const tb = weekWizardApi().tiebreakerStepSummary(week);
+
+  // DI-358 — the three-way open-mode control, reusing the SCRIBE settings'
+  // own dial markup (`.scribe-freq-dial`/`.scribe-freq-opt`, see
+  // renderScribeModelCardHTML() for the precedent) — same interaction, no
+  // new control shape.
+  const mode = _weekWizardOpenMode || OPEN_MODES.NOW;
+  const modeChoices = [
+    { level: OPEN_MODES.NOW, label: 'Open now', description: 'Picks unlock immediately.' },
+    { level: OPEN_MODES.SCHEDULED, label: 'Open at a scheduled time', description: 'Picks unlock automatically at a date/time you choose.' },
+    { level: OPEN_MODES.DRAFT, label: 'Keep as draft', description: "Not ready yet — nothing opens." },
+  ];
+  const modeOptionsHTML = modeChoices.map(o => `
+        <button type="button" class="scribe-freq-opt${o.level === mode ? ' selected' : ''}" data-open-mode="${o.level}"
+                role="radio" aria-checked="${o.level === mode ? 'true' : 'false'}">
+          <span class="scribe-freq-label">${escHtml(o.label)}</span>
+          <span class="scribe-freq-desc">${escHtml(o.description)}</span>
+        </button>`).join('');
+
+  // The datetime field ONLY renders for Scheduled — "no layout jump" per the
+  // DI means it appears/disappears with the mode switch, not conditionally
+  // hidden/shown via CSS over a reserved blank space (there is no such
+  // space to reserve; every mode's own body differs by design, same as any
+  // other radio-group-with-a-detail-field pattern in this codebase, e.g.
+  // Step 5's announce textarea).
+  const scheduleFieldHTML = mode === OPEN_MODES.SCHEDULED
+    ? `<div class="form-group mt-sm">
+        <label class="form-label" for="wiz-schedule-at">Open at</label>
+        <input class="form-input" type="datetime-local" id="wiz-schedule-at" value="${_weekWizardScheduleAt ? escHtml(_weekWizardScheduleAt) : ''}" />
+      </div>`
+    : '';
+
+  // Persistent blocked-open reason (coordinator note 4) — survives past the
+  // one-shot toast tickAutoTransition() also raises when this fires live.
+  const blockedReason = _scheduledOpenBlockedReason.get(week.weekId);
+  const blockedBannerHTML = blockedReason
+    // Emoji, not icon('warning') — every other .warning-box in the app
+    // (paused-league banner, maintenance banner, the group-tiebreaker-
+    // ambiguous notice, the wizard's own missing-spreads banner) uses ⚠️
+    // as WRITTEN TEXT, never the chrome icon family (CLAUDE.md's icon rule:
+    // emoji stay in written text/prose; D-1 governs chrome — headers, nav,
+    // buttons, badges — not an inline warning message's own copy). No new
+    // host class needed, matching the established pattern exactly.
+    ? `<div class="warning-box mt-sm">⚠️ Scheduled open is blocked: ${escHtml(blockedReason)}</div>`
+    : '';
+
+  const finishLabel = mode === OPEN_MODES.NOW ? 'Open for Picks' : mode === OPEN_MODES.SCHEDULED ? 'Schedule Open' : 'Save as Draft';
+  // Ruling: "Keep as draft" is exempt from the gating checklist entirely
+  // (DI-358 — nothing is being opened); Now/Scheduled both still require it.
+  const finishDisabled = mode !== OPEN_MODES.DRAFT && !gate.canOpen;
+
   return `<div class="admin-section-title">Open for picks</div>
     ${row(gate.gamesOk, gate.gamesLabel)}${row(gate.spreadsOk, gate.spreadsLabel)}${row(gate.timingOk, gate.timingLabel)}
+    <div class="admin-section-title mt-md">Tiebreaker</div>
+    <div class="form-group">
+      <label class="form-label" for="wiz-tb-question">Question</label>
+      <input class="form-input" id="wiz-tb-question" value="${escHtml(tb.question)}" />
+      <p class="text-muted text-xs mt-xs">${escHtml(tb.calculationModeCaption)}</p>
+    </div>
+    <div class="admin-section-title mt-md">When</div>
+    <div class="scribe-freq-dial" role="radiogroup" aria-label="Open-for-picks timing">${modeOptionsHTML}</div>
+    ${scheduleFieldHTML}
+    <div id="wiz-schedule-refusal" class="text-sm" style="color:var(--loss)"></div>
+    ${blockedBannerHTML}
     <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-announce">Add an announcement</button>
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step6-back">Back</button>
-    <button type="button" class="btn btn-primary" id="wiz-open-btn" ${gate.canOpen ? '' : 'disabled'}>Open for Picks</button></div>`;
+    <button type="button" class="btn btn-primary" id="wiz-open-btn" ${finishDisabled ? 'disabled' : ''}>${escHtml(finishLabel)}</button></div>`;
 }
 function bindWeekWizardStep6(bodyEl, week, games) {
   bodyEl.querySelector('#wiz-step6-back')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
@@ -27297,11 +27962,56 @@ function bindWeekWizardStep6(bodyEl, week, games) {
   // now that forward navigation (Step 4's "Next") skips it by default. Same
   // destination "Back" already goes to; this one names what it's for.
   bodyEl.querySelector('#wiz-step6-announce')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
+
+  // DI-357 — the tiebreaker question, saved through the SAME write path
+  // (applyTiebreakerQuestion() + saveWeek()) the standalone card's own
+  // `tb-question` field already uses — never a second implementation.
+  // RG-256 class: re-read the mirror's current row first, same as every
+  // other handler in this file that can be handed a stale `week` closure.
+  bodyEl.querySelector('#wiz-tb-question')?.addEventListener('change', (e) => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
+    saveWeek(weekWizardApi().applyTiebreakerQuestion(cur, e.target.value));
+  });
+
+  // DI-358 — the three-way mode dial. Selecting a mode just repaints Step 6
+  // (cheap, matches every other dial in this codebase); the datetime field
+  // and Finish button's label/disabled state are all derived from
+  // `_weekWizardOpenMode` in the render function above.
+  bodyEl.querySelectorAll('[data-open-mode]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _weekWizardOpenMode = btn.dataset.openMode;
+      haptic('selection');
+      renderWeekWizardSheetBody();
+    });
+  });
+  bodyEl.querySelector('#wiz-schedule-at')?.addEventListener('change', (e) => {
+    _weekWizardScheduleAt = e.target.value;
+  });
+
   bodyEl.querySelector('#wiz-open-btn')?.addEventListener('click', () => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
     const missing = countMissingSpreads(games);
-    const timingConfigured = !!computeEffectiveLockAt(week, games);
-    const result = weekWizardApi().openForPicks({ week, gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
-    if (!result.ok) return;
+    const timingConfigured = !!computeEffectiveLockAt(cur, games);
+    const mode = _weekWizardOpenMode || OPEN_MODES.NOW;
+    const refusalEl = bodyEl.querySelector('#wiz-schedule-refusal');
+    if (refusalEl) refusalEl.textContent = '';
+    const result = weekWizardApi().finishWeekSetup({
+      week: cur, mode, scheduledAt: _weekWizardScheduleAt || null,
+      gamesCount: games.length, missingSpreadCount: missing, timingConfigured,
+    });
+    if (!result.ok) {
+      // Inline refusal copy — never a browser alert (DI's own convention).
+      let text = '';
+      if (result.reason === 'missing_scheduled_at') text = WIZARD_COPY.SCHEDULE_MISSING_DATETIME;
+      else if (result.reason === 'past_scheduled_at' || result.reason === 'invalid_scheduled_at') text = WIZARD_COPY.SCHEDULE_PAST_DATETIME;
+      else if (result.gate) text = [result.gate.gamesOk ? null : result.gate.gamesLabel, result.gate.spreadsOk ? null : result.gate.spreadsLabel, result.gate.timingOk ? null : result.gate.timingLabel].filter(Boolean).join('; ');
+      if (refusalEl) refusalEl.textContent = text;
+      return;
+    }
+    _weekWizardOpenMode = null;
+    _weekWizardScheduleAt = null;
     closeWeekWizardSheet();
     refreshHeader();
     renderCommPage();
@@ -27371,7 +28081,7 @@ function reminderSkipToastCopy(data) {
     return { text: `Already reminded within the last ${cooldownHours}h — try again after that.`, tone: 'warning' };
   }
   if (data.skipped === 'no_work') return { text: WIZARD_COPY.EVERYONE_PICKED, tone: 'info' };
-  if (data.skipped) return { text: 'Reminders are turned off for this league — enable them in Settings to use this button.', tone: 'warning' };
+  if (data.skipped) return { text: 'Reminders are turned off for this league — an admin can turn them on in the Admin panel → Data → Background Jobs.', tone: 'warning' };
   if (data.ok === false) return { text: "Couldn't send the reminder — check your connection and try again.", tone: 'error' };
   return null;
 }
@@ -27387,7 +28097,7 @@ function bindScribeReminderControls(bodyEl, week) {
   btn?.addEventListener('click', async () => {
     if (!week || week.status !== 'open') return;
     if (!isServerJobEnabled('reminders')) {
-      showToast('Reminders are turned off for this league — enable them in Settings to use this button.', 'warning');
+      showToast('Reminders are turned off for this league — an admin can turn them on in the Admin panel → Data → Background Jobs.', 'warning');
       return;
     }
     const label = btn.textContent;
@@ -27437,20 +28147,67 @@ function renderWeekWizardManageHTML(week, games) {
     // STEP B(14) (third pass) — D-1: the Munera glyph + text, never the emoji
     // label (kept on the entry only for the drift check vs the Comm panel).
     .map((b) => `<button type="button" class="btn ${b.cls} btn-sm week-wizard-status-btn" data-to="${b.to}">${wizardStatusIconHTML(b)}${escHtml(b.text)}</button>`).join('');
+  // DI-359 (2026-09-27) — the guided Finalize Week entry, replacing the
+  // retired standalone card's inline "✅ Confirm Finalization" banner.
+  // Same trigger (`week.pendingFinalization === true`) as that banner used;
+  // "Not yet" reuses the SAME id/handler that banner's own dismiss button
+  // already had (bindCommEventListeners()'s `dismiss-pending-btn`).
+  const pendingFinalizationBannerHTML = week.pendingFinalization ? `
+    <div class="pending-final-banner">
+      <div><strong>⏰ All games are final.</strong> Ready to close this week and lock standings?</div>
+      <div class="flex gap-sm mt-sm">
+        <button type="button" class="btn btn-primary btn-sm" id="wiz-open-finalize-btn">Finalize Week</button>
+        <button class="btn btn-ghost btn-sm" id="dismiss-pending-btn">Not yet</button>
+      </div>
+    </div>` : '';
+  // BLOCK fix (a) (app-shell part 3A review, 2026-09-27) — once this week is
+  // anything but a draft, this screen was the ONLY place a commissioner
+  // reliably lands via the top-level entry button, and it offered no way
+  // BACK OUT to start the next week at all — the exact "no way through the
+  // wizard" the fix is named for. Offered here unconditionally (not only
+  // when no continuable draft exists — see weekWizardContinuableDrafts()'s
+  // own comment on why Manage only naturally renders in that case anyway),
+  // and the number always accounts for every existing week (drafts
+  // included), so this can never mint a colliding week number.
+  const nextWeekNum = (() => {
+    const allWeeks = getWeeks();
+    return allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
+  })();
+  const setupNextHTML = `<div class="admin-section-title mt-md">Next week</div>
+    <button type="button" class="btn btn-primary btn-block" id="wiz-manage-setup-next">Set up Week ${escHtml(String(nextWeekNum))}</button>`;
   return `<div class="text-sm text-muted mb-sm">Status: ${escHtml(week.status.toUpperCase())}</div>
     <div class="flex gap-sm flex-wrap mb-md">${buttons}</div>
+    ${pendingFinalizationBannerHTML}
     <div class="admin-section-title">Timing</div>
     ${renderWeekWizardTimingFieldsHTML(week, games)}
     <button type="button" class="btn btn-secondary btn-block mt-sm" id="wiz-manage-save-timing">Save Timing</button>
     <div class="admin-section-title mt-md">Announce</div>
     ${renderWeekWizardAnnounceFieldsHTML()}
     <button type="button" class="btn btn-primary btn-block" id="wiz-manage-send-announce" disabled>Send announcement</button>
-    ${week.status === 'open' ? renderScribeReminderControlsHTML(week) : ''}`;
+    ${week.status === 'open' ? renderScribeReminderControlsHTML(week) : ''}
+    ${setupNextHTML}`;
 }
 /** RG-251 reviewer note 2 (2026-09-26) — test-only seam, so authtest [44k3] can drive the Manage
  *  screen from a POLLUTED mirror (the phase-5a twin); same `_xForTest` convention. */
 export const _renderWeekWizardManageHTMLForTest = renderWeekWizardManageHTML;
 function bindWeekWizardManage(bodyEl, week) {
+  // DI-359 — opens the guided Finalize Week flow, IN THE SAME SHEET (no new
+  // sheet component — this just switches renderWeekWizardSheetBody()'s own
+  // branch via `_finalizeStep`, below).
+  bodyEl.querySelector('#wiz-open-finalize-btn')?.addEventListener('click', () => {
+    _finalizeStep = 1;
+    renderWeekWizardSheetBody();
+  });
+  // BLOCK fix (a) — starts a brand-new draft, independent of THIS (non-draft)
+  // week, via _weekWizardForceNewWeek (weekWizardTargetWeek()'s own guard,
+  // above) so the create-flow's Step 1 renders with no existing week rather
+  // than looping straight back to this same Manage screen.
+  bodyEl.querySelector('#wiz-manage-setup-next')?.addEventListener('click', () => {
+    _weekWizardForceNewWeek = true;
+    _weekWizardTargetWeekId = null;
+    _weekWizardStep = 1;
+    renderWeekWizardSheetBody();
+  });
   bodyEl.querySelector('#wiz-manage-save-timing')?.addEventListener('click', () => {
     saveWizardTiming(bodyEl, week);
     showToast('Timing saved ✅', 'success');
@@ -27501,9 +28258,233 @@ function bindWeekWizardManage(bodyEl, week) {
   if (week.status === 'open') bindScribeReminderControls(bodyEl, week);
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// DI-359 — GUIDED FINALIZE WEEK FLOW. Reuses the SAME #week-wizard-sheet
+// shell + .week-wizard-step-dot tracker as the create-flow — a sibling flow,
+// not a new sheet component. NO NEW MATH anywhere below: every step calls
+// exactly the function today's three separate cards already call, via
+// weekWizardApi(). AD-33 is unchanged — neither the tiebreaker nor the
+// Extra Point ever becomes a calculateWeeklyResults() standings input.
+// ══════════════════════════════════════════════════════════════════════════
+
+function renderFinalizeTrackerHTML(step) {
+  const dots = FINALIZE_STEPS.map((s) => `<span class="week-wizard-step-dot${s.step === step ? ' active' : ''}${s.step < step ? ' done' : ''}"></span>`).join('');
+  return `<div class="week-wizard-tracker">${dots}<span class="week-wizard-tracker-label">Step ${step} of ${FINALIZE_STEP_COUNT}</span></div>`;
+}
+
+/** Step 1 — Approve Scores. A pure readiness check + review, never final
+ *  until Next fires (weekWizardApi().finalizeApproveScores()'s own guard —
+ *  see its header: this step must NEVER call finalizeWeek()). */
+function renderFinalizeStep1HTML(week, games) {
+  const summary = finalizeApproveScoresSummary(games);
+  const rows = (games || []).map((g) => {
+    const ok = g.status === 'final' && g.lockedSpread !== null && g.lockedSpread !== undefined;
+    const reason = ok ? '' : (g.status !== 'final' ? ' — not final yet' : ' — no locked spread');
+    return `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(`${g.awayTeam} @ ${g.homeTeam}`)}${escHtml(reason)}</div>`;
+  }).join('');
+  return `<div class="admin-section-title">Approve Scores</div>
+    ${rows || '<p class="text-muted text-sm">No games on this slate.</p>'}
+    ${summary.blocked ? `<div class="warning-box mt-sm">Every game needs a FINAL status and a locked spread before scores can be approved. Fix it in Games, or remove the game from the slate, then come back.</div>` : ''}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-cancel">Cancel</button>
+    <button type="button" class="btn btn-primary" id="wiz-fin-next" ${summary.blocked ? 'disabled' : ''}>Next</button></div>`;
+}
+function bindFinalizeStep1(bodyEl, week, games) {
+  bodyEl.querySelector('#wiz-fin-cancel')?.addEventListener('click', () => { _finalizeStep = null; closeWeekWizardSheet(); });
+  bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
+    const curGames = getGames(cur.weekId);
+    const result = weekWizardApi().finalizeApproveScores({ week: cur, games: curGames });
+    if (!result.ok) { renderWeekWizardSheetBody(); return; } // blocked — repaint to show the current reason
+    _finalizeStep = 2;
+    renderWeekWizardSheetBody();
+  });
+}
+
+/** Step 2 — Confirm Tiebreaker. Auto-Calc prefills; the commissioner can
+ *  accept or override. Writes through the SAME save path the standalone
+ *  Tiebreaker card's own "Save Tiebreaker" button already uses. */
+function renderFinalizeStep2HTML(week) {
+  const autoCalc = weekWizardApi().finalizeAutoCalcTiebreaker(week);
+  const summary = tiebreakerConfirmSummary({ week, autoCalcValue: autoCalc.ok ? autoCalc.value : null });
+  return `<div class="admin-section-title">Confirm Tiebreaker</div>
+    <p class="text-sm">${summary.hasQuestion ? escHtml(summary.question) : '<span class="text-muted">No tiebreaker question set.</span>'}</p>
+    <p class="text-muted text-xs">${autoCalc.ok ? `Auto-Calc suggests: <strong>${numHtml(autoCalc.value)}</strong>` : 'Auto-Calc: no final alma mater scores yet.'}</p>
+    <div class="form-group">
+      <label class="form-label" for="wiz-fin-tb-value">Actual Value</label>
+      <input class="form-input" id="wiz-fin-tb-value" type="number" value="${summary.prefillValue != null ? numHtml(summary.prefillValue) : ''}" />
+    </div>
+    <div id="wiz-fin-tb-refusal" class="text-sm" style="color:var(--loss)"></div>
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
+    <button type="button" class="btn btn-primary" id="wiz-fin-next">Confirm</button></div>`;
+}
+function bindFinalizeStep2(bodyEl, week) {
+  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 1; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
+    const raw = bodyEl.querySelector('#wiz-fin-tb-value')?.value;
+    const refusalEl = bodyEl.querySelector('#wiz-fin-tb-refusal');
+    // null stays legal (an explicit "no tiebreaker value yet") — only a
+    // NON-EMPTY, non-finite entry (garbage text) is refused, matching
+    // confirmFinalizeTiebreaker()'s own guard.
+    const actualValue = (raw === '' || raw === undefined || raw === null) ? null : parseFloat(raw);
+    if (actualValue !== null && !Number.isFinite(actualValue)) {
+      if (refusalEl) refusalEl.textContent = 'Enter a number, or leave blank.';
+      return;
+    }
+    const result = weekWizardApi().confirmFinalizeTiebreaker({ week: cur, actualValue });
+    if (!result.ok) { if (refusalEl) refusalEl.textContent = 'Enter a number, or leave blank.'; return; }
+    _finalizeStep = 3;
+    renderWeekWizardSheetBody();
+  });
+}
+
+/** Step 3 — Confirm Extra Point. Same blind-rule gate the standalone Extra
+ *  Point card already applies (canViewOtherPicks()) — by finalize time the
+ *  week is well past lock, so this is a formality, not a live risk, but the
+ *  gate is kept rather than special-cased away. */
+function renderFinalizeStep3HTML(week) {
+  const players = getPlayers().filter((p) => p.active);
+  const summary = weekWizardApi().finalizeExtraPointSummary({ week, players });
+  const canSeeOthers = canViewOtherPicks(week);
+  return `<div class="admin-section-title">Confirm Extra Point</div>
+    <div class="form-group">
+      <label class="form-label" for="wiz-fin-ep-value">Actual longest FG (yards)</label>
+      <input class="form-input" id="wiz-fin-ep-value" type="number" min="15" max="75" value="${summary.actualValue != null ? numHtml(summary.actualValue) : ''}" />
+    </div>
+    <div id="wiz-fin-ep-refusal" class="text-sm" style="color:var(--loss)"></div>
+    ${canSeeOthers && summary.graded ? renderExtraPointResultsHTML(week, summary.graded, escHtml) : (canSeeOthers ? '' : '<p class="text-muted text-xs">Other players\' guesses stay hidden until kickoff.</p>')}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
+    <button type="button" class="btn btn-primary" id="wiz-fin-next">Confirm</button></div>`;
+}
+function bindFinalizeStep3(bodyEl, week) {
+  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 2; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-fin-next')?.addEventListener('click', () => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
+    const raw = bodyEl.querySelector('#wiz-fin-ep-value')?.value;
+    // Coordinator note 5 (2026-09-27) — parseInt the input before handing it
+    // to confirmFinalizeExtraPoint(), matching `ep-save-btn`'s own guard
+    // exactly (longest FG is always a whole number of yards).
+    const actualValue = parseInt(raw, 10);
+    const refusalEl = bodyEl.querySelector('#wiz-fin-ep-refusal');
+    const result = weekWizardApi().confirmFinalizeExtraPoint({ week: cur, actualValue });
+    if (!result.ok) { if (refusalEl) refusalEl.textContent = 'Enter the actual longest FG first.'; return; }
+    _finalizeStep = 4;
+    renderWeekWizardSheetBody();
+  });
+}
+
+/** Step 4 — Finalize. The unresolved-tie warning is now this step's own
+ *  inline warning box (never a browser confirm()), and the Finalize action
+ *  itself is the EXACT sequence confirm-finalize-btn's handler used to run —
+ *  unchanged, just sequenced behind this guided flow. */
+function renderFinalizeStep4HTML(week, games) {
+  const players = getPlayers().filter((p) => p.active);
+  // Blind rule (loadtest.mjs's whole-tree structural guard) — the SAME
+  // explicit gate bindWeekWizardManage()'s manual "Finalize" status button
+  // already uses before reading other players' picks for its own tie-check
+  // (`if (to === 'final' && arePicksPublic(liveWeekForStatus) && …)`, this
+  // file, above). By the time this step is reachable at all
+  // (week.pendingFinalization === true requires every game FINAL, which
+  // requires LIVE, which arePicksPublic() always treats as public) this is
+  // a formality, not a live risk — but the gate is explicit here too, not
+  // assumed, matching every other reader of `picks` in this file.
+  const picks = arePicksPublic(week) ? getPicks(week.weekId) : [];
+  const warning = weekWizardApi().unresolvedTieWarning({ week, players, picks, games });
+  // Carry-over fix (app-shell part 3A review, 2026-09-27) — the three
+  // "// No icon('warning')..." lines this comment replaces were INSIDE the
+  // template literal below (a `//` comment has no meaning inside a template
+  // string; it rendered as literal text in the actual sheet). D-1's own
+  // inventory sweep for this component: WIZARD_COPY.UNRESOLVED_TIE_WARNING
+  // no longer carries a written-text ⚠️ (js/week-wizard.js, same pass) —
+  // icon('warning') is the ONE glyph now, prefixed here, matching every
+  // other chrome icon in this app. Other `.warning-box` sites in this file
+  // (Step 6's blocked-open banner, Step 2/3's own boxes) are UNCHANGED —
+  // out of this fix's scope; D-1's phased inventory reaches them separately.
+  const warningIconHTML = icon('warning');
+  return `<div class="admin-section-title">Finalize</div>
+    <p class="text-muted text-sm">Approve scores, tiebreaker and Extra Point are set. Finalizing locks standings for ${escHtml(formatWeekLabel(week))}.</p>
+    ${warning.show ? `<div class="warning-box mt-sm">${warningIconHTML} ${escHtml(warning.text)}</div>` : ''}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-fin-back">Back</button>
+    <button type="button" class="btn btn-primary" id="wiz-fin-confirm">Finalize Week</button></div>`;
+}
+function bindFinalizeStep4(bodyEl, week) {
+  bodyEl.querySelector('#wiz-fin-back')?.addEventListener('click', () => { _finalizeStep = 3; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-fin-confirm')?.addEventListener('click', () => {
+    if (!week) return;
+    const cur = getWeek(week.weekId) || week;
+    weekWizardApi().confirmFinalizeWeek(cur);
+    _finalizeStep = null;
+    refreshHeader();
+    showToast('Week finalized — standings locked ✅', 'success');
+    closeWeekWizardSheet();
+    renderCommPage();
+  });
+}
+
+function renderFinalizeStepHTML(step, week, games) {
+  if (step === 1) return renderFinalizeStep1HTML(week, games);
+  if (step === 2) return renderFinalizeStep2HTML(week);
+  if (step === 3) return renderFinalizeStep3HTML(week);
+  return renderFinalizeStep4HTML(week, games);
+}
+function bindFinalizeStep(bodyEl, step, week, games) {
+  if (step === 1) return bindFinalizeStep1(bodyEl, week, games);
+  if (step === 2) return bindFinalizeStep2(bodyEl, week);
+  if (step === 3) return bindFinalizeStep3(bodyEl, week);
+  return bindFinalizeStep4(bodyEl, week);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// BLOCK fix (b) (app-shell part 3A review, 2026-09-27) — the "which draft did
+// you mean" picker. Reuses `.week-wizard-check-row`-style rows (same class
+// Finalize Step 1's own review list already uses) rather than inventing a
+// second list style, and the SAME "Set up Week N+1" action Manage's own
+// button (bindWeekWizardManage(), below) uses — one create-a-new-week path,
+// not two independently written ones.
+// ══════════════════════════════════════════════════════════════════════════
+
+function renderWeekWizardContinuePickerHTML() {
+  const drafts = weekWizardContinuableDrafts();
+  const allWeeks = getWeeks();
+  const nextNum = allWeeks.length ? Math.max(...allWeeks.map((w) => w.weekNumber)) + 1 : 1;
+  const rows = drafts.map((w) => `<button type="button" class="week-wizard-check-row wiz-continue-pick" data-week-id="${escHtml(w.weekId)}" style="width:100%;text-align:left;background:none;border:none;cursor:pointer;color:inherit;font:inherit">
+      <span>${escHtml(formatWeekLabel(w))}</span><span class="text-muted">›</span>
+    </button>`).join('');
+  return `<div class="admin-section-title">More than one draft is set up — which one?</div>
+    ${rows}
+    <button type="button" class="btn btn-secondary btn-block mt-md" id="wiz-continue-pick-new">Set up Week ${escHtml(String(nextNum))} instead</button>
+    <button type="button" class="btn btn-ghost btn-block mt-sm" id="wiz-continue-pick-cancel">Cancel</button>`;
+}
+function bindWeekWizardContinuePicker(bodyEl) {
+  bodyEl.querySelectorAll('.wiz-continue-pick').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      _weekWizardShowContinuePicker = false;
+      _weekWizardTargetWeekId = btn.dataset.weekId || null;
+      const w = getWeek(_weekWizardTargetWeekId);
+      const gs = w ? getGames(w.weekId) : [];
+      const entry = weekWizardApi().selectEntry({ week: w, games: gs, timingConfigured: true });
+      _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
+      renderWeekWizardSheetBody();
+    });
+  });
+  bodyEl.querySelector('#wiz-continue-pick-new')?.addEventListener('click', () => {
+    _weekWizardShowContinuePicker = false;
+    _weekWizardForceNewWeek = true;
+    _weekWizardTargetWeekId = null;
+    _weekWizardStep = 1;
+    renderWeekWizardSheetBody();
+  });
+  bodyEl.querySelector('#wiz-continue-pick-cancel')?.addEventListener('click', () => closeWeekWizardSheet());
+}
+
 /** DI-C1 §2.5's state-selection table, painted: dispatches to the six
- *  create-flow steps (a `draft` week) or the Manage screen (any other
- *  status), reusing `selectWizardEntry()`'s own decision (via
+ *  create-flow steps (a `draft` week), the Manage screen (any other
+ *  status), or — DI-359 — the guided Finalize Week flow whenever
+ *  `_finalizeStep` is set (entered from the Manage screen's own button).
+ *  Reuses `selectWizardEntry()`'s own decision (via
  *  `weekWizardApi().selectEntry()`) ONLY to choose the initial step on
  *  open — subsequent steps are driven by `_weekWizardStep`, set by each
  *  step's own Next/Back handlers, never re-derived on every repaint (which
@@ -27512,12 +28493,39 @@ function bindWeekWizardManage(bodyEl, week) {
 function renderWeekWizardSheetBody() {
   const wrap = document.getElementById('week-wizard-sheet-wrap');
   if (!wrap) return;
-  const week = getCurrentWeek();
-  const games = week ? getGames(week.weekId) : [];
   const titleEl = wrap.querySelector('#week-wizard-title');
   const trackerEl = wrap.querySelector('#week-wizard-step-tracker');
   const bodyEl = wrap.querySelector('#week-wizard-body');
   if (!bodyEl) return;
+
+  // BLOCK fix (b) — genuine ambiguity (more than one draft to continue):
+  // ask, rather than guessing. Checked BEFORE weekWizardTargetWeek() below,
+  // since that function would otherwise fall back to getCurrentWeek() (the
+  // non-draft week the picker exists precisely because that's NOT what the
+  // commissioner meant).
+  if (_weekWizardShowContinuePicker) {
+    if (titleEl) titleEl.textContent = 'Continue set up';
+    if (trackerEl) trackerEl.innerHTML = '';
+    bodyEl.innerHTML = renderWeekWizardContinuePickerHTML();
+    bindWeekWizardContinuePicker(bodyEl);
+    return;
+  }
+
+  // Coordinator fix (2026-09-27) — weekWizardTargetWeek(), not
+  // getCurrentWeek() directly: the sheet must keep rendering the SAME week
+  // it started building even if a DIFFERENT week is (correctly) still
+  // "current" for players/tickAutoTransition() — see that function's own
+  // header, above.
+  const week = weekWizardTargetWeek();
+  const games = week ? getGames(week.weekId) : [];
+
+  if (_finalizeStep && week) {
+    if (titleEl) titleEl.textContent = `Finalize ${formatWeekLabel(week)}`;
+    if (trackerEl) trackerEl.innerHTML = renderFinalizeTrackerHTML(_finalizeStep);
+    bodyEl.innerHTML = renderFinalizeStepHTML(_finalizeStep, week, games);
+    bindFinalizeStep(bodyEl, _finalizeStep, week, games);
+    return;
+  }
 
   if (week && week.status !== 'draft') {
     if (titleEl) titleEl.textContent = `Manage ${formatWeekLabel(week)}`;
@@ -27527,7 +28535,7 @@ function renderWeekWizardSheetBody() {
     return;
   }
 
-  if (titleEl) titleEl.textContent = 'Set Up Week';
+  if (titleEl) titleEl.textContent = 'Set up Week';
   if (trackerEl) trackerEl.innerHTML = renderWeekWizardTrackerHTML(_weekWizardStep);
   if (_weekWizardStep === 1) { bodyEl.innerHTML = renderWeekWizardStep1HTML(week); bindWeekWizardStep1(bodyEl, week); }
   else if (_weekWizardStep === 2) { bodyEl.innerHTML = renderWeekWizardStep2HTML(week); bindWeekWizardStep2(bodyEl, week); }
@@ -27555,7 +28563,36 @@ function openWeekWizardSheet() {
   // showLeaguePageOverlay()'s identical guard, just above.
   if (isContentWithheld()) return;
   document.getElementById('week-wizard-sheet-wrap')?.remove();
-  const week = getCurrentWeek();
+  const currentWeek = getCurrentWeek();
+  // BLOCK fix (b) (app-shell part 3A review, 2026-09-27) — the entry button
+  // used to ALWAYS target getCurrentWeek(), so once that week finalized (or
+  // no week existed yet after one was deleted) with a newer draft ALREADY
+  // sitting untouched (Duplicate, or a prior "Set up Week N+1"), there was no
+  // way back into it except starting a THIRD week by accident. Fresh open
+  // never starts forced/picker (cleared every time, below) — recomputed here.
+  _weekWizardForceNewWeek = false;
+  _weekWizardShowContinuePicker = false;
+  let week = currentWeek;
+  if (currentWeek && currentWeek.status !== WEEK_STATUS.DRAFT) {
+    const drafts = weekWizardContinuableDrafts();
+    if (drafts.length === 1) {
+      week = drafts[0]; // exactly one — no ambiguity, go straight to it
+    } else if (drafts.length > 1) {
+      _weekWizardShowContinuePicker = true; // genuine ambiguity — ask
+      week = null;
+    }
+    // drafts.length === 0 — nothing to continue, `week` stays currentWeek
+    // (the Manage screen, which itself now offers "Set up Week N+1").
+  }
+  // Coordinator fix (2026-09-27) — the wizard now tracks its OWN target week
+  // (weekWizardTargetWeek(), above), independent of the active-week pointer.
+  _weekWizardTargetWeekId = week?.weekId || null;
+  // DI-358 — fresh open-mode selection each time the sheet opens.
+  _weekWizardOpenMode = null;
+  _weekWizardScheduleAt = null;
+  // DI-359 — a fresh open never starts inside the Finalize flow; it is only
+  // ever entered explicitly from the Manage screen's own button.
+  _finalizeStep = null;
   const games = week ? getGames(week.weekId) : [];
   const entry = weekWizardApi().selectEntry({ week, games, timingConfigured: true });
   _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
@@ -27568,7 +28605,7 @@ function openWeekWizardSheet() {
     <div class="chat-sheet-backdrop"></div>
     <div class="chat-sheet" id="week-wizard-sheet">
       <div class="chat-sheet-header">${isNativeShell() ? '<span class="sheet-grabber" aria-hidden="true"></span>' : ''}
-        <div class="chat-sheet-title" id="week-wizard-title">Set Up Week</div>
+        <div class="chat-sheet-title" id="week-wizard-title">Set up Week</div>
         <button class="chat-sheet-close" id="week-wizard-close" aria-label="Close">✕</button>
       </div>
       <div id="week-wizard-step-tracker"></div>
@@ -27636,6 +28673,16 @@ function closeWeekWizardSheet() {
   _unbindWizardSheetDismiss?.();
   _unbindWizardSheetDismiss = null;
   document.getElementById('week-wizard-sheet-wrap')?.remove();
+  // Hygiene — the next open() always re-derives its own target (above); this
+  // just avoids holding a stale weekId in memory between opens.
+  _weekWizardTargetWeekId = null;
+  _finalizeStep = null;
+  // BLOCK fix (a)/(b) hygiene — same reasoning: the next open() always
+  // recomputes both from scratch (openWeekWizardSheet(), above), so nothing
+  // here should survive to strand the NEXT open in "forced new week" or "show
+  // the picker" state from a sheet that already closed.
+  _weekWizardForceNewWeek = false;
+  _weekWizardShowContinuePicker = false;
 }
 
 window.navigateTo=navigateTo;

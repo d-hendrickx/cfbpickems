@@ -1290,6 +1290,47 @@ console.log('\n[A10] TAP TARGETS + the no-tooltip / no-hex / emoji-only rules…
     'A10r(iii): …which only the suspended-slate RESTORE path sets. A handover, a sign-out, a league switch and a discard all still clear the bars.');
 }
 
+// ── DI-394 (UN-354, 2026-09-27) — the shared viewing-week card ─────────────
+// Consolidated onto ONE weekNavCardHTML() (js/app.js), reused by BOTH Picks
+// (renderPicksWeekNav()) and Dashboard (renderDashboardWeekNav()) — a change
+// reaches both pages by construction. Source-level pins (this file's DOM
+// harness is scoped to Picks-page-order fixtures; a full Dashboard fixture
+// is out of this pass's scope) — the behavioural half is exercised for real
+// by authtest.mjs's tickAutoTransition() fixtures and by hand on-device.
+console.log('\n[DI-394] the shared viewing-week card — one function, two pages, no duplicate control…');
+{
+  const appSrcD394 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  assert(/function weekNavCardHTML\(viewWeek, currentWeek, weeksForOrder, \{ dataAttr \}\)/.test(appSrcD394),
+    'weekNavCardHTML() exists with the shared (viewWeek, currentWeek, weeksForOrder, {dataAttr}) signature');
+  assert(/function renderPicksWeekNav\(viewWeek, currentWeek\) \{\s*return weekNavCardHTML\(viewWeek, currentWeek, picksNavWeeks\(\), \{ dataAttr: 'picks-week' \}\);/.test(appSrcD394),
+    "renderPicksWeekNav() is a thin wrapper over weekNavCardHTML() — Picks' own week list (picksNavWeeks()), unchanged filter rules");
+  assert(/function renderDashboardWeekNav\(viewWeek, currentWeek\) \{/.test(appSrcD394) && /selectableDashboardWeeks\(getWeeks\(\), isCommissioner\)/.test(appSrcD394.slice(appSrcD394.indexOf('function renderDashboardWeekNav'), appSrcD394.indexOf('function renderDashboardWeekNav') + 400)),
+    "renderDashboardWeekNav() is a thin wrapper over the SAME weekNavCardHTML() — Dashboard's own week list (selectableDashboardWeeks()), unchanged filter rules (drafts visible to the commissioner)");
+  assert(/chronologicalWeekIds\(weeksForOrder\)/.test(appSrcD394),
+    "weekNavCardHTML()'s prev/next math is resolved via chronologicalWeekIds() — the SAME oldest→newest normalization RG-264's dashboard-swipe fix made the one source of truth, never each list's own raw (possibly newest-first) sort order");
+  assert(/function bindDashboardWeekNav\(\) \{/.test(appSrcD394) && /data-dashboard-week/.test(appSrcD394),
+    'bindDashboardWeekNav() exists and binds [data-dashboard-week] click targets, mirroring bindPicksWeekNav()\'s own [data-picks-week] shape');
+
+  // The redundant `<select id="week-selector">` DI-394's own research
+  // flagged (a second control doing the identical job as the shared card) is
+  // RETIRED, not merely hidden.
+  assert(!/<select class="form-select" id="week-selector">/.test(appSrcD394),
+    'the redundant Dashboard `<select id="week-selector">` markup is gone entirely — the shared arrow-nav card is the ONE control that decides which week Dashboard shows (the id still appears in this pass\'s own retirement comments, which is what the narrower markup-only check above rules out matching)');
+  const dashInnerSrc = appSrcD394.slice(appSrcD394.indexOf('function renderDashboardInner()'), appSrcD394.indexOf('function renderDashboardInner()') + 12000);
+  assert(/renderDashboardWeekNav\(week, currentWeek\)/.test(dashInnerSrc),
+    'renderDashboardInner() renders the shared card (renderDashboardWeekNav(week, currentWeek)) in place of the old <select>');
+  assert(/bindDashboardWeekNav\(\);/.test(dashInnerSrc),
+    'renderDashboardInner() binds the card\'s arrow clicks (bindDashboardWeekNav())');
+
+  // The card always renders SOMETHING once a viewWeek exists — arrows are
+  // the only thing gated on multiple weeks, never the whole card — so a
+  // single-week league never loses week identification entirely now that
+  // the header (DI-393) no longer carries a date as a fallback.
+  const cardFnSrc = appSrcD394.slice(appSrcD394.indexOf('function weekNavCardHTML'), appSrcD394.indexOf('function weekNavCardHTML') + 1800);
+  assert(/const hasMultiple = orderedIds.length > 1;/.test(cardFnSrc) && !/if \(orderedIds\.length < 2\) return '';/.test(cardFnSrc),
+    "weekNavCardHTML() no longer returns '' below two weeks (the pre-DI-394 renderPicksWeekNav() did) — only the ARROWS are gated on hasMultiple, so name/badge/date still render for a single-week league");
+}
+
 // ── Result ───────────────────────────────────────────────────────────────────
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.

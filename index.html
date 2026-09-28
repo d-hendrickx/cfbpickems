@@ -7,6 +7,11 @@
        2026-08-07 for this private six-person league — do not re-litigate. -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
   <meta name="theme-color" content="#500000" />
+  <!-- DI-360 (UN-318) night mode — tells the browser BOTH color schemes are
+       supported (form controls/scrollbars follow the OS choice natively)
+       rather than assuming light-only, matching the CSS's own
+       `prefers-color-scheme: dark` rule under `body.theme-neutral`. -->
+  <meta name="color-scheme" content="light dark" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -28,7 +33,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=26-0" />
+  <link rel="stylesheet" href="css/styles.css?v=27-0" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -133,66 +138,50 @@
 
   <header class="app-header">
     <div class="app-header-inner">
-      <!-- UN-108: #header-meta is the LEFT slot now (was inside .header-right,
-           right-aligned, the bottom item of a 5-row vertical tower). Moved out
-           to balance the header against the identity/sync/tz/theme cluster on
-           the right.
-           UN-127 (change 1, 2026-08-27): #header-meta is now a flex ROW that
-           holds two things — the two-line week block (its own nested element,
-           #header-meta-week) and the feedback shortcut button, injected once
-           by setupHeaderFeedbackButton() (js/app.js) at boot and appended as
-           a SIBLING of the week block, never inside it. refreshHeader() was
-           re-pointed to write only #header-meta-week's innerHTML — it used to
-           target #header-meta directly, which would have wiped the injected
-           button on every week/tab refresh. The week block's own internal
-           structure (name+badge line, date-range line) is completely
-           untouched by this — the button rides beside it, not below it, so
-           UN-117's two-line guarantee still holds structurally: it never
-           becomes a third stacked line, because flex ROW (not column) can
-           only place items side by side. -->
-      <!-- UX Revamp Group A1 (DI-301/307, 2026-09-25) — the drawer trigger
+      <!-- DI-393 (UN-353, 2026-09-27) — the header is a TRUE ONE-LINE ROW,
+           superseding DI-361's three-zone/centred layout in full. Five
+           logical zones, left to right: [trigger] [league pill] [spacer]
+           [week + status] [sync icon]. See css/styles.css's own
+           .app-header-inner/.header-spacer/.header-meta comments (DI-393)
+           for the flex-factor contract (the league pill is the ONE zone
+           that shrinks/truncates first).
+
+           UX Revamp Group A1 (DI-301/307, 2026-09-25) — the drawer trigger
            replaces the header's old six-item .header-right identity cluster.
-           FIRST child of .app-header-inner (before .header-meta), per DI-307
-           — there was no left-side logo element here before this pass; do
-           not confuse this with #brand-wordmark (js/app.js's
-           initNativeWordmark(), native-only, still on the RIGHT beside
-           #league-pill for a different purpose, DI-213k — untouched).
            Filled at boot (an inline temple-mark SVG on native, the shell
            brand name via getShellBrandName() on web) — empty here, same
-           "no flash of unstyled content" discipline #header-identity/
-           #notif-bell-btn already used below. Opens the control-center
-           drawer (js/control-center.js) on tap. -->
+           "no flash of unstyled content" discipline #header-meta-week
+           already uses below. Opens the control-center drawer
+           (js/control-center.js) on tap. -->
       <button type="button" id="control-center-trigger" class="control-center-trigger" aria-label="Open control center"></button>
+      <!-- DI-393 — #league-pill RE-ADDED to the header (it was removed
+           entirely, not merely hidden, by the T-15/DI-307 declutter pass on
+           2026-09-25). renderLeaguePill() (js/app.js) itself was never
+           touched by that removal — it already implements the full DI-184b
+           contract (non-interactive with one league, a tappable switcher
+           with a caret when memberships.length > 1) — this re-wires it by
+           giving it a DOM anchor again. `hidden` by default so there is no
+           flash of an empty pill before the first render resolves it. -->
+      <span id="league-pill" class="league-pill" hidden></span>
+      <span class="header-spacer" aria-hidden="true"></span>
+      <!-- UN-127 (change 1, 2026-08-27): #header-meta is a flex ROW —
+           DI-393 keeps it a row of exactly one child now that the header
+           feedback shortcut (setupHeaderFeedbackButton()) no longer targets
+           it in the boot path (js/app.js's own boot-sequence comment); the
+           element is kept only for headermetatest.mjs's DOM-injection
+           coverage. refreshHeader() writes #header-meta-week's innerHTML —
+           name + status badge, ONE line, no date (DI-393 drops the date
+           from the header entirely; it now lives in DI-394's viewing-week
+           card on Picks/Dashboard). -->
       <div class="header-meta" id="header-meta"><span id="header-meta-week"><strong>Loading…</strong></span></div>
-      <div class="header-right">
-        <!-- REVIEWER F4 (pass-2, wiring pass 3a-bis, 2026-09-25) — #league-pill
-             and #header-identity are REMOVED entirely now, not merely hidden.
-             DI-307's original declutter (2026-09-25, same day) left both
-             elements in the DOM with `hidden`, reasoning "no call site
-             currently un-hides it" — that reasoning was WRONG:
-             renderHeaderIdentity()/renderLeaguePill() (js/app.js) are still
-             called from refreshHeader()/resyncPlayerPreferences() and both
-             unconditionally set `el.hidden = false` whenever a session/active
-             league resolves, so the "decluttered" header kept silently
-             reappearing its old identity/league-pill chips. Per mockups/
-             control-center.html:96-102, the header is exactly
-             trigger | #header-meta | #sync-badge — nothing else. The render
-             functions themselves are UNCHANGED (still exported, still
-             called) — each already returns early when
-             `document.getElementById(...)` finds nothing, so removing the
-             elements here is what actually makes them permanently inert,
-             not a second flag anywhere. Their identity/switch-league jobs
-             live in the control-center drawer now (DI-302). -->
-        <!-- #notif-bell-btn, #tz-toggle, #theme-toggle and the header
-             feedback-button mount are REMOVED entirely (not hidden) per
-             DI-307 — the header keeps exactly logo-trigger | #header-meta |
-             #sync-badge now. Their render functions
-             (renderNotifBell()/renderTzToggle()/renderThemeToggle()) are
-             UNCHANGED and now embed inside the control-center drawer's
-             Settings accordion (Notifications/Time zone/Theme rows,
-             DI-303) instead — see js/app.js's buildControlCenterCtx(). -->
-        <span id="sync-badge" class="sync-badge"></span>
-      </div>
+      <!-- DI-393 — the sync-status icon. `#sync-badge` (id unchanged, so no
+           other call site needs updating) now carries `.header-sync-icon`
+           and a `data-sync="…"` state attribute instead of emoji text;
+           updateSyncBadge() (js/app.js) fills it with an icon from
+           js/icons.js plus an aria-label that changes with the state. The
+           red loud-fail banner is unchanged and stays a SEPARATE, louder
+           notice — this icon is the persistent quiet one. -->
+      <span id="sync-badge" class="header-sync-icon" data-sync=""></span>
     </div>
   </header>
 
@@ -225,50 +214,40 @@
     <section class="page-section" id="page-chat">
       <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
     </section>
-    <!-- DI-308 (T-16) — the Settings tab's own page host. renderSettingsPage()
-         is a thin wrapper reusing js/control-center.js's SAME accordion-row
-         render functions the drawer uses, per DI-308's "one render function,
-         two hosts" instruction — no second, independently-written settings
-         implementation. -->
-    <section class="page-section" id="page-settings">
-      <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>
-    </section>
+    <!-- DI-397 (UN-357, 2026-09-27) — #page-settings (DI-308, T-16) is
+         RETIRED along with the Settings tab: renderSettingsPage() is deleted
+         (js/app.js), and its rows live in the control-center drawer only. -->
   </main>
 
-  <!-- UN-97: the six bottom-nav icons are the ONE named exception to "icons
-       are unicode emoji" (CLAUDE.md, CONVENTIONS.md #16, approved 2026-08-07).
-       Hand-authored inline SVG, viewBox 0 0 24 24, stroke="currentColor" on
-       one style throughout (outline, not filled — DI explicitly allows
-       either). currentColor + the EXISTING .nav-item.active,.nav-item:active
-       color rule (styles.css:101) themes these across all seven themes with
-       ZERO new color CSS. Do not widen this exception to any other icon. -->
-  <nav class="bottom-nav">
-    <button class="nav-item" data-tab="picks">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="7.5 12.5 10.5 15.5 16.5 8.5"/></svg></span><span>Picks</span>
+  <!-- DI-397 (UN-357, 2026-09-27) — the bottom nav is a small, floating,
+       ICON-ONLY pill (Drew's own live ruling: "a smaller, floating tab
+       screen at the bottom like instagram"). Class name and DOM position
+       are UNCHANGED on purpose — js/nav-gestures.js's bindScrollDirection()
+       keeps working with zero changes to that file. FIVE buttons, not six:
+       Picks · Dashboard · Chat · Standings · Comm — the Settings tab is
+       RETIRED (amends D-3 again; its content lives in the control-center
+       drawer only, DI-350's Settings-tab identity block retired with it).
+       Every button keeps the SAME hand-authored inline SVG (UN-97's one
+       named icon-family exception, unchanged) but drops its visible text
+       label — the label moves to a `.sr-only` span (VoiceOver-only text,
+       never `display:none`, so the accessible name survives) per the
+       Interaction Principles' Accessibility section. `aria-current="page"`
+       tracks the active tab (js/app.js's navigateTo()/setupNav()). -->
+  <nav class="bottom-nav" aria-label="Tabs">
+    <button class="nav-item" data-tab="picks" aria-label="Picks">
+      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="7.5 12.5 10.5 15.5 16.5 8.5"/></svg></span><span class="sr-only">Picks</span>
     </button>
-    <button class="nav-item active" data-tab="dashboard">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="19" x2="5" y2="13"/><line x1="12" y1="19" x2="12" y2="7"/><line x1="19" y1="19" x2="19" y2="10"/></svg></span><span>Dashboard</span>
+    <button class="nav-item active" data-tab="dashboard" aria-label="Dashboard" aria-current="page">
+      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="5" y1="19" x2="5" y2="13"/><line x1="12" y1="19" x2="12" y2="7"/><line x1="19" y1="19" x2="19" y2="10"/></svg></span><span class="sr-only">Dashboard</span>
     </button>
-    <button class="nav-item" data-tab="chat">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3.5v-3.5H6a2 2 0 0 1-2-2v-9Z"/></svg></span><span>Chat</span>
+    <button class="nav-item" data-tab="chat" aria-label="Chat">
+      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 5.5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H9l-4 3.5v-3.5H6a2 2 0 0 1-2-2v-9Z"/></svg></span><span class="sr-only">Chat</span>
     </button>
-    <button class="nav-item" data-tab="leaderboard">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M5 5H3v2a4 4 0 0 0 4 4.5"/><path d="M19 5h2v2a4 4 0 0 0-4 4.5"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="8" y1="20.5" x2="16" y2="20.5"/><line x1="8" y1="20.5" x2="9" y2="18"/><line x1="16" y1="20.5" x2="15" y2="18"/></svg></span><span>Standings</span>
+    <button class="nav-item" data-tab="leaderboard" aria-label="Standings">
+      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 4h10v5a5 5 0 0 1-10 0V4Z"/><path d="M5 5H3v2a4 4 0 0 0 4 4.5"/><path d="M19 5h2v2a4 4 0 0 0-4 4.5"/><line x1="12" y1="14" x2="12" y2="18"/><line x1="8" y1="20.5" x2="16" y2="20.5"/><line x1="8" y1="20.5" x2="9" y2="18"/><line x1="16" y1="20.5" x2="15" y2="18"/></svg></span><span class="sr-only">Standings</span>
     </button>
-    <!-- D-3 (2026-09-24): Rules -> Settings. Rules stays reachable (deep
-         links, and the control-center drawer's "Rules" row, DI-304) but
-         leaves the bottom nav — the Settings page (renderSettingsPage())
-         is the same accordion content the drawer's Settings group renders,
-         per DI-308's "one render function, two hosts." Glyph matches
-         js/icons.js's `settings` entry exactly (T-16, hand-authored inline
-         SVG, the same convention every other nav icon here already uses —
-         AD-93 keeps this the app-wide chrome rule, not just a nav-only
-         exception). -->
-    <button class="nav-item" data-tab="settings">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2"/></svg></span><span>Settings</span>
-    </button>
-    <button class="nav-item" data-tab="commissioner">
-      <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><line x1="4.8" y1="4.8" x2="6.6" y2="6.6"/><line x1="17.4" y1="17.4" x2="19.2" y2="19.2"/><line x1="4.8" y1="19.2" x2="6.6" y2="17.4"/><line x1="17.4" y1="6.6" x2="19.2" y2="4.8"/></svg></span><span>Comm.</span>
+    <button class="nav-item" data-tab="commissioner" aria-label="Commissioner">
+      <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5"/><circle cx="12" cy="12" r="2"/><line x1="12" y1="2" x2="12" y2="4.5"/><line x1="12" y1="19.5" x2="12" y2="22"/><line x1="2" y1="12" x2="4.5" y2="12"/><line x1="19.5" y1="12" x2="22" y2="12"/><line x1="4.8" y1="4.8" x2="6.6" y2="6.6"/><line x1="17.4" y1="17.4" x2="19.2" y2="19.2"/><line x1="4.8" y1="19.2" x2="6.6" y2="17.4"/><line x1="17.4" y1="6.6" x2="19.2" y2="4.8"/></svg></span><span class="sr-only">Comm.</span>
     </button>
   </nav>
 
@@ -287,7 +266,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=26-0"></script>
+<script type="module" src="js/app.js?v=27-0"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -304,7 +283,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=26-0' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=27-0' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

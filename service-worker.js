@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v26-0';
+const CACHE_NAME = 'cfb-pickems-v27-0';
 
 const STATIC_ASSETS = [
   './',

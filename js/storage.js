@@ -923,6 +923,38 @@ export function getLogoView() {
 }
 
 /**
+ * DI-360 (2026-09-27) — Munera night mode, Phase 1: the per-player
+ * System/Light/Dark preference. Same `_playerPref`/`_setPlayerPref` pair
+ * every per-player preference in this section already uses (Architecture
+ * bullet 4 — follows the player across devices).
+ *
+ * DEFAULT-WHEN-MISSING (CONVENTIONS #10): every existing player record
+ * predates this field; the honest reading of an absent value is `'system'`
+ * — follow the device's own `prefers-color-scheme`, exactly what a player
+ * who has never touched this control would expect, and exactly what the
+ * CSS already does with no JS involved at all when this attribute is
+ * absent. Signed out reads `'system'` too — no per-player record exists yet
+ * to read, matching UN-127's "no shared-device drift" reasoning for
+ * theme/timezone (no control renders while signed out).
+ *
+ * VALIDATED AT THE WRITE SEAM (CONVENTIONS #7) — an allow-list of exactly
+ * three values, same shape `setAccent()` uses for its own palette allow-list
+ * above. Anything else is refused, not coerced.
+ */
+export function getColorScheme() {
+  const v = _playerPref('colorScheme');
+  return (v === 'light' || v === 'dark') ? v : 'system';
+}
+export function setColorScheme(scheme) {
+  if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') {
+    console.warn('[storage] setColorScheme refused a value outside {system, light, dark}:', scheme);
+    return false;
+  }
+  _setPlayerPref('colorScheme', scheme);
+  return true;
+}
+
+/**
  * RG-198 — the DEVICE's memory of the palette it last painted. See KEYS.
  * THEME_HINT for why this exists and why it is not a second source of truth.
  *

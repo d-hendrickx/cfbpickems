@@ -129,8 +129,9 @@ import { haptic } from './haptics.js';
 // Step 6 (full-app review, 2026-09-26) — the left-edge zone reserved for the
 // control-center drawer's edge swipe (DRAWER_EDGE_ZONE_PX aliases this exact
 // constant in js/control-center.js). nav-gestures.js imports only platform
-// and haptics, so this adds no cycle.
-import { WEEK_SWIPE_EDGE_EXCLUDE_PX } from './nav-gestures.js';
+// and haptics, so this adds no cycle. bindBottomAnchor (v0.27.x bugfix,
+// 2026-09-27) keeps the page thread pinned across the keyboard layout change.
+import { WEEK_SWIPE_EDGE_EXCLUDE_PX, bindBottomAnchor, BOTTOM_ANCHOR_PX } from './nav-gestures.js';
 
 export const chatDigest = _digest;
 
@@ -840,12 +841,25 @@ export function updateChatBadges() {
   const u = unreadForRender(self, 'all');
   const n = (u.known && isChatEnabled()) ? u.count : 0;
   // nav badge
+  // DI-397 (UN-357, 2026-09-27) — the pill's nav buttons are icon-only; the
+  // visible "Chat" label moved to a `.sr-only` span (VoiceOver text, never
+  // `display:none`), which is what supplies the button's accessible name by
+  // default. When there is an unread count, the button's `aria-label`
+  // overrides that name to "Chat, N unread" — the Interaction Principles'
+  // Accessibility section ("Support VoiceOver") applied to a badge that used
+  // to be visual-only; the aria-label is removed (falling back to the plain
+  // ".sr-only" name) the moment the count clears.
   document.querySelectorAll('.nav-item[data-tab="chat"]').forEach(btn => {
     let b = btn.querySelector('.nav-unread');
     if (n > 0) {
       if (!b) { b = document.createElement('span'); b.className = 'nav-unread'; btn.appendChild(b); }
-      b.textContent = n > 99 ? '99+' : String(n);
-    } else b?.remove();
+      const shown = n > 99 ? '99+' : String(n);
+      b.textContent = shown;
+      btn.setAttribute?.('aria-label', `Chat, ${shown} unread`);
+    } else {
+      b?.remove();
+      btn.removeAttribute?.('aria-label');
+    }
   });
   // title badge
   try {
@@ -2346,6 +2360,9 @@ function gamereactRunHTML(run) {
  * measured height.
  */
 let _chatComposerRO = null;
+// v0.27.x bugfix — the stick-to-bottom binding on the CURRENT #chat-scroll;
+// released on every re-render (the node is replaced by innerHTML).
+let _unbindChatThreadAnchor = () => {};
 export function _syncChatStickyMetrics() {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
@@ -2570,6 +2587,8 @@ export function renderChatPage() {
   stampFieldOwner(c, me());
   _composerOwner = me();
   watchChatStickyMetrics();
+  _unbindChatThreadAnchor();
+  _unbindChatThreadAnchor = () => {};
   if (U.searchOpen) {
     // Focus (and restore caret position) rather than scroll-to-bottom — this
     // page re-renders on every keystroke (same pattern as every other U.*
@@ -2579,7 +2598,15 @@ export function renderChatPage() {
     if (si) { si.focus(); const p = si.value.length; si.setSelectionRange?.(p, p); }
   } else {
     const scroll = document.getElementById('chat-scroll');
-    if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    if (scroll) {
+      scroll.scrollTop = scroll.scrollHeight;
+      // v0.27.x bugfix (Drew, 2026-09-27) — T-25's keyboard-up layout grows
+      // this thread by --nav-height and shrinks it back on dismiss; WebKit
+      // has no scroll anchoring, so without this the newest messages end up
+      // under the composer after the keyboard goes down. A deliberate
+      // scroll-up is left alone (js/nav-gestures.js bindBottomAnchor()).
+      _unbindChatThreadAnchor = bindBottomAnchor(scroll);
+    }
   }
 
   // Mark read after the view has been visibly open for 1s (spec)
@@ -3605,7 +3632,7 @@ export const _wireRevealCloser = wireRevealCloser;
 function onChatScrollEvent(scrollEl, jumpEl) {
   if (_revealedMsgId) dismissRevealedActions();
   if (!jumpEl || !scrollEl) return;
-  const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120;
+  const nearBottom = scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < BOTTOM_ANCHOR_PX;
   jumpEl.style.display = nearBottom ? 'none' : 'block';
 }
 export const _onChatScrollEvent = onChatScrollEvent;
