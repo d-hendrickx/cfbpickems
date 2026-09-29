@@ -83,11 +83,13 @@
  *
  * ── ZERO-DEPENDENCY LEAF IMPORTS (safe — these modules import nothing that
  *    could cycle back here, and none of them are this pass's claimed files) ──
- *   `isNativeShell()`        — js/platform.js
  *   `haptic()`               — js/haptics.js
- *   `prefersReducedMotion()`, `AXIS_DEAD_ZONE_PX`, `WEEK_SWIPE_EDGE_EXCLUDE_PX`
+ *   `prefersReducedMotion()`, `AXIS_DEAD_ZONE_PX`, `isInDrawerOpenZone()`
  *                            — js/nav-gestures.js (NOT `gesturesSuspended` —
- *                              see finding 3 above)
+ *                              see finding 3 above). `isInDrawerOpenZone()`
+ *                              replaces the original `WEEK_SWIPE_EDGE_EXCLUDE_PX`
+ *                              import per DI-419 (2026-09-28) — see note 1,
+ *                              amended, below.
  *   `comingSoonCopy()`       — js/leagues-home.js (DI-313's shared "not
  *                              released yet" stub pattern)
  *   `getShellBrandName()`    — js/brand.js (NOT the iOS-thread-exclusive
@@ -125,14 +127,29 @@
  *     feedbackCardHTML,    // renderRulesPage()'s feedback-card markup,
  *                           // verbatim — NOW EMBEDDED (VERDICT amendment 3,
  *                           // applied fix round 1 finding 4 — see below)
- *     gameRequestHTML,     // renderGameRequestCardHTML() verbatim
+ *     gameRequestHTML,     // renderGameRequestCardHTML() verbatim — DI-422:
+ *                           // now embedded under the row label "Request a
+ *                           // game" (was "Game settings"), unchanged body
  *     releaseNotesHTML,    // renderReleaseNotesCardHTML() verbatim
+ *     almaMaterOptionsHTML, // DI-423 AMENDMENT (2026-09-28) — the Profile
+ *                           // pane's alma-mater field's <option> list, built
+ *                           // by app.js's buildAlmaMaterOptions(player.almaMater,
+ *                           // cachedEspnTeamsList()||ALMA_MATERS) — the EXACT
+ *                           // same call chat-ui.js's registerAlmaMaterOptionsProvider()
+ *                           // wires for the chat-prefs picker, and the same
+ *                           // builder the Comm -> Players -> Edit modal calls.
+ *                           // One implementation, three call sites — never a
+ *                           // second dropdown.
  *   },
  *   timeZones = TIME_ZONES, currentTimeZone = DEFAULT_TZ,   // DI-303 row
  *   themes = THEMES, currentTheme = 'neutral',               // DI-307 gap-fill row
  *   logoView = false,                                        // DI-331c row
  *   callbacks: {
- *     onSignOut, onSwitchLeague,                              // DI-302
+ *     onSignOut,                                              // DI-302, now in Profile (DI-421)
+ *     onOpenLeaguesHome,      // DI-418 (amends DI-302's "Switch League" row) —
+ *                              // Profile's "Your Leagues" row; PUSHES the new
+ *                              // Leagues Home overlay, replacing the old
+ *                              // onSwitchLeague/showLeagueSelectorSheet() action
  *     onOpenLeaguePage,           // SECURITY GATE FINDING 3 (2026-09-25) — the identity header's league-name tap
  *     onOpenPasswordChange, onOpenDeleteAccount,              // DI-335/DI-340
  *     onSaveDisplayName, onSaveInitials, onSaveAlmaMater,      // Profile pane
@@ -154,6 +171,11 @@
  * row state, for exactly this purpose (an async body resolving, a toggle
  * flipping, a fresh `getSession()` read).
  *
+ * DI-419 (2026-09-28) — `options.getTab()` (optional, defaults to `() =>
+ * null`) is threaded straight through to `bindControlCenterEdgeSwipe()`'s
+ * own `opts.getTab`, so the drawer's edge-swipe arm check can read the
+ * CURRENT tab (`document.body.dataset.tab`, js/app.js) fresh on every touch.
+ *
  * ── NAMED DEVIATIONS / GAPS, per this thread's own "flag, don't silently
  *    resolve" discipline (matching the DI's own §14/§15 sections; fix-round-1
  *    corrections are marked as such where they supersede a fix-round-0 note) ──
@@ -161,9 +183,14 @@
  * 1. DI-301's own text proposes a 24px left-edge zone, "tunable." By the time
  *    this pass builds, `js/nav-gestures.js` already shipped
  *    `WEEK_SWIPE_EDGE_EXCLUDE_PX = 28` with the comment "left-edge zone
- *    reserved for T-13's drawer." This module reuses that constant
+ *    reserved for T-13's drawer." This module reused that constant
  *    (`DRAWER_EDGE_ZONE_PX = WEEK_SWIPE_EDGE_EXCLUDE_PX`) rather than
  *    re-declaring 24, per the coordinator's own task instruction.
+ *    AMENDED by DI-419 (2026-09-28, Drew ruling A): both the fixed pixel
+ *    zone AND `DRAWER_EDGE_ZONE_PX` itself are RETIRED — the drawer's own
+ *    arm check now calls the ONE shared `isInDrawerOpenZone()`
+ *    (js/nav-gestures.js) directly, a 25%-of-viewport fraction on Picks/
+ *    Dashboard and "anywhere" on every other tab, per Drew's own ruling.
  *
  * 2. DI-302's original text says tapping the identity block opens
  *    `showAccountSheet()`. The 2026-09-25 AMENDMENT overrides this: tapping
@@ -214,11 +241,15 @@
  * 7. Icons that exist today (js/icons.js Phase 1): `bell`, `almaMater`,
  *    `settings`, `chevronRight`, `chevronLeft`, `sportFootball`. Rows with no
  *    matching icon render TEXT LABELS ONLY (never an emoji substitute):
- *    Time zone, SCRIBE settings, Chat settings, Game settings, Team logos,
- *    Theme, Commissioner/Admin/Super Admin panel rows, Help Center, Feedback,
- *    Rules, Version history — each an owed Phase-2 glyph. `bell` is reused
- *    for Notifications, `almaMater` for the Profile pane's alma-mater field.
- *    `chevronRight` is reused for every disclosure/expand chevron.
+ *    Time zone, Notifications, SCRIBE settings, Chat settings, Request a game,
+ *    Team logos, Theme, Appearance, Commissioner/Admin/Super Admin panel rows,
+ *    Help Center, Feedback, Rules, Version history — each an owed Phase-2
+ *    glyph. **DI-422 (2026-09-28):** Notifications no longer renders `bell` —
+ *    "no other button has an icon" (Drew) — so `bell` is currently unused by
+ *    any row; kept in `KNOWN_ICONS` for whichever future row earns it back,
+ *    not removed from the icon family. `almaMater` is used by the Profile
+ *    pane's alma-mater field. `chevronRight` is reused for every
+ *    disclosure/expand chevron.
  *    **Fix round 1, finding 7:** the Profile pane's back affordance now uses
  *    `icon('chevronLeft')` (already exists — fix round 0 used a literal '‹'
  *    despite the real icon being available, an oversight, now fixed). The
@@ -229,11 +260,62 @@
  *    OS-drawn emoji pictograph), matching the identical precedent already
  *    shipped in `showAccountSheet()`'s modal-close button, but it is still
  *    explicitly OWED to Group E's icon inventory for full D-1 compliance.
+ *
+ * 8. **UX Revamp v0.27.2 batch (2026-09-28) — DI-418/DI-421/DI-422/DI-423.**
+ *    Four changes folded in this pass, each at its own render function:
+ *      - DI-418: the drawer's "Switch League" row is GONE from the identity
+ *        header. Its replacement, "Your Leagues", now lives in the Profile
+ *        pane (DI-421) and pushes app.js's new Leagues Home overlay via
+ *        `onOpenLeaguesHome` — never `showLeagueSelectorSheet()`, which stays
+ *        the header pill's own job (`onOpenLeaguePage`'s sibling, wired in
+ *        app.js, outside this module).
+ *      - DI-421: `renderIdentityHeader()` no longer renders
+ *        `control-center-identity-actions` AT ALL — Sign Out and Your Leagues
+ *        moved into `renderProfileScreen()`, gated on the SAME
+ *        `ctx.accountRows === true` flag (Supabase auth mode only — a
+ *        local-PIN device has no Supabase session to leave and no
+ *        multi-league concept). REVIEWER ROUND 2 minor finding (RG-298,
+ *        2026-09-28) — the now-dead `.control-center-identity-actions` CSS
+ *        rule is DELETED (`css/styles.css`), including the
+ *        `hotfix/cc-alma-admin` alignment edit to that same rule — nothing
+ *        renders the class on either side of that merge.
+ *      - REVIEWER ROUND 2 D1 (RG-298, 2026-09-28) — Profile's row order is
+ *        now Your Leagues (WITH the same drill-in chevron Password/Rules
+ *        carry) -> Password -> Sign Out -> Delete Account LAST in the danger
+ *        zone. A drill-in (Your Leagues, Password) never sits below a
+ *        destructive, divider-fenced action — Sign Out moved out of its own
+ *        trailing block (which used to render AFTER Password/Delete Account)
+ *        to sit between Password and the danger zone instead.
+ *      - DI-422: `renderSettingsAccordion()` now emits a LABELED "My
+ *        Preferences" group (Time zone -> Notifications -> Chat settings ->
+ *        Team logos -> Theme -> Appearance, Drew's own order) followed by an
+ *        UNLABELED group holding SCRIBE settings alone (omitted from "My
+ *        Preferences" — Drew's six-item list doesn't name it, and it is pilot
+ *        training-data plumbing, not an everyday preference). Team logos is
+ *        reshaped from a bespoke always-visible toggle row into the SAME
+ *        `accordionRow()` shape every other row uses — tap to expand, body
+ *        holds the switch AND the helper caption (previously always
+ *        visible). Notifications drops `iconName:'bell'`. Appearance's
+ *        school-theme caption moves from the row's collapsed label line into
+ *        its body, above the `<select>`. `renderFeedbackRulesGroup()` gains
+ *        its own "Help & Feedback" label and now ALSO holds "Request a game"
+ *        (renamed from "Game settings", moved out of the Preferences group)
+ *        and "Help Center" (pulled up from `renderHelpFooter()`, which now
+ *        renders only the Privacy Policy footer link) — all five rows
+ *        (Request a game, Feedback, Rules, Version history, Help Center)
+ *        share ONE single-open-per-group state (`feedbackGroupOpenRow`),
+ *        unchanged mechanism, wider membership.
+ *      - DI-423 (Rules page): out of this file's scope — `js/app.js`'s
+ *        `renderRulesPage()` drops its Alma Maters section entirely, and its
+ *        dated AMENDMENT (RG-290 finding) turns the Profile pane's
+ *        alma-mater field from a free-text `<input>` into the SAME ESPN
+ *        `<select>` the chat-prefs picker and Comm -> Players -> Edit use —
+ *        see `renderProfileScreen()`'s own comment and `ctx.bodies.almaMaterOptionsHTML`
+ *        in the ctx contract above.
  */
 
-import { isNativeShell } from './platform.js';
 import { haptic } from './haptics.js';
-import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, WEEK_SWIPE_EDGE_EXCLUDE_PX } from './nav-gestures.js';
+import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone } from './nav-gestures.js';
 import { comingSoonCopy } from './leagues-home.js';
 import { getShellBrandName } from './brand.js';
 import { TIME_ZONES, DEFAULT_TZ, THEMES } from './data-model.js';
@@ -257,8 +339,13 @@ import { isSuperAdmin, isPlatformAdmin } from './roles.js';
 export const DRAWER_WIDTH_VW = 85;
 export const DRAWER_MAX_WIDTH_PX = 340;
 
-/** Reused from nav-gestures.js, NOT re-declared — see file-header note 1. */
-export const DRAWER_EDGE_ZONE_PX = WEEK_SWIPE_EDGE_EXCLUDE_PX;
+/**
+ * DI-419 (2026-09-28, Drew ruling A) amends file-header note 1: the fixed
+ * 28px `DRAWER_EDGE_ZONE_PX` pixel zone is RETIRED. The drawer's own arm
+ * check now calls `isInDrawerOpenZone()` (imported above) directly, at
+ * `bindControlCenterEdgeSwipe()`'s own call site — the ONE shared predicate
+ * DI-419 establishes, not a second, independently-tuned pixel constant.
+ */
 
 /** DI-301: "settles open/closed based on velocity + a 40%-of-width threshold." */
 export const DRAWER_OPEN_SETTLE_RATIO = 0.4;
@@ -454,12 +541,13 @@ export function isScrimShown(state) {
 
 // ═════════════════════════════════════════════════════════════════════════
 // PURE GESTURE MATH — DI-301's native edge-swipe / drag-to-close.
+//
+// DI-419 (2026-09-28, Drew ruling A) — the fixed-28px `_isWithinEdgeZone()`
+// predicate that used to live here is RETIRED: `bindControlCenterEdgeSwipe()`
+// below now calls the ONE shared `isInDrawerOpenZone()` (js/nav-gestures.js)
+// directly at its own touchstart handler, rather than a second,
+// independently-tuned local pixel check.
 // ═════════════════════════════════════════════════════════════════════════
-
-/** True only inside the reserved left-edge band (file-header note 1). */
-export function _isWithinEdgeZone(clientX) {
-  return typeof clientX === 'number' && clientX >= 0 && clientX < DRAWER_EDGE_ZONE_PX;
-}
 
 /**
  * DI-301: "settles open/closed based on velocity + a 40%-of-width threshold."
@@ -490,6 +578,11 @@ function isBlockedByOtherSurface() {
   // over one finger. One owner per touch.
   if (document.getElementById?.('league-page-overlay')) return true;
   if (document.getElementById?.('week-wizard-sheet-wrap')) return true;
+  // DI-418 (2026-09-28) — the Leagues Home overlay (`showLeaguesHomeOverlay()`,
+  // js/app.js) is a THIRD full-screen surface with its own native swipe-back
+  // (mirrors showLeaguePageOverlay() byte-for-byte), same reasoning as the
+  // League Page/wizard entries just above.
+  if (document.getElementById?.('leagues-home-overlay')) return true;
   return false;
 }
 
@@ -497,16 +590,40 @@ function isBlockedByOtherSurface() {
  * DOM binder — gesture-DETECTION layer only. `dispatch` (REQUIRED) is the
  * only side effect; `getState` (REQUIRED) must return the CURRENT state
  * synchronously. `opts.getWidthPx` reads the drawer's live rendered width.
+ * `opts.getTab` (DI-419, 2026-09-28) returns the CURRENT active tab —
+ * `isInDrawerOpenZone()`'s own contract, re-read fresh on every touchstart
+ * (same "re-derive fresh state on every touch" discipline `getState`/
+ * `getWidthPx` already follow); a missing/omitted `getTab` reads as `null`,
+ * which `isInDrawerOpenZone()` treats as "not picks/dashboard" — i.e.
+ * "anywhere" — preserving today's exact behavior for any caller that hasn't
+ * wired it yet.
  *
- * Native-only (DI-301 PARITY-BY-DESIGN: web gets tap-only, no edge-swipe).
+ * REVIEWER ROUND 2 (B3 BLOCK, coordinator ruling, 2026-09-28) — AMENDS
+ * DI-301's own native-only carve-out ("web gets tap-only, no edge-swipe"),
+ * dated here. Drew tests on the home-screen WEB app and asked for "swipe
+ * from left to right" there too; with DI-419's yield NOT itself gated on
+ * `isNativeShell()` (js/nav-gestures.js's `bindWeekSwipe()` never was —
+ * see that function's own header), a native-only drawer binder left the
+ * entire left 25% of Picks/Dashboard on web a dead zone: week-swipe
+ * yielded to a drawer gesture that would never arm to claim it. The
+ * drawer's own open/close CSS transition and tap-to-open trigger
+ * (`#control-center-trigger`) already exist identically on web — this
+ * binder is the ONLY piece that was native-gated, and no longer is. Same
+ * predicate/zone on both platforms; the standalone-PWA note: Safari's own
+ * system back-swipe lives at the physical bezel, this zone starts just
+ * inside it, so the two do not compete for the same first few pixels.
  */
 export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
-  if (!isNativeShell()) return () => {};
   if (typeof dispatch !== 'function' || typeof getState !== 'function') return () => {};
   const getWidthPx = typeof opts.getWidthPx === 'function' ? opts.getWidthPx : () => DRAWER_MAX_WIDTH_PX;
+  const getTab = typeof opts.getTab === 'function' ? opts.getTab : () => null;
 
   let start = null, axis = null, dragActive = false, progressAtStart = 0;
   let lastX = 0, lastT = 0, velocityPxPerMs = 0;
+
+  function viewportWidthPx() {
+    return (typeof window !== 'undefined' && typeof window.innerWidth === 'number') ? window.innerWidth : 0;
+  }
 
   function onTouchStart(e) {
     if (isBlockedByOtherSurface()) { start = null; return; }
@@ -514,11 +631,21 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
     if (!t) return;
     const state = getState();
     const phaseOpen = state.phase === 'open';
-    // Arm from the edge zone when closed (opening drag); arm ANYWHERE on the
-    // open drawer when open (DI-301: "dragging the open drawer left closes
-    // it the same way" — and per finding 3, the drawer being open never
-    // blocks its OWN gesture from arming).
-    if (!phaseOpen && !_isWithinEdgeZone(t.clientX)) { start = null; return; }
+    // DI-419 §Arbitration — "bindControlCenterEdgeSwipe()'s touchstart-time
+    // arm check (!phaseOpen && !isInDrawerOpenZone(...)) is unchanged in
+    // shape — the drawer only ever arms for a touch starting in-zone, as
+    // today." Arm from the shared zone when closed (opening drag); arm
+    // ANYWHERE on the open drawer when open (DI-301: "dragging the open
+    // drawer left closes it the same way" — and per finding 3, the drawer
+    // being open never blocks its OWN gesture from arming).
+    // REVIEWER ROUND 2 (B1/B2) — `target: e.target` lets the SAME arm
+    // check refuse when the touch starts on a chat message (bindMessageSwipe()'s
+    // reply swipe wins outright — B1: a fast L→R drag on a bubble used to
+    // arm BOTH gestures) or a horizontal scroller/text field with
+    // somewhere to scroll back to (B2). Only consulted here in the CLOSED
+    // branch — an open drawer still closes from anywhere, unaffected,
+    // exactly as the comment above already promises.
+    if (!phaseOpen && !isInDrawerOpenZone({ tab: getTab(), clientX: t.clientX, viewportWidthPx: viewportWidthPx(), target: e.target })) { start = null; return; }
     start = { x: t.clientX, y: t.clientY };
     axis = null;
     dragActive = false;
@@ -635,10 +762,13 @@ function initialsOf(ctx) {
   return name.split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
 }
 
-/** DI-302 — identity block (avatar/name/league/chips/version) + the
- *  2026-09-25-amended Sign out / Switch league rows. Fix round 1, finding 5:
- *  the "View league as" row (fix round 0's own optional addition) is REMOVED
- *  entirely — not in the DI, not in the amendment; see file-header note 3. */
+/** DI-302 — identity block (avatar/name/league/chips/version). Fix round 1,
+ *  finding 5: the "View league as" row (fix round 0's own optional addition)
+ *  is REMOVED entirely — not in the DI, not in the amendment; see
+ *  file-header note 3. **DI-421 (2026-09-28):** the Sign out / Switch league
+ *  action rows that used to sit directly under this block are GONE — they
+ *  now live in the pushed Profile pane (`renderProfileScreen()`, below), one
+ *  deliberate tap deeper, per file-header note 8. */
 export function renderIdentityHeader(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderIdentityHeader');
   const player = ctx.session?.player || {};
@@ -666,14 +796,6 @@ export function renderIdentityHeader(ctx) {
       </button>
       <button type="button" class="cc-identity-league-tap text-muted" data-action="cc-open-league-page" aria-label="Open League Page">${leagueName}</button>
       <div class="cc-version-stamp text-muted">${versionLine}</div>
-      <div class="control-center-identity-actions">
-        <button type="button" class="control-center-row control-center-row--action" data-action="cc-signout">
-          <span class="cc-row-label">Sign Out</span>
-        </button>
-        <button type="button" class="control-center-row control-center-row--action" data-action="cc-switch-league">
-          <span class="cc-row-label">Switch League</span>
-        </button>
-      </div>
     </div>`;
 }
 
@@ -688,7 +810,26 @@ export function renderIdentityHeader(ctx) {
  *  (third pass): auth.js's getAccountHasPasswordIdentity() now reads the
  *  session's own provider list, so the row (accountRowsHTML(), below) uses
  *  the DI's labels, falling back to a neutral "Password" only when the
- *  session cannot say. The rows render only in Supabase auth mode. */
+ *  session cannot say. The rows render only in Supabase auth mode.
+ *
+ *  DI-423 AMENDMENT (2026-09-28, RG-290 finding) — the alma-mater field is
+ *  now the SAME ESPN `<select>` (with the "— None —" option) the chat-prefs
+ *  picker (`js/chat-ui.js`'s `prefsPanelHTML()`) and the Comm -> Players ->
+ *  Edit modal (`showEditPlayerModal()`) use — `ctx.bodies.almaMaterOptionsHTML`,
+ *  built by app.js's ONE `buildAlmaMaterOptions()` implementation, injected
+ *  the same way every other `ctx.bodies.*` string is (never re-implemented
+ *  here). A free-text `<input>` here regressed Drew's 2026-09-04 "Do the
+ *  dropdown" ruling (UN-133) — a typed name that doesn't match ESPN's exact
+ *  spelling matched nothing anywhere claimedAlmaMaters() is read. Saving is
+ *  UNCHANGED — `cc-save-profile` reads `[data-field="alma-mater"]`'s `.value`
+ *  exactly as it did for the `<input>`, which a `<select>` also carries; the
+ *  value still reaches `onSaveAlmaMater` -> app.js's `patchPlayer()`.
+ *
+ *  DI-421 (2026-09-28), REORDERED by reviewer BLOCK D1 (RG-298, 2026-09-28) —
+ *  "Your Leagues" (`profileAccountActionsHTML()`, below) now renders FIRST,
+ *  ABOVE `accountRowsHTML()`'s Password/Sign Out/Delete Account sequence —
+ *  see D1's own reasoning at `accountRowsHTML()`'s doc comment. Both share
+ *  the SAME `ctx.accountRows` gate — see file-header note 8. */
 export function renderProfileScreen(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderProfileScreen');
   const player = ctx.session?.player || {};
@@ -711,8 +852,7 @@ export function renderProfileScreen(ctx) {
       </div>
       <div class="form-group">
         <label class="form-label" for="cc-field-alma-mater">${almaIcon ? `<span class="cc-row-icon">${almaIcon}</span>` : ''}Alma mater &amp; home teams</label>
-        <input class="form-input" id="cc-field-alma-mater" data-field="alma-mater"
-          value="${ctx.escHtml(player.almaMater || '')}" />
+        <select class="form-input" id="cc-field-alma-mater" data-field="alma-mater">${ctx.bodies?.almaMaterOptionsHTML || ''}</select>
       </div>
       <button type="button" class="btn btn-primary btn-block" data-action="cc-save-profile">Save</button>
       <!-- UX Revamp Group F (DI-335/DI-340, 2026-09-25) — account-identity
@@ -721,18 +861,59 @@ export function renderProfileScreen(ctx) {
            reasoning (a JS comment, not an HTML one — this whole function
            body is one template literal, and a stray backtick in an inline
            HTML comment here previously broke the module's own parse). -->
+      ${ctx.accountRows === true && ctx.membershipsResolved !== false ? profileAccountActionsHTML(ctx) : ''}
       ${ctx.accountRows === true ? accountRowsHTML(ctx) : ''}
     </div>`;
 }
 
-/** STEP B(7) / N4 (3c fix window, third pass) — the Password / Delete Account
- *  rows. Rendered ONLY when `ctx.accountRows === true` (Supabase auth mode):
- *  both act on a Supabase account and could only fail anywhere else ("a
- *  control that cannot do what it says is worse than no control", DI-335).
- *  Missing flag = hidden. The Password row is a drill-in, so it carries the
- *  same chevron every other drill-in row does; its label follows DI-335
- *  ("Change Password" / "Set Password"), neutral "Password" when the session
- *  cannot tell (`ctx.hasPasswordIdentity` null/absent). */
+/**
+ * DI-421 (2026-09-28) — "Your Leagues" (DI-418's renamed/repointed "Switch
+ * League" row), relocated out of the drawer's identity header
+ * (`renderIdentityHeader()`, above) into the Profile pane. REVIEWER BLOCK D1
+ * (RG-298, 2026-09-28) — now carries the SAME drill-in chevron every other
+ * navigating row in this pane has (`accountRowsHTML()`'s Password row,
+ * `renderFeedbackRulesGroup()`'s Rules row) — a row that pushes to a whole
+ * new screen (Leagues Home) is a drill-in, same shape as those, not a plain
+ * action like Sign Out. Gated on the SAME `ctx.accountRows === true` flag
+ * `accountRowsHTML()` checks — no new flag for THAT half: in local-PIN mode
+ * there is no multi-league concept to switch between. The CALLER
+ * (`renderProfileScreen()`) additionally gates this row on
+ * `ctx.membershipsResolved !== false` (DI-418's own "hide Your Leagues
+ * while memberships unresolved" record item, implemented — reviewer round
+ * 2, RG-298) — the same "hold the slot empty rather than guess" rule
+ * DI-184c's header-pill gate already applies, so a not-yet-loaded
+ * membership list never shows a Leagues Home destination that would open
+ * to nothing.
+ */
+function profileAccountActionsHTML(ctx) {
+  const chevron = iconOrNothing(ctx, 'chevronRight');
+  return `<button type="button" class="control-center-row control-center-row--action" data-action="cc-open-leagues-home">
+        <span class="cc-row-label">Your Leagues</span>
+        <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
+      </button>`;
+}
+
+/**
+ * STEP B(7) / N4 (3c fix window, third pass) — the Password / Sign Out /
+ * Delete Account rows. Rendered ONLY when `ctx.accountRows === true`
+ * (Supabase auth mode): Password/Delete Account act on a Supabase account
+ * and could only fail anywhere else ("a control that cannot do what it says
+ * is worse than no control", DI-335); Sign Out has no session to leave.
+ * Missing flag = hidden. The Password row is a drill-in, so it carries the
+ * same chevron every other drill-in row does; its label follows DI-335
+ * ("Change Password" / "Set Password"), neutral "Password" when the session
+ * cannot tell (`ctx.hasPasswordIdentity` null/absent).
+ *
+ * REVIEWER BLOCK D1 (RG-298, 2026-09-28) — Sign Out moved from a separate
+ * `profileAccountActionsHTML()` block (below "Your Leagues", after Password)
+ * to HERE, between Password and the danger zone: Password → Sign Out →
+ * Delete Account. Delete Account is now unambiguously LAST — a drill-in
+ * (Password) never sat below a destructive, divider-fenced action to begin
+ * with, but Sign Out used to (it rendered in a SEPARATE block after this
+ * one, i.e. visually below Delete Account) — reordered so the danger zone
+ * is the true end of the pane, matching iOS Settings.app's own convention
+ * that destructive actions anchor the bottom.
+ */
 function accountRowsHTML(ctx) {
   const chevron = iconOrNothing(ctx, 'chevronRight');
   const label = ctx.hasPasswordIdentity === true ? 'Change Password'
@@ -740,6 +921,9 @@ function accountRowsHTML(ctx) {
   return `<button type="button" class="control-center-row control-center-row--action" data-action="cc-open-password-change">
         <span class="cc-row-label">${ctx.escHtml(label)}</span>
         <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
+      </button>
+      <button type="button" class="control-center-row control-center-row--action" data-action="cc-signout">
+        <span class="cc-row-label">Sign Out</span>
       </button>
       <div class="control-center-danger-zone">
         <button type="button" class="control-center-row control-center-row--action control-center-row--danger" data-action="cc-open-delete-account">
@@ -804,20 +988,49 @@ function selectBody(ctx, { field, options, current, disabled }) {
   return `<select class="form-input" data-field="${field}"${disabled ? ' disabled' : ''}>${opts}</select>`;
 }
 
-function logoViewToggleRow(ctx) {
+/** DI-422 finding 12 — Team logos, reshaped INTO `accordionRow()`'s own
+ *  body slot (was a bespoke always-visible toggle row with its helper caption
+ *  rendered unconditionally beneath the label). The row now behaves like
+ *  every other settings row: tap the header to expand, and BOTH the switch
+ *  control and the helper text live in the body, hidden while collapsed.
+ *  Markup is otherwise byte-identical to the old `logoViewToggleRow()` —
+ *  this is a relocation into a collapsible body, not a new control. */
+function teamLogosBodyHTML(ctx) {
   const on = ctx.logoView === true;
-  return `<div class="control-center-row-wrap" data-row="logo-view">
-      <button type="button" class="control-center-row control-center-row--toggle" data-action="cc-toggle-logo-view" role="switch" aria-checked="${on}">
-        <span class="cc-row-label">Team logos</span>
-        <span class="cc-row-switch" data-on="${on}" aria-hidden="true"></span>
-      </button>
-      <div class="cc-row-helper text-muted">Show team logos instead of names on Picks and the compact dashboard.</div>
-    </div>`;
+  return `<button type="button" class="control-center-row control-center-row--toggle" data-action="cc-toggle-logo-view" role="switch" aria-checked="${on}">
+      <span class="cc-row-label">Team logos</span>
+      <span class="cc-row-switch" data-on="${on}" aria-hidden="true"></span>
+    </button>
+    <div class="cc-row-helper text-muted">Show team logos instead of names on Picks and the compact dashboard.</div>`;
 }
 
-/** DI-303 (six settings rows, Profile excluded per amendment) + DI-307's
- *  Theme gap-fill row + DI-331's Team-logo-view row: Time zone, Notifications,
- *  SCRIBE settings, Chat settings, Game settings, Team logos, Theme. */
+/** DI-422 finding 12 — Appearance's school-theme caption, moved from the
+ *  row's collapsed label line (the `secondary` param, still supported by
+ *  `accordionRow()` for any future row) into the body, above the `<select>`.
+ *  Same conditional (`currentTheme !== 'neutral'`), same text — only the DOM
+ *  position changed, so it is visible only once the row is expanded. */
+function appearanceBodyHTML(ctx) {
+  const isSchoolTheme = (ctx.currentTheme || 'neutral') !== 'neutral';
+  const caption = isSchoolTheme ? `<p class="cc-row-secondary">Night mode is available with the Munera theme</p>` : '';
+  return `${caption}${selectBody(ctx, {
+    field: 'colorScheme',
+    options: [{ key: 'system', label: 'System' }, { key: 'light', label: 'Light' }, { key: 'dark', label: 'Dark' }],
+    current: ctx.currentColorScheme || 'system',
+    disabled: isSchoolTheme,
+  })}`;
+}
+
+/**
+ * DI-422 (UN-377, 2026-09-28) — "Time zone, notifications, chat settings,
+ * team logos, theme and appearance should be listed under the header 'My
+ * Preferences'" (Drew, verbatim, that exact order). Notifications drops its
+ * `bell` icon ("no other button has an icon" — Drew). SCRIBE settings is
+ * DELIBERATELY OMITTED from this group — Drew's six-item list doesn't name
+ * it, and it is pilot-league training-data plumbing, not an everyday
+ * preference — but it is NOT deleted: it renders in its own unlabeled group
+ * directly below "My Preferences", exactly where it already was, still
+ * gated by its own pilot-only visibility (DI-365).
+ */
 export function renderSettingsAccordion(ctx, state) {
   requireFn(ctx.escHtml, 'escHtml', 'renderSettingsAccordion');
   const timeZones = ctx.timeZones || TIME_ZONES;
@@ -826,28 +1039,23 @@ export function renderSettingsAccordion(ctx, state) {
   const currentTheme = ctx.currentTheme || 'neutral';
   const openRow = state.settingsOpenRow;
 
-  const rows = [
+  const preferenceRows = [
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'timezone', label: 'Time zone', openRowValue: openRow,
       bodyHTML: selectBody(ctx, { field: 'timezone', options: timeZones, current: currentTimeZone }),
     }),
     accordionRow(ctx, state, {
-      group: 'settings', rowId: 'notifications', label: 'Notifications', iconName: 'bell', openRowValue: openRow,
+      group: 'settings', rowId: 'notifications', label: 'Notifications', openRowValue: openRow,
       bodyHTML: ctx.bodies?.notifSettingsHTML || '',
-    }),
-    accordionRow(ctx, state, {
-      group: 'settings', rowId: 'scribe', label: 'SCRIBE settings', openRowValue: openRow,
-      bodyHTML: ctx.bodies?.scribeFileHTML || '',
     }),
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'chat', label: 'Chat settings', openRowValue: openRow,
       bodyHTML: ctx.bodies?.chatPrefsHTML || '',
     }),
     accordionRow(ctx, state, {
-      group: 'settings', rowId: 'game-settings', label: 'Game settings', openRowValue: openRow,
-      bodyHTML: ctx.bodies?.gameRequestHTML || '',
+      group: 'settings', rowId: 'logo-view', label: 'Team logos', openRowValue: openRow,
+      bodyHTML: teamLogosBodyHTML(ctx),
     }),
-    logoViewToggleRow(ctx),
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'theme', label: 'Theme', openRowValue: openRow,
       bodyHTML: selectBody(ctx, { field: 'theme', options: themes, current: currentTheme }),
@@ -864,34 +1072,70 @@ export function renderSettingsAccordion(ctx, state) {
     // would be a dead one — no error, just silently no effect. EXPLAINED, not
     // hidden: the control stays discoverable (a player who wants night mode
     // now knows exactly what to switch), disabled so nothing gets "saved"
-    // that would never paint, with a secondary line naming the reason.
+    // that would never paint, with the reason named — DI-422 finding 12 moved
+    // that explanation into the row's own body (appearanceBodyHTML(), above).
     accordionRow(ctx, state, {
       group: 'settings', rowId: 'appearance', label: 'Appearance', openRowValue: openRow,
-      secondary: (ctx.currentTheme || 'neutral') !== 'neutral' ? 'Night mode is available with the Munera theme' : undefined,
-      bodyHTML: selectBody(ctx, {
-        field: 'colorScheme',
-        options: [{ key: 'system', label: 'System' }, { key: 'light', label: 'Light' }, { key: 'dark', label: 'Dark' }],
-        current: ctx.currentColorScheme || 'system',
-        disabled: (ctx.currentTheme || 'neutral') !== 'neutral',
-      }),
+      bodyHTML: appearanceBodyHTML(ctx),
     }),
   ];
-  return `<div class="control-center-group">${rows.join('')}</div>`;
+
+  // SCRIBE settings — deliberately OUTSIDE "My Preferences" (see this
+  // function's own doc comment) but still part of the SAME single-open
+  // 'settings' group/state, so opening it still closes whichever Preferences
+  // row was open, matching every other row's single-open-per-group behavior.
+  const scribeRow = accordionRow(ctx, state, {
+    group: 'settings', rowId: 'scribe', label: 'SCRIBE settings', openRowValue: openRow,
+    bodyHTML: ctx.bodies?.scribeFileHTML || '',
+  });
+
+  return `<div class="control-center-group">
+      <div class="control-center-group-label">My Preferences</div>
+      ${preferenceRows.join('')}
+    </div>
+    <div class="control-center-group">${scribeRow}</div>`;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-// RENDER — DI-304 Feedback / Rules / Version history + DI-305 Help/footer
+// RENDER — DI-304 Feedback / Rules / Version history, DI-422 "Help & Feedback"
 // ═════════════════════════════════════════════════════════════════════════
 
-/** Fix round 1, finding 4/5 (coordinator ruling, VERDICT amendment 3):
- *  Feedback is now an ACCORDION ROW embedding `ctx.bodies.feedbackCardHTML`
- *  — same single-open-per-group mechanic as Version history, sharing
- *  `feedbackGroupOpenRow`. Rules stays a plain nav link (unchanged). */
+/**
+ * Fix round 1, finding 4/5 (coordinator ruling, VERDICT amendment 3):
+ * Feedback is an ACCORDION ROW embedding `ctx.bodies.feedbackCardHTML` — same
+ * single-open-per-group mechanic as Version history, sharing
+ * `feedbackGroupOpenRow`. Rules stays a plain nav link (unchanged).
+ *
+ * DI-422 (UN-377, 2026-09-28) — this group now carries its OWN header, "Help
+ * & Feedback" (Drew asked for "a header for this grouping" without naming
+ * one; recommended per the coordinator's own reasoning in the DI — every row
+ * is either asking-for-something or giving-feedback, Rules is the one loose
+ * fit but Drew explicitly sequenced it here). Two rows join the group,
+ * sharing the SAME `feedbackGroupOpenRow` single-open state as
+ * Feedback/Version history:
+ *   - "Request a game" (renamed from "Game settings", `rowId` kept as
+ *     `game-settings` — same `ctx.bodies.gameRequestHTML`, unchanged body —
+ *     moved out of "My Preferences", ABOVE Feedback per Drew's own sequence:
+ *     "request a game and place it above feedback, rules, and version
+ *     history").
+ *   - "Help Center" (pulled UP from `renderHelpFooter()`, which now renders
+ *     only the Privacy Policy footer link — see that function, below).
+ */
 export function renderFeedbackRulesGroup(ctx, state) {
   requireFn(ctx.escHtml, 'escHtml', 'renderFeedbackRulesGroup');
   const openRow = state.feedbackGroupOpenRow;
   const chevron = iconOrNothing(ctx, 'chevronRight');
+  // Named `copy`, matching renderHelpFooter()'s own former local — this row
+  // MOVED from that function (DI-422), same variable name, same XSS-sweep
+  // pin (xsstest.mjs's NEW_SWEPT_BACKLOG "ctx.escHtml(copy)" entry) rather
+  // than a renamed one requiring a second, independently-reviewed pin.
+  const copy = comingSoonCopy('The Help Center');
   return `<div class="control-center-group">
+      <div class="control-center-group-label">Help &amp; Feedback</div>
+      ${accordionRow(ctx, state, {
+        group: 'feedback', rowId: 'game-settings', label: 'Request a game', openRowValue: openRow,
+        bodyHTML: ctx.bodies?.gameRequestHTML || '',
+      })}
       ${accordionRow(ctx, state, {
         group: 'feedback', rowId: 'feedback', label: 'Feedback', openRowValue: openRow,
         bodyHTML: ctx.bodies?.feedbackCardHTML || '',
@@ -904,20 +1148,20 @@ export function renderFeedbackRulesGroup(ctx, state) {
         group: 'feedback', rowId: 'version-history', label: 'Version history', openRowValue: openRow,
         bodyHTML: ctx.bodies?.releaseNotesHTML || '',
       })}
+      <button type="button" class="control-center-row control-center-row--nav" data-action="coming-soon" data-coming-soon-copy="${ctx.escHtml(copy)}">
+        <span class="cc-row-label">Help Center</span>
+        <span class="cc-row-chevron" aria-hidden="true">${chevron}</span>
+      </button>
     </div>`;
 }
 
-/** DI-305 — Help Center stub (shared coming-soon pattern) + the
- *  Privacy/legal footer (Terms/Licenses reserved, not invented — DI text). */
+/** DI-305, amended by DI-422 (2026-09-28) — the Help Center row MOVED into
+ *  `renderFeedbackRulesGroup()`'s "Help & Feedback" group, above. This
+ *  function now renders only the Privacy/legal footer (Terms/Licenses
+ *  reserved, not invented — DI text). */
 export function renderHelpFooter(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderHelpFooter');
-  const copy = comingSoonCopy('The Help Center');
-  return `<div class="control-center-group">
-      <button type="button" class="control-center-row control-center-row--nav" data-action="coming-soon" data-coming-soon-copy="${ctx.escHtml(copy)}">
-        <span class="cc-row-label">Help Center</span>
-      </button>
-    </div>
-    <div class="control-center-footer text-muted">
+  return `<div class="control-center-footer text-muted">
       <a href="privacy.html">Privacy Policy</a>
       <!-- Terms / Licenses reserved for roadmap Phase 7 (App Store submission checklist) — not linked until real content exists (DI-305). -->
     </div>`;
@@ -965,6 +1209,11 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
     return { open() {}, close() {}, destroy() {}, update() {}, getState: () => initialControlCenterState() };
   }
   const onAfterPaint = typeof options.onAfterPaint === 'function' ? options.onAfterPaint : null;
+  // DI-419 (2026-09-28) — threaded straight through to bindControlCenterEdgeSwipe()'s
+  // own `opts.getTab`, below, so the drawer's touchstart-time arm check can
+  // read the CURRENT tab fresh on every touch (js/app.js supplies this via
+  // `document.body.dataset.tab`, the same source navigateTo() itself writes).
+  const getTab = typeof options.getTab === 'function' ? options.getTab : () => null;
 
   let state = initialControlCenterState();
   let prevVisible = false;
@@ -1128,13 +1377,15 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
         dispatch({ type: 'close', reducedMotion: true });
         ctx.callbacks?.onSignOut?.();
         break;
-      // S2-2 (full-app review, 2026-09-26) — the league sheet (z 200) opened
-      // UNDER the drawer (z 501). Close the drawer first, the same shape as
-      // 'cc-navigate' / 'cc-open-league-page'.
-      case 'cc-switch-league':
+      // DI-418/DI-421 (2026-09-28) — "Your Leagues" (Profile pane), replacing
+      // the retired 'cc-switch-league' row/action. Pushes app.js's new full-
+      // screen Leagues Home overlay — same "close the drawer first" shape as
+      // 'cc-navigate'/'cc-open-league-page' (S2-2's own reasoning: a
+      // full-screen surface must never open UNDER the still-open drawer).
+      case 'cc-open-leagues-home':
         dispatch({ type: 'close', reducedMotion: rm() });
         haptic('selection');
-        ctx.callbacks?.onSwitchLeague?.();
+        ctx.callbacks?.onOpenLeaguesHome?.();
         break;
       // SECURITY GATE FINDING 3 (2026-09-25) — the identity header's league
       // name tap. Closes the drawer first (same shape as 'cc-navigate' just
@@ -1226,7 +1477,7 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   const unbindSwipe = bindControlCenterEdgeSwipe(
     dispatch,
     () => state,
-    { getWidthPx: () => drawerEl?.getBoundingClientRect?.().width || DRAWER_MAX_WIDTH_PX },
+    { getWidthPx: () => drawerEl?.getBoundingClientRect?.().width || DRAWER_MAX_WIDTH_PX, getTab },
   );
 
   // Initial paint hook — the coordinator's bind functions need a first call

@@ -549,6 +549,15 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
   pill.fire('keydown', key('Enter'));
   assert(opened.length === 1 && /Choose a League/.test(opened[0].innerHTML) && prevented === 1,
     `[pill-2] Enter opens the SAME league-selector sheet a tap opens (opened ${opened.length}, prevented ${prevented})`);
+  // REVIEWER BLOCK B4 (RG-298, 2026-09-28) — the sheet used to render cards
+  // only; with one membership it was a "Choose a League" modal with a single
+  // choice. It now ALSO carries the Create-League stub card (leagues-home.js's
+  // existing coming-soon card) and a "Join a League" row — Drew's ruling B's
+  // "the one league + Join or Create a League."
+  assert(/create-league-card/.test(opened[0].innerHTML) && /\+ Create new league/.test(opened[0].innerHTML),
+    '[pill-2b] BLOCK B4 — the sheet carries the Create-League stub card (same coming-soon card DI-313\'s Leagues Home already uses)');
+  assert(/id="league-selector-join-btn"/.test(opened[0].innerHTML) && />Join a League</.test(opened[0].innerHTML),
+    '[pill-2c] BLOCK B4 — the sheet carries a "Join a League" row');
   opened.length = 0; prevented = 0;
   pill.fire('keydown', key(' '));
   assert(opened.length === 1 && prevented === 1,
@@ -567,8 +576,88 @@ console.log('\n[pill] #league-pill — hides below 48px, and role="button" activ
   auth._setMembershipsForTest([{ leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'League A' }]);
   auth.setActiveLeagueId('A');
   app.renderLeaguePill();
-  assert(pill.count('keydown') === 0 && pill.count('click') === 0 && pill.getAttribute('role') === null,
-    '[pill-7] a SINGLE-membership pill is a static label: no keydown, no click, no role (DI-184b)');
+  // AMENDMENT (DI-418, dated 2026-09-28, Drew ruling B — quoted in full in
+  // js/app.js's own doc comment above _leaguePillClick()) — DI-184b's
+  // static-label rule is SUPERSEDED for this pill: it is now a control at
+  // EVERY membership count, single included. Re-derived from the pre-DI-418
+  // "static label" expectation.
+  assert(pill.count('keydown') === 1 && pill.count('click') === 1 && pill.getAttribute('role') === 'button',
+    '[pill-7] DI-418 amendment — a SINGLE-membership pill is ALSO a control now: one keydown handler, one click handler, role="button"');
+
+  // ── [pill-2d..2h] REVIEWER ROUND 3 R1 (2026-09-29) — the sheet's "Join a
+  //    League" row must REACH a join form with ONE membership. [pill-2c] only
+  //    proved the button exists; the round-2 handler routed through
+  //    renderLeagueFlowScreen() -> resolvePostSignInRoute(), which returns the
+  //    join 'landing' only for ZERO leagues, so a player who can see the pill
+  //    (>=1 league, by construction) got the Leagues Home card list instead.
+  //    The reviewer's exact sequence: one membership -> tap the pill -> tap
+  //    "Join a League" -> a join form must be on screen.
+  {
+    // Nodes that answer querySelector('#id') for ids present in their own
+    // markup, with real listener bookkeeping, so the sheet's REAL handlers run.
+    const makeNode = () => {
+      const byId = new Map(); const l = {};
+      const node = {
+        attrs: {}, classList: { add(){}, remove(){} }, style: {}, dataset: {}, removed: false, focused: false,
+        addEventListener(t, fn) { (l[t] ||= []).push(fn); },
+        setAttribute(k, v) { this.attrs[k] = v; }, remove() { this.removed = true; },
+        focus() { this.focused = true; },
+        count(t) { return (l[t] || []).length; },
+        querySelectorAll() { return []; },
+        querySelector(sel) {
+          const m = /^#([\w-]+)$/.exec(sel);
+          if (!m || !new RegExp(`id="${m[1]}"`).test(this._html)) return null;
+          if (!byId.has(m[1])) { const n = makeNode(); n.id = m[1]; byId.set(m[1], n); }
+          return byId.get(m[1]);
+        },
+        fire(t, ev = {}) { (l[t] || []).forEach(fn => fn({ target: {}, ...ev })); },
+        _html: '', set innerHTML(v) { this._html = v; }, get innerHTML() { return this._html; },
+      };
+      return node;
+    };
+    const joinFormOnScreen = (html) => /id="league-join-code"/.test(html) && /id="league-join-btn"/.test(html);
+    const prevCreate = document.createElement;
+    document.createElement = makeNode;
+    try {
+      opened.length = 0;
+      pill.fire('click', {});
+      const sheet = opened[0];
+      assert(opened.length === 1 && /Choose a League/.test(sheet?.innerHTML || ''),
+        `[pill-2d] fixture: ONE membership, tap the pill -> the league-selector sheet opens (opened ${opened.length}) — not vacuous`);
+      const joinRow = sheet?.querySelector('#league-selector-join-btn');
+      assert(!!joinRow, '[pill-2d2] fixture: the sheet\'s "Join a League" row is a live, bound node');
+      opened.length = 0;
+      joinRow?.fire('click');
+      const dest = opened[0];
+      assert(sheet?.removed === true, '[pill-2e] tapping "Join a League" closes the selector sheet');
+      assert(opened.length === 1 && joinFormOnScreen(dest?.innerHTML || '') && /<h3>Join a League<\/h3>/.test(dest?.innerHTML || ''),
+        `[pill-2f] R1 — with ONE membership the tap reaches a JOIN FORM (invitation-code field + Join League button) in a "Join a League" sheet (opened ${opened.length})`);
+      assert(!/You're not in a league yet/.test(dest?.innerHTML || '') && !/id="league-create-name"/.test(dest?.innerHTML || ''),
+        '[pill-2g] the join sheet does not claim "You\'re not in a league yet" and does not offer the real create_league form (an ADDITIONAL league is the coming-soon stub on the sheet before it)');
+      assert(dest?.querySelector('#league-join-code')?.focused === true,
+        '[pill-2g2] §Forms "Auto-focus appropriately" — the invitation-code field is focused when the sheet opens from the tap');
+      assert(dest?.querySelector('#league-join-btn')?.count('click') === 1 && dest?.querySelector('#league-join-code')?.count('keydown') === 1,
+        '[pill-2g3] the sheet\'s form is BOUND by the shared bindLeagueJoinForm() — one click handler on Join League, one Return-to-submit handler on the code field');
+      // MUTANT — the round-2 destination. Drive the OLD path's own renderer,
+      // renderLeagueFlowScreen(), with the SAME one-membership state into a
+      // page container, and apply the SAME predicate: it must fail, which is
+      // what proves [pill-2f] can tell the two apart.
+      const page = makeNode();
+      idMap['page-dashboard'] = page;
+      try { app.renderLeagueFlowScreen('dashboard'); } catch (e) { /* its maintenance-banner tail may reach unstubbed DOM */ }
+      assert(page.innerHTML.length > 0 && !joinFormOnScreen(page.innerHTML),
+        `[pill-2h] MUTANT — the round-2 path (renderLeagueFlowScreen with one membership) renders ${page.innerHTML.length ? 'the Leagues Home list' : 'NOTHING'} and FAILS the join-form predicate [pill-2f] passes on`);
+      delete idMap['page-dashboard'];
+      // And the source no longer routes this row through that renderer.
+      const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const start = src.indexOf('function showLeagueSelectorSheet()');
+      const body = src.slice(start, src.indexOf('\n}', start));
+      assert(start > -1 && /showJoinLeagueSheet\(\)/.test(body) && !/renderLeagueFlowScreen\(/.test(body.replace(/\/\/.*$/gm, '')),
+        '[pill-2i] showLeagueSelectorSheet()\'s join row calls showJoinLeagueSheet(), never renderLeagueFlowScreen()');
+    } finally {
+      document.createElement = prevCreate;
+    }
+  }
 
   // ── the 48px rule ──
   pill._width = 30; app.renderLeaguePill();
@@ -689,13 +778,18 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   pill._clientWidth = 400; app.renderLeaguePill();
   assert(!pill.hidden && /College Football/.test(pill.textContent),
     `[pill-sport-0] fixture: plenty of room (400px), week round-tripped with NO sport field, membership sportDefault:'cfb' -> the FULL sport name shows via the FALLBACK ("${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football',
+  // DI-418 (2026-09-28) — a single membership is now INTERACTIVE too (Drew
+  // ruling B). REVIEWER BLOCK B4 (RG-298, 2026-09-28) — the tap phrase for
+  // exactly one membership is "Tap for leagues." (opens the sheet to
+  // browse/join/create, not to "switch" among options that don't exist),
+  // re-derived from the pre-B4 "Tap to switch." expectation.
+  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
     `[pill-sport-1] aria-label names both league and sport (got "${pill.getAttribute('aria-label')}")`);
 
   pill._clientWidth = 120; app.renderLeaguePill();
   assert(!pill.hidden && /\bCFB\b/.test(pill.textContent) && !/College Football/.test(pill.textContent),
     `[pill-sport-2] tight room (120px — full overflows, code fits) -> degrades to the SHORT CODE, not hidden ("${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football',
+  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
     `[pill-sport-3] aria-label is UNCHANGED by the visual degradation step — it still names the full sport, only the visible pill compresses (got "${pill.getAttribute('aria-label')}")`);
 
   pill._clientWidth = 70; app.renderLeaguePill();
@@ -721,7 +815,7 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   pill._clientWidth = 400; app.renderLeaguePill();
   assert(!pill.hidden && /College Football/.test(pill.textContent),
     `[pill-sport-7] NO current week at all (deleted; getCurrentWeek() -> null), membership sportDefault:'cfb' -> the sport STILL shows, from the league fallback alone (got "${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football',
+  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool, viewing: College Football. Tap for leagues.',
     `[pill-sport-7b] …and the aria-label names it too (got "${pill.getAttribute('aria-label')}")`);
 
   // ── NEITHER source resolves -> league name alone. A week round-tripped
@@ -734,10 +828,14 @@ console.log('\n[pill-sport] DI-417 — the league pill\'s sport: full -> code ->
   storage.setActiveWeekId('w1');
   auth._setMembershipsForTest([{ leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'IRB Pool', sportDefault: null }]);
   pill._clientWidth = 400; app.renderLeaguePill();
-  assert(!pill.hidden && /^IRB Pool$/.test(pill.textContent),
-    `[pill-sport-8] neither the week NOR the membership resolves a sport -> league name alone even with plenty of room, no "·" separator (got "${pill.textContent}")`);
-  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool',
-    `[pill-sport-9] …and the aria-label drops the ", viewing:" clause entirely rather than naming an unknown sport (got "${pill.getAttribute('aria-label')}")`);
+  // DI-418 — the pill is interactive even with one membership now, so the
+  // caret (▾) renders in textContent too (aria-hidden hides it from the
+  // accessibility tree only, not from textContent) — re-derived from the
+  // pre-DI-418 exact-match "no caret" expectation.
+  assert(!pill.hidden && /^IRB Pool ▾$/.test(pill.textContent),
+    `[pill-sport-8] neither the week NOR the membership resolves a sport -> league name alone (plus the DI-418 caret) even with plenty of room, no "·" separator (got "${pill.textContent}")`);
+  assert(pill.getAttribute('aria-label') === 'Active league: IRB Pool. Tap for leagues.',
+    `[pill-sport-9] …and the aria-label drops the ", viewing:" clause entirely rather than naming an unknown sport, but STILL carries a tap phrase (single membership -> "Tap for leagues.", REVIEWER BLOCK B4) (got "${pill.getAttribute('aria-label')}")`);
 
   // ── priority order — a week that DOES carry its own `sport` (an explicit,
   //    forward-compatible case; still round-tripped, and it survives because

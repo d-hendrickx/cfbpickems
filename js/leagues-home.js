@@ -263,6 +263,18 @@ function leaguesHomeSkeletonHTML() {
  * right, so a routing bug fails loud (a visibly wrong card count) instead of
  * throwing.
  */
+/**
+ * `showTitle` (REVIEWER ROUND 2 D2, RG-298, 2026-09-28) — the boot-time
+ * full-page caller (`leagueSelectorHTML()`, js/app.js) IS the whole screen,
+ * so its own "Your Leagues" `.admin-section-title` is the page's only
+ * heading and stays on (default `true`, unchanged call shape for that
+ * caller). The Leagues Home OVERLAY (`showLeaguesHomeOverlay()`, DI-418)
+ * has its OWN nav-bar title reading "Your Leagues" one level up
+ * (`.league-page-title`, mirroring League Page's own header) — rendering
+ * this section title too duplicated the phrase twice in one screen.
+ * `showTitle: false` suppresses ONLY this internal heading; the card list
+ * itself (and the loading skeleton's own list) is unchanged either way.
+ */
 export function renderLeaguesHome({
   memberships = [],
   activeLeagueId = null,
@@ -271,15 +283,17 @@ export function renderLeaguesHome({
   icon = defaultIcon,
   roleBadgeHTML,
   loading = false,
+  showTitle = true,
 } = {}) {
   requireEscHtml(escHtml, 'renderLeaguesHome');
+  const title = showTitle ? '<div class="admin-section-title">Your Leagues</div>' : '';
   if (loading) {
-    return `<div class="admin-section-title">Your Leagues</div>
+    return `${title}
       <div class="league-card-list" aria-busy="true">${leaguesHomeSkeletonHTML()}</div>`;
   }
   const list = Array.isArray(memberships) ? memberships : [];
   const cards = list.map(m => leagueCardHTML(m, { activeLeagueId, isPilotLeague, escHtml, icon, roleBadgeHTML })).join('');
-  return `<div class="admin-section-title">Your Leagues</div>
+  return `${title}
     <div class="league-card-list">
       ${cards}
       ${renderCreateLeagueStubCard({ escHtml, icon })}

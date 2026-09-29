@@ -989,6 +989,19 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 .team{display:flex;flex-direction:column;gap:2px;text-align:center;min-width:0}
 .team-rank{font-size:.7rem;color:var(--gold);font-weight:700;font-family:'Oswald',sans-serif}
 .team-name{font-family:'Oswald',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text-primary);line-height:1.2}
+/* DI-428(a) (2026-09-28), amended round 2 (reviewer F5, 2026-09-29) — the
+   submitted/read-only Picks card's matchup row, toggle ON AND a real usable
+   logo (js/app.js's `awayLogoUsable`/`homeLogoUsable` gate). Wraps
+   `pickButtonContentHTML()`'s output (reused verbatim from the pick button,
+   .pick-btn-logo-wrap) at the SAME size/weight `.team-name` already uses.
+   Round 1 also routed the no-logo/manual-game fallback through this class,
+   wrapping pickButtonContentHTML()'s bare-text return with no mascot
+   styling ("Oklahoma (Sooners)" as one 1.05rem string) — that case now
+   renders the classic `.team-name`/`.team-mascot` split instead (below),
+   never reaching this class, so `.team-name-logo` only ever wraps a REAL
+   `.pick-btn-logo-wrap` box; its own `.pick-btn-logo-name` (.72rem,
+   opacity .65) governs the "smaller underneath" label. */
+.team-name-logo{font-family:'Oswald',sans-serif;font-size:1.05rem;font-weight:600;color:var(--text-primary);line-height:1.2}
 .team-conf{font-size:.7rem;color:var(--text-muted)}
 /* BUG-4 — "your pick" marker on the READ-ONLY (submitted) game card. The pick
    buttons that carry .selected are not rendered there, so the matchup row
@@ -1304,6 +1317,48 @@ label:has(+ .form-value-static){color:var(--text-muted);font-weight:500;font-siz
 .dashboard-table td{padding:10px 12px;border-bottom:1px solid var(--border);font-size:.85rem;vertical-align:middle}
 .dashboard-table tr:last-child td{border-bottom:none}.dashboard-table tr:nth-child(even) td{background:var(--bg-card-alt)}
 .game-info-cell{min-width:180px}.game-info-matchup{font-size:.82rem;font-weight:600;font-family:'Oswald',sans-serif;color:var(--text-primary);line-height:1.3}
+/* DI-428(c) (2026-09-28), reworked round 2 (reviewer F1, 2026-09-29) —
+   standard matrix, per-game row header, toggle ON.
+   ROUND 1 made `.game-info-matchup` itself `display:flex;flex-wrap:wrap`,
+   which (a) let the browser choose per-row whether the logo pair and the
+   abbreviation sat side by side or wrapped — never a real "stack", and
+   different at 375/390 depending on each row's own team-name length — and
+   (b) changed the toggle-OFF badge spacing too (the 2x/NFL chips), which
+   nobody asked for (F4). `.game-info-matchup` is back to its original,
+   pre-DI-428(c) declaration above; 100% of the new layout is scoped to
+   `.matrix-hdr-block`, emitted ONLY in logo mode.
+   `.matrix-hdr-block` is `inline-flex;flex-direction:column` — a hard
+   two-row stack (logos, then the abbreviation) with no wrap decision, so
+   every row has the identical shape at every viewport width. Height cost is
+   real and measured (matrixheadertest.mjs [2] row-height assertions) — the
+   DI's own "breaks the matrix" clause was width-only, and the width
+   measurement (this function's own header comment, js/app.js) is unchanged
+   at Δ0px; stacking is a height trade the DI didn't price in, recorded here
+   rather than silently absorbed. */
+.matrix-hdr-block{display:inline-flex;flex-direction:column;gap:2px;vertical-align:top}
+/* 24px boxes — the same small-logo size DI-428(b)'s Games-tab slate rows use
+   (one app-wide "small logo" convention, not a second size invented here),
+   deliberately smaller than the Picks page's 40px pick-button boxes: this
+   context is a dense multi-row table, not a single large tap target.
+   Fixed-box/no-layout-shift + fade-in-on-load, same mechanism as
+   .pick-btn-logo/.dc-chip-logo (bindLogoImageEvents() covers all three).
+   No separator glyph here any more (round 2, F1) — it rendered TWICE
+   (once here, once in `.matrix-hdr-abbr`'s own text); the abbreviation is
+   the one place "@"/"vs" appears now. */
+.matrix-hdr-logos{display:flex;align-items:center;justify-content:space-between;gap:4px} /* reviewer N1 (2026-09-28): each logo sits over its own team in the abbreviation below */
+.matrix-hdr-logo-box{width:24px;height:24px;border-radius:6px;background:var(--bg-input);
+  display:flex;align-items:center;justify-content:center;overflow:hidden;flex:0 0 auto}
+.matrix-hdr-logo{width:100%;height:100%;object-fit:contain;opacity:0;
+  transition:opacity var(--motion-fast,150ms) ease-out}
+.matrix-hdr-logo.is-loaded{opacity:1}
+.matrix-hdr-logo-missing{background:transparent}
+/* A runtime load failure — same "never a broken-image icon" rule as the
+   pick button/compact chip — hides the box; the abbreviation text sitting
+   right below it (never removed from the DOM) is the fallback, so nothing
+   needs to be re-rendered. */
+.matrix-hdr-logo-box.logo-broken{display:none}
+.matrix-hdr-abbr{white-space:nowrap}
+@media (prefers-reduced-motion:reduce){.matrix-hdr-logo{transition:none}}
 .game-info-meta{display:flex;gap:6px;align-items:center;margin-top:4px;flex-wrap:wrap}
 .pick-cell{text-align:center;font-weight:600;font-size:.78rem;white-space:nowrap;font-family:'Oswald',sans-serif}
 .pick-cell.result-win{background:rgba(26,122,63,.1)}.pick-cell.result-loss{background:rgba(185,28,28,.08)}
@@ -1332,6 +1387,11 @@ label:has(+ .form-value-static){color:var(--text-muted);font-weight:500;font-siz
 .game-admin-card{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--card-radius);padding:12px 14px;margin-bottom:10px;box-shadow:var(--shadow-card)}
 .game-admin-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
 .game-admin-matchup{font-family:'Oswald',sans-serif;font-size:.95rem;font-weight:600;flex:1;color:var(--text-primary)}
+/* DI-428(b) (UN-383, 2026-09-28) — the small team logo on the commissioner's
+   Games-tab slate rows (Available Games pool + Selected Slate), 24px fixed
+   box so a missing/broken logo never shifts the row's layout. */
+.slate-row-logo{width:24px;height:24px;object-fit:contain;vertical-align:middle;
+  margin-right:4px;border-radius:4px;background:var(--bg-input)}
 .game-admin-meta{font-size:.78rem;color:var(--text-muted);display:flex;gap:10px;flex-wrap:wrap}
 .candidate-reason{font-size:.7rem;color:var(--maroon-text);background:var(--maroon-pale);border:1px solid var(--maroon-tint);border-radius:20px;padding:2px 8px;display:inline-flex;align-items:center}
 .player-admin-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
@@ -3082,15 +3142,27 @@ body.native-shell .picks-week-nav{justify-content:center}
    [data-no-transition] (js/app.js's finishSlideThenRemove() precedent): the
    transition is OFF by default (a live drag is raw, untransitioned 1:1
    tracking — "a transition here would make the content visibly lag the
-   finger, which reads as latency, not polish," DI-409) and switched ON only
-   for the animated halves (commit-exit, enter, cancel/edge spring-back),
-   all sharing WEEK_SWIPE_BOUNCE_MS (150ms) via --motion-fast — one
-   animation language, not three ad-hoc durations. */
+   finger, which reads as latency, not polish," DI-409). DI-420 (2026-09-28,
+   amends DI-409) — [data-week-swipe-animating] now carries WHICH of two
+   motion-system buckets is playing, not a single boolean: "commit" (a
+   completed week navigation — the exit+enter halves of commitSlide(),
+   js/nav-gestures.js) runs at WEEK_SWIPE_COMMIT_MS/--motion-nav (260ms),
+   matching #league-page-overlay's own `transition:transform var(--motion-nav)
+   ease-out` (this file, ~line 5042) for the identical "one screen pushes
+   another" shape Drew is citing; "bounce" (cancel / edge spring-back — an
+   incomplete or at-bound drag reverting, Small-feedback, not a navigation)
+   stays at WEEK_SWIPE_BOUNCE_MS/--motion-fast (150ms), unchanged from
+   DI-409. One animation LANGUAGE (this same CSS attribute + JS
+   matched-duration fallback timer), two motion-system buckets — not three
+   ad-hoc durations. */
 #page-picks,#page-dashboard{transform:translateX(var(--week-swipe-x,0px))}
-#page-picks[data-week-swipe-animating="true"],#page-dashboard[data-week-swipe-animating="true"]{
+#page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"]{
+  transition:transform var(--motion-nav) ease-out}
+#page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"]{
   transition:transform var(--motion-fast) ease-out}
 @media (prefers-reduced-motion:reduce){
-  #page-picks[data-week-swipe-animating="true"],#page-dashboard[data-week-swipe-animating="true"]{transition:none}
+  #page-picks[data-week-swipe-animating="commit"],#page-dashboard[data-week-swipe-animating="commit"],
+  #page-picks[data-week-swipe-animating="bounce"],#page-dashboard[data-week-swipe-animating="bounce"]{transition:none}
 }
 
 /* ── Historical read-only week view ── */
@@ -3352,7 +3424,10 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
 .chat-offline-banner{background:#B02A37;color:#fff;border-radius:10px;padding:8px 12px;font-size:.8rem;font-weight:600;margin-bottom:8px}
 
 /* messages */
-.chat-msg{display:flex;gap:8px;margin-bottom:10px}
+/* REVIEWER ROUND 2 (N4, 2026-09-28) — position:relative makes the row (which
+   never slides) the containing block for .chat-swipe-reply-icon below; round
+   3 places the glyph within it relative to the BUBBLE (see that rule). */
+.chat-msg{display:flex;gap:8px;margin-bottom:10px;position:relative}
 .chat-msg.is-pending{opacity:1} /* v0.17.0 — pending shows a 🕐, never dimmed text (stuck-dim was the offline bug's symptom) */
 .chat-msg.is-failed .chat-bubble{border:1px solid #B02A37}
 .chat-flash .chat-bubble{outline:2px solid var(--maroon);transition:outline .2s}
@@ -3362,6 +3437,47 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
 /* UN-120: position:relative anchors .chat-actions (now position:absolute,
    out of document flow) to THIS message's column, not the page. */
 .chat-bubble-col{flex:1;min-width:0;position:relative}
+/* DI-427 (UN-382, 2026-09-28) — the reply glyph revealed BEHIND the bubble
+   as js/chat-ui.js's bindMessageSwipe() drags .chat-bubble-col to the right
+   (iMessage's own reveal-behind-the-bubble treatment). Reuses the SAME ↩
+   character .chat-actions' reply button already uses — no new icon.
+   position:absolute, out of flow (costs no layout height at rest, same
+   "reserves zero space until revealed" discipline .chat-actions/
+   .chat-reaction-names already follow); opacity-only fade
+   (--motion-fast/150ms, matching the bubble's own spring-back duration) so
+   the glyph and the bubble's return both read as one motion. Pure CSS,
+   toggled by the SAME [data-swipe-armed] attribute js/chat-ui.js's
+   bindMessageSwipe() sets/clears live during the drag (never a class
+   swapped mid-drag from JS — one write, both this rule and any future
+   consumer read it the same way).
+   REVIEWER ROUND 2 (N4 BLOCK, 2026-09-28) — REPOSITIONED. Round 1 anchored
+   this glyph to `.chat-bubble-col` — the SAME element bindMessageSwipe()
+   translates — so as the bubble dragged right, the glyph (a child of the
+   thing moving) traveled right WITH it at the same rate, never actually
+   staying behind to be "revealed." Markup moved to a direct child of
+   `.chat-msg` (the row, never translated) instead, so the glyph now sits
+   fixed in place while the bubble slides away from it — the reveal the DI
+   actually describes.
+   REVIEWER ROUND 3 (N4 BLOCK, 2026-09-29) — the round-2 `left:8px` put the
+   glyph ON the avatar (received rows) or ~260px from the bubble (own rows,
+   right-aligned, any width): a fixed offset on the row cannot track a
+   bubble. `left`/`top` are now written per gesture by bindMessageSwipe()'s
+   placeGlyph() (js/chat-ui.js) from the bubble's own at-rest rect — the
+   centre of the band the bubble vacates, vertically centred on the bubble —
+   and translate(-50%,-50%) centres the glyph on that point. The 0/0 here is
+   only the unplaced default; the glyph is opacity:0 until the drag arms,
+   which happens strictly after placement. Still a child of the untranslated
+   row, still painted under the bubble column (earlier in the DOM). */
+.chat-swipe-reply-icon{position:absolute;left:0;top:0;transform:translate(-50%,-50%);
+  font-size:.8rem;color:var(--text-muted);opacity:0;pointer-events:none;
+  transition:opacity var(--motion-fast) ease-out}
+.chat-msg[data-swipe-armed="true"] .chat-swipe-reply-icon{opacity:1}
+@media (prefers-reduced-motion:reduce){.chat-swipe-reply-icon{transition:none}}
+/* Touched-screen audit (round 3) — an own bubble dragged right overflows the
+   thread's content box, and .chat-scroll's overflow-x computes to auto; for
+   the length of a reply drag only, the thread is not sideways-scrollable.
+   Set/cleared by bindMessageSwipe()'s setThreadClip() (js/chat-ui.js). */
+.chat-scroll[data-reply-swiping="true"]{overflow-x:hidden}
 /* DI-346 (UN-304, T-36) — own messages push right, Messages/WhatsApp/Slack
    convention: side alone (not just the name label) carries authorship.
    max-width:78% is the invocation's own figure — leaves the far (left) side
@@ -3566,7 +3682,11 @@ body[data-tab="chat"] .page-wrapper{min-height:100dvh}
    rule existed before this pass (the composer had never been disablable). */
 .chat-input:disabled,.chat-send-btn:disabled{opacity:.5;cursor:not-allowed}
 .chat-input:focus{outline:2px solid var(--maroon-light)}
-.chat-send-btn{flex:0 0 40px;width:40px;height:40px;border-radius:50%;border:none;background:var(--maroon);color:#fff;font-size:1rem;cursor:pointer}
+.chat-send-btn{flex:0 0 40px;width:40px;height:40px;border-radius:50%;border:none;background:var(--maroon);color:#fff;font-size:1rem;cursor:pointer;
+  transition:transform var(--motion-fast,150ms) ease-out}
+/* RG-297 (RG-296 review F) — ➤ had no press feedback at all; same scale(.97)
+   as every other button. Not while disabled (paused league). */
+.chat-send-btn:active:not(:disabled){transform:scale(.97)}
 /* UN-103: the emoji row (insert buttons + "more emoji" picker) is gone from
    the composer foot entirely — Drew: players use their own keyboard's emoji.
    What's left is just the char count. */
@@ -3671,8 +3791,8 @@ html:has(#week-wizard-sheet-wrap){overflow:hidden}
        20        .chat-actions / reaction rows inside a message
        50        .submit-bar, sticky tab strips
       100        .app-header, .bottom-nav
-      150        #league-page-overlay, body.native-shell::before status strip,
-                 .chat-msg .reaction-picker
+      150        #league-page-overlay, #leagues-home-overlay, body.native-shell::before
+                 status strip, .chat-msg .reaction-picker
       200        .modal-overlay (every showXModal()), .backend-error-banner
       500/501    #control-center-backdrop / #control-center (the drawer; a
                  drawer row that opens a modal closes the drawer first, S2-2)
@@ -3801,7 +3921,13 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .chat-new-divider::before,.chat-new-divider::after{content:'';flex:1;height:1px;background:#B02A37;opacity:.5}
 .chat-jump-latest{position:sticky;bottom:76px;margin-left:auto;display:block;
   background:var(--maroon);color:#fff;border:none;border-radius:999px;padding:6px 14px;
-  font-size:.75rem;cursor:pointer;box-shadow:var(--shadow-btn)}
+  font-size:.75rem;cursor:pointer;box-shadow:var(--shadow-btn);
+  transition:transform var(--motion-fast,150ms) ease-out}
+/* RG-291 review note (2026-09-28) — the same press feedback every other
+   button carries (.btn, .nav-item, .pick-btn, .chat-quick-react-btn).
+   RG-297 (RG-296 review F) — eased like .chat-quick-react-btn: the transition
+   sits on the REST rule so the release eases back too, not just the press. */
+.chat-jump-latest:active{transform:scale(.97)}
 /* UN-104 consequence (not itself in the design input, flagged in the
    handoff): the composer is sticky now, so the flat 76px above no longer
    clears it — this button would render UNDER the composer instead of above
@@ -3838,9 +3964,13 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    anchored to the wrapper's own `bottom:0` (which flex flow already put
    exactly between the thread and the composer) — no `--nav-bar-clearance`/
    `--chat-composer-h` math needed at all, since the wrapper's position IS
-   "just above the composer" by construction. */
+   "just above the composer" by construction.
+   DI-399(b-ii) polish (Drew, 2026-09-28: "the bottom is right on the line
+   and should be brought vertically just a hair") — lifted 8px (one step of
+   the 8-point grid) off that line so the pill floats clear of the composer
+   edge; still zero flex space, still over the thread's bottom. */
 .chat-pull-refresh-wrap{flex:0 0 auto;height:0;overflow:visible;position:relative}
-.chat-pull-refresh{position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+.chat-pull-refresh{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);
   width:max-content;max-width:80vw;text-align:center;
   background:var(--bg-card);border:1px solid var(--border);border-radius:999px;
   padding:6px 14px;font-size:.7rem;color:var(--text-muted);box-shadow:var(--shadow-card);
@@ -5055,6 +5185,25 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 #league-page-overlay[data-no-transition]{transition:none}
 @media (prefers-reduced-motion:reduce){#league-page-overlay{transition:none}}
 
+/* DI-418 (UN-373, 2026-09-28) — Leagues Home overlay. Mirrors
+   #league-page-overlay above byte-for-byte (same z-index, same full-page
+   takeover shape, same native swipe-back recipe via its own
+   --leagues-home-drag-x custom property, driven by js/app.js's
+   showLeaguesHomeOverlay()/bindSwipeToDismiss() the identical way
+   --league-page-drag-x already is) — a second full-screen PUSH overlay, not
+   a second overlay mechanism. `.league-page-header`/`.league-page-body`/
+   `.league-page-back`/`.league-page-title` (above) are reused verbatim —
+   this overlay introduces no new chrome classes, only its own root id and
+   drag-progress property. */
+#leagues-home-overlay{position:fixed;inset:0;z-index:150;background:var(--bg);
+  overflow-y:auto;-webkit-overflow-scrolling:touch;padding:var(--page-pad);
+  padding-top:calc(var(--page-pad) + env(safe-area-inset-top,0px));
+  padding-bottom:calc(var(--page-pad) + env(safe-area-inset-bottom,0px));
+  transform:translateX(calc(100% * var(--leagues-home-drag-x,0)));
+  transition:transform var(--motion-nav) ease-out}
+#leagues-home-overlay[data-dragging="true"]{transition:none}
+@media (prefers-reduced-motion:reduce){#leagues-home-overlay{transition:none}}
+
 /* DI-318 — Pilot League badge, reused wherever a league/card needs it
    (league cards, Admin panel's Pilot League Flag card, the control-center
    role-chip row). Gold accent, distinct from the status badges above. */
@@ -5313,7 +5462,13 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
    its own small size correction — a badge sized for a standings row read
    too large inline beside a name. */
 .cc-role-chip{font-size:.6rem;padding:2px 7px}
-.control-center-identity-actions{display:flex;flex-direction:column;margin-top:4px}
+/* .control-center-identity-actions DELETED (RG-298, 2026-09-28, reviewer
+   minor finding) — dead: DI-421 moved Sign Out/Your Leagues out of the
+   identity header into the Profile pane (js/control-center.js), and nothing
+   renders this class anymore. Supersedes hotfix/cc-alma-admin's RG-294
+   alignment fix to this same rule (margin:4px -16px 0) — that fix is now
+   moot, not left as an orphan, since the markup it aligned no longer
+   exists on this surface at all. */
 
 /* Profile pane. */
 .control-center-profile{display:flex;flex-direction:column;gap:14px}

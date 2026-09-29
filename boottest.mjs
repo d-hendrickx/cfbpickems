@@ -5986,27 +5986,56 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // Re-derived AGAIN 2026-09-28 (reviewer round 3 — R1/R1b/R2/N12-note, all
   // above one or more of these sites) — line numbers only, same six sites,
   // matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (UX Revamp v0.27.2, DI-418/421/422/423 —
+  // buildControlCenterCtx()'s new almaMaterOptionsHTML body, onOpenLeaguesHome
+  // callback, showLeaguesHomeOverlay()/renderLeaguesHomeOverlayBody()/
+  // settleLeaguesHomeSwipe()/_setLeaguesHomeOverlayInert()/
+  // isLeaguesHomeDismissGestureBlocked(), and the DI-418 amendment doc block
+  // above _leaguePillClick() — all above the last three of these sites) —
+  // line numbers only, same six sites, matched by exact text.
+  // Re-derived 2026-09-28 (hotfix/cc-alma-admin, RG-290 — app.js's
+  // onSaveAlmaMater and patchPlayer() grew) — line numbers only, same sites,
+  // matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (REVIEWER ROUND 2 merge — feat/control-center-v0272's
+  // round 2 (B1-B4/D1-D2, RG-298) merged with release/v0.27.2's own work —
+  // line numbers only, same six sites, matched by exact text against the
+  // merged tree. See [1] section header for the merge SHA.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+
   const ENUMERATED_HVS_SITES = [
     // The import itself — not a "call site," but unavoidable to use the
     // function at all; excluded here rather than by file-level exemption
     // (rolestest's "the module itself" shape) so a SECOND import line
     // elsewhere in the file still gets caught.
-    { line: 556, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    { line: 575, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
     // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
     // place a raw token question is still the right question: no vendored
     // SDK means isSignedInForApp() cannot even be asked yet.
-    { line: 1294, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    { line: 1322, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
     // The deps object handed to other modules — a bare reference, never
     // called from here; whatever THAT module does with it is its own
     // concern, not this file's gate logic.
-    { line: 1722, text: "hasValidSupabaseSession," },
+    { line: 1750, text: "hasValidSupabaseSession," },
     // noIdentityEverProven() — deliberately asks the token question directly
     // (an identity that was never even attempted is a narrower, and correct,
     // question than "is the app-level identity signed in").
-    { line: 4882, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+    { line: 5046, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
     // isSignedInForApp() itself — the ONE place allowed to compose the raw
     // token question into the app-level answer everything else must use.
-    { line: 4904, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    { line: 5068, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
     // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
     // whether THIS payload proves the token is fresh; a narrower question
     // than "is the app signed in," and correctly so.
@@ -6024,7 +6053,14 @@ console.log('     every gate/release site the security probe reverted reads isSi
     // Re-derived AGAIN 2026-09-27 (app-shell part 3A review, BLOCK fix (d)'s
     // wizardSetActiveWeekId() call + comment, added inside tickAutoTransition()'s
     // scan loop — above this site) — line number only, same site, matched by text.
-    { line: 26312, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+    // Re-derived 2026-09-28 (merge round 2 — feat/wizard-admin-v0272's
+    // reviewer round 2 fixes (B1/B2/B3/N1) merged with release/v0.27.2's own
+    // work (feat/logos-surfaces-v0272, hotfix/composer-focus-sweep, hotfix/
+    // scribe-autonomous-rpc-catch) — line number only, same site, matched by
+    // exact text against the merged tree.
+    // Re-derived AGAIN 2026-09-28 (REVIEWER ROUND 2 merge — feat/control-center-v0272's
+    // round 2 merged in too) — line number only, matched by exact text.
+    { line: 26968, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
   ];
 
   // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
@@ -6129,23 +6165,121 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // Re-derived AGAIN 2026-09-28 (reviewer round 3 — same reason as the
   // hasValidSupabaseSession pin above) — line numbers only, same eight
   // sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (UX Revamp v0.27.2, DI-418/421/422/423 —
+  // same additions as the hasValidSupabaseSession pin above, all above one
+  // or more of these sites) — line numbers only, same eight sites, matched
+  // by exact text.
+  // Re-derived 2026-09-28 (hotfix/cc-alma-admin, RG-290 — same reason as the
+  // hasValidSupabaseSession pin above) — line numbers only, matched by text.
+  // Re-derived 2026-09-28 (merge round 2 — feat/wizard-admin-v0272's
+  // reviewer round 2 fixes merged with release/v0.27.2, same reason as the
+  // hasValidSupabaseSession pin above) — line numbers only, same eight
+  // sites, matched by exact text against the merged tree.
+  // Re-derived AGAIN 2026-09-28 (REVIEWER ROUND 2 merge — feat/control-center-v0272's
+  // round 2 merged in too, plus this round's own B1/B2 additions above
+  // renderLeaguePill()) — line numbers only, same eight sites, matched by
+  // exact text.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+  // Re-derived 2026-09-29 (v0.27.2 STAMP — the WHATS_NEW v0.27.2 entry at app.js:102 sits above every site) — line numbers only, matched by exact text.
   const ENUMERATED_ISFA_SITES = [
-    { line: 5668, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
-    { line: 24171, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
-    { line: 24237, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
-    { line: 24288, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    { line: 5861, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { line: 24817, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { line: 24883, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { line: 24934, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
     // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
     // the line numbers moved (see the note on the hasValidSupabaseSession
     // pin above).
-    { line: 26155, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
-    { line: 26461, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
-    { line: 27083, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
-    { line: 27113, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+    { line: 26811, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { line: 27117, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { line: 27825, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { line: 27855, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
   ];
   const linesN1 = srcN1raw.split('\n');
   const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);
   assert(isfaMismatches.length === 0,
     `[35b] all eight gate/release sites still read isSignedInForApp() at their pinned line (mismatches: ${JSON.stringify(isfaMismatches.map(m => m.fn))})`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [40] REVIEWER ROUND 2 BLOCK B1 (RG-298, 2026-09-28) — the Profile pane's
+//      alma-mater <select> on a COLD ESPN-teams cache, through the REAL
+//      buildControlCenterCtx(). Before this fix, the fallback was the raw
+//      `ALMA_MATERS` array (school-name STRINGS); buildAlmaMaterOptions()
+//      reads `.location`/`.displayName` off each entry, so every fallback
+//      <option> rendered EMPTY (`<option value="">`) and picking one wiped
+//      the claim on save. almaMaterCatalogFallback() is the shape-correcting
+//      wrapper — this proves the REAL ctx.bodies.almaMaterOptionsHTML a cold
+//      device actually gets carries six real, non-empty school options.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[40] REVIEWER BLOCK B1 — Profile\'s alma-mater catalog is shape-correct on a cold cache, through the real buildControlCenterCtx()…');
+{
+  const appMod40 = await import('./js/app.js');
+  const authMod40 = await import('./js/auth.js');
+  const storageMod40 = await import('./js/storage.js');
+  storageMod40.setBackendMode('local');
+  storageMod40.addPlayer({ playerId: 'p-cold40', displayName: 'ColdCache', almaMater: '', active: true, preferences: {} });
+  storageMod40.setSession('p-cold40');
+  globalThis.localStorage.setItem('cfbp_supabase_active_league', 'L-test40');
+  authMod40._setMembershipsForTest([{ leagueId: 'L-test40', leagueName: 'Test League 40', pilot: false, status: 'active' }]);
+  // The fixture: COLD cache — nothing fetched yet this "page load".
+  appMod40._resetEspnTeamsCacheForTest();
+
+  const ctx40 = appMod40._buildControlCenterCtxForTest();
+  const optionsHtml40 = ctx40.bodies.almaMaterOptionsHTML || '';
+  assert(optionsHtml40.length > 0, '[40] fixture: almaMaterOptionsHTML is genuinely non-empty (not vacuous)');
+  // Every real ALMA_MATERS school renders as a NON-EMPTY <option value="...">
+  // — the exact defect: before the fix, every fallback option's value was ''.
+  const dataModel40 = await import('./js/data-model.js');
+  const missingOrEmpty40 = dataModel40.ALMA_MATERS.filter(school => {
+    const re = new RegExp(`<option value="${school.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}"[^>]*>`);
+    return !re.test(optionsHtml40);
+  });
+  assert(missingOrEmpty40.length === 0,
+    `[40a] all six ALMA_MATERS schools render as their OWN non-empty option value (missing/wrong: ${JSON.stringify(missingOrEmpty40)})`);
+  assert(!/<option value="">[^<]*<\/option>\s*<option value="">/.test(optionsHtml40),
+    '[40b] no run of EMPTY <option value=""> values (the exact BLOCK B1 symptom — six blank options where six real schools should be)');
+  assert((optionsHtml40.match(/<option value="[^"]/g) || []).length >= 6,
+    `[40c] at least six options carry a REAL (non-empty) value attribute (got ${(optionsHtml40.match(/<option value="[^"]/g) || []).length})`);
+
+  globalThis.localStorage.removeItem('cfbp_supabase_active_league');
+  globalThis.localStorage.removeItem('cfbp_players');
+  storageMod40.clearSession();
+  authMod40._setMembershipsForTest([]);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [41] REVIEWER ROUND 2 D2 (RG-298, 2026-09-28) — renderLeaguesHomeOverlayBody()
+//      (the Leagues Home OVERLAY) wires `showTitle: false` into its
+//      renderLeaguesHome() call; leagueSelectorHTML() (the boot-time
+//      full-page caller) does NOT — a source-position scan, since driving
+//      the overlay's own fake-DOM fixture end-to-end is out of proportion to
+//      what this wiring claim needs proven (js/leagues-home.js's own suite,
+//      leagueshometest.mjs, already proves the pure function's behavior for
+//      both `showTitle` values — this is ONLY the "who passes what" wiring).
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[41] REVIEWER D2 — the Leagues Home overlay passes showTitle:false; the boot-time full page does not…');
+{
+  const { readFileSync } = await import('node:fs');
+  const appSrc41 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const overlayStart = appSrc41.indexOf('function renderLeaguesHomeOverlayBody()');
+  const overlayEnd = overlayStart > -1 ? appSrc41.indexOf('\n}', overlayStart) : -1;
+  assert(overlayStart > -1 && overlayEnd > overlayStart, '[41] fixture: renderLeaguesHomeOverlayBody() was located');
+  const overlayBody = appSrc41.slice(overlayStart, overlayEnd);
+  assert(/showTitle:\s*false/.test(overlayBody),
+    '[41a] renderLeaguesHomeOverlayBody() passes showTitle:false to renderLeaguesHome()');
+
+  const landingStart = appSrc41.indexOf('function leagueSelectorHTML()');
+  const landingEnd = landingStart > -1 ? appSrc41.indexOf('\n}', landingStart) : -1;
+  assert(landingStart > -1 && landingEnd > landingStart, '[41] fixture: leagueSelectorHTML() was located');
+  const landingBody = appSrc41.slice(landingStart, landingEnd);
+  assert(!/showTitle/.test(landingBody),
+    '[41b] leagueSelectorHTML() (the boot-time full-page caller) does NOT pass showTitle at all — unchanged call shape, keeps the default (true)');
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────

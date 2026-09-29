@@ -179,6 +179,13 @@ export const ADMIN_CARD_TAB = Object.freeze({
   'scribe-training': 'data',
   'background-jobs': 'data',
   'feedback-bug-reports': 'data',
+  // DI-425 (UN-380, coordinator addendum, 2026-09-28) — moved whole from
+  // Comm→SCRIBE's "Chat & S.C.R.I.B.E." card. Drew's own words: "…are admin
+  // things not commissioner things and should be in admin panel not comm
+  // panel."
+  'scribe-digest-export': 'data',
+  'scribe-post-queue': 'data',
+  'chat-diagnostics': 'data',
 });
 
 /**
@@ -218,6 +225,10 @@ const ADMIN_CARD_TITLE = Object.freeze({
   'scribe-training': 'SCRIBE Training',
   'background-jobs': 'Background Jobs',
   'feedback-bug-reports': 'Feedback & Bug Reports',
+  // DI-425
+  'scribe-digest-export': 'Copy Weekly Digest JSON',
+  'scribe-post-queue': 'Post Queue as SCRIBE',
+  'chat-diagnostics': 'Chat Diagnostics',
 });
 
 // ══════════════════════════════════════════════════════════════════════════

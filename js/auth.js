@@ -551,6 +551,7 @@ let _membershipsError = null;
 // `isPlatformAdmin: getIsPlatformAdmin()` at ITS OWN call site, not here.
 let _isPlatformAdminCache = false;
 let _isSuperAdminCache = false;
+let _platformAdminFlagsError = null;   // RG-293 — see getPlatformAdminFlagsError()
 let _synthesizedSession = { playerId: null, isAdmin: false, playerVerified: false };
 const _authListeners = new Set();
 
@@ -626,6 +627,13 @@ function _bumpIdentityEpoch(reason) {
   // each one means a caller that somehow did could not use it either.
   _membershipRefreshInFlight = null;
   _verificationInFlight = null;
+  // RG-293 reviewer S1 (2026-09-28) — the admin flags belonged to the identity
+  // that just ended too. On a direct A→B account change (no SIGNED_OUT in
+  // between) or a recovery session that skips the read, A's TRUE flags must
+  // not paint B's chrome until B's own read lands: fail closed at the epoch.
+  _isPlatformAdminCache = false;
+  _isSuperAdminCache = false;
+  _platformAdminFlagsError = null;
   console.info(`[auth] identity epoch -> ${_identityEpoch} (${reason}) — any in-flight membership read or verification round issued for the previous identity is now void`);
   return _identityEpoch;
 }
@@ -1217,6 +1225,7 @@ function _handleAuthStateChange(event, session) {
     // still the wrong answer.
     _isPlatformAdminCache = false;
     _isSuperAdminCache = false;
+    _platformAdminFlagsError = null;
     _accountEmail = '';
     _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
     // DI-334 FINDING 1 — a SIGNED_OUT is exactly the "exit" case the
@@ -1792,6 +1801,7 @@ export function forceSignedOutSession() {
   // _handleAuthStateChange() for the full reasoning (same fix, same reason).
   _isPlatformAdminCache = false;
   _isSuperAdminCache = false;
+  _platformAdminFlagsError = null;
   _notifyIdentityMaybeChanged();   // instrumented write (term 3)
 }
 export function isSessionForcedOut() { return _sessionForcedOut; }
@@ -1871,25 +1881,67 @@ export function clearForcedSignOut() {
  */
 export async function refreshPlatformAdminFlags() {
   const epoch0 = _identityEpoch;
+  // Security F2 (2026-09-28) — no proven session, no read: the identity chokepoint
+  // calls this on every change INCLUDING sign-out, and both RPCs are revoked
+  // from `anon` (0002:145–150, 0026:1354), so an anonymous read only produces
+  // a 42501 warning and a stale diagnostic. It could also race: a read sent
+  // while still anonymous that resolves AFTER the new account's read would
+  // overwrite a TRUE with false (fail-closed, but it hides Drew's admin rows).
+  if (!_accountUserId && !hasValidSupabaseSession()) {
+    _isPlatformAdminCache = false; _isSuperAdminCache = false; _platformAdminFlagsError = null;
+    return { isPlatformAdmin: false, isSuperAdmin: false };
+  }
   let isPlat = false, isSuper = false;
+  const failures = [];
+  // RG-293 (live v0.27.1, 2026-09-28) — `client.rpc()` in the vendored
+  // supabase-js 2.116.0 returns a PostgrestFilterBuilder: a THENABLE, not a
+  // Promise — it has `.then` and NO `.catch`. This used to chain
+  // `client.rpc(...).catch(...)` directly, which threw a synchronous
+  // TypeError into the try/catch below on every real device, so both flags
+  // failed closed on every boot and no admin ever saw the Admin rows. The
+  // test fakes wrapped rpc in Promise.resolve(), which does have `.catch`, so
+  // nothing offline could see it (authtest [77] now drives the real builder).
+  // `await` inside an async wrapper is the only shape that works for both.
+  const ask = async (client, name) => {
+    try {
+      const res = await client.rpc(name);
+      if (res && res.error == null) return res.data === true;
+      failures.push(`${name}: ${_flagReadErrorText(res?.error)}`);
+    } catch (e) {
+      failures.push(`${name}: ${_flagReadErrorText(e)}`);
+    }
+    return false;
+  };
   try {
     const client = ensureClient();
     if (client && typeof client.rpc === 'function') {
-      const [platRes, superRes] = await Promise.all([
-        client.rpc('is_platform_admin').catch((e) => ({ data: false, error: e })),
-        client.rpc('is_super_admin').catch((e) => ({ data: false, error: e })),
-      ]);
-      isPlat = platRes && platRes.error == null && platRes.data === true;
-      isSuper = superRes && superRes.error == null && superRes.data === true;
+      [isPlat, isSuper] = await Promise.all([ask(client, 'is_platform_admin'), ask(client, 'is_super_admin')]);
+    } else if (getAuthMode() === 'supabase') {
+      // Outside supabase mode there is no client by design and nothing to report.
+      failures.push('no Supabase client');
     }
   } catch (e) {
-    console.warn('[auth] platform-admin/super-admin flag fetch failed — failing closed', e);
+    failures.push(_flagReadErrorText(e));
   }
   // I6 — a reply for an identity this device has since left must never be applied.
   if (epoch0 !== _identityEpoch) { _warnStaleIdentity('a platform-admin flag read'); return; }
+  // Fail CLOSED, but never silently: the reason is logged and kept for
+  // getPlatformAdminFlagsError(). Code/message only — never a token.
+  _platformAdminFlagsError = failures.length ? failures.join('; ') : null;
+  if (_platformAdminFlagsError) console.warn(`[auth] platform-admin/super-admin flag read failed — failing closed (${_platformAdminFlagsError})`);
   _isPlatformAdminCache = isPlat;
   _isSuperAdminCache = isSuper;
   _recomputeSynthesizedSession();
+}
+/** RG-293 — why the last admin-flag read failed closed, or null when it
+ *  succeeded (or has not run for this identity). Reset with the flags at every
+ *  sign-out site. */
+export function getPlatformAdminFlagsError() { return _platformAdminFlagsError; }
+function _flagReadErrorText(e) {
+  if (!e) return 'unknown error';
+  const code = e.code ? `${e.code} ` : '';
+  const msg = typeof e.message === 'string' ? e.message : String(e);
+  return `${code}${msg}`.slice(0, 200);
 }
 
 /** Term 3's ONE write site. Every path that can change the synthesized session
@@ -2470,7 +2522,7 @@ async function _refreshMembershipsAndSessionOnce({ preferMemberId = null, prefer
  *  refetches memberships and makes the newly-joined league active — DI-181c
  *  "routes straight to that league's dashboard (skips DI-181's own
  *  selector)". */
-export async function joinLeague(code) {
+export async function joinLeague(code, { activate = true } = {}) {
   const client = ensureClient();
   if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
   // join_league() RETURNS the member row's own id (v_member_id, or the
@@ -2498,7 +2550,20 @@ export async function joinLeague(code) {
   // SEC F2 — refreshMembershipsAndSession() returns null for "could not ask".
   // `(list || [])` rather than a bare .find(), so a race can never turn a
   // successful join into a TypeError the player reads as a failed join.
-  const list = await refreshMembershipsAndSession({ preferMemberId: memberId });
+  //
+  // `activate: false` (REVIEWER ROUND 4 R3, 2026-09-29) — the join does NOT
+  // move the pointer. For a player who is ALREADY in a league (the header
+  // pill sheet's Join), moving it here would flip identity to the new league
+  // without switchActiveLeague()'s adapter step: no beginSwitch() drop of the
+  // old mirror, the old league's Realtime left up, no SWITCHING state, no
+  // "Switching leagues…" cover — pointer on B over A's rows. So that caller
+  // refreshes with the CURRENT league as the preference (keeps the pointer
+  // where it is, and a preference also keeps this read out of the
+  // single-flight coalescer, so an in-flight pre-join read cannot answer it
+  // without the new row), then runs the real switch itself. With no active
+  // league there is nothing to switch FROM, and the default path applies.
+  const holdLeagueId = activate === false ? getActiveLeagueId() : null;
+  const list = await refreshMembershipsAndSession(holdLeagueId ? { preferLeagueId: holdLeagueId } : { preferMemberId: memberId });
   return (list || []).find(m => m.memberId === memberId) || null;
 }
 
@@ -4597,6 +4662,7 @@ function _clearExpiredSessionFromDevice(err) {
     // in _handleAuthStateChange() for the full reasoning.
     _isPlatformAdminCache = false;
     _isSuperAdminCache = false;
+    _platformAdminFlagsError = null;
     _accountEmail = '';
     _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
     // DI-334 FINDING 1 — a destroyed session is an exit; a recovery flag left
@@ -4669,6 +4735,7 @@ export async function signOut() {
     // in _handleAuthStateChange() for the full reasoning.
     _isPlatformAdminCache = false;
     _isSuperAdminCache = false;
+    _platformAdminFlagsError = null;
     _accountEmail = '';
     _accountProviders = null; // N4 — cleared alongside _accountEmail, same lifecycle
     // DI-334 FINDING 1 — cancelRecovery() already clears this before calling
@@ -4747,6 +4814,7 @@ export function _resetAuthForTest() {
   _membershipsError = null;
   _isPlatformAdminCache = false;
   _isSuperAdminCache = false;
+  _platformAdminFlagsError = null;
   _accountEmail = '';
   _accountUserId = '';
   _accountProviders = null; // N4 — per-PAGE cache, same lifecycle as the pair above
@@ -4814,6 +4882,8 @@ export function _setHasSupabaseDataBackendForTest(v) {
   _hasSupabaseDataBackendOverrideForTest = (v === null) ? null : !!v;
 }
 export function _setAccountUserIdForTest(uid) { _accountUserId = uid || ''; _notifyIdentityMaybeChanged(); }
+/** Test seam (RG-293 S1) — drives the REAL epoch bump the A→B account-change path takes (_setAccountUserId → _bumpIdentityEpoch). */
+export function _bumpIdentityEpochForTest(reason = 'test') { return _bumpIdentityEpoch(reason); }
 /** DI-180p — how many COMPLETED verification rounds this page has run since
  *  the last proven-good path (invariant I1). Read by authtest to prove "a
  *  second consecutive 401" is counted per ROUND, not per call and not guessed. */

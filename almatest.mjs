@@ -149,14 +149,16 @@
  *   5  renderAlmaMaterWatch/renderAlmaMaterRankings — driven by claims, PLUS
  *      (2026-09-04) F5's dedicated fixtures: the claimant-name lookup is
  *      case/whitespace-insensitive and active-only
- *   6  renderRulesPage — driven by claims, escHtml'd
+ *   6  renderRulesPage — DI-423 (2026-09-28): the Alma Maters section is
+ *      REMOVED entirely; asserted as an absence, not a claims-driven render
  *   7  renderAlmaMaterSettingsCard() — READ-ONLY summary, no add/remove UI
  *   8  showEditPlayerModal — ESPN-canonical <select> (2026-09-04, was
  *      free-text + datalist), real #ep-save ripple
  *   9  toggle-active ripple — deactivating the sole claimant clears the roster
  *  10  THE FULL RIPPLE — one claim change reaches Watch, Rankings, the ⭐
- *      flag, Tier 1 (scored from the POOL, per F1), the Rules list, and the
- *      Auto-Calc, end to end
+ *      flag, Tier 1 (scored from the POOL, per F1), and the Auto-Calc, end
+ *      to end; the Rules list is checked too, as a NEGATIVE (DI-423 retired
+ *      it as a sixth consumer — it must show nothing before AND after)
  *  11  A freely-typed non-catalog claim — works, and its documented
  *      precision gap is proven behaviorally (not just via getAlmaMaterMatch)
  *  12  Structural residue scan — the rejected two-list model left nothing
@@ -271,7 +273,13 @@ globalThis.document = {
   querySelector: sel => bySelector(sel),
   querySelectorAll: sel => selectorSets.get(sel) || [],
   createElement: () => makeEl('__toast__'),
-  body: { classList: { add() {}, remove() {} }, appendChild() {}, innerHTML: '' },
+  // `dataset: {}` (RG-298, 2026-09-28 — reviewer round 2, coordinator addition)
+  // — navigateTo() (js/app.js) unconditionally stamps `document.body.dataset.tab
+  // = tab`. Without this, EVERY navigateTo() driven from this file throws
+  // (caught by its own callers' try/catch, so the suite stayed green, but a
+  // caught-and-logged exception on every repaint is not "working" — see
+  // section [20]'s own dataset-patching line, now redundant and removed).
+  body: { classList: { add() {}, remove() {} }, appendChild() {}, innerHTML: '', dataset: {} },
   hidden: false,
 };
 globalThis.window = globalThis;
@@ -629,23 +637,44 @@ console.log('\n[5] renderAlmaMaterWatch / renderAlmaMaterRankings — driven by 
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[6] renderRulesPage — driven by claims, escHtml\'d…');
+console.log('\n[6] renderRulesPage — Alma Maters section REMOVED (DI-423, UN-378, 2026-09-28)…');
 {
+  // DI-423: "Alma maters should not be listed in the rules section." (Drew,
+  // verbatim) — renderRulesPage() no longer renders that section AT ALL, for
+  // any claim, active or inactive, hostile or not. The roster's canonical,
+  // maintained home is the Comm -> Players "Alma maters & home teams" card
+  // (section [7], below) — claimedAlmaMaters() itself is UNCHANGED and still
+  // feeds Watch/Rankings/the Comm card/the Auto-Calc; only this ONE
+  // redundant display is gone.
   localStorage.clear();
   el('page-rules');
   storage.addPlayer(freshPlayer({ playerId: 'rp1', displayName: 'Hostile', almaMater: '<img src=x onerror=alert(1)>', active: true }));
   storage.addPlayer(freshPlayer({ playerId: 'rp2', displayName: 'Kevin', almaMater: 'Notre Dame', active: true }));
   renderRulesPage();
   const html = el('page-rules').innerHTML;
-  assert(html.includes('Notre Dame'), 'fixture check: the Rules tab genuinely rendered a real claim (not vacuous)');
-  assert(!html.includes('<img src=x onerror=alert(1)>'), 'a malicious claimed school name is NOT rendered as raw, executable HTML');
-  assert(html.includes('&lt;img'), 'the malicious school name IS present, escHtml-encoded — rendered, not silently dropped, just made safe');
+  // Matches the actual heading tag the old section used
+  // (`<h3>${icon('almaMater')} Alma Maters</h3>`) — deliberately NOT
+  // `/<h3>[^<]*Alma Maters<\/h3>/` (a mutation-testing catch, 2026-09-28):
+  // icon('almaMater') renders REAL SVG markup containing its own `<tag>`
+  // characters between `<h3>` and the text, which `[^<]*` cannot cross —
+  // that shape silently never matches the real heading at all. Matching only
+  // the tail (`Alma Maters</h3>`, regardless of what precedes it) survives
+  // an icon prefix while still not being fooled by this file's OWN "the Alma
+  // Maters section RETIRED…" HTML comment (which ships inside
+  // renderRulesPage()'s template literal but is never immediately followed
+  // by a closing `</h3>`).
+  assert(!/Alma Maters<\/h3>/.test(html), 'DI-423 — the Rules page renders NO "Alma Maters" section heading at all');
+  assert(!html.includes('Notre Dame'), 'DI-423 — a claimed school name (Notre Dame) does not appear on the Rules page — it is not duplicated here anymore');
+  assert(!html.includes('<img src=x onerror=alert(1)>') && !html.includes('&lt;img'),
+    'DI-423 — a hostile claimed name is not rendered on this page at all (escaped or otherwise) — the whole section is gone, not just sanitized');
+  assert(html.includes('Debts') && html.includes('Bylaws'), 'fixture check: the page still renders — Debts & Bylaws (the section that followed Alma Maters) is intact');
 
-  // An inactive player's claim does not reach the Rules tab either.
+  // An inactive player's claim was already excluded before this DI, and
+  // remains moot now that the section is gone entirely.
   storage.addPlayer(freshPlayer({ playerId: 'rp3', displayName: 'Ghost', almaMater: 'Oklahoma', active: false }));
   renderRulesPage();
   const html2 = el('page-rules').innerHTML;
-  assert(!html2.includes('Oklahoma'), 'an inactive player\'s claimed school does not appear on the Rules tab');
+  assert(!html2.includes('Oklahoma'), 'an inactive player\'s claimed school still does not appear on the Rules tab (moot — nothing does, DI-423)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -660,7 +689,17 @@ console.log('\n[7] renderAlmaMaterSettingsCard() — READ-ONLY summary, no add/r
   storage.addPlayer(freshPlayer({ playerId: 'sc4', displayName: 'Ghost', almaMater: 'Georgia', active: false }));
 
   const html = renderAlmaMaterSettingsCard();
-  assert(html.includes('data-comm-tab="settings"'), 'RG-10: the card carries data-comm-tab="settings" (a card missing it renders on all five tabs)');
+  // Test-plumbing fix (2026-09-29, Testing Protocol 191): this asserted
+  // `settings` — the card's tab until the UX Revamp wiring pass 3a retagged
+  // it to `rules` (DI-319 amendment 3; js/comm-panel-layout.js
+  // 'alma-maters': 'rules'). DI-423 removed the Rules PAGE's alma-mater
+  // section, not this Comm-panel card. The suite was not spawned by
+  // loadtest.mjs, so the stale expectation sat red unread. Exactly ONE
+  // data-comm-tab attribute, and it is `rules`: a card with none renders on
+  // every tab (RG-10), and a card with two would be ambiguous.
+  const commTabs7 = [...html.matchAll(/data-comm-tab="([^"]*)"/g)].map(m => m[1]);
+  assert(commTabs7.length === 1 && commTabs7[0] === 'rules',
+    `RG-10: the card carries exactly one data-comm-tab, and it is "rules" (DI-319 amendment 3) — a card missing it renders on every tab (got: ${JSON.stringify(commTabs7)})`);
   assert(html.includes('Texas A&amp;M') || html.includes('Texas A&M'), 'fixture check: the derived roster genuinely rendered Texas A&M (not vacuous)');
   assert(html.includes('Drew') && html.includes('Kihoon'), 'BOTH claimants of a shared school are listed, not just one');
   assert(html.includes('Arkansas') && html.includes('Jacob'), 'Arkansas (Jacob\'s claim) is listed with its claimant');
@@ -825,7 +864,7 @@ console.log('\n[9] toggle-active ripple — deactivating the sole claimant clear
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings, ⭐, Tier 1, Rules, Auto-Calc…');
+console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings, ⭐, Tier 1, Auto-Calc (DI-423, 2026-09-28: Rules no longer lists alma maters — checked as a NEGATIVE, not a ripple target)…');
 {
   localStorage.clear();
   resetDom();
@@ -872,7 +911,10 @@ console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings
   el('toast-container');
   storage.addPlayer(freshPlayer({ playerId: 'fr1', displayName: 'Reviewer', active: true, almaMater: '' }));
 
-  // BEFORE the claim — none of the six consumers mention Clemson.
+  // BEFORE the claim — none of the five consumers mention Clemson. (DI-423,
+  // 2026-09-28: the Rules tab is RETIRED as a sixth consumer — it no longer
+  // shows alma maters at all, so it is checked here only for the negative
+  // "still says nothing" case, not as a ripple target.)
   assert(!claimedAlmaMaters().includes('Clemson'), 'fixture check: before the claim, Clemson is not in the derived roster (not vacuous)');
   assert(!renderAlmaMaterWatch('fr_w').includes('Clemson'), 'before: Alma Mater Watch has no Clemson row');
   assert(!renderAlmaMaterRankings().includes('Clemson'), 'before: Alma Mater Rankings has no Clemson row');
@@ -880,7 +922,7 @@ console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings
   const slateBefore = buildSuggestedSlate(scoredBefore, 1).slate;
   assert(slateBefore.length === 1 && slateBefore[0].homeTeam === 'Ohio State', 'before: with NEITHER pool game flagged, the 1-slot slate goes to the higher-scored decoy (Ohio State), not Clemson — proves the fixture score gap is real, not vacuous');
   renderRulesPage();
-  assert(!el('page-rules').innerHTML.includes('Clemson'), 'before: the Rules tab has no Clemson entry');
+  assert(!el('page-rules').innerHTML.includes('Clemson'), 'before: the Rules tab has no Clemson entry (DI-423 — it never lists any alma mater at all anymore)');
 
   // THE CLAIM — via the REAL #ep-save handler, the one place a claim actually changes.
   el('ep-name').value = 'Reviewer';
@@ -891,7 +933,7 @@ console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings
   el('ep-save')._fire('click');
   assert(storage.getPlayer('fr1').almaMater === 'Clemson', 'fixture check: the claim genuinely changed (not vacuous)');
 
-  // AFTER — all six consumers now know about Clemson.
+  // AFTER — all FIVE remaining consumers now know about Clemson.
   assert(claimedAlmaMaters().includes('Clemson'), 'AFTER: claimedAlmaMaters() includes Clemson');
   assert(storage.getGame(claimGame.gameId).isAlmaMaterGame === true, 'AFTER: the ⭐ flag on the SLATE — recomputeAlmaMaterFlags() ran as part of the save');
   assert(storage.getAvailableGames('fr_w').find(g => g.gameId === claimGameAvail.gameId).isAlmaMaterGame === true,
@@ -901,8 +943,13 @@ console.log('\n[10] THE FULL RIPPLE — one claim change reaches Watch, Rankings
   const scoredAfter = scoreCandidateGames(storage.getAvailableGames('fr_w'), 'fr_w');
   const slateAfter = buildSuggestedSlate(scoredAfter, 1).slate;
   assert(slateAfter.some(g => g.homeTeam === 'Clemson'), 'AFTER: Tier 1, scored from the POOL exactly like renderCommPage() does — the low-scored Clemson game is now guaranteed onto even a 1-slot slate, unconditionally, beating the higher-scored decoy purely on the ⭐ flag');
+  // DI-423 (2026-09-28) — the SIXTH former consumer, the Rules tab, is
+  // RETIRED: it must still show NOTHING even after the exact same claim
+  // change that just rippled through the other five. This is the positive
+  // proof that the removal survives a live claim change, not merely a
+  // static page load with no claims yet (section [6]'s own coverage).
   renderRulesPage();
-  assert(el('page-rules').innerHTML.includes('Clemson'), 'AFTER: the Rules tab now lists Clemson');
+  assert(!el('page-rules').innerHTML.includes('Clemson'), 'AFTER: DI-423 — the Rules tab STILL does not list Clemson (or anything else) — the removal holds even through a live claim-change ripple');
   const total = (await import('./js/scoring.js')).calculateAlmaMaterTotal(storage.getGames('fr_w'), almaMatersForAutoCalc(storage.getWeek('fr_w')), week.tiebreakerCalculationMode);
   assert(total === 31, `AFTER: the tiebreaker Auto-Calc sums the newly-claimed Clemson game's FINAL score (31) — got ${total}`);
 }
@@ -1733,6 +1780,17 @@ console.log('\n[16] item 1 — the ESPN team catalog never reaches the synced se
     // js/data-model.js's SCRIBE_HEAT_ORDER on BOTH sides of the wire, so it can
     // never grow.
     'scribeHeat',
+    // UX Revamp wiring pass 3b (916bdb7, 2026-09-25, DI-342 / DI-C3 §4.2-§4.3):
+    // the Week wizard's SCRIBE Reminders controls. Shipped without an entry
+    // here, so this assertion went red — unread, because almatest was not
+    // spawned by loadtest.mjs (Testing Protocol 191). Size-judged
+    // 2026-09-29: `reminderCadence` is a <select> value from
+    // js/reminder-rules.js's closed REMINDER_CADENCE_VALUES (longest
+    // 'hourly-final-day', 16 chars), re-validated by normalizeCadence() on
+    // read in supabase/functions/reminders; `reminderCooldownHours` is an
+    // integer >= 1 (parseInt-clamped in bindScribeReminderControls()). Neither
+    // can grow with the season. Defaults live in data-model.js DEFAULT_SETTINGS.
+    'reminderCadence', 'reminderCooldownHours',
     // small maps/arrays, bounded by a fixed real-world count
     'commPanelSectionsCollapsed', 'commPanelSectionsHidden',  // 19 comm-panel sections
     'dashboardColumnOrder',                                    // 6 players
@@ -2206,6 +2264,277 @@ console.log('\n[19] Demo games must never feed an alma-mater rank lookup…');
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[20] RG-290 — the Control Center Profile save is a claim change too: same ripple as Players → Edit…');
+{
+  // Drew, verbatim (live v0.27.1, 2026-09-28): "Changing my alma mater in my
+  // profile in control center is not altering the list of alma maters that is
+  // used elsewhere (for tiebreakers, for building slate, etc)."
+  //
+  // FIELD MAP (established before the fix): the Profile pane writes
+  // `player.almaMater` through app.js's patchPlayer() (onSaveAlmaMater in
+  // buildControlCenterCtx()), the SAME field Players → Edit writes and the SAME
+  // field claimedAlmaMaters() reads — there was never a second field. What the
+  // Profile path skipped is the stored DENORMALISATION of that roster:
+  // `game.isAlmaMaterGame` on the open/upcoming slate AND the Available-Games
+  // pool. Only #ep-save and .toggle-player-btn called
+  // recomputeAlmaMaterFlags(); patchPlayer() (the Profile pane AND chat-ui's
+  // prefs-panel alma <select>, both routed through it) never did. The two
+  // consumers Drew named read that stored flag, not the live roster:
+  //   - the tiebreaker Auto-Calc's default 'selectedSlateOnly' mode requires
+  //     `g.isAlmaMaterGame && isAlma` (scoring.js calculateAlmaMaterTotal),
+  //   - the slate builder's Tier 1 is `pool.filter(g => g.isAlmaMaterGame)`
+  //     (data-provider.js buildSuggestedSlate).
+  // Driven here through the REAL ctx callbacks buildControlCenterCtx() hands
+  // the drawer, in the order control-center.js's 'cc-save-profile' case fires
+  // them (display name, initials, alma mater).
+  localStorage.clear();
+  resetDom();
+  el('toast-container');
+  const scoring = await import('./js/scoring.js');
+
+  const week = freshWeek({ weekId: 'cc_w', status: 'draft', tiebreakerCalculationMode: 'selectedSlateOnly' });
+  storage.saveWeek(week);
+  // A LOCKED week alongside — a claim change must NOT reach it (tiebreaker
+  // guesses were submitted against its slate; CONVENTIONS #25's spirit).
+  storage.saveWeek(freshWeek({ weekId: 'cc_locked', weekNumber: 2, label: 'Week 2', status: 'locked' }));
+
+  const oldGame  = freshGame({ weekId: 'cc_w', homeTeam: 'Texas A&M', awayTeam: 'Florida', isAlmaMaterGame: true,
+    status: GAME_STATUS.FINAL, homeScore: 21, awayScore: 8 });
+  const newGame  = freshGame({ weekId: 'cc_w', homeTeam: 'Clemson', awayTeam: 'Wake Forest', isAlmaMaterGame: false,
+    spread: -21, status: GAME_STATUS.FINAL, homeScore: 31, awayScore: 10 });
+  storage.saveAllGamesForWeek('cc_w', [oldGame, newGame]);
+  const lockedGame = freshGame({ weekId: 'cc_locked', homeTeam: 'Clemson', awayTeam: 'Duke', isAlmaMaterGame: false });
+  storage.saveAllGamesForWeek('cc_locked', [lockedGame]);
+
+  const decoyAvail = freshGame({ weekId: 'cc_w', homeTeam: 'Ohio State', awayTeam: 'Michigan', homeRank: 2, awayRank: 3,
+    spread: -3, nationalTV: true, broadcastNetwork: 'FOX', isAlmaMaterGame: false });
+  const oldAvail = freshGame({ weekId: 'cc_w', homeTeam: 'Texas A&M', awayTeam: 'Florida', isAlmaMaterGame: true });
+  const newAvail = freshGame({ weekId: 'cc_w', homeTeam: 'Clemson', awayTeam: 'Wake Forest', spread: -21, isAlmaMaterGame: false });
+  storage.saveAvailableGames('cc_w', [decoyAvail, oldAvail, newAvail]);
+
+  storage.addPlayer(freshPlayer({ playerId: 'cc_drew', displayName: 'Drew', initials: 'DH', active: true, almaMater: 'Texas A&M' }));
+  storage.setSession('cc_drew', true, true);   // the commissioner, as Drew is
+
+  assert(claimedAlmaMaters().join('|') === 'Texas A&M', 'fixture check: before the save the roster is exactly [Texas A&M] (not vacuous)');
+  const tier1Before = buildSuggestedSlate(scoreCandidateGames(storage.getAvailableGames('cc_w'), 'cc_w'), 2).slate.map(g => g.homeTeam);
+  assert(tier1Before.includes('Texas A&M') && !tier1Before.includes('Clemson'), `fixture check: before, Tier 1 guarantees Texas A&M and not Clemson (${tier1Before.join(', ')})`);
+
+  const ctx = app._buildControlCenterCtxForTest();
+  assert(typeof ctx?.callbacks?.onSaveAlmaMater === 'function', 'fixture check: the drawer ctx carries the real onSaveAlmaMater callback');
+  assert(ctx.session.player.almaMater === 'Texas A&M', 'fixture check: the Profile pane renders from player.almaMater — the same field claimedAlmaMaters() reads');
+  ctx.callbacks.onSaveDisplayName('Drew');
+  ctx.callbacks.onSaveInitials('DH');
+  ctx.callbacks.onSaveAlmaMater('Clemson');
+
+  assert(storage.getPlayer('cc_drew').almaMater === 'Clemson', '20a the Profile save writes player.almaMater (the one field) — not preferences, not a device setting');
+  const roster = claimedAlmaMaters();
+  assert(roster.includes('Clemson') && !roster.includes('Texas A&M'), `20b claimedAlmaMaters() now [${roster.join(', ')}] — the new school in, the old one out`);
+  assert(renderAlmaMaterSettingsCard().includes('Clemson') && !renderAlmaMaterSettingsCard().includes('Texas A&amp;M'), '20c the tiebreaker/roster card (Rules tab) lists Clemson and no longer Texas A&M');
+  assert(storage.getGame(newGame.gameId).isAlmaMaterGame === true, '20d THE BUG — the DRAFT slate\'s Clemson game is re-flagged ⭐ by the Profile save');
+  assert(storage.getGame(oldGame.gameId).isAlmaMaterGame === false, '20e …and the Texas A&M game loses its ⭐ — the old claim does not linger');
+  const pool = storage.getAvailableGames('cc_w');
+  assert(pool.find(g => g.gameId === newAvail.gameId)?.isAlmaMaterGame === true && pool.find(g => g.gameId === oldAvail.gameId)?.isAlmaMaterGame === false,
+    '20f the Available-Games POOL (what Build Slate scores) is re-flagged the same way — Clemson ⭐, Texas A&M not');
+  const tier1After = buildSuggestedSlate(scoreCandidateGames(storage.getAvailableGames('cc_w'), 'cc_w'), 2).slate.map(g => g.homeTeam);
+  assert(tier1After.includes('Clemson') && !tier1After.includes('Texas A&M'), `20g building the slate: Tier 1 now guarantees Clemson, not Texas A&M (${tier1After.join(', ')})`);
+  const total = scoring.calculateAlmaMaterTotal(storage.getGames('cc_w'), almaMatersForAutoCalc(storage.getWeek('cc_w')), 'selectedSlateOnly');
+  assert(total === 31, `20h the tiebreaker Auto-Calc (selectedSlateOnly — the default) sums Clemson's 31, not Texas A&M's 21 — got ${total}`);
+  assert(storage.getGame(lockedGame.gameId).isAlmaMaterGame === false, '20i a LOCKED week is left untouched — the ripple keeps its DRAFT/OPEN-only gate');
+
+  // The page UNDER the drawer repaints: with a tab current whose render
+  // still shows the claimed-schools roster, the new claim appears right
+  // after Save (the drawer never triggered a repaint before, so the old
+  // roster stayed on screen).
+  //
+  // RE-DERIVED (RG-298, 2026-09-28, reviewer round 2 coordinator addition) —
+  // this used to target the RULES tab, asserting the new claim ("Oklahoma")
+  // appeared there. DI-423 (UN-378, this same release) REMOVED the Alma
+  // Maters section from the Rules page entirely ("Alma maters should not be
+  // listed in the rules section." — Drew), so that expectation can no
+  // longer be true — not a repaint bug, a stale assertion against removed
+  // content. Re-targeted at DASHBOARD (Alma Mater Watch, `dash-alma`,
+  // `renderAlmaMaterWatch()`), one of DI-423's own named THREE remaining
+  // consumers of claimedAlmaMaters() — verified directly above (real
+  // fixture run, 2026-09-29) to repaint cleanly with no thrown/caught error
+  // once `document.body.dataset` exists from the start (see the top-level
+  // document mock's own comment).
+  el('page-dashboard').innerHTML = '<ul class="rules-list"><li>STALE</li></ul>';
+  storage.setActiveWeekId('cc_w');
+  const prevTab = app.state.currentTab;
+  app.state.currentTab = 'dashboard';
+  app._buildControlCenterCtxForTest().callbacks.onSaveAlmaMater('Oklahoma');
+  app.state.currentTab = prevTab;
+  assert(!el('page-dashboard').innerHTML.includes('STALE') && el('page-dashboard').innerHTML.includes('Oklahoma'),
+    '20i2 the page under the drawer (Dashboard -> Alma Mater Watch) is repainted with the new claim after the Profile save');
+  app._buildControlCenterCtxForTest().callbacks.onSaveAlmaMater('Clemson');   // back to the fixture's claim
+
+  // Same chokepoint, the other self-edit surface: chat-ui's prefs-panel alma
+  // <select> calls the registered writer, which IS patchPlayer().
+  // Reset the flags to the pre-save state first so this assertion cannot pass
+  // on whatever 20d–20h left behind.
+  storage.saveAllGamesForWeek('cc_w', [{ ...storage.getGame(oldGame.gameId), isAlmaMaterGame: true }, { ...storage.getGame(newGame.gameId), isAlmaMaterGame: false }]);
+  app.patchPlayer('cc_drew', { almaMater: 'Wake Forest' });
+  assert(storage.getGame(oldGame.gameId).isAlmaMaterGame === false && storage.getGame(newGame.gameId).isAlmaMaterGame === true,
+    '20j patchPlayer() itself carries the ripple — the chat prefs-panel alma picker (same registered writer) re-flags too: Wake Forest ⭐, Texas A&M not');
+
+  // A NON-commissioner's own Profile save: the claim is written (league_members
+  // self-edit allows alma_mater, 0002_rls.sql league_members_guard), but games/
+  // the pool are commissioner-only under RLS (games_update: is_commissioner) —
+  // attempting the re-flag from a player's device would be REFUSED and raise the
+  // red banner. So the player's device must not write games at all.
+  storage.addPlayer(freshPlayer({ playerId: 'cc_kev', displayName: 'Kevin', active: true, almaMater: 'Purdue' }));
+  storage.setSession('cc_kev', false, true);
+  const gamesBefore = JSON.stringify(storage.getGames('cc_w'));
+  const poolBefore = JSON.stringify(storage.getAvailableGames('cc_w'));
+  // Florida is the AWAY side of the (currently un-starred) Texas A&M game, so
+  // a re-flag WOULD change a row — this guard is not vacuous.
+  assert(storage.getGame(oldGame.gameId).isAlmaMaterGame === false, 'fixture check: the Texas A&M–Florida game is un-starred before Kevin\'s save, so a re-flag for "Florida" would visibly change it');
+  const ctxK = app._buildControlCenterCtxForTest();
+  ctxK.callbacks.onSaveAlmaMater('Florida');
+  assert(storage.getPlayer('cc_kev').almaMater === 'Florida', '20k a player\'s own Profile save still writes his claim');
+  assert(JSON.stringify(storage.getGames('cc_w')) === gamesBefore && JSON.stringify(storage.getAvailableGames('cc_w')) === poolBefore,
+    '20l …and a NON-commissioner device writes no game/pool rows (RLS would refuse them — never trade a stale ⭐ for a red banner)');
+}
+
+console.log('\n[21] REVIEWER ROUND 3 R2 — Profile\'s catalog landing patches the LIVE <select> in place; the player\'s in-progress pick survives…');
+{
+  // The reviewer's exact sequence: Profile opens -> the background ESPN fetch
+  // fires -> the player changes the alma-mater <select> to a school that is
+  // NOT their stored claim -> the fetch lands. Round 2 answered the landing
+  // with refreshControlCenterAndSettingsPage(), a wholesale Profile repaint
+  // (field-preserve.js carries no <select>), so the pick snapped back to the
+  // stored school and, on iOS, an open picker was left on a dead node.
+  //
+  // A select stub with a REAL select's two behaviours that matter here:
+  // replacing its options re-derives `.value` from the `selected` option (or
+  // the first), and assigning `.value` to a value no option carries yields ''.
+  const unesc = (v) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  function makeSelect(id) {
+    const e = makeEl(id);
+    let html = ''; let v = '';
+    const values = () => [...html.matchAll(/<option value="([^"]*)"/g)].map(m => unesc(m[1]));
+    Object.defineProperty(e, 'innerHTML', {
+      configurable: true,
+      get: () => html,
+      set(next) {
+        html = String(next);
+        const opts = [...html.matchAll(/<option value="([^"]*)"( selected)?/g)];
+        const pick = opts.find(m => m[2]) || opts[0];
+        v = pick ? unesc(pick[1]) : '';
+      },
+    });
+    Object.defineProperty(e, 'value', { configurable: true, get: () => v, set(next) { v = values().includes(String(next)) ? String(next) : ''; } });
+    e.optionCount = () => values().length;
+    registry.set(id, e);
+    return e;
+  }
+  const espnTeam = (location, name) => ({ team: { id: location, location, name, abbreviation: 'X', displayName: `${location} ${name}` } });
+  const espnResponse = { sports: [{ leagues: [{ teams: [
+    espnTeam('Texas A&M', 'Aggies'), espnTeam('USC', 'Trojans'), espnTeam('Oklahoma', 'Sooners'),
+    espnTeam('Clemson', 'Tigers'), espnTeam('Ohio State', 'Buckeyes'), espnTeam('Washington', 'Huskies'),
+    espnTeam('Notre Dame', 'Fighting Irish'), espnTeam('Purdue', 'Boilermakers'), espnTeam('Arkansas', 'Razorbacks'),
+  ] }] }] };
+  const savedFetch21 = globalThis.fetch;
+
+  // One Profile open, cold cache: the select painted from the REAL ctx.
+  const openProfile = (stored) => {
+    localStorage.clear();
+    resetDom();
+    app._resetEspnTeamsCacheForTest();
+    storage.addPlayer(freshPlayer({ playerId: 'r2_p', displayName: 'R2', active: true, almaMater: stored }));
+    storage.setSession('r2_p', false, true);
+    const sel = makeSelect('cc-field-alma-mater');
+    sel.innerHTML = app._buildControlCenterCtxForTest().bodies.almaMaterOptionsHTML;
+    return sel;
+  };
+  // A fetch the test resolves by hand, so the change can land BETWEEN the
+  // fetch starting and the fetch landing.
+  const deferredFetch = () => {
+    let release; const gate = new Promise(r => { release = r; });
+    let calls = 0;
+    globalThis.fetch = async () => { calls++; await gate; return { ok: true, json: async () => espnResponse }; };
+    return { release: () => release(), calls: () => calls };
+  };
+
+  try {
+    // ── 21a–21e: a different school, picked while the fetch is in flight ──
+    {
+      const sel = openProfile('Texas A&M');
+      assert(sel.value === 'Texas A&M' && sel.optionCount() === 7,
+        `21 fixture: Profile opens on the stored claim with the 6-school fallback + None (value "${sel.value}", ${sel.optionCount()} options) — not vacuous`);
+      const f = deferredFetch();
+      const landing = app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(sel.optionCount() === 7, '21 fixture: the catalog fetch is still pending — nothing has landed on the select yet');
+      sel.value = 'USC';                                           // the player's pick, mid-fetch
+      assert(sel.value === 'USC', '21 fixture: the change took (USC is a fallback option)');
+      const before = sel.optionCount();
+      f.release(); await landing;
+      assert(f.calls() >= 1, `21 fixture: the fetch genuinely ran (${f.calls()} call(s)) — not vacuous`);
+      assert(sel.value === 'USC', `21a R2 — after the catalog lands the select STILL holds the player's pick "USC", not the stored "Texas A&M" (got "${sel.value}")`);
+      assert(sel.optionCount() > before && /Ohio State Buckeyes/.test(sel.innerHTML),
+        `21b …and its option list grew to the ESPN catalog in place (${before} -> ${sel.optionCount()}; "Ohio State Buckeyes" now offered)`);
+      assert(registry.get('cc-field-alma-mater') === sel,
+        '21c the SAME node — patched in place, never replaced (an open iOS picker stays attached to a live element)');
+      assert(storage.getPlayer('r2_p').almaMater === 'Texas A&M', '21d nothing was saved by the landing — the stored claim is untouched until the player taps Save');
+    }
+    // ── 21e: "— None —" is a real pick too — it must not snap back to the claim ──
+    {
+      const sel = openProfile('Oklahoma');
+      const f = deferredFetch();
+      const landing = app._maybeRefreshAlmaMaterCatalogForTest();
+      sel.value = '';
+      f.release(); await landing;
+      assert(sel.value === '' && sel.optionCount() > 7,
+        `21e picking "— None —" mid-fetch survives the landing too (value "${sel.value}", ${sel.optionCount()} options) — the read is sel.value, not "sel.value || stored"`);
+    }
+    // ── 21f: an untouched select keeps showing the stored claim ──
+    {
+      const sel = openProfile('Clemson');
+      const f = deferredFetch();
+      const landing = app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(/Clemson \(current — not in ESPN list\)/.test(sel.innerHTML), '21f fixture: a non-fallback claim renders as its own "(current…)" option before the catalog lands');
+      f.release(); await landing;
+      assert(sel.value === 'Clemson' && /<option value="Clemson" selected>Clemson Tigers/.test(sel.innerHTML) && !/not in ESPN list/.test(sel.innerHTML),
+        `21f an UNTOUCHED select lands on the stored claim, now as the real ESPN option (value "${sel.value}")`);
+    }
+    // ── 21g: minor (a) — a FAILED fetch is remembered; later Profile paints don't retry ──
+    {
+      openProfile('Texas A&M');
+      let failCalls = 0;
+      globalThis.fetch = async () => { failCalls++; throw new Error('ESPN unreachable'); };
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      const afterFirst = failCalls;
+      assert(afterFirst >= 1, `21g fixture: the first attempt genuinely tried the network (${afterFirst} call(s): direct + proxies) — not vacuous`);
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(failCalls === afterFirst,
+        `21g minor (a) — two more Profile repaints after a FAILED fetch make ZERO further network calls (${afterFirst} -> ${failCalls}); once per page load, success or failure`);
+      assert(app._buildControlCenterCtxForTest().bodies.almaMaterOptionsHTML.includes('value="Texas A&amp;M" selected'),
+        '21g …and Profile still renders the complete fallback list with the claim selected (the failure never blocks Save)');
+    }
+    // ── 21h: the landing never repaints Profile wholesale (source, comment-stripped) ──
+    {
+      const { readFileSync } = await import('node:fs');
+      const src = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+      const start = src.indexOf('async function maybeRefreshAlmaMaterCatalog()');
+      const body = src.slice(start, src.indexOf('\n}', start)).replace(/\/\/.*$/gm, '');
+      assert(start > -1 && !/refreshControlCenterAndSettingsPage\(|controlCenterApi/.test(body) && /patchProfileAlmaMaterOptionsInPlace\(/.test(body),
+        '21h maybeRefreshAlmaMaterCatalog() calls the in-place patch and NEVER refreshControlCenterAndSettingsPage()/controlCenterApi.update() (the wholesale Profile repaint that reset the select)');
+    }
+  } finally {
+    globalThis.fetch = savedFetch21;
+    app._resetEspnTeamsCacheForTest();
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log('\n══════════════════════════════════════════════════');
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, ${fail} failed`);
 else { console.log(`❌ ${pass} passed, ${fail} failed`); process.exitCode = 1; }
+// RG-290 (2026-09-28) — §20i2 drives a REAL repaint through navigateTo(), which
+// (as in the browser) starts chat.js's transport poll; its self-rescheduling
+// timer would hold this process open forever. Same exit discipline as
+// boottest.mjs/rolestest.mjs: flush, then exit; an unref'd backstop timer
+// guarantees a wedged stdout cannot hang loadtest's spawnSync either.
+process.stdout.write('', () => process.exit(fail === 0 ? 0 : 1));
+setTimeout(() => process.exit(fail === 0 ? 0 : 1), 5000).unref();

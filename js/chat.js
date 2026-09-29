@@ -1102,6 +1102,20 @@ export function retryFailed(id) {
   notify('events', { added: 0, caughtUp: S.caughtUp, wasCaughtUp: S.caughtUp });
 }
 export function isFailed(id) { return S.failed.has(id); }
+/** RG-297 — test-only seam (chatpagetest [G], the `_xForTest` convention).
+ *  Local/PIN mode has no backend, so flushOutbox() returns before it ever
+ *  splices the queue and no send can end on the FAILED path there — which left
+ *  the ⟳ retry control unmeasurable in the engine. This parks one queued event
+ *  exactly where flushOutbox()'s MAX_ATTEMPTS branch puts it. Production never
+ *  calls it. */
+export function _markFailedForTest(id) {
+  const i = S.outbox.findIndex(o => o.ev.id === id);
+  if (i < 0) return false;
+  const [o] = S.outbox.splice(i, 1);
+  S.failed.set(id, o.ev);
+  persistOutbox();
+  return true;
+}
 export function isPending(id) {
   const m = S.items.get(id);
   return !!m && m.local && !S.failed.has(id);

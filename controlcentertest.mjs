@@ -21,7 +21,8 @@
  *
  * SECTIONS
  *   [0]  Zero top-level side effects at import.
- *   [1]  Constants — DRAWER_EDGE_ZONE_PX reuse; DRAWER_MOTION_MS now 260ms,
+ *   [1]  Constants — DRAWER_EDGE_ZONE_PX RETIRED by DI-419 (2026-09-28,
+ *        isInDrawerOpenZone() replaces its role); DRAWER_MOTION_MS now 260ms,
  *        matching the shared --motion-nav token (fix round 1 checklist note).
  *   [2]  Drawer phase state machine.
  *   [3]  Profile push/back.
@@ -30,7 +31,8 @@
  *        round 0's separate 'toggle-settings-row'/'toggle-history' events.
  *   [5]  isDrawerVisuallyOpen() / the data-open hook.
  *   [6]  _resolveDrawerSettle().
- *   [7]  _isWithinEdgeZone().
+ *   [7]  isInDrawerOpenZone() (js/nav-gestures.js) — DI-419 (2026-09-28),
+ *        RETIRED _isWithinEdgeZone()'s replacement.
  *   [8]  starredPanels() — FIX ROUND 1 finding 6: each entry now carries a
  *        `group` ('admin'|'commissioner'), Super Admin grouped under 'admin'.
  *   [9]  renderControlCenter() — data-open contract, body embedding, XSS,
@@ -85,10 +87,10 @@ console.log('[0] Zero top-level side effects at import…');
 
 const CC = await import('./js/control-center.js');
 const {
-  DRAWER_WIDTH_VW, DRAWER_MAX_WIDTH_PX, DRAWER_EDGE_ZONE_PX, DRAWER_MOTION_MS,
+  DRAWER_WIDTH_VW, DRAWER_MAX_WIDTH_PX, DRAWER_MOTION_MS,
   DRAWER_OPEN_SETTLE_RATIO, DRAWER_FLICK_VELOCITY_PX_MS,
   initialControlCenterState, _controlCenterStateMachine, _toggleAccordionRow,
-  isDrawerVisuallyOpen, _isWithinEdgeZone, _resolveDrawerSettle,
+  isDrawerVisuallyOpen, _resolveDrawerSettle,
   starredPanels, renderControlCenter, renderIdentityHeader, renderProfileScreen,
   renderStarredPanels, renderSettingsAccordion, renderFeedbackRulesGroup, renderHelpFooter,
   bindControlCenterEdgeSwipe, mountControlCenter,
@@ -139,9 +141,13 @@ function baseCtx(overrides = {}) {
 console.log('\n[1] CONSTANTS…');
 // ═════════════════════════════════════════════════════════════════════════
 {
-  assert(DRAWER_EDGE_ZONE_PX === NG.WEEK_SWIPE_EDGE_EXCLUDE_PX,
-    '1a: DRAWER_EDGE_ZONE_PX is the SAME value as nav-gestures.js\'s WEEK_SWIPE_EDGE_EXCLUDE_PX (28) — reused, never re-declared');
-  assert(DRAWER_EDGE_ZONE_PX === 28, '1b: …and that shared value is 28px');
+  // DI-419 (2026-09-28) — DRAWER_EDGE_ZONE_PX is RETIRED; the drawer's own
+  // arm check now calls js/nav-gestures.js's isInDrawerOpenZone() directly
+  // (see [10], below, for the behavioral coverage this constant's removal
+  // leaves in its place).
+  assert(CC.DRAWER_EDGE_ZONE_PX === undefined, '1a: DRAWER_EDGE_ZONE_PX no longer exists as an export — isInDrawerOpenZone() (js/nav-gestures.js) replaced its role');
+  assert(typeof NG.isInDrawerOpenZone === 'function' && typeof NG.DRAWER_ZONE_FRACTION === 'number',
+    '1b: …and js/control-center.js imports the ONE shared predicate/constant that replaced it, from js/nav-gestures.js');
   assert(DRAWER_WIDTH_VW === 85 && DRAWER_MAX_WIDTH_PX === 340, '1c: drawer width — 85vw, capped at 340px (DI-301)');
   assert(DRAWER_OPEN_SETTLE_RATIO === 0.4, '1d: 40%-of-width settle threshold (DI-301)');
   assert(DRAWER_FLICK_VELOCITY_PX_MS === 0.3, '1e: flick-velocity override threshold');
@@ -245,15 +251,21 @@ console.log('\n[6] _resolveDrawerSettle()…');
 }
 
 // ═════════════════════════════════════════════════════════════════════════
-console.log('\n[7] _isWithinEdgeZone()…');
+console.log('\n[7] isInDrawerOpenZone() (js/nav-gestures.js) — RETIRED _isWithinEdgeZone()\'s replacement, exercised at THIS module\'s own call site…');
 // ═════════════════════════════════════════════════════════════════════════
 {
-  assert(_isWithinEdgeZone(0) === true, '7a: x=0 within the zone');
-  assert(_isWithinEdgeZone(27) === true, '7b: x=27 within the zone');
-  assert(_isWithinEdgeZone(28) === false, '7c: x=28 NOT within the zone');
-  assert(_isWithinEdgeZone(100) === false, '7d: well inside the content, never within the zone');
-  assert(_isWithinEdgeZone(-1) === false, '7e: negative x rejected');
-  assert(_isWithinEdgeZone(undefined) === false, '7f: non-numeric x rejected');
+  const { isInDrawerOpenZone, DRAWER_ZONE_FRACTION } = NG;
+  // Same shape of coverage _isWithinEdgeZone() used to carry, on a 400px
+  // viewport (100px = the 25% boundary) — the fixture width [10], below,
+  // also uses.
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: 0, viewportWidthPx: 400 }) === true, '7a: Picks, x=0 — within the zone');
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: 99, viewportWidthPx: 400 }) === true, '7b: Picks, x=99 (< 25% of 400) — within the zone');
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: 100, viewportWidthPx: 400 }) === false, '7c: Picks, x=100 (the 25% boundary itself) — NOT within the zone (strict <)');
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: 300, viewportWidthPx: 400 }) === false, '7d: well inside the content, never within the zone');
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: -1, viewportWidthPx: 400 }) === false, '7e: negative x rejected');
+  assert(isInDrawerOpenZone({ tab: 'picks', clientX: undefined, viewportWidthPx: 400 }) === false, '7f: non-numeric x rejected');
+  assert(isInDrawerOpenZone({ tab: 'commissioner', clientX: 399, viewportWidthPx: 400 }) === true, '7g: [DI-419] on any tab OTHER than Picks/Dashboard, "anywhere" opens the drawer — the widened zone this DI added');
+  assert(DRAWER_ZONE_FRACTION === 0.25, '7h: DRAWER_ZONE_FRACTION is 25% — a fraction of the viewport, not the retired 28px pixel constant');
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -350,11 +362,19 @@ console.log('\n[9] renderControlCenter() / renderStarredPanels() / renderFeedbac
   catch (e) { threw = e instanceof TypeError; }
   assert(threw, '9h-2: …and the same when `icon` is missing');
 
+  // DI-422 (2026-09-28) — Help Center MOVED from renderHelpFooter() into
+  // renderFeedbackRulesGroup()'s "Help & Feedback" group (row 11 of the
+  // DI's coverage matrix: "Help Center" pulled up from the footer group).
   const helpHTML = renderHelpFooter(baseCtx());
   const expectedCopy = "The Help Center isn't available yet — it's coming in a future update.";
-  assert(helpHTML.includes('data-action="coming-soon"'), '9i-1: the Help Center row uses the shared [data-action="coming-soon"] contract');
-  assert(helpHTML.includes(`data-coming-soon-copy="${escHtml(expectedCopy)}"`), '9i-2: …carrying the exact shared-pattern copy string, escaped');
-  assert(helpHTML.includes('href="privacy.html"'), '9i-3: the footer links to privacy.html');
+  assert(!helpHTML.includes('data-action="coming-soon"') && !helpHTML.includes('Help Center'),
+    '9i-1: DI-422 — renderHelpFooter() no longer renders the Help Center row at all (moved into "Help & Feedback")');
+  assert(helpHTML.includes('href="privacy.html"'), '9i-3: the footer still links to privacy.html');
+  const feedbackGroupHTML = renderFeedbackRulesGroup(baseCtx(), initialControlCenterState());
+  assert(feedbackGroupHTML.includes('data-action="coming-soon"') && feedbackGroupHTML.includes('Help Center'),
+    '9i-4: DI-422 — the Help Center row now lives inside renderFeedbackRulesGroup()\'s own "Help & Feedback" output');
+  assert(feedbackGroupHTML.includes(`data-coming-soon-copy="${escHtml(expectedCopy)}"`),
+    '9i-5: …carrying the exact shared-pattern copy string, escaped, at its new home');
 
   // Emoji sweep — ✕ (U+2715, close control) is an allowed plain symbol glyph
   // (existing `showAccountSheet()` precedent, file header note 7); ‹ is no
@@ -424,42 +444,158 @@ console.log('\n[10] bindControlCenterEdgeSwipe() — FIX ROUND 1 finding 3: must
     const handlers = {};
     return {
       Capacitor: { isNativePlatform: () => true },
+      // DI-419 (2026-09-28) — isInDrawerOpenZone() reads window.innerWidth
+      // fresh on every touchstart; 400px matches [7]'s own fixture width
+      // (100px = the 25% boundary), so every touch coordinate below keeps
+      // its pre-DI-419 "inside/outside the zone" meaning.
+      innerWidth: 400,
       addEventListener(type, fn) { handlers[type] = fn; },
       removeEventListener(type) { delete handlers[type]; },
       _fire(type, evt) { handlers[type]?.(evt); },
     };
   }
+  // DI-419 — Picks/Dashboard is the realistic case for this section's own
+  // zone-based (arm/no-arm) coverage; a caller with no getTab() (defaults to
+  // `null`, "not Picks/Dashboard") gets "anywhere," per DI-419's own rule —
+  // exercised separately, structurally, below.
+  const GET_TAB_PICKS = { getTab: () => 'picks' };
   function touch(x, y) { return { touches: [{ clientX: x, clientY: y }] }; }
+  function touchOn(x, y, target) { return { touches: [{ clientX: x, clientY: y }], target }; }
 
-  // 10a: off-native -> inert no-op, never binds.
-  globalThis.window = { addEventListener() { throw new Error('must not bind off-native'); }, removeEventListener() {} };
-  const unbindOff = bindControlCenterEdgeSwipe(() => {}, () => initialControlCenterState());
-  assert(typeof unbindOff === 'function', '10a-1: returns a callable unbind even when nothing was ever bound');
-  unbindOff();
+  // 10a: REVIEWER ROUND 2 (B3 BLOCK, coordinator ruling, 2026-09-28) —
+  // bindControlCenterEdgeSwipe() is NO LONGER native-only. DI-301's own
+  // "web gets tap-only, no edge-swipe" carve-out is AMENDED (dated, in
+  // js/control-center.js's own file-header note directly above this
+  // function): the drawer's edge-swipe now binds and arms IDENTICALLY on
+  // web (no Capacitor bridge at all) as on native. The OLD version of this
+  // test asserted the opposite (a fake window whose addEventListener threw
+  // if the binder ever tried to attach off-native) — replaced, not merely
+  // deleted, since "binds on web too" is exactly the behavior B3 requires
+  // and a real regression here would otherwise go unnoticed.
+  {
+    const fakeWin = makeFakeWindow();
+    delete fakeWin.Capacitor; // explicitly no native bridge — a genuine web browser
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, ...GET_TAB_PICKS });
+    fakeWin._fire('touchstart', touch(10, 300));
+    fakeWin._fire('touchmove', touch(30, 300));
+    assert(events.some(e => e.type === 'drag-start'),
+      '10a: [B3] web (no Capacitor bridge) — the drawer edge-swipe arms just like native; DI-301\'s native-only carve-out is amended, not just untested');
+    unbind();
+  }
+  // 10a2: the ONLY remaining early-return guard is the dispatch/getState
+  // contract check — unrelated to platform, still enforced after B3.
+  {
+    const unbindBad = bindControlCenterEdgeSwipe(null, null);
+    assert(typeof unbindBad === 'function', '10a2: still returns a callable no-op unbind when dispatch/getState are missing (a contract check, not a platform gate)');
+  }
 
   globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} } };
 
-  // 10b: closed drawer, outside the edge zone -> never arms.
+  // 10b: closed drawer, outside the shared drawer zone (Picks, x>=100 of a
+  // 400px viewport = 25%) -> never arms.
   {
     const fakeWin = makeFakeWindow();
     globalThis.window = fakeWin;
     const events = [];
-    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState());
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), GET_TAB_PICKS);
     fakeWin._fire('touchstart', touch(100, 300));
     fakeWin._fire('touchmove', touch(160, 300));
-    assert(events.length === 0, '10b: outside the 28px edge zone (closed drawer), the gesture never arms');
+    assert(events.length === 0, '10b: [DI-419] outside the 25%-of-viewport drawer zone on Picks (closed drawer), the gesture never arms');
     unbind();
   }
 
-  // 10c: closed drawer, inside the edge zone -> arms.
+  // 10c: closed drawer, inside the shared drawer zone -> arms.
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, ...GET_TAB_PICKS });
+    fakeWin._fire('touchstart', touch(10, 300));
+    fakeWin._fire('touchmove', touch(30, 300));
+    assert(events.some(e => e.type === 'drag-start'), '10c: [DI-419] inside the drawer zone, past the axis dead-zone, arms a drag');
+    unbind();
+  }
+
+  // 10c2: [DI-419] EVERY OTHER TAB — "anywhere" opens the drawer, even well
+  // outside the old 28px/new 25% zone shape, per Drew's own ruling.
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, getTab: () => 'chat' });
+    fakeWin._fire('touchstart', touch(350, 300)); // 87.5% across — well outside Picks/Dashboard's own zone
+    fakeWin._fire('touchmove', touch(300, 300));
+    assert(events.some(e => e.type === 'drag-start'), '10c2: on a non-Picks/Dashboard tab, a touch starting far from the left edge still arms the drawer');
+    unbind();
+  }
+
+  // 10c3: [DI-419] a caller that omits opts.getTab() entirely still gets
+  // "anywhere" (defaults to `null`, read as "not Picks/Dashboard") — never
+  // a silent full block. This fixture's `touch(x,y)` events also carry no
+  // `target` at all, so isInDrawerOpenZone()'s B1/B2 `target` check (round
+  // 2, below) safely defaults to "never yields" here — a NEW section covers
+  // the yield-target behavior (a `.chat-msg`/scroller/text-field target)
+  // directly, with a real `target`.
   {
     const fakeWin = makeFakeWindow();
     globalThis.window = fakeWin;
     const events = [];
     const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300 });
-    fakeWin._fire('touchstart', touch(10, 300));
-    fakeWin._fire('touchmove', touch(30, 300));
-    assert(events.some(e => e.type === 'drag-start'), '10c: inside the edge zone, past the axis dead-zone, arms a drag');
+    fakeWin._fire('touchstart', touch(350, 300));
+    fakeWin._fire('touchmove', touch(300, 300));
+    assert(events.some(e => e.type === 'drag-start'), '10c3: omitting opts.getTab() entirely still arms (defaults to null -> "not Picks/Dashboard" -> anywhere)');
+    unbind();
+  }
+
+  // 10c4-c7: REVIEWER ROUND 2 (B1/B2 BLOCK, 2026-09-28) — the DRAWER's own
+  // arm check refuses a touch starting on a yield-target, on the Chat tab
+  // ("anywhere" would otherwise claim it) — direct coverage at THIS call
+  // site; the combined drawer+bindMessageSwipe simulation lives at
+  // chatscrolltest.mjs [8].
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, getTab: () => 'chat' });
+    const msgTarget = { closest: (sel) => (String(sel).includes('.chat-msg') ? msgTarget : null) };
+    fakeWin._fire('touchstart', touchOn(350, 300, msgTarget)); // "anywhere" on Chat — would normally arm
+    fakeWin._fire('touchmove', touchOn(300, 300, msgTarget));
+    assert(events.length === 0, '10c4: [B1] a touch starting on a .chat-msg target never arms the drawer, even on Chat\'s own "anywhere" zone');
+    unbind();
+  }
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, getTab: () => 'chat' });
+    const fieldTarget = { closest: (sel) => (String(sel).includes('input') ? fieldTarget : null) };
+    fakeWin._fire('touchstart', touchOn(350, 300, fieldTarget));
+    fakeWin._fire('touchmove', touchOn(300, 300, fieldTarget));
+    assert(events.length === 0, '10c5: [B2] a touch starting on an <input> target never arms the drawer either');
+    unbind();
+  }
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, getTab: () => 'chat' });
+    const scrollerTarget = { scrollLeft: 30, closest(sel) { return String(sel).includes('.comm-tabbar') ? this : null; } };
+    fakeWin._fire('touchstart', touchOn(350, 300, scrollerTarget));
+    fakeWin._fire('touchmove', touchOn(300, 300, scrollerTarget));
+    assert(events.length === 0, '10c6: [B2] a touch starting on a .comm-tabbar with room to scroll back (scrollLeft>0) never arms the drawer');
+    unbind();
+  }
+  {
+    const fakeWin = makeFakeWindow();
+    globalThis.window = fakeWin;
+    const events = [];
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, getTab: () => 'chat' });
+    const scrollerAtRest = { scrollLeft: 0, closest(sel) { return String(sel).includes('.comm-tabbar') ? this : null; } };
+    fakeWin._fire('touchstart', touchOn(350, 300, scrollerAtRest));
+    fakeWin._fire('touchmove', touchOn(300, 300, scrollerAtRest));
+    assert(events.some(e => e.type === 'drag-start'), '10c7: [B2] …but a .comm-tabbar ALREADY at rest (scrollLeft 0) does NOT refuse — the drawer arms normally');
     unbind();
   }
 
@@ -552,7 +688,7 @@ console.log('\n[10] bindControlCenterEdgeSwipe() — FIX ROUND 1 finding 3: must
     const fakeWin = makeFakeWindow();
     globalThis.window = fakeWin;
     const events = [];
-    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300 });
+    const unbind = bindControlCenterEdgeSwipe(ev => events.push(ev), () => initialControlCenterState(), { getWidthPx: () => 300, ...GET_TAB_PICKS });
     fakeWin._fire('touchstart', touch(10, 300));
     fakeWin._fire('touchmove', touch(60, 300));
     assert(events.length > 0, '10j non-vacuity: with neither surface up, the SAME edge touch does start the drawer drag');
@@ -781,7 +917,11 @@ console.log('\n[11] mountControlCenter() — FIX ROUND 1 findings 1, 2, 8, 9…'
     api.destroy();
   }
 
-  // ── 11f: onAfterPaint + update() (finding 2). ──
+  // ── 11f: onAfterPaint + update() (finding 2). DI-422 — Team logos is now
+  // an accordion row (accordionRow() shape, finding 12): the switch control
+  // lives in the row's BODY, so the "logo-view" row must be expanded (a
+  // 'cc-toggle-row' dispatch) before the switch exists in the DOM at all —
+  // re-derived from the old always-visible-toggle fixture. ──
   {
     const root = new FakeElement('div');
     const ctx1 = baseCtx({ logoView: false });
@@ -790,27 +930,30 @@ console.log('\n[11] mountControlCenter() — FIX ROUND 1 findings 1, 2, 8, 9…'
     const countAfterMount = paintLog.length;
     assert(countAfterMount >= 1, '11f-1: onAfterPaint fires at least once at mount');
 
+    api.open();
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="logo-view"]') });
     const toggleBtn = root.querySelector('[data-action="cc-toggle-logo-view"]');
-    assert(!!toggleBtn, '11f-2: fixture sanity — the logo-view toggle row rendered');
+    assert(!!toggleBtn, '11f-2: fixture sanity — the logo-view toggle row rendered once its accordion row is expanded (DI-422)');
+
     let savedValue = null;
     const ctx2 = baseCtx({ logoView: false, callbacks: { onSetLogoView: (v) => { savedValue = v; } } });
     // Re-mount with the real callback wired (baseCtx() above had none) —
     // simplest way to exercise the callback without reaching into closures.
     const root2 = new FakeElement('div');
     const api2 = mountControlCenter(root2, ctx2, {});
+    api2.open();
+    root2._dispatch('click', { target: root2.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="logo-view"]') });
     root2._dispatch('click', { target: root2.querySelector('[data-action="cc-toggle-logo-view"]') });
     assert(savedValue === true, '11f-3: tapping the Team-logos toggle calls onSetLogoView(true) via the SAME content the mount built');
 
     // update(): a fresh ctx reflecting the saved preference — content
-    // reflects it, phase/pane/open-row are preserved.
-    api2.open();
-    root2._dispatch('click', { target: root2.querySelector('[data-action="cc-toggle-row"][data-group="settings"][data-row="timezone"]') });
-    assert(api2.getState().settingsOpenRow === 'timezone', '11f-4: fixture — timezone row is open before update()');
-    const paintCountBeforeUpdate = paintLog.length;
+    // reflects it, phase/pane/open-row (still "logo-view", untouched by
+    // update()) are preserved.
+    assert(api2.getState().settingsOpenRow === 'logo-view', '11f-4: fixture — the logo-view row is still the open row before update()');
     api2.update(baseCtx({ logoView: true }));
     const toggleAfterUpdate = root2.querySelector('[data-action="cc-toggle-logo-view"]');
     assert(toggleAfterUpdate?.getAttribute('aria-checked') === 'true', '11f-5: update(nextCtx) re-renders content against the NEW ctx (logoView:true now reflected)');
-    assert(api2.getState().settingsOpenRow === 'timezone', '11f-6: …while PRESERVING the open accordion row (state untouched by update())');
+    assert(api2.getState().settingsOpenRow === 'logo-view', '11f-6: …while PRESERVING the open accordion row (state untouched by update())');
     assert(api2.getState().phase === 'opening' || api2.getState().phase === 'open', '11f-7: …and the drawer phase is also preserved (still open/opening, not reset to closed)');
 
     api.destroy(); api2.destroy();
@@ -938,34 +1081,45 @@ console.log('\n[11] mountControlCenter() — FIX ROUND 1 findings 1, 2, 8, 9…'
     api.destroy();
   }
 
-  // ── 11m: S2-2 (full-app review, 2026-09-26) — Switch League used to open
-  // the league sheet (z 200) UNDER the still-open drawer (z 501). The drawer
-  // must already be closing/closed at the moment onSwitchLeague() runs. ──
+  // ── 11m: S2-2 (full-app review, 2026-09-26), RE-DERIVED for DI-418/DI-421
+  // (2026-09-28) — "Switch League" is retired; its replacement, "Your
+  // Leagues", now lives in the Profile pane and dispatches
+  // onOpenLeaguesHome(). Full coverage (fixture + close-before-callback +
+  // negative "not in the main pane" + grouping/order) lives in section [15],
+  // below — this section keeps only the ORIGINAL S2-2 shape check, re-pointed
+  // at the new row/action so the historical regression this guards against
+  // (a full-screen surface opening UNDER the still-open drawer) stays
+  // covered at its original call site too. ──
   {
     let phaseAtCallback = null;
     const root = new FakeElement('div');
-    const ctx = baseCtx({ callbacks: { onSwitchLeague: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
+    const ctx = baseCtx({ accountRows: true, callbacks: { onOpenLeaguesHome: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
     const api = mountControlCenter(root, ctx);
     api.open();
-    const btn = root.querySelector('[data-action="cc-switch-league"]');
-    assert(!!btn, '11m fixture: the drawer renders a [data-action="cc-switch-league"] row');
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-push-profile"]') });
+    const btn = root.querySelector('[data-action="cc-open-leagues-home"]');
+    assert(!!btn, '11m fixture: the Profile pane renders a [data-action="cc-open-leagues-home"] ("Your Leagues") row');
     root._dispatch('click', { target: btn });
     assert(phaseAtCallback === 'closing' || phaseAtCallback === 'closed',
-      `11m: S2-2 — Switch League closes the drawer BEFORE onSwitchLeague() opens the sheet (phase seen by the callback: "${phaseAtCallback}") — never a sheet under an open drawer`);
+      `11m: S2-2 shape preserved — "Your Leagues" closes the drawer BEFORE onOpenLeaguesHome() opens the overlay (phase seen by the callback: "${phaseAtCallback}") — never a full-screen surface under an open drawer`);
     api.destroy();
   }
 
-  // ── 11n: S2-3 (full-app review, 2026-09-26) — Sign Out used to leave the
+  // ── 11n: S2-3 (full-app review, 2026-09-26), RE-DERIVED for DI-421
+  // (2026-09-28) — Sign Out now lives in the Profile pane. Used to leave the
   // drawer OPEN under the sign-in gate (not inert, back after the next
   // sign-in). It must be fully CLOSED — no slide, the gate paints over it —
   // by the time onSignOut() runs. ──
   {
     let phaseAtCallback = null;
     const root = new FakeElement('div');
-    const ctx = baseCtx({ callbacks: { onSignOut: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
+    const ctx = baseCtx({ accountRows: true, callbacks: { onSignOut: () => { phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
     const api = mountControlCenter(root, ctx);
     api.open();
-    root._dispatch('click', { target: root.querySelector('[data-action="cc-signout"]') });
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-push-profile"]') });
+    const signOutBtn = root.querySelector('[data-action="cc-signout"]');
+    assert(!!signOutBtn, '11n fixture: the Profile pane renders a [data-action="cc-signout"] row (DI-421)');
+    root._dispatch('click', { target: signOutBtn });
     assert(phaseAtCallback === 'closed',
       `11n: S2-3 — Sign Out closes the drawer INSTANTLY before onSignOut() runs (phase seen by the callback: "${phaseAtCallback}", want "closed")`);
     assert(api.getState().phase === 'closed', '11n-2: …and it stays closed afterwards (nothing to reappear after the next sign-in)');
@@ -1188,6 +1342,217 @@ console.log('\n[14] v0.27.1 round 2 (reviewer conditions/findings on 33243d1) �
 
   globalThis.window = savedWindow;
   globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[15] UX Revamp v0.27.2 — DI-418/DI-421/DI-422 (2026-09-28): "Your Leagues" relocated to Profile, drawer grouping…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow = globalThis.window;
+  const savedDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+
+  // 15a — DI-421: the drawer's MAIN pane (identity header + everything else
+  // except Profile) no longer carries Sign Out or a leagues-switch action at
+  // all. Mutation guard: this checks every action string AND the retired
+  // wrapper class, not just one.
+  {
+    const mainHTML = renderIdentityHeader(baseCtx()) + renderStarredPanels(baseCtx())
+      + renderSettingsAccordion(baseCtx(), initialControlCenterState())
+      + renderFeedbackRulesGroup(baseCtx(), initialControlCenterState());
+    assert(!mainHTML.includes('cc-signout') && !mainHTML.includes('cc-switch-league') && !mainHTML.includes('cc-open-leagues-home'),
+      '15a: DI-421 — none of the drawer\'s main-pane renderers emit Sign Out or a leagues-switch action anywhere');
+    assert(!mainHTML.includes('control-center-identity-actions'),
+      '15a-2: …and the retired identity-actions wrapper is gone from the main pane too');
+  }
+
+  // 15b — DI-421: the PROFILE pane renders "Your Leagues" and "Sign Out", in
+  // that order, ONLY when ctx.accountRows === true — the SAME gate
+  // accountRowsHTML()'s Password/Delete Account rows use, not a new flag.
+  {
+    const withRows = renderProfileScreen(baseCtx({ accountRows: true }));
+    const yourLeaguesIdx = withRows.indexOf('cc-open-leagues-home');
+    const signOutIdx = withRows.indexOf('cc-signout');
+    assert(yourLeaguesIdx > -1 && signOutIdx > -1 && yourLeaguesIdx < signOutIdx,
+      `15b: DI-421 — Profile renders "Your Leagues" ABOVE "Sign Out" when accountRows:true (yourLeagues@${yourLeaguesIdx}, signOut@${signOutIdx})`);
+    assert(/Your Leagues/.test(withRows) && /Sign Out/.test(withRows), '15b-2: fixture — both labels are the exact expected text');
+
+    const withoutRows = renderProfileScreen(baseCtx());
+    assert(!withoutRows.includes('cc-open-leagues-home') && !withoutRows.includes('cc-signout'),
+      '15b-3: DI-421 — with no accountRows flag (local-PIN mode), NEITHER row renders — no Supabase session to leave, no multi-league concept');
+  }
+
+  // 15c — DI-418: "Your Leagues" dispatches onOpenLeaguesHome(), closing the
+  // drawer FIRST (same S2-2 shape as cc-navigate/cc-open-league-page),
+  // reached through a real Profile push, not a raw HTML string check.
+  {
+    let opened = 0, phaseAtCallback = null;
+    const root = new FakeElement('div');
+    const ctx = baseCtx({ accountRows: true, callbacks: { onOpenLeaguesHome: () => { opened++; phaseAtCallback = root.querySelector('#control-center')?.getAttribute('data-phase'); } } });
+    const api = mountControlCenter(root, ctx);
+    api.open();
+    root._dispatch('click', { target: root.querySelector('[data-action="cc-push-profile"]') });
+    const btn = root.querySelector('[data-action="cc-open-leagues-home"]');
+    assert(!!btn, '15c fixture: the Profile pane renders a [data-action="cc-open-leagues-home"] row');
+    root._dispatch('click', { target: btn });
+    assert(opened === 1, `15c: tapping "Your Leagues" calls onOpenLeaguesHome() exactly once (got ${opened})`);
+    assert(phaseAtCallback === 'closing' || phaseAtCallback === 'closed',
+      `15c-2: …and the drawer is already closing/closed by the time it runs (got "${phaseAtCallback}") — never a full-screen surface under an open drawer`);
+    api.destroy();
+  }
+
+  // 15d — DI-422: "My Preferences" heads Time zone -> Notifications -> Chat
+  // settings -> Team logos -> Theme -> Appearance, in that exact document
+  // order (Drew's own list order); SCRIBE settings renders but sits OUTSIDE
+  // that labeled group, in its own unlabeled one, directly after it.
+  {
+    const html = renderSettingsAccordion(baseCtx(), initialControlCenterState());
+    assert(html.includes('control-center-group-label">My Preferences<'), '15d-1: the "My Preferences" group header renders');
+    const order = ['timezone', 'notifications', 'chat', 'logo-view', 'theme', 'appearance', 'scribe']
+      .map(rowId => html.indexOf(`data-row="${rowId}"`));
+    assert(order.every((idx, i) => idx > -1 && (i === 0 || idx > order[i - 1])),
+      `15d-2: Drew's exact row order — Time zone, Notifications, Chat settings, Team logos, Theme, Appearance, then SCRIBE settings (indices ${JSON.stringify(order)})`);
+    // Mutation guard — proves SCRIBE is genuinely OUTSIDE the labeled group,
+    // not merely rendered LAST inside it: immediately after "My Preferences"'s
+    // own closing `</div>`, a SECOND, UNLABELED `.control-center-group` opens
+    // whose first child is the scribe row (no group-label between them).
+    assert(/<\/div>\s*<div class="control-center-group">\s*<div class="control-center-row-wrap" data-row="scribe">/.test(html),
+      '15d-3: SCRIBE settings lives in its OWN unlabeled `.control-center-group`, immediately after "My Preferences" closes — not nested inside it and not preceded by a second label');
+  }
+
+  // 15e — DI-422 row 10: Notifications drops its bell icon — "no other
+  // button has an icon" (Drew, verbatim).
+  {
+    const html = renderSettingsAccordion(baseCtx(), initialControlCenterState());
+    const notifRow = (html.match(/<div class="control-center-row-wrap" data-row="notifications">[\s\S]*?<\/button>/) || [''])[0];
+    assert(!!notifRow && !notifRow.includes('data-icon="bell"') && !notifRow.includes('cc-row-icon'),
+      '15e: the Notifications row carries no icon at all (bell removed, DI-422 row 10)');
+  }
+
+  // 15f — DI-422 finding 12: Team logos' switch control and helper caption
+  // are BOTH absent while the row is collapsed, and BOTH present only once
+  // it is the open row — mutation-proven against the SAME ctx, collapsed vs
+  // expanded, rather than asserting presence alone.
+  {
+    const collapsed = renderSettingsAccordion(baseCtx(), initialControlCenterState());
+    assert(!collapsed.includes('cc-toggle-logo-view') && !collapsed.includes('Show team logos instead of names'),
+      '15f-1: Team logos collapsed -> neither the switch nor the helper caption render at all');
+    const expanded = renderSettingsAccordion(baseCtx(), { ...initialControlCenterState(), settingsOpenRow: 'logo-view' });
+    assert(expanded.includes('cc-toggle-logo-view') && expanded.includes('Show team logos instead of names'),
+      '15f-2: Team logos expanded -> BOTH the switch and the helper caption render, together, inside the body');
+  }
+
+  // 15g — DI-422 finding 12: Appearance's school-theme caption is likewise
+  // absent while collapsed, even under a school theme — it used to be
+  // ALWAYS visible on the collapsed row's own label line; it now lives only
+  // in the expanded body.
+  {
+    const collapsedSchool = renderSettingsAccordion(baseCtx({ currentTheme: 'aggie' }), initialControlCenterState());
+    assert(!collapsedSchool.includes('cc-row-secondary'),
+      '15g: Appearance collapsed under a school theme -> the "Night mode is available…" caption does NOT render at all (moved into the body, DI-422 finding 12)');
+  }
+
+  // 15h — DI-422 rows 11/16: "Help & Feedback" heads Request a game (renamed
+  // from "Game settings", same rowId/body) -> Feedback -> Rules -> Version
+  // history -> Help Center, in that exact document order, all sharing ONE
+  // single-open state (feedbackGroupOpenRow).
+  {
+    const html = renderFeedbackRulesGroup(baseCtx(), initialControlCenterState());
+    assert(html.includes('control-center-group-label">Help &amp; Feedback<'), '15h-1: the "Help & Feedback" group header renders');
+    assert(html.includes('>Request a game<') && !html.includes('>Game settings<'),
+      '15h-2: the row reads "Request a game", never the old "Game settings" label');
+    const idxGame = html.indexOf('data-row="game-settings"');
+    const idxFeedback = html.indexOf('data-row="feedback"');
+    const idxRules = html.indexOf('data-target="rules"');
+    const idxHistory = html.indexOf('data-row="version-history"');
+    const idxHelp = html.indexOf('>Help Center<');
+    assert([idxGame, idxFeedback, idxRules, idxHistory, idxHelp].every(i => i > -1)
+      && idxGame < idxFeedback && idxFeedback < idxRules && idxRules < idxHistory && idxHistory < idxHelp,
+      `15h-3: document order is Request a game -> Feedback -> Rules -> Version history -> Help Center (indices ${JSON.stringify([idxGame, idxFeedback, idxRules, idxHistory, idxHelp])})`);
+    // Single-open-state sharing — proven through the real state machine, not
+    // the render alone: opening "game-settings" (group:'feedback') shares
+    // feedbackGroupOpenRow with Feedback/Version history/Help Center's siblings.
+    const steps = _controlCenterStateMachine([
+      { type: 'toggle-row', group: 'feedback', rowId: 'game-settings' },
+      { type: 'toggle-row', group: 'feedback', rowId: 'feedback' },
+    ]);
+    assert(steps[0].feedbackGroupOpenRow === 'game-settings' && steps[1].feedbackGroupOpenRow === 'feedback',
+      '15h-4: "Request a game" shares the SAME single-open group as Feedback/Version history — opening one closes the other');
+  }
+
+  // 15i — renderHelpFooter() no longer renders Help Center (DI-422) but
+  // still renders the Privacy Policy link.
+  {
+    const footer = renderHelpFooter(baseCtx());
+    assert(!footer.includes('Help Center') && footer.includes('privacy.html'),
+      '15i: renderHelpFooter() -> Privacy Policy only, Help Center gone (moved to renderFeedbackRulesGroup())');
+  }
+
+  globalThis.window = savedWindow;
+  globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[16] REVIEWER ROUND 2 (RG-298, 2026-09-28) — D1 Profile order + chevron,');
+console.log('     D2 title suppression is app.js\'s job (see below), minor Help Center chevron,');
+console.log('     DI-418\'s membershipsResolved gate…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // 16a — D1: exact order Your Leagues -> Password -> Sign Out -> Delete
+  // Account, Delete Account LAST inside the danger zone. Index-based, so a
+  // reshuffle that keeps all four rows present but in the wrong order fails.
+  {
+    const html = renderProfileScreen(baseCtx({ accountRows: true, hasPasswordIdentity: true }));
+    const idxLeagues = html.indexOf('cc-open-leagues-home');
+    const idxPassword = html.indexOf('cc-open-password-change');
+    const idxSignOut = html.indexOf('cc-signout');
+    const idxDelete = html.indexOf('cc-open-delete-account');
+    assert([idxLeagues, idxPassword, idxSignOut, idxDelete].every(i => i > -1)
+      && idxLeagues < idxPassword && idxPassword < idxSignOut && idxSignOut < idxDelete,
+      `16a: D1 order — Your Leagues -> Password -> Sign Out -> Delete Account (indices ${JSON.stringify([idxLeagues, idxPassword, idxSignOut, idxDelete])})`);
+    // Delete Account is the LAST thing in the danger zone, and the danger
+    // zone is the last thing in the pane — mutation guard against a row
+    // slipped in AFTER Delete Account without moving its own index.
+    const deleteZone = html.slice(html.indexOf('control-center-danger-zone'));
+    assert(deleteZone.includes('cc-open-delete-account') && !deleteZone.slice(deleteZone.indexOf('cc-open-delete-account') + 1).includes('control-center-row--action'),
+      '16a-2: no OTHER action row renders after Delete Account — it is genuinely the last thing in the pane');
+  }
+
+  // 16b — D1: "Your Leagues" now carries the SAME drill-in chevron
+  // Password/Rules/Help Center carry (it pushes to a whole new screen).
+  {
+    const html = renderProfileScreen(baseCtx({ accountRows: true }));
+    const leaguesRow = (html.match(/<button[^>]*data-action="cc-open-leagues-home"[\s\S]*?<\/button>/) || [''])[0];
+    assert(!!leaguesRow && leaguesRow.includes('cc-row-chevron') && leaguesRow.includes('data-icon="chevronRight"'),
+      '16b: "Your Leagues" carries the chevronRight drill-in affordance, same as Password');
+  }
+
+  // 16c — Minor: Help Center also gets the chevron now.
+  {
+    const html = renderFeedbackRulesGroup(baseCtx(), initialControlCenterState());
+    const helpRow = (html.match(/<button[^>]*data-coming-soon-copy="[^"]*"[\s\S]*?<\/button>/) || [''])[0];
+    assert(!!helpRow && helpRow.includes('Help Center') && helpRow.includes('cc-row-chevron') && helpRow.includes('data-icon="chevronRight"'),
+      '16c: the Help Center row carries the chevronRight affordance too');
+  }
+
+  // 16d — DI-418 "hide Your Leagues while memberships unresolved"
+  // (ctx.membershipsResolved). Explicitly `false` hides ONLY that row —
+  // Password/Sign Out/Delete Account are unaffected (a DIFFERENT gate,
+  // ctx.accountRows, governs those). Absent (undefined, every OTHER fixture
+  // in this suite) still renders it — "hold empty only once we KNOW it's
+  // unresolved," not "assume unresolved by default."
+  {
+    const unresolved = renderProfileScreen(baseCtx({ accountRows: true, membershipsResolved: false }));
+    assert(!unresolved.includes('cc-open-leagues-home'),
+      '16d-1: membershipsResolved:false hides "Your Leagues"');
+    assert(unresolved.includes('cc-open-password-change') && unresolved.includes('cc-signout') && unresolved.includes('cc-open-delete-account'),
+      '16d-2: …while Password/Sign Out/Delete Account still render (a DIFFERENT gate, unaffected)');
+    const resolved = renderProfileScreen(baseCtx({ accountRows: true, membershipsResolved: true }));
+    assert(resolved.includes('cc-open-leagues-home'), '16d-3: membershipsResolved:true shows it');
+    const absent = renderProfileScreen(baseCtx({ accountRows: true }));
+    assert(absent.includes('cc-open-leagues-home'), '16d-4: an ABSENT field (every pre-existing fixture in this file) still shows it — not a silent regression for callers that never set the new field');
+  }
 }
 
 // ═════════════════════════════════════════════════════════════════════════

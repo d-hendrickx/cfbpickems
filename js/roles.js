@@ -291,6 +291,22 @@ export const CARD_OPERABILITY = Object.freeze({
   'scribe-training':                                       { scope: 'commissioner', pilotGated: true },
   'background-jobs':                                         { scope: 'admin' },     // read-only display
   'feedback-bug-reports':                                      { scope: 'admin' },   // see note above
+  // DI-425 (UN-380, coordinator addendum, 2026-09-28) — moved from Comm→SCRIBE.
+  // The DI's own §States is explicit: "Admin-only visibility, matching every
+  // other Admin→Data card... same gate starredPanels() already uses to even
+  // show the Admin Panel entry" — 'admin', not 'commissioner'. Also matches
+  // Drew's own framing ("admin things not commissioner things"). Unlike
+  // 'scribe-model' (a genuinely commissioner-gated RLS write), none of these
+  // three write paths are commissioner-RLS-gated: the digest export is a
+  // local read + clipboard copy (no write at all, like 'export-data'); the
+  // chat diagnostic is a read-only probe (like 'espn-source'/'data-proof');
+  // and the SCRIBE queue post writes a chat message via sendChatEvent() —
+  // chat writes are member-level, not commissioner-gated (AD-9/AD-17's one
+  // room, open to any member), so an admin who does not commission this
+  // league is not silently refused by RLS the way 'scribe-model' would be.
+  'scribe-digest-export':                                      { scope: 'admin' },  // read-only export
+  'scribe-post-queue':                                         { scope: 'admin' },
+  'chat-diagnostics':                                          { scope: 'admin' },  // read-only probe
 });
 
 export function canOperateCard(cardId, session, league) {

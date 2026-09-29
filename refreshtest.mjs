@@ -980,6 +980,174 @@ console.log('\n[8] Security F1 — a player device\'s refresh never sends logo f
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// [9] RG-292 (Drew, v0.27.1, 2026-09-28: "I'm refreshing scores on the existing
+//     week and the logos aren't popping up for the games on the slate") — the
+//     DISPLAY-ONLY poll never backfilled a logo on ANY device.
+//
+// While `settings.serverJobs.scoresRefresh` is true every device's 60s tick
+// calls doRefreshScores({displayOnly:true}) (runAutoRefreshTick(), section [4]),
+// and that branch `continue`d before the logo merge — so with the switch on,
+// the only logo writer left was a commissioner pressing a manual refresh. The
+// server job (`scores-refresh`) writes score columns only. Logos are not
+// grading data and have no second writer to interleave with, so the
+// commissioner/grader device now persists a LOGO-ONLY merge (nothing else on
+// the row moves) even in display-only mode. A player device is unchanged: it
+// still sends no logo field at all (section [8], RG-276).
+//
+// Driven through the REAL adapter with the hydrated games rows folded into its
+// server base (`_foldRealtimeRowForTest`), so 9-3 reads the actual PATCH the
+// planner would send — column by column — not a field diff of the mirror.
+//
+// WHAT THIS DOES NOT COVER (reported, not fixed here): on a LIVE week the
+// Picks tab renders the SUBMITTED view, whose renderGameCard(…, showResult=true)
+// omits the pick buttons — the only place a Picks card draws a logo — so the
+// data this section proves is persisted is still not drawn on that card.
+console.log('\n[9] RG-292 — the display-only poll (server switch ON) backfills logos on the commissioner device, logo columns only…');
+{
+  const auth9 = await import('./js/auth.js');
+  const sb9 = await import('./js/supabase-backend.js');
+  const proj9 = await import('./js/supabase-projection.js');
+  const LEAGUE9 = 'L-LOGO9';
+  const LOGO_H = 'https://a.espncdn.com/i/teamlogos/ncaa/500/41.png';
+  const LOGO_A = 'https://a.espncdn.com/i/teamlogos/ncaa/500/42.png';
+  const quiet9 = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  // ESPN says 28-7; the stored rows (what the SERVER last wrote) say 0-0. A
+  // display-only poll must leave 0-0 on the row — the server job owns scores.
+  const ev9 = (id) => ({
+    id, date: '2026-09-08T18:00Z',
+    status: { type: { name: 'STATUS_IN_PROGRESS', detail: 'Q3 4:10', shortDetail: 'Q3 4:10' } },
+    competitions: [{
+      timeValid: true, neutralSite: false,
+      competitors: [
+        { homeAway: 'home', id: '41', score: '28', curatedRank: { current: 99 }, team: { id: '41', location: 'Home', name: 'Hosts', shortDisplayName: 'Home', logo: LOGO_H } },
+        { homeAway: 'away', id: '42', score: '7', curatedRank: { current: 99 }, team: { id: '42', location: 'Away', name: 'Visitors', shortDisplayName: 'Away', logo: LOGO_A } },
+      ],
+      odds: [], broadcasts: [], notes: [],
+      venue: { fullName: 'Test Stadium', address: { city: 'Testville', state: 'TS' } },
+    }],
+  });
+  // `updatedAt` is set because every served row has one (games.updated_at is
+  // NOT NULL): without it the projection records the field in `extra.__absent`,
+  // saveGame()'s stamp removes it from that list, and 9-3 would see an `extra`
+  // change that no real hydrated row can produce.
+  const games9 = () => ([
+    refreshableGame({ gameId: 'rg_292_null', espnEventId: '401520901', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, lastUpdated: '2026-09-08T18:30:00.000Z', updatedAt: '2026-09-08T18:30:00.000Z', homeLogo: null, awayLogo: null }),
+    refreshableGame({ gameId: 'rg_292_set', espnEventId: '401520902', status: GAME_STATUS.LIVE, homeScore: 0, awayScore: 0, lastUpdated: '2026-09-08T18:30:00.000Z', updatedAt: '2026-09-08T18:30:00.000Z', homeLogo: 'https://irbfootball.example/h9.png', awayLogo: 'https://irbfootball.example/a9.png' }),
+  ]);
+  const fakeClient9 = () => {
+    const thenable = () => ({ select() { return this; }, eq() { return this; }, then(res) { return res({ data: [], error: null }); } });
+    return { from: () => thenable(), rpc: async () => ({ data: [], error: null }) };
+  };
+
+  async function runDisplayOnlyAs(role) {
+    localStorage.clear();
+    auth9._resetAuthForTest?.();
+    auth9.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true,
+      supabaseUrl: 'https://proj.supabase.test', supabaseAnonKey: 'anon' });
+    auth9._setMembershipsForTest([{ leagueId: LEAGUE9, memberId: 'p1', role, displayName: 'Tester', leagueName: 'IRB' }]);
+    await quiet9(() => auth9.setActiveLeagueId(LEAGUE9));
+    auth9._setAccountUserIdForTest('u-logo9');
+    auth9._setStoredSessionForTest?.({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    auth9._setHasSupabaseDataBackendForTest(true);
+    sb9._resetForTest();
+    sb9.init({
+      register: auth9.registerSupabaseDataBackend,
+      getClient: () => fakeClient9(),
+      getActiveLeagueId: () => LEAGUE9,
+      getIdentityEpoch: auth9.getIdentityEpoch,
+      getAccountUserId: auth9.getAccountUserId,
+      getDeviceDataOwnerTuple: auth9.getDeviceDataOwnerTuple,
+      getDeviceDataOwner: auth9.getDeviceDataOwner,
+      getLeagueName: auth9._switchBannerLeagueName,
+      getLeagueNameById: auth9._leagueNameById,
+      getSession: storage.getSession,          // the REAL role resolution
+      hasValidSupabaseSession: auth9.hasValidSupabaseSession,
+      isPrivilegeHeld: auth9.isPrivilegeHeld,
+      hasSheetMirror: auth9.hasSheetMirrorOnDevice,
+      isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    await quiet9(() => sb9.hydrate(LEAGUE9, { epoch: auth9.getIdentityEpoch() }));
+    storage.setBackendMode('supabase');
+    sb9._seedMirrorForTest('cfbp_weeks', [liveWeek()]);
+    sb9._seedMirrorForTest('cfbp_active_week', 'rw1');
+    sb9._seedMirrorForTest('cfbp_settings', { serverJobs: { scoresRefresh: true } });   // server job ON: the tick is display-only
+    sb9._seedMirrorForTest('cfbp_picks', []);
+    sb9._seedMirrorForTest('cfbp_lock_overrides', {});
+    // The server's rows, folded into the adapter's BASE (as a hydrate/Realtime
+    // would), so planFlush() diffs against what the server really holds.
+    for (const row of proj9.toRows.cfbp_games(games9(), { leagueId: LEAGUE9 }).games) {
+      sb9._foldRealtimeRowForTest('games', { eventType: 'INSERT', new: { ...row, league_id: LEAGUE9 } });
+    }
+    const notif9 = await import('./js/notifications.js');
+    const switchOn = notif9.isServerJobEnabled('scoresRefresh');
+    app.liveStatusById.clear();
+    installEspnStub([ev9('401520901'), ev9('401520902')]);
+    let threw = null;
+    await quiet9(async () => {
+      // EXACTLY the call runAutoRefreshTick() makes with the switch on (js/app.js,
+      // the `isServerJobEnabled('scoresRefresh')` branch; section [4] 4-3 drives
+      // the tick itself). Called directly because the tick re-hydrates first in
+      // supabase mode, which over this fake client would empty the seeded base.
+      try { await app.doRefreshScores(storage.getCurrentWeek(), storage.getGames('rw1'), { displayOnly: switchOn }); }
+      catch (e) { threw = e; }
+    });
+    const { plan, refusals } = sb9.planFlush();
+    const out = {
+      threw, switchOn,
+      state: sb9.getState(),
+      isAdmin: storage.getSession().isAdmin,
+      gamesOps: plan.filter(op => op && op.table === 'games'),
+      refusals,
+      overlay: new Map(sb9._overlayForTest()),
+      dirty: sb9._dirtyKeysForTest(),
+      g1: storage.getGame('rg_292_null'),
+      g2: storage.getGame('rg_292_set'),
+      live1: app.liveStatusById.get('rg_292_null'),
+    };
+    storage.setBackendMode('local');
+    await quiet9(() => sb9._resetForTest());
+    return out;
+  }
+
+  // ── (a) THE COMMISSIONER DEVICE — the reported defect ────────────────────
+  const c = await runDisplayOnlyAs('commissioner');
+  assert(c.state === 'ACTIVE' && c.isAdmin === true && c.switchOn === true,
+    `9-0: fixture check — a COMMISSIONER session over an ACTIVE adapter with serverJobs.scoresRefresh ON (state=${c.state}, isAdmin=${c.isAdmin}, switch=${c.switchOn})`);
+  assert(c.threw === null,
+    `9-1a: the display-only refresh completes (threw=${c.threw && c.threw.name})`);
+  assert(c.g1 && c.g1.homeLogo === LOGO_H && c.g1.awayLogo === LOGO_A,
+    `9-1: with the server switch ON, the commissioner device's display-only poll BACKFILLS the null logos from the same ESPN read (got ${JSON.stringify(c.g1 && { h: c.g1.homeLogo, a: c.g1.awayLogo })}) — before RG-292 the display-only branch continued past the merge and no device ever wrote them`);
+  assert(c.dirty.includes('cfbp_games'),
+    `9-2: …and queues the games write so the backfill reaches every phone (dirty=${JSON.stringify(c.dirty)})`);
+  assert(c.g1 && c.g1.homeScore === 0 && c.g1.awayScore === 0 && c.g1.status === GAME_STATUS.LIVE && c.g1.lastUpdated === '2026-09-08T18:30:00.000Z',
+    `9-3a: …while the row's SCORE/STATUS/lastUpdated stay exactly what the server wrote (got ${JSON.stringify(c.g1 && { h: c.g1.homeScore, a: c.g1.awayScore, s: c.g1.status, lu: c.g1.lastUpdated })}); ESPN said 28-7, the server job owns that column`);
+  const patch1 = c.gamesOps.filter(op => op.op === 'patch' && op.rowId === 'rg_292_null');
+  const cols1 = patch1.length === 1 ? Object.keys(patch1[0].changed || {}).sort() : null;
+  assert(!!cols1 && cols1.includes('home_logo') && cols1.includes('away_logo')
+      && cols1.every(col => ['home_logo', 'away_logo', 'updated_at'].includes(col)),
+    `9-3: THE REAL PATCH the planner would send touches ONLY home_logo/away_logo (+ saveGame's updated_at stamp) — never home_score/away_score/status/actual_winner/ats_winner/last_updated/kickoff (got ${JSON.stringify(cols1)}, ops=${JSON.stringify(c.gamesOps.map(o => ({ op: o.op, id: o.rowId })))}, refusals=${c.refusals.length})`);
+  assert(!c.gamesOps.some(op => op.rowId === 'rg_292_set') && c.g2 && c.g2.homeLogo === 'https://irbfootball.example/h9.png' && c.g2.awayLogo === 'https://irbfootball.example/a9.png' && c.g2.homeScore === 0,
+    `9-4: a game whose logos are already set gets NO write at all in display-only mode — never overwritten, and no score smuggled in (ops for it: ${JSON.stringify(c.gamesOps.filter(o => o.rowId === 'rg_292_set').map(o => o.op))})`);
+  assert(!!c.live1 && c.live1.detail === 'Q3 4:10',
+    `9-5: …and the display-only pass still fills liveStatusById, the thing it exists for (got ${JSON.stringify(c.live1 && c.live1.detail)})`);
+
+  // ── (b) THE PLAYER PHONE — unchanged: no logo field, no write ────────────
+  const p = await runDisplayOnlyAs('player');
+  assert(p.state === 'ACTIVE' && p.isAdmin === false && p.switchOn === true,
+    `9-6: fixture check — the SAME fixture as a PLAYER session (state=${p.state}, isAdmin=${p.isAdmin}, switch=${p.switchOn})`);
+  assert(p.threw === null && p.dirty.length === 0 && p.gamesOps.length === 0 && p.overlay.size === 0,
+    `9-7: a player's display-only poll still writes NOTHING — no push, no plan, no overlay (threw=${p.threw && p.threw.name}, dirty=${JSON.stringify(p.dirty)}, ops=${p.gamesOps.length}, overlay=${p.overlay.size}); logos are not on the player allow-list (8-C)`);
+  assert(p.g1 && p.g1.homeLogo == null && p.g1.awayLogo == null && p.g1.homeScore === 0,
+    `9-8: …and the player's copy is untouched — it receives the logo when the commissioner's write lands via Realtime (got ${JSON.stringify(p.g1 && { h: p.g1.homeLogo, a: p.g1.awayLogo, s: p.g1.homeScore })})`);
+  assert(!!p.live1 && p.live1.detail === 'Q3 4:10',
+    `9-9: …while its quarter/clock still render (got ${JSON.stringify(p.live1 && p.live1.detail)})`);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log(`\n[refreshtest] ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

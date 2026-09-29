@@ -37,7 +37,8 @@
  *     (finding 1).
  *   - [9] NEW section: the raw synthesized session shape ({playerId,isAdmin,
  *     playerVerified} only) and the "naive, half-composed" shape both pinned
- *     by test; the fully composed bag asserts Drew gets all 22 cards.
+ *     by test; the fully composed bag asserts Drew gets all 25 cards
+ *     (22 + DI-425's three, 2026-09-28).
  *   - [10] NEW section: isMemberOfLeague()'s legacy single-league fallback
  *     (finding 2), via renderExportDataBody directly.
  *   - [B5]→[11]: viewerUserId-required now suppresses EVERY action for
@@ -164,9 +165,9 @@ console.log('\n[1] Card-map completeness/uniqueness (RG-10) …');
   const rolesKeys = Object.keys(CARD_OPERABILITY).sort();
   const adminKeys = Object.keys(ADMIN_CARD_TAB).sort();
   assert(JSON.stringify(adminKeys) === JSON.stringify(rolesKeys),
-    '[1k] ADMIN_CARD_TAB is EXACTLY CARD_OPERABILITY\'s keys (22, no gap remaining)',
+    '[1k] ADMIN_CARD_TAB is EXACTLY CARD_OPERABILITY\'s keys (25, DI-425 added scribe-digest-export/scribe-post-queue/chat-diagnostics 2026-09-28)',
     `admin=${JSON.stringify(adminKeys)} roles=${JSON.stringify(rolesKeys)}`);
-  assert(adminKeys.length === 22, '[1k2] fixture check — the table really has 22 rows now', `${adminKeys.length}`);
+  assert(adminKeys.length === 25, '[1k2] fixture check — the table really has 25 rows now (22 + DI-425\'s three)', `${adminKeys.length}`);
   const adminTabKeys = new Set(ADMIN_TABS.map((t) => t.key));
   assert(Object.values(ADMIN_CARD_TAB).every((v) => adminTabKeys.has(v)),
     '[1l] every ADMIN_CARD_TAB value is a real ADMIN_TABS key (never super-admin, never "admin")');
@@ -257,10 +258,13 @@ const VIEWER_ADMIN_AND_COMMISSIONER = { playerId: 'p-drew', isAdmin: true, playe
 // what makes [3c-absent/scribe-model], [8g2] and [9b-absent/scribe-model]
 // guard DI-320 §3's named fail condition (card visible, write silently
 // refused) instead of pinning it green.
-const ADMIN_ONLY_ROWS = ['espn-source', 'data-proof', 'users-across-leagues', 'platform-admins', 'pilot-league-flag', 'export-data', 'background-jobs', 'feedback-bug-reports'];
+// DI-425 (2026-09-28) added 'scribe-digest-export'/'scribe-post-queue'/'chat-diagnostics' —
+// all three 'admin' scope in js/roles.js's CARD_OPERABILITY (see that file's own DI-425 comment
+// for why none of the three is commissioner-RLS-gated the way 'scribe-model' is).
+const ADMIN_ONLY_ROWS = ['espn-source', 'data-proof', 'users-across-leagues', 'platform-admins', 'pilot-league-flag', 'export-data', 'background-jobs', 'feedback-bug-reports', 'scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics'];
 const COMMISSIONER_ONLY_ROWS = ['data-source-mode', 'demo-simulation', 'account-linking', 'auto-refresh', 'randomize-picks-shortcut', 'security-settings', 'scribe-caps-limits', 'data-management', 'chat-retention', 'chat-history', 'recalculate-finalized-weeks', 'obligation-corrections', 'scribe-model'];
 assert(ADMIN_ONLY_ROWS.length + COMMISSIONER_ONLY_ROWS.length + 1 /* scribe-training, pilot-gated */ === Object.keys(ADMIN_CARD_TAB).length,
-  '[fixture] ADMIN_ONLY_ROWS + COMMISSIONER_ONLY_ROWS + scribe-training account for all 22 ADMIN_CARD_TAB rows',
+  '[fixture] ADMIN_ONLY_ROWS + COMMISSIONER_ONLY_ROWS + scribe-training account for all 25 ADMIN_CARD_TAB rows',
   `${ADMIN_ONLY_ROWS.length + COMMISSIONER_ONLY_ROWS.length + 1} vs ${Object.keys(ADMIN_CARD_TAB).length}`);
 
 function cardPresent(html, cardId) {
@@ -301,7 +305,7 @@ console.log('\n[3] Per-viewer rendering matrix …');
   for (const id of [...ADMIN_ONLY_ROWS, ...COMMISSIONER_ONLY_ROWS]) assert(cardPresent(outBoth, id), `[3d/${id}] admin+commissioner, non-pilot league — card PRESENT`);
   assert(!cardPresent(outBoth, 'scribe-training'), '[3d-absent/scribe-training] admin+commissioner, NON-pilot league — pilot-gated card ABSENT');
 
-  // (d2) same viewer, PILOT league — scribe-training now present too (all 22).
+  // (d2) same viewer, PILOT league — scribe-training now present too (all 25).
   const outBothPilot = renderAdminPanel({ viewer: VIEWER_ADMIN_AND_COMMISSIONER, league: LEAGUE_PILOT, leagues: [LEAGUE_PILOT], users: USERS, escHtml, icon: iconFn, bodies });
   assert(cardPresent(outBothPilot, 'scribe-training'), '[3d2] admin+commissioner, PILOT league — scribe-training PRESENT');
   for (const id of Object.keys(ADMIN_CARD_TAB)) assert(cardPresent(outBothPilot, id), `[3d2/${id}] admin+commissioner, PILOT league — every card PRESENT`);
@@ -460,11 +464,15 @@ console.log('\n[8] Injected bodies render exactly once …');
     'auto-refresh': (ctx) => { calls2['auto-refresh'] = (calls2['auto-refresh'] || 0) + 1; return 'x'; },
     'export-data': (ctx) => { calls2['export-data'] = (calls2['export-data'] || 0) + 1; return 'x'; },
     'scribe-model': (ctx) => { calls2['scribe-model'] = (calls2['scribe-model'] || 0) + 1; return 'x'; },
+    // DI-425 (2026-09-28) — spot-check one of the three moved cards through
+    // the SAME call-counting fixture the pre-existing admin-scoped rows use.
+    'chat-diagnostics': (ctx) => { calls2['chat-diagnostics'] = (calls2['chat-diagnostics'] || 0) + 1; return 'x'; },
   };
   renderAdminPanel({ viewer: VIEWER_ADMIN_ONLY_NONMEMBER, league: LEAGUE_NONPILOT, leagues: LEAGUES, users: USERS, escHtml, icon: iconFn, bodies: bodies2 });
   assert(!calls2['auto-refresh'], '[8f] admin-only non-commissioning viewer — commissioner-scoped injected body never called');
   assert(calls2['export-data'] === 1, '[8g] admin-only non-commissioning viewer — admin-scoped injected body still called exactly once');
   assert(!calls2['scribe-model'], '[8g2] admin-only non-commissioning viewer — scribe-model (commissioner-scoped: is_commissioner-gated league_kv write) body NEVER called; the card is absent, not visible-with-a-silently-refused-write');
+  assert(calls2['chat-diagnostics'] === 1, '[8g3] admin-only non-commissioning viewer — DI-425\'s chat-diagnostics (admin scope) body still called exactly once, same as every other admin-scoped row');
 
   // A card with NO injected body supplied at all renders the honest
   // placeholder, never throws, never fabricates content.
@@ -512,8 +520,8 @@ console.log('\n[9] Composed viewer-bag contract …');
   };
   const outComposed = renderAdminPanel({ viewer: composedBag, league: LEAGUE_PILOT, leagues: [LEAGUE_PILOT], users: USERS, escHtml, icon: iconFn, bodies: {} });
   const all22 = Object.keys(ADMIN_CARD_TAB);
-  assert(all22.length === 22, '[9c] fixture check — ADMIN_CARD_TAB really has 22 keys', `${all22.length}`);
-  for (const id of all22) assert(cardPresent(outComposed, id), `[9c/${id}] fully composed bag, pilot league — card PRESENT (Drew gets all 22)`);
+  assert(all22.length === 25, '[9c] fixture check — ADMIN_CARD_TAB really has 25 keys (22 + DI-425\'s three)', `${all22.length}`);
+  for (const id of all22) assert(cardPresent(outComposed, id), `[9c/${id}] fully composed bag, pilot league — card PRESENT (Drew gets all 25)`);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -690,6 +698,26 @@ console.log('\n[11f] ITEM 6 — cross-league cards show a skeleton while loading
   const superEmpty = renderSuperAdminPlaceholder({ escHtml, leagues: [], allLeaguesLoading: false, platformKv: { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: true, error: null }, users: [] });
   assert(superEmpty.includes('No leagues found.') && !superEmpty.includes('league-card-skeleton-line'),
     '[11f-6] League Status: not loading + zero leagues shows the honest empty state');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// [12] DI-425 (UN-380, coordinator addendum, 2026-09-28) — the three
+// Comm→SCRIBE tools relocated to Admin→Data: placement + titles.
+// ════════════════════════════════════════════════════════════════════════════
+console.log('\n[12] DI-425 — scribe-digest-export / scribe-post-queue / chat-diagnostics …');
+{
+  const DI425_IDS = ['scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics'];
+  for (const id of DI425_IDS) {
+    assert(adminTabFor(id) === 'data', `[12a/${id}] adminTabFor() resolves to 'data'`);
+  }
+  // Already proven dynamically at [1k]/[1k2] (ADMIN_CARD_TAB === CARD_OPERABILITY
+  // keys, 25) and [9c] (Drew gets all 25, including these three) — this section
+  // adds the ONE thing those don't check: the actual card TITLE text renders.
+  const outTitles = renderAdminPanel({ viewer: VIEWER_ADMIN_AND_COMMISSIONER, league: LEAGUE_NONPILOT, leagues: LEAGUES, users: USERS, escHtml, icon: iconFn, bodies: {} });
+  assert(outTitles.includes('Copy Weekly Digest JSON'), '[12b] "Copy Weekly Digest JSON" card title renders');
+  assert(outTitles.includes('Post Queue as SCRIBE'), '[12c] "Post Queue as SCRIBE" card title renders');
+  assert(outTitles.includes('Chat Diagnostics'), '[12d] "Chat Diagnostics" card title renders');
+  for (const id of DI425_IDS) assert(cardPresent(outTitles, id), `[12e/${id}] card present for an admin+commissioner viewer`);
 }
 
 // ── Bonus: renderAdminAccessDeniedCard / renderPilotLeagueFlagBody /

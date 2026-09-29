@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.27.1';
-export const APP_VERSION_DATE = '2026-09-28';
+export const APP_VERSION = 'v0.27.2';
+export const APP_VERSION_DATE = '2026-09-29';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -99,6 +99,25 @@ export const APP_VERSION_DATE = '2026-09-28';
 // FIRST item is SCRIBE's chat-post headline (whatsNewHeadline()'s 90-char
 // cut). CAP: v0.22.5, the oldest, drops to keep 12.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.27.2',
+    date: '2026-09-29',
+    added: [
+      'Tap your league name in the header to see your leagues, join another, or (soon) create one. "Your Leagues" also lives in your Profile.',
+      'The menu opens with a swipe from the left edge on every screen — on Picks and Dashboard, the left quarter opens the menu and the rest of the screen swipes between weeks.',
+      'Swiping between weeks now slides both weeks together, like turning a page.',
+      'Picks and Dashboard share the week you\'re viewing — swipe on one, and the other follows.',
+      'In Chat, swipe a message to the right to reply, just like Messages — the reply arrow appears beside the bubble.',
+      'The menu is grouped into My Preferences and Help & Feedback; your profile holds Your Leagues, Password and Sign Out.',
+      'Commissioners: the week setup asks for a Weekly Blurb, keeps the Extra Point under a collapsible Extra Games section, and every SCRIBE card collapses. Team logos now show on the submitted picks card, the slate and the matrix.',
+    ],
+    fixed: [
+      'Admins: the Admin panel now appears — the role check had been failing silently since it shipped.',
+      'Changing your alma mater in your profile now updates Alma Mater Watch, and the school list is never blank.',
+      'Chat keeps the keyboard up when you tap "↓ latest", a reaction or the sync icon while typing.',
+      'Alma maters no longer clutter the Rules page.',
+    ],
+  },
   {
     version: 'v0.27.1',
     date: '2026-09-28',
@@ -877,8 +896,17 @@ export const state = {
   currentTab: 'picks',
   draftPicks: {}, draftTiebreaker: null,
   editingPicks: false, // true while a logged-in player is updating their already-submitted picks
-  dashboardWeekId: null,
-  picksWeekId: null,      // v0.16.0 — non-null when viewing a previous locked/closed week on the Picks tab
+  // DI-426 (UN-381, 2026-09-28) — UNIFIES the former state.dashboardWeekId
+  // (v0.16.0) and state.picksWeekId (v0.16.0) into ONE shared field: a week
+  // swiped/arrowed/selected into on EITHER tab is what the OTHER tab shows
+  // next, rather than each tab remembering its own independent "viewing
+  // week." `null` preserves BOTH former fields' own sentinel meaning —
+  // "show the live/current week" — so the merge invents no new convention.
+  // In-memory only (NOT behind storage.js's load()/save() seam — `state` at
+  // large never is): resets to `null` on every boot, deliberately NOT
+  // persisted (DI-426's own "recommend NOT persisting" call — a returning
+  // player almost always wants the CURRENT week, not a stale swiped-to one).
+  viewingWeekId: null,
   draftExtraPoint: null,  // v0.16.0 — Ischemic Extra Point guess (longest FG, yards)
   // FEAT-8a / UN-179 — which page (if any) is currently in layout EDIT MODE:
   // null | 'dashboard' | 'standings'. TRANSIENT by design (DI-179j): the
@@ -2825,8 +2853,19 @@ async function runPostHydrateTail() {
   // be a cycle), so app.js hands it down instead. The SAME function the
   // commissioner's Edit Player modal calls, with the same current-value
   // preservation, and an identical fallback source when ESPN is unreachable.
+  //
+  // FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — the fallback used to be the
+  // raw `ALMA_MATERS` array, a list of SCHOOL-NAME STRINGS. buildAlmaMaterOptions()
+  // reads `.location`/`.displayName` off each entry (the shape
+  // almaMaterCatalogFallback()/fetchEspnTeamsList() actually produce) — a
+  // string has neither, so every fallback option rendered as an EMPTY
+  // `<option value="">`, and picking one and saving WIPED the claim. Live
+  // since 70321ac, on every cold-cache device (i.e. every player who opens
+  // Chat settings before the commissioner's Edit Player modal has fetched
+  // the real catalog once this page load). almaMaterCatalogFallback() is the
+  // SAME shape-correcting wrapper showEditPlayerModal() already uses.
   try {
-    registerAlmaMaterOptionsProvider(current => buildAlmaMaterOptions(current, cachedEspnTeamsList() || ALMA_MATERS));
+    registerAlmaMaterOptionsProvider(current => buildAlmaMaterOptions(current, cachedEspnTeamsList() || almaMaterCatalogFallback()));
   } catch (e) { console.warn('[chat] the alma-mater options provider could not be registered', e); }
   // SECURITY F-3 / DI-T7.6 — the self-edit WRITER, handed down the same way and
   // for the same layering reason. patchPlayer() lives here because this is the
@@ -3821,6 +3860,19 @@ function buildControlCenterCtx() {
       feedbackCardHTML: renderFeedbackCardHTML(),
       gameRequestHTML: renderGameRequestCardHTML(),
       releaseNotesHTML: renderReleaseNotesCardHTML(),
+      // DI-423 AMENDMENT (2026-09-28, RG-290 finding) — the Profile pane's
+      // alma-mater field is now the SAME ESPN <select> the chat-prefs picker
+      // uses. buildAlmaMaterOptions()/cachedEspnTeamsList()/almaMaterCatalogFallback():
+      // the EXACT call registerAlmaMaterOptionsProvider() wires up for
+      // chat-ui.js (see near that registration, above) — one option-list
+      // builder, one fallback rule, three callers (chat-prefs, Comm ->
+      // Players -> Edit, and this drawer), never a second implementation.
+      // FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — was `|| ALMA_MATERS`
+      // (a raw string array; buildAlmaMaterOptions() needs `.location`/
+      // `.displayName` objects, so every fallback option rendered EMPTY and
+      // picking one wiped the claim on save) — see the identical fix and its
+      // full reasoning at the registerAlmaMaterOptionsProvider() call above.
+      almaMaterOptionsHTML: buildAlmaMaterOptions(player?.almaMater || '', cachedEspnTeamsList() || almaMaterCatalogFallback()),
     },
     timeZones: TIME_ZONES, currentTimeZone: getTimezone() || DEFAULT_TZ,
     themes: THEMES, currentTheme: getTheme() || 'neutral',
@@ -3829,6 +3881,14 @@ function buildControlCenterCtx() {
     // STEP B(7) / N4 (third pass) — the Password / Delete Account rows act on
     // a Supabase account; in any other auth mode they could only fail.
     accountRows: getAuthMode() === 'supabase',
+    // DI-418 "hide Your Leagues while memberships unresolved" (RG-298,
+    // 2026-09-28, reviewer round 2 record item, implemented — trivial) —
+    // the SAME `hasResolvedMemberships()` synchronous cache-read DI-184c's
+    // header-pill gate already uses ("hold the slot empty rather than
+    // guess"). control-center.js's own `renderProfileScreen()` treats an
+    // ABSENT field as "resolved" (`!== false`), so existing fixtures that
+    // never set this field are unaffected.
+    membershipsResolved: hasResolvedMemberships(),
     // DI-335 — "Change Password" vs "Set Password"; null = cannot tell.
     hasPasswordIdentity: getAccountHasPasswordIdentity(),
     callbacks: {
@@ -3839,7 +3899,16 @@ function buildControlCenterCtx() {
         await signOut();
         applyIdentityDeltaIfChanged('control-center-signout', { discard: true });
       },
-      onSwitchLeague: () => showLeagueSelectorSheet(),
+      // DI-418/DI-421 (2026-09-28) — Profile's "Your Leagues" row (the
+      // renamed/repointed "Switch League" row). PUSHES the new full-screen
+      // Leagues Home overlay, replacing the old onSwitchLeague/
+      // showLeagueSelectorSheet() action for THIS row — the header pill's
+      // own tap (`_leaguePillClick()`, below) still opens
+      // showLeagueSelectorSheet() unchanged; that is a separate, faster
+      // "quick switch" affordance DI-418 explicitly keeps (see its own
+      // §Placement note 2). showLeaguesHomeOverlay() carries its own
+      // isContentWithheld() guard, mirroring showLeaguePageOverlay()'s.
+      onOpenLeaguesHome: () => showLeaguesHomeOverlay(),
       // SECURITY GATE FINDING 3 (916bdb7 review, 2026-09-25) — the identity
       // header's league-name tap (js/control-center.js, `data-action="cc-
       // open-league-page"`). `showLeaguePageOverlay()` already refuses to
@@ -3851,7 +3920,19 @@ function buildControlCenterCtx() {
       onOpenDeleteAccount: () => showDeleteAccountSheet(),
       onSaveDisplayName: (v) => { if (session?.playerId) patchPlayer(session.playerId, { displayName: v }); },
       onSaveInitials: (v) => { if (session?.playerId) patchPlayer(session.playerId, { initials: v }); },
-      onSaveAlmaMater: (v) => { if (session?.playerId) patchPlayer(session.playerId, { almaMater: v }); },
+      // RG-290 — patchPlayer() now carries the claim-change ripple; the page
+      // under the drawer (Rules roster, Watch, the pool's ⭐ badges) is then
+      // repainted the way #ep-save repaints the Comm page, so nothing on
+      // screen keeps showing the old claim after the drawer closes.
+      onSaveAlmaMater: (v) => {
+        if (!session?.playerId) return;
+        const before = String(getPlayer(session.playerId)?.almaMater || '').trim();
+        patchPlayer(session.playerId, { almaMater: v });
+        if (before !== String(v || '').trim()) {
+          try { navigateTo(state.currentTab || 'dashboard'); }
+          catch (e) { console.warn('[cc] repaint after the alma-mater save failed', e); }
+        }
+      },
       onSetTimeZone: (v) => { setTimezone(v); refreshControlCenterAndSettingsPage(); },
       onSetTheme: (v) => { applyThemeChoice(v); refreshControlCenterAndSettingsPage(); },
       onSetColorScheme: (v) => { applyColorSchemeChoice(v); refreshControlCenterAndSettingsPage(); },
@@ -3910,6 +3991,77 @@ async function maybeRefreshNotifSettingsRow() {
   }
 }
 
+/**
+ * FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — the Profile pane's own
+ * background ESPN-catalog fetch, the drawer's twin of showEditPlayerModal()'s
+ * (js/app.js, near `const fresh = await fetchEspnTeamsList();`). Before this,
+ * NOTHING triggered a fetch when a player opened Profile — the catalog only
+ * ever arrived if the commissioner happened to open Edit Player first, same
+ * page load. A player who never saw that surface stayed on the (now-fixed,
+ * but still six-school) fallback for the entire session.
+ *
+ * REVIEWER ROUND 3 R2 (2026-09-29) — THE LANDING PATCHES THE LIVE <select> IN
+ * PLACE; IT NEVER REPAINTS PROFILE. This used to call
+ * refreshControlCenterAndSettingsPage() on landing, which rebuilds the whole
+ * Profile pane (`profileContentEl.innerHTML = …`, js/control-center.js
+ * paintProfileContent()). js/field-preserve.js carries only
+ * `input[id],textarea[id]`, so a school the player had JUST picked — the
+ * fetch fires the moment Profile opens, so it lands while they are using the
+ * picker — snapped back to the stored one, and on iOS the open picker stayed
+ * attached to the dead node, so Save persisted the OLD school silently. Now
+ * the exact precedent showEditPlayerModal() already uses: replace only the
+ * options of the one live select, rebuilding them around `sel.value` (READ,
+ * never reset), so the player's in-progress choice is the option marked
+ * `selected` in the new list and the node itself — and any picker open on
+ * it — survives. The drawer's ctx still holds the fallback option string
+ * until its next update(), which rebuilds ctx from buildControlCenterCtx()
+ * and therefore from the now-populated cache, so no later paint can regress
+ * to the short list.
+ *
+ * REVIEWER ROUND 3 minor (a) — `_almaCatalogFetchAttempted` is set when the
+ * fetch STARTS and never cleared (except by the test seam), so a FAILED
+ * fetch is remembered too: the drawer repaints on every toggle-row dispatch
+ * and every one of them used to retry through the direct URL plus three CORS
+ * proxies. Once per page load, success or failure — the fallback list is a
+ * complete, valid option list either way.
+ */
+let _almaCatalogFetchAttempted = false;
+async function maybeRefreshAlmaMaterCatalog() {
+  if (_almaCatalogFetchAttempted || cachedEspnTeamsList()) return;
+  _almaCatalogFetchAttempted = true;
+  try {
+    const fresh = await fetchEspnTeamsList();
+    if (Array.isArray(fresh) && fresh.length) {
+      // In-memory only — never through the storage seam (RG-55, see
+      // cachedEspnTeamsList()'s own doc comment).
+      _espnTeamsCache = { teams: fresh, fetchedAt: new Date().toISOString() };
+      patchProfileAlmaMaterOptionsInPlace(fresh);
+    }
+  } catch (e) {
+    console.warn('[control-center] alma-mater catalog fetch failed, staying on the ALMA_MATERS fallback', e);
+    // Never blocks Profile or Save — the fallback rendered above is already
+    // a valid, complete option list (CONVENTIONS #7's "defensive at the
+    // boundary"), same as showEditPlayerModal()'s own identical failure path.
+  }
+}
+/** R2 — the in-place half of the landing above. `sel.value` is the player's
+ *  CURRENT choice (the select always carries one: the stored school it was
+ *  rendered with, or whatever they picked since, "— None —" included), so it
+ *  — not the stored claim — is what the rebuilt list marks `selected`. The
+ *  stored claim is only the fallback for a node that reports no string value.
+ *  The value is re-asserted after the swap as well, so the choice survives
+ *  even where an engine ignores the `selected` attribute on an options swap. */
+function patchProfileAlmaMaterOptionsInPlace(teams) {
+  const sel = document.getElementById('cc-field-alma-mater');
+  if (!sel) return;   // Profile closed/never painted — the next paint reads the cache
+  const current = typeof sel.value === 'string'
+    ? sel.value
+    : String(getPlayer(getSession()?.playerId)?.almaMater || '');
+  sel.innerHTML = buildAlmaMaterOptions(current, teams);
+  sel.value = current;
+}
+export const _maybeRefreshAlmaMaterCatalogForTest = maybeRefreshAlmaMaterCatalog;
+
 /** DI-313/316's shared dispatcher — ONE document-level delegated handler for
  *  every `[data-action="coming-soon"]` stub in the app (Leagues Home's
  *  Create-League card, League Page's Add-Sport card, the drawer's Help
@@ -3965,6 +4117,13 @@ function bindControlCenterBodies(scopeEl, rowState) {
   if (rowState?.settingsOpenRow === 'notifications' && !_lastNotifSettingsHTML) {
     maybeRefreshNotifSettingsRow();
   }
+  // FIX (RG-298, 2026-09-28, reviewer BLOCK B1) — the Profile pane's own
+  // ESPN alma-mater catalog fetch, triggered the moment Profile is pushed
+  // open (mirroring showEditPlayerModal()'s "fetch on open" behavior), not
+  // left to whatever OTHER surface happens to fetch one first.
+  if (rowState?.pane === 'profile' && !cachedEspnTeamsList()) {
+    maybeRefreshAlmaMaterCatalog();
+  }
 }
 
 function mountControlCenterDrawer() {
@@ -3972,6 +4131,11 @@ function mountControlCenterDrawer() {
   if (!root) return;
   controlCenterApi = mountControlCenter(root, buildControlCenterCtx(), {
     onAfterPaint: (rootEl, ccState) => bindControlCenterBodies(rootEl, ccState),
+    // DI-419 (2026-09-28) — the drawer's own edge-swipe arm check needs the
+    // CURRENT tab, read fresh on every touch (`document.body.dataset.tab` is
+    // the SAME source navigateTo() itself writes, `state.currentTab`'s own
+    // DOM mirror).
+    getTab: () => document.body?.dataset?.tab || state.currentTab || null,
   });
   // TOUCHED-SCREEN AUDIT FINDING (2026-09-25, alongside SECURITY GATE F1/
   // reviewer item 3) — `inert` on `.app-header` (_setAppContentInert()/
@@ -5298,14 +5462,25 @@ function navigateTo(tab) {
     // OWN semantics exactly (positive dx = "back in time" = previous week,
     // matching the '‹' arrow; the current-week sentinel `null` is preserved
     // for Picks, same as bindPicksWeekNav() itself uses).
+    // DI-426 (UN-381, 2026-09-28) — both getState() closures now read/write
+    // the ONE shared `state.viewingWeekId` (formerly two independent fields,
+    // state.picksWeekId/state.dashboardWeekId) so a week swiped-to on either
+    // tab is what the OTHER tab shows next.
+    // DI-419 (2026-09-28) — `tab` rides along in the SAME getState() return,
+    // the drawer/week-swipe arbitration's own "current tab" read
+    // (bindWeekSwipe() consults it once axis resolves to 'x', never at
+    // touchstart) — a literal per-binder value, not a second DOM read.
     if (tab === 'picks') {
       bindWeekSwipe(document.getElementById('page-picks'), () => {
-        const weeks = picksNavWeeks();
-        const cur = getCurrentWeek();
-        return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.picksWeekId || cur?.weekId || null };
+        // REVIEWER ROUND 3 (B4 residual) — the swipe starts from the week
+        // Picks is SHOWING (picksShowingWeek(), the same resolver
+        // renderPicksPage() uses), never the raw shared field: after the
+        // draft/hidden-week fallback that field names a week outside this
+        // list, and the swipe used to rubber-band dead from index -1.
+        return { weekIds: chronologicalWeekIds(picksNavWeeks()), currentWeekId: picksShowingWeek().showingWeekId, tab: 'picks' };
       }, (targetId) => {
         const cur = getCurrentWeek();
-        state.picksWeekId = (targetId === cur?.weekId) ? null : targetId;
+        state.viewingWeekId = (targetId === cur?.weekId) ? null : targetId;
         renderPicksPage();
         window.scrollTo({ top: 0 });
       });
@@ -5317,10 +5492,10 @@ function navigateTo(tab) {
         // chronologicalWeekIds() is what the direction table requires. Passing
         // this list raw is what made Dashboard swipes run backwards.
         // REVIEWER note 1 (v0.27.0 APPROVE WITH NOTES) — this used to fall
-        // back straight to `weeks[0]?.weekId` whenever `state.dashboardWeekId`
+        // back straight to `weeks[0]?.weekId` whenever `state.viewingWeekId`
         // was unset, ignoring the CURRENT week entirely.
         // `renderDashboardInner()`'s own `displayWeekId` is
-        // `state.dashboardWeekId||(currentWeekVisible?currentWeek?.weekId:null)
+        // `state.viewingWeekId||(currentWeekVisible?currentWeek?.weekId:null)
         // ||allWeeks[0]?.weekId` — with a draft/newer week created after the
         // current one, `weeks[0]` (newest) is that draft, not the week the
         // Dashboard is actually showing, so the swipe started from a week with
@@ -5329,9 +5504,15 @@ function navigateTo(tab) {
         // displays.
         const cur = getCurrentWeek();
         const curVisible = cur && (cur.dataSourceMode !== 'demo' || isCommissioner);
-        return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.dashboardWeekId || (curVisible ? cur?.weekId : null) || weeks[0]?.weekId || null };
+        return { weekIds: chronologicalWeekIds(weeks), currentWeekId: state.viewingWeekId || (curVisible ? cur?.weekId : null) || weeks[0]?.weekId || null, tab: 'dashboard' };
       }, (targetId) => {
-        state.dashboardWeekId = targetId;
+        // REVIEWER ROUND 2 (N2, 2026-09-28) — null-normalize like the
+        // arrows (bindDashboardWeekNav()) and the Picks swipe callback
+        // above: a swipe that lands back on the CURRENT week writes the
+        // shared sentinel, not the week's own concrete id, so every writer
+        // of state.viewingWeekId agrees on what "current" looks like.
+        const cur = getCurrentWeek();
+        state.viewingWeekId = (targetId === cur?.weekId) ? null : targetId;
         renderDashboard();
       });
     }
@@ -5500,6 +5681,18 @@ export function setupHeaderIdentity() {
  *     button role. A static label is not a control (DI-184g);
  *   - INTERACTIVE when memberships > 1 — caret, role="button", tabindex, and
  *     the league-selector sheet on tap.
+ *
+ * **AMENDMENT (DI-418, dated 2026-09-28, Drew ruling B, relayed by the
+ * coordinator mid-research):** *"tapping the league name in the header opens
+ * the league-selector sheet EVEN WITH ONE membership (the sheet shows the
+ * one league + Join or Create a League); DI-184b's static-label rule is
+ * amended, dated, with Drew's ruling quoted."* The `memberships > 1` gate on
+ * `interactive` (`renderLeaguePill()`, below) is REMOVED — the pill is
+ * ALWAYS a control (caret, role="button", tabindex, click+keydown bound)
+ * whenever a league name resolves, regardless of membership count. Nothing
+ * else about DI-184b changes: the pill still renders for every supabase-mode
+ * account, still holds empty rather than guess while loading/unresolved
+ * (DI-184c), and still opens the SAME `showLeagueSelectorSheet()`.
  *
  * DI-184d's invariant is unchanged and is the reason this function reads
  * getActiveLeagueName() EXACTLY ONCE into `name`: that one call chains through
@@ -5678,8 +5871,13 @@ export function renderLeaguePill() {
   // the slot empty rather than guess" rule applied to its third input; the two
   // above it (no session, memberships unresolved) already do exactly this.
   if (!name) { _clearLeaguePill(el); return; }
-  const memberships = getCachedMemberships();
-  const interactive = memberships.length > 1;
+  // DI-418 AMENDMENT to DI-184b (dated 2026-09-28, Drew ruling B, quoted in
+  // full in _leaguePillClick()'s own doc comment above) — the
+  // `memberships.length > 1` gate on `interactive` is GONE. The pill is a
+  // control whenever a league name resolves, single membership included:
+  // tapping it opens the league-selector sheet, which shows the one league
+  // plus Join or Create a League.
+  const interactive = true;
   // DI-417 (UN-372, 2026-09-28) — "<league name> · <sport>", sport from the
   // active week. null when unresolvable (no current week, or an unmapped
   // sport key) — the pill degrades straight to the league name alone, the
@@ -5703,9 +5901,16 @@ export function renderLeaguePill() {
     // DI-417's own aria-label rule: names BOTH league and sport (when known)
     // regardless of which visual degradation step is on screen — the
     // accessible name states the fact, the visible pill is what compresses.
+    // FIX (RG-298, 2026-09-28, reviewer BLOCK B4) — the tap phrase now
+    // matches what actually happens: a SINGLE membership opens the sheet to
+    // browse/join/create leagues ("Tap for leagues."), not to "switch" among
+    // options that don't exist yet; several memberships still says "Tap to
+    // switch." — the phrasing DI-184c's own aria-label rule already used
+    // before this DI, unchanged for that case.
+    const tapPhrase = getCachedMemberships().length > 1 ? 'Tap to switch.' : 'Tap for leagues.';
     el.setAttribute('aria-label', sport
-      ? `Active league: ${name}, viewing: ${sport.label}. Tap to switch.`
-      : `Active league: ${name}. Tap to switch.`);
+      ? `Active league: ${name}, viewing: ${sport.label}. ${tapPhrase}`
+      : `Active league: ${name}. ${tapPhrase}`);
     el.addEventListener('click', _leaguePillClick);
     el.addEventListener('keydown', _leaguePillKeydown);
   } else {
@@ -8658,9 +8863,28 @@ function renderPicksPage() {
   // (read-only) and fills the head slot (What's New + recap) for every branch
   // of the current-week renderer.
   const c = document.getElementById('page-picks'); if (!c) return;
-  const currentWeek = getCurrentWeek();
-  const viewWeek = state.picksWeekId ? getWeek(state.picksWeekId) : null;
-  if (viewWeek && currentWeek && viewWeek.weekId !== currentWeek.weekId) {
+  // REVIEWER ROUND 3 (B4 residual, 2026-09-29) — the resolution below now
+  // lives in picksShowingWeek(), the ONE answer to "which week is Picks
+  // actually showing", shared with the Picks week-swipe's getState() so the
+  // swipe can never start from a week the page is not displaying.
+  const { currentWeek, viewWeek, picksCanShowIt } = picksShowingWeek();
+  // DI-426 — reads the shared state.viewingWeekId (formerly state.picksWeekId).
+  // REVIEWER ROUND 2 (B4 BLOCK, 2026-09-28) — Dashboard's own week list
+  // (selectableDashboardWeeks()) is WIDER than Picks' own (picksNavWeeks()
+  // unconditionally excludes every draft, even for a commissioner —
+  // Dashboard shows drafts to the commissioner). A week the shared field
+  // points at that Picks itself cannot navigate to (a commissioner viewing
+  // a draft on Dashboard, or a showInHistory:false week reaching a
+  // non-commissioner some other way) used to fall through to
+  // renderHistoricalPicksView() anyway via a raw getWeek() lookup — landing
+  // on a week with index -1 in Picks' own nav order, so BOTH arrows
+  // disabled and the swipe dead, labeled "past week (read-only)" for what
+  // may well be a future draft. Gate the historical branch on Picks' own
+  // navigable list; a week outside it falls through to the CURRENT week
+  // below WITHOUT writing the shared field, so a player who arrived from
+  // Dashboard viewing that same draft still finds Dashboard showing it on
+  // return (only Picks-can-actually-resolve-it values are ever cleared).
+  if (viewWeek) {
     renderHistoricalPicksView(c, viewWeek, currentWeek);
     // Branch A shows THAT week's own recap (it is the week being read), not the
     // previous week's — and it moves from the bottom of the page into the slot.
@@ -8671,7 +8895,13 @@ function renderPicksPage() {
     renderMaintenanceBannerIfNeeded('picks');
     return;
   }
-  state.picksWeekId = null;
+  // Only normalize the shared field to null when PICKS ITSELF is the one
+  // that resolved it (to nothing, or to the current week) — never merely
+  // because Picks personally cannot show it (the B4 case, above), which
+  // must survive this render untouched for Dashboard's own sake.
+  if (!state.viewingWeekId || picksCanShowIt) {
+    state.viewingWeekId = null;
+  }
   renderPicksPageCurrent();
   c.insertAdjacentHTML('afterbegin', renderPicksWeekNav(currentWeek, currentWeek));
   bindPicksWeekNav();
@@ -8719,6 +8949,43 @@ function renderPicksPage() {
   renderPausedLeagueBannerIfNeeded('picks');
   renderMaintenanceBannerIfNeeded('picks');
 }
+
+/**
+ * REVIEWER ROUND 3 (B4 residual, 2026-09-29) — "the week Picks is actually
+ * showing", in ONE place. Round 2 made renderPicksPage() fall through to the
+ * current week when the shared state.viewingWeekId points at a week Picks'
+ * own list cannot show (a commissioner's draft, a showInHistory:false week —
+ * both legitimately on Dashboard), deliberately WITHOUT clearing the shared
+ * field. But the Picks week-swipe's getState() still reported
+ * `state.viewingWeekId || current`, i.e. the draft's id: not in Picks' list,
+ * so _weekSwipeAtBound()/_weekSwipeResolve() found index -1 and every swipe
+ * only rubber-banded while the arrows (drawn from the current week) worked.
+ * Two readers resolving the same question two ways is the defect class;
+ * both now call this.
+ *
+ * Returns:
+ *   currentWeek    — getCurrentWeek(), as every caller already read it.
+ *   viewWeek       — the NON-current week Picks renders read-only
+ *                    (renderHistoricalPicksView()), or null when Picks shows
+ *                    the current week.
+ *   showingWeekId  — the id of whichever week is on screen (viewWeek's, else
+ *                    the current week's), or null when there is none.
+ *   picksCanShowIt — the shared field names a week in Picks' own list (the
+ *                    only case renderPicksPage() may normalize the field).
+ * Pure read: never writes state.
+ */
+function picksShowingWeek() {
+  const currentWeek = getCurrentWeek();
+  const picksViewableIds = chronologicalWeekIds(picksNavWeeks());
+  const rawViewWeek = state.viewingWeekId ? getWeek(state.viewingWeekId) : null;
+  const picksCanShowIt = !!rawViewWeek && picksViewableIds.includes(rawViewWeek.weekId);
+  const viewWeek = (picksCanShowIt && currentWeek && rawViewWeek.weekId !== currentWeek.weekId) ? rawViewWeek : null;
+  const showingWeekId = viewWeek?.weekId || currentWeek?.weekId || null;
+  return { currentWeek, viewWeek, showingWeekId, picksCanShowIt };
+}
+
+/** Test hook — layouttest A11n drives the shared resolver directly. */
+export const _picksShowingWeekForTest = picksShowingWeek;
 
 /** Weeks a player may browse on the Picks tab: current week + anything locked/live/final. Demo weeks are commissioner-only. */
 function picksNavWeeks() {
@@ -8790,7 +9057,8 @@ function bindPicksWeekNav() {
   document.querySelectorAll('[data-picks-week]').forEach(b => b.addEventListener('click', () => {
     if (!b.dataset.picksWeek) return;
     const cur = getCurrentWeek();
-    state.picksWeekId = (b.dataset.picksWeek === cur?.weekId) ? null : b.dataset.picksWeek;
+    // DI-426 — writes the shared state.viewingWeekId (formerly state.picksWeekId).
+    state.viewingWeekId = (b.dataset.picksWeek === cur?.weekId) ? null : b.dataset.picksWeek;
     renderPicksPage();
     window.scrollTo({ top: 0 });
   }));
@@ -8812,7 +9080,8 @@ function bindDashboardWeekNav() {
   document.querySelectorAll('[data-dashboard-week]').forEach(b => b.addEventListener('click', () => {
     if (!b.dataset.dashboardWeek) return;
     const cur = getCurrentWeek();
-    state.dashboardWeekId = (b.dataset.dashboardWeek === cur?.weekId) ? null : b.dataset.dashboardWeek;
+    // DI-426 — writes the shared state.viewingWeekId (formerly state.dashboardWeekId).
+    state.viewingWeekId = (b.dataset.dashboardWeek === cur?.weekId) ? null : b.dataset.dashboardWeek;
     renderDashboard();
     window.scrollTo({ top: 0 });
   }));
@@ -9264,12 +9533,24 @@ function renderSubmittedView(c, week, games, session, displayName) {
     renderPicksPage();
     window.scrollTo({ top: 0 });   // UN-115 (DI-115b): same driver as login — the form replaces the submitted view
   });
+  // DI-428(a) — `bindLogoImageEvents()` was previously reached ONLY from the
+  // pre-submission draft render path (below, in `renderPicksPageCurrent()`).
+  // A player who lands straight on an already-submitted week (the common
+  // case — most sessions never see the draft form at all) never triggered
+  // it, so the submitted card's `.pick-btn-logo` images — now painted by
+  // this same view (DI-428a above) — would sit at `opacity:0` forever
+  // (css/styles.css: `.pick-btn-logo{opacity:0}` until `.is-loaded` lands).
+  // Idempotent (see the function's own header), so calling it again from the
+  // draft path costs nothing.
+  bindLogoImageEvents(c);
   const list = document.getElementById('submitted-games'); if (!list) return;
   list.innerHTML = games.map(game => {
     const pick = picks.find(p=>p.gameId===game.gameId);
     return renderGameCard(game, pick?.selectedTeam, pick?evaluatePick(pick,game):PICK_RESULT.PENDING, true, true);
   }).join('');
 }
+/** Test-only alias (same convention as every other `_xForTest` seam) — DI-428(a). */
+export const _renderSubmittedViewForTest = renderSubmittedView;
 
 function renderWeekBanner(week) {
   if (!week?.blurb) return '';
@@ -9555,14 +9836,41 @@ export function updatePicksLiveStatusInPlace(games) {
 // visible right beside it (.pick-btn-logo-name), so a non-empty alt made a
 // screen reader announce the team twice. alt="" (not a missing alt, which
 // makes VoiceOver read the filename).
+/**
+ * The ONE `<img>` template every team-logo render path builds from — same
+ * escHtml(url)/alt=""/referrerpolicy safety every time, `extraAttrs` only
+ * ever adding attributes (never changing the escaping). Extracted for
+ * DI-428(b) (UN-383, 2026-09-28) so the Games-tab slate rows' small logo
+ * reuses this exact template rather than a second hand-written `<img>`.
+ */
+function teamLogoImgHTML(url, cssClass, extraAttrs = '') {
+  return `<img class="${escHtml(cssClass)}" src="${escHtml(url)}" alt="" ${extraAttrs}referrerpolicy="no-referrer">`;
+}
+
 function pickButtonContentHTML(displayName, logoUrl, logoViewOn, isManual) {
   const url = (!isManual && logoViewOn) ? logoOk(logoUrl) : null;
   if (!url) return escHtml(displayName);
   return `<span class="pick-btn-logo-wrap">
-    <span class="pick-btn-logo-box"><img class="pick-btn-logo" src="${escHtml(url)}" alt="" referrerpolicy="no-referrer"></span>
+    <span class="pick-btn-logo-box">${teamLogoImgHTML(url, 'pick-btn-logo', 'loading="lazy" ')}</span>
     <span class="pick-btn-logo-name">${escHtml(displayName)}</span>
   </span>`;
 }
+
+/**
+ * DI-428(b) (UN-383, 2026-09-28) — the commissioner's Games-tab slate rows
+ * (Available Games pool + Selected Slate) get a small 24px logo before each
+ * team name, name unchanged, when the player's Team logos toggle is on.
+ * Same gate as `pickButtonContentHTML()`: manual games and a null/unusable
+ * URL both render nothing (no `<img>` at all — "opting out costs nothing",
+ * DI-331d's own rule, reused rather than re-derived). `loading="lazy"` per
+ * the DI — these rows can run long (10 slate games, dozens in the pool).
+ */
+function slateRowLogoHTML(logoUrl, isManual, logoViewOn) {
+  const url = (!isManual && logoViewOn) ? logoOk(logoUrl) : null;
+  return url ? teamLogoImgHTML(url, 'slate-row-logo', 'loading="lazy" ') : '';
+}
+/** Test-only alias (same `_xForTest` convention as every other seam). */
+export const _slateRowLogoHTMLForTest = slateRowLogoHTML;
 
 /**
  * DI-331g — 'load'/'error' do not bubble, so a delegated listener needs the
@@ -9582,7 +9890,7 @@ function bindLogoImageEvents(container) {
   container._logoEventsWired = true;
   container.addEventListener('load', e => {
     const img = e.target;
-    if (img?.classList?.contains('pick-btn-logo') || img?.classList?.contains('dc-chip-logo')) {
+    if (img?.classList?.contains('pick-btn-logo') || img?.classList?.contains('dc-chip-logo') || img?.classList?.contains('matrix-hdr-logo')) {
       img.classList.add('is-loaded');
     }
   }, true);
@@ -9592,6 +9900,18 @@ function bindLogoImageEvents(container) {
       img.closest('.pick-btn-logo-wrap')?.classList.add('logo-broken');
     } else if (img?.classList?.contains('dc-chip-logo')) {
       img.closest('.dc-chip-pick')?.classList.add('logo-broken');
+    } else if (img?.classList?.contains('slate-row-logo')) {
+      // DI-428(b) — unlike the two branches above, the team name here is
+      // ALWAYS rendered beside the logo (never swapped in) — nothing to
+      // fall back to but hiding the broken-image glyph itself.
+      img.style.display = 'none';
+    } else if (img?.classList?.contains('matrix-hdr-logo')) {
+      // DI-428(c) — fourth render path sharing this one binder, same shape as
+      // the dc-chip-logo arm above: the nearest fixed-box ancestor gets
+      // `.logo-broken` so CSS can hide the broken box and fall back to the
+      // abbreviation text that's already sitting right next to it (never a
+      // DOM text-injection — same rule as every other arm here).
+      img.closest('.matrix-hdr-logo-box')?.classList.add('logo-broken');
     }
   }, true);
 }
@@ -9599,10 +9919,63 @@ function bindLogoImageEvents(container) {
 export const _bindLogoImageEventsForTest = bindLogoImageEvents;
 export const _pickButtonContentHTMLForTest = pickButtonContentHTML;
 
+/**
+ * DI-428(a) (2026-09-28, amends DI-331d/f) — the read-only/submitted Picks
+ * card now carries the SAME logo+name treatment as the pick button, at every
+ * week status. RG-292's finding was specific: `!showResult` (the draft view,
+ * before submission) already drew logos in `.pick-buttons` below; `showResult`
+ * (this card, after submission — every status from OPEN-but-submitted through
+ * FINAL, since renderSubmittedView() is the only caller that passes
+ * showResult:true) drew none — the toggle meant one thing before you
+ * submitted and a different thing after.
+ *
+ * Reuses `pickButtonContentHTML()` VERBATIM (never re-derived) for the case
+ * where there IS a usable logo — same fixed-box/no-layout-shift wrapper,
+ * same escHtml()'d name underneath. Round 2 (reviewer F5, 2026-09-29):
+ * the WHOLE branch choice — logo treatment vs. the CLASSIC `.team-name`/
+ * `.team-mascot` split — is gated on `awayLogoUsable`/`homeLogoUsable`
+ * (computed once, below, with the exact same isManual/logoOk() gate
+ * pickButtonContentHTML() applies internally), not merely on the toggle.
+ * Round 1 fell through to pickButtonContentHTML()'s OWN bare-text fallback
+ * on a manual/no-logo game, which has no mascot styling at all —
+ * "Oklahoma (Sooners)" rendered as one undifferentiated 1.05rem string.
+ * Now that case never reaches pickButtonContentHTML() at all; it renders
+ * the pre-existing, already-correct `.team-name`/`.team-mascot` markup
+ * instead, so `.team-name-logo` (css/styles.css) only ever wraps a REAL
+ * logo box — no plain-text fallback lives inside it any more.
+ *
+ * Gated on `showResult` specifically (not "logoViewOn" alone) so the
+ * PRE-submission draft view is untouched: that view already shows logos in
+ * the pick buttons below the matchup row, and painting them a second time in
+ * the matchup row itself would be a duplicate, not a fix.
+ *
+ * Blind rule: unaffected. `pickedTeam` here is always the VIEWER's own pick
+ * (see the BUG-4 comment block above, "renderGameCard is called from the
+ * Picks page only, never from a surface that shows another player's
+ * selections") — this only changes HOW the two public team names/logos
+ * render, never WHICH player's selection is shown. `renderSubmittedView()`
+ * (below) fetches `getPicks(week.weekId, session.playerId)` — the session
+ * player's own picks only — so there is no opponent data in this render
+ * path to leak in the first place.
+ */
 export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
   // DI-331d — read once per card; both pick buttons share the same toggle
   // state (there is no per-button variant).
   const logoViewOn = getLogoView();
+  // Round 2 F5 (reviewer, 2026-09-29) — computed ONCE, ahead of the matchup
+  // markup below, using the EXACT same isManual/logoOk() gate
+  // pickButtonContentHTML() applies internally. The submitted-card matchup
+  // row uses this to choose between the logo treatment and the CLASSIC
+  // `.team-name`/`.team-mascot` split — not between the logo treatment and
+  // pickButtonContentHTML()'s own bare-text fallback, which has no mascot
+  // styling at all. Reusing that bare fallback inside `.team-name-logo` was
+  // the round-1 defect: "Oklahoma (Sooners)" rendered as one undifferentiated
+  // 1.05rem string on any manual/no-logo game in logo mode. Gating the WHOLE
+  // branch choice on "is there really a usable logo" — not merely "is the
+  // toggle on" — means the classic, already-correct mascot markup is what
+  // renders whenever pickButtonContentHTML() would have fallen through.
+  const awayLogoUsable = !!(showResult && logoViewOn && !game.isManual && logoOk(game.awayLogo));
+  const homeLogoUsable = !!(showResult && logoViewOn && !game.isManual && logoOk(game.homeLogo));
   const sv = game.lockedSpread!==null ? game.lockedSpread : game.spread;
   // For final games with no spread: show "Final" label; TBD only for future unset games.
   // The provenance ("ESPN · DraftKings" vs "Manual") was confusing players on the
@@ -9709,14 +10082,18 @@ export function renderGameCard(game, pickedTeam, result, isLocked, showResult) {
       <div class="matchup">
         <div class="team away${pickedSide==='away'?' team-picked':''}">
           ${awayRk?`<div class="team-rank">${awayRk}</div>`:''}
-          <div class="team-name">${escHtml(game.awayTeam)}${awayMasc?` <span class="team-mascot">(${escHtml(awayMasc)})</span>`:''}</div>
+          ${awayLogoUsable
+            ?`<div class="team-name-logo">${pickButtonContentHTML(awayDisplay, game.awayLogo, logoViewOn, game.isManual)}</div>`
+            :`<div class="team-name">${escHtml(game.awayTeam)}${awayMasc?` <span class="team-mascot">(${escHtml(awayMasc)})</span>`:''}</div>`}
           <div class="team-conf">${escHtml(game.awayConference||'')}</div>
           ${pickedSide==='away'?pickFlag:''}
         </div>
         <div class="vs-divider">@</div>
         <div class="team home${pickedSide==='home'?' team-picked':''}">
           ${homeRk?`<div class="team-rank">${homeRk}</div>`:''}
-          <div class="team-name">${escHtml(game.homeTeam)}${homeMasc?` <span class="team-mascot">(${escHtml(homeMasc)})</span>`:''}</div>
+          ${homeLogoUsable
+            ?`<div class="team-name-logo">${pickButtonContentHTML(homeDisplay, game.homeLogo, logoViewOn, game.isManual)}</div>`
+            :`<div class="team-name">${escHtml(game.homeTeam)}${homeMasc?` <span class="team-mascot">(${escHtml(homeMasc)})</span>`:''}</div>`}
           <div class="team-conf">${escHtml(game.homeConference||'')}</div>
           ${pickedSide==='home'?pickFlag:''}
         </div>
@@ -10649,9 +11026,11 @@ function renderDashboard() {
   // `host` stays — the prelink banner below shares it.
   const host = document.getElementById('page-dashboard');
   // DI-331g — idempotent; see bindLogoImageEvents()'s own header. Covers the
-  // compact layout's `.dc-chip-logo` images (renderDashboardCompact()) —
-  // the matrix (renderDashboardTable()) never emits logo `<img>`s, DI-331f's
-  // explicit non-conversion.
+  // compact layout's `.dc-chip-logo` images (renderDashboardCompact()) AND,
+  // since DI-428(c) (2026-09-28), the standard matrix's `.matrix-hdr-logo`
+  // images too (renderDashboardTable(), gated on logoView + a usable URL —
+  // stale note corrected round 2, reviewer F3, 2026-09-29: this WAS
+  // DI-331f's deliberate non-conversion of the matrix; it no longer is).
   bindLogoImageEvents(host);
   // ── DI-183a-ii (Step 3b) — "Set up your account", ABOVE EVERYTHING ────────
   // Inserted the way the chat teaser was: `afterbegin` on the page host,
@@ -10703,12 +11082,24 @@ function renderDashboardInner() {
   const currentWeekVisible = currentWeek && (currentWeek.dataSourceMode !== 'demo' || isCommissioner);
   if(!currentWeekVisible && !allWeeks.length){c.innerHTML=emptyState('📊','No Weeks Yet','Commissioner needs to open a week.');return;}
 
-  const displayWeekId=state.dashboardWeekId||(currentWeekVisible?currentWeek?.weekId:null)||allWeeks[0]?.weekId;
+  // DI-426 — reads the shared state.viewingWeekId (formerly state.dashboardWeekId);
+  // the fallback chain itself is UNCHANGED (DI-426's own "the shared field's
+  // value first, falling through exactly as it already does" instruction) —
+  // this is also the draft-week fallback the DI names: a commissioner
+  // viewing a DRAFT week on Picks who switches to Dashboard finds
+  // state.viewingWeekId pointing at a week selectableDashboardWeeks() may
+  // not include (Picks can show a draft; Dashboard's own list only ever
+  // includes finalized+live+open, plus drafts for the commissioner too —
+  // see selectableDashboardWeeks()) — getWeek(displayWeekId) still resolves
+  // the draft record itself (weeks are looked up by id, not filtered by
+  // this list), so `week` below is correct either way and no special-case
+  // branch is needed.
+  const displayWeekId=state.viewingWeekId||(currentWeekVisible?currentWeek?.weekId:null)||allWeeks[0]?.weekId;
   const week=getWeek(displayWeekId)||(currentWeekVisible?currentWeek:null)||allWeeks[0];
   if(!week){c.innerHTML=emptyState('📊','No Week','');return;}
-  // Safety: if a stale state.dashboardWeekId points at a demo week, snap back.
+  // Safety: if a stale state.viewingWeekId points at a demo week, snap back.
   if (week.dataSourceMode === 'demo' && !isCommissioner) {
-    state.dashboardWeekId = allWeeks[0]?.weekId || null;
+    state.viewingWeekId = allWeeks[0]?.weekId || null;
     return renderDashboardInner();
   }
 
@@ -11122,6 +11513,11 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
   // all three surfaces blind on one rule instead of three near-copies.
   const viewerId    = session.playerVerified ? session.playerId : null;
   const canSeeOthers = canViewOtherPicks(week);
+  // DI-428(c) — read once for the whole matrix, same as renderGameCard() and
+  // renderDashboardCompact(). Describes the GAME (public schedule data, not
+  // anybody's pick), so it is read unconditionally here, ahead of every
+  // blind-rule branch below — unlike `canSeeOthers`, it never gates on it.
+  const logoViewOn = getLogoView();
 
   // If not public, not admin, and player hasn't submitted — show prompt not data
   if (!isPublic && !session.isAdmin) {
@@ -11259,7 +11655,7 @@ export function renderDashboardTable(players,games,allPicks,weeklyResults,weekId
 
     return`<tr>
       <td class="game-info-cell">
-        <div class="game-info-matchup">${escHtml(matchupBare(game))} ${renderGameBadges(game)}</div>
+        <div class="game-info-matchup">${matrixGameHeaderHTML(game, logoViewOn, shortTeam)} ${renderGameBadges(game)}</div>
         <div class="game-info-meta">
           <span class="spread-badge-sm">${spreadStr}</span>
           ${statusInfo}
@@ -11692,7 +12088,7 @@ export function renderDashboardCompact(players, games, allPicks, weeklyResults, 
       // falls through to the text chip with no extra `isManual` check needed.
       const pickLogoUrl = (logoViewOn && pickedSide) ? logoOk(pickedSide === 'home' ? game.homeLogo : game.awayLogo) : null;
       const pickContent = pickLogoUrl
-        ? `<span class="dc-chip-pick-logo"><img class="dc-chip-logo" src="${escHtml(pickLogoUrl)}" alt="${escHtml(pick.selectedTeam)}" referrerpolicy="no-referrer"><span class="dc-chip-pick-fallback">${escHtml(pickShort)}</span></span>`
+        ? `<span class="dc-chip-pick-logo"><img class="dc-chip-logo" src="${escHtml(pickLogoUrl)}" alt="${escHtml(pick.selectedTeam)}" loading="lazy" referrerpolicy="no-referrer"><span class="dc-chip-pick-fallback">${escHtml(pickShort)}</span></span>`
         : escHtml(pickShort);
       return `<div class="dc-chip ${cls}" data-player-id="${escHtml(player.playerId)}" draggable="true" title="${escHtml(player.displayName)} picked ${escHtml(pick.selectedTeam)}"><span class="dc-chip-init">${initials}</span><span class="dc-chip-pick">${pickContent}${icon?` ${icon}`:''}</span></div>`;
     }).join('');
@@ -12937,6 +13333,24 @@ export function renderCommPage() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       });
     });
+    // REVIEWER ROUND 2, BLOCK B1 (2026-09-28) — renderCommExtrasV16() APPENDS
+    // the Extra Point and "Chat & S.C.R.I.B.E." cards to `c` via
+    // insertAdjacentHTML('beforeend', …) — they do not exist in `c`'s DOM
+    // until this call runs. It used to run AFTER wireCollapsibleSections(c)/
+    // wirePanelCollapseAllControls(c, …) below, so DI-424/425's two new
+    // `.admin-section-title`s (Extra Games / Chat & S.C.R.I.B.E.) were never
+    // seen by either: no chevron, no click-to-collapse, no re-application of
+    // a previously-saved collapsed state, and "Collapse all" (which queries
+    // `c.querySelectorAll('.admin-section[data-comm-tab]')` at CLICK time,
+    // not at wire time) would still collapse them — only "Expand all" could
+    // ever bring them back. Moved above both calls; wireCollapsibleSections()
+    // itself is NOT called a second time anywhere — it is not idempotent for
+    // wiring purposes (a second call would bind a SECOND click listener to
+    // every title it has already wired, since `titleEl.addEventListener(...)`
+    // has no dedup — the identical class of bug B2 describes for the three
+    // Admin buttons, just via a double-wire instead of a double-bind). One
+    // call, positioned after every card that needs it already exists.
+    renderCommExtrasV16(week, games);   // v0.16.0 — Extra Point + Chat/SCRIBE admin
     wireCollapsibleSections(c);
     // DI-408 AMENDED — the heading-row pair, scoped to state.commTab via
     // data-comm-tab/data-comm-active (the same attribute the tab click
@@ -12953,7 +13367,6 @@ export function renderCommPage() {
     // is the games-tab target week itself, so every games-tab action binds
     // against `gtWeek`/`gtGames` there, never the live `week`/`games`.
     bindCommEventListeners(week, games, availGames, gamesTabSuggested, settings, allWeeks, gamesTabShortlist, gamesTabWeek);
-    renderCommExtrasV16(week, games);   // v0.16.0 — Extra Point + Chat/SCRIBE admin
     initScrollFades(c);   // UN-105a — this panel's own scroll-fade wrappers
 
   } catch(err) {
@@ -13545,6 +13958,93 @@ function bindUsersAcrossLeaguesControls() {
   });
 }
 
+/**
+ * REVIEWER ROUND 2, BLOCK B2 (2026-09-28) — the click handlers for DI-425's
+ * three relocated Admin→Data cards (`scribe-digest-export`/`scribe-post-
+ * queue`/`chat-diagnostics`, `js/admin-panel.js` ADMIN_CARD_TAB). Called
+ * from `renderAdminPage()`, AFTER its own `c.innerHTML = renderAdminPanel(
+ * …)` has painted fresh DOM — so every call binds onto brand-new nodes with
+ * zero pre-existing listeners (no accumulation risk the way the OLD home,
+ * `renderCommExtrasV16()`, had: that function ran on every unguarded
+ * `renderCommPage()` call and looked the ids up via bare
+ * `document.getElementById()`, which can find an element ANYWHERE in the
+ * document, not just inside the page that logically owns it).
+ *
+ * Every lookup is scoped to `c` (`#page-admin`, the caller's own container)
+ * — `c.querySelector('#id')`, never the global `document.getElementById`
+ * — so these handlers can only ever bind to the Admin panel's own copy of
+ * these buttons, structurally, not merely "because nothing else currently
+ * shares the id."
+ */
+function bindAdminScribeToolsControls(c, week) {
+  if (!c) return;
+  c.querySelector('#chat-digest-btn')?.addEventListener('click', async () => {
+    const st = c.querySelector('#chat-digest-status');
+    try {
+      if (!week) throw new Error('No active week to build a digest for.');
+      const players = getPlayers().filter(p=>p.active);
+      const wkGames = getGames(week.weekId);
+      const picks = getPicks(week.weekId);
+      const atsLossesByPlayer = {};
+      players.forEach(p => {
+        atsLossesByPlayer[p.playerId] = picks
+          .filter(pk => pk.playerId === p.playerId)
+          .filter(pk => { const g = wkGames.find(x => x.gameId === pk.gameId); const ats = g?.atsWinner; return ats && ats !== 'no_decision' && ats !== pk.selectedTeam; })
+          .map(pk => pk.gameId);
+      });
+      const start = week.startDate ? new Date(week.startDate + 'T00:00:00').getTime() - 4*86400000 : Date.now() - 7*86400000;
+      const end = week.endDate ? new Date(week.endDate + 'T23:59:59').getTime() + 2*86400000 : Date.now();
+      const digest = chatDigest(start, end, { players, games: wkGames, atsLossesByPlayer, week: week.weekNumber });
+      await navigator.clipboard.writeText(JSON.stringify(digest, null, 2));
+      if (st) st.textContent = '✅ Copied to clipboard';
+    } catch (e) { if (st) st.textContent = '❌ ' + (e.message || e); }
+  });
+
+  c.querySelector('#scribe-queue-btn')?.addEventListener('click', () => {
+    const st = c.querySelector('#scribe-queue-status');
+    try {
+      const arr = JSON.parse(c.querySelector('#scribe-queue-input')?.value || '[]');
+      if (!Array.isArray(arr) || !arr.length) throw new Error('Paste a non-empty JSON array');
+      let posted = 0, deferred = 0;
+      const now = Date.now();
+      arr.forEach((item, i) => {
+        const at = item.postAt ? new Date(item.postAt).getTime() : 0;
+        if (at && at > now) { deferred++; return; }   // scheduling proper lands with Tier 1
+        if (!item.body) return;
+        sendChatEvent({
+          type: 'message', gameTag: item.gameTag || '', body: String(item.body),
+          author: 'scribe', meta: { source: 'tier1' },
+        });
+        posted++;
+      });
+      if (st) st.textContent = `✅ Posted ${posted}` + (deferred ? ` · ${deferred} future-dated skipped (scheduling ships with Tier 1)` : '');
+    } catch (e) { if (st) st.textContent = '❌ ' + (e.message || e); }
+  });
+
+  c.querySelector('#chat-diag-btn')?.addEventListener('click', async () => {
+    const out = c.querySelector('#chat-diag-out');
+    if (out) out.textContent = '⏳ testing…';
+    try {
+      const mod = await import('./chatTransport.js');
+      const { head } = await mod.fetchHead();
+      if (out) out.textContent = `✅ Chat backend OK — head at seq ${head}.`;
+    } catch (e) {
+      // REVIEWER B3 (2026-09-28) — `.stale` is a retired Apps-Script-era
+      // signal (`StaleDeploymentError`, deleted 2026-09-23 per
+      // chatTransport.js's own header note) that `classifySupabaseError()`
+      // never sets; this branch is unreachable under the live Supabase
+      // transport today, but is left structurally intact (rather than
+      // deleted) with honest, backend-neutral copy in case a future
+      // transport ever does set it.
+      if (out) out.textContent = e?.stale
+        ? '❌ Could not verify the chat read path — try again in a moment.'
+        : '❌ ' + (e.message || e);
+    }
+  });
+}
+/** Test-only seam, same `_xForTest` convention as every other bind function. */
+export const _bindAdminScribeToolsControlsForTest = bindAdminScribeToolsControls;
+
 export function renderAdminPage() {
   const c = document.getElementById('page-admin'); if (!c) return;
   const viewer = composeAdminViewer();
@@ -13626,6 +14126,10 @@ export function renderAdminPage() {
     'data-management': () => renderDataManagementBody(),
     'chat-retention': () => renderChatRetentionAdmin(),
     'chat-history': () => renderChatEpochAdmin(),
+    // DI-425 — moved from Comm→SCRIBE, verbatim behavior.
+    'scribe-digest-export': () => renderScribeDigestExportBody({ week }),
+    'scribe-post-queue': () => renderScribePostQueueBody(),
+    'chat-diagnostics': () => renderChatDiagnosticsBody(),
   };
 
   c.innerHTML = renderAdminPanel({
@@ -13765,6 +14269,10 @@ export function renderAdminPage() {
   }
   bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist);
   bindScribeModelControl();
+  // REVIEWER ROUND 2, BLOCK B2 — the three DI-425 Admin→Data tools' own
+  // handlers, scoped to `c` (#page-admin). Called after `c.innerHTML =
+  // renderAdminPanel(...)` above, so it always binds onto fresh nodes.
+  bindAdminScribeToolsControls(c, week);
   bindUsersAcrossLeaguesControls();
   if (viewer.isSuperAdmin) bindSuperAdminControls();
   if (getAuthMode() === 'supabase') {
@@ -14138,6 +14646,9 @@ function availAddPayloadJSON(game, week) {
 export function renderAvailableGamesList(availGames, currentSlate, week) {
   // ONE fold per list render rather than one per row (FEAT-2 / DI-175e chip).
   const grFolded = foldGameRequests();
+  // DI-428(b) — read once per list render, same "read once, not per row"
+  // convention `pickButtonContentHTML()`'s own callers already use.
+  const logoViewOn = getLogoView();
   return availGames.map(game => {
     const onSlate = currentSlate.some(g => g.espnEventId&&g.espnEventId===game.espnEventId || (g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam));
     const spreadStr = game.spread!==null ? `${fmtSpread(game.spread,game.favorite,game)} ${game.spreadSource==='espn'?'(ESPN)':'(Manual)'}` : '⚠️ TBD';
@@ -14146,9 +14657,9 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
     return `<div class="game-admin-card" style="${onSlate?'opacity:.65':''}">
       <div class="game-admin-header">
         <div class="game-admin-matchup">
-          ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
+          ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
+          ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?`<span class="alma-mater-badge ml-sm">${icon('almaMater')}</span>`:''}
           ${game.nationalTV?`<span class="national-tv-badge ml-sm">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grFolded)}
@@ -14175,6 +14686,9 @@ export function renderAdminGamesList(games, week, overrides) {
   // ONE fold per list render (FEAT-2 / DI-175e chip) — a requested game that
   // has been added reads as satisfied right here, in the slate.
   const grSlateFolded = foldGameRequests();
+  // DI-428(b) — read once per list render (same convention as
+  // renderAvailableGamesList() above).
+  const logoViewOn = getLogoView();
   return games.sort((a,b)=>new Date(a.kickoff)-new Date(b.kickoff)).map(game => {
     const mu = overrides[game.gameId]==='unlocked';
     const sv = game.lockedSpread!==null?game.lockedSpread:game.spread;
@@ -14191,9 +14705,9 @@ export function renderAdminGamesList(games, week, overrides) {
       ${readyBanner}
       <div class="game-admin-header">
         <div class="game-admin-matchup">
-          ${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
+          ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
-          ${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
+          ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
           ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater')}</span>`:''}
           ${game.nationalTV?`<span class="national-tv-badge">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grSlateFolded)}
@@ -14876,6 +15390,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('avail-reset-filters-inline')?.addEventListener('click', resetFilters);
   // Wire add/remove buttons inside the initial render of the groups
   bindAvailGroupHandlers(gtWeek, gtGames);
+  // DI-428(b) — same delegated load/error handling `.pick-btn-logo`/
+  // `.dc-chip-logo` already get, idempotent per container (see
+  // bindLogoImageEvents()'s own header comment).
+  bindLogoImageEvents(document.getElementById('page-commissioner'));
 
   // Slate controls — B1: `gtWeek`/`gtGames` throughout.
   document.getElementById('clear-slate-btn')?.addEventListener('click', ()=>{
@@ -16983,6 +17501,71 @@ function renderChatEpochAdmin() {
     <button class="btn btn-danger btn-sm" id="chat-epoch-clear-btn">${cleared ? '🧹 Clear Chat Again' : '🧹 Clear Chat History Before Launch'}</button>`;
 }
 
+// ─── DI-425 (UN-380, coordinator addendum to the UX Revamp v0.27.2 batch,
+// 2026-09-28) — three admin/platform-troubleshooting tools moved from
+// Comm→SCRIBE's "Chat & S.C.R.I.B.E." card to Admin→Data. Drew's own words:
+// "…are admin things not commissioner things and should be in admin panel
+// not comm panel." Bare inner content per the CARD SHELL CONTRACT
+// (js/admin-panel.js's own doc header) — that module supplies the
+// .admin-section/.admin-section-title/.card wrapper and the card's title
+// text (ADMIN_CARD_TITLE); these functions return ONLY what goes inside it.
+// Every button id, and every click handler behind it (bindCommEventListeners(),
+// this file — unchanged, still id-based and therefore still finds these
+// elements regardless of which page container they now render inside, same
+// as every other relocated Admin→Data card), is REUSED VERBATIM. Only the
+// render location (and, for Chat diagnostics only, its own stale intro
+// copy) changes. ───────────────────────────────────────────────────────────
+
+/** Was inside "Chat & S.C.R.I.B.E." (Comm→SCRIBE); moved whole. `week` is
+ *  REQUIRED by the unchanged `chat-digest-btn` handler's date-range math —
+ *  threaded in from `renderAdminPage()`'s own `bodies['scribe-digest-export']`
+ *  call, same pattern as `bodies['demo-simulation']`/`bodies['data-proof']`. */
+function renderScribeDigestExportBody({ week }) {
+  if (!week) return `<p class="text-muted text-xs">No active week to build a digest for.</p>`;
+  return `
+    <p class="text-muted text-xs mb-sm">Tier 0 (deterministic lines) runs automatically with rate limits. The digest feeds recap generation.</p>
+    <div class="flex gap-sm flex-wrap">
+      <button class="btn btn-secondary btn-sm" id="chat-digest-btn">📤 Copy weekly digest JSON</button>
+      <span class="text-muted text-xs" id="chat-digest-status"></span>
+    </div>`;
+}
+
+/** Was inside "Chat & S.C.R.I.B.E." (Comm→SCRIBE); moved whole. */
+function renderScribePostQueueBody() {
+  return `
+    <p class="text-muted text-xs mb-sm">Tier 1 lets you paste a reviewed batch of SCRIBE posts.</p>
+    <div class="form-group">
+      <label class="form-label" style="font-size:.7rem">SCRIBE queue (Tier 1) — paste JSON: [{"channel":"general","body":"…","postAt":"2026-08-29T18:00Z"}]</label>
+      <textarea class="form-input" id="scribe-queue-input" rows="3" placeholder='[{"channel":"general","body":"Week 4 is open. Do better."}]'></textarea>
+    </div>
+    <div class="flex gap-sm flex-wrap">
+      <button class="btn btn-primary btn-sm" id="scribe-queue-btn">Post queue as SCRIBE</button>
+      <span class="text-muted text-xs" id="scribe-queue-status"></span>
+    </div>`;
+}
+
+/** Was inside "Chat & S.C.R.I.B.E." (Comm→SCRIBE); moved whole, copy
+ *  REWRITTEN TWICE. The originally-retired text read "Tests the deployed
+ *  Apps Script for the chat endpoints — the v0.16 outage was an out-of-date
+ *  deployment, which this detects in one click." Apps Script was fully
+ *  retired 2026-09-23 (CLAUDE.md) — that sentence describes an architecture
+ *  a full generation out of date. The FIRST rewrite (DI-425) was ALSO wrong
+ *  — reviewer round 2, BLOCK B3 (2026-09-28): it claimed "Edge Function
+ *  chat endpoints... end-to-end... not sending" (implying a write/send
+ *  path). The handler (`chat-diag-btn`'s click listener, below) calls
+ *  `chatTransport.js`'s `fetchHead()` -> `sbFetchHead()`
+ *  (`chatTransport.js:712`) -> the `chat_head` PostgREST RPC — a READ-ONLY
+ *  head probe, never an Edge Function, never a send. Copy corrected to
+ *  match what the check actually does. */
+function renderChatDiagnosticsBody() {
+  return `
+    <p class="text-muted text-xs mb-sm">Checks this device can read the league's chat log from the server and reports the latest message number. Use this first if players say chat isn't syncing.</p>
+    <div class="flex gap-sm flex-wrap">
+      <button class="btn btn-secondary btn-sm" id="chat-diag-btn">Run test</button>
+      <span class="text-muted text-xs" id="chat-diag-out"></span>
+    </div>`;
+}
+
 function renderCommLogin(c) {
   // THIRD GUARD, and the outermost of the three is `renderCommPage()`'s own
   // branch at the `!session.isAdmin` fork — in supabase mode it renders DI-182c's
@@ -17552,7 +18135,7 @@ function cachedEspnTeamsList() {
  * Callers: almatest.mjs §16b, §16c (which contains a canary proving this
  * function actually empties the cache) and §16f.
  */
-export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; }
+export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; _almaCatalogFetchAttempted = false; }
 
 /**
  * Builds the alma-mater <select>'s <option> list from whichever team source
@@ -18298,9 +18881,17 @@ export function renderRulesPage() {
       ${rules.map(s=>`<div class="rules-section"><h3>${escHtml(s.section)}</h3>
         <ul class="rules-list">${s.items.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul>
       </div><div class="divider"></div>`).join('')}
-      <div class="rules-section"><h3>${icon('almaMater')} Alma Maters</h3>
-        <ul class="rules-list">${claimedAlmaMaters().map(am=>`<li>${escHtml(am)}</li>`).join('')}</ul>
-      </div>
+      <!-- DI-423 (UN-378, 2026-09-28) — the Alma Maters section RETIRED off
+           this page ("Alma maters should not be listed in the rules
+           section." — Drew, verbatim). The roster is player data, not a
+           rule; its canonical, maintained home is the Comm -> Players
+           "Alma maters & home teams" card (renderAlmaMaterSettingsCard(),
+           above in this file). claimedAlmaMaters() itself is UNCHANGED and
+           still feeds Alma Mater Watch, Alma Mater Rankings, the Comm
+           Players card, and the tiebreaker's Auto-Calc — only this ONE
+           redundant display is gone. The divider below (already between two
+           sections) is kept unchanged — it still separates the mapped
+           rules sections from Debts and Bylaws. -->
       <div class="divider"></div>
       <div class="rules-section"><h3>🍺 Debts &amp; Bylaws</h3>
         <ul class="rules-list">
@@ -20409,7 +21000,12 @@ export function renderFeedbackAdminSectionHTML() {
 
 /**
  * The commissioner panel's Ischemic Extra Point card, INCLUDING its
- * data-comm-tab="week" wrapper (RG-10).
+ * data-comm-tab="week" wrapper (RG-10) and, since DI-424 (UN-379,
+ * coordinator addendum, 2026-09-28), an `.admin-section-title` reading
+ * "Extra Games" — the same zero-new-code `wireCollapsibleSections()`
+ * mechanism every other Comm card's title already opts into, default
+ * EXPANDED (the coordinator's own call — this is the one side-bet card on
+ * the Week tab, likely checked right after Finalize Week).
  *
  * WHY THIS IS EXPORTED, and why it is a separate function at all: it is the
  * test seam for the blind rule on this surface. `renderCommExtrasV16()` starts
@@ -20467,6 +21063,7 @@ export function renderCommExtraPointCardHTML(week) {
 
   return `
     <div class="admin-section" data-comm-tab="week">
+    <div class="admin-section-title">Extra Games</div>
     <div class="card mb-md" id="comm-ep-card">
       <h3 style="color:var(--maroon)">🎯 Ischemic Extra Point — ${escHtml(formatWeekLabel(week))}</h3>
       <p class="text-muted text-xs">Longest made FG on the slate, blackjack rules. Detect pulls per-game scoring plays from ESPN; you can always override manually.</p>
@@ -20537,8 +21134,8 @@ function renderCommExtrasV16(week, games) {
     const scribeLearningsOn = isScribeLearningsEnabled();
     c.insertAdjacentHTML('beforeend', `
     <div class="admin-section" data-comm-tab="scribe">
+    <div class="admin-section-title">📋 Chat &amp; S.C.R.I.B.E.</div>
     <div class="card mb-md" id="comm-chat-card">
-      <h3 style="color:var(--maroon)">📋 Chat &amp; S.C.R.I.B.E.</h3>
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
         <input type="checkbox" id="chat-enabled-toggle" ${chatOn ? 'checked' : ''} />
         <span class="form-label" style="margin:0">Chat enabled</span>
@@ -20582,32 +21179,12 @@ function renderCommExtrasV16(week, games) {
         </span>
       </label>
       <div class="divider"></div>
-      <p class="text-muted text-xs">Tier 0 (deterministic lines) runs automatically with rate limits. Tier 1 lets you paste a reviewed batch of SCRIBE posts. The digest feeds recap generation.</p>
-      <div class="flex gap-sm flex-wrap mb-sm">
-        <button class="btn btn-secondary btn-sm" id="chat-digest-btn">📤 Copy weekly digest JSON</button>
-        <span class="text-muted text-xs" id="chat-digest-status"></span>
-      </div>
-      <div class="form-group">
-        <label class="form-label" style="font-size:.7rem">SCRIBE queue (Tier 1) — paste JSON: [{"channel":"general","body":"…","postAt":"2026-08-29T18:00Z"}]</label>
-        <textarea class="form-input" id="scribe-queue-input" rows="3" placeholder='[{"channel":"general","body":"Week 4 is open. Do better."}]'></textarea>
-      </div>
-      <div class="flex gap-sm flex-wrap mb-sm">
-        <button class="btn btn-primary btn-sm" id="scribe-queue-btn">Post queue as SCRIBE</button>
-        <span class="text-muted text-xs" id="scribe-queue-status"></span>
-      </div>
       <div class="form-group">
         <label class="form-label" style="font-size:.7rem">Season recap blurb (shows on Week 1 under "The Permanent Record")</label>
         <textarea class="form-input" id="season-recap-input" rows="3">${escHtml(getSettings().seasonRecapText || '')}</textarea>
       </div>
       <button class="btn btn-secondary btn-sm" id="season-recap-save">Save blurb</button>
       <div class="divider"></div>
-      <div class="mb-sm"><strong style="font-size:.8rem">🩺 Chat diagnostics</strong>
-        <p class="text-muted text-xs">Tests the deployed Apps Script for the chat endpoints — the v0.16 outage was an out-of-date deployment, which this detects in one click.</p>
-        <div class="flex gap-sm flex-wrap">
-          <button class="btn btn-secondary btn-sm" id="chat-diag-btn">Run test</button>
-          <span class="text-muted text-xs" id="chat-diag-out"></span>
-        </div>
-      </div>
       <div class="mb-sm"><strong style="font-size:.8rem">📈 Backend load (last 7 days)</strong>
         <div id="chat-metrics-out" class="text-muted text-xs">—</div>
       </div>
@@ -20810,68 +21387,29 @@ function renderCommExtrasV16(week, games) {
     if (g) { emitExtraPointEvent(week.weekId, g); showToast('📣 Posted to chat', 'success'); }
   });
 
-  document.getElementById('chat-digest-btn')?.addEventListener('click', async () => {
-    const st = document.getElementById('chat-digest-status');
-    try {
-      const players = getPlayers().filter(p=>p.active);
-      const wkGames = getGames(week.weekId);
-      const picks = getPicks(week.weekId);
-      const atsLossesByPlayer = {};
-      players.forEach(p => {
-        atsLossesByPlayer[p.playerId] = picks
-          .filter(pk => pk.playerId === p.playerId)
-          .filter(pk => { const g = wkGames.find(x => x.gameId === pk.gameId); const ats = g?.atsWinner; return ats && ats !== 'no_decision' && ats !== pk.selectedTeam; })
-          .map(pk => pk.gameId);
-      });
-      const start = week.startDate ? new Date(week.startDate + 'T00:00:00').getTime() - 4*86400000 : Date.now() - 7*86400000;
-      const end = week.endDate ? new Date(week.endDate + 'T23:59:59').getTime() + 2*86400000 : Date.now();
-      const digest = chatDigest(start, end, { players, games: wkGames, atsLossesByPlayer, week: week.weekNumber });
-      await navigator.clipboard.writeText(JSON.stringify(digest, null, 2));
-      if (st) st.textContent = '✅ Copied to clipboard';
-    } catch (e) { if (st) st.textContent = '❌ ' + (e.message || e); }
-  });
-
-  document.getElementById('scribe-queue-btn')?.addEventListener('click', () => {
-    const st = document.getElementById('scribe-queue-status');
-    try {
-      const arr = JSON.parse(document.getElementById('scribe-queue-input')?.value || '[]');
-      if (!Array.isArray(arr) || !arr.length) throw new Error('Paste a non-empty JSON array');
-      let posted = 0, deferred = 0;
-      const now = Date.now();
-      arr.forEach((item, i) => {
-        const at = item.postAt ? new Date(item.postAt).getTime() : 0;
-        if (at && at > now) { deferred++; return; }   // scheduling proper lands with Tier 1
-        if (!item.body) return;
-        sendChatEvent({
-          type: 'message', gameTag: item.gameTag || '', body: String(item.body),
-          author: 'scribe', meta: { source: 'tier1' },
-        });
-        posted++;
-      });
-      if (st) st.textContent = `✅ Posted ${posted}` + (deferred ? ` · ${deferred} future-dated skipped (scheduling ships with Tier 1)` : '');
-    } catch (e) { if (st) st.textContent = '❌ ' + (e.message || e); }
-  });
-
+  // REVIEWER ROUND 2, BLOCK B2 (2026-09-28) — chat-digest-btn/scribe-queue-btn/
+  // chat-diag-btn are GONE from here. DI-425 relocated their MARKUP to
+  // Admin→Data but these three handlers stayed bound HERE via bare
+  // `document.getElementById(...)`, which finds an element with that id
+  // ANYWHERE in the document — including inside #page-admin now that that is
+  // the only place these ids render. renderCommExtrasV16() runs on every
+  // `renderCommPage()` call, unconditionally (no `state.currentTab` guard,
+  // and several handlers elsewhere in this file call `renderCommPage()`
+  // directly as their own repaint — e.g. the tiebreaker/timing save handlers
+  // below), so every such incidental call added ANOTHER click listener onto
+  // the SAME already-rendered Admin button — "Post queue as SCRIBE" could
+  // post its batch N times for one click, N being however many unrelated
+  // Comm-repainting saves happened while Admin was open. Bound instead by
+  // `bindAdminScribeToolsControls()`, below, called from `renderAdminPage()`
+  // itself and scoped to `c` (#page-admin) — that function's own
+  // `c.innerHTML = renderAdminPanel(...)` replaces the DOM (and therefore
+  // every old listener) on each genuine call, so binding once per call is
+  // inherently accumulation-safe, and scoping to `c` means these handlers
+  // can never reach into #page-commissioner even if an id ever collided
+  // again.
   document.getElementById('season-recap-save')?.addEventListener('click', () => {
     saveSetting('seasonRecapText', document.getElementById('season-recap-input')?.value || '');
     showToast('✅ Season recap blurb saved', 'success');
-  });
-
-  document.getElementById('chat-diag-btn')?.addEventListener('click', async () => {
-    const out = document.getElementById('chat-diag-out');
-    if (out) out.textContent = '⏳ testing…';
-    try {
-      const mod = await import('./chatTransport.js');
-      const { head } = await mod.fetchHead();
-      // Step 5 D-6: "Deployment is current" is an Apps Script statement; there is no deployment
-      // to be current on the Supabase transport.
-      const tail = mod.chatTransportMode() === 'sheets' ? ' Deployment is current.' : '';
-      if (out) out.textContent = `✅ Chat backend OK — head at seq ${head}.${tail}`;
-    } catch (e) {
-      if (out) out.textContent = e?.stale
-        ? '❌ DEPLOYMENT OUT OF DATE — the deployed Apps Script has no chat endpoints. Paste the new Code.gs, then Deploy → Manage deployments → Edit → New version (same URL).'
-        : '❌ ' + (e.message || e);
-    }
   });
 
   (async () => {
@@ -22123,6 +22661,14 @@ export function isEspnRefreshableGame(g) {
   return !!g.espnSport && !!g.espnEventId;            // manual w/ full ESPN linking
 }
 
+/** The logo fields refreshScoresByEventIds() backfilled on this update — `{}`
+ *  on every ordinary poll (data-provider.js sets them only when the stored
+ *  logo is null). ONE definition for both doRefreshScores() write paths
+ *  (RG-292) so the full write and the display-only logo write cannot drift. */
+function logoBackfillOf(upd) {
+  return {...(upd.homeLogo!==undefined?{homeLogo:upd.homeLogo}:{}),...(upd.awayLogo!==undefined?{awayLogo:upd.awayLogo}:{})};
+}
+
 export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
   // The outer setupAutoRefresh already short-circuits demo/manual WEEKS, so
   // this per-game filter is the second line of defense for mixed slates.
@@ -22164,6 +22710,25 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
           scribeLiveGameCheck(stored, merged);
         }
       } catch(e){ console.warn('[refresh] display-only live events', e); }
+      // RG-292 (Drew, v0.27.1, 2026-09-28: "the logos aren't popping up for the
+      // games on the slate") — the ONE write this pass makes, and only on the
+      // commissioner/grader device. Logos are not grading data and the server
+      // job never writes them, so there is no second writer to interleave with:
+      // before this line, a display-only poll (every device's tick while
+      // `serverJobs.scoresRefresh` is on) skipped the backfill entirely and the
+      // only remaining logo writer was a manual refresh. The object is the
+      // mirror's own row (`stored`, what the server last wrote) plus the two
+      // logo fields — score/status/actualWinner/kickoff/lastUpdated are NOT
+      // taken from `upd`, so the planner's PATCH carries home_logo/away_logo
+      // (and saveGame's updated_at stamp) only. `logoBackfillOf()` is empty on
+      // every ordinary poll (data-provider.js sets the fields only for a null
+      // stored logo), so this is a no-op once a row has its logos. A player
+      // device still sends no logo field at all (security F1, RG-276).
+      // Guard: refreshtest.mjs [9].
+      if (mayPersistGameGrading()) {
+        const logoOnly = logoBackfillOf(upd);
+        if (Object.keys(logoOnly).length) saveGame({ ...stored, ...logoOnly });
+      }
       continue;
     }
     // Item 2 Pass A: saveGame()'s object below is an EXPLICIT ALLOW-LIST of
@@ -22188,9 +22753,7 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
     // the commissioner's device backfills the row for everyone. With the gate
     // closed the object below is byte-identical to the pre-backfill write.
     // Guards: refreshtest.mjs [8] (player, real adapter) and [7] (backfill).
-    const logoBackfill = mayPersistGameGrading()
-      ? {...(upd.homeLogo!==undefined?{homeLogo:upd.homeLogo}:{}),...(upd.awayLogo!==undefined?{awayLogo:upd.awayLogo}:{})}
-      : {};
+    const logoBackfill = mayPersistGameGrading() ? logoBackfillOf(upd) : {};
     saveGame({...stored,homeScore:upd.homeScore,awayScore:upd.awayScore,status:upd.status,actualWinner:upd.actualWinner,kickoff:upd.kickoff,kickoffConfirmed:upd.kickoffConfirmed,kickoffDateOnly:upd.kickoffDateOnly,lastUpdated:upd.lastUpdated,...logoBackfill});
     // v0.17.0 — kickoff system event + SCRIBE live observations
     try {
@@ -22805,6 +23368,89 @@ function matchupBare(game) {
   if (!game) return '';
   const sep = game.neutralSite ? 'vs' : '@';
   return `${teamSchool(game,'away')} ${sep} ${teamSchool(game,'home')}`;
+}
+
+/**
+ * DI-428(c) (2026-09-28, amends DI-331f) — the standard matrix's per-game
+ * row label (`.game-info-cell`'s `.game-info-matchup` line — the one place
+ * this table identifies which game a row is, functionally its "header").
+ * RG-292's finding named this surface explicitly as one DI-331f deliberately
+ * left unconverted; UN-383 asks for it.
+ *
+ * MEASURED (matrixheadertest.mjs [2], ENGINE-MEASURED in headless Chrome
+ * against the real css/styles.css) at the matrix's own two live-app widths —
+ * 1024px, where `.main-content:has(#page-dashboard.active)` first widens to
+ * max-width:1400px and the layout first becomes 'standard' (DI-311), and
+ * 1280px, a common laptop width comfortably inside that cap — against a
+ * realistic six-player, eight-game slate (varied real school-name lengths)
+ * rendered through the REAL `renderDashboardTable()`. RESULT: `.game-info-
+ * cell` and `.dashboard-table` rendered at the IDENTICAL pixel width with
+ * the header logos on as with them off, at both breakpoints (Δ0px; table
+ * layout evidently isn't driven by this column's content width in either
+ * case) — no new horizontal overflow either. The logo therefore renders
+ * unconditionally when there is something to show; had the measurement gone
+ * the other way, this function would return `escHtml(matchupBare(game))`
+ * unconditionally and this comment would say so. The DI's "breaks the
+ * matrix" clause was width-only — it says nothing about row HEIGHT, which
+ * stacking (below) does cost; that cost is measured and stated too
+ * (matrixheadertest.mjs [2], the row-height assertions).
+ *
+ * ROUND 2 (reviewer F1, 2026-09-29) — round 1 laid the logo pair and the
+ * abbreviation out as TWO SIBLINGS in a `display:flex;flex-wrap:wrap` parent
+ * (`.game-info-matchup`), which does not "stack" — it lets the browser
+ * choose, per row, whether they sit side by side or wrap, based on each
+ * row's own content width. At 1024/1280 they sat SIDE BY SIDE (never
+ * "above"); at 375/390 different rows wrapped differently depending on team-
+ * name length, so adjacent rows had different shapes and the row grew ~30px
+ * only on the rows that happened to wrap. It also emitted the "@"/"vs"
+ * separator TWICE — once in `.matrix-hdr-logo-sep` next to the logos, once
+ * again inside `abbr`.
+ *
+ * Fixed by making the two lines a hard TWO-ROW STACK inside their own
+ * `inline-flex;flex-direction:column` wrapper (`.matrix-hdr-block`,
+ * css/styles.css) — never a wrap decision, identical shape at every width —
+ * and dropping the separator from the logo row entirely (it only ever
+ * appears once now, inside `abbr`). `.game-info-matchup` itself is no
+ * longer `display:flex` (round 1 had scoped that rule to the WHOLE class,
+ * which changed the toggle-OFF badge spacing too, unasked — F4); it is back
+ * to its original pre-DI-428(c) declaration, and `.matrix-hdr-block`
+ * carries 100% of the new layout, scoped to logo mode only.
+ *
+ * Falls back to the byte-identical `matchupBare()` string — never a broken
+ * box, never a half-logo row — whenever there is nothing usable to show:
+ * toggle off, both logos missing/opted-out, or a manual game (`isManual`
+ * games have no `homeLogo`/`awayLogo` at all per the data-model factory
+ * default, so `logoOk(null)` already returns null with no extra check
+ * needed — same non-special-casing DI-331f's own compact-chip comment
+ * notes). A single missing side (one team has a logo, the other doesn't)
+ * still renders the pair — the inner `box()` helper draws an empty
+ * placeholder box for the missing side rather than collapsing to text-only,
+ * so the row doesn't jump between a one-logo and a two-logo layout as
+ * different games scroll by.
+ *
+ * CONTENT CHANGE FOR THE LEDGER (coordinator, round 2): in logo mode this
+ * row now shows `shortTeam()` <=4-char abbreviations ("TAMU @ BAMA") where
+ * the matrix previously always showed the full `matchupBare()` school names
+ * ("Texas A&M @ Alabama") — a genuine content change, not merely a visual
+ * one, distinct from the toggle-OFF path which is byte-identical to before.
+ */
+function matrixGameHeaderHTML(game, logoViewOn, shortTeam) {
+  if (!game) return '';
+  const awayUrl = (logoViewOn && !game.isManual) ? logoOk(game.awayLogo) : null;
+  const homeUrl = (logoViewOn && !game.isManual) ? logoOk(game.homeLogo) : null;
+  if (!awayUrl && !homeUrl) return escHtml(matchupBare(game));
+  const sep = game.neutralSite ? 'vs' : '@';
+  // Merge round 2 (2026-09-28) — routed through teamLogoImgHTML() (extracted
+  // by DI-428(b)) so there is ONE `<img>` template across every logo render
+  // path, not a fourth hand-written one; byte-identical output.
+  const box = (url) => url
+    ? `<span class="matrix-hdr-logo-box">${teamLogoImgHTML(url, 'matrix-hdr-logo', 'loading="lazy" ')}</span>`
+    : `<span class="matrix-hdr-logo-box matrix-hdr-logo-missing" aria-hidden="true"></span>`;
+  const abbr = `${escHtml(shortTeam(teamSchool(game,'away')))} ${escHtml(sep)} ${escHtml(shortTeam(teamSchool(game,'home')))}`;
+  return `<span class="matrix-hdr-block">
+    <span class="matrix-hdr-logos">${box(awayUrl)}${box(homeUrl)}</span>
+    <span class="matrix-hdr-abbr">${abbr}</span>
+  </span>`;
 }
 
 /**
@@ -25797,9 +26443,19 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // hold's inert lock — and chat-ui's resetGameChatSheetForTeardown()).
   try {
     const hadLeaguePage = !!document.getElementById('league-page-overlay');
+    // FIX (RG-298, 2026-09-28, reviewer BLOCK B2) — the Leagues Home overlay
+    // (DI-418) is a THIRD full-screen surface that inerts `.main-content`/
+    // `.bottom-nav`/`.app-header` when it opens, same shape as League Page —
+    // this chokepoint had a hideLeaguePageOverlay() twin for League Page but
+    // none for Leagues Home, so a sign-out/expiry/league-switch while it was
+    // open left `inert`/`aria-hidden` on the app shell: the exact "inherited
+    // an app it could not touch" defect F5 (above) already fixed for League
+    // Page, now closed here too.
+    const hadLeaguesHome = !!document.getElementById('leagues-home-overlay');
     const hadChatSheet = !!document.getElementById('chat-sheet-wrap');
     document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove());
     if (hadLeaguePage) hideLeaguePageOverlay();
+    if (hadLeaguesHome) hideLeaguesHomeOverlay();
     if (hadChatSheet) resetGameChatSheetForTeardown();
     // S2-3 (2026-09-26) — every sign-out (drawer, Settings, session expiry,
     // forced) passes through here: close the drawer so it is not left open
@@ -26533,6 +27189,24 @@ function leagueRoleBadgeHTML(role, { leagueId = null } = {}) {
 // copy of it.
 const SIGNUPS_CLOSED_COPY = "New leagues aren't being created right now — check back soon.";
 
+/** The Join form's body (field, error line, button) — ONE markup, two hosts:
+ *  DI-181a's landing card below, and the header pill sheet's "Join a League"
+ *  sheet (`showJoinLeagueSheet()`, REVIEWER ROUND 3 R1). Same ids in both, so
+ *  `bindLeagueJoinForm()` binds either — never a second join implementation. */
+function leagueJoinFormHTML() {
+  const signupsOpen = getCachedSignupsOpen();
+  const disabledAttr = signupsOpen ? '' : 'disabled';
+  const closedNotice = signupsOpen ? '' : `<div class="text-xs mb-sm" style="color:var(--text-muted)">${escHtml(SIGNUPS_CLOSED_COPY)}</div>`;
+  return `${closedNotice}
+        <div class="form-group">
+          <label for="league-join-code">Invitation code</label>
+          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" ${disabledAttr} />
+          <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
+        </div>
+        <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
+        <button type="button" class="btn btn-primary btn-block" id="league-join-btn" ${disabledAttr}>Join League</button>`;
+}
+
 function leagueFlowLandingHTML() {
   // Courtesy client check — DI-344's own "real authority is server" split,
   // the same shape the paused-league banner and every other signups_open
@@ -26550,14 +27224,7 @@ function leagueFlowLandingHTML() {
     <div class="league-flow-row">
       <div class="card">
         <h3>Join a League</h3>
-        ${closedNotice}
-        <div class="form-group">
-          <label for="league-join-code">Invitation code</label>
-          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" ${disabledAttr} />
-          <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
-        </div>
-        <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
-        <button type="button" class="btn btn-primary btn-block" id="league-join-btn" ${disabledAttr}>Join League</button>
+        ${leagueJoinFormHTML()}
       </div>
       <div class="card">
         <h3>Create a League</h3>
@@ -26696,23 +27363,76 @@ function leagueRpcErrorCopy(err) {
 }
 export const _LEAGUE_RPC_ERROR_COPY_FOR_TEST = { map: LEAGUE_RPC_ERROR_COPY, connectivity: LEAGUE_CONNECTIVITY_COPY, unknown: LEAGUE_UNKNOWN_COPY, resolve: leagueRpcErrorCopy };
 
-function bindLeagueFlowScreen(container) {
+/** Binds `leagueJoinFormHTML()`'s button inside `container` — shared by the
+ *  landing (below) and the pill sheet's Join sheet. `onJoined` runs after a
+ *  successful join and before the repaint (the sheet closes itself there).
+ *
+ *  `switchToJoined` (REVIEWER ROUND 4 R3, 2026-09-29) — the pill sheet's
+ *  caller ALREADY has an active league, so the join must not flip the pointer
+ *  on its own (joinLeague()'s `activate:false`); the move to the new league
+ *  then goes through doSwitchActiveLeague() — the "Switching leagues…" cover
+ *  plus switchActiveLeague()'s full adapter step (beginSwitch drops the old
+ *  mirror and Realtime, SWITCHING, hydrate the new league), the same path a
+ *  Leagues Home card tap takes. The zero-league landing keeps the plain
+ *  joinLeague(code): there is no "from" league to tear down there. */
+function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false } = {}) {
   const joinBtn = container.querySelector('#league-join-btn');
   const joinErr = container.querySelector('#league-join-error');
-  joinBtn?.addEventListener('click', async () => {
-    const code = container.querySelector('#league-join-code')?.value || '';
+  const codeInput = container.querySelector('#league-join-code');
+  const submit = async () => {
+    if (!joinBtn || joinBtn.disabled) return;   // in flight, or signups closed
+    const code = codeInput?.value || '';
     if (joinErr) joinErr.style.display = 'none';
     joinBtn.disabled = true; joinBtn.textContent = 'Joining…';
+    const welcome = (joined) => `You're in — welcome to ${joined?.leagueName || 'your new league'}.`;
     try {
-      const joined = await joinLeague(code);
-      showToast(`You're in — welcome to ${joined?.leagueName || 'your new league'}.`, 'success');
-      navigateTo(state.currentTab || 'dashboard');
+      if (!switchToJoined) {
+        // The zero-league landing — unchanged: joinLeague() moves the pointer.
+        const joined = await joinLeague(code);
+        if (onJoined) onJoined(joined);
+        showToast(welcome(joined), 'success');
+        navigateTo(state.currentTab || 'dashboard');
+        return;
+      }
+      // SECURITY NOTE 3 (round 4 gate, 2026-09-29) — the league the player is
+      // switching FROM is read BEFORE the join. The post-refresh pointer is not
+      // evidence: if the returned list no longer holds A and B is its only row,
+      // the refresh auto-resolves the pointer to B through the identity path,
+      // and comparing against THAT would skip the switch and leave A's mirror
+      // under B's pill.
+      const fromLeagueId = getActiveLeagueId();
+      const joined = await joinLeague(code, { activate: false });
+      if (onJoined) onJoined(joined);
+      if (!joined?.leagueId) {
+        // The join went through but the refreshed list did not carry the row
+        // (a race) — nothing to switch to yet, and no league to welcome to.
+        showToast('Joined. Open Your Leagues to switch.', 'success');
+        navigateTo(state.currentTab || 'dashboard');
+      } else if (joined.leagueId === fromLeagueId) {
+        showToast(welcome(joined), 'success');
+        navigateTo(state.currentTab || 'dashboard');
+      } else {
+        // REVIEWER N1 — the welcome is said only once the player IS there: a
+        // failed switch shows doSwitchActiveLeague()'s own error toast instead.
+        const switched = await doSwitchActiveLeague(joined.leagueId);   // cover, adapter switch, its own repaint
+        if (switched) showToast(welcome(joined), 'success');
+      }
     } catch (err) {
       if (joinErr) { joinErr.textContent = leagueRpcErrorCopy(err); joinErr.style.display = 'block'; }
     } finally {
       joinBtn.disabled = false; joinBtn.textContent = 'Join League';
     }
+  };
+  joinBtn?.addEventListener('click', submit);
+  // Interaction Principles §Forms "Advance correctly" — Return/Go on the one
+  // field submits, the same as tapping Join League (both hosts).
+  codeInput?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault?.(); submit(); }
   });
+}
+
+function bindLeagueFlowScreen(container) {
+  bindLeagueJoinForm(container);
   const createBtn = container.querySelector('#league-create-btn');
   const createErr = container.querySelector('#league-create-error');
   createBtn?.addEventListener('click', async () => {
@@ -26848,6 +27568,28 @@ export function patchPlayer(playerId, fields) {
     }
   }
   savePlayer(next);
+  // RG-290 (live v0.27.1, 2026-09-28) — a self-edited alma mater is a CLAIM
+  // CHANGE (AD-34), exactly like Players → Edit's #ep-save and the
+  // activate/deactivate toggle, which both follow savePlayer() with
+  // recomputeAlmaMaterFlags(). This writer — the Control Center Profile pane
+  // AND chat-ui's prefs-panel alma picker both arrive here — never did, so
+  // the stored ⭐ `isAlmaMaterGame` on the open/upcoming slate and the
+  // Available-Games pool kept the OLD claim: the tiebreaker Auto-Calc's
+  // default 'selectedSlateOnly' mode and the slate builder's Tier 1 both read
+  // that stored flag, not the live roster. Only a commissioner's device runs
+  // the re-flag: games/the pool are commissioner-write under RLS
+  // (games_update: is_commissioner). Security F4 (2026-09-28): a player's
+  // device never SENDS game writes — the adapter keeps cfbp_games local for
+  // players (supabase-backend.js ~500/1620) — so an ungated re-flag there
+  // would change that player's own display quietly, NOT raise the banner;
+  // that is why the gate sits here. See the RG-290 ledger row for the
+  // player-device gap this leaves (a non-commissioner's claim change leaves
+  // ⭐ flags stale until a commissioner re-flags).
+  if (Object.prototype.hasOwnProperty.call(patch, 'almaMater')
+      && String(patch.almaMater || '').trim().toLowerCase() !== String(current.almaMater || '').trim().toLowerCase()
+      && getSession()?.isAdmin) {
+    recomputeAlmaMaterFlags(claimedAlmaMaters());
+  }
   return true;
 }
 
@@ -27744,6 +28486,39 @@ export function bindPrelinkBanner(container) {
  * unlike DI-181a's automatic selector, this is a VOLUNTARY reopen by an
  * account that already has a working active league loaded, so cancelling
  * out of it must be possible.
+ *
+ * FIX (RG-298, 2026-09-28, reviewer BLOCK B4) — with exactly ONE membership
+ * this used to render a "Choose a League" modal with a single card and
+ * nothing else — a choice with one option is not a choice. Drew ruling B
+ * (quoted at `_leaguePillClick()`'s own doc comment, above) says the sheet
+ * shows "the one league + Join or Create a League" — the comment there
+ * already claimed this was true; it was not, until now. Coordinator's scope
+ * ruling: append BOTH — reuse only, no new flow:
+ *   - `renderCreateLeagueStubCard()` (js/leagues-home.js) — the SAME
+ *     coming-soon stub card DI-313's Leagues Home already uses (creating an
+ *     ADDITIONAL league is not yet supported; routes through the existing
+ *     document-level `bindComingSoonDispatcher()`, no binding needed here).
+ *   - A "Join a League" row that closes this sheet and opens the Join sheet
+ *     (`showJoinLeagueSheet()`, below) — DI-181a's own join form
+ *     (`leagueJoinFormHTML()` + `bindLeagueJoinForm()`, shared with the
+ *     landing), never a second join implementation.
+ *
+ * REVIEWER ROUND 3 R1 (2026-09-29) — this row used to copy
+ * `showAccountSheet()`'s close/resetLinkFlow()/renderLeagueFlowScreen()
+ * sequence. That sequence only reaches the join form with ZERO memberships:
+ * renderLeagueFlowScreen() routes through resolvePostSignInRoute(), which
+ * returns 'landing' only for an account with no leagues — and this sheet is
+ * reachable only from the header pill, which renders only when a league name
+ * resolves, so every player who could tap the row has ≥1 league and landed on
+ * the Leagues Home card list instead of a join form. `showAccountSheet()`
+ * itself only offers that sequence under `memberships.length === 0`; the
+ * copy took the sequence without the condition. The row now opens the join
+ * form directly, independent of membership count (headermetatest
+ * [pill-2d..2g] drives it with ONE membership). It is a sheet rather than
+ * DI-181a's full landing on purpose: the landing's heading ("You're not in a
+ * league yet") is false for anyone who can see this row, and its Create card
+ * is the real create_league flow — creating an ADDITIONAL league is the
+ * coming-soon stub card this sheet already carries.
  */
 function showLeagueSelectorSheet() {
   const ov = document.createElement('div');
@@ -27751,12 +28526,47 @@ function showLeagueSelectorSheet() {
   ov.innerHTML = `<div class="modal">
     <div class="modal-header"><h3>Choose a League</h3><button class="modal-close" id="league-selector-sheet-close">✕</button></div>
     ${leagueSelectorListHTML()}
+    ${renderCreateLeagueStubCard({ escHtml })}
+    <button type="button" class="btn btn-ghost btn-block mt-sm" id="league-selector-join-btn">Join a League</button>
   </div>`;
   document.body.appendChild(ov);
   const close = () => ov.remove();
   ov.querySelector('#league-selector-sheet-close')?.addEventListener('click', close);
   ov.addEventListener('click', e => { if (e.target === ov) close(); });
   bindLeagueSelectorRows(ov, close);
+  // R1 — straight to the join form, whatever the membership count (see the
+  // doc comment above for why the account sheet's sequence can't be reused).
+  ov.querySelector('#league-selector-join-btn')?.addEventListener('click', () => {
+    close();
+    showJoinLeagueSheet();
+  });
+}
+
+/** REVIEWER ROUND 3 R1 — the pill sheet's "Join a League" destination: the
+ *  SAME modal-overlay sheet shape as `showLeagueSelectorSheet()` above (one
+ *  sheet replacing another, no new presentation pattern), holding DI-181a's
+ *  own join form. A successful join closes the sheet, toasts, and then
+ *  SWITCHES to the new league through doSwitchActiveLeague() — the cover and
+ *  the full adapter switch (R3, see bindLeagueJoinForm()'s `switchToJoined`),
+ *  never joinLeague()'s own pointer move. */
+function showJoinLeagueSheet() {
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay centered';
+  ov.innerHTML = `<div class="modal" id="league-join-sheet">
+    <div class="modal-header"><h3>Join a League</h3><button class="modal-close" id="league-join-sheet-close" aria-label="Close">✕</button></div>
+    ${leagueJoinFormHTML()}
+  </div>`;
+  document.body.appendChild(ov);
+  const close = () => ov.remove();
+  ov.querySelector('#league-join-sheet-close')?.addEventListener('click', close);
+  ov.addEventListener('click', e => { if (e.target === ov) close(); });
+  bindLeagueJoinForm(ov, { onJoined: close, switchToJoined: true });
+  // §Forms "Auto-focus appropriately" — the sheet's only job is this one
+  // field, and this runs inside the row's tap, so iOS raises the keyboard.
+  const codeInput = ov.querySelector('#league-join-code');
+  if (codeInput && !codeInput.disabled) {
+    try { codeInput.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  }
 }
 
 /** DI-181c "Switching leagues…" — the one state that DOES get the full
@@ -27772,11 +28582,16 @@ function showLeagueSwitchOverlay() {
 }
 function hideLeagueSwitchOverlay() { document.getElementById('league-switch-overlay')?.remove(); }
 
+/** Resolves `true` when the switch landed (SWITCH_END), `false` otherwise —
+ *  the join sheet's welcome toast waits on it (round 5, reviewer N1). Every
+ *  other caller ignores the value, as before. */
 export async function doSwitchActiveLeague(leagueId) {
-  if (!leagueId) return;
+  if (!leagueId) return false;
+  let switched = false;
   showLeagueSwitchOverlay();
   try {
     await switchActiveLeague(leagueId);
+    switched = true;
   } catch (e) {
     console.warn('[auth] league switch failed', e);
     showToast("Couldn't switch leagues — check your connection and try again.", 'error');
@@ -27811,6 +28626,7 @@ export async function doSwitchActiveLeague(leagueId) {
     refreshHeader();
     navigateTo(state.currentTab || 'dashboard');
   }
+  return switched;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -27873,10 +28689,32 @@ function _setLeaguePageOverlayInert(on) {
   // separately, below, as defense in depth); without inerting the header,
   // that button stayed tappable — reachable by touch, keyboard AND scripted
   // click — while this overlay sat over everything else, opening the
-  // control-center drawer (Sign Out, Switch League, Profile) over a League
-  // Page the player should not even be able to reach without a working
-  // active league. Belt-and-suspenders with the z-index fix directly above
+  // control-center drawer (DI-421: Sign Out and Your Leagues now live one
+  // tap deeper in Profile, but the drawer itself is still reachable here)
+  // over a League Page the player should not even be able to reach without
+  // a working active league. Belt-and-suspenders with the z-index fix directly above
   // this function's own CSS rule (css/styles.css).
+  for (const sel of ['.main-content', '.bottom-nav', '.app-header']) {
+    document.querySelectorAll(sel).forEach(el => {
+      if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+      else { el.removeAttribute('inert'); el.removeAttribute('aria-hidden'); }
+    });
+  }
+}
+
+/**
+ * DI-418 (UN-373, 2026-09-28) — the Leagues Home overlay's own inert sweep.
+ * Duplicates `_setLeaguePageOverlayInert()`'s SHAPE (same three selectors,
+ * same hold-gate deference, same reasoning) rather than sharing the function
+ * — this overlay and League Page are never open at the same time (Leagues
+ * Home closes itself, via `bindLeagueSelectorRows()`'s `afterPick`, before
+ * opening League Page for the active-league card), so there is no ordering
+ * hazard either function needs to know about the other's existence to
+ * avoid; a short, occasionally-duplicated pattern, matching this file's own
+ * `isBlockedByOtherSurface()`/`_dismissBlockingSurfaceUp()` precedent.
+ */
+function _setLeaguesHomeOverlayInert(on) {
+  if (!on && _appContentInert) return;
   for (const sel of ['.main-content', '.bottom-nav', '.app-header']) {
     document.querySelectorAll(sel).forEach(el => {
       if (on) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
@@ -27960,16 +28798,21 @@ function renderLeaguePageOverlayBody() {
 // self-block on touchstart, since each of these overlays' own presence is
 // one of THAT function's suspending conditions. A short, occasionally-
 // duplicated list, not a cycle.
-function _dismissBlockingSurfaceUp({ excludeWizard = false } = {}) {
+function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome = false } = {}) {
   if (document.getElementById('site-gate-overlay')) return true;
   if (document.querySelector('.modal-overlay')) return true;
   if (document.getElementById('chat-sheet-wrap')) return true;
   if (!excludeWizard && document.getElementById('week-wizard-sheet-wrap')) return true;
+  // DI-418 (2026-09-28) — the Leagues Home overlay is a THIRD full-screen
+  // surface with its own native swipe-back (bindSwipeToDismiss() on
+  // #leagues-home-overlay, mirroring showLeaguePageOverlay()'s own). Same
+  // "OTHER surface" carve-out shape as excludeWizard, just above.
+  if (!excludeLeaguesHome && document.getElementById('leagues-home-overlay')) return true;
   if (document.querySelector('#control-center[data-open="true"]')) return true;
   return false;
 }
 /** The League Page's swipe-back: blocked by any other surface on top,
- *  including the week wizard's sheet. */
+ *  including the week wizard's sheet and the Leagues Home overlay. */
 function isDismissGestureBlockedByOtherSurface() {
   return _dismissBlockingSurfaceUp();
 }
@@ -27980,6 +28823,12 @@ function isDismissGestureBlockedByOtherSurface() {
  *  minus the wizard's own wrap ("OTHER surface" means other than itself). */
 function isWizardDismissGestureBlocked() {
   return _dismissBlockingSurfaceUp({ excludeWizard: true });
+}
+/** DI-418 (2026-09-28) — the Leagues Home overlay's OWN swipe-back. Same
+ *  "OTHER surface" carve-out as the wizard's, just above — minus its own
+ *  `#leagues-home-overlay` entry. */
+function isLeaguesHomeDismissGestureBlocked() {
+  return _dismissBlockingSurfaceUp({ excludeLeaguesHome: true });
 }
 
 /** League Page overlay's own swipe-back: standings -> league one level, or
@@ -28108,6 +28957,102 @@ function hideLeaguePageOverlay() {
   _setLeaguePageOverlayInert(false);
   _leaguePageOverlayView = 'league';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DI-418 (UN-373, 2026-09-28) — LEAGUES HOME OVERLAY
+// Reached from the control center's Profile pane ("Your Leagues" row,
+// `onOpenLeaguesHome` in buildControlCenterCtx()). Mirrors
+// showLeaguePageOverlay() byte-for-byte in structure — same guard, same
+// `data-hold-teardown` sweep target, same inert-sweep shape, same native
+// swipe-back mechanism — a second full-screen PUSH overlay, not a second
+// overlay MECHANISM. Content is `renderLeaguesHome()` (js/leagues-home.js)
+// verbatim, the SAME card list (name, Pilot badge, role badge, chevron,
+// DI-313's "+ Create new league" stub) already built for the boot-time
+// gate (`leagueSelectorHTML()`, above) — reused, not re-implemented.
+// ═══════════════════════════════════════════════════════════════════════════
+let _unbindLeaguesHomeSwipeBack = null;
+
+function renderLeaguesHomeOverlayBody() {
+  const ov = document.getElementById('leagues-home-overlay');
+  if (!ov) return;
+  ov.innerHTML = `<div class="league-page-header">
+      <button type="button" class="league-page-back" data-action="leagues-home-back" aria-label="Back">${icon('chevronLeft')}</button>
+      <h2 class="league-page-title">Your Leagues</h2>
+    </div>
+    <div class="league-page-body">${renderLeaguesHome({
+      memberships: getCachedMemberships(),
+      activeLeagueId: getActiveLeagueId(),
+      isPilotLeague: isMembershipPilot,
+      escHtml, icon,
+      roleBadgeHTML: leagueRoleBadgeHTML,
+      // REVIEWER ROUND 2 D2 (RG-298, 2026-09-28) — the overlay's OWN
+      // `.league-page-title` above already reads "Your Leagues"; suppress
+      // renderLeaguesHome()'s internal section title so the phrase does not
+      // render twice on one screen. The boot-time full-page caller
+      // (leagueSelectorHTML(), unchanged) keeps its title — it has no outer
+      // nav-bar heading of its own.
+      showTitle: false,
+    })}</div>`;
+  ov.querySelector('[data-action="leagues-home-back"]')?.addEventListener('click', hideLeaguesHomeOverlay);
+  // Reuses bindLeagueSelectorRows() verbatim — the SAME row binder the
+  // header pill's sheet and the boot-time full-page selector both already
+  // use (DI-184f "no second selector implementation," DI-312's own
+  // extension of that rule to card markup). Tapping the ACTIVE league's own
+  // card closes THIS overlay first (afterPick) before opening League Page —
+  // bindLeagueSelectorRows()'s own logic, unchanged.
+  bindLeagueSelectorRows(ov, hideLeaguesHomeOverlay);
+}
+
+function settleLeaguesHomeSwipe(el, { dismissed, reducedMotion } = {}) {
+  el.removeAttribute('data-dragging');
+  if (!dismissed) {
+    el.style.setProperty('--leagues-home-drag-x', '0');
+    return;
+  }
+  finishSlideThenRemove({
+    listenEl: el,
+    apply: () => el.style.setProperty('--leagues-home-drag-x', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => hideLeaguesHomeOverlay(),
+  });
+}
+export const _settleLeaguesHomeSwipeForTest = settleLeaguesHomeSwipe;
+
+function showLeaguesHomeOverlay() {
+  // SECURITY GATE FINDING 1 (2026-09-25) — same guard showLeaguePageOverlay()
+  // carries: never open another body-appended overlay while content is
+  // withheld, even one a later teardown pass would immediately sweep.
+  if (isContentWithheld()) return;
+  document.getElementById('leagues-home-overlay')?.remove();
+  const el = document.createElement('div');
+  el.id = 'leagues-home-overlay';
+  el.setAttribute('data-hold-teardown', '');
+  document.body.appendChild(el);
+  renderLeaguesHomeOverlayBody();
+  _setLeaguesHomeOverlayInert(true);
+  _unbindLeaguesHomeSwipeBack?.();
+  _unbindLeaguesHomeSwipeBack = bindSwipeToDismiss(el, {
+    axis: 'x',
+    getBlocked: isLeaguesHomeDismissGestureBlocked,
+    getDistancePx: () => el.getBoundingClientRect().width || window.innerWidth || 1,
+    onProgress: (progress) => {
+      el.setAttribute('data-dragging', 'true');
+      el.style.setProperty('--leagues-home-drag-x', String(progress));
+    },
+    onSettle: (result) => settleLeaguesHomeSwipe(el, result),
+  });
+}
+
+function hideLeaguesHomeOverlay() {
+  _unbindLeaguesHomeSwipeBack?.();
+  _unbindLeaguesHomeSwipeBack = null;
+  document.getElementById('leagues-home-overlay')?.remove();
+  _setLeaguesHomeOverlayInert(false);
+}
+export const _showLeaguesHomeOverlayForTest = showLeaguesHomeOverlay;
+export const _hideLeaguesHomeOverlayForTest = hideLeaguesHomeOverlay;
+export const _isLeaguesHomeDismissGestureBlockedForTest = isLeaguesHomeDismissGestureBlocked;
+
 // SECURITY GATE FINDING 1 (2026-09-25) test-only seams — same `_xForTest`
 // convention as every other seam in this file. `tearDownRenderedContentForHold`/
 // `_setAppContentInert` are the hold gate's own mechanism; `showLeaguePageOverlay`/
@@ -28745,14 +29690,17 @@ function bindWeekWizardStep4(bodyEl, week) {
   bodyEl.querySelector('#wiz-step4-next')?.addEventListener('click', () => {
     saveWizardTiming(bodyEl, week);
     // REVIEWER BLOCK item 5 (916bdb7 review, 2026-09-25) — UN-295's ≤6-tap
-    // budget. Step 5 (announce) is OPTIONAL and, on a fresh forward pass,
-    // ALWAYS blank — landing on it still cost a real tap (Skip) to move
-    // past nothing, making the no-announcement path 7 taps instead of 6.
-    // Forward navigation now skips straight to Step 6; Step 5 stays fully
-    // reachable — Step 6's own "Add an announcement" row (below) and its
-    // existing Back button both still land on it — for the commissioner who
-    // actually wants to type something, which is real, opt-in extra work
-    // and correctly costs an extra tap.
+    // budget. Step 5 is OPTIONAL and, on a fresh forward pass, ALWAYS blank
+    // — landing on it still cost a real tap to move past nothing, making
+    // the do-nothing path 7 taps instead of 6. Forward navigation skips
+    // straight to Step 6; Step 5 stays fully reachable — Step 6's own
+    // "Edit weekly blurb" row (below) and its existing Back button both
+    // still land on it — for the commissioner who actually wants to write
+    // one, which is real, opt-in extra work and correctly costs an extra
+    // tap. DI-424 (2026-09-28) repointed Step 5 from a one-time announcement
+    // draft to the persistent week.blurb field — this skip-forward behavior
+    // itself is UNCHANGED by that DI ("this DI does not touch step
+    // navigation").
     _weekWizardStep = 6;
     renderWeekWizardSheetBody();
   });
@@ -28771,40 +29719,56 @@ function sendWizardAnnouncement(text) {
   postCommissionerAnnouncement(text, sess?.playerId || null);
 }
 
-function renderWeekWizardStep5HTML() {
-  return `<div class="admin-section-title">Announce (optional)</div>
-    ${renderWeekWizardAnnounceFieldsHTML()}
-    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-back">Back</button><button type="button" class="btn btn-ghost" id="wiz-step5-skip">Skip</button><button type="button" class="btn btn-primary" id="wiz-step5-send" disabled>Send announcement</button></div>`;
+/**
+ * DI-424 (UN-379, coordinator addendum to the UX Revamp v0.27.2 batch,
+ * 2026-09-28) — Step 5's field, bound to `week.blurb` (the persistent
+ * Picks-page banner, `js/app.js:9275-9285`), NOT a one-time announcement.
+ * Same `.form-textarea` class + placeholder convention the standalone
+ * Week-tab card uses (`blurb-input`, ~line 12496) — reused here, not a new
+ * form implementation.
+ */
+function renderWeekWizardBlurbFieldsHTML(week) {
+  return `<div class="form-group">
+      <textarea class="form-textarea" id="wiz-blurb-body" rows="3" placeholder="A note for players, shown on the Picks page all week — rivalry stakes, a reminder, anything.">${escHtml(week?.blurb || '')}</textarea>
+    </div>`;
 }
-function bindWeekWizardStep5(bodyEl) {
-  const body = bodyEl.querySelector('#wiz-announce-body');
-  const sendBtn = bodyEl.querySelector('#wiz-step5-send');
-  body?.addEventListener('input', () => { if (sendBtn) sendBtn.disabled = !body.value.trim(); });
-  // DI-354 (UN-312) — Step 5 was the one step in the create-flow with no Back
-  // button (verified: Steps 2/3/4/6 already have one). Same discard-confirm
-  // judgment Skip already uses (`WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM`) — a
-  // drafted-but-unsent announcement is never silently discarded, whichever
-  // button leaves the step.
+/** Reuses the SAME saveWeek() call the standalone Week-tab blurb card
+ *  already uses (`save-blurb-btn`'s handler, ~line 14626) — not a second
+ *  write path for the same field. RG-256 class: re-read the mirror's
+ *  current row first, same as every other Next-handler save in this
+ *  wizard (`saveWizardTiming()`'s own `liveWeek`).
+ *  REVIEWER ROUND 2, N1 (2026-09-28) — Step 5's Next fired this on EVERY
+ *  advance, even when the field was untouched or still blank, writing an
+ *  identical value and toasting "Blurb saved" for a save that changed
+ *  nothing. Now a no-op (no write, no toast) unless the typed value
+ *  actually differs from the week's current blurb. */
+function saveWizardBlurb(bodyEl, week) {
+  const value = bodyEl.querySelector('#wiz-blurb-body')?.value || '';
+  const liveWeek = getWeek(week.weekId) || week;
+  if (value === (liveWeek.blurb || '')) return;
+  saveWeek({ ...liveWeek, blurb: value });
+  // Same toast the standalone Week-tab card's own save gives (`showToast('Blurb saved','success')`,
+  // ~line 14627) — one consistent feel for the same field, edited from either surface.
+  showToast('Blurb saved', 'success');
+}
+/** Test-only seam, same `_xForTest` convention as `_saveWizardTimingForTest`. */
+export const _saveWizardBlurbForTest = saveWizardBlurb;
+
+function renderWeekWizardStep5HTML(week) {
+  return `<div class="admin-section-title">Weekly Blurb (optional)</div>
+    ${renderWeekWizardBlurbFieldsHTML(week)}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step5-next">Next</button></div>`;
+}
+function bindWeekWizardStep5(bodyEl, week) {
+  // Back discards this step's own local edit, same convention every other
+  // step's Back button already uses (e.g. Step 4's Back does not call
+  // saveWizardTiming()) — only Next commits.
   bodyEl.querySelector('#wiz-step5-back')?.addEventListener('click', () => {
-    if (body && body.value.trim() && !confirm(WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM)) return;
     _weekWizardStep = 4;
     renderWeekWizardSheetBody();
   });
-  bodyEl.querySelector('#wiz-step5-skip')?.addEventListener('click', () => {
-    if (body && body.value.trim() && !confirm(WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM)) return;
-    _weekWizardStep = 6;
-    renderWeekWizardSheetBody();
-  });
-  sendBtn?.addEventListener('click', () => {
-    const text = (body?.value || '').trim();
-    if (!text) return;
-    try {
-      sendWizardAnnouncement(text);
-      showToast('✅ Announcement sent', 'success');
-    } catch (e) {
-      console.warn('[week-wizard] announcement send failed', e);
-      showToast('Could not send announcement', 'error');
-    }
+  bodyEl.querySelector('#wiz-step5-next')?.addEventListener('click', () => {
+    if (week) saveWizardBlurb(bodyEl, week);
     _weekWizardStep = 6;
     renderWeekWizardSheetBody();
   });
@@ -28897,7 +29861,7 @@ function renderWeekWizardStep6HTML(week, games) {
     ${scheduleFieldHTML}
     <div id="wiz-schedule-refusal" class="text-sm" style="color:var(--loss)"></div>
     ${blockedBannerHTML}
-    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-announce">Add an announcement</button>
+    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-blurb">Edit weekly blurb</button>
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step6-back">Back</button>
     <button type="button" class="btn btn-primary" id="wiz-open-btn" ${finishDisabled ? 'disabled' : ''}>${escHtml(finishLabel)}</button></div>`;
 }
@@ -28905,8 +29869,12 @@ function bindWeekWizardStep6(bodyEl, week, games) {
   bodyEl.querySelector('#wiz-step6-back')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
   // REVIEWER BLOCK item 5 — the discoverable, intent-labeled path to Step 5
   // now that forward navigation (Step 4's "Next") skips it by default. Same
-  // destination "Back" already goes to; this one names what it's for.
-  bodyEl.querySelector('#wiz-step6-announce')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
+  // destination "Back" already goes to; this one names what it's for. DI-424
+  // (2026-09-28) renamed both the button and its id (was
+  // `#wiz-step6-announce` / "Add an announcement") to match Step 5's new
+  // identity — its destination changed meaning, so leaving the old label
+  // pointing at a blurb textarea would have been a stale, misleading copy.
+  bodyEl.querySelector('#wiz-step6-blurb')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
 
   // DI-357 — the tiebreaker question, saved through the SAME write path
   // (applyTiebreakerQuestion() + saveWeek()) the standalone card's own
@@ -29486,7 +30454,7 @@ function renderWeekWizardSheetBody() {
   else if (_weekWizardStep === 2) { bodyEl.innerHTML = renderWeekWizardStep2HTML(week); bindWeekWizardStep2(bodyEl, week); }
   else if (_weekWizardStep === 3) { bodyEl.innerHTML = renderWeekWizardStep3HTML(games); bindWeekWizardStep3(bodyEl, week, games); }
   else if (_weekWizardStep === 4) { bodyEl.innerHTML = renderWeekWizardStep4HTML(week, games); bindWeekWizardStep4(bodyEl, week); }
-  else if (_weekWizardStep === 5) { bodyEl.innerHTML = renderWeekWizardStep5HTML(); bindWeekWizardStep5(bodyEl); }
+  else if (_weekWizardStep === 5) { bodyEl.innerHTML = renderWeekWizardStep5HTML(week); bindWeekWizardStep5(bodyEl, week); }
   else { bodyEl.innerHTML = renderWeekWizardStep6HTML(week, games); bindWeekWizardStep6(bodyEl, week, games); }
 }
 

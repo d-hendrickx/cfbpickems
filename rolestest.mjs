@@ -118,6 +118,10 @@ console.log('\n── canOperateCard() — DI-320 per-card operability table ─
   const ADMIN_ONLY_ROWS = [
     'espn-source', 'data-proof', 'users-across-leagues', 'platform-admins',
     'pilot-league-flag', 'export-data', 'background-jobs', 'feedback-bug-reports',
+    // DI-425 (UN-380, coordinator addendum, 2026-09-28) — moved from
+    // Comm→SCRIBE, all three 'admin' scope (see this file's own
+    // CARD_OPERABILITY comment for why none is commissioner-RLS-gated).
+    'scribe-digest-export', 'scribe-post-queue', 'chat-diagnostics',
   ];
   const COMMISSIONER_ROWS = [
     'data-source-mode', 'demo-simulation', 'account-linking', 'auto-refresh',
@@ -137,7 +141,7 @@ console.log('\n── canOperateCard() — DI-320 per-card operability table ─
 
   assert(ADMIN_ONLY_ROWS.length + COMMISSIONER_ROWS.length + 1 /* scribe-training, pilot-gated */
     === Object.keys(CARD_OPERABILITY).length,
-    'fixture check — the two lists above (21 total: 8 admin-operable + 13 commissioner-operable, scribe-model among the latter since reviewer round 2, 2026-09-25) plus the one pilot-gated card account for every row in CARD_OPERABILITY',
+    'fixture check — the two lists above (24 total: 11 admin-operable [8 + DI-425\'s 3] + 13 commissioner-operable, scribe-model among the latter since reviewer round 2, 2026-09-25) plus the one pilot-gated card account for every row in CARD_OPERABILITY',
     `table has ${Object.keys(CARD_OPERABILITY).length} rows, fixture covers ${ADMIN_ONLY_ROWS.length + COMMISSIONER_ROWS.length + 1}`);
 
   const leagueA = { id: 'LA', pilot: false };
@@ -282,19 +286,50 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // wireCollapsibleSections(c) for real, plus the DI-405/DI-408 stale-
   // comment fixes above these sites) — line numbers only, same three
   // sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (UX Revamp v0.27.2, DI-418/421/422/423 —
+  // buildControlCenterCtx()'s new almaMaterOptionsHTML body + onOpenLeaguesHome
+  // callback, above the SECOND 'app.js' pin here and everything below it) —
+  // line numbers only, same sites, matched by exact text.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+
   const ENUMERATED_CALL_SITES = [
     // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
     // pass — code added above both sites shifted their line numbers only;
     // same two sites, matched by exact text).
-    { file: 'app.js', line: 3801, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
-    { file: 'app.js', line: 13173, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    // Re-derived 2026-09-28 (merge round 2 — feat/wizard-admin-v0272's
+    // reviewer round 2 fixes merged with release/v0.27.2 (feat/logos-
+    // surfaces-v0272, hotfix/composer-focus-sweep, hotfix/cc-alma-admin,
+    // hotfix/scribe-autonomous-rpc-catch) — line numbers only, same two
+    // sites, matched by exact text against the merged tree.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+    { file: 'app.js', line: 3840, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', line: 13586, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
     // UX Revamp wiring pass 3a (2026-09-25) — renderAdminPage()'s own
     // cross-league users-read gate (WIRING_CHECKLIST_B_092526.md
     // §Window(b)): only fetch listUsersAcrossLeagues() when the composed
     // viewer bag says isPlatformAdmin, the same chrome-gating shape every
     // other enumerated site here already uses. Text updated, wiring pass
     // 3a-bis (BLOCK 2's `attempted` guard replaces `rows == null`).
-    { file: 'app.js', line: 13584, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+    { file: 'app.js', line: 14084, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
   ];
 
   function findIdentifierHits(src, ident) {
@@ -390,8 +425,21 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // in-memory provider cache added code ahead of it, at several points
   // throughout this file).
   // Re-derived 2026-09-26 (v0.26.0 stamp + full-app review fix window): line numbers only, same sites, same texts, matched by exact text.
+  // FOUND ON release/v0.27.2's OWN tip, independent of any feat-branch merge
+  // (confirmed: `node rolestest.mjs` is red on release/v0.27.2 by itself) —
+  // NOT introduced by this merge, fixed here because it blocks a green run
+  // of this suite post-merge either way, and flagged to design-matrix-pm so
+  // release/v0.27.2's own thread patches it too. hotfix/cc-alma-admin's RG-293
+  // fix (`refreshPlatformAdminFlags()`, js/auth.js:1882) added a SECOND
+  // early-return branch inside the SAME canonical derivation function this
+  // list's own reasoning already names as allowed ("the real derivation lives
+  // in _recomputeSynthesizedSession()/_refreshPlatformAdminFlags()") — a
+  // no-session fail-closed return, `{ isPlatformAdmin: false, isSuperAdmin:
+  // false }`, sibling to the existing `isPlatformAdmin: !!admin,` return a few
+  // lines later in the same function. Re-derived 2026-09-28 (merge round 2).
   const AUTH_JS_ENUMERATED_HITS = [
-    { line: 3196, text: 'isPlatformAdmin: !!admin,' },
+    { line: 1892, text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
+    { line: 3261, text: 'isPlatformAdmin: !!admin,' },
   ];
   const authHits = allHits.filter((h) => h.file === 'auth.js'
     && !AUTH_JS_ENUMERATED_HITS.some((c) => c.line === h.line && c.text === h.text));
@@ -935,14 +983,43 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // wireCollapsibleSections(c) for real, plus the DI-405/DI-408 stale-
   // comment fixes above these sites) — line numbers only, same five sites,
   // matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (UX Revamp v0.27.2, DI-418/421/422/423 —
+  // same additions as the isPlatformAdmin allow-list above, above every
+  // 'app.js' pin here except the first) — line numbers only, same five
+  // sites, matched by exact text.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+
+  // Re-derived 2026-09-28 (DI-424/425/428(b) — the Weekly Blurb wizard step,
+  // the Extra Point "Extra Games" collapsible wrapper, the three Admin→Data
+  // card bodies, and the Games-tab slate-row logo helpers all land ahead of
+  // some or all of these sites) — line numbers only, same five sites,
+  // matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (REVIEWER ROUND 2 merge — feat/control-center-v0272's
+  // round 2 (B1-B4/D1-D2, RG-298) merged with release/v0.27.2's own reviewer
+  // round 2 B1/B2/B3/N1 fixes — line numbers only, same five sites, matched
+  // by exact text against the merged tree.
+  // Re-derived 2026-09-29 (MERGE — feat/gestures-v0272 rounds 2–3 (Opus) and
+  // feat/control-center-v0272 rounds 2–5 (Opus) merged into release/v0.27.2:
+  // picksShowingWeek(), the Picks swipe getState() rewrite, showJoinLeagueSheet(),
+  // leagueJoinFormHTML()/bindLeagueJoinForm(), patchProfileAlmaMaterOptionsInPlace()
+  // and doSwitchActiveLeague()'s boolean return all sit above one or more of
+  // these sites) — line numbers only, same sites, matched by exact text against
+  // the MERGED tree.
+  // Re-derived 2026-09-29 (v0.27.2 STAMP — the WHATS_NEW v0.27.2 entry at app.js:102 sits above every site) — line numbers only, matched by exact text.
   const ENUMERATED_SUPER_CALL_SITES = [
-    { file: 'app.js', line: 3802, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 13174, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 13561, text: 'if (viewer.isSuperAdmin) {' },
+    { file: 'app.js', line: 3841, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 13587, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 14061, text: 'if (viewer.isSuperAdmin) {' },
     // Text updated, wiring pass 3a-bis (BLOCK 2's `attempted` guard replaces
     // `loaded`/`loading`-only).
-    { file: 'app.js', line: 13576, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
-    { file: 'app.js', line: 13769, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
+    { file: 'app.js', line: 14076, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
+    { file: 'app.js', line: 14277, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
   ];
 
   function findIdentifierHitsLocal(src, ident) {
@@ -982,9 +1059,26 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // own instruction — "not a second window"), fed by the same `_refreshPlatformAdminFlags()` —
   // but exposed as `getIsSuperAdmin()`, a differently-spelled identifier, for the identical
   // "getSession() stays exactly three keys, and never joins this allow-list fence" reason.
-  const superAuthHits = allSuperHits.filter((h) => h.file === 'auth.js');
+  //
+  // ONE enumerated exception added, merge round 2 (2026-09-28) — SAME finding
+  // and SAME reasoning as AUTH_JS_ENUMERATED_HITS's own dated note above:
+  // found already-red on release/v0.27.2's own tip, not introduced by this
+  // merge. hotfix/cc-alma-admin's RG-293 no-session fail-closed return
+  // (`refreshPlatformAdminFlags()`, js/auth.js:1892) is `{ isPlatformAdmin:
+  // false, isSuperAdmin: false }` — ONE object literal that legitimately
+  // trips BOTH scans, since it is the canonical derivation function's own
+  // fail-closed branch, not a second, independent re-derivation of the flag
+  // anywhere else. This was a hard zero-tolerance check with no exception
+  // mechanism at all (unlike the isPlatformAdmin scan just above) because no
+  // auth.js line had ever legitimately carried the literal `isSuperAdmin`
+  // text before; it now needs the identical one-line allow-list shape.
+  const AUTH_JS_ENUMERATED_SUPER_HITS = [
+    { line: 1892, text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
+  ];
+  const superAuthHits = allSuperHits.filter((h) => h.file === 'auth.js'
+    && !AUTH_JS_ENUMERATED_SUPER_HITS.some((c) => c.line === h.line && c.text === h.text));
   assert(superAuthHits.length === 0,
-    'auth.js carries ZERO literal isSuperAdmin hits — the real derivation lives in _recomputeSynthesizedSession()/_refreshPlatformAdminFlags(), exposed via getIsSuperAdmin() (by design, never on this allow-list)',
+    'auth.js carries ZERO literal isSuperAdmin hits beyond the one enumerated fail-closed-return exception — the real derivation lives in _recomputeSynthesizedSession()/_refreshPlatformAdminFlags(), exposed via getIsSuperAdmin() (by design, never on this allow-list)',
     JSON.stringify(superAuthHits));
 
   // admin-panel.js and control-center.js — DISCOVERED DURING BUILD, NOT built by this pass: a

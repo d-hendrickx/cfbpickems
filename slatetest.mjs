@@ -745,7 +745,17 @@ console.log('\n[10] DI-3 — Available Games filters…');
   const barHtml = renderAvailFilterBar(pool);
   assert(barHtml.includes('avail-national-tv') && barHtml.includes('avail-tight-only'), 'both new checkboxes render with their expected ids');
   assert(/id="avail-national-tv"\s+checked/.test(barHtml), 'the national-TV checkbox reflects state.availFilter.nationalTV=true as checked');
-  assert(barHtml.includes('📺 On National TV') && barHtml.includes('🎯 Tight matchups only'), 'chip copy present and styled with the same avail-chip-label pattern');
+  // Test-plumbing fix (2026-09-29, Testing Protocol 191): the national-TV
+  // chip's glyph is icon('tv') — the Munera family SVG (js/icons.js) — since
+  // D-1's chrome icon migration replaced the 📺 emoji. The exact icon markup
+  // immediately followed by the copy is what renders; the 🎯 chip is still
+  // emoji on this tree. slatetest was not spawned by loadtest.mjs, so the
+  // stale 📺 expectation sat red unread.
+  const { icon: iconFn10 } = await import('./js/icons.js');
+  const TV_ICON10 = iconFn10('tv');
+  assert(TV_ICON10.startsWith('<svg') && TV_ICON10.includes('<rect x="3" y="5" width="18" height="13"'),
+    'fixture check: icon(\'tv\') resolves to the family television SVG (an unknown name returns \'\', which would make the chip/badge checks vacuous)');
+  assert(barHtml.includes(`${TV_ICON10} On National TV`) && barHtml.includes('🎯 Tight matchups only'), 'chip copy present and styled with the same avail-chip-label pattern (national-TV chip carries the family tv icon, not 📺)');
 
   // Reset state for later sections.
   state.availFilter = { groupBy: 'date', conference: '', rank: 'any', almaOnly: false, nationalTV: false, tightOnly: false, search: '' };
@@ -760,15 +770,22 @@ console.log('\n[11] DI-7 — render paths + all add-to-slate paths carry the fie
   const plainGame = G({ gameId: 'rp2', nationalTV: false, broadcastNetwork: null, homeTeam: 'PlainHome', awayTeam: 'PlainAway' });
 
   // ── Commissioner-only surfaces DO show the badge ──
+  // The badge is `${icon('tv')} ${network}` since D-1's icon migration (was
+  // `📺 ${network}`). Assert the exact family SVG immediately followed by the
+  // network name — dropping the badge, the icon, or the network all go red.
+  const { icon: iconFn11 } = await import('./js/icons.js');
+  const TV_ICON11 = iconFn11('tv');
+  assert(TV_ICON11.startsWith('<svg') && TV_ICON11.includes('<rect x="3" y="5" width="18" height="13"'),
+    'fixture check: icon(\'tv\') resolves to the family television SVG (not vacuous)');
   const availHtml = renderAvailableGamesList([tvGame, plainGame], [], WEEK);
   assert(availHtml.includes('TVHome') && availHtml.includes('national-tv-badge'), 'renderAvailableGamesList(): national-tv-badge renders for a nationalTV game');
-  assert(availHtml.includes('📺 FOX'), 'renderAvailableGamesList(): badge shows the network name, not a generic label');
+  assert(availHtml.includes(`${TV_ICON11} FOX`), 'renderAvailableGamesList(): badge shows the tv icon followed by the network name, not a generic label');
   const plainSection = availHtml.slice(availHtml.indexOf('PlainHome') - 50, availHtml.indexOf('PlainHome') + 400);
   assert(!plainSection.includes('national-tv-badge'), 'a non-nationalTV game in the SAME list gets no badge');
 
   const adminHtml = renderAdminGamesList([tvGame], WEEK, {});
-  assert(adminHtml.includes('TVHome') && adminHtml.includes('national-tv-badge') && adminHtml.includes('📺 FOX'),
-    'renderAdminGamesList() (Selected Slate) also shows the 📺 badge');
+  assert(adminHtml.includes('TVHome') && adminHtml.includes('national-tv-badge') && adminHtml.includes(`${TV_ICON11} FOX`),
+    'renderAdminGamesList() (Selected Slate) also shows the tv-icon badge with the network name');
 
   // ── DI-7's named highest-risk item: the hand-built Available Games payload
   //    must carry the fields, not just spread them free. Extract the EXACT
@@ -783,7 +800,7 @@ console.log('\n[11] DI-7 — render paths + all add-to-slate paths carry the fie
   // ── Player-facing surface does NOT show the badge, but genuinely rendered ──
   const playerCard = renderGameCard(tvGame, null, 'pending', false, false);
   assert(playerCard.includes('TVHome') && playerCard.includes('TVAway'), 'fixture check: renderGameCard() genuinely rendered this game (not a vacuous pass)');
-  assert(!playerCard.includes('national-tv-badge') && !playerCard.includes('📺'),
+  assert(!playerCard.includes('national-tv-badge') && !playerCard.includes('📺') && !playerCard.includes(TV_ICON11),
     'renderGameCard() (Picks page / Dashboard) shows NO national-TV badge — deliberate DI-7 scope boundary');
 
   // ── CSV export ──

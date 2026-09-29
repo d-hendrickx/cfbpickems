@@ -236,6 +236,22 @@ console.log('\n[4] renderLeaguesHome()');
   assert(html.includes('IRB Football') && html.includes('Test League'), 'both league cards render');
   assert(html.indexOf('data-action="coming-soon"') > html.lastIndexOf('data-action="switch-league"'), 'the Create-League stub card is the LAST card in the list');
   assert(html.includes(escHtml(COMING_SOON_COPY.createLeague)), 'the stub card carries the exact DI-313 toast copy');
+
+  // REVIEWER ROUND 2 D2 (RG-298, 2026-09-28) — `showTitle` (default true):
+  // the boot-time full-page caller keeps its own "Your Leagues" section
+  // title (unchanged call shape, no `showTitle` argument at all); the
+  // Leagues Home OVERLAY passes `showTitle: false` because it already has
+  // its own nav-bar title one level up.
+  assert(html.includes('admin-section-title">Your Leagues<'), 'default (no showTitle argument) still renders the internal "Your Leagues" section title — the boot-time caller\'s shape is unchanged');
+  const noTitleHtml = renderLeaguesHome({ memberships: two, escHtml, roleBadgeHTML, showTitle: false });
+  assert(!noTitleHtml.includes('admin-section-title">Your Leagues<'), 'D2: showTitle:false suppresses ONLY the internal section title');
+  assert(noTitleHtml.includes('IRB Football') && noTitleHtml.includes('Test League') && noTitleHtml.includes('data-action="coming-soon"'),
+    'D2: …while the card list itself (including the Create-League stub) is completely unaffected');
+  // The loading skeleton also respects showTitle — the OVERLAY can be
+  // mid-loading too, same rule.
+  const loadingNoTitle = renderLeaguesHome({ loading: true, escHtml, showTitle: false });
+  assert(!loadingNoTitle.includes('admin-section-title">Your Leagues<') && loadingNoTitle.includes('aria-busy="true"'),
+    'D2: the loading skeleton also suppresses the title under showTitle:false, while staying aria-busy');
 }
 
 console.log('\n[5] comingSoonCopy() / COMING_SOON_COPY — exact DI-313/DI-316 strings');

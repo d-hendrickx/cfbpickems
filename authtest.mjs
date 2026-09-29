@@ -526,9 +526,17 @@ console.log('\n[3] DI-184 — the active-league pill + DI-184d\'s single-source 
   app.renderLeaguePill();
   assert(pill.hidden === false && pill.innerHTML.includes('League A'),
     'SINGLE membership: the pill STILL renders — DI-184b\'s approved text, for every account, not only multi-league ones (reviewer B4 reverting D-2)');
-  assert(pill.listenerCount('click') === 0, 'single membership: NO click handler — a static label is not a control (DI-184b)');
-  assert(pill.getAttribute('role') === null, 'single membership: no button role');
-  assert(!pill.innerHTML.includes('▾'), 'single membership: no caret (DI-184g — a caret implies interactivity)');
+  // AMENDMENT (DI-418, dated 2026-09-28, Drew ruling B, quoted in full in
+  // js/app.js's own doc comment above _leaguePillClick()) — DI-184b's
+  // static-label rule ("single membership: static label, not a control") is
+  // SUPERSEDED for this pill specifically: tapping the league name must open
+  // the league-selector sheet even with one membership (the sheet then shows
+  // the one league + Join or Create a League). The `memberships.length > 1`
+  // gate on `interactive` is gone — re-derived from "no control" to "always
+  // a control whenever a name resolves".
+  assert(pill.listenerCount('click') === 1, 'single membership: DI-418 amendment — a click handler IS attached (the pill is always a control now)');
+  assert(pill.getAttribute('role') === 'button', 'single membership: DI-418 amendment — role="button" even with one membership');
+  assert(pill.innerHTML.includes('▾'), 'single membership: DI-418 amendment — the caret renders too (interactivity is no longer gated on membership count)');
 
   // D-2 is gone: document.title is no longer touched by this function at all.
   document.title = 'CFB Pickems';
@@ -569,7 +577,12 @@ console.log('\n[3] DI-184 — the active-league pill + DI-184d\'s single-source 
   assert(htmlSrc.includes('id="league-pill"'),
     'index.html carries id="league-pill" — DI-393 re-adds it as the header\'s league zone, so renderLeaguePill() has a real anchor again in production');
   assert(/<span id="league-pill"/.test(htmlSrc),
-    'and it is a <span>, never a <button> — a tag cannot change at runtime, so the non-interactive (single-league) case has to be the element\'s default shape (DI-184b)');
+    // DI-418 (2026-09-28) — every membership count is now interactive (see
+    // the amendment above), so this is no longer "the non-interactive case's
+    // default shape" — it is simply the element's ONE shape at every state;
+    // role="button"/tabindex are applied dynamically in JS regardless (the
+    // same role="button" <span> pattern the multi-membership pill already used).
+    'and it is a <span>, never a <button> — role/tabindex are applied dynamically in JS at every membership count now (DI-418), never a hardcoded <button>');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2024,9 +2037,13 @@ console.log('\n[17d] THE STATIC RULE — every identity-changing path routes thr
   // demonstrate it would now be caught, rather than asserting that it is absent
   // from code that was just edited to remove it.
   const authMutations = [
+    // Re-derived 2026-09-29 (reviewer round 4 R3): joinLeague()'s refresh now
+    // chooses its preference from the `activate` option; the mutation still
+    // replaces that ONE call with the 1d71cbf shape (bare refresh + trailing
+    // pointer write), so the defect it reintroduces is unchanged.
     ['joinLeague() writes the active-league pointer AFTER the refresh again (the reviewer\'s Finding 1, verbatim)',
       s => s.replace(
-        /const list = await refreshMembershipsAndSession\(\{ preferMemberId: memberId \}\);\n  return \(list \|\| \[\]\)\.find\(m => m\.memberId === memberId\) \|\| null;/,
+        /const list = await refreshMembershipsAndSession\(holdLeagueId \? \{ preferLeagueId: holdLeagueId \} : \{ preferMemberId: memberId \}\);\n  return \(list \|\| \[\]\)\.find\(m => m\.memberId === memberId\) \|\| null;/,
         'const list = await refreshMembershipsAndSession();\n  const joined = (list || []).find(m => m.memberId === memberId) || null;\n  if (joined) setActiveLeagueId(joined.leagueId);\n  return joined;')],
     ['createLeague() writes the pointer after the refresh again',
       s => s.replace(
@@ -2375,6 +2392,7 @@ console.log('\n[18b] Security fix round (2026-09-25), FINDING 1 — the platform
   // session (a different member signing in without a full reload) inherits
   // the previous account's admin/super-admin chrome.
   resetAll({ rpc: superRpc });
+  storeValidSession(); // security F2 (2026-09-28): the refresh reads only for a proven session
   wireRealAuthUI();
   await auth.refreshPlatformAdminFlags();
   assert(auth.getIsPlatformAdmin() === true && auth.getIsSuperAdmin() === true,
@@ -2386,6 +2404,7 @@ console.log('\n[18b] Security fix round (2026-09-25), FINDING 1 — the platform
   // forceSignedOutSession() — SEC F1's interlock latch — is a SEPARATE exit
   // path from signOut() and must reset the same two caches independently.
   resetAll({ rpc: superRpc });
+  storeValidSession(); // security F2 (2026-09-28): the refresh reads only for a proven session
   wireRealAuthUI();
   await auth.refreshPlatformAdminFlags();
   assert(auth.getIsSuperAdmin() === true, 'fixture check, second path');
@@ -12334,6 +12353,43 @@ console.log('     the League Page\'s inert lock is lifted and the chat sheet\'s 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[62b] REVIEWER ROUND 2 BLOCK B2 (RG-298, 2026-09-28) — the SAME identity-change');
+console.log('      sweep closes the Leagues Home overlay (DI-418) too, lifting its inert lock…');
+{
+  const realWarn = console.warn; const realInfo = console.info;
+  console.warn = () => {}; console.info = () => {};
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uA' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uA', email: 'a@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    const main = new FakeEl(), nav = new FakeEl(), header = new FakeEl();
+    setClassEls('.main-content', [main]); setClassEls('.bottom-nav', [nav]); setClassEls('.app-header', [header]);
+    // Open the Leagues Home overlay through its real opener if this state
+    // allows it, else stand its one effect in exactly as the opener makes it
+    // — same fixture shape as [62]'s League Page fixture, above.
+    app._showLeaguesHomeOverlayForTest?.();
+    let lh = document.getElementById('leagues-home-overlay');
+    if (!lh) {
+      lh = document.createElement('div'); lh.id = 'leagues-home-overlay'; lh.setAttribute('data-hold-teardown', ''); document.body.appendChild(lh);
+      for (const el of [main, nav, header]) { el.setAttribute('inert', ''); el.setAttribute('aria-hidden', 'true'); }
+    }
+    assert('inert' in main.attrs && 'inert' in header.attrs, 'fixture: Leagues Home is open and the app behind it is inert');
+    setClassEls('[data-hold-teardown]', [lh]);
+
+    // Identity change — a DIFFERENT account signs in on the same page (the
+    // BLOCK's own reproduction: sign-out/expiry/league-switch while Leagues
+    // Home is open).
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uB', email: 'b@example.com' }, access_token: 't2', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    assert(lh._removed === true, '62b-1: the Leagues Home overlay is GONE after the identity change');
+    assert(!('inert' in main.attrs) && !('inert' in nav.attrs) && !('inert' in header.attrs) && !('aria-hidden' in main.attrs),
+      '62b-2: …and .main-content / .bottom-nav / .app-header are no longer inert (closed through hideLeaguesHomeOverlay(), not just removed by the generic sweep) — the F5 "inherited an app it could not touch" defect, closed for this overlay too');
+  } finally { console.warn = realWarn; console.info = realInfo; setClassEls('[data-hold-teardown]', []); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[63] SECURITY GATE F3 + REVIEWER B2/R2 (third pass) — the League Page swipe settle:');
 console.log('     Standings->League resets the offset with no transition; a CLOSE plays out, then removes…');
 {
@@ -13681,6 +13737,7 @@ console.log('     chokepoint (applyIdentityDeltaIfChanged(), driven by the real 
     // (wireRealAuthUI(), never a hand-called refreshAuthUI() — reviewer B1's
     // own rule), which is what actually calls applyIdentityDeltaIfChanged().
     resetAll({ rpc: superRpc });
+    storeValidSession(); // security F2 (2026-09-28): the refresh reads only for a proven session
     wireRealAuthUI();
     auth._fireAuthEventForTest('PASSWORD_RECOVERY', { user: { id: 'u-recover', email: 'r@example.com' }, access_token: 't', expires_at: fresh });
     for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
@@ -13699,6 +13756,7 @@ console.log('     chokepoint (applyIdentityDeltaIfChanged(), driven by the real 
     try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
     rpcCalls = [];
     resetAll({ rpc: superRpc });
+    storeValidSession(); // security F2 (2026-09-28): the refresh reads only for a proven session
     wireRealAuthUI();
     auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u-ordinary', email: 'o@example.com' }, access_token: 't', expires_at: fresh });
     for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
@@ -14313,6 +14371,817 @@ console.log('     ACTUALLY parked; nothing parked -> no repaint at all…');
   } finally {
     globalThis.matchMedia = savedMM76;
     console.warn = realWarn76; console.info = realInfo76;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[77F2] security F2 — a signed-out refresh makes NO RPC call and leaves the diagnostic null…');
+{
+  const authF2 = await import('./js/auth.js');
+  const accountBeforeF2 = authF2.getAccountUserId();
+  const hadSessionF2 = authF2.hasValidSupabaseSession();
+  authF2._setAccountUserIdForTest('');
+  authF2._setStoredSessionForTest(null); // signed out: no account AND no proven session
+  authF2._setPlatformAdminFlagsForTest(true, true);
+  const r = await authF2.refreshPlatformAdminFlags();
+  assert(r && r.isPlatformAdmin === false && r.isSuperAdmin === false && authF2.getIsPlatformAdmin() === false && authF2.getIsSuperAdmin() === false,
+    '[77F2-1] with no proven session the refresh resolves both flags FALSE without a read');
+  assert(authF2.getPlatformAdminFlagsError() == null, '[77F2-2] …and records no diagnostic (an anonymous 42501 would otherwise sit there while signed out)');
+  const srcF2 = readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8');
+  const fnF2 = (srcF2.match(/export async function refreshPlatformAdminFlags\(\)\s*\{[\s\S]*?\n\}/) || [])[0] || '';
+  assert(/if \(!_accountUserId && !hasValidSupabaseSession\(\)\) \{/.test(fnF2) && fnF2.indexOf('if (!_accountUserId && !hasValidSupabaseSession()) {') < fnF2.indexOf('rpc('),
+    '[77F2-3] structural: the no-session early return sits BEFORE any rpc() call (mutant: remove it → red)');
+  if (hadSessionF2) authF2._setStoredSessionForTest({ access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  authF2._setAccountUserIdForTest(accountBeforeF2); // restore for the blocks that follow
+}
+
+console.log('\n[77S1] RG-293 reviewer S1 — an identity-epoch bump fails the admin flags CLOSED (a previous account\'s TRUE flags never survive a direct account change)…');
+{
+  const auth77 = await import('./js/auth.js');
+  auth77._setAccountUserIdForTest('user-A-77S1');
+  auth77._setPlatformAdminFlagsForTest(true, true);
+  const before = { p: auth77.getIsPlatformAdmin(), s: auth77.getIsSuperAdmin() };
+  assert(before.p === true && before.s === true, '[77S1-0] fixture: both flags TRUE for identity A (via the test seam)');
+  const epochBefore = auth77.getIdentityEpoch();
+  auth77._bumpIdentityEpochForTest('test: direct A→B account change, no SIGNED_OUT'); // the exact bump _setAccountUserId() makes
+  assert(auth77.getIdentityEpoch() > epochBefore, '[77S1-0b] fixture: the account change bumped the identity epoch');
+  assert(auth77.getIsPlatformAdmin() === false && auth77.getIsSuperAdmin() === false,
+    '[77S1-1] after the epoch bump both flags read FALSE until B\'s own read lands (fail closed at the epoch, not at the next read)');
+  assert(auth77.getPlatformAdminFlagsError() == null, '[77S1-2] …and the previous identity\'s diagnostic is cleared with them');
+  const src77 = readFileSync(new URL('./js/auth.js', import.meta.url), 'utf8');
+  const epochFn = (src77.match(/function _bumpIdentityEpoch\([^)]*\)\s*\{[\s\S]*?\n\}/) || [])[0] || '';
+  assert(/_isPlatformAdminCache = false;/.test(epochFn) && /_isSuperAdminCache = false;/.test(epochFn) && /_platformAdminFlagsError = null;/.test(epochFn),
+    '[77S1-3] structural: _bumpIdentityEpoch() itself resets both caches and the diagnostic (mutant: remove any one line → red)');
+}
+
+console.log('\n[77] RG-293 (live v0.27.1, 2026-09-28) — "I still cant see the admin panel in the');
+console.log('     control center": the admin-flag read, driven through the REAL vendored SDK\'s');
+console.log('     query builder, lands; the drawer repaints with the Admin rows; a failed read');
+console.log('     leaves no row AND a readable diagnostic…');
+{
+  // WHY THE REAL SDK. supabase-js 2.116.0's `client.rpc()` returns a
+  // PostgrestFilterBuilder — a THENABLE (it has `.then`) that is NOT a Promise
+  // (it has no `.catch`). refreshPlatformAdminFlags() chained `.catch(...)`
+  // straight onto it, which throws a synchronous TypeError into its own
+  // try/catch → "failing closed" → both flags false, on every device, every
+  // boot, since the feature shipped. This file's fake client wraps every rpc in
+  // `Promise.resolve(...)` (makeFakeClient, above), which HAS `.catch` — so
+  // [18b]'s green run could never see it. Here the rpc is the SDK's own
+  // builder, loaded from vendor/ into a separate realm with a scripted fetch.
+  const vm = await import('node:vm');
+  const sdkSrc = readFileSync(new URL('./vendor/supabase-js-2.116.0.js', import.meta.url), 'utf8');
+  const realm = { console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams,
+    Headers, Request, Response, AbortController, TextEncoder, TextDecoder, queueMicrotask, structuredClone,
+    btoa, atob, crypto: globalThis.crypto, WebSocket: globalThis.WebSocket, fetch: async () => { throw new Error('realm fetch unused — global.fetch is injected'); } };
+  realm.globalThis = realm; realm.self = realm; realm.window = realm;
+  vm.createContext(realm);
+  vm.runInContext(sdkSrc, realm);
+  const realSdk = realm.supabase;
+  /** script: { is_platform_admin: fn(): Response|throw, is_super_admin: ... } */
+  const realRpcClient = (script) => realSdk.createClient('https://x.test', 'anon-key', {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: async (url, init) => {
+      const name = String(url).split('/rpc/')[1]?.split('?')[0];
+      const fn = script[name];
+      if (!fn) return new Response(JSON.stringify({ message: `no script for ${name}` }), { status: 404, headers: { 'content-type': 'application/json' } });
+      return fn(init);
+    } },
+  });
+  const ok = (v) => () => new Response(JSON.stringify(v), { status: 200, headers: { 'content-type': 'application/json' } });
+  /** resetAll(), then swap ONLY the fake client's rpc for the real SDK builder. */
+  const resetWithRealRpc = (script, overrides = {}) => {
+    resetAll(overrides);
+    const sdkClient = realRpcClient(script);
+    const fakeFactory = globalThis.window.supabase.createClient;
+    globalThis.window.supabase = {
+      createClient(url, key, opts) { const c = fakeFactory(url, key, opts); c.rpc = (n, p) => sdkClient.rpc(n, p); return c; },
+    };
+    return sdkClient;
+  };
+
+  const warns = []; const realWarn = console.warn; console.warn = (...a) => { warns.push(a.map(String).join(' ')); };
+  const spyUpdates = [];
+  const spy = { close() {}, open() {}, update: (ctx) => spyUpdates.push(ctx), destroy() {}, getState: () => ({ phase: 'closed' }) };
+  const prevApi = app._setControlCenterApiForTest(spy);
+  const cc = await import('./js/control-center.js');
+  const drew = { data: [{ league_id: 'L-IRB', id: 'p_drew', role: 'commissioner', display_name: 'Drew', active: true, leagues: { name: 'IRB' } }], error: null };
+  try {
+    // 77-0 fixture: the SDK's builder really is a thenable without .catch.
+    {
+      const b = realRpcClient({}).rpc('is_platform_admin');
+      assert(typeof b.then === 'function' && typeof b.catch === 'undefined',
+        `77-0 fixture — the vendored SDK's rpc() builder is a thenable with NO .catch (then: ${typeof b.then}, catch: ${typeof b.catch}); this is the shape production sees`);
+    }
+
+    // 77-1 the read itself, through the real builder.
+    resetWithRealRpc({ is_platform_admin: ok(true), is_super_admin: ok(true) });
+    storeValidSession(); // security F2: proven session required for the read
+    warns.length = 0;
+    await auth.refreshPlatformAdminFlags();
+    assert(auth.getIsPlatformAdmin() === true && auth.getIsSuperAdmin() === true,
+      `77-1 THE BUG — refreshPlatformAdminFlags() through the REAL SDK builder resolves Drew's seeded row: isPlatformAdmin ${auth.getIsPlatformAdmin()}, isSuperAdmin ${auth.getIsSuperAdmin()} (warned: ${JSON.stringify(warns)})`);
+    assert(typeof auth.getPlatformAdminFlagsError === 'function' && auth.getPlatformAdminFlagsError() === null,
+      '77-2 a successful read leaves no diagnostic behind');
+
+    // 77-3 the boot order Drew actually takes: session restored → the drawer
+    // is already built with both flags false → memberships land → the flags land
+    // LATER → the drawer must repaint with the Admin rows, through the REAL
+    // listener chain (SIGNED_IN → the identity chokepoint → the flag read → update()).
+    resetWithRealRpc({ is_platform_admin: ok(true), is_super_admin: ok(true) },
+      { getSession: async () => ({ data: { session: { user: { id: 'u-drew' } } } }), from: () => drew });
+    storeValidSession(); // security F2: proven session required for the read
+    app._setControlCenterApiForTest(spy);
+    spyUpdates.length = 0;
+    wireRealAuthUI();
+    storeValidSession();
+    const firstCtx = app._buildControlCenterCtxForTest();
+    assert(firstCtx.flags.isPlatformAdmin === false && !cc.renderStarredPanels(firstCtx).includes('Admin Panel'),
+      '77-3 fixture — the drawer\'s first ctx (before any read) has no Admin row (fail-closed default)');
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u-drew', email: 'drew@example.com' } });
+    for (let i = 0; i < 12; i++) await new Promise((r) => setTimeout(r, 0));
+    const lastCtx = spyUpdates[spyUpdates.length - 1];
+    assert(!!lastCtx && lastCtx.flags.isPlatformAdmin === true && lastCtx.flags.isSuperAdmin === true,
+      `77-4 the flags landing AFTER the first render reach the drawer — its last update() carried isPlatformAdmin/isSuperAdmin true (updates: ${spyUpdates.length}, last: ${JSON.stringify(lastCtx?.flags)})`);
+    const html = lastCtx ? cc.renderStarredPanels(lastCtx) : '';
+    assert(html.includes('Admin Panel') && html.includes('Super Admin Panel') && html.includes('Commissioner Panel'),
+      '77-5 …and that repaint renders the Super Admin, Admin AND Commissioner rows for Drew');
+
+    // 77-6 a FAILED read — the server refuses (e.g. a grant missing) — fails
+    // closed (no row) but is not silent: a diagnostic names the RPC.
+    resetWithRealRpc({
+      is_platform_admin: () => new Response(JSON.stringify({ code: '42501', message: 'permission denied for function is_platform_admin' }), { status: 403, headers: { 'content-type': 'application/json' } }),
+      is_super_admin: ok(false),
+    });
+    storeValidSession(); // security F2: proven session required for the read
+    warns.length = 0;
+    await auth.refreshPlatformAdminFlags();
+    const failCtx = app._buildControlCenterCtxForTest();
+    assert(auth.getIsPlatformAdmin() === false && !cc.renderStarredPanels(failCtx).includes('Admin Panel'),
+      '77-6 a refused read fails CLOSED — no Admin row');
+    const diag = auth.getPlatformAdminFlagsError();
+    assert(!!diag && /is_platform_admin/.test(diag) && /42501|permission denied/.test(diag),
+      `77-7 …and leaves a diagnostic that names the RPC and the server's code (got ${JSON.stringify(diag)})`);
+    assert(warns.some((w) => /is_platform_admin/.test(w)), '77-8 …and the refusal is logged, not swallowed');
+
+    // 77-9 a network failure (fetch rejects) — same: closed, with a diagnostic.
+    resetWithRealRpc({
+      is_platform_admin: () => { throw new TypeError('Failed to fetch'); },
+      is_super_admin: () => { throw new TypeError('Failed to fetch'); },
+    });
+    storeValidSession(); // security F2: proven session required for the read
+    await auth.refreshPlatformAdminFlags();
+    assert(auth.getIsPlatformAdmin() === false && auth.getIsSuperAdmin() === false && !!auth.getPlatformAdminFlagsError(),
+      `77-9 an unreachable server fails closed with a diagnostic too (got ${JSON.stringify(auth.getPlatformAdminFlagsError())})`);
+
+    // 77-10 the diagnostic is identity-scoped: a sign-out clears it with the flags.
+    await auth.signOut();
+    assert(auth.getPlatformAdminFlagsError() === null, '77-10 sign-out clears the diagnostic alongside the flags');
+  } finally {
+    console.warn = realWarn;
+    app._setControlCenterApiForTest(prevApi);
+  }
+}
+
+console.log('\n[77] DI-424/425 (UN-379/380, coordinator addendum, 2026-09-28) — the');
+console.log('     wizard\'s Weekly Blurb step, the Extra Point "Extra Games" collapsible');
+console.log('     wrapper, and the three Comm→SCRIBE tools relocated to Admin→Data…');
+{
+  const realWarn77 = console.warn; const realInfo77 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM77 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u77' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u77', email: '77@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-77', memberId: 'm77', role: 'commissioner', displayName: 'Drew', leagueName: 'League 77' }]);
+    auth.setActiveLeagueId('L-77');
+    auth._setPlatformAdminFlagsForTest(true, false);
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    globalThis.localStorage.removeItem('cfbp_comments');
+
+    // ── (a) DI-424 — the create-flow, Step 1 -> Step 2 -> add a manual game
+    //        -> Step 3 -> Step 4 -> Step 6 (forward skip, unchanged) -> Step
+    //        6's "Edit weekly blurb" -> Step 5, exactly the real path a
+    //        commissioner takes. ─────────────────────────────────────────
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    const wrap77 = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrap77, '[77a] fixture: the sheet opened');
+    const body77 = wrap77.querySelector('#week-wizard-body');
+    body77.querySelector('#wiz-cw-season').value = '2026';
+    body77.querySelector('#wiz-cw-num').value = '77';
+    body77.querySelector('#wiz-cw-round').value = '';
+    body77.querySelector('#wiz-cw-start').value = '2026-10-01';
+    body77.querySelector('#wiz-cw-end').value = '2026-10-07';
+    body77.querySelector('#wiz-step1-create').dispatch('click', { target: body77.querySelector('#wiz-step1-create') });
+    const targetId77 = app._weekWizardSessionForTest().targetWeekId;
+    assert(!!targetId77, '[77a] fixture: Step 1 minted a new draft week');
+
+    body77.querySelector('#wiz-step2-add-manual').dispatch('click', { target: body77.querySelector('#wiz-step2-add-manual') });
+    const ov77 = document.body.lastChild;
+    const setBoth77 = (id, val) => { const g = document.getElementById(id); if (g) g.value = val; const l = ov77.querySelector('#' + id); if (l) l.value = val; };
+    setBoth77('m-home', 'DI424 Home'); setBoth77('m-away', 'DI424 Away');
+    setBoth77('m-home-mascot', ''); setBoth77('m-away-mascot', '');
+    setBoth77('m-kickoff', '2026-10-03T17:00');
+    setBoth77('m-spread-fav', ''); setBoth77('m-spread-margin', '');
+    setBoth77('m-mult-preset', '1'); setBoth77('m-venue', '');
+    setBoth77('m-hconf', ''); setBoth77('m-aconf', ''); setBoth77('m-hrank', ''); setBoth77('m-arank', '');
+    ov77.querySelector('#m-save').dispatch('click', { target: ov77.querySelector('#m-save') });
+    assert(storage.getGames(targetId77).length === 1, '[77a] fixture: the manual game persisted');
+
+    body77.querySelector('#wiz-step2-next').dispatch('click', { target: body77.querySelector('#wiz-step2-next') });
+    assert(app._weekWizardSessionForTest().step === 3, '[77a] fixture: advanced to Step 3');
+    body77.querySelector('#wiz-step3-next').dispatch('click', { target: body77.querySelector('#wiz-step3-next') });
+    assert(app._weekWizardSessionForTest().step === 4, '[77a] fixture: advanced to Step 4');
+    body77.querySelector('#wiz-step4-next').dispatch('click', { target: body77.querySelector('#wiz-step4-next') });
+    assert(app._weekWizardSessionForTest().step === 6,
+      '77-1: Step 4\'s Next still skips straight to Step 6 — DI-424 does not touch step navigation');
+
+    // Step 6's shortcut is now "Edit weekly blurb" (was "Add an announcement").
+    assert(/id="wiz-step6-blurb"[^>]*>Edit weekly blurb</.test(body77.innerHTML),
+      `77-2: Step 6 carries the renamed "Edit weekly blurb" button, not the stale "Add an announcement" (got ${body77.innerHTML.match(/id="wiz-step6-[a-z]+"[^>]*>[^<]*</)?.[0]})`);
+    assert(!/Add an announcement/.test(body77.innerHTML), '77-3: "Add an announcement" text is gone from Step 6 entirely');
+
+    const commentsBefore77 = storage.getComments().length;
+    body77.querySelector('#wiz-step6-blurb').dispatch('click', { target: body77.querySelector('#wiz-step6-blurb') });
+    assert(app._weekWizardSessionForTest().step === 5, '[77a] fixture: "Edit weekly blurb" landed on Step 5');
+
+    // Step 5 itself: title, textarea bound to week.blurb (starts blank — a
+    // brand-new draft), Back/Next only (no Skip/Send, no announce textarea).
+    assert(/Weekly Blurb \(optional\)/.test(body77.innerHTML), '77-4: Step 5\'s title reads "Weekly Blurb (optional)"');
+    assert(!/Announce \(optional\)/.test(body77.innerHTML), '77-5: the old "Announce (optional)" title is gone');
+    // NOTE: FakeEl.querySelector('#id') always returns a (lazily-memoized)
+    // element for ANY id, whether or not that id truly appears in the
+    // rendered markup (it does not parse `.innerHTML`) — so presence/absence
+    // and rendered VALUE checks below go through `.innerHTML` directly, the
+    // same convention [74]'s own "Skip to slate" absence checks use, not
+    // `.querySelector(...)`'s truthiness/`.value`.
+    assert(/id="wiz-blurb-body"/.test(body77.innerHTML), '77-6: the blurb textarea (#wiz-blurb-body) renders');
+    assert(!/id="wiz-announce-body"/.test(body77.innerHTML), '77-7: the OLD announce textarea (#wiz-announce-body) does NOT render on Step 5 anymore');
+    assert(!/id="wiz-step5-send"/.test(body77.innerHTML) && !/id="wiz-step5-skip"/.test(body77.innerHTML),
+      '77-8: neither "Send announcement" nor "Skip" render on the blurb step');
+    assert(/<textarea class="form-textarea" id="wiz-blurb-body"[^>]*>\s*<\/textarea>/.test(body77.innerHTML),
+      `77-9: fixture — a brand-new draft starts with a blank blurb (got ${body77.innerHTML.match(/<textarea class="form-textarea" id="wiz-blurb-body"[^>]*>[\s\S]{0,40}/)?.[0]})`);
+
+    // Type a blurb, click Next — must save via saveWeek(), NOT post an
+    // announcement (storage.getComments() must be byte-identical after).
+    body77.querySelector('#wiz-blurb-body').value = 'Rivalry week — bring your A game.';
+    body77.querySelector('#wiz-step5-next').dispatch('click', { target: body77.querySelector('#wiz-step5-next') });
+    assert(storage.getWeek(targetId77)?.blurb === 'Rivalry week — bring your A game.',
+      `77-10: week.blurb persisted through the SAME saveWeek() call the standalone Week-tab card uses (got ${JSON.stringify(storage.getWeek(targetId77)?.blurb)})`);
+    assert(app._weekWizardSessionForTest().step === 6, '77-11: Next advances back to Step 6');
+    assert(storage.getComments().length === commentsBefore77,
+      `77-12: NO announcement/chat post fired from the wizard's blurb save (comments before=${commentsBefore77}, after=${storage.getComments().length})`);
+
+    // Re-open Step 5 via Back from Step 6 — the just-saved value round-trips
+    // back into the textarea (proves the render side reads week.blurb, not
+    // just the save side writing it).
+    body77.querySelector('#wiz-step6-back').dispatch('click', { target: body77.querySelector('#wiz-step6-back') });
+    assert(app._weekWizardSessionForTest().step === 5, '[77a] fixture: Step 6 Back landed on Step 5');
+    assert(body77.innerHTML.includes('>Rivalry week — bring your A game.</textarea>'),
+      `77-13: the textarea re-renders PRE-FILLED with the just-saved week.blurb value (got ${body77.innerHTML.match(/<textarea class="form-textarea" id="wiz-blurb-body"[^>]*>[^<]*/)?.[0]})`);
+    // Back (not Next) discards without saving — same convention as every
+    // other step's Back button (e.g. Step 4's own).
+    body77.querySelector('#wiz-blurb-body').value = 'this edit should be discarded';
+    body77.querySelector('#wiz-step5-back').dispatch('click', { target: body77.querySelector('#wiz-step5-back') });
+    assert(app._weekWizardSessionForTest().step === 4, '[77a] fixture: Step 5 Back landed on Step 4');
+    assert(storage.getWeek(targetId77)?.blurb === 'Rivalry week — bring your A game.',
+      '77-14: Back discarded the untyped-and-unsaved edit — week.blurb is UNCHANGED');
+
+    app._weekWizardCloseForTest?.();
+
+    // ── (b) DI-424 — Extra Point's "Extra Games" collapsible wrapper,
+    //        default EXPANDED, on the real Comm→Week render. ──────────────
+    const commEl77 = new FakeEl(); commEl77.id = 'page-commissioner'; registry.set('page-commissioner', commEl77);
+    app.state.currentTab = 'commissioner';
+    app.state.commTab = 'week';
+    storage.saveWeek({ ...storage.getWeek(targetId77), status: 'draft' });
+    app.renderCommPage();
+    assert(/<div class="admin-section" data-comm-tab="week">\s*<div class="admin-section-title">Extra Games<\/div>\s*<div class="card mb-md" id="comm-ep-card">/.test(commEl77.innerHTML),
+      `77-15: Extra Point's .admin-section-title "Extra Games" is a DIRECT CHILD SIBLING of .card (the shape wireCollapsibleSections()' CSS combinator requires) (title text present: ${/Extra Games/.test(commEl77.innerHTML)}, exact structural match: ${/<div class="admin-section" data-comm-tab="week">\s*<div class="admin-section-title">Extra Games<\/div>\s*<div class="card mb-md" id="comm-ep-card">/.test(commEl77.innerHTML)})`);
+    assert(!storage.getSettings().commPanelSectionsCollapsed?.['extra-games'],
+      '77-16: fixture — "Extra Games" is NOT pre-collapsed (default expanded, the coordinator\'s own call)');
+    assert(!commEl77.innerHTML.includes('admin-section-collapsed'),
+      '77-17: …and nothing on this render is collapsed by default');
+
+    // ── (c) DI-425 — three tools ABSENT from Comm→SCRIBE, PRESENT on
+    //        Admin→Data with correct titles; Chat diagnostics copy carries
+    //        no "Apps Script" text anywhere in the panel. ──────────────────
+    app.state.commTab = 'scribe';
+    app.renderCommPage();
+    for (const id of ['chat-digest-btn', 'scribe-queue-input', 'scribe-queue-btn', 'chat-diag-btn']) {
+      assert(!commEl77.innerHTML.includes(`id="${id}"`), `77-18/${id}: NOT reachable from Comm→SCRIBE anymore`);
+    }
+    // NOT a blanket "Apps Script" ban on the whole Comm panel — the SCRIBE
+    // Participation card's own, separate, still-accurate "the server SCRIBE
+    // is switched on... Apps Script is still running SCRIBE's unprompted
+    // posts today" sentence is untouched by this DI and stays. Only the
+    // STALE Chat-diagnostics sentence this DI actually rewrote is checked.
+    assert(!/Tests the deployed Apps Script for the chat endpoints/.test(commEl77.innerHTML),
+      '77-19: the stale "Tests the deployed Apps Script..." Chat diagnostics copy is gone from the Comm panel (moved + rewritten)');
+    // The remaining, UNTOUCHED contents of "Chat & S.C.R.I.B.E." stay —
+    // toggles, season recap, backend-load readout.
+    assert(commEl77.innerHTML.includes('id="chat-enabled-toggle"'), '77-20: the chat-enabled toggle is still on Comm→SCRIBE (untouched by this DI)');
+    assert(commEl77.innerHTML.includes('id="season-recap-input"') && commEl77.innerHTML.includes('id="season-recap-save"'),
+      '77-21: the season-recap blurb save is still on Comm→SCRIBE (untouched by this DI)');
+    assert(commEl77.innerHTML.includes('id="chat-metrics-out"'), '77-22: the Backend load readout is still on Comm→SCRIBE (untouched by this DI)');
+    // §16 — the "Chat & S.C.R.I.B.E." title is now a DIRECT CHILD SIBLING of
+    // .card (same shape as (b) above, and the same shape its three
+    // siblings — Participation/Heat/Learning Rate — already have).
+    assert(/<div class="admin-section" data-comm-tab="scribe">\s*<div class="admin-section-title">📋 Chat &amp; S\.C\.R\.I\.B\.E\.<\/div>\s*<div class="card mb-md" id="comm-chat-card">/.test(commEl77.innerHTML),
+      '77-23: "Chat & S.C.R.I.B.E."\'s title is now a direct-child .admin-section-title sibling of .card, same shape as Participation/Heat/Learning Rate');
+
+    const adminEl77 = new FakeEl(); adminEl77.id = 'page-admin'; registry.set('page-admin', adminEl77);
+    app.state.currentTab = 'admin';
+    app.state.adminTab = 'data';
+    app.renderAdminPage();
+    for (const id of ['chat-digest-btn', 'scribe-queue-input', 'scribe-queue-btn', 'chat-diag-btn']) {
+      assert(adminEl77.innerHTML.includes(`id="${id}"`), `77-24/${id}: reachable from Admin→Data`);
+    }
+    assert(adminEl77.innerHTML.includes('Copy Weekly Digest JSON') && adminEl77.innerHTML.includes('Post Queue as SCRIBE') && adminEl77.innerHTML.includes('Chat Diagnostics'),
+      '77-25: all three card titles render on Admin→Data');
+    assert(!/Apps Script/.test(adminEl77.innerHTML), '77-26: zero "Apps Script" mentions on the rendered Admin panel either');
+    // REVIEWER B3 (2026-09-28) — the FIRST rewrite ("Tests the live chat path
+    // end-to-end... Supabase Edge Function chat endpoints") was ALSO wrong
+    // (the check is a read-only chat_head RPC probe, never an Edge Function,
+    // never a send) — this pins the SECOND, corrected copy instead.
+    assert(/Checks this device can read the league's chat log from the server/.test(adminEl77.innerHTML),
+      '77-27: the twice-rewritten Chat diagnostics description (read-only chat_head probe, no "Edge Function"/"end-to-end" claim) is present');
+    assert(!/end-to-end|Edge Function/.test(adminEl77.innerHTML),
+      '77-27b: the FIRST (also-wrong) rewrite\'s "end-to-end"/"Edge Function" language is gone too');
+    assert(!adminEl77.innerHTML.includes('id="chat-digest-btn"'.replace('id=', 'data-comm-tab=')), 'fixture: sanity — no stray Comm attribute leaked onto this string');
+
+    // ── §16 mutation proof — the OLD bug shape (title with no
+    //     .admin-section-title class) is skipped by wireCollapsibleSections(),
+    //     proven directly against the REAL function via its own test seam
+    //     (FakeEl.querySelectorAll() is a stub that always returns [], same
+    //     reason [64g] drives this function directly rather than through the
+    //     full render path). ─────────────────────────────────────────────────
+    assert(typeof app._wireCollapsibleSectionsForTest === 'function', '[77d] fixture: the collapse test seam is exported');
+    function fakeTitleEl77(text) {
+      const t = { textContent: text, _classes: new Set(), _listeners: [], _children: [] };
+      t.classList = { add: (c) => t._classes.add(c), contains: (c) => t._classes.has(c) };
+      t.querySelector = () => null;
+      t.appendChild = (el) => { t._children.push(el); return el; };
+      t.addEventListener = (type, fn) => { if (type === 'click') t._listeners.push(fn); };
+      return t;
+    }
+    function fakeSection77(hasTitleClass) {
+      const sec = { dataset: {}, _classes: new Set() };
+      sec.classList = { add: (c) => sec._classes.add(c), contains: (c) => sec._classes.has(c) };
+      const title = fakeTitleEl77('📋 Chat & S.C.R.I.B.E.');
+      // The FIX: the title carries .admin-section-title, so
+      // sec.querySelector('.admin-section-title') finds it — same
+      // querySelector-by-class contract every other card's fake already
+      // proves at [64g]. The MUTANT (below) simulates the pre-fix bare <h3>
+      // by having querySelector return null instead, exactly reproducing
+      // `wireCollapsibleSections()`'s own `if (!titleEl) return;` early exit.
+      sec.querySelector = (selector) => (hasTitleClass && selector === '.admin-section-title' ? title : null);
+      sec._title = title;
+      return sec;
+    }
+    const fixedCard77 = fakeSection77(true);
+    app._wireCollapsibleSectionsForTest({ querySelectorAll: (sel) => (sel === '.admin-section' ? [fixedCard77] : []) });
+    assert(fixedCard77._title._classes.has('admin-section-title-toggle') && fixedCard77._title._listeners.length === 1,
+      '77-28: FIXED shape — a title carrying .admin-section-title gets the toggle class + a click listener (the card is now collapsible)');
+
+    const mutantCard77 = fakeSection77(false);
+    app._wireCollapsibleSectionsForTest({ querySelectorAll: (sel) => (sel === '.admin-section' ? [mutantCard77] : []) });
+    assert(!mutantCard77._title._classes.has('admin-section-title-toggle') && mutantCard77._title._listeners.length === 0,
+      '77-29: MUTATION-PROOF — the pre-fix shape (bare <h3>, no .admin-section-title) is SKIPPED entirely (titleEl null -> early return) — this is what "Chat & S.C.R.I.B.E." looked like before this DI, and it is what proves the fix is real, not vacuous');
+  } finally {
+    globalThis.matchMedia = savedMM77;
+    console.warn = realWarn77; console.info = realInfo77;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[78] REVIEWER ROUND 2 (2026-09-28) — B1 (renderCommExtrasV16() moved');
+console.log('     ABOVE wireCollapsibleSections(c)), B2 (the three Admin→Data tool handlers');
+console.log('     rebound scoped to #page-admin, no accumulation across an intervening');
+console.log('     renderCommPage()), N1 (saveWizardBlurb() no-ops when unchanged)…');
+{
+  const realWarn78 = console.warn; const realInfo78 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM78 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    // ── (a) B1 — STRUCTURAL, mutation-provable: inside renderCommPage()'s
+    //     OWN body, renderCommExtrasV16(week, games) sits STRICTLY BEFORE
+    //     wireCollapsibleSections(c) — same "char-offset before NOT after"
+    //     discipline as [64g]'s own order proof. ─────────────────────────
+    const { readFileSync: rfs78 } = await import('node:fs');
+    const raw78 = rfs78(new URL('./js/app.js', import.meta.url), 'utf8');
+    const strip78 = (t) => t.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    const src78 = strip78(raw78);
+    const bodyOfFn78 = (text, header) => {
+      const at = text.indexOf(header);
+      if (at < 0) return { at: -1, body: '' };
+      const open = text.indexOf('{', at) + 1;
+      let depth = 1;
+      for (let i = open; i < text.length; i++) {
+        if (text[i] === '{') depth++;
+        else if (text[i] === '}') { depth--; if (depth === 0) return { at, body: text.slice(open, i + 1) }; }
+      }
+      return { at, body: '' };
+    };
+    const checkOrder78 = (body) => {
+      const extrasAt = body.indexOf('renderCommExtrasV16(week, games);');
+      const wireAt = body.indexOf('wireCollapsibleSections(c);');
+      return { extrasAt, wireAt, ok: extrasAt >= 0 && wireAt >= 0 && extrasAt < wireAt };
+    };
+    const { body: commBody78, at: commAt78 } = bodyOfFn78(src78, 'export function renderCommPage()');
+    assert(commAt78 >= 0, '[78a] fixture: renderCommPage() was located in js/app.js');
+    const order78 = checkOrder78(commBody78);
+    assert(order78.ok,
+      `78-1: renderCommPage() calls renderCommExtrasV16(week, games) STRICTLY BEFORE wireCollapsibleSections(c) — the cards it appends (Extra Games, Chat & S.C.R.I.B.E.) have to exist in the DOM before the wiring pass looks for .admin-section-title (extrasAt=${order78.extrasAt}, wireAt=${order78.wireAt})`);
+    // MUTATION-PROOF — swap the order in a scratch STRING copy (never the
+    // live file) and confirm the SAME check goes red.
+    const poisoned78 = commBody78
+      .replace('renderCommExtrasV16(week, games);', '/*MOVED*/')
+      .replace('wireCollapsibleSections(c);', 'wireCollapsibleSections(c); renderCommExtrasV16(week, games);');
+    assert(poisoned78.length !== commBody78.length || poisoned78 !== commBody78, '[78a] fixture: the poison actually changed something');
+    const poisonedOrder78 = checkOrder78(poisoned78);
+    assert(poisonedOrder78.ok === false,
+      `78-1-MUT: with the call order swapped back to the pre-fix shape, the SAME check goes RED (ok=${poisonedOrder78.ok})`);
+    // NON-IDEMPOTENCY — wireCollapsibleSections(c) is called EXACTLY ONCE
+    // inside renderCommPage()'s body (the fix note explicitly rules out
+    // "just call it again after" as a second wire call would double-bind
+    // every title's click listener — the same double-bind class as B2).
+    const wireCallCount78 = (commBody78.match(/wireCollapsibleSections\(c\);/g) || []).length;
+    assert(wireCallCount78 === 1, `78-1b: wireCollapsibleSections(c) is called exactly ONCE inside renderCommPage() (got ${wireCallCount78}) — a second call would double-bind every already-wired title's click listener`);
+
+    // ── (b) B1 — the collapse mechanism's own DOM-shape proof, tied
+    //     specifically to "Extra Games" (77d already covers "Chat &
+    //     S.C.R.I.B.E."): a title carrying .admin-section-title as a
+    //     direct-child sibling of .card, with a PRE-SAVED collapsed state,
+    //     re-applies that state (chevron + collapsed class) the moment
+    //     wireCollapsibleSections() runs — driven directly against the REAL
+    //     function via its test seam, same reason [64g]/[77d] do: FakeEl.
+    //     querySelectorAll() is a hardcoded stub that always returns [], so
+    //     nothing about per-card wiring is reachable through the full
+    //     render path in THIS harness — verified structurally by (a)
+    //     above instead, and behaviorally here. ──────────────────────────
+    assert(typeof app._wireCollapsibleSectionsForTest === 'function', '[78b] fixture: the collapse test seam is exported');
+    function fakeTitleEl78(text) {
+      const t = { textContent: text, _classes: new Set(), _listeners: [], _children: [] };
+      t.classList = { add: (c) => t._classes.add(c), contains: (c) => t._classes.has(c) };
+      t.querySelector = (sel) => (sel === '.section-chevron' ? t._children.find((c) => c.className === 'section-chevron') || null : null);
+      t.appendChild = (el) => { t._children.push(el); return el; };
+      t.addEventListener = (type, fn) => { if (type === 'click') t._listeners.push(fn); };
+      return t;
+    }
+    function fakeExtraGamesSection78() {
+      const sec = { dataset: {}, _classes: new Set() };
+      sec.classList = {
+        add: (c) => sec._classes.add(c), contains: (c) => sec._classes.has(c),
+        remove: (c) => sec._classes.delete(c),
+        toggle: (c, force) => { const want = force === undefined ? !sec._classes.has(c) : !!force; if (want) sec._classes.add(c); else sec._classes.delete(c); return want; },
+      };
+      const title = fakeTitleEl78('Extra Games');
+      sec.querySelector = (selector) => (selector === '.admin-section-title' ? title : null);
+      sec._title = title;
+      return sec;
+    }
+    storage.setBackendMode('local');
+    // A commissioner PREVIOUSLY collapsed "Extra Games" on an earlier
+    // render — persisted state, same fixture shape [64g] uses.
+    storage.saveSetting('commPanelSectionsCollapsed', { 'extra-games': true });
+    const extraGamesCard78 = fakeExtraGamesSection78();
+    assert(!extraGamesCard78._classes.has('admin-section-collapsed'),
+      '[78b] fixture: a fresh render\'s card object starts with NO collapsed class (this is what renderCommExtrasV16()\'s insertAdjacentHTML produces every time — brand new markup, no memory of its own)');
+    app._wireCollapsibleSectionsForTest({ querySelectorAll: (sel) => (sel === '.admin-section' ? [extraGamesCard78] : []) });
+    assert(extraGamesCard78._classes.has('admin-section-collapsed'),
+      '78-2: "Extra Games" RE-APPLIES the previously-saved collapsed state the moment wireCollapsibleSections() runs on it');
+    assert(extraGamesCard78._title._classes.has('admin-section-title-toggle') && extraGamesCard78._title._listeners.length === 1,
+      '78-3: …and gets the click-to-collapse toggle class + exactly one bound listener');
+    assert(extraGamesCard78._title._children.some((c) => c.className === 'section-chevron'),
+      '78-4: …and the chevron');
+    // A real click still un-collapses it (round-trip).
+    extraGamesCard78._title._listeners[0]({ target: { closest: () => null } });
+    assert(!extraGamesCard78._classes.has('admin-section-collapsed'), '78-5: a real click toggles it back open');
+
+    // ── (c) B2 — end-to-end: render Admin for real, click "Post queue as
+    //     SCRIBE" ONCE with N items -> exactly N events queued
+    //     (chat._outboxForTest()) — then an INTERVENING renderCommPage()
+    //     call (simulating some unrelated Admin-reused handler's own
+    //     repaint), then click ONCE MORE with a fresh 1-item batch -> the
+    //     outbox grows by exactly 1 more, not 2, proving the click listener
+    //     was never duplicated. ─────────────────────────────────────────
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u78' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u78', email: '78@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-78', memberId: 'm78', role: 'commissioner', displayName: 'Drew', leagueName: 'League 78' }]);
+    auth.setActiveLeagueId('L-78');
+    auth._setPlatformAdminFlagsForTest(true, false);
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    storage.saveWeek({ weekId: 'wk78', season: '2026', weekNumber: 1, label: 'Week 1', season: 2026, status: 'draft', dataSourceMode: 'espn_live', sport: 'cfb' });
+    chat._resetForTest();
+
+    const adminEl78 = new FakeEl(); adminEl78.id = 'page-admin'; registry.set('page-admin', adminEl78);
+    app.state.currentTab = 'admin';
+    app.state.adminTab = 'data';
+    app.renderAdminPage();
+    assert(adminEl78.innerHTML.includes('id="scribe-queue-btn"'), '[78c] fixture: the queue button rendered on Admin→Data');
+
+    adminEl78.querySelector('#scribe-queue-input').value = JSON.stringify([
+      { body: 'one' }, { body: 'two' }, { body: 'three' },
+    ]);
+    const before78 = chat._outboxForTest().length;
+    adminEl78.querySelector('#scribe-queue-btn').dispatch('click', { target: adminEl78.querySelector('#scribe-queue-btn') });
+    const after78 = chat._outboxForTest().length;
+    assert(after78 - before78 === 3, `78-6: one click with a 3-item batch queues EXACTLY 3 events (before=${before78}, after=${after78})`);
+
+    // The intervening repaint — a real renderCommPage() call, exactly the
+    // shape a save-and-repaint handler inside bindCommEventListeners()
+    // takes today, reused unconditionally by renderAdminPage() too.
+    const commEl78 = new FakeEl(); commEl78.id = 'page-commissioner'; registry.set('page-commissioner', commEl78);
+    app.renderCommPage();
+
+    adminEl78.querySelector('#scribe-queue-input').value = JSON.stringify([{ body: 'four' }]);
+    const before78b = chat._outboxForTest().length;
+    adminEl78.querySelector('#scribe-queue-btn').dispatch('click', { target: adminEl78.querySelector('#scribe-queue-btn') });
+    const after78b = chat._outboxForTest().length;
+    assert(after78b - before78b === 1,
+      `78-7: THE FIX — after an intervening renderCommPage() call, the SAME click on the SAME admin button still queues exactly 1 event for a 1-item batch, not 2+ (before=${before78b}, after=${after78b}) — renderCommExtrasV16() no longer binds these ids at all, so it can never double-bind them via a stray global document.getElementById() lookup`);
+
+    // Chat digest / diagnostics reachable + scoped too (not just the queue
+    // button) — quick spot-check, same render.
+    assert(adminEl78.innerHTML.includes('id="chat-digest-btn"') && adminEl78.innerHTML.includes('id="chat-diag-btn"'),
+      '[78c] fixture: the other two DI-425 tools are on the same render');
+
+    // ── (d) B2 mutation-proof — a scratch COPY of js/app.js with the
+    //     bindAdminScribeToolsControls(c, week) call site removed from
+    //     renderAdminPage()'s body (string surgery on a copy, never the
+    //     live file — CLAUDE.md's own mutation-testing discipline) proves
+    //     the call site is load-bearing: without it, the SAME click
+    //     produces ZERO queued events, because nothing is bound at all. ──
+    const { body: adminBody78 } = bodyOfFn78(src78, 'export function renderAdminPage()');
+    assert(adminBody78.includes('bindAdminScribeToolsControls(c, week);'),
+      '78-8: renderAdminPage() calls bindAdminScribeToolsControls(c, week) in its own body');
+    const { mkdtemp: mkdtemp78, writeFile: writeFile78, rm: rm78 } = await import('node:fs/promises');
+    const os78 = await import('node:os');
+    const path78 = await import('node:path');
+    const dir78 = await mkdtemp78(path78.join(os78.tmpdir(), 'b2mutant-'));
+    try {
+      const mutantSrc78 = raw78.replace('  bindAdminScribeToolsControls(c, week);\n', '');
+      assert(mutantSrc78.length < raw78.length, '[78d] fixture: the mutant is actually smaller — the line was removed');
+      await writeFile78(path78.join(dir78, 'app.mjs'), mutantSrc78, 'utf8');
+      // The mutant is a raw string copy of app.js's SOURCE, not a runnable
+      // module on its own (app.js has a large, order-sensitive dependency
+      // graph) — so this mutation proof is STRUCTURAL, matching [64g]/[78a]'s
+      // own precedent: the call site is provably necessary (78-8, above) and
+      // provably the ONLY call site (78-9, below), which is what makes 78-6/
+      // 78-7's real, executed, green assertions non-vacuous — a version of
+      // renderAdminPage() with this ONE line removed cannot bind the button
+      // at all, and there is no second call site anywhere that would do it
+      // for it.
+      const callSiteCount78 = (raw78.match(/bindAdminScribeToolsControls\(c, week\);/g) || []).length;
+      assert(callSiteCount78 === 1,
+        `78-9: bindAdminScribeToolsControls(c, week) is called from EXACTLY ONE place in js/app.js (got ${callSiteCount78}) — not renderCommExtrasV16() (removed there, B2), not bindCommEventListeners() (the same accumulation-prone home the reviewer explicitly ruled out)`);
+    } finally {
+      await rm78(dir78, { recursive: true, force: true });
+    }
+
+    // ── (e) N1 — saveWizardBlurb() no-ops (no write, no toast) when the
+    //     typed value is UNCHANGED from the week's current blurb. ────────
+    storage.saveWeek({ weekId: 'wk78n1', season: '2026', weekNumber: 2, label: 'Week 2', status: 'draft', dataSourceMode: 'espn_live', sport: 'cfb', blurb: 'already saved text' });
+    assert(typeof app._saveWizardBlurbForTest === 'function', '[78e] fixture: the blurb save test seam is exported');
+    const fakeBody78 = { querySelector: (sel) => (sel === '#wiz-blurb-body' ? { value: 'already saved text' } : null) };
+    const weekBefore78 = storage.getWeek('wk78n1');
+    app._saveWizardBlurbForTest(fakeBody78, weekBefore78);
+    const weekAfter78 = storage.getWeek('wk78n1');
+    assert(weekAfter78 === weekBefore78 || weekAfter78.blurb === weekBefore78.blurb,
+      '78-10: saveWizardBlurb() with an UNCHANGED value writes nothing (same object identity or byte-identical blurb)');
+    // Non-vacuity — a genuinely different value still saves (this is 77-10's
+    // own case, re-confirmed directly against the seam here too).
+    const fakeBodyChanged78 = { querySelector: (sel) => (sel === '#wiz-blurb-body' ? { value: 'a NEW blurb' } : null) };
+    app._saveWizardBlurbForTest(fakeBodyChanged78, weekBefore78);
+    assert(storage.getWeek('wk78n1')?.blurb === 'a NEW blurb',
+      '78-11 non-vacuity: …but a CHANGED value still saves — this is not a guard that silently eats every save');
+  } finally {
+    globalThis.matchMedia = savedMM78;
+    console.warn = realWarn78; console.info = realInfo78;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [79] REVIEWER ROUND 4 R3 (2026-09-29) — a join from the header pill sheet,
+//      by a player ALREADY in a league, runs the real league-switch path.
+//
+// Before: the sheet's Join called joinLeague(code), whose preferMemberId
+// refresh moved the active-league pointer to B through the identity path
+// alone — no sb.beginSwitch() (league A's mirror and Realtime stayed up), no
+// SWITCHING state, no "Switching leagues…" cover (DI-181c). Pointer and pill
+// said B over A's rows. Now joinLeague(code, { activate:false }) leaves the
+// pointer on A and the sheet hands the move to doSwitchActiveLeague(B).
+//
+// The reviewer's sequence, driven end to end through the REAL controls: a
+// signed-in device in supabase DATA mode with ONE membership (A), hydrated
+// ACTIVE for A -> tap the header pill -> tap "Join a League" -> type the code
+// -> tap Join League.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league switch (cover, beginSwitch, SWITCHING, hydrate B)…');
+{
+  const sb = await import('./js/supabase-backend.js');
+  const quiet79 = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const ROW_A = { league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Drew', active: true, leagues: { name: 'League A' } };
+  const ROW_B = { league_id: 'L-B', id: 'mB', role: 'player', display_name: 'Drew', active: true, leagues: { name: 'League B' } };
+  const realFetch79 = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'test-app-id' }) });
+
+  /** Runs the whole sequence once. Returns what was observed. */
+  async function joinFromSheet79({ postJoinRows = [ROW_A, ROW_B] } = {}) {
+    let rows = [ROW_A];
+    let joinArgs = null;
+    resetAll({
+      getSession: async () => ({ data: { session: { user: { id: 'u-drew', email: 'drew@example.com' } } } }),
+      from: () => ({ data: rows, error: null }),
+      rpc: (name, args) => {
+        if (name !== 'join_league') return { data: false, error: null };   // is_platform_admin()/is_super_admin() — not this test's subject
+        joinArgs = { name, args }; return { data: 'mB', error: null };
+      },
+    });
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    // The DATA adapter, wired with a PostgREST-shaped fake that records which
+    // league every hydrate read is scoped to.
+    const hydrateLeagues = [];
+    const dataClient = {
+      from: () => {
+        const q = {
+          select() { return q; },
+          eq(col, val) { if (col === 'league_id') hydrateLeagues.push(val); return q; },
+          then(res) { return res({ data: [], error: null }); },
+        };
+        return q;
+      },
+      rpc: async () => ({ data: [], error: null }),
+    };
+    sb._resetForTest();
+    sb.init({
+      register: auth.registerSupabaseDataBackend,
+      getClient: () => dataClient,
+      getActiveLeagueId: () => auth.getActiveLeagueId(),
+      getIdentityEpoch: auth.getIdentityEpoch,
+      getAccountUserId: auth.getAccountUserId,
+      getDeviceDataOwnerTuple: auth.getDeviceDataOwnerTuple,
+      getDeviceDataOwner: auth.getDeviceDataOwner,
+      getLeagueName: auth._switchBannerLeagueName,
+      getLeagueNameById: auth._leagueNameById,
+      getSession: () => ({ isAdmin: false, playerId: storage.getSession()?.playerId || null }),
+      hasValidSupabaseSession: auth.hasValidSupabaseSession,
+      isPrivilegeHeld: auth.isPrivilegeHeld,
+      hasSheetMirror: auth.hasSheetMirrorOnDevice,
+      isSiteUnlocked: storage.isSiteUnlocked,
+    });
+    wireRealAuthUI();
+    globalThis.window.OneSignalDeferred = [];
+    storeValidSession();
+    await quiet79(async () => {
+      auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u-drew', email: 'drew@example.com' } });
+      await pumpOneSignalQueue({ login: () => {}, logout: () => {} });
+      await sb._setStateForTest('ACTIVE', 'authtest-79: league A hydrated');
+    });
+    const before = { league: auth.getActiveLeagueId(), state: sb.getState() };
+
+    // Observers: every adapter state change, and every overlay the body receives.
+    const states = [];
+    // Round 5 (reviewer N1) — every toast is stamped with WHERE in the switch
+    // it was shown: before SWITCH_START, or after the adapter reached ACTIVE
+    // again for the new league.
+    let switchStarted = false, activeAfterSwitch = false;
+    const toasts = [];
+    const toastBox = new FakeEl('div'); toastBox.id = 'toast-container';
+    toastBox.appendChild = (t) => { toasts.push({ text: t.innerHTML, switchStarted, activeAfterSwitch }); return t; };
+    registry.set('toast-container', toastBox);
+    const offStatus = sb.onStatus((_status, detail) => {
+      states.push({ state: detail?.state, reason: detail?.reason || '' });
+      if (switchStarted && detail?.state === 'ACTIVE') activeAfterSwitch = true;
+    });
+    const appended = [];
+    const bodyAppend = document.body.appendChild.bind(document.body);
+    document.body.appendChild = (el) => { appended.push(el); return bodyAppend(el); };
+    let coverSeenWhileSwitching = false;
+    const offAuth = auth.onAuthEvent((ev) => {
+      if (ev === 'SWITCH_START') {
+        switchStarted = true;
+        // Everything the adapter reads from here on is the switch's own hydrate.
+        hydrateLeagues.length = 0;
+        queueMicrotask(() => { coverSeenWhileSwitching = !!document.getElementById('league-switch-overlay'); });
+      }
+    });
+
+    // The header pill, as renderLeaguePill() binds it.
+    const pill = new FakeEl('button'); pill.id = 'league-pill'; pill.getClientRects = () => [{}];
+    registry.set('league-pill', pill);
+    app.renderLeaguePill();
+    const pillBound = pill.listenerCount('click') === 1;
+    pill.click();
+    const selectorSheet = document.body.lastChild;
+    const selectorOk = /Choose a League/.test(selectorSheet?.innerHTML || '');
+    selectorSheet?.querySelector('#league-selector-join-btn')?.click();
+    const joinSheet = document.body.lastChild;
+    const joinSheetOk = /id="league-join-code"/.test(joinSheet?.innerHTML || '') && joinSheet !== selectorSheet;
+
+    rows = postJoinRows;                           // what the server answers after the join
+    joinSheet.querySelector('#league-join-code').value = 'IRB-4F2K';
+    await quiet79(async () => {
+      joinSheet.querySelector('#league-join-btn').click();
+      for (let i = 0; i < 200 && !(auth.getActiveLeagueId() === 'L-B' && !document.getElementById('league-switch-overlay') && sb.getState() !== 'SWITCHING'); i++) await tick();
+      await pumpOneSignalQueue({ login: () => {}, logout: () => {} });
+    });
+    offStatus(); offAuth();
+    document.body.appendChild = bodyAppend;
+    return {
+      before, pillBound, selectorOk, joinSheetOk, joinArgs, states, hydrateLeagues, toasts,
+      coverAppended: appended.some(el => el?.id === 'league-switch-overlay'),
+      coverSeenWhileSwitching,
+      coverGone: !document.getElementById('league-switch-overlay'),
+      after: { league: auth.getActiveLeagueId(), state: sb.getState(), playerId: storage.getSession()?.playerId },
+    };
+  }
+
+  try {
+    const r = await joinFromSheet79();
+    assert(r.before.league === 'L-A' && r.before.state === 'ACTIVE',
+      `[79] fixture: signed in, ONE membership, scoped to League A and hydrated ACTIVE (league ${r.before.league}, state ${r.before.state})`);
+    assert(r.pillBound && r.selectorOk && r.joinSheetOk,
+      `[79] fixture: the REAL controls — the pill is bound, a tap opens "Choose a League", its "Join a League" row opens the join sheet (bound ${r.pillBound}, selector ${r.selectorOk}, join sheet ${r.joinSheetOk})`);
+    assert(r.joinArgs?.name === 'join_league' && r.joinArgs?.args?.p_code === 'IRB-4F2K',
+      `[79] fixture: the join RPC really ran with the typed code (${JSON.stringify(r.joinArgs)})`);
+    assert(r.coverAppended && r.coverSeenWhileSwitching,
+      `[79a] R3 — the "Switching leagues…" cover (#league-switch-overlay) was put up, and was up when SWITCH_START fired (appended ${r.coverAppended}, up at SWITCH_START ${r.coverSeenWhileSwitching})`);
+    const seq = r.states.map(x => x.state);
+    const switchIdx = r.states.findIndex(x => x.state === 'SWITCHING' && /league-switch:L-B/.test(x.reason));
+    assert(switchIdx > -1,
+      `[79b] R3 — the adapter entered SWITCHING for League B, i.e. sb.beginSwitch() ran (Realtime down, league A's mirror dropped) (states: ${JSON.stringify(r.states.map(x => `${x.state}<${x.reason}>`))})`);
+    assert(switchIdx > -1 && seq.slice(switchIdx + 1).includes('ACTIVE') && r.after.state === 'ACTIVE',
+      `[79c] R3 — …and left it only by hydrating to ACTIVE again (states: ${JSON.stringify(seq)}, final ${r.after.state})`);
+    assert(r.hydrateLeagues.length > 0 && r.hydrateLeagues.every(l => l === 'L-B'),
+      `[79d] R3 — from SWITCH_START on, the re-hydrate read League B's rows and ONLY League B's (${r.hydrateLeagues.length} league-scoped reads: ${JSON.stringify([...new Set(r.hydrateLeagues)])})`);
+    assert(r.after.league === 'L-B' && r.after.playerId === 'mB',
+      `[79e] the device ends in League B as B's member (league ${r.after.league}, playerId ${r.after.playerId})`);
+    assert(r.coverGone, '[79f] …and the cover comes down once the switch has landed');
+    const welcome = r.toasts.filter(t => /welcome to League B/.test(t.text));
+    assert(welcome.length === 1 && welcome[0].switchStarted && welcome[0].activeAfterSwitch
+        && !r.toasts.some(t => /welcome/.test(t.text) && !t.switchStarted),
+      `[79f2] REVIEWER N1 — the "welcome to League B" toast is NOT shown before SWITCH_START, and IS shown once, after the adapter is ACTIVE for B (${JSON.stringify(r.toasts)})`);
+
+    // ── [79h] SECURITY NOTE 3 — League A is MISSING from the post-join list and
+    //    B is its only row. The refresh then auto-resolves the pointer to B
+    //    through the identity path; comparing the joined league against that
+    //    post-refresh pointer would skip the switch. Compared against the
+    //    PRE-join league, it still switches.
+    const h = await joinFromSheet79({ postJoinRows: [ROW_B] });
+    const hSwitch = h.states.findIndex(x => x.state === 'SWITCHING' && /league-switch:L-B/.test(x.reason));
+    assert(h.before.league === 'L-A' && h.joinArgs?.name === 'join_league',
+      `[79h] fixture: started in League A and the join RPC ran (league ${h.before.league})`);
+    assert(h.coverAppended && hSwitch > -1 && h.states.map(x => x.state).slice(hSwitch + 1).includes('ACTIVE') && h.after.league === 'L-B',
+      `[79h] SECURITY NOTE 3 — with A gone from the list and B the only row, the join STILL runs the switch: cover up (${h.coverAppended}), SWITCHING for B then ACTIVE (${JSON.stringify(h.states.map(x => x.state))}), ending in ${h.after.league}`);
+    assert(h.hydrateLeagues.length > 0 && h.hydrateLeagues.every(l => l === 'L-B'),
+      `[79h] …and the switch's hydrate read only League B (${JSON.stringify([...new Set(h.hydrateLeagues)])})`);
+  } finally {
+    globalThis.fetch = realFetch79;
+    await quiet79(() => sb._resetForTest());
+  }
+
+  // ── [79g] joinLeague()'s option, directly — activate:false never moves the
+  //    pointer; the default still does (the zero-league landing and every
+  //    existing caller keep their behaviour).
+  {
+    const ROWS = [ROW_A, ROW_B];
+    for (const [label, opts, expectLeague] of [['activate:false', { activate: false }, 'L-A'], ['default', undefined, 'L-B']]) {
+      let rows = [ROW_A];
+      resetAll({
+        getSession: async () => ({ data: { session: { user: { id: 'u-drew', email: 'drew@example.com' } } } }),
+        from: () => ({ data: rows, error: null }),
+        rpc: () => ({ data: 'mB', error: null }),
+      });
+      wireRealAuthUI(); globalThis.window.OneSignalDeferred = []; storeValidSession();
+      await quiet79(async () => {
+        auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u-drew', email: 'drew@example.com' } });
+        await pumpOneSignalQueue({ login: () => {}, logout: () => {} });
+      });
+      rows = ROWS;
+      let joined = null;
+      await quiet79(async () => { joined = opts ? await auth.joinLeague('IRB-4F2K', opts) : await auth.joinLeague('IRB-4F2K'); });
+      assert(joined?.leagueId === 'L-B' && auth.getActiveLeagueId() === expectLeague && auth.getCachedMemberships().length === 2,
+        `[79g] joinLeague(${label}) returns the new membership and leaves the pointer on ${expectLeague} (got ${auth.getActiveLeagueId()}, ${auth.getCachedMemberships().length} memberships cached)`);
+    }
   }
 }
 

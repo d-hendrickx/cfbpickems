@@ -126,12 +126,16 @@ import { getActiveLeagueId, getCachedMemberships, getCachedMaintenanceBanner } f
 // internally by haptic() itself (isNativeShell()) — no extra gating needed
 // at any of this file's three call sites.
 import { haptic } from './haptics.js';
-// Step 6 (full-app review, 2026-09-26) — the left-edge zone reserved for the
-// control-center drawer's edge swipe (DRAWER_EDGE_ZONE_PX aliases this exact
-// constant in js/control-center.js). nav-gestures.js imports only platform
-// and haptics, so this adds no cycle. bindBottomAnchor (v0.27.x bugfix,
-// 2026-09-27) keeps the page thread pinned across the keyboard layout change.
-import { WEEK_SWIPE_EDGE_EXCLUDE_PX, bindBottomAnchor, BOTTOM_ANCHOR_PX } from './nav-gestures.js';
+// Step 6 (full-app review, 2026-09-26) — nav-gestures.js imports only
+// platform and haptics, so this adds no cycle. bindBottomAnchor (v0.27.x
+// bugfix, 2026-09-27) keeps the page thread pinned across the keyboard
+// layout change. DI-427 (UN-382, 2026-09-28) adds `_rubberBandOffset()` (the
+// SAME diminishing-returns curve DI-409's `_weekSwipeRubberBand()` reuses —
+// no second curve invented), `prefersReducedMotion()` (the reply-swipe's own
+// visual layer is gated exactly like week-swipe's), and `WEEK_SWIPE_BOUNCE_MS`
+// (the reply bubble's spring-back shares week-swipe's own Small-feedback
+// duration/--motion-fast token).
+import { bindBottomAnchor, BOTTOM_ANCHOR_PX, _rubberBandOffset, prefersReducedMotion, WEEK_SWIPE_BOUNCE_MS } from './nav-gestures.js';
 
 export const chatDigest = _digest;
 
@@ -2260,6 +2264,7 @@ function messageHTML(m, self, showNewDivider) {
 
   return `${showNewDivider ? '<div class="chat-new-divider"><span>NEW</span></div>' : ''}
   <div class="chat-msg${mine ? ' chat-mine' : ''}${scribe ? ' chat-scribe' : ''}${privateChip ? ' chat-msg-private' : ''}${pending ? ' is-pending' : ''}${failed ? ' is-failed' : ''}" data-mid="${esc(m.id)}">
+    <span class="chat-swipe-reply-icon" aria-hidden="true">↩</span>
     <div class="chat-avatar${scribe ? ' chat-avatar-scribe' : ''}${mine ? ' chat-avatar-mine' : ''}" ${accent ? `style="background:${esc(accent)};color:#fff"` : ''}>${esc(initialsOf(m.author))}</div>
     <div class="chat-bubble-col">
       <div class="chat-meta">
@@ -2553,7 +2558,7 @@ export function renderChatPage() {
     ? searchResultsHTML(searchQuery)
     : `${(retentionOn() || backfillBlockedByEpoch()) ? '' : '<button class="chat-load-older" id="chat-load-older">↑ load earlier</button>'}${msgsHTML}`;
 
-  c.innerHTML = `
+  const pageHTML = `
     ${banner}
     ${retentionNoticeHTML()}
     <div class="chat-sticky-stack">
@@ -2597,6 +2602,13 @@ export function renderChatPage() {
     <button class="chat-jump-latest" id="chat-jump" style="display:none">↓ latest</button>
     ${self ? composerHTML() : loginPromptHTML()}
   `;
+  // RG-297 — the SAME composer textarea stays in the document across the
+  // repaint (focus, keyboard, draft, caret, IME and undo untouched); the rest
+  // of the page is rebuilt around it. Falls back to the whole-page write —
+  // and RG-174's draft restore below — whenever it cannot (first render, a
+  // different player, signed out). See carryComposerAcross().
+  const carried = carryComposerAcross(c, pageHTML, 'chat-input', _composerOwner);
+  if (!carried) c.innerHTML = pageHTML;
 
   bindChatPage();
   // DI-344/345 §Render paths — the SAME isLeaguePaused(league) check
@@ -2634,7 +2646,10 @@ export function renderChatPage() {
   }
   // RG-174 — put the draft back onto the FRESH composer, after bindChatPage()
   // so the restored text lands on a node whose listeners are already live.
-  restoreComposerDraft(draft);
+  // RG-297 — a carried composer never lost its draft; only its char count
+  // (#chat-count, rebuilt around it) needs re-deriving.
+  if (carried) syncComposerChrome(carried);
+  else restoreComposerDraft(draft);
   // RG-176 — and the prefs fields, for the same reason and at the same moment.
   // The owner key is re-read HERE rather than reused from the capture: the
   // identity guard has to be checked on BOTH sides, or a session change that
@@ -2884,6 +2899,91 @@ function restoreComposerDraft(snap) {
   if (snap.focused) input.focus();
 }
 
+// ── RG-297 — A REPAINT NEVER DESTROYS THE LIVE COMPOSER ──────────────────────
+/**
+ * RG-296 review (2026-09-28). Three defects, one mechanism: a repaint REPLACED
+ * the textarea the player was typing into.
+ *
+ *   B  The keyboard went down after EVERY send (Chat and the game sheet). The
+ *      send's own repaint built a fresh, empty composer; RG-174 captures only
+ *      a NON-EMPTY draft, so "was focused" was discarded with it, and the
+ *      sheet's outerHTML swap captured nothing at all.
+ *   A  Even when RG-174 did re-focus, the layout was wrong: removing the
+ *      focused textarea fires focusout, bindKeyboardAvoid() (js/nav-gestures.js)
+ *      clears body[data-keyboard-up], and the re-focus re-baselines at the
+ *      already-shrunken viewport — so --nav-bar-clearance came back above a
+ *      raised keyboard (measured: the composer jumped 56px up the screen).
+ *   E  Starting or cancelling a reply in the game sheet wiped a typed draft.
+ *
+ * Capture-and-restore cannot fix A: the blur has already happened, and on iOS
+ * a programmatic focus() outside a user gesture (an inbound-message repaint)
+ * may not raise the keyboard at all. So the node is not recreated. The new
+ * markup is parsed off-document, and the page is rebuilt AROUND the live
+ * textarea: at every level of its ancestor chain the old node stays put, its
+ * other children are swapped for the new markup's, and its attributes are
+ * synced to the new markup's. The textarea itself never leaves the document —
+ * no focusout, no keyboard bounce, and value, caret, IME composition and undo
+ * history all survive untouched. Everything else (reply banner, tag chip, ➤,
+ * char count, mention menu) is exactly what a fresh render would have built.
+ *
+ * Why not simply MOVE the old textarea into the new markup: moving a node is a
+ * removal followed by an insertion, and the removal alone blurs it.
+ *
+ * Carried only for the SAME verified player the composer was rendered for (the
+ * RG-174 `_composerOwner` rule, RG-51 class): another session's composer is
+ * never carried — the fresh, empty one is built instead. Returns the carried
+ * textarea, or null when the caller must fall back to a full write (first
+ * render, signed out, a different player, an engine without <template>, or a
+ * markup shape that no longer matches).
+ */
+const _wiredComposerInputs = new WeakSet();
+
+function carryComposerAcross(host, html, inputId, owner, hostIsComposer = false) {
+  if (typeof document === 'undefined' || !host || !html) return null;
+  if (!me() || me() !== owner) return null;
+  const live = document.getElementById(inputId);
+  if (!live || live.isConnected === false || typeof host.contains !== 'function' || !host.contains(live)) return null;
+  const tpl = document.createElement('template');
+  if (!tpl || !('content' in tpl) || typeof tpl.content?.querySelector !== 'function') return null;
+  tpl.innerHTML = html;
+  const newRoot = hostIsComposer ? tpl.content.firstElementChild : tpl.content;
+  const fresh = newRoot?.querySelector?.('#' + inputId);
+  if (!fresh) return null;
+  // The two ancestor chains, textarea → just below the root. Refuse (fall back)
+  // unless they have the same shape — checked BEFORE the first mutation.
+  const oldChain = [], newChain = [];
+  for (let n = live; n && n !== host; n = n.parentNode) oldChain.push(n);
+  for (let n = fresh; n && n !== newRoot; n = n.parentNode) newChain.push(n);
+  if (oldChain.length !== newChain.length) return null;
+  if (oldChain.some((n, i) => n.tagName !== newChain[i].tagName)) return null;
+  try {
+    if (hostIsComposer) syncCarriedAttributes(host, newRoot);
+    let oldParent = host, newParent = newRoot;
+    for (let i = oldChain.length - 1; i >= 0; i--) {
+      const keep = oldChain[i], stand = newChain[i];
+      for (const ch of [...oldParent.childNodes]) if (ch !== keep) oldParent.removeChild(ch);
+      let before = true;
+      for (const ch of [...newParent.childNodes]) {
+        if (ch === stand) { before = false; continue; }
+        if (before) oldParent.insertBefore(ch, keep); else oldParent.appendChild(ch);
+      }
+      // The textarea keeps its inline style (syncComposerChrome()'s grown height).
+      syncCarriedAttributes(keep, stand, i === 0 ? ['style'] : []);
+      oldParent = keep; newParent = stand;
+    }
+  } catch (err) {
+    // Loud, and safe: the caller's full write replaces whatever this left.
+    console.error('[chat-ui] RG-297 composer carry failed — rebuilding the composer instead', err);
+    return null;
+  }
+  return live;
+}
+
+function syncCarriedAttributes(el, from, keepNames = []) {
+  for (const a of [...el.attributes]) if (!keepNames.includes(a.name) && !from.hasAttribute(a.name)) el.removeAttribute(a.name);
+  for (const a of [...from.attributes]) if (!keepNames.includes(a.name) && el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
+}
+
 // ── RG-191 — A SENT DRAFT IS CONSUMED BEFORE ANYTHING CAN RE-RENDER ──────────
 /**
  * Drew, 2026-09-19, on v0.22.5: "it is remembering my message in the chat, but
@@ -3037,6 +3137,27 @@ function extractMentions(body) {
   return [...ids];
 }
 
+/**
+ * RG-296 (RG-291 follow-up sweep, 2026-09-28) — the RG-291 idiom, for every
+ * tappable control within reach of a focused composer. A tap's synthesized
+ * mousedown moves focus to the button (every engine; iOS synthesizes it
+ * from the tap), the composer blurs, bindKeyboardAvoid() drops
+ * body[data-keyboard-up], --nav-bar-clearance comes back and the composer +
+ * thread move up the screen BETWEEN mousedown and mouseup — so the click lands
+ * on a common ancestor (or on the returning bottom nav, which navigates away)
+ * and the control's handler never runs. Measured before this fix (chatpagetest
+ * [G]): ➤ Send did not send, the @mention option switched tabs, the reply and
+ * game-tag ✕ and the reaction pill did nothing. Where the tap did land (➕, the
+ * reaction picker, the quick-react row, the sheet's ➤ and pills) it still took
+ * the keyboard down. Cancelling the mousedown's default — ONLY the focus move —
+ * keeps the composer focused and the layout still; click, Tab and Enter/Space
+ * are untouched. Never touchstart/pointerdown: those would also cancel
+ * scrolling and the synthesized click.
+ */
+function keepComposerFocus(el) {
+  el?.addEventListener('mousedown', e => e.preventDefault());
+}
+
 function doSend() {
   const input = document.getElementById('chat-input');
   const body = (input?.value || '').trim();
@@ -3116,6 +3237,7 @@ function bindFilterButtons(root) {
  */
 function bindMessageActionButtons(host, renderFn, surface) {
   host?.querySelectorAll('[data-reply]').forEach(b => b.addEventListener('click', () => openReplyFor(b.dataset.reply, surface)));
+  host?.querySelectorAll('[data-reply]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
   // ONE query, reused twice below — the wiring and the DI-268 re-mount both
   // want the same set of triggers, and a second `querySelectorAll` would be a
   // second place to keep the selector correct (feedbacktest [28](f) pins that
@@ -3135,6 +3257,7 @@ function bindMessageActionButtons(host, renderFn, surface) {
     if (!me()) return;
     toggleMessageReactPicker(b, b.dataset.reactOpen, renderFn);
   }));
+  host?.querySelectorAll('[data-react-open]').forEach(keepComposerFocus);   // RG-296
   // DI-326 amendment (2026-09-25) — the Tapback-style quick-react row above
   // .chat-actions. A direct commit (same as picking from the full picker,
   // toggleMessageReactPicker's option handler just above) — not a second
@@ -3149,12 +3272,14 @@ function bindMessageActionButtons(host, renderFn, surface) {
     toggleReact(b.dataset.quickReact, b.dataset.emoji, self);
     renderFn();
   }));
+  host?.querySelectorAll('[data-quick-react]').forEach(keepComposerFocus);   // RG-296
   host?.querySelectorAll('[data-pin]').forEach(b => b.addEventListener('click', () => {
     const self = me(); if (!self) return;
     const msg = getMessage(b.dataset.pin);
     pinMessage(b.dataset.pin, self, !msg?.pinned);
     renderFn();
   }));
+  host?.querySelectorAll('[data-pin]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
   host?.querySelectorAll('[data-edit]').forEach(b => b.addEventListener('click', () => {
     const self = me(); if (!self) return;
     const msg = getMessage(b.dataset.edit); if (!msg) return;
@@ -3216,6 +3341,7 @@ function bindMessageActionButtons(host, renderFn, surface) {
     });
     renderFn();
   }));
+  host?.querySelectorAll('[data-callout]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
 }
 // Test-only alias (see chat.js's `_resetForTest` convention) — exercises the
 // REAL shared wiring both surfaces use, not a re-implementation.
@@ -3301,6 +3427,16 @@ function bindChatPage() {
   const scroll = document.getElementById('chat-scroll');
   const jump = document.getElementById('chat-jump');
   scroll?.addEventListener('scroll', () => onChatScrollEvent(scroll, jump));
+  // RG-291 (live v0.27.1, Drew 2026-09-28) — "↓ latest" with the keyboard up
+  // must not take focus from the composer. A mousedown on a <button> moves
+  // focus to it (every engine; iOS synthesizes one from the tap), the
+  // textarea blurs, bindKeyboardAvoid() drops body[data-keyboard-up], the
+  // nav clearance comes back and this button jumps --nav-bar-clearance up
+  // the screen BETWEEN mousedown and mouseup — so the click landed on
+  // #page-chat, never on the button: keyboard gone, no jump. Cancelling the
+  // mousedown's default (the focus move) keeps the composer focused and the
+  // layout still, so the click lands here. Tab + Enter/Space still work.
+  jump?.addEventListener('mousedown', e => e.preventDefault());
   jump?.addEventListener('click', () => { if (scroll) scroll.scrollTop = scroll.scrollHeight; });
 
   c.querySelectorAll('[data-jump]').forEach(b => b.addEventListener('click', () => {
@@ -3313,6 +3449,7 @@ function bindChatPage() {
     toggleReact(b.dataset.target, b.dataset.react, self);
     renderChatPage();
   }));
+  c.querySelectorAll('[data-react]').forEach(keepComposerFocus);   // RG-296
   // UN-120: long-press (touch, UNCHANGED) + right-click (desktop, replaces
   // hover) + axis-locked swipe (touch, supplements long-press) — all three
   // delegated on the same scroll container so they survive every re-render.
@@ -3329,23 +3466,35 @@ function bindChatPage() {
   // before this batch, so neither needed to move.
   bindMessageActionButtons(c, renderChatPage, 'main');
   c.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => { retryFailed(b.dataset.retry); renderChatPage(); }));
+  c.querySelectorAll('[data-retry]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
 
   // composer
   const input = document.getElementById('chat-input');
-  input?.addEventListener('input', () => {
+  // RG-297 — the textarea is CARRIED across repaints (carryComposerAcross()),
+  // so its own listeners are bound once per node; re-binding on every render
+  // would stack a keydown per repaint (Enter → doSend() N times). Every other
+  // control here is a fresh node each render and is bound as before.
+  const wireInput = !!input && !_wiredComposerInputs.has(input);
+  if (wireInput) _wiredComposerInputs.add(input);
+  if (wireInput) input.addEventListener('input', () => {
     // RG-174 — the autosize + char count moved into syncComposerChrome() so the
     // draft restore produces identical chrome for identical text. Behaviour of
     // this listener is otherwise unchanged.
     syncComposerChrome(input);
     maybeMentionMenu(input);
   });
-  input?.addEventListener('keydown', e => {
+  if (wireInput) input.addEventListener('keydown', e => {
     const desktop = matchMedia('(min-width: 700px)').matches;
     if (e.key === 'Enter' && !e.shiftKey && desktop) { e.preventDefault(); doSend(); }
   });
   document.getElementById('chat-send')?.addEventListener('click', doSend);
   document.getElementById('chat-cancel-reply')?.addEventListener('click', () => { U.replyTo = null; renderChatPage(); });
   document.getElementById('chat-strip-tag')?.addEventListener('click', () => { U.tagStripped = true; renderChatPage(); });
+  // RG-296 — see keepComposerFocus(). The two ✕s repaint the page; the
+  // composer is carried across it, still focused (RG-297).
+  keepComposerFocus(document.getElementById('chat-send'));
+  keepComposerFocus(document.getElementById('chat-cancel-reply'));
+  keepComposerFocus(document.getElementById('chat-strip-tag'));
 }
 
 /**
@@ -3404,6 +3553,7 @@ function toggleMessageReactPicker(anchorEl, mid, renderFn = renderChatPage) {
     picker.remove();
     renderFn();
   }));
+  picker.querySelectorAll('[data-emoji]').forEach(keepComposerFocus);   // RG-296
   setTimeout(() => {
     const closer = ev => {
       if (!picker.contains(ev.target) && !ev.target.closest?.('[data-react-open]')) {
@@ -3588,24 +3738,199 @@ export const _bindMessageActionsContextMenu = bindMessageActionsContextMenu;
  * The dead zone before an axis commits is what keeps this from stealing
  * vertical scroll — a vertical drag is classified 'y' at 8px, and the 'x'
  * branch below never runs for it.
+ *
+ * DI-427 (UN-382, amends T-28/UN-280, 2026-09-28) — L→R (reply) ONLY gains a
+ * drag-follow + spring-back VISUAL layer on top of this SAME detection state
+ * machine (axis-lock, threshold commit, haptic — every line above this
+ * comment is unchanged). R→L (react picker) gets no visual change, per
+ * Drew's own wording ("the reply swipe... behavior of making it the reply" —
+ * this batch's item 10 is about the reply direction specifically).
+ * `.chat-bubble-col` (the whole message row — bubble, meta, reactions,
+ * actions — "the message itself," Drew's own words) follows the finger 1:1
+ * up to REPLY_SWIPE_MAX_PX, then resists further movement via
+ * `_rubberBandOffset()`'s own diminishing-returns curve (the SAME curve
+ * DI-409's `_weekSwipeRubberBand()` reuses — no second curve invented),
+ * matching Drew's own cited reference ("iMessage: ~30-40pt max with
+ * resistance"). The `.chat-swipe-reply-icon` (the SAME ↩ character already
+ * used in `.chat-actions` — no new icon) reveals behind the bubble the
+ * instant the drag crosses SWIPE_THRESHOLD_PX (the arm point, unchanged
+ * constant) via `[data-swipe-armed="true"]` on the `.chat-msg` root. On
+ * release the transform ALWAYS springs back to 0 — whether or not the reply
+ * armed (Drew: "...and then rubberband back when you let go... to give
+ * feedback on the reply swipe," describing the spring-back as the
+ * confirmation itself, not conditioned on the outcome) — over
+ * WEEK_SWIPE_BOUNCE_MS/--motion-fast (150ms, Small-feedback bucket; DI-420's
+ * Navigation-bucket fix is for a completed NAVIGATION and does not apply to
+ * this in-place bounce). Reduced motion: no translate at all (detection/
+ * commit/haptic unchanged either way — only the visual layer is gated),
+ * matching DI-409's/DI-420's own rule.
+ *
+ * ARBITRATION NOTE WITH THE DRAWER'S L→R GESTURE (DI-419) — RESOLVED,
+ * reviewer round 2 (B1 BLOCK, 2026-09-28). Round 1 removed the old
+ * WEEK_SWIPE_EDGE_EXCLUDE_PX exclusion here rather than mechanically
+ * "retargeting" it to `isInDrawerOpenZone()` as DI-427's own design input
+ * literally describes — that predicate reads "anywhere" on the Chat tab
+ * (not Picks/Dashboard), so plugging it in as an exclusion would have
+ * swallowed the ENTIRE Chat surface, contradicting Drew's own ruling one
+ * paragraph earlier in the same input ("the reply swipe on chat messages...
+ * still wins when the touch starts on a bubble"). That left a REAL gap,
+ * caught in review: removing the check meant NOTHING made the drawer's own,
+ * independently-armed `window`-level binder back off — a fast L→R drag on
+ * a bubble armed BOTH gestures (drag-start…settleOpen:true on the drawer,
+ * a committed reply on this binder, simultaneously). Fixed at the DRAWER's
+ * OWN end instead: `isInDrawerOpenZone()`'s new `target` argument
+ * (js/nav-gestures.js) refuses to claim a touch whose `target.closest(...)`
+ * resolves to `.chat-msg` — `bindControlCenterEdgeSwipe()`'s touchstart arm
+ * check now passes `target: e.target` and backs off on a bubble,
+ * regardless of tab. This binder itself is STILL unchanged in shape (no
+ * `stopPropagation()`, no awareness of the drawer's zone) — it wins by
+ * being the more-specific, same-touchstart target; the drawer now
+ * independently agrees.
+ */
+const REPLY_SWIPE_MAX_PX = 36; // Drew's own cited range, "~30-40pt," mid-range
+
+/**
+ * Pure, testable drag-follow curve (same "pure math, DOM-free" discipline
+ * `_weekSwipeAtBound()`/`_weekSwipeRubberBand()` follow in nav-gestures.js).
+ * 1:1 to REPLY_SWIPE_MAX_PX, then `_rubberBandOffset()`'s own
+ * diminishing-returns resistance for the excess — never a second curve.
+ */
+export function _replySwipeDragOffset(dx) {
+  const d = Math.max(0, dx || 0);
+  if (d <= REPLY_SWIPE_MAX_PX) return d;
+  return REPLY_SWIPE_MAX_PX + _rubberBandOffset(d - REPLY_SWIPE_MAX_PX);
+}
+
+/**
+ * REVIEWER ROUND 2 (N1, 2026-09-28) — the REPLY (L→R) direction is now
+ * iMessage's own arm-then-commit-on-RELEASE shape, not a mid-drag commit.
+ * Round 1 committed the reply the INSTANT dx crossed SWIPE_THRESHOLD_PX
+ * (same `committed` guard the react-picker direction still uses), which
+ * froze the bubble at ~36-38px right at the crossing (the drag-follow's own
+ * resistance curve stopped updating once `committed` latched) — the
+ * resistance DI-427 added became invisible in practice. Now: crossing the
+ * threshold only ARMS (haptic once, glyph on) and drag-follow keeps
+ * tracking (bounded) for the rest of the gesture; committing (calling
+ * `openReplyFor()`) happens on release, ONLY if still armed at that instant
+ * — dragging back under the threshold before releasing un-arms it (no
+ * reply, still springs back). `armed` (the COMMIT decision) is computed
+ * unconditionally, regardless of reduced motion — only the VISUAL layer
+ * (`setDragX`/`setArmed`'s glyph) is gated on it, per DI-427's own
+ * "detection/commit/haptic unchanged either way — only the visual layer is
+ * gated" rule.
+ * The react-picker (R→L) direction is UNCHANGED — no visual layer, no arm
+ * state, commits immediately mid-drag exactly as before (DI-427 never
+ * touched that direction; N1 doesn't either).
  */
 function bindMessageSwipe(root) {
   if (!root || root._swipeWired) return;
   root._swipeWired = true;
   const surface = surfaceForRoot(root);   // DI-125a — see surfaceForRoot()
-  let start = null, targetMid = null, axis = null, committed = false;
+  let start = null, targetMid = null, targetMsgEl = null, targetColEl = null, axis = null, committed = false, armed = false;
+  let glyphPlaced = false;
+
+  /**
+   * REVIEWER ROUND 3 (N4, 2026-09-29) — anchor the ↩ glyph to the BUBBLE,
+   * not the row. Round 2 pinned it at a fixed `left:8px` on `.chat-msg`:
+   * on a received row that is inside the avatar's own column (painted over
+   * the initials), and on an own row — right-aligned, any width — it sat
+   * ~260px from the bubble. A fixed row offset cannot serve bubbles of
+   * varying width on both sides, so the glyph is placed ONCE per gesture,
+   * from the bubble's own at-rest rect: horizontally centered in the band
+   * the bubble vacates as it slides right (its original left edge +
+   * REPLY_SWIPE_MAX_PX/2 — the band is [left, left + drag offset], and the
+   * glyph only shows once armed, i.e. offset >= REPLY_SWIPE_MAX_PX), and
+   * vertically centered on the bubble. The glyph stays a direct child of
+   * the (never-translated) row, so it holds still while the bubble slides
+   * off it — the reveal — and, being earlier in the DOM than the positioned
+   * `.chat-bubble-col`, it paints UNDER the bubble whenever they overlap
+   * (at rest, and during the spring-back fade). A received bubble's left
+   * edge is right of its avatar by the row gap, so the glyph can never
+   * reach the avatar. Measured at axis lock, before this gesture's first
+   * transform write (touchstart clears any leftover transform), so the rect
+   * is the bubble's at-rest position. Layout READS only, one per gesture;
+   * the two style writes follow them.
+   */
+  function placeGlyph() {
+    if (glyphPlaced) return;
+    glyphPlaced = true;
+    const msgEl = targetMsgEl;
+    const glyph = msgEl?.querySelector?.('.chat-swipe-reply-icon');
+    const bubble = targetColEl?.querySelector?.('.chat-bubble') || targetColEl;
+    if (!glyph?.style || typeof msgEl.getBoundingClientRect !== 'function' || typeof bubble?.getBoundingClientRect !== 'function') return;
+    const row = msgEl.getBoundingClientRect();
+    const b = bubble.getBoundingClientRect();
+    const left = b.left - row.left - (msgEl.clientLeft || 0) + REPLY_SWIPE_MAX_PX / 2;
+    const top = b.top - row.top - (msgEl.clientTop || 0) + b.height / 2;
+    glyph.style.left = `${Math.round(left)}px`;
+    glyph.style.top = `${Math.round(top)}px`;
+  }
+
+  function setDragX(px) {
+    if (targetColEl) targetColEl.style.transform = px > 0 ? `translateX(${px}px)` : '';
+  }
+  /**
+   * Touched-screen audit (round 3, 2026-09-29) — an OWN bubble is
+   * right-aligned, so dragging it right pushes it past the thread's content
+   * box: measured in Chrome at 390×844, `#chat-scroll`'s scrollWidth went
+   * 362 → 397 mid-drag, and `.chat-scroll`'s computed overflow-x is `auto`
+   * (it only sets overflow-y) — the thread became sideways-scrollable under
+   * the finger for the length of the gesture. `[data-reply-swiping]`
+   * (css/styles.css) clips x for exactly that window; it is set only once a
+   * reply drag is under way (no overflow exists yet, so nothing is clipped
+   * that was visible) and cleared when the spring-back ends. Scoped to the
+   * gesture, not the thread's permanent style, so nothing else that relies on
+   * the thread's current overflow behaviour changes.
+   */
+  function setThreadClip(on) {
+    if (!root.dataset) return;
+    if (on) { if (root.dataset.replySwiping !== 'true') root.dataset.replySwiping = 'true'; }
+    else delete root.dataset.replySwiping;
+  }
+  function setArmed(on) {
+    if (!targetMsgEl?.dataset) return;
+    if (on) targetMsgEl.dataset.swipeArmed = 'true';
+    else delete targetMsgEl.dataset.swipeArmed;
+  }
+  /** DI-427 — fires on EVERY release (touchend/touchcancel), armed or not. */
+  function springBack() {
+    const colEl = targetColEl;
+    setArmed(false);
+    // Reviewer round-3 note 1 — belt-and-braces: a row with no bubble column
+    // (a .chat-system row) never leaves the thread clipped.
+    if (!colEl) { setThreadClip(false); return; }
+    if (prefersReducedMotion()) {
+      colEl.style.transition = '';
+      colEl.style.transform = '';
+      setThreadClip(false);
+      return;
+    }
+    colEl.style.transition = `transform ${WEEK_SWIPE_BOUNCE_MS}ms ease-out`;
+    colEl.style.transform = '';
+    setTimeout(() => {
+      colEl.style.transition = '';
+      if (!start) setThreadClip(false); // a new drag already under way keeps its own clip
+    }, WEEK_SWIPE_BOUNCE_MS);
+  }
+
   root.addEventListener('touchstart', e => {
     if (e.touches?.length !== 1) return;
     const msgEl = e.target.closest?.('.chat-msg');
     if (!msgEl) return;
     const t = e.touches[0];
-    // A touch that starts in the left-edge zone belongs to the drawer's edge
-    // swipe (and iOS's own back gesture), never to a message reply swipe.
-    if (typeof t.clientX === 'number' && t.clientX >= 0 && t.clientX < WEEK_SWIPE_EDGE_EXCLUDE_PX) { start = null; targetMid = null; return; }
     start = { x: t.clientX, y: t.clientY };
     targetMid = msgEl.dataset.mid;
+    targetMsgEl = msgEl;
+    targetColEl = msgEl.querySelector?.('.chat-bubble-col') || null;
+    // Defensive — a fresh touch always starts from a known-clean transform,
+    // same "never inherited state" discipline bindWeekSwipe()'s own
+    // touchstart applies (nav-gestures.js, C2).
+    if (targetColEl) { targetColEl.style.transition = ''; targetColEl.style.transform = ''; }
+    setArmed(false);
     axis = null;
     committed = false;
+    armed = false;
+    glyphPlaced = false;
   }, { passive: true });
   root.addEventListener('touchmove', e => {
     if (!start || committed || !targetMid) return;
@@ -3616,17 +3941,52 @@ function bindMessageSwipe(root) {
     if (axis === null && (Math.abs(dx) > LONG_PRESS_THRESHOLD_PX || Math.abs(dy) > LONG_PRESS_THRESHOLD_PX)) {
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
     }
-    if (axis === 'x' && Math.abs(dx) >= SWIPE_THRESHOLD_PX) {
+    if (axis === 'x' && dx > 0) {
+      // N1 — the COMMIT decision (`armed`), computed every tick regardless
+      // of reduced motion; a fresh crossing (not just "currently past 40px")
+      // fires the haptic exactly once per arm, not on every subsequent px.
+      const nowArmed = dx >= SWIPE_THRESHOLD_PX;
+      if (nowArmed && !armed) haptic('light'); // DI-326 — native-only, gated internally by haptic() itself.
+      armed = nowArmed;
+      // DI-427 — the VISUAL layer only: drag-follow + glyph, gated off
+      // reduced motion (detection/commit/haptic above are NOT gated).
+      if (!prefersReducedMotion()) {
+        placeGlyph(); // N4 — once per gesture, BEFORE the first transform write
+        // Reviewer round-3 note 1 — only a row with a bubble column moves,
+        // so only such a row can overflow the thread; a .chat-system row
+        // (data-mid, no .chat-bubble-col) never sets the clip.
+        if (targetColEl) setThreadClip(true);
+        setDragX(_replySwipeDragOffset(dx));
+        setArmed(armed);
+      }
+    }
+    // React-picker (R→L) — UNCHANGED shape: commits immediately mid-drag,
+    // no visual layer, no arm state.
+    if (axis === 'x' && dx < 0 && Math.abs(dx) >= SWIPE_THRESHOLD_PX) {
       committed = true;
       cancelPendingLongPress();
       // DI-326 — native-only, gated internally by haptic() itself.
       haptic('light');
-      if (dx > 0) openReplyFor(targetMid, surface); else openReactPickerFor(targetMid, surface);
+      openReactPickerFor(targetMid, surface);
     }
   }, { passive: true });
-  const clear = () => { start = null; targetMid = null; axis = null; committed = false; };
-  root.addEventListener('touchend', clear);
-  root.addEventListener('touchcancel', clear);
+  /**
+   * N1 — `shouldCommit` distinguishes a genuine release (touchend: commit
+   * if still armed) from an interrupted gesture (touchcancel: never
+   * commits, even if armed — an OS-level interruption is not a deliberate
+   * release). The spring-back itself stays unconditional either way
+   * (DI-427).
+   */
+  function finish(shouldCommit) {
+    if (shouldCommit && armed && axis === 'x') {
+      cancelPendingLongPress();
+      openReplyFor(targetMid, surface);
+    }
+    springBack();
+    start = null; targetMid = null; targetMsgEl = null; targetColEl = null; axis = null; committed = false; armed = false;
+  }
+  root.addEventListener('touchend', () => finish(true));
+  root.addEventListener('touchcancel', () => finish(false));
 }
 export const _bindMessageSwipe = bindMessageSwipe;
 
@@ -3724,8 +4084,11 @@ function maybeMentionMenu(input) {
   menu.querySelectorAll('[data-mention]').forEach(b => b.addEventListener('click', () => {
     input.value = input.value.replace(/@[\w.']*$/, '@' + b.dataset.mention + ' ');
     menu.style.display = 'none';
-    input.focus();
+    // RG-296 — the option no longer takes focus (below), so the composer never
+    // blurred; re-focus only if something else did take it (no keyboard bounce).
+    if (document.activeElement !== input) input.focus();
   }));
+  menu.querySelectorAll('[data-mention]').forEach(keepComposerFocus);   // RG-296
 }
 
 // ── Prefs panel (identity + notifications) ────────────────────────────────────
@@ -4043,19 +4406,32 @@ function sendSheetMessage() {
 
 function bindSheetComposer() {
   document.getElementById('chat-sheet-send')?.addEventListener('click', sendSheetMessage);
-  document.getElementById('chat-sheet-input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width:700px)').matches) { e.preventDefault(); sendSheetMessage(); }
-  });
+  keepComposerFocus(document.getElementById('chat-sheet-send'));   // RG-296
+  // RG-297 — the textarea is carried across renderSheetComposer(); bind it once.
+  const inp = document.getElementById('chat-sheet-input');
+  if (inp && !_wiredComposerInputs.has(inp)) {
+    _wiredComposerInputs.add(inp);
+    inp.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey && matchMedia('(min-width:700px)').matches) { e.preventDefault(); sendSheetMessage(); }
+    });
+  }
   document.getElementById('chat-sheet-cancel-reply')?.addEventListener('click', () => { U.sheetReplyTo = null; renderSheetComposer(); });
+  keepComposerFocus(document.getElementById('chat-sheet-cancel-reply'));   // RG-297 (RG-296 review finding 1)
 }
 
-/** Composer-only refresh (DI-125b) — same outerHTML-swap-then-rebind shape as
- *  renderPillsOnly() uses for the pills row, chosen for the same reason:
- *  starting/cancelling a reply shouldn't re-fetch or redraw the message list. */
+/** Composer-only refresh (DI-125b) — starting/cancelling a reply shouldn't
+ *  re-fetch or redraw the message list.
+ *  RG-297 — the live textarea is CARRIED across the refresh (see
+ *  carryComposerAcross()): the old outerHTML swap rebuilt it, which wiped a
+ *  typed draft on ↩/✕ (the sheet never had RG-174) and dropped the keyboard
+ *  after every send. The owner is the current player: the sheet is torn down
+ *  on any identity change (resetGameChatSheetForTeardown(), F5), so a sheet
+ *  composer never outlives the player it was opened for. */
 function renderSheetComposer() {
   const host = document.getElementById('chat-sheet-composer');
   if (!host) return;
-  host.outerHTML = sheetComposerHTML();
+  const html = sheetComposerHTML();
+  if (!carryComposerAcross(host, html, 'chat-sheet-input', me(), true)) host.outerHTML = html;
   bindSheetComposer();
 }
 
@@ -4183,7 +4559,9 @@ function renderSheetMessages() {
   host.querySelectorAll('[data-react]').forEach(b => b.addEventListener('click', () => {
     if (!self) return; toggleReact(b.dataset.target, b.dataset.react, self); renderSheetMessages();
   }));
+  host.querySelectorAll('[data-react]').forEach(keepComposerFocus);   // RG-296
   host.querySelectorAll('[data-retry]').forEach(b => b.addEventListener('click', () => { retryFailed(b.dataset.retry); renderSheetMessages(); }));
+  host.querySelectorAll('[data-retry]').forEach(keepComposerFocus);   // RG-297 (RG-296 review finding 1)
   // DI-125a/b — the SAME reveal gestures and the SAME action-button wiring
   // the main feed uses, delegated on THIS container. `host` persists across
   // repeat renderSheetMessages() calls, so the three gesture binders' own

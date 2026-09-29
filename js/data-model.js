@@ -417,13 +417,22 @@ export const THEMES = [
 // by not naming schools here at all — data-model.js never imports
 // storage.js, so it has no way to read claimedAlmaMaters() and compute a
 // roster string itself (same constraint documented on getAlmaMaterMatch()
-// above). Instead this item points at the single derived list that already
-// renders on the same page (renderRulesPage()'s "⭐ Alma Maters" section,
-// js/app.js) — one source of truth, not two copies to keep in sync.
+// above).
+//
+// DI-423 (UN-378, 2026-09-28) — the item used to point at "the single
+// derived list that already renders on the same page" (renderRulesPage()'s
+// "⭐ Alma Maters" section). That section is RETIRED off the Rules page
+// entirely ("Alma maters should not be listed in the rules section." —
+// Drew, verbatim); the roster's canonical, maintained home is now the
+// commissioner's Comm -> Players "Alma maters & home teams" card, which a
+// PLAYER cannot see. Rather than point a player-facing rule at a
+// commissioner-only surface, the "listed under ⭐ Alma Maters below" clause
+// is simply dropped — the sentence still states the RULE (alma mater games
+// are prioritized) without naming a location for the roster at all.
 export const DEFAULT_RULES = [
   { id:'r1', section:'The Basics', items:[
     'Each week, the Commissioner selects 10 college football games for the slate.',
-    'Alma mater games — the schools claimed by active players, listed under ⭐ Alma Maters below — are always prioritized.',
+    'Alma mater games — the schools claimed by active players — are always prioritized.',
     'You pick which team you think will win against the spread.',
     'Picks are blind — you cannot see others\' picks until you submit your own.',
     'Games lock at kickoff. If the week is locked, no picks are accepted even for future games.',

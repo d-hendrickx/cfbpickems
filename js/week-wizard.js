@@ -106,6 +106,16 @@
  *   7. `finishWeekSetupFromWizard()`'s SCHEDULED mode requires
  *      `week.status === 'draft'` and rejects a past datetime
  *      (`WIZARD_COPY.SCHEDULE_PAST_DATETIME`).
+ *
+ * ── DI-424 (UN-379, coordinator addendum to the UX Revamp v0.27.2 batch,
+ * 2026-09-28) ────────────────────────────────────────────────────────────
+ * `WIZARD_STEPS[4]` (id `'announce'`, title "Announce (optional)") becomes
+ * id `'blurb'`, title "Weekly Blurb (optional)" — the DOM/save wiring for
+ * this is entirely in `js/app.js` (this file stays DOM-free, per this
+ * file's own rule above), which reuses the standalone Week-tab blurb
+ * card's exact `saveWeek()` call. `WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM` is
+ * retired (see its own former call site's comment); `shouldConfirmAnnouncementDiscard()`
+ * is left in place — see its own updated header comment for why.
  */
 
 // ── Step metadata (§2.3's ASCII diagram) ────────────────────────────────────
@@ -114,7 +124,14 @@ export const WIZARD_STEPS = Object.freeze([
   { step: 2, id: 'populate', title: 'Populate games' },
   { step: 3, id: 'confirm', title: 'Confirm slate + spreads' },
   { step: 4, id: 'timing', title: 'Timing & auto-transitions' },
-  { step: 5, id: 'announce', title: 'Announce (optional)' },
+  // DI-424 (UN-379, coordinator addendum, 2026-09-28) — Step 5 was "Announce
+  // (optional)" (a one-time push via postCommissionerAnnouncement()); it is
+  // now "Weekly Blurb (optional)", bound to week.blurb (the persistent
+  // Picks-page banner) via the SAME saveWeek() call the standalone Week-tab
+  // card already uses. The standalone "🎙 Commissioner Announcement" card
+  // (Comm→Week) is UNCHANGED — a one-time announcement is still reachable
+  // from there, just no longer duplicated inside the wizard.
+  { step: 5, id: 'blurb', title: 'Weekly Blurb (optional)' },
   { step: 6, id: 'open', title: 'Open for picks' },
 ]);
 export const WIZARD_STEP_COUNT = WIZARD_STEPS.length;
@@ -131,7 +148,11 @@ export const WIZARD_COPY = Object.freeze({
   FETCH_FAILED: "Couldn't fetch games — check your connection and try again.",
   FETCH_ZERO: "No games found for these dates. Check the week's start/end dates in Step 1, or add games manually from the Games tab after this wizard.",
   MISSING_SPREADS: (n) => `${n} game${n === 1 ? '' : 's'} still need${n === 1 ? 's' : ''} a spread before you can open for picks.`,
-  ANNOUNCE_SKIP_CONFIRM: 'You can send an announcement anytime from the Week tab — skip for now?',
+  // DI-424 — ANNOUNCE_SKIP_CONFIRM is RETIRED: Step 5 is no longer an
+  // announcement draft with something to lose on Back/Skip, it is a plain
+  // textarea bound to week.blurb — a blank field is not a confirm-guarded
+  // action the way an unsent announcement draft was. (Was: 'You can send an
+  // announcement anytime from the Week tab — skip for now?')
   OPEN_SUCCESS: (weekNumber) => `Week ${weekNumber} is open — picks unlock now.`,
   EVERYONE_PICKED: "Everyone's picked — nothing to nudge.",
   // DI-358 — the three-way open-mode control at Step 6.
@@ -486,12 +507,21 @@ export function stepBackTarget(step) {
 }
 
 /**
- * Step 5 (Announce)'s existing Skip handler already refuses to discard a
- * drafted-but-unsent announcement silently (`WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM`,
- * confirmed via a browser `confirm()`) — DI-354 asks the NEW Back button on
- * the same step to reuse that exact judgment, not invent a second "has this
- * been typed" check that could drift from Skip's. Whitespace-only text does
- * not count as drafted content (a stray space shouldn't gate navigation).
+ * ORPHANED FROM THE CREATE-FLOW'S STEP 5 by DI-424 (2026-09-28) — that step
+ * is now "Weekly Blurb", which has nothing to confirm-discard (a blank
+ * blurb is not a lost draft the way an unsent announcement was;
+ * `WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM` is retired, above). Left in place,
+ * exported and tested exactly as before — it was never actually wired into
+ * app.js's create-flow Step 5 handler in the first place (that handler
+ * inlined its own equivalent check).
+ *
+ * SOFTENED, reviewer round 2 N3 (2026-09-28): the Manage screen's own
+ * separate "Announce" section (`renderWeekWizardManageHTML()`/
+ * `bindWeekWizardManage()`, unaffected by DI-424) does NOT call this
+ * function today and has no discard-confirm of its own at all — its Send
+ * handler just posts whatever text is present, unconditionally. This is an
+ * orphaned pure utility, exported and covered by its own tests, not a
+ * function with a live caller anywhere in the app right now.
  */
 export function shouldConfirmAnnouncementDiscard(announceText) {
   return !!(announceText && announceText.trim().length > 0);

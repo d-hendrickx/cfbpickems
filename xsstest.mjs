@@ -1432,6 +1432,12 @@ const EXEMPTIONS = [
   // closed, literal-valued lookup table as SYNC_ICON_BY_STATUS above).
   { file: 'js/app.js', expr: "icon(iconName)",
     why: "iconName resolves through SYNC_ICON_BY_STATUS, a literal-valued lookup table keyed on the backend adapter's own small enumerated status vocabulary — never user data" },
+  // DI-418 (UN-373, 2026-09-28) — renderLeaguesHomeOverlayBody()'s back
+  // affordance, mirroring showLeaguePageOverlay()'s own back-chevron shape.
+  // Same triviality as icon('close')/icon('munera') above: a hard-coded
+  // string literal, no `{ label }` option, no data flows through it.
+  { file: 'js/app.js', expr: "icon('chevronLeft')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   // DI-394 (UN-354, 2026-09-27) — weekNavCardHTML()'s shared viewing-week
   // card (js/app.js), reused by both Picks (renderPicksWeekNav()) and
   // Dashboard (renderDashboardWeekNav()). `dataAttr` is a function
@@ -1607,13 +1613,21 @@ const NEW_SWEPT_BACKLOG = {
     { d: "18a6e623ab", n: 1, t: "ctx.escHtml(player.displayName || '')" },
     { d: "afed03527f", n: 1, t: "ctx.escHtml(player.initials || '')" },
     { d: "e1f7419945", n: 1, t: "almaIcon" },
-    { d: "aae7f26412", n: 1, t: "ctx.escHtml(player.almaMater || '')" },
+    // DI-423 AMENDMENT (2026-09-28) — the retired free-text <input>'s
+    // `ctx.escHtml(player.almaMater || '')` interpolation is GONE (replaced
+    // by the <select> above, whose ctx.bodies.almaMaterOptionsHTML pin
+    // carries the escaping now) — the stale pin is removed, not left behind.
     { d: "2920cdbf16", n: 2, t: "ctx.escHtml(label)" },
     // Finding 6 (app-shell part 3A review, 2026-09-27) — accordionRow()'s new
     // OPTIONAL `secondary` line, escaped through the SAME injected
     // `ctx.escHtml(...)` every other row-text site in this file already uses.
     { d: "06b13ef1a8", n: 1, t: "ctx.escHtml(secondary)" },
-    { d: "b55ac8822f", n: 3, t: "chevron" },
+    // REVIEWER ROUND 2 (RG-298, 2026-09-28) — grew 3 -> 5: "Your Leagues"
+    // (D1, profileAccountActionsHTML()) and "Help Center" (minor finding,
+    // renderFeedbackRulesGroup()) both gained the SAME chevron every other
+    // drill-in row already carries — reusing the identical `chevron` local
+    // each function already computes, not a new expression shape.
+    { d: "b55ac8822f", n: 5, t: "chevron" },
     { d: "e14d65d016", n: 1, t: "ctx.escHtml(p.target)" },
     { d: "2c7c720cbc", n: 1, t: "ctx.escHtml(p.label)" },
     { d: "3cd021bc86", n: 1, t: "ctx.escHtml(g.label)" },
@@ -1627,6 +1641,13 @@ const NEW_SWEPT_BACKLOG = {
     { d: "c0d2856b74", n: 1, t: "field" },
     { d: "d2a1edd66c", n: 1, t: "opts" },
     { d: "ee2a7d5c9d", n: 1, t: "ctx.escHtml(copy)" },
+    // DI-423 AMENDMENT (2026-09-28) — the Profile pane's alma-mater field
+    // became the same ESPN <select> the chat-prefs picker/Comm->Players->Edit
+    // use; its <option> list arrives pre-built via ctx.bodies.almaMaterOptionsHTML
+    // (app.js's ONE buildAlmaMaterOptions(), which escHtml()'s every school
+    // name/current-value it emits — not provable by this file's classifier,
+    // same shape as every other ctx.bodies.* injection in this module).
+    { d: "f71a0bc689", n: 1, t: "ctx.bodies?.almaMaterOptionsHTML || ''" },
     { d: "670edf0acc", n: 1, t: "state.pane" },
     { d: "c39e7b69be", n: 1, t: "state.phase" },
     { d: "b9f4c1ac11", n: 1, t: "iconOrNothing(ctx, 'close') || '✕'" },

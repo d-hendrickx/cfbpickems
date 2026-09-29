@@ -64,6 +64,20 @@ export const PULL_TO_REFRESH_ARM_PX = 64; // 8x8, the Philosophy's own 8-pt grid
 export const PULL_TO_REFRESH_SUCCESS_FADE_MS = 200;
 
 // DI-325 (T-27 WEEK-SWIPE)
+// SUPERSEDED as an operational zone by DI-419 (2026-09-28) — see
+// DRAWER_ZONE_FRACTION/isInDrawerOpenZone() below, the ONE shared predicate
+// bindWeekSwipe() and bindControlCenterEdgeSwipe() (js/control-center.js)
+// consult. REVIEWER ROUND 2 (N3, 2026-09-28) — chat-ui.js's
+// bindMessageSwipe() does NOT call isInDrawerOpenZone()/DRAWER_ZONE_FRACTION
+// itself (corrects an earlier, inaccurate version of this comment): the B1
+// fix (round 2) instead teaches isInDrawerOpenZone()'s own
+// `_isDrawerYieldTarget()` check to refuse a `.chat-msg` target, so the
+// DRAWER'S OWN arm check backs off a touch starting on a message bubble —
+// bindMessageSwipe() needs no awareness of the drawer's zone at all, it
+// already wins structurally by being a more-specific, same-touchstart
+// target. Kept exported (value unchanged) only because it is still a
+// historically-accurate "28px" fact a few comments/tests reference; nothing
+// in this file computes an arm/yield decision from it anymore.
 export const WEEK_SWIPE_EDGE_EXCLUDE_PX = 28; // left-edge zone reserved for T-13's drawer
 // DI-409 (2026-09-28) — retuned from the DI-325 scaffolding's original 12px.
 // The DI's own instruction: RUBBER_BAND_CAP_PX (24, below) "was sized for a
@@ -74,12 +88,98 @@ export const WEEK_SWIPE_EDGE_EXCLUDE_PX = 28; // left-edge zone reserved for T-1
 // retuning it is safe. Still reuses _rubberBandOffset()'s exact curve, just
 // scaled to this cap instead of RUBBER_BAND_CAP_PX (_weekSwipeRubberBand()).
 export const WEEK_SWIPE_BOUNCE_MAX_PX = 48;   // edge-of-list rubber-band bounce-back
-// Shared for BOTH the edge/cancel spring-back (Small-feedback bucket) AND
-// each half (exit, enter) of the commit hand-off (~140-150ms, half of the
-// 220-300ms Navigation budget, DI-409) — one animation-language duration,
-// not three ad-hoc literals. Matches css/styles.css's --motion-fast (150ms)
-// exactly.
+// DI-420 (2026-09-28, amends DI-409) — the cancel / edge spring-back stays
+// on the Small-feedback bucket (an aborted or at-bound drag reverting is
+// feedback, not a navigation). Matches css/styles.css's --motion-fast
+// (150ms) exactly.
 export const WEEK_SWIPE_BOUNCE_MS = 150;
+// DI-420 — the COMMIT slide (a completed week navigation) moves to the
+// Navigation bucket, matching #league-page-overlay's own
+// `transition:transform var(--motion-nav) ease-out` (css/styles.css:5042) —
+// same token, same bucket, same "this is a real navigation event" reasoning
+// Drew is pointing at. Matches css/styles.css's --motion-nav (260ms) exactly.
+export const WEEK_SWIPE_COMMIT_MS = 260;
+
+// DI-419 (2026-09-28, Drew ruling A) — the ONE shared drawer-open-vs-
+// week-swipe arbitration zone. Replaces WEEK_SWIPE_EDGE_EXCLUDE_PX's (28px)
+// and control-center.js's DRAWER_EDGE_ZONE_PX's role with a single
+// fraction-of-viewport constant, consulted by bindWeekSwipe() (below) and
+// bindControlCenterEdgeSwipe() (js/control-center.js) — never re-derived
+// independently at either. See `isInDrawerOpenZone()`'s own file-header
+// note (N3, round 2) for why chat-ui.js's bindMessageSwipe() does NOT
+// consult this fraction itself.
+export const DRAWER_ZONE_FRACTION = 0.25;
+
+/**
+ * REVIEWER ROUND 2 (2026-09-28), B1/B2 BLOCK — the zone alone is not enough:
+ * a touch geometrically inside the drawer's own zone can still belong to a
+ * MORE SPECIFIC gesture/control that also lives there. Two concrete cases,
+ * both closed over here so all three call sites (bindWeekSwipe below,
+ * bindControlCenterEdgeSwipe in js/control-center.js, and any future one)
+ * agree by construction:
+ *   B1 — a touch starting on a chat message (`.chat-msg`) belongs to
+ *        bindMessageSwipe()'s reply swipe (js/chat-ui.js), never the
+ *        drawer — this was ALREADY true by intent (see that file's own
+ *        DI-427 arbitration note) but nothing actually enforced it against
+ *        the drawer's OWN, independently-armed `window` listener; a fast
+ *        L→R drag on a bubble armed BOTH gestures.
+ *   B2 (ruled the UN's own exception, no Drew round trip) — the "anywhere"
+ *      widening an L→R swipe now claims on every non-Picks/Dashboard tab
+ *      collides with every horizontal scroller/text field that ALSO lives
+ *      in that space: `.chat-pills-scroll`, `.dashboard-scroll` (wraps the
+ *      wide matrix — also reachable on Picks/Dashboard, inside the LEFT
+ *      zone specifically), `.comm-tabbar`, `.batch-grid-scroll`, and any
+ *      `input`/`textarea`/`[contenteditable]`. A horizontal scroller only
+ *      yields when it actually HAS somewhere to scroll back to
+ *      (`scrollLeft > 0`) — at rest (already scrolled to its own start) an
+ *      L→R drag there is unambiguous and the drawer/week-swipe keep it.
+ *
+ * `target` is OPTIONAL (existing callers that do not supply one keep
+ * today's exact zone-only behavior — no caller is silently broken by this
+ * addition). Pure otherwise: reads only `target.closest()`/`.scrollLeft`,
+ * no other DOM/global state.
+ */
+const DRAWER_YIELD_SELECTOR = '.chat-msg, input, textarea, [contenteditable]';
+const DRAWER_HSCROLL_SELECTOR = '.chat-pills-scroll, .dashboard-scroll, .comm-tabbar, .batch-grid-scroll';
+
+/** Exported for direct/mutation testing — see the file-header note above. */
+export function _isDrawerYieldTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  if (target.closest(DRAWER_YIELD_SELECTOR)) return true;
+  const scroller = target.closest(DRAWER_HSCROLL_SELECTOR);
+  return !!(scroller && (scroller.scrollLeft || 0) > 0);
+}
+
+/**
+ * DI-419 §Arbitration, Drew ruling A quoted in full: "on Picks and
+ * Dashboard, a left-to-right swipe that STARTS in the left quarter of the
+ * screen opens the control center; one that starts further in goes to the
+ * previous week... On every other tab, left-to-right from anywhere opens the
+ * control center. Define the zone as a fraction of the viewport width (25%),
+ * not a pixel count..."
+ *
+ * Pure predicate — no DOM read beyond the values handed in (plus, via
+ * `target`, ITS OWN `.closest()`/`.scrollLeft` — never a second, independent
+ * DOM query), so it is equally usable from a touchstart handler (a live
+ * clientX/target) or a test (synthetic ones). `_isDrawerYieldTarget(target)`
+ * is checked FIRST and unconditionally — a more-specific gesture/control
+ * always wins, on every tab, open or closed. Failing that: `tab` not being
+ * 'picks'/'dashboard' always returns true (anywhere opens the drawer, per
+ * Drew's own "every other tab... from anywhere"); on 'picks'/'dashboard' it
+ * is true only inside the left DRAWER_ZONE_FRACTION of the viewport.
+ */
+export function isInDrawerOpenZone({ tab, clientX, viewportWidthPx, target } = {}) {
+  if (_isDrawerYieldTarget(target)) return false;
+  if (tab !== 'picks' && tab !== 'dashboard') return true;
+  // On Picks/Dashboard, no viewport width to measure the 25% fraction
+  // against means there is no basis to claim the touch for the drawer —
+  // fails CLOSED (week-swipe keeps ownership of its own tab, matching
+  // today's "gesture keeps working even if a caller omits a param" idiom
+  // every other binder in this file follows), never open.
+  const width = typeof viewportWidthPx === 'number' && viewportWidthPx > 0 ? viewportWidthPx : 0;
+  if (width <= 0 || typeof clientX !== 'number') return false;
+  return clientX >= 0 && clientX < width * DRAWER_ZONE_FRACTION;
+}
 
 // DI-327 (T-29 SCROLL-BOUNCE)
 export const RUBBER_BAND_CAP_PX = 24;
@@ -121,6 +221,12 @@ export function gesturesSuspended() {
   // suspension contract, DI-C1's sheet reuses `.chat-sheet` markup).
   if (document.getElementById?.('league-page-overlay')) return true;
   if (document.getElementById?.('week-wizard-sheet-wrap')) return true;
+  // FIX (RG-298, 2026-09-28, reviewer BLOCK B3) — the Leagues Home overlay
+  // (`#leagues-home-overlay`, DI-418) is a THIRD full-screen body-appended
+  // surface, same shape as League Page/the wizard sheet just above; it was
+  // missing from this list, so a window-level gesture (pull-to-refresh in
+  // particular — the RG-285 class of defect) could still arm underneath it.
+  if (document.getElementById?.('leagues-home-overlay')) return true;
   // T-13 (control-center drawer), wired this window. `#control-center`'s own
   // `data-open` attribute is driven by js/control-center.js's
   // `isDrawerVisuallyOpen(state)` — true for 'open'/'opening'/'closing', and
@@ -883,9 +989,8 @@ export function _weekSwipeRubberBand(overscrollPx) {
  * px value while dragging, a signed CSS percent while animating) and
  * `[data-week-swipe-animating]` (css/styles.css) are the only DOM writes
  * this binder makes beyond the pre-existing `onNavigate()` call; the
- * transition itself is CSS (`--motion-fast`/WEEK_SWIPE_BOUNCE_MS, one
- * animation language), never a JS raf loop — same "CSS class/attribute +
- * matched-duration timer" precedent already shipped for the dashboard-
+ * transition itself is CSS, never a JS raf loop — same "CSS class/attribute
+ * + matched-duration timer" precedent already shipped for the dashboard-
  * layout cross-fade (`js/app.js` ~2460-2465's `.dash-layout-fading`) and
  * the League Page swipe-back (`js/app.js`'s `finishSlideThenRemove()` /
  * `#league-page-overlay[data-dragging]`/`[data-no-transition]`) — this
@@ -895,22 +1000,55 @@ export function _weekSwipeRubberBand(overscrollPx) {
  * `prefersReducedMotion()` short-circuits the whole visual layer to today's
  * exact behavior: no live tracking, `onNavigate()` fires immediately on
  * commit with no transform at all.
+ *
+ * DI-420 (2026-09-28, amends DI-409) — `[data-week-swipe-animating]` now
+ * carries which of TWO durations is playing, not a single boolean:
+ * `="commit"` (WEEK_SWIPE_COMMIT_MS/--motion-nav, 260ms — a completed
+ * navigation, the exit+enter halves of commitSlide()) or `="bounce"`
+ * (WEEK_SWIPE_BOUNCE_MS/--motion-fast, 150ms — cancel/edge spring-back,
+ * unchanged bucket, unchanged duration). One animation LANGUAGE (CSS
+ * transition + matched-duration fallback timer), two motion-system
+ * BUCKETS, matching the League Page overlay's own --motion-nav for the
+ * identical "one screen pushes another" shape (css/styles.css:5042).
+ *
+ * DI-419 (2026-09-28, Drew ruling A) — this binder no longer refuses to arm
+ * at touchstart based on any left-edge zone at all (the R→L "swipe to next
+ * week starting near the left of the screen" gesture must never be
+ * stranded). Instead, the INSTANT axis resolution lands on 'x' in
+ * `onTouchMove`, an L→R drag (`dx > 0`) that started inside the ONE shared
+ * `isInDrawerOpenZone()` zone yields entirely to the drawer's own,
+ * independently-armed `window`-level binder (js/control-center.js) — no
+ * rubber-band, no commit, no spring-back for this gesture. R→L, or an L→R
+ * start OUTSIDE the zone, is completely unaffected — see the yield check
+ * below for the full reasoning.
  */
 const weekSwipeStates = new WeakMap();
 
 export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   if (!root || typeof root.addEventListener !== 'function') return () => {};
   if (weekSwipeStates.has(root)) return weekSwipeStates.get(root);
-  const edgeExcludePx = opts.leftEdgeExcludePx ?? WEEK_SWIPE_EDGE_EXCLUDE_PX;
   let start = null, axis = null, committed = false, busy = false;
-  let dragWeekIds = [], dragCurrentWeekId = null;
+  let dragWeekIds = [], dragCurrentWeekId = null, dragTab = null, dragTarget = null;
+  // REVIEWER ROUND 3 (N-a, 2026-09-29) — the px offset root is ACTUALLY
+  // painted at (the last live drag write), so commitSlide() can start the
+  // incoming layer flush against the clone instead of a full width away.
+  let liveOffsetPx = 0;
+
+  function viewportWidthPx() {
+    return (typeof window !== 'undefined' && typeof window.innerWidth === 'number') ? window.innerWidth : 0;
+  }
 
   function setX(cssValue) {
     if (typeof root.style?.setProperty === 'function') root.style.setProperty('--week-swipe-x', cssValue);
+    // N-a — only a plain px value is a live drag position; percent/calc
+    // values are animation endpoints, after which root rests at 0.
+    liveOffsetPx = /^-?[\d.]+px$/.test(cssValue) ? parseFloat(cssValue) : 0;
   }
-  function setAnimating(on) {
+  /** DI-420 — `kind` is `'commit' | 'bounce' | falsy` (off). See this
+   *  function's own file-header note above for what each bucket means. */
+  function setAnimating(kind) {
     if (!root.dataset) return;
-    if (on) root.dataset.weekSwipeAnimating = 'true';
+    if (kind) root.dataset.weekSwipeAnimating = kind;
     else delete root.dataset.weekSwipeAnimating;
   }
 
@@ -922,7 +1060,7 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
    * the DI's own words). `done` runs at most once. Kept local rather than
    * imported so this module never depends on app.js.
    */
-  function afterTransition(done) {
+  function afterTransition(done, durationMs) {
     let finished = false;
     let timer = null;
     function finish(e) {
@@ -934,18 +1072,67 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       done();
     }
     root.addEventListener('transitionend', finish);
-    timer = setTimeout(finish, WEEK_SWIPE_BOUNCE_MS + 60);
+    // DI-420 — the bounded fallback tracks whichever duration is ACTUALLY
+    // playing (WEEK_SWIPE_COMMIT_MS for a commit-exit/enter half,
+    // WEEK_SWIPE_BOUNCE_MS for a cancel/edge spring-back), never a single
+    // shared literal — the fallback must time out AFTER the real CSS
+    // transition it is standing in for, whichever bucket that is.
+    timer = setTimeout(finish, (durationMs ?? WEEK_SWIPE_BOUNCE_MS) + 60);
   }
 
   function springBack() {
     // Cancelling, or a release at an edge — Small-feedback bucket, no
     // haptic (an incomplete or edge gesture is never a success).
     if (prefersReducedMotion()) { setAnimating(false); setX('0px'); return; }
-    setAnimating(true);
+    setAnimating('bounce');
     setX('0px');
-    afterTransition(() => setAnimating(false));
+    afterTransition(() => setAnimating(false), WEEK_SWIPE_BOUNCE_MS);
   }
 
+  /**
+   * REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) — REBUILT.
+   * The prior two-phase design (exit 260ms → transitionend → re-render →
+   * rAF → enter 260ms) was a planning defect, not a build defect: it ran
+   * ~520ms total with the page FULLY off-screen between the two halves and
+   * `busy` latched the whole time. Drew's actual need is SHAPE — both weeks
+   * visible and moving AT ONCE, the same "one screen pushes another" the
+   * League Page overlay already does — not two sequential animations.
+   *
+   * New shape, ONE `--motion-nav` (260ms) transition, both layers moving
+   * together:
+   *   1. Clone the OUTGOING content into a `position:fixed` overlay layer,
+   *      sized/positioned to root's OWN current `getBoundingClientRect()`
+   *      (which already reflects any live drag offset — visual continuity,
+   *      no snap). `position:fixed` (not `absolute`) specifically because
+   *      root ITSELF always carries a CSS `transform`
+   *      (`#page-picks,#page-dashboard{transform:translateX(...)}`,
+   *      unconditional) — a `position:absolute`/`fixed` DESCENDANT of a
+   *      transformed element uses that ancestor as its containing block and
+   *      would compound with root's own motion; a `position:fixed` SIBLING,
+   *      inserted into root's own (untransformed) parent, is unaffected by
+   *      that and resolves against the real viewport, matching exactly
+   *      where root visually sits right now. `pointer-events:none` +
+   *      `aria-hidden="true"` — decorative only, never reachable.
+   *   2. Render the NEW week into the REAL element (the existing
+   *      `onNavigate()` call, unchanged), positioned off-screen at the
+   *      OPPOSITE edge from where the clone will exit toward (the
+   *      continuous-filmstrip contract DI-409 already established) —
+   *      transition OFF for this write, then a forced reflow (B1, reviewer
+   *      round 2 precedent — a single rAF alone is not reliably ordered
+   *      after a preceding style write on WebKit).
+   *   3. In ONE animation frame, animate BOTH layers: the clone slides to
+   *      `exitPct` (fully off, toward the drag direction — matching the OLD
+   *      code's own exit direction exactly), root slides to `0` (fully in).
+   *      Same duration, same frame, same easing — a true simultaneous
+   *      slide, never a frame where neither layer is on screen.
+   *   4. `busy` releases and the clone is removed ONCE, on root's own
+   *      transitionend (or the matched fallback timer) — ONE transition
+   *      window, not two.
+   * Reduced motion: unchanged — instant navigate, no transform, no clone
+   * ever created. The cancel/edge spring-back (`springBack()`, above) is
+   * untouched — still 150ms/--motion-fast, B5 only rebuilds the COMMIT
+   * path.
+   */
   function commitSlide(dxAtCommit, targetWeekId) {
     // Replaces the drifted haptic('selection') call — js/haptics.js's own
     // kind table documents 'light' as "swipe commits" (DI-409's Touched-
@@ -960,61 +1147,123 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       return;
     }
     busy = true;
-    const exitPct = dxAtCommit > 0 ? 100 : -100; // exits toward the drag direction
-    setAnimating(true);
-    setX(`${exitPct}%`);
-    afterTransition(() => {
-      // C1 (reviewer round 2) — a throwing onNavigate (a render function
-      // failing) must not strand the page at the exit offset with the busy
-      // guard latched forever. try/finally guarantees the reset fires
-      // exactly when the call failed, then re-throws — this binder never
-      // swallows the caller's own error, only guarantees the gesture
-      // itself can't get stuck because of it.
-      let renderFailed = false;
-      try {
-        if (typeof onNavigate === 'function') onNavigate(targetWeekId);
-      } catch (err) {
-        renderFailed = true;
-        throw err;
-      } finally {
-        if (renderFailed) {
-          setAnimating(false);
-          setX('0px');
-          busy = false;
+    const exitPct = dxAtCommit > 0 ? 100 : -100; // OLD content exits toward the drag direction
+
+    const canClone = typeof document !== 'undefined' && typeof document.createElement === 'function'
+      && root.parentNode && typeof root.getBoundingClientRect === 'function';
+    let clone = null;
+    let removeClone = () => {};
+    if (canClone) {
+      const rect = root.getBoundingClientRect();
+      clone = document.createElement('div');
+      clone.className = 'week-swipe-exit-layer';
+      clone.setAttribute('aria-hidden', 'true');
+      // REVIEWER ROUND 3 (N-b) — `inert` as well: aria-hidden alone leaves
+      // the clone's copied buttons focusable (and the pointer-events:none
+      // below covers only the pointer). Decorative, for 260ms, never
+      // reachable by any input.
+      clone.setAttribute('inert', '');
+      // Snapshot of the OUTGOING content, before onNavigate replaces root's
+      // own. N-b: this duplicates every id inside root for the ~260ms the
+      // clone lives. Harmless by construction — the clone is inserted AFTER
+      // root (insertBefore(clone, root.nextSibling)), so getElementById()
+      // and querySelector('#…') return root's real, first-in-document node,
+      // and the clone is removed on the transition's end (or its fallback
+      // timer, or a throwing onNavigate).
+      clone.innerHTML = root.innerHTML;
+      const cs = clone.style;
+      cs.position = 'fixed';
+      cs.top = `${rect.top}px`;
+      cs.left = `${rect.left}px`;
+      cs.width = `${rect.width}px`;
+      cs.height = `${rect.height}px`;
+      cs.overflowY = 'auto';
+      cs.pointerEvents = 'none';
+      cs.zIndex = '5';
+      cs.transform = 'translateX(0px)';
+      root.parentNode.insertBefore(clone, root.nextSibling);
+      removeClone = () => { if (clone.parentNode) clone.parentNode.removeChild(clone); };
+      // N-b — innerHTML carries no scroll position: a sideways-scrolled
+      // horizontal scroller (the Dashboard matrix's .dashboard-scroll) would
+      // snap to 0 in the outgoing layer. Copy scrollLeft for every scroller
+      // that has one; the two subtrees were serialized/parsed from the same
+      // markup, so document order pairs them — the tagName+className check
+      // skips any pair the round trip did not preserve. Reads happen after
+      // getBoundingClientRect() above (layout already clean); the writes
+      // land on the clone only.
+      if (typeof root.querySelectorAll === 'function' && typeof clone.querySelectorAll === 'function') {
+        const src = root.querySelectorAll('*');
+        const dst = clone.querySelectorAll('*');
+        if (src.length === dst.length) {
+          for (let i = 0; i < src.length; i++) {
+            const sl = src[i].scrollLeft;
+            if (sl > 0 && dst[i].tagName === src[i].tagName && dst[i].className === src[i].className) dst[i].scrollLeft = sl;
+          }
         }
       }
-      // Fresh content is now painted — root's own node persists across the
-      // repaint (only its innerHTML changed), so this same element carries
-      // the hand-off. Position it at the OPPOSITE edge from where the old
-      // content exited (a continuous filmstrip, not two independent
-      // jumps), transition off for one frame, then animate to 0.
+    }
+
+    // C1 (reviewer round 2, DI-409) — a throwing onNavigate (a render
+    // function failing) must not strand the page (or the clone) with the
+    // busy guard latched forever.
+    try {
+      if (typeof onNavigate === 'function') onNavigate(targetWeekId);
+    } catch (err) {
+      removeClone();
       setAnimating(false);
-      setX(`${-exitPct}%`);
-      // B1 (reviewer round 2) — force a reflow between this position-reset
-      // write and re-enabling the transition below. A single
-      // requestAnimationFrame() alone is not reliable: WebKit can dispatch
-      // it before flushing this intervening style write within the same
-      // frame (proven on the fallback-timer path; the normal path is
-      // likely affected on iOS too), so the enter half could animate FROM
-      // the same edge the old content just exited toward instead of from
-      // the opposite one. Real DOM elements always expose `offsetWidth`
-      // (0 if unrendered); a test fixture without it just reads
-      // `undefined`, harmlessly.
-      void root.offsetWidth;
-      const enter = () => {
-        setAnimating(true);
-        setX('0px');
-        afterTransition(() => { setAnimating(false); busy = false; });
-      };
-      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(enter); else enter();
-    });
+      setX('0px');
+      busy = false;
+      throw err;
+    }
+    // Fresh content is now painted — root's own node persists across the
+    // repaint (only its innerHTML changed). Position it at the OPPOSITE
+    // edge from where the clone is about to exit toward (continuous
+    // filmstrip), transition off for one frame.
+    setAnimating(false);
+    // REVIEWER ROUND 3 (N-a) — start the incoming layer flush against the
+    // clone: the clone sits at root's live drag offset (its rect was read
+    // with the drag transform applied), so a bare -exitPct% would leave a
+    // strip exactly that wide between the two layers (32px measured). With
+    // no live offset (a single-move commit) the value is the plain percent.
+    const off = liveOffsetPx;
+    const plusOff = off < 0 ? `- ${-off}px` : `+ ${off}px`;   // "+ off", sign-normalized for readable CSS
+    const minusOff = off < 0 ? `+ ${-off}px` : `- ${off}px`;  // "- off"
+    setX(off ? `calc(${-exitPct}% ${plusOff})` : `${-exitPct}%`);
+    // B1 (reviewer round 2) — force a reflow between this position-reset
+    // write and re-enabling the transition below, same reasoning as before:
+    // WebKit can dispatch a requestAnimationFrame() callback before
+    // flushing an intervening style write within the same frame. Real DOM
+    // elements always expose `offsetWidth` (0 if unrendered); a test
+    // fixture without it just reads `undefined`, harmlessly.
+    void root.offsetWidth;
+
+    const animate = () => {
+      setAnimating('commit');
+      setX('0px');
+      if (clone && clone.parentNode) {
+        clone.style.transition = `transform ${WEEK_SWIPE_COMMIT_MS}ms ease-out`;
+        // N-a — the clone travels the SAME distance as root (one width less
+        // the live offset), so with one duration and one easing the two
+        // layers stay touching for the whole slide, not just at its start.
+        clone.style.transform = off ? `translateX(calc(${exitPct}% ${minusOff}))` : `translateX(${exitPct}%)`;
+      }
+      afterTransition(() => {
+        removeClone();
+        setAnimating(false);
+        busy = false;
+      }, WEEK_SWIPE_COMMIT_MS);
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(animate); else animate();
   }
 
   function onTouchStart(e) {
     if (busy || gesturesSuspended()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
-    if (t.clientX < edgeExcludePx) { start = null; return; } // reserved for T-13's drawer
+    // DI-419 — no zone-based refusal to arm here anymore (see this
+    // function's own file-header note); the drawer/week-swipe arbitration
+    // happens once the axis resolves in onTouchMove, below, so an R→L
+    // gesture starting anywhere near the left edge is never stranded.
     // Defensive — clears any transition attribute a prior interrupted
     // spring-back left behind, so a fresh drag always starts raw/untracked
     // (never lagging the finger under a leftover transition).
@@ -1028,9 +1277,11 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     start = { x: t.clientX, y: t.clientY };
     axis = null;
     committed = false;
-    const s = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null };
+    dragTarget = e.target ?? null;
+    const s = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null, tab: null };
     dragWeekIds = Array.isArray(s?.weekIds) ? s.weekIds : [];
     dragCurrentWeekId = s?.currentWeekId ?? null;
+    dragTab = s?.tab ?? null;
   }
   function onTouchMove(e) {
     if (!start || committed) return;
@@ -1040,6 +1291,37 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     const dy = t.clientY - start.y;
     if (axis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      // DI-419 §Arbitration, "the R→L carve-out" — an L→R drag (dx>0) that
+      // STARTED inside the one shared drawer-open zone belongs to the
+      // drawer's own, independently-armed `window`-level binder
+      // (js/control-center.js's bindControlCenterEdgeSwipe()), which is
+      // ALREADY tracking this same touch in parallel. Week-swipe cancels
+      // its own tracking for this gesture entirely — no rubber-band, no
+      // commit, no spring-back on release — and yields, rather than fight
+      // it for the same finger. R→L (dx<0), or an L→R start OUTSIDE the
+      // zone, is completely unaffected — falls through to ordinary
+      // tracking below exactly as before this DI.
+      // REVIEWER ROUND 2 (B2) — a SECOND, independent yield reason:
+      // `_isDrawerYieldTarget(dragTarget)` is true for a horizontal
+      // scroller with room to scroll back (`.dashboard-scroll` wraps the
+      // Dashboard matrix — reachable both inside AND outside this 25%
+      // zone) or a text field. This is deliberately NOT threaded through
+      // `isInDrawerOpenZone({...,target})` the way B1 threads it for the
+      // drawer's own call: that call's `target` check makes the DRAWER
+      // refuse (a single "should I arm" question, answered the same
+      // direction by "in zone" and "not a yield-target"), but week-swipe's
+      // own question is the OPPOSITE polarity — "should I yield" — so a
+      // yield-target must OR into the yield decision, not be folded into
+      // the (unrelated) zone-geometry answer, or week-swipe would wrongly
+      // KEEP tracking over a scroller/text-field just because the drawer
+      // also refused it.
+      if (axis === 'x' && dx > 0 && (
+        isInDrawerOpenZone({ tab: dragTab, clientX: start.x, viewportWidthPx: viewportWidthPx() }) ||
+        _isDrawerYieldTarget(dragTarget)
+      )) {
+        start = null; axis = null; committed = false;
+        return;
+      }
     }
     if (axis !== 'x') return; // never fights vertical scroll — no transform touched
     const atBound = _weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx);

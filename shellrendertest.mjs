@@ -131,6 +131,11 @@ const ctx = { session:{ player:{ id:'p1', displayName:'Drew', initials:'DH', alm
   flags:{ isCommissioner:true, isPlatformAdmin:false, isSuperAdmin:false, isPilotLeague:false },
   version:{ APP_VERSION:'0.27.0', APP_VERSION_DATE:'2026-09-27' },
   bodies:{ notifSettingsHTML:'', chatPrefsHTML:'', scribeFileHTML:'', feedbackCardHTML:'', gameRequestHTML:'', releaseNotesHTML:'' },
+  // REVIEWER ROUND 2 (RG-298, 2026-09-28) — accountRows:true so section [D]'s
+  // Profile-pane rows (Your Leagues, Password, Sign Out, Delete Account) are
+  // actually present to measure; section [A] does not touch Profile at all
+  // and is unaffected by this addition.
+  accountRows:true, hasPasswordIdentity:null,
   currentTimeZone:'PT', currentTheme:'neutral', logoView:false, callbacks:{} };
 const trig = document.getElementById('control-center-trigger');
 // DI-405 (2026-09-28, Drew's ruling "Munera mark on web too"): the trigger is the mark ONLY on both platforms.
@@ -495,6 +500,13 @@ try {
     `C-5: #chat-scroll's own measured height is IDENTICAL idle -> armed (idle ${idle.scrollHeight}, armed ${armed.scrollHeight}) — the indicator no longer competes with the thread for flex space (was: 708 -> 691, reviewer round 2 finding 3)`);
   assert(armed.indicatorBottom <= armed.composerTop + 0.5,
     `C-6: the (now-visible) indicator sits ABOVE the composer's own top edge, never over it (indicator bottom ${armed.indicatorBottom}, composer top ${armed.composerTop})`);
+  // DI-399(b-ii) polish (Drew, 2026-09-28): "the bottom is right on the line
+  // and should be brought vertically just a hair". The line is the thread
+  // card's own bottom edge (#chat-scroll is a card; the composer card starts
+  // 10px below it) — at bottom:0 the pill's bottom sat exactly on it (gap 0).
+  // Now it clears that edge by one 8px grid step.
+  assert(armed.scrollBottom - armed.indicatorBottom >= 8 - 0.5,
+    `C-6b: the pill's bottom clears the thread card's bottom edge by at least 8px, not sitting on the line (indicator bottom ${armed.indicatorBottom}, thread bottom ${armed.scrollBottom}, gap ${(armed.scrollBottom - armed.indicatorBottom).toFixed(1)})`);
   assert(armed.indicatorTop < armed.scrollBottom,
     `C-7: …and below the last message — i.e. inside/overlapping the bottom of the thread area, never floating above it as a second "new content" signal (indicator top ${armed.indicatorTop}, thread bottom ${armed.scrollBottom})`);
 
@@ -504,6 +516,76 @@ try {
   const cssText = readFileSync(join(here, 'css', 'styles.css'), 'utf8');
   assert(!/\.chat-pull-refresh\{position:sticky/.test(cssText),
     'C-8 mutation-proof companion: the OLD position:sticky rule for .chat-pull-refresh is genuinely gone from the shipped file, not left alongside the fix');
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[D] RG-294, RE-DERIVED for DI-421/D1 (RG-298, 2026-09-28) — "Sign Out" and');
+  console.log('    "Your Leagues" line up with Password/Rules inside the PROFILE pane (390×844)…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // Drew (live v0.27.1, 2026-09-28): "'sign out' and 'switch league' are
+  // indented compared to the rest of the list" — RG-294's original fix (a
+  // negative-margin correction on `.control-center-identity-actions`, the
+  // wrapper those two rows sat in directly under the identity header).
+  //
+  // REVIEWER ROUND 2 (RG-298, 2026-09-28) — DI-421 subsequently moved BOTH
+  // rows out of the identity header entirely, into the pushed PROFILE pane,
+  // and D1 reordered/re-chevroned them there (Your Leagues -> Password ->
+  // Sign Out -> Delete Account). `.control-center-identity-actions` is now
+  // DELETED (nothing renders it) — RG-294's fix is superseded, not broken;
+  // the alignment question is now "do Sign Out / Your Leagues line up with
+  // every OTHER Profile row (Password)", since they all share the exact
+  // same `.control-center-row control-center-row--action` markup there, with
+  // no special wrapper at all. Re-measured against that reality: push into
+  // Profile first, then compare.
+  {
+    await open(drawerFile, 390, 844, true);
+    for (let i = 0; i < 40 && !(await evaluate('!!window.__ccReady')); i++) await sleep(50);
+    const t = await evaluate(`(() => { const r = document.getElementById('control-center-trigger').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await click(t.x, t.y);
+    await sleep(400);
+    // Push into Profile — the SAME identity-tap button `renderIdentityHeader()`
+    // wires to `data-action="cc-push-profile"`.
+    const p = await evaluate(`(() => { const r = document.querySelector('[data-action="cc-push-profile"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await click(p.x, p.y);
+    await sleep(400);
+    const m = await evaluate(`(() => {
+      const L = sel => { const e = document.querySelector(sel); return e ? +e.getBoundingClientRect().left.toFixed(1) : null; };
+      const R = sel => { const e = document.querySelector(sel); return e ? +e.getBoundingClientRect().right.toFixed(1) : null; };
+      return {
+        signOutLabel: L('#control-center [data-action="cc-signout"] .cc-row-label'),
+        leaguesLabel: L('#control-center [data-action="cc-open-leagues-home"] .cc-row-label'),
+        signOutRow: L('#control-center [data-action="cc-signout"]'), signOutRowRight: R('#control-center [data-action="cc-signout"]'),
+        pwLabel: L('#control-center [data-action="cc-open-password-change"] .cc-row-label'),
+        pwRow: L('#control-center [data-action="cc-open-password-change"]'), pwRowRight: R('#control-center [data-action="cc-open-password-change"]'),
+        avatar: L('#control-center .cc-avatar'),
+        saveBtn: L('#control-center [data-action="cc-save-profile"]'), saveBtnRight: R('#control-center [data-action="cc-save-profile"]'),
+        nameInput: L('#control-center #cc-field-display-name'), nameInputRight: R('#control-center #cc-field-display-name'),
+      };
+    })()`);
+    assert([m.signOutLabel, m.leaguesLabel, m.pwLabel].every(v => typeof v === 'number'),
+      `D-0: fixture — Profile's Sign Out / Your Leagues / Password rows all rendered and measured (${JSON.stringify(m)})`);
+    assert(Math.abs(m.signOutLabel - m.pwLabel) <= 0.5 && Math.abs(m.leaguesLabel - m.pwLabel) <= 0.5,
+      `D-1: Sign Out / Your Leagues labels start at the SAME x as the Password row's label — no residual indent from the retired identity-actions wrapper (sign out ${m.signOutLabel}, leagues ${m.leaguesLabel}, password ${m.pwLabel})`);
+    assert(Math.abs(m.signOutRow - m.pwRow) <= 0.5 && Math.abs(m.signOutRowRight - m.pwRowRight) <= 0.5,
+      `D-2: …and the rows themselves span the same box as Password, so their press-state and 44pt target line up too (sign out ${m.signOutRow}…${m.signOutRowRight}, password ${m.pwRow}…${m.pwRowRight})`);
+    assert(m.avatar !== null,
+      `D-3: fixture sanity — the identity header's avatar still measures (${m.avatar}) even though the drawer is now showing the Profile pane on top of it`);
+    // REVIEWER ROUND 3 minor (b) (2026-09-29) — D-1/D-2 compare SIBLING rows,
+    // which all share one markup and would still agree with each other if the
+    // whole row group were indented. Drew's complaint was "indented compared
+    // to the rest of the list", so measure ACROSS containers too: the account
+    // rows (inside their own row group) against the Profile form column — the
+    // Save button and the Display name field — that sits above them in the
+    // same pane. Same left edge and same right edge, within half a pixel.
+    assert(typeof m.saveBtn === 'number' && typeof m.nameInput === 'number'
+        && Math.abs(m.signOutRow - m.saveBtn) <= 0.5 && Math.abs(m.signOutRow - m.nameInput) <= 0.5
+        && Math.abs(m.signOutRowRight - m.saveBtnRight) <= 0.5 && Math.abs(m.signOutRowRight - m.nameInputRight) <= 0.5,
+      `D-5: CROSS-CONTAINER — the account rows' box starts and ends where the Profile form column does (row ${m.signOutRow}…${m.signOutRowRight}, Save ${m.saveBtn}…${m.saveBtnRight}, Display name ${m.nameInput}…${m.nameInputRight})`);
+    // Anti-vacuity: the retired wrapper class genuinely carries no rule
+    // anymore, so this isn't "the rows happened to line up anyway."
+    const cssTextD = readFileSync(join(here, 'css', 'styles.css'), 'utf8');
+    assert(!/\.control-center-identity-actions\{/.test(cssTextD),
+      'D-4 mutation-proof companion: .control-center-identity-actions carries NO rule at all in the shipped stylesheet (RG-298 minor finding) — the old alignment fix is genuinely gone, not merely unused');
+  }
 } catch (e) {
   assert(false, `the engine sections ran to completion (threw: ${e && e.message})`);
 } finally {

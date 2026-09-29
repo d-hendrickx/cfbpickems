@@ -133,7 +133,16 @@ function mkEl(id) {
     // ever emitted through an append — the edit strip and move bars are written
     // with the page's innerHTML, which does clear it.
     insertAdjacentHTML(pos, h) { this._html = pos === 'afterbegin' ? h + this._html : this._html + h; },
-    appendChild() {}, remove() {}, addEventListener() {}, removeEventListener() {},
+    appendChild() {}, remove() {},
+    // REVIEWER ROUND 3 (B4 residual, 2026-09-29) — listeners are RECORDED
+    // (never fired by anything but an explicit `_fire()`), so A11n below can
+    // drive the REAL bindWeekSwipe() binder navigateTo('picks') attaches to
+    // #page-picks. Nothing else in this suite fires events, so recording is
+    // behaviour-neutral for every other section.
+    _listeners: null,
+    addEventListener(type, fn) { ((this._listeners ||= {})[type] ||= []).push(fn); },
+    removeEventListener(type, fn) { if (this._listeners?.[type]) this._listeners[type] = this._listeners[type].filter(h => h !== fn); },
+    _fire(type, ev) { (this._listeners?.[type] || []).slice().forEach(fn => fn(ev)); },
     querySelector(sel) {
       if (sel !== '#picks-head-slot' || !this._html.includes(SLOT_MARKUP)) return null;
       const host = this;
@@ -277,7 +286,7 @@ const M = {
 
 function renderPicks({ playerId = null, isAdmin = false, verified = false, viewWeekId = null } = {}) {
   setSession(playerId, isAdmin, verified);
-  app.state.picksWeekId = viewWeekId;
+  app.state.viewingWeekId = viewWeekId; // DI-426 — shared field (formerly picksWeekId)
   els.get('page-picks')._html = '';
   window.navigateTo('picks');
   return els.get('page-picks')._html;
@@ -489,6 +498,7 @@ console.log('\n[8] FALLBACK — a container with no slot still gets the cards…
   const orig = els.get('page-picks');
   const noSlot = {
     ...orig, _html: '',
+    _listeners: null, // its OWN listener record — the spread would otherwise share orig's (A11n-fixture2 counts orig's)
     get innerHTML() { return this._html; },
     set innerHTML(v) { this._html = String(v).replace(SLOT_MARKUP, ''); },   // slot stripped
     insertAdjacentHTML(pos, h) { this._html = pos === 'afterbegin' ? h + this._html : this._html + h; },
@@ -564,6 +574,106 @@ console.log('\n[9] BUG-4 — the submitted view must name the team you picked…
   // Restore the fixture for anything appended after this section.
   saveWeek(cur);
   saveGame(mkGame('w_cur', 'g1', 'PRIMARY HOME', 'PRIMARY AWAY', FUTURE));
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[9b] DI-428(a) (2026-09-28, amends DI-331d/f) — submitted card, LOGO mode: same treatment as the pick button, at every status, blind rule unchanged…');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  // Extends §9's own fixture/pattern (BUG-4) rather than inventing a new one —
+  // this is the "existing render test for the blind rule in logo mode"
+  // DI-428(a)'s build note points at. Snapshotted/restored so nothing below
+  // inherits it (same idiom loadtest.mjs [1c] uses for its own real-render
+  // blind-rule check).
+  const snapshot = new Map(store);
+  const AWAY_LOGO = 'https://a.espncdn.com/i/teamlogos/ncaa/500/away-9b.png';
+  const HOME_LOGO = 'https://a.espncdn.com/i/teamlogos/ncaa/500/home-9b.png';
+  try {
+    saveGame({ ...mkGame('w_cur', 'g1', 'PRIMARY HOME', 'PRIMARY AWAY', FUTURE),
+               status: 'live', homeScore: 17, awayScore: 10,
+               homeLogo: HOME_LOGO, awayLogo: AWAY_LOGO });
+    saveWeek({ ...cur, status: 'live' });
+    saveAllPicks([
+      { pickId: 'cp1', weekId: 'w_cur', gameId: 'w_cur_g1', playerId: 'p1', selectedTeam: 'PRIMARY HOME', submittedAt: '2026-09-05T00:00:00Z' },
+      { pickId: 'cp2', weekId: 'w_cur', gameId: 'w_cur_g1', playerId: 'p2', selectedTeam: 'PRIMARY AWAY', submittedAt: '2026-09-05T00:00:00Z' },
+    ]);
+    const p1rec = storage.getPlayer('p1');
+    storage.savePlayer({ ...p1rec, preferences: { ...p1rec.preferences, logoView: true } });
+
+    // ── Toggle ON — the real render, driven through window.navigateTo('picks')
+    //    exactly like §9, so this is the page a player actually gets. ──
+    const pageOn = renderPicks({ playerId: 'p1', verified: true });
+    const cardsOn = els.get('submitted-games')._html;
+    assert(has(pageOn, M.submitted), '9b-0: fixture check — branch D (submitted view) is still the branch under test');
+
+    // Non-vacuity — this render genuinely painted both teams' logos (public
+    // schedule data, not anybody's pick) via the SAME pick-btn-logo-wrap
+    // markup the draft-view pick buttons use — proving DI-428(a) actually
+    // fired, not merely that the fixture happens to pass.
+    assert(cardsOn.includes(AWAY_LOGO) && cardsOn.includes(HOME_LOGO),
+      '9b-1: the submitted card renders BOTH teams\' logos — the same pick-btn-logo-wrap treatment as the pick button, reused verbatim');
+    assert((cardsOn.match(/class="pick-btn-logo-wrap"/g) || []).length === 2,
+      '9b-2: exactly one logo-wrap per team (away + home), not a stray extra or a missing one');
+    assert(cardsOn.includes('team-name-logo'),
+      '9b-3: the matchup row uses the new .team-name-logo wrapper, not the plain .team-name div, when the toggle is on');
+
+    // ── The BUG-4 marker survives — DI-428(a) must not regress it. ──
+    const homeBlockOn = cardsOn.slice(cardsOn.indexOf('<div class="vs-divider"'), cardsOn.indexOf('<div class="spread-row"'));
+    const awayBlockOn = cardsOn.slice(cardsOn.indexOf('<div class="team away'), cardsOn.indexOf('<div class="vs-divider"'));
+    assert(homeBlockOn.includes('team-picked') && !awayBlockOn.includes('team-picked'),
+      '9b-4: the "Your pick" marker is still on PRIMARY HOME (the team p1 actually picked) — unchanged by the logo treatment');
+    assert(cardsOn.includes('Your pick'), '9b-5: …and the marker copy is still readable text, not colour/logo alone');
+
+    // ── Blind rule, in LOGO mode specifically — R2-3's own "a REAL render,
+    //    not a source-order scan" standard. p2's pick is the OTHER team on
+    //    this same public game; the two logos rendered are the GAME's teams,
+    //    not anybody's selection, so both are expected — what must NOT
+    //    appear is p2's identity or a marker on p2's side. ──
+    assert(!cardsOn.includes('Brayden'),
+      "9b-6: blind rule (logo mode) — p2's display name appears nowhere on p1's submitted card");
+    assert(!awayBlockOn.includes('team-picked') && !awayBlockOn.includes('Your pick'),
+      "9b-7: blind rule (logo mode) — PRIMARY AWAY (p2's pick, not p1's) carries no pick marker of any kind, logo or otherwise");
+
+    // ── Toggle OFF — control. Byte-shape regression check: without this
+    //    section, an edit to renderGameCard() that hard-coded the logo
+    //    treatment (ignoring the toggle) would still pass 9b-1..7. ──
+    storage.savePlayer({ ...p1rec, preferences: { ...p1rec.preferences, logoView: false } });
+    const pageOff = renderPicks({ playerId: 'p1', verified: true });
+    const cardsOff = els.get('submitted-games')._html;
+    assert(!cardsOff.includes(AWAY_LOGO) && !cardsOff.includes(HOME_LOGO) && !cardsOff.includes('pick-btn-logo-wrap'),
+      '9b-8: toggle OFF — no logo markup at all, byte-shape unchanged from pre-DI-428(a)');
+    assert(cardsOff.includes('class="team-name"') && !cardsOff.includes('team-name-logo'),
+      '9b-9: toggle OFF — the plain .team-name div is still what renders (never .team-name-logo)');
+    const homeBlockOff = cardsOff.slice(cardsOff.indexOf('<div class="vs-divider"'), cardsOff.indexOf('<div class="spread-row"'));
+    assert(homeBlockOff.includes('team-picked'),
+      '9b-10: toggle OFF — the "Your pick" marker still works exactly as §9 proved (this section did not regress it)');
+
+    // ── Fallback — a manual game (no logos at all) renders the CLASSIC
+    //    .team-name/.team-mascot split, never .team-name-logo (round 2,
+    //    reviewer F5: round 1 wrapped pickButtonContentHTML()'s bare-text
+    //    fallback in .team-name-logo, which has no mascot styling at all —
+    //    "Oklahoma (Sooners)" rendered as one undifferentiated string). Uses
+    //    a REAL TEAM_MASCOT_LOOKUP entry (Oklahoma -> Sooners, the reviewer's
+    //    own cited example), not a fixture school with no mascot, so this
+    //    actually exercises the split. ──
+    storage.savePlayer({ ...p1rec, preferences: { ...p1rec.preferences, logoView: true } });
+    saveGame({ ...mkGame('w_cur', 'g1', 'Oklahoma', 'PRIMARY AWAY', FUTURE),
+               status: 'live', homeScore: 17, awayScore: 10,
+               isManual: true, homeLogo: HOME_LOGO, awayLogo: HOME_LOGO });
+    const pageManual = renderPicks({ playerId: 'p1', verified: true });
+    const cardsManual = els.get('submitted-games')._html;
+    assert(!cardsManual.includes('<img') && !cardsManual.includes('team-name-logo'),
+      '9b-11a: manual game, toggle ON — no <img> (D-12: manual games never get a logo) and NEVER .team-name-logo (that class only wraps a real logo box now, round 2 F5)');
+    assert(cardsManual.includes('class="team-name">Oklahoma') && cardsManual.includes('PRIMARY AWAY'),
+      '9b-11b: …the classic .team-name div renders the plain school name');
+    assert(/<span class="team-mascot">\(Sooners\)<\/span>/.test(cardsManual),
+      '9b-11c: …and the TEAM_MASCOT_LOOKUP mascot renders in its own smaller .team-mascot span (F5) — not merged into one 1.05rem string');
+    saveGame({ ...mkGame('w_cur', 'g1', 'PRIMARY HOME', 'PRIMARY AWAY', FUTURE), status: 'live', homeScore: 17, awayScore: 10 }); // restore
+  } finally {
+    store.clear();
+    snapshot.forEach((v, k) => store.set(k, v));
+  }
 }
 
 
@@ -683,7 +793,7 @@ saveAllPicks([
 /** Render the Dashboard through the nav and hand back the emitted HTML. */
 function renderDash({ playerId = null, isAdmin = false, verified = false, weekId = 'w_layout' } = {}) {
   setSession(playerId, isAdmin, verified);
-  app.state.dashboardWeekId = weekId;
+  app.state.viewingWeekId = weekId; // DI-426 — shared field (formerly dashboardWeekId)
   els.get('page-dashboard')._html = '';
   window.navigateTo('dashboard');
   return els.get('page-dashboard')._html;
@@ -1178,12 +1288,165 @@ console.log('\n[A9] RE-ENTRANCY — the order survives the obligation re-render�
   // both re-render the whole page.
   setSectionOrder('dashboard', ['dash-summary', 'dash-picks', 'dash-alma', 'dash-tiebreaker']);
   const dFirst = sectionIds(renderDash({ playerId: 'p1', verified: true }));
-  app.state.dashboardWeekId = 'w_layout';
+  app.state.viewingWeekId = 'w_layout'; // DI-426 — shared field (formerly dashboardWeekId)
   window.navigateTo('dashboard');
   assert(sameArr(sectionIds(els.get('page-dashboard')._html), dFirst),
     'A9e: the Dashboard order survives its own re-render path too');
 
   clearSectionOrder('dashboard'); clearSectionOrder('standings');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[A9z] DI-426 (UN-381) — ONE shared viewing week for Picks and Dashboard… (runs between A9 and A10 — see file note)');
+// ═════════════════════════════════════════════════════════════════════════════
+{
+  setSession('p1', false, true);
+  // 'w_layout' (weekNumber 9) vs the active week 'w_cur' (weekNumber 2) —
+  // two genuinely different, already-on-file weeks (§A fixtures, above).
+  app.state.viewingWeekId = null;
+
+  // A11a/b — a write on PICKS is visible via the DASHBOARD read path.
+  renderPicks({ playerId: 'p1', verified: true, viewWeekId: 'w_layout' });
+  assert(app.state.viewingWeekId === 'w_layout',
+    'A11a: fixture — viewing "w_layout" on Picks wrote the ONE shared state.viewingWeekId');
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard'); // NOT renderDash() — that helper writes its own weekId; this call must read the field Picks just wrote
+  const dashAfterPicks = els.get('page-dashboard')._html;
+  assert(dashAfterPicks.includes('Week 9') && !dashAfterPicks.includes('>Week 2<'),
+    `A11b: switching to Dashboard WITHOUT touching state.viewingWeekId shows week 9 (the week Picks was just viewing), not the active week 2 (dashboard html snippet: ${dashAfterPicks.slice(dashAfterPicks.indexOf('picks-week-nav-label') - 5, dashAfterPicks.indexOf('picks-week-nav-label') + 80)})`);
+
+  // A11c/d — the REVERSE: a write on DASHBOARD is visible via the PICKS read path.
+  app.state.viewingWeekId = null;
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  // Same effect as clicking the [data-dashboard-week="w_layout"] arrow
+  // (bindDashboardWeekNav() itself just writes this same shared field).
+  app.state.viewingWeekId = 'w_layout';
+  assert(app.state.viewingWeekId === 'w_layout', 'A11c: fixture — viewing "w_layout" on Dashboard wrote the shared field');
+  els.get('page-picks')._html = '';
+  window.navigateTo('picks');
+  const picksAfterDash = els.get('page-picks')._html;
+  assert(picksAfterDash.includes('week-status-card') === false && /LAYOUT HOME|w_layout_g1|hist-game-row/.test(picksAfterDash),
+    'A11d: switching to Picks WITHOUT touching state.viewingWeekId shows the historical read-only view of week 9 (the week Dashboard was just viewing) — the reverse direction');
+
+  // A11e — reload (no persistence): state.viewingWeekId is an in-memory field
+  // only, reset to null at every fresh boot — never behind storage.js's
+  // load()/save() seam. Structural: the state object literal itself.
+  const appSrcA11 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  assert(/viewingWeekId:\s*null,/.test(appSrcA11),
+    'A11e: state.viewingWeekId is seeded to null in the state object literal — the SAME "not persisted, resets on boot" contract state.picksWeekId/state.dashboardWeekId individually had before this DI');
+  const storageSrcA11 = await readFile(new URL('./js/storage.js', import.meta.url), 'utf8');
+  assert(!/viewingWeekId/.test(storageSrcA11),
+    'A11f: structural — "viewingWeekId" appears nowhere in storage.js (never a KEYS entry, never routed through load()/save() — an in-memory app.js `state` field only, per DI-426\'s own "recommend NOT persisting" call)');
+
+  // A11g-i — REVIEWER ROUND 2 (B4 BLOCK, 2026-09-28) — REWRITTEN: the old
+  // A11g/h only proved Dashboard itself didn't crash on a draft id (the
+  // UNREACHABLE direction — Dashboard's own list already includes commissioner
+  // drafts, so that path was never actually broken). The REAL bug was the
+  // REVERSE: Picks' own list (picksNavWeeks()) excludes EVERY draft
+  // unconditionally, so a week the shared field points at that Picks
+  // cannot navigate to used to fall through to renderHistoricalPicksView()
+  // anyway (a raw getWeek() lookup), landing at nav index -1 — both arrows
+  // disabled, the swipe dead, and labeled "past week (read-only)" for what
+  // may be a future draft being set up. Commissioner draft round trip:
+  const draftWk = mkWeek({ weekId: 'w_di426_draft', weekNumber: 20, status: 'draft' });
+  saveWeek(draftWk);
+  setSession('p1', true, true); // commissioner — Dashboard's own list includes drafts only for this viewer
+  // Same effect as clicking the draft's own arrow/card on Dashboard.
+  app.state.viewingWeekId = 'w_di426_draft';
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  assert(els.get('page-dashboard')._html.includes('Week 20'),
+    'A11g-fixture: fixture — Dashboard shows the draft (week 20) to the commissioner when state.viewingWeekId points at it (confirms the precondition: Dashboard CAN show a week Picks cannot)');
+  els.get('page-picks')._html = '';
+  window.navigateTo('picks');
+  const picksOnDraft = els.get('page-picks')._html;
+  assert(!/past week \(read-only\)/.test(picksOnDraft),
+    `A11g: [B4] Picks does NOT render the draft as a broken "past week (read-only)" historical view (it cannot navigate to it at all) (snippet: ${picksOnDraft.slice(0, 200)})`);
+  assert(picksOnDraft.includes('Week 2') && !picksOnDraft.includes('Week 20'),
+    `A11h: …it falls through to the CURRENT week (Week 2) instead (snippet around the label: ${picksOnDraft.slice(picksOnDraft.indexOf('picks-week-nav-label') - 5, picksOnDraft.indexOf('picks-week-nav-label') + 60)})`);
+  assert(app.state.viewingWeekId === 'w_di426_draft',
+    'A11i: [B4] …and, critically, state.viewingWeekId is LEFT UNTOUCHED — Picks could not show it, so it never claims/clears the shared field; Dashboard must still find it on return');
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  assert(els.get('page-dashboard')._html.includes('Week 20'),
+    `A11j: [B4] …and switching BACK to Dashboard WITHOUT touching state.viewingWeekId again shows the SAME draft (week 20), not silently stranded on the current week (snippet: ${els.get('page-dashboard')._html.slice(0, 200)})`);
+
+  // A11k-m — REVIEWER ROUND 2 (B4 BLOCK) — the SAME class of gap reaches a
+  // REGULAR (non-commissioner) PLAYER too: a week with showInHistory:false
+  // is excluded from picksNavWeeks() (Picks' own list, unconditionally) but
+  // carries NO such exclusion in selectableDashboardWeeks() — so it can
+  // legitimately show on Dashboard for ANY viewer, not just a
+  // commissioner-only draft.
+  const hiddenWk = mkWeek({ weekId: 'w_di426_hidden', weekNumber: 21, status: 'final', showInHistory: false });
+  saveWeek(hiddenWk);
+  setSession('p1', false, true); // a REGULAR, non-admin player
+  app.state.viewingWeekId = null;
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  app.state.viewingWeekId = 'w_di426_hidden';
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  assert(els.get('page-dashboard')._html.includes('Week 21'),
+    'A11k-fixture: fixture — Dashboard shows the showInHistory:false week to a REGULAR player too (confirms selectableDashboardWeeks() carries no such exclusion, unlike picksNavWeeks())');
+  els.get('page-picks')._html = '';
+  window.navigateTo('picks');
+  const picksOnHidden = els.get('page-picks')._html;
+  assert(!/past week \(read-only\)/.test(picksOnHidden),
+    'A11k: [B4] a showInHistory:false week reaching Picks via the shared field also falls through to the current week, not a broken historical view');
+  assert(app.state.viewingWeekId === 'w_di426_hidden',
+    'A11l: [B4] …and again leaves state.viewingWeekId untouched for Dashboard\'s own sake');
+  els.get('page-dashboard')._html = '';
+  window.navigateTo('dashboard');
+  assert(els.get('page-dashboard')._html.includes('Week 21'),
+    'A11m: …and Dashboard still shows the SAME hidden week on return');
+
+  // A11n-r — REVIEWER ROUND 3 (B4 residual, 2026-09-29) — the reviewer's
+  // EXACT failing sequence, in real Chrome: after the B4 draft fallback
+  // (commissioner, shared field on a draft Picks cannot show, Picks falls
+  // through to the current week), a L→R swipe on Picks only rubber-banded
+  // and stayed on the current week, because the swipe's getState() still
+  // reported the DRAFT's id (not in Picks' list → index -1 → "at bound").
+  // Same starting state, same events: the draft id on the shared field,
+  // navigateTo('picks') (which renders AND binds the real bindWeekSwipe()
+  // on #page-picks), then touchstart + touchmove L→R past SWIPE_COMMIT_PX
+  // through that REAL binder's listeners.
+  setSession('p1', true, true);
+  app.state.viewingWeekId = 'w_di426_draft';
+  els.get('page-picks')._html = '';
+  window.navigateTo('picks');
+  const picksFallback = els.get('page-picks')._html;
+  assert(picksFallback.includes('>Week 2<') && app.state.viewingWeekId === 'w_di426_draft',
+    `A11n-fixture: fixture — the B4 fallback state: Picks shows the current week (Week 2) while the shared field still names the draft (field: ${app.state.viewingWeekId})`);
+  const pp = els.get('page-picks');
+  assert((pp._listeners?.touchstart || []).length === 1 && (pp._listeners?.touchmove || []).length === 1,
+    `A11n-fixture2: fixture — navigateTo('picks') bound exactly ONE real week-swipe listener set on #page-picks (touchstart ${(pp._listeners?.touchstart || []).length}, touchmove ${(pp._listeners?.touchmove || []).length})`);
+  // The resolver the binder's getState() calls at touchstart (A11o proves
+  // the getState() really does call it), read through its test hook.
+  assert(app._picksShowingWeekForTest().showingWeekId === 'w_cur',
+    `A11n: [B4 residual] the week Picks' swipe starts from is the week Picks SHOWS (w_cur), not the draft the shared field names (got ${app._picksShowingWeekForTest().showingWeekId})`);
+  const appSrcA11n = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const gsIdx = appSrcA11n.indexOf("bindWeekSwipe(document.getElementById('page-picks')");
+  const gsWin = gsIdx === -1 ? '' : appSrcA11n.slice(gsIdx, appSrcA11n.indexOf('}, (targetId)', gsIdx));
+  assert(gsIdx !== -1 && /currentWeekId:\s*picksShowingWeek\(\)\.showingWeekId/.test(gsWin) && !/state\.viewingWeekId/.test(gsWin.replace(/\/\/.*$/gm, '')),
+    'A11o: structural — the Picks swipe getState() reads picksShowingWeek(), the SAME resolver renderPicksPage() uses, and never the raw shared field (comments stripped)');
+  // THE behavioural proof: the real binder, real touch sequence.
+  pp._fire('touchstart', { touches: [{ clientX: 150, clientY: 400 }], target: pp });
+  pp._fire('touchmove', { touches: [{ clientX: 170, clientY: 401 }], target: pp }); // dx=20 — axis locks to x, below commit
+  pp._fire('touchmove', { touches: [{ clientX: 210, clientY: 402 }], target: pp }); // dx=60 — past SWIPE_COMMIT_PX(40)
+  pp._fire('touchend', {});
+  assert(app.state.viewingWeekId === 'w_past',
+    `A11p: [B4 residual] a real L→R bindWeekSwipe drag from the fallback navigates to the PREVIOUS week in Picks' own list (w_past, Week 1) — on the round-2 tree this stayed on the draft id and only rubber-banded (field now: ${app.state.viewingWeekId})`);
+  assert(pp._html.includes('PAST BLURB MARKER') && pp._html.includes('>Week 1<'),
+    `A11q: …and Picks now actually renders Week 1 (snippet: ${pp._html.slice(pp._html.indexOf('picks-week-nav-label') - 5, pp._html.indexOf('picks-week-nav-label') + 60)})`);
+  // The arrows and the swipe agree: the fallback page's own ‹ arrow pointed
+  // at the same week the swipe just went to.
+  assert(/data-picks-week="w_past"[^>]*aria-label="Previous week"/.test(picksFallback),
+    'A11r: …the SAME week the fallback page\'s own ‹ arrow targets — arrows and swipe resolve from one "showing" week');
+  pp._fire('transitionend', { target: pp }); // release the binder's busy latch for any later suite section
+
+  app.state.viewingWeekId = null;
+  setSession('p1', false, true);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
