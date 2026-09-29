@@ -1150,8 +1150,14 @@ export function getAutoLockOffsetMinutes(week) {
 export function getAutoLiveEnabled(week) {
   return week?.autoLiveEnabled !== false; // default true
 }
-export function getAutoFinalizeEnabled(week) {
-  return week?.autoFinalizeEnabled !== false; // default true
+// DI-414 (UN-369, 2026-09-28) — "Prompt for finalization when all games are
+// final" is retired as a setup-time choice (Drew: "this should default be
+// on"). Unconditional `true` — the field is never read again, by anything.
+// The stored key itself is NEVER deleted from an existing week row (old
+// weeks explicitly saved with `autoFinalizeEnabled:false` keep that value in
+// storage; it simply stops being consulted) — no migration, no write here.
+export function getAutoFinalizeEnabled() {
+  return true;
 }
 
 // ─── MULTI-PART WEEK GROUPING (UN-118/UN-125, v0.17.7) ───────────────────────
@@ -1211,14 +1217,21 @@ export function isGroupTiebreakerAmbiguous(groupWeeks) {
 // Base path map for ESPN's public scoreboard API. Same shape for every sport,
 // so one polling routine can serve CFB + NFL (and easily extend).
 // Doc reference: site.api.espn.com/apis/site/v2/sports/<sport>/<league>/scoreboard
+// DI-417 (UN-372, 2026-09-28) — `code` added to each entry: the header
+// league pill's graceful-degradation step 2 (short code, e.g. "CFB") once
+// the full label ("College Football") doesn't fit. Reuses this existing
+// sport-metadata object rather than a second map elsewhere (js/brand.js
+// etc.) — this object already IS the one "sport -> display strings" source.
 export const ESPN_SPORT_ENDPOINTS = {
   'college-football': {
     label: 'College Football',
+    code: 'CFB',
     path: 'football/college-football',
     // A CFB event ID is what the existing pipeline uses; nothing new to do here.
   },
   'nfl': {
     label: 'NFL',
+    code: 'NFL',
     path: 'football/nfl',
   },
   // Extend by adding more entries as needed — the fetcher is generic.

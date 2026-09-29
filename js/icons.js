@@ -75,7 +75,13 @@ export const ICONS = {
   // tab (js/comm-panel-layout.js:62), Admin → Games tab
   // (js/admin-panel.js:122), and Leagues Home's football sport-card glyph
   // (js/leagues-home.js:440) — no call-site edits needed for this swap.
-  sportFootball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><line x1="12" y1="6" x2="12" y2="18"/><line x1="6.5" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="17.5" y2="12"/></svg>',
+  // DI-410 (UN-365, 2026-09-28, Drew's pick) — crossed swords/gladii,
+  // arena/games reading, replacing the rect-and-divider "matchup" concept
+  // above. Two spaced blades, each drawn as three short segments (a long
+  // diagonal stroke plus two shorter guard/tip strokes) rather than one
+  // continuous line, so the crossing point reads as two distinct swords
+  // overlapping instead of one bent line.
+  sportFootball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18.5" y1="3" x2="7.5" y2="14"/><line x1="5.5" y1="12" x2="9.5" y2="16"/><line x1="7.5" y1="14" x2="4.5" y2="17"/><line x1="5.5" y1="3" x2="16.5" y2="14"/><line x1="14.5" y1="16" x2="18.5" y2="12"/><line x1="16.5" y1="14" x2="19.5" y2="17"/></svg>',
 
   // ── Coordinator follow-up, 2026-09-25 (commissioner/admin panel tab
   // glyphs) — same convention as everything above. ─────────────────────────
@@ -102,9 +108,14 @@ export const ICONS = {
   // stroke path, fill:none like every entry in this family.
   scribeSpark: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5c.6 4 2.4 5.8 6.4 6.4-4 .6-5.8 2.4-6.4 6.4-.6-4-2.4-5.8-6.4-6.4 4-.6 5.8-2.4 6.4-6.4Z"/></svg>',
 
-  // A cloud outline with a short base line beneath (sync/data-at-rest
-  // reading) — for a "Data" admin tab (backend/export/sync surfaces).
-  cloudData: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.5-7.96A5 5 0 0 1 16.2 8.1 4.5 4.5 0 0 1 17 17H7Z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>',
+  // A cloud outline (sync/data-at-rest reading) — for a "Data" admin tab
+  // (backend/export/sync surfaces), and the header sync glyph
+  // (`.header-sync-glyph`). DI-410 (UN-365, 2026-09-28, Drew's pick) — the
+  // ORIGINAL path's bottom-left corner started at y=18 but the base ran to
+  // y=17, leaving a visible jog instead of a flat, connected base; the
+  // separate base `<line>` beneath it (a leftover from an earlier concept)
+  // is dropped along with it — this is now a single closed stroke.
+  cloudData: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.5-7.96A5 5 0 0 1 16.2 9.1 4.5 4.5 0 0 1 17 18Z"/></svg>',
 
   // A shield outline with an inset checkmark — for an "Admin"/permissions
   // tab. Distinct silhouette from `almaMater`'s laurel and from the existing

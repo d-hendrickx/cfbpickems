@@ -326,6 +326,30 @@ export function renderAdminTabBar({ activeTab = 'week', icon, viewer } = {}) {
 }
 
 /**
+ * REVIEWER ROUND 2 (2026-09-28) — mirrors the Commissioner panel's own
+ * heading-row "Collapse all / Expand all" pair (js/app.js ~11919,
+ * `panelCollapseActionsHTML()`). The markup is duplicated rather than
+ * imported from js/app.js — this module has no dependency on app.js (CARD
+ * SHELL CONTRACT, this file's own header comment) and never will;
+ * `js/app.js`'s `renderAdminPage()` now calls `wireCollapsibleSections(c)`
+ * BEFORE `wirePanelCollapseAllControls(c, …)` (REVIEWER ROUND 2 B1 fix —
+ * before it, only the Comm panel ever called `wireCollapsibleSections()`,
+ * so this pair's own claim to "share the collapse mechanism" was false: no
+ * per-card toggle/chevron on Admin cards, and nothing re-applied
+ * `settings.commPanelSectionsCollapsed` on re-render, so every async cache
+ * landing silently expanded everything again). Admin card titles
+ * (`ADMIN_CARD_TITLE`, above) don't collide with the Commissioner panel's
+ * own titles, so both panels sharing one settings key is safe.
+ */
+function panelCollapseActionsHTML() {
+  return `<div class="panel-collapse-actions">
+      <button type="button" class="btn btn-ghost" id="admin-panel-collapse-all-btn">Collapse all</button>
+      <span class="panel-collapse-divider text-muted" aria-hidden="true">·</span>
+      <button type="button" class="btn btn-ghost" id="admin-panel-expand-all-btn">Expand all</button>
+    </div>`;
+}
+
+/**
  * DI-320 §Layout: "a small Oxblood `var(--oxblood)` accent line under the
  * header and an ADMIN pill next to the page title… the one deliberate
  * departure from 'identical to commissioner panel'."
@@ -345,9 +369,12 @@ export function renderAdminHeader({ viewer, league, leagues = [], escHtml } = {}
     ? `across ${leagueCount || 1} league${(leagueCount || 1) === 1 ? '' : 's'} (${esc(league.name || '')})`
     : `across ${leagueCount} league${leagueCount === 1 ? '' : 's'}`;
   return `
-    <div class="section-header admin-section-header" style="border-bottom:2px solid var(--oxblood)">
-      <h2>Admin <span class="badge" style="background:var(--oxblood);color:var(--oxblood-on);border-color:var(--oxblood)">ADMIN</span></h2>
-      <p class="text-muted text-xs mt-sm">${esc(scopeLine)}</p>
+    <div class="section-header admin-section-header section-header-layout" style="border-bottom:2px solid var(--oxblood)">
+      <div class="section-header-main">
+        <h2>Admin <span class="badge" style="background:var(--oxblood);color:var(--oxblood-on);border-color:var(--oxblood)">ADMIN</span></h2>
+        <p class="text-muted text-xs mt-sm">${esc(scopeLine)}</p>
+      </div>
+      ${panelCollapseActionsHTML()}
     </div>`;
 }
 

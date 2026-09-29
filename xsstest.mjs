@@ -1419,15 +1419,19 @@ const EXEMPTIONS = [
   { file: 'js/app.js', expr: "icon('munera')",
     why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   // DI-393 (UN-353, 2026-09-27) — updateSyncBadge()'s header sync icon.
-  // `iconName`/`label` are read from SYNC_ICON_BY_STATUS/SYNC_LABEL_BY_STATUS
-  // (js/app.js, module scope) — two lookup tables whose every value is a
-  // hard-coded string literal, keyed by `status`, which itself is never
-  // user-typed text: it arrives from the backend adapter's own small,
-  // enumerated vocabulary (synced/syncing/error/refused/offline — the same
-  // five states this function's own `SYNC_LABEL_BY_STATUS`/map bodies
-  // enumerate). No player-authored data flows through either variable.
-  { file: 'js/app.js', expr: "icon(iconName, { label })",
-    why: "iconName/label both resolve through SYNC_ICON_BY_STATUS/SYNC_LABEL_BY_STATUS, literal-valued lookup tables keyed on the backend adapter's own small enumerated status vocabulary — never user data" },
+  // `iconName` is read from SYNC_ICON_BY_STATUS (js/app.js, module scope) —
+  // a lookup table whose every value is a hard-coded string literal, keyed
+  // by `status`, which itself is never user-typed text: it arrives from the
+  // backend adapter's own small, enumerated vocabulary (synced/syncing/
+  // error/refused/offline). No player-authored data flows through it.
+  // DI-399(a) (UN-359, 2026-09-28) — no `{ label }` argument any more:
+  // #sync-badge itself is now the interactive control and carries its own
+  // aria-label via setAttribute() (a raw string assignment, not an
+  // innerHTML sink, so it is outside this scanner's template-literal
+  // surface entirely — SYNC_TAP_LABEL_BY_STATUS is the same shape of
+  // closed, literal-valued lookup table as SYNC_ICON_BY_STATUS above).
+  { file: 'js/app.js', expr: "icon(iconName)",
+    why: "iconName resolves through SYNC_ICON_BY_STATUS, a literal-valued lookup table keyed on the backend adapter's own small enumerated status vocabulary — never user data" },
   // DI-394 (UN-354, 2026-09-27) — weekNavCardHTML()'s shared viewing-week
   // card (js/app.js), reused by both Picks (renderPicksWeekNav()) and
   // Dashboard (renderDashboardWeekNav()). `dataAttr` is a function
@@ -1923,10 +1927,15 @@ const APP_BACKLOG = [
   { d: "e689e15c86", n: 1, t: "readiness.level" },
   { d: "5a3e5177ec", n: 1, t: "readiness.level!=='ok'?' game-admin-card-'+readiness.level:''" },
   { d: "7df29809a5", n: 1, t: "readyBanner" },
-  { d: "20df01f92e", n: 1, t: "renderAdminGamesList(games,week,getGameLockOverrides())" },
+  // DI-412 AMENDED (reviewer round 2 B1, 2026-09-28) — renamed from
+  // `games`/`week` to `gamesTabGames`/`gamesTabWeek` (the wizard's parked
+  // target when one exists, else the live week — same call, same safety
+  // reasoning, new digest under the new argument names).
+  { d: "76769792ce", n: 1, t: "renderAdminGamesList(gamesTabGames,gamesTabWeek,getGameLockOverrides())" },
   { d: "50e2c18742", n: 1, t: "renderAlmaMaterRankings()" },
   { d: "373c406920", n: 1, t: "renderAvailableGamesList(games, currentSlate, week)" },
-  { d: "03daf8ec73", n: 1, t: "renderAvailableGroups(availGames, games, week)" },
+  // DI-412 AMENDED (reviewer round 2 B1, 2026-09-28) — same rename as above.
+  { d: "9a3810c364", n: 1, t: "renderAvailableGroups(gamesTabAvailGames, gamesTabGames, gamesTabWeek)" },
   { d: "a9b7fa53d9", n: 1, t: "renderDashboardCompact(players,games,allPicks,weeklyResults,week.weekId,actualTB)" },
   { d: "c91704dcef", n: 1, t: "renderObligationCorrectionsAdmin()" },
   { d: "9d1ce5e3e6", n: 1, t: "renderObligationsAdmin()" },

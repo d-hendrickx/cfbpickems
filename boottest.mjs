@@ -3789,7 +3789,7 @@ let sharedBootHandler = null;
   // stub registers exactly as index.html declares it (empty), and the claim is
   // about what boot() leaves inside it.
   // ═════════════════════════════════════════════════════════════════════════
-  console.log('\n[36] v0.27.0 — the header trigger that opens the control center is FILLED at boot (web: brand name; native: the Munera mark)…');
+  console.log('\n[36] v0.27.0/DI-405 — the header trigger that opens the control center is FILLED at boot (web and native both: the Munera mark, icon-only)…');
   {
     const iconsMod36 = await import('./js/icons.js');
     const brandMod36 = await import('./js/brand.js');
@@ -3825,29 +3825,30 @@ let sharedBootHandler = null;
     });
     const text36 = el => String(el?.innerHTML || '').replace(/<[^>]*>/g, '').trim();
 
-    // ── (a) WEB — the shell brand name, plus a tappable affordance glyph ─────
+    // ── (a) WEB — DI-405: the Munera mark, icon-only, same as native ─────────
     {
       await reset36();
       const r = await quiet36(() => runBoot({ config: SUPA36, seed: DEVICE36(), beforeBoot: plantTrigger36({ native: false }) }));
       const t = r.reg.get('control-center-trigger');
       assert(!!t, '[36a] fixture: the trigger element is in the DOM for the whole boot');
       assert(brandMod36.getPlatform() === 'web' && brandMod36.getShellBrandName() === 'CFB Pickems',
-        '[36a] fixture: this is the WEB shell, and getShellBrandName() is still "CFB Pickems" (DI-213h/i — brand.js semantics untouched)');
+        '[36a] fixture: this is the WEB shell, and getShellBrandName() is still "CFB Pickems" (DI-213h/i — brand.js semantics untouched; unaffected by DI-405, which only touches the trigger, not brand.js)');
       assert(String(t?.innerHTML || '').trim().length > 0,
         `[36a] RG — after a signed-in supabase boot on WEB, #control-center-trigger is NOT EMPTY (got ${JSON.stringify(t?.innerHTML)}). Empty is the v0.26.0 defect: an invisible 44x44 button and no way to reach Sign Out`);
-      assert(text36(t) === brandMod36.getShellBrandName(),
-        `[36a] …its visible text is exactly getShellBrandName() (${JSON.stringify(brandMod36.getShellBrandName())}), got ${JSON.stringify(text36(t))}`);
-      // REVIEWER note 4 (v0.27.0 APPROVE WITH NOTES, coordinator design ruling)
-      // — Drew expects a LOGO top-left: web is now the SAME Munera mark as
-      // native, plus the brand name, and NEVER a trailing chevron (a "›"
-      // reads as push-forward navigation on iOS, not "open a drawer").
+      // DI-405 (UN-360, Drew: "Munera mark on web too") — the web branch no
+      // longer emits the brand-name text span; web and native now render
+      // byte-identical markup shape (icon only).
+      assert(text36(t) === '',
+        `[36a] …and no visible text beside it — the mark alone is the logo on web too, matching NATIVE's own assertion below (got ${JSON.stringify(text36(t))})`);
       assert(String(t?.innerHTML || '').includes(iconsMod36.icon('munera')),
-        '[36a] …and it carries the Munera mark glyph beside the brand name — the same logo affordance as native, not a bare text link');
+        '[36a] …and it carries the Munera mark glyph — the same logo affordance as native');
       assert(!String(t?.innerHTML || '').includes(iconsMod36.icon('chevronRight')),
         '[36a] …and NOT a trailing chevron — that reads as push-forward navigation, not "open a drawer" (coordinator ruling replacing the chevron this trigger shipped with)');
-      // REVIEWER note 2 — the visible name is echoed in the accessible name.
-      assert(t?.getAttribute('aria-label') === `${brandMod36.getShellBrandName()}, open control center`,
-        `[36a] …and aria-label contains the visible name (got ${JSON.stringify(t?.getAttribute('aria-label'))})`);
+      // DI-405 — with no visible name, there is nothing to echo into the
+      // accessible name; web keeps index.html's plain default, exactly like
+      // NATIVE's own assertion below.
+      assert(t?.getAttribute('aria-label') === 'Open control center',
+        `[36a] …and aria-label stays the plain default — nothing visible to echo (got ${JSON.stringify(t?.getAttribute('aria-label'))})`);
     }
 
     // ── (b) NATIVE — the Munera mark SVG from js/icons.js, no text ───────────
@@ -5966,27 +5967,46 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // DI-348 warm-relaunch snapshot (boot()'s new leading capture + a new
   // helper/test seam above `async function boot()`) shifted the last three
   // sites; same six sites, no new ones, only their line numbers moved.
+  // Re-derived 2026-09-28 (DI-411…416/WIZARD_SLATE — gameModalFieldLocks()/
+  // isEspnRefreshableGame()/resumeWeekWizardSheet()/dismissWizardSheetForNavigation()
+  // and the Step 2/3/6 wizard edits, all above one or more of these sites) —
+  // line numbers only, same six sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (same pass — the xsstest.mjs [9c-2] fix
+  // extracted gameSourceLockedHTML()/manualLinkEditableHTML() inside
+  // showGameModal(), above the LAST of these six sites only) — line number
+  // only, same six sites, matched by exact text.
+  // Re-derived 2026-09-28 (REVIEWER ROUND 2, feat/wizard-slate-v0271 —
+  // merged release/v0.27.1 (02841a7) into the branch; RG-282…288/DI-398/399/
+  // DI-409/comm-panel-round-3 etc. all land above one or more of these sites)
+  // — line numbers only, same six sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (reviewer round 2, STEP C — gamesTabTargetWeek()/
+  // gamesTabIsLive, wizardSetActiveWeekId()'s N12 guard, mountWeekWizardSheetShell()
+  // factored out of openWeekWizardSheet()/resumeWeekWizardSheet(), all above one or
+  // more of these sites) — line numbers only, same six sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (reviewer round 3 — R1/R1b/R2/N12-note, all
+  // above one or more of these sites) — line numbers only, same six sites,
+  // matched by exact text.
   const ENUMERATED_HVS_SITES = [
     // The import itself — not a "call site," but unavoidable to use the
     // function at all; excluded here rather than by file-level exemption
     // (rolestest's "the module itself" shape) so a SECOND import line
     // elsewhere in the file still gets caught.
-    { line: 535, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    { line: 556, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
     // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
     // place a raw token question is still the right question: no vendored
     // SDK means isSignedInForApp() cannot even be asked yet.
-    { line: 1267, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    { line: 1294, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
     // The deps object handed to other modules — a bare reference, never
     // called from here; whatever THAT module does with it is its own
     // concern, not this file's gate logic.
-    { line: 1695, text: "hasValidSupabaseSession," },
+    { line: 1722, text: "hasValidSupabaseSession," },
     // noIdentityEverProven() — deliberately asks the token question directly
     // (an identity that was never even attempted is a narrower, and correct,
     // question than "is the app-level identity signed in").
-    { line: 4610, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+    { line: 4882, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
     // isSignedInForApp() itself — the ONE place allowed to compose the raw
     // token question into the app-level answer everything else must use.
-    { line: 4632, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    { line: 4904, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
     // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
     // whether THIS payload proves the token is fresh; a narrower question
     // than "is the app signed in," and correctly so.
@@ -6004,7 +6024,7 @@ console.log('     every gate/release site the security probe reverted reads isSi
     // Re-derived AGAIN 2026-09-27 (app-shell part 3A review, BLOCK fix (d)'s
     // wizardSetActiveWeekId() call + comment, added inside tickAutoTransition()'s
     // scan loop — above this site) — line number only, same site, matched by text.
-    { line: 25513, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+    { line: 26312, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
   ];
 
   // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
@@ -6075,18 +6095,52 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // sync-glyph wrapper + _updateSyncBadgeForTest seam, and the league pill's keydown/
   // fit-to-room helpers — all above some of these sites) — line numbers only, same
   // sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (DI-405, UN-360 — renderControlCenterTrigger() rewritten
+  // to icon-only on both platforms, above every one of these sites) — line numbers
+  // only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (DI-406, UN-361 — openWeekWizardSheet({ forceNew })
+  // + weekWizardEntryCardHTML()'s New Week button, above every site EXCEPT
+  // renderLeaguePill(), which sits earlier in source order and is untouched)
+  // — line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (DI-407, UN-362 — the Build Slate card's button
+  // sizing/copy edit, above every site EXCEPT renderLeaguePill(), which
+  // sits earlier in source order and is untouched) — line numbers only,
+  // same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (REVIEWER ROUND 2 B1 — renderAdminPage() now calls
+  // wireCollapsibleSections(c) before wirePanelCollapseAllControls(c, …),
+  // plus the _wireCollapsibleSectionsForTest export and the stale-comment
+  // fixes above every one of these sites, including renderLeaguePill() this
+  // time) — line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (DI-411…416/WIZARD_SLATE — gameModalFieldLocks()/
+  // isEspnRefreshableGame()/resumeWeekWizardSheet()/dismissWizardSheetForNavigation()
+  // and the Step 2/3/6 wizard edits, above one or more of these sites) — line
+  // numbers only, same eight sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (same pass — the xsstest.mjs [9c-2] fix
+  // extracted gameSourceLockedHTML()/manualLinkEditableHTML() inside
+  // showGameModal(), above every site EXCEPT renderLeaguePill(), which sits
+  // earlier in source order and is untouched) — line numbers only, same
+  // eight sites, matched by exact text.
+  // Re-derived 2026-09-28 (REVIEWER ROUND 2, feat/wizard-slate-v0271 —
+  // merged release/v0.27.1 (02841a7), same reason as the hasValidSupabaseSession
+  // pin above) — line numbers only, same eight sites, matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (reviewer round 2, STEP C — same reason as the
+  // hasValidSupabaseSession pin above) — line numbers only, same eight sites,
+  // matched by exact text.
+  // Re-derived AGAIN 2026-09-28 (reviewer round 3 — same reason as the
+  // hasValidSupabaseSession pin above) — line numbers only, same eight
+  // sites, matched by exact text.
   const ENUMERATED_ISFA_SITES = [
-    { line: 5231, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
-    { line: 23372, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
-    { line: 23438, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
-    { line: 23489, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    { line: 5668, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { line: 24171, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { line: 24237, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { line: 24288, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
     // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
     // the line numbers moved (see the note on the hasValidSupabaseSession
     // pin above).
-    { line: 25356, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
-    { line: 25662, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
-    { line: 26284, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
-    { line: 26314, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+    { line: 26155, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { line: 26461, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { line: 27083, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { line: 27113, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
   ];
   const linesN1 = srcN1raw.split('\n');
   const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);

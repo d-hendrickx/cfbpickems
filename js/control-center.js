@@ -333,9 +333,17 @@ export function initialControlCenterState() {
 
 function stepControlCenter(state, event) {
   switch (event.type) {
+    // RG-278 (live v0.27.0 web, 2026-09-28) — `dragProgress` is not only the
+    // drag's value: css/styles.css positions #control-center ONLY through
+    // `--cc-drag-progress` (fully open = 1, fully closed = 0), so every
+    // open/close must SETTLE it too. The tap path used to change `phase`
+    // alone: data-open="true" faded the scrim in while the panel stayed at
+    // translateX(-100%) — "grays out the screen but no control center pops
+    // up" — and a swipe-opened drawer closed by ✕ stayed on screen, inert.
+    // (drag-end settles its own 1/0 and then re-enters here; same value.)
     case 'open': {
       if (state.phase === 'open' || state.phase === 'opening') return state;
-      return { ...state, phase: event.reducedMotion ? 'open' : 'opening' };
+      return { ...state, phase: event.reducedMotion ? 'open' : 'opening', dragProgress: 1 };
     }
     case 'close': {
       if (state.phase === 'closed' || state.phase === 'closing') return state;
@@ -344,6 +352,7 @@ function stepControlCenter(state, event) {
         ...state,
         phase: reducedMotion ? 'closed' : 'closing',
         pane: reducedMotion ? 'main' : state.pane,
+        dragProgress: 0,
       };
     }
     case 'transition-end': {
@@ -360,7 +369,11 @@ function stepControlCenter(state, event) {
       return { ...state, pane: 'main' };
     case 'drag-start':
       if (state.dragging) return state;
-      return { ...state, dragging: true, dragProgress: state.phase === 'open' ? 1 : 0 };
+      // v0.27.1 round 2 (reviewer finding 7) — keep the SETTLED progress
+      // (1 once open/opening, 0 once closed/closing, since RG-278) rather than
+      // deriving it from `phase === 'open'`, which snapped a drag caught
+      // during the 260 ms "opening" slide back to 0 for a frame.
+      return { ...state, dragging: true, dragProgress: clamp01(state.dragProgress || 0) };
     case 'drag-move':
       if (!state.dragging) return state;
       return { ...state, dragProgress: clamp01(event.progress) };
@@ -395,6 +408,7 @@ export function _controlCenterStateMachine(events) {
     state = stepControlCenter(state, ev);
     out.push({
       phase: state.phase, pane: state.pane,
+      dragProgress: state.dragProgress,
       settingsOpenRow: state.settingsOpenRow,
       feedbackGroupOpenRow: state.feedbackGroupOpenRow,
     });
@@ -420,6 +434,21 @@ export function _toggleAccordionRow(currentOpenId, rowId) {
 export function isDrawerVisuallyOpen(state) {
   if (!state) return false;
   if (state.phase === 'open' || state.phase === 'opening' || state.phase === 'closing') return true;
+  return !!state.dragging && state.dragProgress > 0;
+}
+
+/**
+ * v0.27.1 round 2 (reviewer condition 1) — the SCRIM's own predicate, which
+ * deliberately differs from isDrawerVisuallyOpen() in exactly one phase:
+ * 'closing'. The drawer must still count as present while it slides out (so
+ * no other gesture arms mid-slide), but the scrim has to START fading the
+ * moment the close starts, alongside the panel — driving it from
+ * isDrawerVisuallyOpen() held it fully dark for the whole 260 ms slide and
+ * only then faded it (a dark screen with no panel on it: RG-278 in reverse).
+ */
+export function isScrimShown(state) {
+  if (!state) return false;
+  if (state.phase === 'open' || state.phase === 'opening') return true;
   return !!state.dragging && state.dragProgress > 0;
 }
 
@@ -476,7 +505,7 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
   if (typeof dispatch !== 'function' || typeof getState !== 'function') return () => {};
   const getWidthPx = typeof opts.getWidthPx === 'function' ? opts.getWidthPx : () => DRAWER_MAX_WIDTH_PX;
 
-  let start = null, axis = null, dragActive = false, wasOpenAtStart = false;
+  let start = null, axis = null, dragActive = false, progressAtStart = 0;
   let lastX = 0, lastT = 0, velocityPxPerMs = 0;
 
   function onTouchStart(e) {
@@ -493,7 +522,6 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
     start = { x: t.clientX, y: t.clientY };
     axis = null;
     dragActive = false;
-    wasOpenAtStart = phaseOpen;
     lastX = t.clientX; lastT = Date.now(); velocityPxPerMs = 0;
   }
 
@@ -505,11 +533,16 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
     const dy = t.clientY - start.y;
     if (axis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-      if (axis === 'x') { dragActive = true; dispatch({ type: 'drag-start' }); }
+      if (axis === 'x') {
+        dragActive = true; dispatch({ type: 'drag-start' });
+        // Round 2 (finding 7) — continue from where the panel IS (drag-start
+        // keeps the settled progress): 0 closed, 1 open, 1 mid-"opening".
+        progressAtStart = clamp01(getState().dragProgress || 0);
+      }
     }
     if (axis !== 'x' || !dragActive) return;
     const widthPx = Math.max(1, getWidthPx() || DRAWER_MAX_WIDTH_PX);
-    const progress = wasOpenAtStart ? clamp01(1 + dx / widthPx) : clamp01(dx / widthPx);
+    const progress = clamp01(progressAtStart + dx / widthPx);
     dispatch({ type: 'drag-move', progress });
     const now = Date.now();
     const dt = Math.max(1, now - lastT);
@@ -904,10 +937,11 @@ export function renderControlCenter(ctx, state) {
   requireFn(ctx.escHtml, 'escHtml', 'renderControlCenter');
   requireFn(ctx.icon, 'icon', 'renderControlCenter');
   const open = isDrawerVisuallyOpen(state);
+  const scrim = isScrimShown(state);
   const closed = state.phase === 'closed';
   const dragProgress = clamp01(state.dragProgress || 0);
 
-  return `<div id="control-center-backdrop" class="control-center-backdrop" data-action="cc-backdrop" data-open="${open}" aria-hidden="${!open}"></div>
+  return `<div id="control-center-backdrop" class="control-center-backdrop" data-action="cc-backdrop" data-open="${scrim}" aria-hidden="${!scrim}"></div>
     <div id="control-center" class="control-center" role="dialog" aria-modal="true" aria-label="Control center"
       data-open="${open}" data-pane="${state.pane}" data-phase="${state.phase}" data-dragging="${!!state.dragging}"
       style="--cc-drag-progress:${dragProgress}"
@@ -980,9 +1014,10 @@ export function mountControlCenter(rootEl, ctx, options = {}) {
   // `--cc-drag-progress` custom property).
   function applyAttributes(next) {
     const open = isDrawerVisuallyOpen(next);
+    const scrim = isScrimShown(next);
     const dragProgress = clamp01(next.dragProgress || 0);
-    backdropEl?.setAttribute('data-open', String(open));
-    backdropEl?.setAttribute('aria-hidden', String(!open));
+    backdropEl?.setAttribute('data-open', String(scrim));
+    backdropEl?.setAttribute('aria-hidden', String(!scrim));
     if (drawerEl) {
       drawerEl.setAttribute('data-open', String(open));
       drawerEl.setAttribute('data-phase', next.phase);

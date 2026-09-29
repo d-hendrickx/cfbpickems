@@ -33,7 +33,7 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png" />
   <link rel="icon" type="image/svg+xml" href="favicon.svg" />
   <link rel="icon" type="image/x-icon" href="favicon.ico" />
-  <link rel="stylesheet" href="css/styles.css?v=27-0" />
+  <link rel="stylesheet" href="css/styles.css?v=27-1" />
   <style>
     /* v14.1: Hide app shell until JS is ready so users don't see a flash of the
        maroon header before the PIN gate / dashboard renders. JS removes the
@@ -154,6 +154,15 @@
            already uses below. Opens the control-center drawer
            (js/control-center.js) on tap. -->
       <button type="button" id="control-center-trigger" class="control-center-trigger" aria-label="Open control center"></button>
+      <!-- DI-393 amendment (Drew, 2026-09-28, v0.27.0 feedback: "the 'IRB
+           Pickems' pill in the top header is not centered in the space it's
+           in") — a LEADING spacer, the twin of .header-spacer below, so the
+           two equal zero-basis spacers split the free space and the league
+           pill sits centred between the trigger and the week zone. It never
+           shrinks anything (basis 0), so the strict truncation order is
+           untouched, and #league-pill stays a PRECEDING SIBLING of
+           .header-meta (the `#league-pill[hidden]~.header-meta` rule). -->
+      <span class="header-spacer header-spacer--lead" aria-hidden="true"></span>
       <!-- DI-393 — #league-pill RE-ADDED to the header (it was removed
            entirely, not merely hidden, by the T-15/DI-307 declutter pass on
            2026-09-25). renderLeaguePill() (js/app.js) itself was never
@@ -180,7 +189,16 @@
            updateSyncBadge() (js/app.js) fills it with an icon from
            js/icons.js plus an aria-label that changes with the state. The
            red loud-fail banner is unchanged and stays a SEPARATE, louder
-           notice — this icon is the persistent quiet one. -->
+           notice — this icon is the persistent quiet one.
+           DI-399(a) (UN-359, 2026-09-28) — a real tappable control now, on
+           web AND native: `role="button"`, `tabindex="0"` and the
+           aria-label itself are all set by updateSyncBadge() (progressive,
+           same as `data-sync` always was — left off the static markup here
+           so headermetatest's [hdr-e] pin on this exact literal stays a
+           true "before the first status event" baseline), bound once by
+           bindSyncBadgeTap() at boot. Tap/Enter/Space run runManualSync()
+           — the SAME function the pull-to-refresh gesture calls
+           (CONVENTIONS #21, one refresh path). -->
       <span id="sync-badge" class="header-sync-icon" data-sync=""></span>
     </div>
   </header>
@@ -266,7 +284,7 @@
      disk by authtest.mjs [12]. Still vendored, still same-origin, still no
      CDN and no build step. -->
 <!-- Cache-bust the main entry script so a stale browser cache can't serve v9 app.js. -->
-<script type="module" src="js/app.js?v=27-0"></script>
+<script type="module" src="js/app.js?v=27-1"></script>
 <script type="module">
   // Service worker registration + auto-update.
   // The logic moved to js/sw-register.js on 2026-09-10 (reviewer BLOCK F1) so
@@ -283,7 +301,7 @@
   import { setupServiceWorker } from './js/sw-register.js';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      setupServiceWorker({ scriptUrl: 'service-worker.js?v=27-0' })
+      setupServiceWorker({ scriptUrl: 'service-worker.js?v=27-1' })
         .catch(e => console.warn('[SW] setup failed', e)); // CONVENTIONS #4 — every await guarded inside, this keeps it that way
     });
   }

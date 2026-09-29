@@ -30,6 +30,19 @@
  *       (fix round 1 item 4), WeakMap double-bind idempotency (item 7).
  *   5   DI-325 T-27 week-swipe resolve — index math, ends return null,
  *       sub-threshold dx returns null.
+ *   5j  v0.27.0 — one direction table on Picks AND Dashboard, driven through
+ *       the REAL bindWeekSwipe() + the real app.js list builders.
+ *   5k  DI-409 (UN-364, 2026-09-28) — week-swipe VISUAL layer, BINDER-level:
+ *       drag-follow (1:1 px tracking, no transition), cancel spring-back
+ *       (mutation-proof: a version that skips it), commit slide (haptic
+ *       'light' at the commit instant, onNavigate() gated on the exit
+ *       transition, enter half lands back at 0), edge rubber-band (never
+ *       navigates/haptics at a list boundary), reduced motion (mutation-
+ *       proof: a version that ignores it — no live tracking, instant
+ *       navigate, transition attribute never appears), vertical-drag safety
+ *       (mutation-proof: a version that lets a vertical drag translate —
+ *       axis-locked 'y' never touches the transform), plus the pure
+ *       `_weekSwipeAtBound()`/`_weekSwipeRubberBand()` helpers directly.
  *   6   DI-327 T-29 rubber-band curve — monotonic, capped, zero at zero.
  *   6b  DI-327 T-29 bindBottomBounce() BOUNDED-ELEMENT test — a bounded
  *       scroller (Chat) reads ITS OWN scrollTop/clientHeight/scrollHeight,
@@ -65,13 +78,14 @@ const {
   NAV_HIDE_DOWN_PX, NAV_SHOW_UP_PX, NAV_ALWAYS_VISIBLE_NEAR_TOP_PX,
   KEYBOARD_VIEWPORT_DELTA_PX,
   PULL_TO_REFRESH_ARM_PX, PULL_TO_REFRESH_SUCCESS_FADE_MS,
-  WEEK_SWIPE_EDGE_EXCLUDE_PX, WEEK_SWIPE_BOUNCE_MAX_PX,
+  WEEK_SWIPE_EDGE_EXCLUDE_PX, WEEK_SWIPE_BOUNCE_MAX_PX, WEEK_SWIPE_BOUNCE_MS,
   RUBBER_BAND_CAP_PX,
   _navShowHideStateMachine, _keyboardLayoutStateMachine,
   _pullToRefreshStateMachine, _pullToRefreshEligible,
   _weekSwipeResolve, _rubberBandOffset, _bottomBounceEligible,
+  _weekSwipeAtBound, _weekSwipeRubberBand, bindWeekSwipe,
   gesturesSuspended, prefersReducedMotion, isKeyboardUp,
-  bindScrollDirection, bindPullToRefresh, bindBottomBounce,
+  bindScrollDirection, bindPullToRefresh, bindBottomBounce, bindBottomPullToRefresh,
   DISMISS_SETTLE_RATIO, DISMISS_FLICK_VELOCITY_PX_MS,
   _resolveDismissSettle, bindSwipeToDismiss,
 } = NG;
@@ -436,6 +450,287 @@ console.log('\n[4g] DI-324 T-26 — bindPullToRefresh() BINDER-level tests (fix 
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+console.log('\n[4h] RG-281 (reviewer round 2, 2026-09-28) — bindPullToRefresh() "the top-binder twin"…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // js/app.js's OWN current call sites only ever pass `() => window`
+  // (stable — the Picks/Dashboard else-branch), so THIS regression is not
+  // reachable through app.js today. It WAS reachable in v0.26/v0.27, when
+  // Chat's own top-edge bind used `() => document.getElementById(
+  // 'chat-scroll')` — the same unstable-identity hazard DI-399(b-ii)
+  // removed by giving Chat its own bottom-edge binder instead (see [6c]).
+  // This section proves the FUNCTION ITSELF carries the same RG-281 fix
+  // bindBottomPullToRefresh() does — defense in depth for any future
+  // caller, not a claim that today's app.js still feeds it an unstable
+  // element.
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+
+  function makeFakeWindowScrollEl() {
+    const handlers = {};
+    return {
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).forEach(fn => fn(ev)); },
+    };
+  }
+  globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: {} } };
+
+  {
+    // 4h-1 — bind against a bounded, unstable-identity scroller; the
+    // CALLER then replaces it with a fresh node that is NOT at scroll-top
+    // (a real page, scrolled down) — the drag must read that fresh node,
+    // never the bind-time one.
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let current = { scrollTop: 0, addEventListener() {}, removeEventListener() {} }; // bind-time: at top, eligible
+    let refreshed = 0;
+    bindPullToRefresh(() => current, async () => { refreshed++; }, { onFail: () => {} });
+    current = { scrollTop: 400, addEventListener() {}, removeEventListener() {} }; // replaced — scrolled well down
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '4h-1: bind -> caller replaces the scroll element with a NOT-at-top node -> drag -> 0 refreshes');
+  }
+  {
+    // 4h-2 — the replacement is DETACHED (a torn-down node reports 0 for
+    // every metric, which _pullToRefreshEligible(0) reads as "eligible" —
+    // exactly RG-281's "hide the page" case, the top-edge shape).
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let current = { scrollTop: 0, addEventListener() {}, removeEventListener() {} };
+    let refreshed = 0;
+    bindPullToRefresh(() => current, async () => { refreshed++; }, { onFail: () => {} });
+    current = { scrollTop: 0, isConnected: false, addEventListener() {}, removeEventListener() {} }; // detached
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '4h-2: the replacement node is DETACHED (isConnected:false) — even though its own scrollTop still reads 0 ("eligible"), isScrollElLive() refuses it');
+  }
+  {
+    // 4h-3 — `window` itself is never falsely refused: isScrollElLive()
+    // must answer true for the ordinary, ever-connected case.
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, '4h-3: `window` (Picks/Dashboard\'s real scroller) is never false-flagged by the liveness guard — the ordinary case still refreshes');
+  }
+  {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('./js/nav-gestures.js', import.meta.url), 'utf8');
+    const fnStart = src.indexOf('export function bindPullToRefresh');
+    const fnBody = src.slice(fnStart, fnStart + 5200); // widened for RG-285's opts.isActive block, added inside this same function
+    assert(fnStart > 0, '4h-4 fixture: bindPullToRefresh() is a real export');
+    assert(/getScrollElFrom\(getScrollEl\)/.test(fnBody) && /isScrollElLive\(/.test(fnBody),
+      '4h-4: onTouchStart re-resolves getScrollEl() FRESH and checks isScrollElLive() — the SAME RG-281 guard bindBottomPullToRefresh() carries');
+    assert(/eligible: false/.test(fnBody) && !/MAX_SAFE_INTEGER/.test(fnBody),
+      '4h-5: the not-live case passes an explicit `eligible: false`, not a fabricated scrollTop sentinel');
+  }
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[4i] RG-285 (reviewer round 3, 2026-09-28) — bindPullToRefresh()\'s opts.isActive: the window binder never fires while Chat is the active tab…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // Picks/Dashboard's own bindPullToRefresh(() => window, …) is bound once
+  // and never unbound (window is a STABLE identity — RG-281's own fresh-
+  // resolve fix does not help here, since the SAME window object really is
+  // still "live"). Chat never scrolls `window` at all (its own thread
+  // scrolls #chat-scroll internally), so window.scrollY stays 0 —
+  // _pullToRefreshEligible(0) reads that as "eligible" on every touch in
+  // chat history, and a downward drag ≥64px armed and released this
+  // binder while the reader was just scrolling messages. Driven through
+  // the REAL binder, same discipline as [4g]/[4h].
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+
+  function makeFakeWindowScrollEl() {
+    const handlers = {};
+    return {
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).forEach(fn => fn(ev)); },
+    };
+  }
+  function setActiveTab(tab) {
+    globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: { tab } } };
+  }
+
+  {
+    // Red on 8a0510a first (confirmed by hand before this fix landed): bind
+    // the window binder the SAME way Picks/Dashboard's own call site does,
+    // then simulate the tab having moved to Chat — a downward drag must
+    // fire ZERO refreshes.
+    setActiveTab('chat');
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, {
+      onFail: () => {},
+      isActive: () => document.body.dataset.tab !== 'chat',
+    });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] }); // downward drag, well past the arm point
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, `4i-1: data-tab="chat" — a downward drag anywhere in chat history never arms or refreshes the window binder (got ${refreshed})`);
+  }
+  {
+    // The SAME binder, the SAME kind of drag, on the tab it actually means
+    // something on — confirms this is a real predicate, not one that
+    // happens to always refuse (anti-vacuity).
+    setActiveTab('picks');
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, {
+      onFail: () => {},
+      isActive: () => document.body.dataset.tab !== 'chat',
+    });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, `4i-2: data-tab="picks" — the SAME drag arms and refreshes exactly once (got ${refreshed})`);
+  }
+  {
+    // dashboard is the OTHER active tab, same contract.
+    setActiveTab('dashboard');
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, {
+      onFail: () => {},
+      isActive: () => document.body.dataset.tab !== 'chat',
+    });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, `4i-3: data-tab="dashboard" — also arms and refreshes exactly once (got ${refreshed})`);
+  }
+  for (const tab of ['leaderboard', 'commissioner', 'rules', 'admin']) {
+    // Reviewer round 4 (2026-09-28): the RG-285 predicate must be a DENYLIST —
+    // an allowlist of picks/dashboard silently removed pull-to-refresh from
+    // Standings, Comm, Rules and Admin (DI-324: every page except the gate
+    // and sheets/modals). Each of these must still refresh exactly once.
+    setActiveTab(tab);
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, { onFail: () => {}, isActive: () => document.body.dataset.tab !== 'chat' });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, `4i-3-${tab}: data-tab="${tab}" keeps pull-to-refresh (got ${refreshed}) — only Chat is denied`);
+  }
+  {
+    // No isActive supplied at all — backward-compatible default (always
+    // active), so a caller that never needed this guard is unaffected.
+    setActiveTab('chat'); // even on chat — proves the DEFAULT truly is "always active", not silently borrowing the real predicate
+    const fakeWin = makeFakeWindowScrollEl(); globalThis.window = fakeWin;
+    let refreshed = 0;
+    bindPullToRefresh(() => fakeWin, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 100 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 100 + PULL_TO_REFRESH_ARM_PX + 4 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, `4i-4: with NO isActive option supplied, the binder defaults to always-active (backward compatible) — got ${refreshed}`);
+  }
+  {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('./js/nav-gestures.js', import.meta.url), 'utf8');
+    const fnStart = src.indexOf('export function bindPullToRefresh');
+    const fnBody = src.slice(fnStart, fnStart + 4500);
+    assert(/isActive/.test(fnBody), '4i-5 fixture: bindPullToRefresh() itself references isActive');
+    assert(/onTouchStart[\s\S]*?typeof isActive === 'function' && !isActive\(\)/.test(fnBody),
+      '4i-6: the isActive() check runs inside onTouchStart, before any scroll-position read');
+  }
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[4j] RG-289 (live v0.27.0, Drew 2026-09-28) — no window-level bounce binder acts on Chat; the Chat pull-up lifts nothing…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // bindBottomBounce(() => window, .page-wrapper) is bound ONCE, on the first
+  // non-Chat tab, and its window touch listeners stay live on Chat. Chat never
+  // scrolls `window`, so the window "true bottom" test (0 + innerHeight >=
+  // scrollHeight - 1) passed on every touch: every upward drag anywhere on
+  // Chat lifted the page. Driven through the REAL binder with a fake window
+  // whose document fits exactly (Chat's measured shape, chatpagetest [A-2]).
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+  function makeFakeWin() {
+    const handlers = {};
+    return {
+      scrollY: 0, innerHeight: 844,
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).forEach(fn => fn(ev)); },
+    };
+  }
+  function setTab(tab) {
+    globalThis.document = { getElementById: () => null, querySelector: () => null, body: { dataset: { tab } }, documentElement: { scrollHeight: 844 } };
+  }
+  const deny = () => document.body.dataset.tab !== 'chat';
+  /** Bind the way navigateTo() does, drag up 120px, return the largest lift written. */
+  function dragUp(tab, opts) {
+    setTab(tab);
+    const fakeWin = makeFakeWin(); globalThis.window = fakeWin;
+    const writes = [];
+    // A real element has addEventListener — bindBottomBounce() refuses a target without one.
+    const target = { style: {}, addEventListener() {}, removeEventListener() {} };
+    Object.defineProperty(target.style, 'transform', { set(v) { writes.push(v); }, get() { return writes[writes.length - 1] || ''; } });
+    bindBottomBounce(() => fakeWin, target, opts);
+    fakeWin._fire('touchstart', { touches: [{ clientY: 600 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 480 }] });
+    const lift = Math.max(0, ...writes.map(w => { const m = /translateY\(-([\d.]+)px\)/.exec(w || ''); return m ? +m[1] : 0; }));
+    fakeWin._fire('touchend', {});
+    return lift;
+  }
+  assert(dragUp('chat', { isActive: deny }) === 0,
+    '4j-1: data-tab="chat" — the window bottom-bounce binder, bound with the Chat denylist, writes NO lift on an upward drag (v0.27.1 tree: ~20px on every drag)');
+  assert(dragUp('picks', { isActive: deny }) > 5,
+    `4j-2: data-tab="picks" — the SAME binder, SAME drag, still bounces (anti-vacuity: the gate is a real predicate)`);
+  for (const tab of ['dashboard', 'leaderboard', 'commissioner', 'rules', 'admin']) {
+    assert(dragUp(tab, { isActive: deny }) > 5, `4j-2-${tab}: data-tab="${tab}" keeps its T-29 bottom bounce — only Chat is denied`);
+  }
+  assert(dragUp('chat') > 5, '4j-3: with NO isActive supplied the binder is always-active (backward compatible) — which is exactly the leak on Chat');
+  // bindScrollDirection(window) is also bound once and stays attached on Chat.
+  // It listens to window 'scroll' only, and on Chat the root cannot scroll
+  // (css RG-289 block; chatpagetest [A-4]/[A-12]…[A-17] measure scrollY 0
+  // throughout), so it receives nothing there — pinned statically below.
+
+  const { readFileSync } = await import('node:fs');
+  const ng = readFileSync(new URL('./js/nav-gestures.js', import.meta.url), 'utf8');
+  const bb = ng.slice(ng.indexOf('export function bindBottomBounce'), ng.indexOf('export function bindBottomBounce') + 2600);
+  assert(/export function bindBottomBounce\(getScrollEl, target, opts = \{\}\)/.test(bb) &&
+    /function onTouchStart[\s\S]*?typeof isActive === 'function' && !isActive\(\)[\s\S]*?readScrollPos\(/.test(bb),
+    '4j-4: bindBottomBounce() takes opts.isActive and checks it inside onTouchStart BEFORE any scroll-position read (RG-285\'s placement)');
+  const app = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+  const nav = app.slice(app.indexOf('const getScrollEl = tab === \'chat\''), app.indexOf('// T-27 (DI-325) — B-02'));
+  assert(nav.length > 500, '4j-5 fixture: found navigateTo()\'s per-tab gesture wiring in js/app.js');
+  const chatBranch = nav.slice(nav.indexOf("if (tab === 'chat') {"), nav.indexOf('} else {'));
+  const otherBranch = nav.slice(nav.indexOf('} else {'));
+  assert(!/bindBottomBounce\(|bindPullToRefresh\(/.test(chatBranch),
+    '4j-6: the Chat branch binds NO window pull-to-refresh and NO bottom bounce of its own');
+  assert(/bindBottomBounce\(getScrollEl,[^;]*isActive:\s*\(\)\s*=>\s*document\.body\.dataset\.tab !== 'chat'/.test(otherBranch),
+    '4j-7: the window bindBottomBounce() call passes the Chat DENYLIST (tab !== \'chat\') — mutation: deleting the option goes red here and in chatpagetest [A-7]/[A-8]/[A-10]');
+  assert(/bindBottomPullToRefresh\(getScrollEl, null,/.test(chatBranch),
+    '4j-8: Chat\'s pull-up is bound with NO rubber-band target — arming it at the newest message no longer lifts header, thread and composer together (chatpagetest [A-20])');
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 console.log('\n[5] DI-325 T-27 — week-swipe resolve (pure index math)…');
 // ═════════════════════════════════════════════════════════════════════════
 {
@@ -512,12 +807,25 @@ console.log('\n[5j] v0.27.0 — ONE direction table on Picks AND Dashboard (Drew
 
   const swipe = (getState, fromX, toX) => {
     const handlers = {};
-    const root = { addEventListener: (t, fn) => { handlers[t] = fn; }, removeEventListener() {} };
+    // DI-409 — bindWeekSwipe() now writes a CSS custom property + a dataset
+    // flag and (on commit) defers onNavigate() until the exit transition
+    // completes (real DOM: `transitionend`); this fixture's fake root grew
+    // `style`/`dataset` accordingly, and fires a synthetic `transitionend`
+    // after the touch sequence so this test still resolves synchronously —
+    // it is testing DIRECTION correctness, not the animation timing (5k
+    // above owns that).
+    const root = {
+      style: { setProperty() {} },
+      dataset: {},
+      addEventListener: (t, fn) => { handlers[t] = fn; },
+      removeEventListener() {},
+    };
     let navigated = null;
     const unbind = NG.bindWeekSwipe(root, getState, (id) => { navigated = id; });
     handlers.touchstart({ touches: [{ clientX: fromX, clientY: 300 }] });
     handlers.touchmove({ touches: [{ clientX: fromX + (toX - fromX) / 2, clientY: 300 }] });
     handlers.touchmove({ touches: [{ clientX: toX, clientY: 300 }] });
+    handlers.transitionend?.({ target: root }); // completes the commit-exit half, if one started
     handlers.touchend({});
     unbind();
     return navigated;
@@ -551,6 +859,285 @@ console.log('\n[5j] v0.27.0 — ONE direction table on Picks AND Dashboard (Drew
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow = globalThis.window;
+
+  function makeFakeWeekSwipeRoot() {
+    const handlers = {};
+    const props = {};
+    return {
+      dataset: {},
+      style: { setProperty: (k, v) => { props[k] = v; } },
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _props: props,
+      _fire(type, ev) { (handlers[type] || []).slice().forEach(fn => fn(ev)); },
+    };
+  }
+  const ts5k = (root, x, y) => root._fire('touchstart', { touches: [{ clientX: x, clientY: y }] });
+  const tm5k = (root, x, y) => root._fire('touchmove', { touches: [{ clientX: x, clientY: y }] });
+  const te5k = (root) => root._fire('touchend', {});
+  const WEEKS5K = ['w1', 'w2', 'w3', 'w4'];
+  const getState5k = () => ({ weekIds: WEEKS5K, currentWeekId: 'w2' });
+
+  // 5k-a: dragging, below commit threshold — raw 1:1 px tracking, transition OFF.
+  {
+    const root = makeFakeWeekSwipeRoot();
+    bindWeekSwipe(root, getState5k, () => {});
+    ts5k(root, 200, 300);
+    tm5k(root, 220, 300); // dx=20 — past AXIS_DEAD_ZONE(8), below SWIPE_COMMIT_PX(40)
+    assert(root._props['--week-swipe-x'] === '20px',
+      `5k-a1: mid-drag, below commit threshold — raw 1:1 px tracking (got ${root._props['--week-swipe-x']})`);
+    assert(root.dataset.weekSwipeAnimating === undefined,
+      '5k-a2: no [data-week-swipe-animating] during raw drag-follow — the transition stays OFF (no easing; "a transition here would read as latency, not polish")');
+    te5k(root);
+  }
+
+  // 5k-b: cancelling (release below threshold) — springs back WITH the
+  // transition, no haptic. MUTATION-PROOF for "a version that skips the
+  // cancel spring": a mutant that removed springBack()'s two calls would
+  // leave --week-swipe-x at its last dragged value ("15px") and/or never
+  // set the animating attribute — either assertion below goes red on it.
+  {
+    globalThis.window = {}; // no Capacitor — haptic() is a documented no-op regardless
+    const root = makeFakeWeekSwipeRoot();
+    bindWeekSwipe(root, getState5k, () => {});
+    ts5k(root, 200, 300);
+    tm5k(root, 215, 300); // dx=15 — past dead-zone, below commit
+    assert(root._props['--week-swipe-x'] === '15px', '5k-b0: fixture — mid-drag before release');
+    te5k(root);
+    assert(root._props['--week-swipe-x'] === '0px',
+      '5k-b1: cancelling springs the transform back to translateX(0) — MUTATION: a version that skips the cancel spring leaves this at "15px"');
+    assert(root.dataset.weekSwipeAnimating === 'true',
+      '5k-b2: cancelling turns the transition ON for the spring (Small-feedback bucket) — MUTATION: skipping the spring leaves this attribute unset (an instant, untransitioned snap)');
+  }
+
+  // 5k-c: committing — crossing SWIPE_COMMIT_PX mid-drag slides fully off
+  // toward the drag direction, fires haptic('light') at that exact instant
+  // (DI-409's correction of the drifted 'selection' call), and only calls
+  // onNavigate() once the exit half's transition completes; the enter half
+  // then hands off back to translateX(0) and releases the busy guard.
+  {
+    const calls = [];
+    globalThis.window = {
+      Capacitor: { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(o) } } },
+    };
+    const root = makeFakeWeekSwipeRoot();
+    let navigated = null;
+    bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
+    ts5k(root, 260, 300);
+    tm5k(root, 160, 300); // dx=-100 — negative = "next week" = w3, well past commit
+    assert(root._props['--week-swipe-x'] === '-100%',
+      `5k-c1: crossing commit slides fully off toward the drag direction (got ${root._props['--week-swipe-x']})`);
+    assert(root.dataset.weekSwipeAnimating === 'true', '5k-c2: the commit-exit half animates (transition ON)');
+    assert(calls.length === 1 && calls[0].style === 'LIGHT',
+      `5k-c3: haptic('light') fires at the commit instant, not the drifted 'selection' (got ${JSON.stringify(calls)})`);
+    assert(navigated === null, '5k-c4: onNavigate() has NOT fired yet — it is gated on the exit transition completing');
+    root._fire('transitionend', { target: root }); // exit half completes
+    assert(navigated === 'w3', `5k-c5: onNavigate() fires with the resolved target once the exit half completes (got ${navigated})`);
+    assert(root._props['--week-swipe-x'] === '0px',
+      `5k-c6: with no requestAnimationFrame in this test environment, the enter half runs synchronously and lands back at translateX(0) (got ${root._props['--week-swipe-x']})`);
+    root._fire('transitionend', { target: root }); // enter half completes
+    assert(root.dataset.weekSwipeAnimating === undefined, '5k-c7: the enter half finishing turns the transition back OFF, ready for the next drag');
+  }
+
+  // 5k-d: at an end of the list — the boundary check switches 1:1 tracking
+  // to the rubber-band curve DURING the drag (before any commit threshold),
+  // and NEVER commits there, however far past SWIPE_COMMIT_PX the drag goes
+  // — no navigation, no haptic (an edge is not a success), no early spring.
+  // REVIEWER BLOCK B2 (round 2, 2026-09-28) — this used to encode the WRONG
+  // behaviour: crossing 40px at a bound sprang back IMMEDIATELY, mid-drag,
+  // while the finger was still down (the page snapped back UNDER it), and
+  // the offset never approached WEEK_SWIPE_BOUNCE_MAX_PX's own asymptote
+  // because it was captured the instant the 40px threshold crossed (~23px).
+  // The DI is explicit that spring-back happens ON RELEASE — rewritten to
+  // prove exactly that: the rubber-band keeps growing past the old
+  // (wrong) commit point, and only touchend/clear() springs it back.
+  {
+    const calls = [];
+    globalThis.window = {
+      Capacitor: { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(o) } } },
+    };
+    const root = makeFakeWeekSwipeRoot();
+    let navigated = null;
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5K, currentWeekId: 'w1' }), (id) => { navigated = id; });
+    ts5k(root, 100, 300);
+    tm5k(root, 130, 300); // dx=30 ("previous" direction) — w1 is already the first week
+    const rb1 = root._props['--week-swipe-x'];
+    assert(typeof rb1 === 'string' && rb1.endsWith('px') && parseFloat(rb1) > 0 && parseFloat(rb1) < 30,
+      `5k-d1: at the list's first week, dragging "previous" further is RESISTED (rubber-band offset < raw dx) (got ${rb1})`);
+    tm5k(root, 200, 300); // dx=100 — well past SWIPE_COMMIT_PX, still at the bound
+    assert(navigated === null, '5k-d2: crossing SWIPE_COMMIT_PX while still at the bound does NOT navigate');
+    assert(calls.length === 0, '5k-d3: …and never fires a haptic either — an edge is not a success');
+    const rb2 = root._props['--week-swipe-x'];
+    assert(typeof rb2 === 'string' && rb2.endsWith('px') && rb2 !== '0px',
+      `5k-d4: MUTATION PROOF (B2): crossing the commit threshold at a bound does NOT spring back immediately either — a version with the old early-spring bug would show "0px" here already (got ${rb2})`);
+    assert(parseFloat(rb2) > parseFloat(rb1),
+      `5k-d5: …the rubber-band keeps growing the further the (still-down) finger drags, never capped at the old early-commit point (got ${rb2} vs ${rb1})`);
+    tm5k(root, 260, 300); // dx=160 — dragging further still, well past the old 40px trigger
+    const rb3 = parseFloat(root._props['--week-swipe-x']);
+    assert(rb3 > parseFloat(rb2) && rb3 < WEEK_SWIPE_BOUNCE_MAX_PX,
+      `5k-d6: …and keeps approaching WEEK_SWIPE_BOUNCE_MAX_PX (48px) rather than being stuck at the ~23px the old early-commit bug capped it at (got ${rb3})`);
+    te5k(root); // release — ONLY NOW does it spring back (clear()'s springBack(), per the DI)
+    assert(root._props['--week-swipe-x'] === '0px',
+      '5k-d7: …and releasing at the bound springs back to 0 — the DI\'s "spring back happens ON RELEASE," now true here');
+    assert(navigated === null, '5k-d8: …still never navigated, through the whole sequence');
+  }
+
+  // 5k-e: reduced motion — MUTATION-PROOF for "a version that ignores
+  // reduced motion": a sub-threshold drag applies NO live transform at all,
+  // and a commit navigates IMMEDIATELY with the transition attribute never
+  // appearing.
+  {
+    const savedMatchMedia = globalThis.matchMedia;
+    globalThis.matchMedia = () => ({ matches: true });
+    globalThis.window = {}; // no Capacitor
+    const root = makeFakeWeekSwipeRoot();
+    let navigated = null;
+    bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
+    ts5k(root, 260, 300); // C2's touchstart reset writes '0px' here — expected baseline, not "no write at all"
+    assert(root._props['--week-swipe-x'] === '0px', '5k-e0: fixture — touchstart\'s own C2 reset baseline');
+    tm5k(root, 240, 300); // dx=-20 — past dead-zone, below commit
+    assert(root._props['--week-swipe-x'] === '0px',
+      `5k-e1: prefers-reduced-motion — a sub-threshold drag applies NO live transform, so the value stays at touchstart's own baseline — MUTATION: a version that ignores reduced motion sets this to "-20px" (got ${root._props['--week-swipe-x']})`);
+    tm5k(root, 160, 300); // dx=-100 (from start) — crosses commit
+    assert(navigated === 'w3',
+      `5k-e2: …and a commit still navigates, immediately, with no transition step (got ${navigated})`);
+    assert(root.dataset.weekSwipeAnimating === undefined,
+      '5k-e3: …[data-week-swipe-animating] never appears under reduced motion — MUTATION: a version that ignores reduced motion would animate anyway');
+    globalThis.matchMedia = savedMatchMedia;
+  }
+
+  // 5k-f: a vertical-locked drag never touches the transform. MUTATION-PROOF
+  // for "a version that lets a vertical drag translate": axis locks to 'y'
+  // on the first move past the dead zone (dy dominates dx) and stays locked
+  // for the rest of the gesture, however far it later drifts horizontally.
+  {
+    globalThis.window = {};
+    const root = makeFakeWeekSwipeRoot();
+    let navigated = null;
+    bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
+    ts5k(root, 200, 300); // C2's touchstart reset writes '0px' here — expected baseline
+    tm5k(root, 205, 340); // dx=5, dy=40 -> locks to 'y'
+    tm5k(root, 260, 340); // a big dx too, now — but axis is already locked to 'y'
+    assert(root._props['--week-swipe-x'] === '0px',
+      `5k-f1: a vertical-locked drag never MOVES --week-swipe-x past touchstart's own baseline — MUTATION: a version that lets a vertical drag translate would set this once dx grows large (got ${root._props['--week-swipe-x']})`);
+    assert(navigated === null, '5k-f2: …and never navigates either — week-swipe only ever engages on the x axis');
+    te5k(root);
+    assert(root.dataset.weekSwipeAnimating === undefined,
+      '5k-f3: releasing a vertical-locked drag does not spring anything back either — nothing was ever dragged on this axis');
+  }
+
+  // 5k-g: the pure helpers, directly.
+  assert(_weekSwipeAtBound(WEEKS5K, 'w1', 50) === true, '5k-g1: _weekSwipeAtBound() — at the first week, the "previous" direction is at-bound');
+  assert(_weekSwipeAtBound(WEEKS5K, 'w1', -50) === false, '5k-g2: …but the "next" direction is not');
+  assert(_weekSwipeAtBound(WEEKS5K, 'w4', -50) === true, '5k-g3: …and at the last week, the "next" direction is at-bound');
+  assert(_weekSwipeAtBound(WEEKS5K, 'w2', 50) === false, '5k-g4: …a middle week is never at-bound in either direction');
+  assert(_weekSwipeAtBound(WEEKS5K, 'w2', -50) === false, '5k-g5: (other direction, same middle week)');
+  assert(_weekSwipeRubberBand(0) === 0, '5k-g6: _weekSwipeRubberBand(0) === 0 — same "zero at zero" contract as _rubberBandOffset()');
+  const rbBig = _weekSwipeRubberBand(50000);
+  assert(rbBig > 0 && WEEK_SWIPE_BOUNCE_MAX_PX - rbBig < 0.1,
+    `5k-g7: _weekSwipeRubberBand() asymptotically approaches WEEK_SWIPE_BOUNCE_MAX_PX, never RUBBER_BAND_CAP_PX — the same curve, reused at a different cap (got ${rbBig})`);
+  assert(WEEK_SWIPE_BOUNCE_MS === 150, "5k-g8: WEEK_SWIPE_BOUNCE_MS matches css/styles.css's --motion-fast (150ms) — one animation language");
+
+  // 5k-h: C1 (reviewer round 2) — an exception inside onNavigate (a render
+  // function throwing) must not strand the page at the exit offset with
+  // the busy guard latched forever.
+  {
+    globalThis.window = {};
+    const root = makeFakeWeekSwipeRoot();
+    bindWeekSwipe(root, getState5k, () => { throw new Error('render exploded'); });
+    ts5k(root, 260, 300);
+    tm5k(root, 160, 300); // dx=-100 — commits
+    let threw = false;
+    try {
+      root._fire('transitionend', { target: root }); // exit completes; onNavigate throws
+    } catch (e) {
+      threw = true;
+    }
+    assert(threw, '5k-h1: a throwing onNavigate propagates — the binder does not silently swallow the caller\'s error');
+    assert(root._props['--week-swipe-x'] === '0px',
+      `5k-h2: …but the transform is still reset to translateX(0) rather than stranded at the exit offset (got ${root._props['--week-swipe-x']})`);
+    assert(root.dataset.weekSwipeAnimating === undefined, '5k-h3: …the animating attribute is cleared too');
+    // busy released — a fresh drag right after the throw is accepted, not
+    // silently dropped by the busy guard staying latched forever.
+    ts5k(root, 260, 300);
+    tm5k(root, 240, 300); // dx=-20 — below commit, a plain sub-drag to prove touchstart was accepted
+    assert(root._props['--week-swipe-x'] === '-20px',
+      `5k-h4: MUTATION PROOF (C1): a fresh drag right after the throw is accepted (busy released) — a version that skips the finally-reset would still show "0px"/never move here (got ${root._props['--week-swipe-x']})`);
+    te5k(root);
+  }
+
+  // 5k-i: C2 (reviewer round 2) — a fresh touchstart always resets any
+  // stale live-drag value first, protecting against a background re-render
+  // mid-drag replacing the touched node before its own touchend/
+  // touchcancel ever arrives (the old node simply goes away, mid-gesture).
+  {
+    globalThis.window = {};
+    const root = makeFakeWeekSwipeRoot();
+    bindWeekSwipe(root, getState5k, () => {});
+    ts5k(root, 200, 300);
+    tm5k(root, 230, 300); // dx=30 — mid-drag, never released (simulating a detached node)
+    assert(root._props['--week-swipe-x'] === '30px', '5k-i0: fixture — mid-drag, no touchend ever delivered');
+    ts5k(root, 200, 300); // a fresh touchstart, as if a NEW gesture just began
+    assert(root._props['--week-swipe-x'] === '0px',
+      `5k-i1: MUTATION PROOF (C2): a fresh touchstart resets any stale live-drag value first — a version that skips this reset would still show "30px" here (got ${root._props['--week-swipe-x']})`);
+  }
+
+  // 5k-j: B1 (reviewer round 2) — the enter half's opposite-edge starting
+  // position must be FLUSHED (a forced reflow) before the transition is
+  // turned back on, or the browser can collapse the two writes into one
+  // and animate from the WRONG edge (proven on the fallback-timer path;
+  // likely on the normal path on iOS too, since WebKit can dispatch a
+  // requestAnimationFrame callback before flushing an intervening style
+  // write within the same frame). Driven with an instrumented root that
+  // logs every style/dataset write and every `offsetWidth` READ, in order.
+  {
+    globalThis.window = {};
+    const log = [];
+    const styleProps = {};
+    const datasetTarget = {};
+    const dataset = new Proxy(datasetTarget, {
+      set(target, prop, value) { log.push({ op: 'animating-set', value }); target[prop] = value; return true; },
+      deleteProperty(target, prop) { log.push({ op: 'animating-delete' }); delete target[prop]; return true; },
+      get(target, prop) { return target[prop]; },
+    });
+    const handlers = {};
+    const root = {
+      dataset,
+      style: { setProperty: (k, v) => { log.push({ op: 'setX', value: v }); styleProps[k] = v; } },
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).slice().forEach(fn => fn(ev)); },
+      _props: styleProps,
+    };
+    Object.defineProperty(root, 'offsetWidth', { get() { log.push({ op: 'reflow-read' }); return 300; } });
+
+    let navigated = null;
+    bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
+    ts5k(root, 260, 300);
+    tm5k(root, 160, 300); // dx=-100 — commits, exits toward -100%
+    root._fire('transitionend', { target: root }); // exit half completes; enter half runs synchronously (no rAF in Node)
+    assert(navigated === 'w3', `5k-j0: fixture — the commit completed (got ${navigated})`);
+
+    const oppositeEdgeIdx = log.findIndex(e => e.op === 'setX' && e.value === '100%'); // -exitPct% (exitPct=-100)
+    const reflowIdx = log.findIndex((e, i) => e.op === 'reflow-read' && i > oppositeEdgeIdx);
+    const enterAnimatingIdx = log.findIndex((e, i) => e.op === 'animating-set' && e.value === 'true' && i > (reflowIdx === -1 ? oppositeEdgeIdx : reflowIdx));
+    assert(oppositeEdgeIdx !== -1, `5k-j1: fixture — the opposite-edge position write ("100%") happened (log: ${JSON.stringify(log)})`);
+    assert(reflowIdx !== -1,
+      `5k-j2: MUTATION PROOF (B1): a layout read (offsetWidth) happens after the opposite-edge write — a version that removes the forced reflow shows NO 'reflow-read' entry at all (log: ${JSON.stringify(log)})`);
+    assert(reflowIdx > oppositeEdgeIdx,
+      `5k-j3: …specifically AFTER the opposite-edge write, not before it (got reflow at ${reflowIdx}, opposite-edge write at ${oppositeEdgeIdx})`);
+    assert(enterAnimatingIdx !== -1 && reflowIdx < enterAnimatingIdx,
+      `5k-j4: …and BEFORE the enter half re-enables the transition — the exact ordering that guarantees the -100% start is resolved before the transition turns back on (reflow at ${reflowIdx}, enter-animating-on at ${enterAnimatingIdx})`);
+  }
+
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 console.log('\n[6] DI-327 T-29 — rubber-band resistance curve…');
 // ═════════════════════════════════════════════════════════════════════════
 {
@@ -566,6 +1153,15 @@ console.log('\n[6] DI-327 T-29 — rubber-band resistance curve…');
   const gainEarly = _rubberBandOffset(50) - _rubberBandOffset(10);
   const gainLate = _rubberBandOffset(500) - _rubberBandOffset(450);
   assert(gainEarly > gainLate, '6g: diminishing returns — equal-sized drag increments produce shrinking additional offset as the drag grows');
+
+  // 6h — reviewer round 2 (2026-09-28) — a 1px tolerance, mirroring
+  // _pullToRefreshEligible()'s own FIX ROUND 1 ITEM 5 (some engines report
+  // scroll metrics off by a sub-pixel at rest, which would otherwise make
+  // this gesture never arm on a real device).
+  const ih = 800, sh = 2000;
+  assert(_bottomBounceEligible(sh - ih, ih, sh) === true, '6h-1: exactly at the true bottom is still eligible (unchanged)');
+  assert(_bottomBounceEligible(sh - ih - 1, ih, sh) === true, '6h-2: 1px short of the true bottom tolerates the sub-pixel rest — eligible');
+  assert(_bottomBounceEligible(sh - ih - 2, ih, sh) === false, '6h-3: 2px short is genuinely not at the bottom — not eligible (the tolerance is 1px, not open-ended)');
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -637,6 +1233,299 @@ console.log('\n[6b] DI-327 T-29 — bindBottomBounce() BOUNDED-ELEMENT test (fix
   const unbindA = bindBottomBounce(() => chatAtBottom, targetAtBottom);
   const unbindB = bindBottomBounce(() => chatAtBottom, targetAtBottom);
   assert(unbindA === unbindB, '6b-3: a second bind() for the same scroll element returns the SAME unbind function (attaches once)');
+
+  globalThis.document = savedDocument;
+  globalThis.window = savedWindow;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[6c] DI-399(b-ii) — bindBottomPullToRefresh() (UN-359, 2026-09-28) — Chat\'s mirrored bottom-edge pull-to-refresh…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  // Driven through the REAL binder — same discipline as [4g]/[6b]: this
+  // proves the WIRING (which reducer, which eligibility formula, which
+  // suspension checks) rather than a hand-rolled model of it. No separate
+  // pure `_bottomPullToRefreshStateMachine` exists to batch-test — the DI's
+  // own instruction is REUSE stepPullToRefresh, not a parallel reducer, and
+  // that reducer is already exhaustively proven pure in [4] above; what's
+  // new here is the binder wiring around it (bottom eligibility, dragUp
+  // sign, keyboard suspension, the rubber-band visual).
+  const savedDocument = globalThis.document;
+  const savedWindow = globalThis.window;
+
+  function makeFakeWindow() {
+    const handlers = {};
+    return {
+      innerHeight: 800,
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).forEach(fn => fn(ev)); },
+      _handlerCount(type) { return (handlers[type] || []).length; },
+    };
+  }
+  function makeFakeTarget() { return { style: {}, addEventListener() {}, removeEventListener() {} }; }
+  // The bounded scroller (Chat's own #chat-scroll), genuinely at its own
+  // bottom — scrollTop + clientHeight === scrollHeight, the SAME
+  // `_bottomBounceEligible` formula [6b] already exercises.
+  function makeChatAtBottom() { return { scrollTop: 800, clientHeight: 400, scrollHeight: 1200, addEventListener() {}, removeEventListener() {} }; }
+  function makeChatNotAtBottom() { return { scrollTop: 0, clientHeight: 400, scrollHeight: 1200, addEventListener() {}, removeEventListener() {} }; }
+
+  // `activeTab` defaults to 'chat' — every case in this section models
+  // Chat actually being the visible tab (the real precondition
+  // bindBottomPullToRefresh() is bound under); [6c-11] below flips it to
+  // prove the NEW body[data-tab] gate (reviewer round 2, finding 1) is
+  // load-bearing on its own, independent of app.js's own unbind-before-
+  // rebind discipline (which this file cannot see — that half is proven in
+  // headermetatest.mjs against the real app.js).
+  function freshDocEnv({ keyboardUp = false, activeTab = 'chat' } = {}) {
+    const dataset = {};
+    if (keyboardUp) dataset.keyboardUp = '';
+    if (activeTab) dataset.tab = activeTab;
+    globalThis.document = {
+      getElementById: (id) => (id === 'chat-sheet-wrap' || id === 'site-gate-overlay' || id === 'league-page-overlay' || id === 'week-wizard-sheet-wrap') ? null : null,
+      querySelector: () => null,
+      body: { dataset },
+    };
+  }
+
+  // 6c-1 — eligibility mirrors _bottomBounceEligible, at the bottom edge:
+  // dragging up while genuinely NOT at the scroller's own bottom never arms
+  // or refreshes, however far the finger travels.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatNotAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 100 }] }); // dragUp 100px, well past ARM_PX
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-1: NOT at the scroller\'s own bottom — dragging up never arms or refreshes, however far (mirrors [4d]\'s top-edge case)');
+    assert(target.style.transform === '' || target.style.transform === undefined, '6c-1b: …and no rubber-band visual applies either, ineligible from touchstart');
+  }
+
+  // 6c-2 — at the true bottom, dragging UP past PULL_TO_REFRESH_ARM_PX
+  // arms, and releasing calls refreshFn — the SAME 64px threshold
+  // stepPullToRefresh already enforces for the top-edge binder, reused
+  // unmodified.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - (PULL_TO_REFRESH_ARM_PX + 4) }] }); // past the arm point
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 1, `6c-2: at the true bottom, dragging up ${PULL_TO_REFRESH_ARM_PX + 4}px (past PULL_TO_REFRESH_ARM_PX=${PULL_TO_REFRESH_ARM_PX}) arms and release calls refreshFn exactly once`);
+  }
+
+  // 6c-3 — dragging DOWN (into older history) is the opposite sign and
+  // never arms, however far — this is the exact case Drew's own testing
+  // named (matrix row 2c): the reader must be able to scroll up through
+  // history freely.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 + 100 }] }); // dragging DOWN — dragUp negative
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-3: dragging DOWN from the bottom (into history) never arms — only drag-UP-past-the-bottom is this gesture\'s positive axis');
+  }
+
+  // 6c-4 — axis lock: a horizontally-dominant drag never arms, mirroring
+  // AXIS_DEAD_ZONE_PX exactly as the top-edge binder's own [4]/stepPullToRefresh
+  // touchmove branch already enforces (reused unmodified, not re-derived).
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400, clientX: 200 }] });
+    // The axis commits on the FIRST move past the dead zone (state.axis is
+    // sticky thereafter) — |dx|=90 clearly dominates |dy|=10 here, so this
+    // locks 'x', unlike an equal-magnitude first move (which the reducer's
+    // own `>` comparison — not `>=` — would resolve to 'y', a tie-break
+    // that is itself proven, not assumed, by this fixture's clear margin).
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 10, clientX: 200 - 90 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 90, clientX: 200 - 95 }] }); // axis stays 'x' regardless of this later vertical distance
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-4: a horizontally-committed drag (a reply-swipe on the last message) never arms the refresh, whatever its vertical distance');
+  }
+
+  // 6c-5 — gesturesSuspended() (a modal/gate/sheet open) refuses entirely.
+  {
+    globalThis.document = {
+      getElementById: (id) => id === 'chat-sheet-wrap' ? {} : null,
+      querySelector: () => null,
+      body: { dataset: {} },
+    };
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 100 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-5: gesturesSuspended() (chat-sheet/modal/gate open) refuses the gesture entirely, same as every other binder in this file');
+  }
+
+  // 6c-6 — isKeyboardUp() ALSO suspends this binder specifically (a
+  // deliberate difference from the top-edge binder, named in the handoff):
+  // the composer sits at exactly this gesture's edge, so a drag while
+  // typing must resolve to normal text interaction, never an armed refresh.
+  {
+    freshDocEnv({ keyboardUp: true });
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 100 }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-6: with the keyboard up (composer focused), the gesture is suspended too — isKeyboardUp(), checked IN ADDITION to gesturesSuspended() (which does not itself cover the keyboard, by its own header\'s amendment)');
+  }
+
+  // 6c-7 — onFail is REQUIRED, exactly like the top-edge binder ([4g-1]):
+  // omitting it returns the same inert no-op binder, never a gesture that
+  // might silently fail.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    const unbindNoFail = bindBottomPullToRefresh(() => chat, target, async () => {}, {});
+    assert(typeof unbindNoFail === 'function', '6c-7a: bindBottomPullToRefresh() without onFail still returns a function (the no-op contract)');
+    assert(fakeWin._handlerCount('touchstart') === 0, '6c-7b: …and attached ZERO listeners — no onFail means no gesture');
+  }
+
+  // 6c-8 — WeakMap idempotency, same shape as every other binder here.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    const unbindA = bindBottomPullToRefresh(() => chat, target, async () => {}, { onFail: () => {} });
+    const unbindB = bindBottomPullToRefresh(() => chat, target, async () => {}, { onFail: () => {} });
+    assert(unbindA === unbindB, '6c-8: a second bind() for the same scroll element returns the SAME unbind function (attaches once)');
+  }
+
+  // 6c-9 — the rubber-band visual (Precedence over bindBottomBounce on
+  // Chat's own scroller): dragging up past the bottom applies
+  // _rubberBandOffset() to `target.style.transform` DURING the drag (the
+  // SAME resistance curve/target shape bindBottomBounce uses, so the
+  // reader never sees a bare unstyled overscroll followed by a themed
+  // one), and release clears it.
+  {
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    bindBottomPullToRefresh(() => chat, target, async () => {}, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - 20 }] }); // below the arm point — still "pulling"
+    assert(typeof target.style.transform === 'string' && target.style.transform.includes('translateY('),
+      '6c-9a: mid-drag (below the arm point), the rubber-band resistance curve is already visible — the reader is never shown a bare unstyled overscroll');
+    fakeWin._fire('touchend', {});
+    assert(target.style.transform === '', '6c-9b: release clears the visual (settles back to no offset)');
+  }
+
+  // 6c-10 — structural: the success path calls the SAME completion haptic
+  // the top-edge binder fires (js/nav-gestures.js's own runRefresh(),
+  // haptic('light')), and the source calls stepPullToRefresh/
+  // _bottomBounceEligible/_rubberBandOffset — reuse, not reimplementation,
+  // checked against the SHIPPED file rather than assumed.
+  {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('./js/nav-gestures.js', import.meta.url), 'utf8');
+    const fnStart = src.indexOf('export function bindBottomPullToRefresh');
+    const fnBody = src.slice(fnStart, fnStart + 6000);
+    assert(fnStart > 0, '6c-10 fixture: bindBottomPullToRefresh() is a real export in js/nav-gestures.js');
+    assert(/stepPullToRefresh\(state, \{ type: 'touchmove'/.test(fnBody), '6c-10a: touchmove is fed through the SAME stepPullToRefresh() reducer [4] already proves — not a parallel one');
+    assert(/_bottomBounceEligible\(/.test(fnBody), '6c-10b: eligibility reuses _bottomBounceEligible() — the SAME "true bottom" formula bindBottomBounce() uses, not a second formula');
+    assert(/_rubberBandOffset\(/.test(fnBody), '6c-10c: the drag visual reuses _rubberBandOffset() — the SAME resistance curve, not a bespoke one');
+    assert(/haptic\('light'\)/.test(fnBody), "6c-10d: success fires haptic('light') — the SAME completion haptic the top-edge binder fires");
+    assert(/isKeyboardUp\(\)/.test(fnBody) && /gesturesSuspended\(\)/.test(fnBody), '6c-10e: suspension checks BOTH gesturesSuspended() and isKeyboardUp() — named, not silently only one');
+    // Reviewer round 2 (2026-09-28) — the explicit `eligible` field, not the
+    // MAX_SAFE_INTEGER sentinel an earlier version faked through
+    // _pullToRefreshEligible().
+    assert(/stepPullToRefresh\(state, \{ type: 'touchstart', eligible:/.test(fnBody),
+      '6c-10f: touchstart passes an explicit `eligible` boolean into stepPullToRefresh() — not a fabricated scrollTop sentinel');
+    assert(!/MAX_SAFE_INTEGER/.test(fnBody), '6c-10g: the MAX_SAFE_INTEGER sentinel is gone from this binder entirely');
+    assert(/getScrollElFrom\(getScrollEl\)/.test(fnBody) && /isScrollElLive\(/.test(fnBody) && /isChatTabActive\(\)/.test(fnBody),
+      '6c-10h: RG-281 — onTouchStart re-resolves getScrollEl() FRESH and checks isScrollElLive()/isChatTabActive() before trusting it, never the bind-time `scrollEl` alone');
+  }
+
+  // ── RG-281 (reviewer round 2, 2026-09-28) — the regressions named in the
+  //    BLOCK, reproduced against the REAL binder. Red on e2af0fc first
+  //    (confirmed by hand before the fix landed): a bind-time-only
+  //    `scrollEl` plus a WeakMap keyed on that SAME resolved node meant a
+  //    replaced/detached/off-tab node still answered "eligible" via
+  //    `_bottomBounceEligible(0,0,0)` — a stale binder that should be dead
+  //    fired a refresh on a real drag anyway. ──────────────────────────────
+  console.log('   [6c-11..13] RG-281 — a replaced, detached, or off-tab scroll element never fires a stale refresh…');
+  {
+    // 6c-11 — bind, then the CALLER replaces the node getScrollEl()
+    // resolves to (exactly what renderChatPage()'s c.innerHTML= does on
+    // every repaint) — the FRESH node is a real, connected, but NOT-at-
+    // bottom chat-scroll (a newly-opened room, say), so the drag must read
+    // ITS metrics, not whatever was true of the OLD node at bind time.
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    let current = makeChatAtBottom();           // bind-time node: eligible
+    const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => current, target, async () => { refreshed++; }, { onFail: () => {} });
+    current = makeChatNotAtBottom();             // renderChatPage() swapped it — no longer at bottom
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - (PULL_TO_REFRESH_ARM_PX + 4) }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-11: bind -> caller replaces the scroll element with a NOT-at-bottom node -> drag -> 0 refreshes (eligibility is read from the CURRENT node, never a bind-time snapshot)');
+  }
+  {
+    // 6c-12 — the replacement node is detached/collapsed (isConnected:false
+    // or clientHeight 0 — the shape of a node `renderChatPage()` has thrown
+    // away, or the page being hidden). A detached element reports 0 for
+    // every scroll metric, which _bottomBounceEligible(0,0,0) reads as
+    // "eligible" — isScrollElLive() is the ONLY thing standing between that
+    // and a false-positive refresh.
+    freshDocEnv();
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    let current = makeChatAtBottom();
+    const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => current, target, async () => { refreshed++; }, { onFail: () => {} });
+    current = { ...makeChatAtBottom(), isConnected: false }; // detached — still reports "at bottom" metrics
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - (PULL_TO_REFRESH_ARM_PX + 4) }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, '6c-12: the replacement node is DETACHED (isConnected:false) — even though its scrollTop/clientHeight/scrollHeight still read "at the bottom", isScrollElLive() refuses it, so no false-positive refresh');
+  }
+  {
+    // 6c-13 — the belt-and-suspenders gate: Chat is not even the active
+    // tab (body[data-tab] !== 'chat') — a stray still-bound instance (the
+    // one app.js's own unbind-before-rebind discipline is the STRONG fix
+    // for) must not fire on another tab's drag.
+    freshDocEnv({ activeTab: 'picks' });
+    const fakeWin = makeFakeWindow(); globalThis.window = fakeWin;
+    const chat = makeChatAtBottom(); const target = makeFakeTarget();
+    let refreshed = 0;
+    bindBottomPullToRefresh(() => chat, target, async () => { refreshed++; }, { onFail: () => {} });
+    fakeWin._fire('touchstart', { touches: [{ clientY: 400 }] });
+    fakeWin._fire('touchmove', { touches: [{ clientY: 400 - (PULL_TO_REFRESH_ARM_PX + 4) }] });
+    fakeWin._fire('touchend', {});
+    await new Promise(r => setTimeout(r, 0));
+    assert(refreshed === 0, "6c-13: body[data-tab] is 'picks', not 'chat' — a live-but-stray binder does not fire on another tab's drag");
+  }
 
   globalThis.document = savedDocument;
   globalThis.window = savedWindow;

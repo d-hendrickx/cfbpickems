@@ -16,6 +16,7 @@
  */
 
 import * as wizard from './js/week-wizard.js';
+import { getAutoFinalizeEnabled } from './js/data-model.js';
 
 let pass = 0, fail = 0;
 function assert(cond, label) {
@@ -945,6 +946,50 @@ console.log('\n[16] createWeekWizard() factory — every DI-353/354/357/358/359 
   assert(typeof w.confirmFinalizeWeek === 'function'
     && w.confirmFinalizeWeek(factoryStore.get('w1')).week.status === 'final',
     '16-13: confirmFinalizeWeek exposed and bound to deps (incl. the new getWeek dep)');
+}
+
+console.log('\n[17] DI-411…416 (UN-366…371, 2026-09-28) — WIZARD_SLATE batch, pure-logic pieces…');
+{
+  // ── DI-411 — "Fetch ESPN…" verbiage removed from the wizard's own copy.
+  assert(!/ESPN/i.test(wizard.WIZARD_COPY.FETCH_LOADING), '17-1: FETCH_LOADING no longer names ESPN');
+  assert(!/ESPN/i.test(wizard.WIZARD_COPY.FETCH_FAILED), '17-2: FETCH_FAILED no longer names ESPN');
+  assert(wizard.WIZARD_COPY.FETCH_LOADING === "Fetching this week's games…", '17-3: FETCH_LOADING exact copy pin');
+  assert(wizard.WIZARD_COPY.FETCH_FAILED === "Couldn't fetch games — check your connection and try again.", '17-4: FETCH_FAILED exact copy pin');
+  // FETCH_ZERO/FETCH_PARTIAL never named ESPN and are explicitly UNCHANGED —
+  // pinned so a future edit can't silently add "ESPN" back into them.
+  assert(!/ESPN/i.test(wizard.WIZARD_COPY.FETCH_ZERO), '17-5: FETCH_ZERO still does not name ESPN (unchanged by this DI)');
+  assert(!/ESPN/i.test(wizard.WIZARD_COPY.FETCH_PARTIAL(3)), '17-6: FETCH_PARTIAL still does not name ESPN (unchanged by this DI)');
+
+  // ── DI-414 — getAutoFinalizeEnabled() always true, regardless of what's
+  //    stored (a pre-existing week explicitly saved with `false` keeps that
+  //    value in storage — it just stops being read).
+  assert(getAutoFinalizeEnabled({ autoFinalizeEnabled: false }) === true,
+    '17-7: getAutoFinalizeEnabled() ignores a stored false — always true');
+  assert(getAutoFinalizeEnabled({ autoFinalizeEnabled: true }) === true, '17-8: …and a stored true');
+  assert(getAutoFinalizeEnabled(undefined) === true, '17-9: …and no week at all');
+  assert(getAutoFinalizeEnabled() === true, '17-10: …and no argument');
+
+  // ── DI-416 — the Step 6 "another week already open" trigger predicate.
+  const weeks416 = [
+    { weekId: 'w1', weekNumber: 1, status: 'final' },
+    { weekId: 'w2', weekNumber: 2, status: 'open' },
+  ];
+  assert(wizard.anotherWeekAlreadyOpen(weeks416, 'w3')?.weekId === 'w2',
+    '17-11: a genuinely different, currently-open week is flagged (w3 is the one being set up)');
+  assert(wizard.anotherWeekAlreadyOpen(weeks416, 'w2') === null,
+    '17-12: the week being set up itself is excluded, even though its own status is open');
+  assert(wizard.anotherWeekAlreadyOpen([{ weekId: 'w1', status: 'final' }], 'w2') === null,
+    '17-13: no other week open/locked/live ⇒ null (no notice)');
+  for (const status of ['open', 'locked', 'live']) {
+    assert(wizard.anotherWeekAlreadyOpen([{ weekId: 'w1', status }], 'w2')?.status === status,
+      `17-14 (${status}): each of the three flaggable statuses is caught`);
+  }
+  for (const status of ['draft', 'final']) {
+    assert(wizard.anotherWeekAlreadyOpen([{ weekId: 'w1', status }], 'w2') === null,
+      `17-15 (${status}): draft/final never trigger the notice`);
+  }
+  assert(wizard.anotherWeekAlreadyOpen([], 'w1') === null, '17-16: an empty week list ⇒ null, not a throw');
+  assert(wizard.anotherWeekAlreadyOpen(null, 'w1') === null, '17-17: a null week list ⇒ null, not a throw');
 }
 
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

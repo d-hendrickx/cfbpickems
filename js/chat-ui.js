@@ -81,7 +81,7 @@ import {
   // exercised directly by loadtest §69, unreadtest and pushtest [14].
   unreadCountOrUnknown, unreadAuthors, mentionUnreadCount, markSeen, getLastSeen,
   readThroughSeq,
-  backfill, chatDigest as _digest, setViewOpen,
+  backfill, chatDigest as _digest, setViewOpen, roomMode,
   getRetentionDays, isChatEnabled,
   backfillBlockedByEpoch,
   isHiddenByRetention, isHiddenByEpoch,
@@ -179,7 +179,6 @@ const U = {
   markTimer: null,
   toastQueue: [],
   toastShowing: false,
-  prefsOpen: false,
   searchOpen: false,        // F2 (UN-165) — replaces the pills row in place
   searchQuery: '',
   returnToChat: false,      // set when a signed-out reader taps "Log in" in chat
@@ -2363,6 +2362,36 @@ let _chatComposerRO = null;
 // v0.27.x bugfix — the stick-to-bottom binding on the CURRENT #chat-scroll;
 // released on every re-render (the node is replaced by innerHTML).
 let _unbindChatThreadAnchor = () => {};
+// RG-279 (live v0.27.0, 2026-09-28) — which list the CURRENT #chat-scroll
+// shows (U.filter; null while search is open), so the next repaint can tell
+// "the same list, refreshed" (keep the reader's place) from "a different
+// list" (start it at its newest message).
+let _chatScrollView = null;
+// RG-279 — set by doSend() for the ONE repaint that must land on the
+// sender's own new message, whatever the reader's position; consumed (reset)
+// by that repaint.
+let _chatPinNextRender = false;
+/**
+ * RG-279 — the scrollTop a repaint should put back, or null for "pin to the
+ * newest message". renderChatPage() replaces #chat-scroll with a fresh node
+ * on EVERY repaint (every inbound event, transport flip and data repaint —
+ * every few seconds live), and used to pin that node unconditionally, so a
+ * reader who had scrolled up to read history was snapped back down. A
+ * position is kept only when ALL hold: this is not a deliberate jump
+ * (`pin`, e.g. your own send); the room was already open (entering Chat
+ * from another tab opens at the newest message — a hidden section reads
+ * scrollTop 0, which must not be mistaken for a reader at the top); the
+ * same list is being re-shown; the old node is still laid out; and the
+ * reader was OUTSIDE the BOTTOM_ANCHOR_PX band — the same band the
+ * "↓ latest" button and bindBottomAnchor() use, so a reader at the latest
+ * keeps following new messages.
+ */
+function _chatReaderScrollTopToKeep(prev, { pin, roomWasOpen, sameView }) {
+  if (pin || !roomWasOpen || !sameView || !prev || prev.isConnected === false) return null;
+  if (!(prev.clientHeight > 0)) return null;
+  const dist = prev.scrollHeight - prev.scrollTop - prev.clientHeight;
+  return dist >= BOTTOM_ANCHOR_PX ? prev.scrollTop : null;
+}
 export function _syncChatStickyMetrics() {
   if (typeof document === 'undefined') return;
   const root = document.documentElement;
@@ -2403,6 +2432,15 @@ export function renderChatPage() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const self = me();
   const st = chatStatus();
+  // RG-279 — read the reader's place off the OLD thread before innerHTML
+  // replaces it, and whether the room was already open, before
+  // setViewOpen(true) below makes it so.
+  const keepScrollTop = _chatReaderScrollTopToKeep(document.getElementById('chat-scroll'), {
+    pin: _chatPinNextRender,
+    roomWasOpen: roomMode() !== 'closed',
+    sameView: !U.searchOpen && _chatScrollView === U.filter,
+  });
+  _chatPinNextRender = false;
   setViewOpen(true);
 
   // respectRetention: true — the rendered stream honors the commissioner's
@@ -2523,17 +2561,39 @@ export function renderChatPage() {
         <h2>Chat <span class="badge badge-beta" title="Still being tested — tell us if something looks wrong">BETA</span> ${_chatSyncBadgeHTML()}</h2>
         <div class="chat-header-actions">
           <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat">🔍</button>
-          <button class="btn btn-ghost btn-sm" id="chat-prefs-btn" title="Chat preferences">⚙️</button>
           ${refreshControlHTML('chat-refresh')}
         </div>
       </div>
       ${U.searchOpen ? searchBarHTML() : pillsHTML()}
       ${viewHeader}
     </div>
-    ${U.prefsOpen ? prefsPanelHTML() : ''}
     <div class="chat-scroll" id="chat-scroll">
       ${scrollBodyHTML}
     </div>
+    <!-- DI-399(b-ii) (UN-359, 2026-09-28) — Chat's own bottom-edge
+         pull-to-refresh indicator. Below the last message, above the
+         composer (never above the thread — that would read as "new
+         content arrived at the top", which is false and would fight the
+         blind-rule/reveal-ritual language this app already uses for
+         "something changed" signals). Idle/empty by default (data-phase
+         attribute, styled in css/styles.css); js/app.js's
+         bindBottomPullToRefresh() onPhaseChange sets the phase and label
+         text — the SAME "binder detects/orchestrates, the coordinator owns
+         markup/CSS" split bindPullToRefresh()'s own header already
+         documents.
+         Reviewer round 2 (2026-09-28) — wrapped in a ZERO-HEIGHT flex-flow
+         wrapper (.chat-pull-refresh-wrap): the indicator ITSELF is
+         position:absolute inside it, so growing from idle (empty) to armed
+         (labelled) never changes #chat-scroll's own flex-distributed
+         height (the double-write bindBottomAnchor()'s ResizeObserver
+         caught mid-drag, since #chat-scroll is flex:1 and used to compete
+         with this element for space). The wrapper sits exactly where flex
+         flow puts it — between #chat-scroll and the composer — so it needs
+         no --nav-bar-clearance math at all (the earlier position:sticky
+         version double-counted that, since #page-chat already subtracts
+         the clearance from its own height).
+         NO BACKTICKS IN HERE — this markup lives inside a template literal. -->
+    <div class="chat-pull-refresh-wrap"><div class="chat-pull-refresh" id="chat-pull-refresh" data-phase="idle" aria-hidden="true"></div></div>
     <button class="chat-jump-latest" id="chat-jump" style="display:none">↓ latest</button>
     ${self ? composerHTML() : loginPromptHTML()}
   `;
@@ -2589,6 +2649,7 @@ export function renderChatPage() {
   watchChatStickyMetrics();
   _unbindChatThreadAnchor();
   _unbindChatThreadAnchor = () => {};
+  _chatScrollView = U.searchOpen ? null : U.filter;
   if (U.searchOpen) {
     // Focus (and restore caret position) rather than scroll-to-bottom — this
     // page re-renders on every keystroke (same pattern as every other U.*
@@ -2599,7 +2660,17 @@ export function renderChatPage() {
   } else {
     const scroll = document.getElementById('chat-scroll');
     if (scroll) {
-      scroll.scrollTop = scroll.scrollHeight;
+      // RG-279 — a reader who scrolled up keeps their place across the
+      // repaint; everyone else opens at / follows the newest message.
+      if (keepScrollTop !== null) {
+        scroll.scrollTop = keepScrollTop;
+        const jump = document.getElementById('chat-jump');
+        if (jump) jump.style.display = 'block';
+      } else {
+        scroll.scrollTop = scroll.scrollHeight;
+      }
+      // Bound AFTER the position is set: the anchor records "at the bottom"
+      // at bind time, so its first reading must be the reader's (RG-279).
       // v0.27.x bugfix (Drew, 2026-09-27) — T-25's keyboard-up layout grows
       // this thread by --nav-height and shrinks it back on dismiss; WebKit
       // has no scroll anchoring, so without this the newest messages end up
@@ -3001,6 +3072,9 @@ function doSend() {
   // The token stays armed across this repaint — it is the last one that could
   // put the sent text back — and is released in `finally` so a throw in the
   // render can never strand it (see _consumedDraft).
+  // RG-279 — your own message is the one deliberate move that always lands
+  // at the newest message, even from halfway up the thread.
+  _chatPinNextRender = true;
   try { renderChatPage(); } finally { _consumedDraft = null; }
 }
 
@@ -3152,23 +3226,24 @@ function bindChatPage() {
   bindFilterButtons(c);
   bindLoginPrompt(c);
 
-  document.getElementById('chat-prefs-btn')?.addEventListener('click', () => {
-    U.prefsOpen = !U.prefsOpen; renderChatPage();
-  });
-  // NOT scoped to `c` — see bindPrefsPanel()'s own header. #page-chat is the
-  // FIRST host of these ids in document order (index.html's static markup),
-  // so the unscoped, document-wide getElementById() this call has always
-  // used continues to resolve to THIS page's own copy even when the drawer's
-  // copy is also mounted; the drawer's own call (bindControlCenterBodies())
-  // is the one that needs (and gets) real scoping, since it is the SECOND
-  // copy in document order and would otherwise never be found.
-  bindPrefsPanel();
+  // DI-398 (UN-358, 2026-09-28) — the Chat tab's own ⚙ trigger and its
+  // unscoped bindPrefsPanel() call are REMOVED, not left dead: with no
+  // #page-chat copy of the panel's markup left to bind (prefsPanelHTML() is
+  // no longer rendered into `c` above), this unscoped, document-wide
+  // getElementById() call would otherwise resolve to the control center's
+  // OWN copy of these fields whenever the drawer's Chat settings row is
+  // open at the same time — attaching a second 'change' listener to a node
+  // js/app.js's bindControlCenterBodies() (js/app.js ~3691) already binds,
+  // scoped, exactly the double-bind hazard NOTE 4 (2026-09-25) fixed once
+  // already. The control center's Chat settings accordion row
+  // (js/control-center.js, `group: 'settings', rowId: 'chat'`) is the one
+  // surviving host; prefsPanelHTML()/bindPrefsPanel() themselves are
+  // unchanged.
   document.getElementById('chat-refresh-btn')?.addEventListener('click', onChatRefreshTap);
 
   document.getElementById('chat-load-older')?.addEventListener('click', async e => {
     e.target.textContent = '…';
-    await backfill(100);
-    renderChatPage();
+    await loadOlderKeepingPlace();
   });
 
   // F2 (UN-165) — search. 🔍 toggles open/closed (closing resets the query,
@@ -3799,35 +3874,40 @@ export const _prefsPanelHTMLForTest = prefsPanelHTML;
  *  binding rather than by calling the writer the binding happens to use. Without
  *  it, a mutation that put the whole-row spread BACK at the call site inside
  *  saveSelfField() left authtest green — the suite was exercising patchPlayer()
- *  and not the one line that decides what patchPlayer() is handed. Production
- *  reaches bindPrefsPanel() through bindChatPage() (renderChatPage()'s own
- *  binder) AND, since the security fix round (2026-09-25, NOTE 4), through
- *  js/app.js's bindControlCenterBodies() for the drawer/Settings page's Chat
- *  accordion row — both now pass their own scope container explicitly. */
+ *  and not the one line that decides what patchPlayer() is handed.
+ *  DI-398 (UN-358, 2026-09-28) — Production reaches bindPrefsPanel() through
+ *  exactly ONE caller now: js/app.js's bindControlCenterBodies(), for the
+ *  control center drawer's Chat settings accordion row. bindChatPage() no
+ *  longer calls this at all — the Chat tab's own ⚙ trigger (and its
+ *  unscoped call here) was removed, not merely stopped rendering the
+ *  panel's markup; see js/chat-ui.js's bindChatPage() for the removal note. */
 export const _bindPrefsPanelForTest = (scopeEl) => bindPrefsPanel(scopeEl);
 
 /**
- * Security fix round (2026-09-25), NOTE 4 — `scopeEl` is now REQUIRED-in-
- * spirit (defaults to `document` only so the two pre-existing call sites
- * below and `_bindPrefsPanelForTest`'s own callers stay source-compatible).
- * This panel is now embedded in TWO hosts (`bindChatPage()`'s `#page-chat`,
- * AND the control-center drawer/Settings page's Chat accordion row —
- * `js/app.js`'s `bindControlCenterBodies()`), and a bare
- * `document.getElementById('pref-nick')` resolves to whichever host's copy
- * of that id appears FIRST in document order — with both open (drawer open
- * while the Chat tab is also mounted), the second host's inputs bind
- * nothing and silently drop every edit. Scoped to the CONTAINER the caller
- * actually just (re)painted, mirroring `bindFilterButtons(c)`/
- * `bindLoginPrompt(c)` immediately above this function's other call site.
+ * Security fix round (2026-09-25), NOTE 4 — `scopeEl` is REQUIRED-in-spirit
+ * (defaults to `document` only so `_bindPrefsPanelForTest`'s own callers
+ * stay source-compatible). This panel used to be embedded in TWO hosts
+ * (`bindChatPage()`'s `#page-chat`, AND the control-center drawer's Chat
+ * accordion row — `js/app.js`'s `bindControlCenterBodies()`), and a bare
+ * `document.getElementById('pref-nick')` resolved to whichever host's copy
+ * of that id appeared FIRST in document order — with both open, the second
+ * host's inputs bound nothing and silently dropped every edit.
+ * DI-398 (UN-358, 2026-09-28) — NOTE 4's hazard is now impossible BY
+ * CONSTRUCTION, not merely avoided: `#page-chat` no longer renders this
+ * panel's markup at all, so there is only ever ONE host, ever. This
+ * function keeps taking an explicit `scopeEl` (not narrowed back to a
+ * document-only signature) because the CONTAINER-scoping discipline itself
+ * is still correct practice — the same pattern `bindFilterButtons(c)`/
+ * `bindLoginPrompt(c)` immediately above this function's other call site
+ * already use — not because a second host still exists to disambiguate.
  *
  * `document.getElementById(id)` when scoped to the whole document (the
- * default, and `bindChatPage()`'s effective scope before this fix), never
- * `document.querySelector('#'+id)` — both resolve the same element in a real
- * browser, but `getElementById` is the one that also works against this
- * repo's Node test-fixture `document` stub (authtest.mjs's `FakeEl`/
- * `freshDom()`, which implements `getElementById` against its id registry
- * but does not implement `document.querySelector('#id')`). A NON-document
- * `scopeEl` (the drawer/Settings-page host) uses `scopeEl.querySelector`,
+ * default), never `document.querySelector('#'+id)` — both resolve the same
+ * element in a real browser, but `getElementById` is the one that also
+ * works against this repo's Node test-fixture `document` stub (authtest.mjs's
+ * `FakeEl`/`freshDom()`, which implements `getElementById` against its id
+ * registry but does not implement `document.querySelector('#id')`). A
+ * NON-document `scopeEl` (the drawer's own host) uses `scopeEl.querySelector`,
  * which is what actually scopes to that subtree in a real DOM.
  */
 function _prefsField(root, id) {
@@ -3957,6 +4037,7 @@ function sendSheetMessage() {
   if (inp) inp.value = '';
   U.sheetReplyTo = null;
   renderSheetComposer();
+  _sheetPinNextRender = true;                      // RG-280 — your own message lands in view
   renderSheetMessages();
 }
 
@@ -4018,6 +4099,7 @@ export function openGameChatSheet(gameId) {
       ${sheetComposerHTML()}
     </div>`;
   document.body.appendChild(wrap);
+  _sheetPinNextRender = true;                      // RG-280 — a (re)opened sheet starts at the newest message
   renderSheetMessages();
   bindSheetComposer();
   wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', closeSheet);
@@ -4064,6 +4146,11 @@ function closeSheet() {
  * "jump to latest" button in the sheet; onChatScrollEvent already no-ops
  * that half when passed `null`.
  */
+// RG-280 — which #chat-sheet-scroll / game the last sheet render painted, and
+// the one-shot "land on the newest message" request (open, your own send).
+let _sheetScrollHost = null;
+let _sheetScrollGameId = null;
+let _sheetPinNextRender = false;
 function bindSheetScrollDismiss(root) {
   if (!root || root._scrollDismissWired) return;
   root._scrollDismissWired = true;
@@ -4074,6 +4161,17 @@ function renderSheetMessages() {
   _abbrMemo.clear();                                 // per-pass cache only (see abbrMapFor)
   const host = document.getElementById('chat-sheet-scroll');
   if (!host || !U.sheetGameId) return;
+  // RG-280 (v0.27.1 round 2) — the RG-279 rule for the game-thread sheet.
+  // #chat-sheet-scroll is a STABLE node (only its innerHTML is swapped), but
+  // this function pinned it to the bottom on every 'events' delivery and
+  // every reaction/retry tap. A reader outside the BOTTOM_ANCHOR_PX band keeps
+  // their place; a fresh sheet (open) and your own send pin once.
+  const sheetPin = _sheetPinNextRender || host !== _sheetScrollHost || U.sheetGameId !== _sheetScrollGameId;
+  _sheetPinNextRender = false;
+  const sheetDist = host.scrollHeight - host.scrollTop - host.clientHeight;
+  const sheetKeepTop = !sheetPin && host.clientHeight > 0 && sheetDist >= BOTTOM_ANCHOR_PX ? host.scrollTop : null;
+  _sheetScrollHost = host;
+  _sheetScrollGameId = U.sheetGameId;
   const self = me();
   // Retention applies here too — otherwise a player could dodge the window by
   // opening a game's bottom sheet instead of the main room (UN-88).
@@ -4081,7 +4179,7 @@ function renderSheetMessages() {
   host.innerHTML = list.length
     ? list.map(item => item.kind === 'gamereact-run' ? gamereactRunHTML(item) : messageHTML(item, self, false)).join('')
     : '<div class="chat-empty">No entries for this game yet.</div>';
-  host.scrollTop = host.scrollHeight;
+  host.scrollTop = sheetKeepTop !== null ? sheetKeepTop : host.scrollHeight;
   host.querySelectorAll('[data-react]').forEach(b => b.addEventListener('click', () => {
     if (!self) return; toggleReact(b.dataset.target, b.dataset.react, self); renderSheetMessages();
   }));
@@ -4108,6 +4206,25 @@ function renderSheetMessages() {
  * having to simulate `openGameChatSheet()`'s unrelated chrome (header,
  * backdrop, first-use hint) just to reach it.
  */
+/**
+ * v0.27.1 round 2 (reviewer finding 4) — "↑ load earlier" PREPENDS up to 100
+ * older messages. The reader is at the top of the thread (that is where the
+ * button is), so RG-279's keep-scrollTop repaint left them at scrollTop 0 —
+ * the top of the NEW batch, ~100 messages above what they were reading.
+ * Keep the distance from the BOTTOM instead: the same message stays in view.
+ */
+async function loadOlderKeepingPlace(doBackfill = backfill) {
+  const before = document.getElementById('chat-scroll');
+  const fromBottom = before && before.clientHeight > 0 ? before.scrollHeight - before.scrollTop : null;
+  await doBackfill(100);
+  renderChatPage();
+  const after = document.getElementById('chat-scroll');
+  if (after && fromBottom !== null && !U.searchOpen) after.scrollTop = after.scrollHeight - fromBottom;
+}
+/** Test-only thin delegate (chatscrolltest §8) — lets the suite supply a
+ *  backfill stand-in, since chat.backfill() needs a configured backend. */
+export function _loadOlderForTest(doBackfill) { return loadOlderKeepingPlace(doBackfill); }
+
 export function _renderSheetMessagesForTest(gameId) {
   U.sheetGameId = gameId;
   renderSheetMessages();

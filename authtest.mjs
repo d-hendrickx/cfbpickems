@@ -550,7 +550,13 @@ console.log('\n[3] DI-184 — the active-league pill + DI-184d\'s single-source 
   const nameUses = (fnMatch[0].match(/getActiveLeagueName\(\)/g) || []).length;
   assert(nameUses === 1, `getActiveLeagueName() is called exactly ONCE per render (got ${nameUses}) — two reads could disagree`);
   assert(/const name = getActiveLeagueName\(\)/.test(fnMatch[0]), 'the call result is captured into `name`');
-  assert(/escHtml\(name/.test(fnMatch[0]), 'the rendered pill text is escHtml() of that same `name` — one source, provably (DI-184d)');
+  // RE-DERIVED v0.27.1 (DI-417, 2026-09-28): the pill's markup is built by
+  // _leaguePillContentVariants(name, sport, interactive) — the SAME `name` is
+  // passed through once, and every variant inside that helper is escHtml(name).
+  assert(/_leaguePillContentVariants\(name,/.test(fnMatch[0]), 'the captured `name` is handed ONCE to _leaguePillContentVariants() — one source, provably (DI-184d)');
+  const variantsFn = src.match(/function _leaguePillContentVariants\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert(!!variantsFn && (variantsFn[0].match(/escHtml\(name\)/g) || []).length >= 2 && !/\$\{name\}/.test(variantsFn[0]),
+    'the rendered pill text is escHtml() of that same `name` in every variant of _leaguePillContentVariants() — never a raw ${name} (DI-184d)');
   assert(!/document\.title/.test(fnMatch[0]), 'and nothing in the function assigns document.title');
   // DI-393 (UN-353, 2026-09-27) — SUPERSEDES REVIEWER F4 (2026-09-25):
   // index.html carries #league-pill AGAIN, as the header's own league zone
@@ -12654,6 +12660,548 @@ console.log('       draft, shows a picker for 2+, and Duplicate no longer steals
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64d] DI-406 (UN-361) — "New Week" button: renders ONLY when the entry button');
+console.log('       reads "Manage This Week", opens the sheet cold into create-mode Step 1,');
+console.log('       and never disturbs the existing week…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const realWarn64d = console.warn; const realInfo64d = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM64d = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  const finalWeek64d = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'final',
+    dataSourceMode: 'espn', lockedAt: new Date().toISOString(), finalizedAt: new Date().toISOString(),
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  const draftWeek64d = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'draft',
+    dataSourceMode: 'espn', lockedAt: null, finalizedAt: null,
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  const openWeek64d = (id, num) => ({
+    weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`, status: 'open',
+    dataSourceMode: 'espn', lockedAt: null, finalizedAt: null,
+    pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null,
+  });
+  try {
+    // ── (a) card shape, pure — every entry-label state, driven directly
+    //      through _weekWizardEntryCardHTMLForTest() (no DOM); mirrors
+    //      [64b]'s own storage-seeding pattern for weekWizardEntryLabel() ──
+    const card = app._weekWizardEntryCardHTMLForTest;
+    assert(typeof card === 'function', '[64d] fixture: the card HTML test seam is exported');
+
+    resetAll();
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    storage.saveWeek(openWeek64d('wk_d1', 1));
+    storage.setActiveWeekId('wk_d1');
+    const manageHTML = card(storage.getCurrentWeek());
+    assert(/Manage This Week/.test(manageHTML) && /id="week-wizard-new-week-btn"/.test(manageHTML) && /New Week</.test(manageHTML),
+      `[64d] (a) "Manage This Week" state: the New Week button renders (html: ${manageHTML.slice(0, 260)})`);
+
+    resetAll();
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    storage.saveWeek(draftWeek64d('wk_d2', 1));
+    storage.setActiveWeekId('wk_d2');
+    const draftHTML = card(storage.getCurrentWeek());
+    assert(/Continue set up/.test(draftHTML) && !/Continue set up:/.test(draftHTML) && !/id="week-wizard-new-week-btn"/.test(draftHTML),
+      `[64d] (a) "Continue set up" state (current week itself a draft): NO New Week button (html: ${draftHTML.slice(0, 260)})`);
+
+    resetAll();
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    const emptyHTML = card(null);
+    assert(/Set up Week/.test(emptyHTML) && !/id="week-wizard-new-week-btn"/.test(emptyHTML),
+      `[64d] (a) "Set up Week" state (no week exists yet): NO New Week button (html: ${emptyHTML.slice(0, 260)})`);
+
+    resetAll();
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    storage.saveWeek(finalWeek64d('wk_d3', 5));
+    storage.setActiveWeekId('wk_d3');
+    storage.saveWeek(draftWeek64d('wk_d4', 6));
+    const oneContHTML = card(storage.getCurrentWeek());
+    assert(/Continue set up: Week 6/.test(oneContHTML) && !/id="week-wizard-new-week-btn"/.test(oneContHTML),
+      `[64d] (a) "Continue set up: Week N" state (exactly one continuable draft): NO New Week button (html: ${oneContHTML.slice(0, 260)})`);
+
+    storage.saveWeek(draftWeek64d('wk_d5', 7));
+    const twoContHTML = card(storage.getCurrentWeek());
+    assert(/Continue set up…/.test(twoContHTML) && !/id="week-wizard-new-week-btn"/.test(twoContHTML),
+      `[64d] (a) "Continue set up…" picker state (2+ continuable drafts): NO New Week button (html: ${twoContHTML.slice(0, 260)})`);
+
+    // ── (b) the REAL button, wired through renderCommPage(): clicking it
+    //      opens the sheet cold into create-mode Step 1 — never "Manage
+    //      Week 9" — and the EXISTING open week (with its own games) is
+    //      completely untouched (DI-406's guard decision: always allowed,
+    //      no confirmation, no disabled state — same posture as the Manage
+    //      screen's own "Set up Week N+1" button) ───────────────────────
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uD1' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uD1', email: 'd1@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-64d', memberId: 'm64d', role: 'commissioner', displayName: 'Drew', leagueName: 'League 64d' }]);
+    auth.setActiveLeagueId('L-64d');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    storage.saveWeek(openWeek64d('wk_d6', 9));
+    storage.setActiveWeekId('wk_d6');
+    storage.saveGame({ gameId: 'g_d6', weekId: 'wk_d6', homeTeam: 'Home', awayTeam: 'Away', spread: -3, status: 'scheduled' });
+    assert(storage.getSession()?.isAdmin === true, '[64d] (b) fixture: this device resolves as commissioner');
+
+    const commEl64d = new FakeEl(); commEl64d.id = 'page-commissioner'; registry.set('page-commissioner', commEl64d);
+    app.state.currentTab = 'commissioner';
+    app.renderCommPage();
+    // FakeEl's innerHTML setter only ID-scans nested tags into lightweight
+    // placeholders (this file's own [64c] comment, ~line 12574) — it does not
+    // capture their own inner text, so the label is checked as a STRING
+    // match against the rendered panel's innerHTML, same convention [64c]
+    // uses for body content.
+    assert(/id="week-wizard-entry-btn"[^>]*>Manage This Week</.test(commEl64d.innerHTML),
+      `[64d] (b) fixture: the entry button really reads "Manage This Week" (panel html: ${commEl64d.innerHTML.slice(0, 400)})`);
+    const newWeekBtn64d = document.getElementById('week-wizard-new-week-btn');
+    assert(!!newWeekBtn64d && newWeekBtn64d.listenerCount('click') === 1,
+      `[64d] (b) fixture: the real New Week button is on the rendered Commissioner panel with its own bound listener (got ${newWeekBtn64d?.listenerCount?.('click')})`);
+    newWeekBtn64d.dispatch('click', { target: newWeekBtn64d });
+
+    const wrap64d = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrap64d, '[64d] (b) clicking New Week opens the wizard sheet');
+    assert(wrap64d.querySelector('#week-wizard-title')?.textContent === 'Set up Week',
+      `[64d] (b) …landing directly on create-mode Step 1 ("Set up Week"), never "Manage Week 9" (got ${JSON.stringify(wrap64d.querySelector('#week-wizard-title')?.textContent)})`);
+    const trackerHTML64d = wrap64d.querySelector('#week-wizard-step-tracker')?.innerHTML || '';
+    assert(/Step 1 of/.test(trackerHTML64d), `[64d] (b) …the step tracker shows Step 1 (got ${trackerHTML64d.slice(0, 120)})`);
+
+    // The existing week — DI-406's guard decision: always allowed, regardless
+    // of status, because creating a new draft can never disturb it.
+    assert(storage.getWeek('wk_d6')?.status === 'open',
+      '[64d] (b) the existing OPEN week is unaffected: still open');
+    assert(storage.getGames('wk_d6').length === 1 && storage.getGames('wk_d6')[0].gameId === 'g_d6',
+      '[64d] (b) …still has its own games, untouched');
+    assert(storage.getCurrentWeek()?.weekId === 'wk_d6',
+      '[64d] (b) …and the active/current-week pointer is unmoved — the new draft sits inert until explicitly advanced past draft (getCurrentWeek()\'s own open/locked/live-first priority)');
+  } finally {
+    globalThis.matchMedia = savedMM64d;
+    console.warn = realWarn64d; console.info = realInfo64d;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64e] DI-408 AMENDED (UN-363) — "Collapse all / Expand all" heading-row pair:');
+console.log('       renders on BOTH panels, the retired Sections menu is really gone, per-card');
+console.log('       click-to-collapse still works, and a stale-hidden card comes back…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const realWarn64e = console.warn; const realInfo64e = console.info;
+  console.warn = () => {}; console.info = () => {};
+  try {
+    // [43g2]'s statusCardFor() shape (this file, ~line 7736) — no
+    // wireRealAuthUI()/_fireAuthEventForTest() round trip: that path lets
+    // the real auth listener chain kick off an async
+    // refreshPlatformAdminFlags() call (no rpc client configured here, so it
+    // resolves to `false` and silently overwrites the test-only flag this
+    // section sets below, on whichever later await happens to let it land —
+    // [64d]/[64c] need the real chain for openWeekWizardSheet()'s
+    // isContentWithheld() gate; this section does not).
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uE1' }, access_token: 't' } } }) });
+    storeValidSession();
+    auth._setMembershipsForTest([{ leagueId: 'L-64e', memberId: 'm64e', role: 'commissioner', displayName: 'Drew', leagueName: 'League 64e' }]);
+    auth.setActiveLeagueId('L-64e');
+    auth._setPlatformAdminFlagsForTest(true, false);   // also a platform admin, so #page-admin renders real cards too
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    storage.saveWeek({
+      weekId: 'wk_e1', season: '2026', weekNumber: 3, label: 'Week 3', status: 'open',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null,
+      pendingFinalization: false, tiebreakerQuestion: 'How many total points?', extraPointEnabled: false, groupId: null,
+    });
+    storage.setActiveWeekId('wk_e1');
+    assert(storage.getSession()?.isAdmin === true, '[64e] fixture: this device resolves as commissioner');
+
+    // ── (a) Commissioner panel — heading-row pair exists, no Sections menu ──
+    const commEl64e = new FakeEl(); commEl64e.id = 'page-commissioner'; registry.set('page-commissioner', commEl64e);
+    app.state.currentTab = 'commissioner';
+    app.state.commTab = 'week';
+    app.renderCommPage();
+    assert(/id="comm-panel-collapse-all-btn"[^>]*>Collapse all</.test(commEl64e.innerHTML) &&
+           /id="comm-panel-expand-all-btn"[^>]*>Expand all</.test(commEl64e.innerHTML),
+      `[64e] (a) the Commissioner panel's heading row carries both buttons (html: ${commEl64e.innerHTML.slice(0, 300)})`);
+    assert(!/📚 Sections/.test(commEl64e.innerHTML) && !/id="sec-expand-all"/.test(commEl64e.innerHTML) &&
+           !/id="sec-collapse-all"/.test(commEl64e.innerHTML) && !/id="sec-show-all"/.test(commEl64e.innerHTML) &&
+           !/class="section-toggle"/.test(commEl64e.innerHTML) && !/class="[^"]*\bsection-menu\b/.test(commEl64e.innerHTML),
+      '[64e] (a) the retired bottom "📚 Sections" menu (and its hide-checkboxes) is really gone from the rendered panel');
+    // wirePanelCollapseAllControls() looks these up via `c.querySelector('#…')`
+    // (the ELEMENT-level, `_subEls`-memoized lookup — this file's own [64c]
+    // comment on why that's a SEPARATE registry from document.getElementById()'s
+    // global one), so the test reaches the SAME bound object the same way.
+    const collapseAllBtn64e = commEl64e.querySelector('#comm-panel-collapse-all-btn');
+    const expandAllBtn64e = commEl64e.querySelector('#comm-panel-expand-all-btn');
+    assert(!!collapseAllBtn64e && collapseAllBtn64e.listenerCount('click') === 1 &&
+           !!expandAllBtn64e && expandAllBtn64e.listenerCount('click') === 1,
+      `[64e] (a) fixture: both real buttons have their own bound listener (got ${collapseAllBtn64e?.listenerCount?.('click')}, ${expandAllBtn64e?.listenerCount?.('click')})`);
+
+    // ── (b) per-card click-to-collapse is UNCHANGED — the amendment's own
+    //      "keep it" clause. The real "Week Manager" card title should still
+    //      carry its own click-to-collapse listener. ────────────────────────
+    assert(/📅 Week Manager/.test(commEl64e.innerHTML),
+      `[64e] (b) fixture: the real "Week Manager" card title is on the rendered panel (html: ${commEl64e.innerHTML.slice(0, 200)})`);
+    // Per-title click IS still wired by wireCollapsibleSections() — proven
+    // directly by grepping the live function body, since this file's shared
+    // FakeEl has no way to reach an un-idd inline title element by content
+    // (querySelectorAll() is a stub that always returns []; the harness-wide
+    // limitation this section works around throughout).
+    {
+      const { readFileSync: rfs64e } = await import('node:fs');
+      const src64e = rfs64e(new URL('./js/app.js', import.meta.url), 'utf8');
+      const fnAt = src64e.indexOf('function wireCollapsibleSections(container) {');
+      assert(fnAt >= 0, '[64e] (b) fixture: wireCollapsibleSections() was located in js/app.js');
+      const fnBody = src64e.slice(fnAt, src64e.indexOf('\nfunction ', fnAt + 40));
+      assert(/titleEl\.addEventListener\('click'/.test(fnBody) &&
+             /sec\.classList\.toggle\('admin-section-collapsed'\)/.test(fnBody) &&
+             /saveSetting\('commPanelSectionsCollapsed', c\)/.test(fnBody),
+        '[64e] (b) wireCollapsibleSections() still binds a click-to-collapse listener on every card title and persists to commPanelSectionsCollapsed — the amendment\'s "keep it" clause');
+      assert(!/menuEl|section-menu|sec-expand-all|sec-collapse-all|sec-show-all|commPanelSectionsHidden/.test(fnBody),
+        '[64e] (b) …and the function body no longer constructs the bottom Sections menu or touches commPanelSectionsHidden at all');
+    }
+
+    // ── (c) a previously-hidden card comes back — commPanelSectionsHidden
+    //      is inert, never read again. The OLD code path set `sec.style.
+    //      display = 'none'` as a runtime property write (never reflected
+    //      into the innerHTML string either before or after this change), so
+    //      the source-body scan in (b) above — proving
+    //      wireCollapsibleSections() no longer even REFERENCES
+    //      commPanelSectionsHidden — is the real proof; this is the render-
+    //      level companion: the card's title still renders at all with a
+    //      stale hidden entry on record. ─────────────────────────────────
+    storage.saveSetting('commPanelSectionsHidden', { 'week-manager': true });
+    const commEl64e2 = new FakeEl(); commEl64e2.id = 'page-commissioner'; registry.set('page-commissioner', commEl64e2);
+    auth._setPlatformAdminFlagsForTest(true, false);   // re-asserted — see the fixture comment at the top of this section
+    app.renderCommPage();
+    assert(/📅 Week Manager/.test(commEl64e2.innerHTML),
+      `[64e] (c) a card with a STALE commPanelSectionsHidden entry still renders — the key is inert, hidden cards come back (html: ${commEl64e2.innerHTML.slice(0, 200)})`);
+
+    // ── (d) Admin panel — the mirrored pair exists too ──────────────────────
+    const adminEl64e = new FakeEl(); adminEl64e.id = 'page-admin'; registry.set('page-admin', adminEl64e);
+    app.state.adminTab = 'week';
+    // renderAdminPage() carries a "shield" (SECURITY GATE S-1, [55] above)
+    // that no-ops its own paint unless state.currentTab === 'admin' — this
+    // block set 'commissioner' for (a)-(c) above, so it must flip here or
+    // #page-admin stays empty, same trap [55] itself exists to document.
+    app.state.currentTab = 'admin';
+    auth._setPlatformAdminFlagsForTest(true, false);   // re-asserted — see the fixture comment at the top of this section
+    app.renderAdminPage();
+    assert(/id="admin-panel-collapse-all-btn"[^>]*>Collapse all</.test(adminEl64e.innerHTML) &&
+           /id="admin-panel-expand-all-btn"[^>]*>Expand all</.test(adminEl64e.innerHTML),
+      `[64e] (d) the Admin panel's heading row carries both buttons too (html: ${adminEl64e.innerHTML.slice(0, 300)})`);
+    const adminCollapseBtn64e = adminEl64e.querySelector('#admin-panel-collapse-all-btn');
+    const adminExpandBtn64e = adminEl64e.querySelector('#admin-panel-expand-all-btn');
+    assert(!!adminCollapseBtn64e && adminCollapseBtn64e.listenerCount('click') === 1 &&
+           !!adminExpandBtn64e && adminExpandBtn64e.listenerCount('click') === 1,
+      `[64e] (d) fixture: both real Admin-panel buttons have their own bound listener (got ${adminCollapseBtn64e?.listenerCount?.('click')}, ${adminExpandBtn64e?.listenerCount?.('click')})`);
+  } finally {
+    console.warn = realWarn64e; console.info = realInfo64e;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64f] DI-408 AMENDED (UN-363) — wirePanelCollapseAllControls(), driven DIRECTLY');
+console.log('       against real small fake DOM objects (authtest\'s shared FakeEl.querySelectorAll()');
+console.log('       is a stub that always returns [], so [64e] cannot exercise the toggle logic');
+console.log('       itself): mutation-proven no-card-skipped, tab-scoping, untitled-card skip, and');
+console.log('       settings persistence, all against the REAL exported function…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  assert(typeof app._wirePanelCollapseAllControlsForTest === 'function',
+    '[64f] fixture: the wirePanelCollapseAllControls() test seam is exported');
+
+  /** A minimal, real classList — toggle/contains/add/remove, nothing else,
+   *  matching exactly what the production function calls. */
+  function fakeClassList64f(card) {
+    card._classes = card._classes || new Set();
+    return {
+      contains: (c) => card._classes.has(c),
+      add: (c) => { card._classes.add(c); },
+      remove: (c) => { card._classes.delete(c); },
+      toggle: (c, force) => {
+        const want = force === undefined ? !card._classes.has(c) : !!force;
+        if (want) card._classes.add(c); else card._classes.delete(c);
+        return want;
+      },
+    };
+  }
+  function fakeCard64f({ tabAttr, tabValue, title }) {
+    const card = { _attrs: { [tabAttr]: tabValue }, dataset: {} };
+    card.getAttribute = (k) => (k in card._attrs ? card._attrs[k] : null);
+    card.querySelector = (sel) => (sel === '.admin-section-title' && title != null ? { textContent: title } : null);
+    card.classList = fakeClassList64f(card);
+    return card;
+  }
+  function fakePanel64f(cards, activeVal, activeAttrName, cardAttrName) {
+    // REVIEWER ROUND 2 tightening (2026-09-28) — the ORIGINAL fake ignored
+    // the selector entirely (any string, even a wrong one, returned the
+    // fixture list unconditionally), so a production bug passing the wrong
+    // `cardAttr` into `.admin-section[${cardAttr}]` would have gone
+    // completely undetected here. Now an EXACT match on the literal
+    // selector production actually builds — a wrong selector returns [],
+    // which fails every assertion below that depends on the cards actually
+    // being found (not a silent, vacuous pass).
+    const expectedSel = `.admin-section[${cardAttrName}]`;
+    return {
+      getAttribute: (k) => (k === activeAttrName ? activeVal : null),
+      querySelectorAll: (sel) => (sel === expectedSel ? cards : []),
+    };
+  }
+  function fakeBtn64f() {
+    const listeners = [];
+    return { addEventListener: (t, fn) => { if (t === 'click') listeners.push(fn); }, _fire: () => listeners.forEach((fn) => fn()) };
+  }
+
+  storage.setBackendMode('local');
+  storage.saveSetting('commPanelSectionsCollapsed', {});
+
+  const cardA = fakeCard64f({ tabAttr: 'data-comm-tab', tabValue: 'week', title: 'Week Manager' });
+  const cardB = fakeCard64f({ tabAttr: 'data-comm-tab', tabValue: 'week', title: 'Weekly Blurb Summary' });
+  const cardOtherTab = fakeCard64f({ tabAttr: 'data-comm-tab', tabValue: 'games', title: 'Build Slate' });
+  const cardNoTitle = fakeCard64f({ tabAttr: 'data-comm-tab', tabValue: 'week', title: null });
+  const panel = fakePanel64f([cardA, cardB, cardOtherTab, cardNoTitle], 'week', 'data-comm-active', 'data-comm-tab');
+  // Canary — the tightened fake really discriminates: a selector that is
+  // NOT the exact literal production builds returns [], not the fixture.
+  assert(panel.querySelectorAll('.admin-section[data-comm-tab]').length === 4,
+    '[64f] fixture canary: the CORRECT selector finds all four fixture cards');
+  assert(panel.querySelectorAll('.admin-section[data-wrong-tab]').length === 0,
+    '[64f] fixture canary: a WRONG selector (mismatched cardAttr) returns nothing — proves the fake is not vacuously permissive');
+  const collapseBtn = fakeBtn64f();
+  const expandBtn = fakeBtn64f();
+
+  app._wirePanelCollapseAllControlsForTest(panel, {
+    collapseBtn, expandBtn, cardAttr: 'data-comm-tab', activeAttr: 'data-comm-active',
+  });
+
+  assert([cardA, cardB, cardOtherTab, cardNoTitle].every((c) => !c.classList.contains('admin-section-collapsed')),
+    '[64f] fixture: nothing starts collapsed');
+
+  collapseBtn._fire();
+  // MUTATION-PROVEN: checked as TWO SEPARATE real objects, not a count — a
+  // version that only collapses cards[0] (`sections.slice(0, 1)`, or any
+  // "skip one card" mutation) fails ONE of these two assertions directly.
+  assert(cardA.classList.contains('admin-section-collapsed'),
+    '[64f] "Collapse all" collapses the FIRST active-tab titled card');
+  assert(cardB.classList.contains('admin-section-collapsed'),
+    '[64f] "Collapse all" ALSO collapses the SECOND active-tab titled card — proves no card is silently skipped, not just the first one checked');
+  assert(!cardOtherTab.classList.contains('admin-section-collapsed'),
+    '[64f] a card tagged for a DIFFERENT tab (games) is left untouched — scoped to the active tab only');
+  assert(!cardNoTitle.classList.contains('admin-section-collapsed'),
+    '[64f] a card with NO .admin-section-title is skipped — nothing to click to re-expand it individually');
+
+  const collapsedNow = storage.getSettings().commPanelSectionsCollapsed || {};
+  assert(collapsedNow['week-manager'] === true && collapsedNow['weekly-blurb-summary'] === true,
+    `[64f] both collapsed cards persist through commPanelSectionsCollapsed, keyed by the SAME slug function the per-card click handler uses (got ${JSON.stringify(collapsedNow)})`);
+  assert(!('build-slate' in collapsedNow) || collapsedNow['build-slate'] !== true,
+    '[64f] …the other-tab card is not written as collapsed either');
+
+  expandBtn._fire();
+  assert(cardA.classList.contains('admin-section-collapsed') === false && cardB.classList.contains('admin-section-collapsed') === false,
+    '[64f] "Expand all" reverses BOTH active-tab cards');
+  const collapsedAfterExpand = storage.getSettings().commPanelSectionsCollapsed || {};
+  assert(collapsedAfterExpand['week-manager'] === false && collapsedAfterExpand['weekly-blurb-summary'] === false,
+    '[64f] …and persists the false value too (matching the per-card click handler\'s own c[slug] = false shape, not a delete)');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[64h] REVIEWER ROUND 3 B2\' (2026-09-28) — the Collapse all / Expand all pair keeps readable type and a 44pt-wide target…');
+{
+  const css64h = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+  const rule64h = (css64h.match(/\.panel-collapse-actions \.btn\{([^}]*)\}/) || [])[1] || '';
+  const fs64h = parseFloat((rule64h.match(/font-size:\s*([\d.]+)rem/) || [])[1] || '0');
+  assert(fs64h >= 0.75, `[64h] (a) .panel-collapse-actions .btn font-size is at least .75rem (got ${fs64h}rem) — 9px type was the smallest text on the screen and below the iOS readable floor`);
+  assert(/min-width:\s*44px/.test(rule64h) && /min-height:\s*44px/.test(rule64h), '[64h] (b) the pair keeps a 44x44 minimum target (Interaction Principles §Button Behavior) — "Expand all" measured 42px wide before this pin');
+  const wrap64h = (css64h.match(/\.panel-collapse-actions\{([^}]*)\}/) || [])[1] || '';
+  assert(/margin-left:\s*auto/.test(wrap64h) && parseFloat((wrap64h.match(/gap:\s*([\d.]+)px/) || [])[1] || '0') >= 4, '[64h] (c) the pair is right-aligned (margin-left:auto) with at least 4px between the two targets');
+  const mutant64h = rule64h.replace(/font-size:\s*[\d.]+rem/, 'font-size:.56rem');
+  assert(parseFloat((mutant64h.match(/font-size:\s*([\d.]+)rem/) || [])[1]) < 0.75, '[64h-mut] the round-2 .56rem value goes RED against (a)');
+}
+
+console.log('\n[64g] REVIEWER ROUND 2 B1 (2026-09-28) — renderAdminPage() really calls');
+console.log('       wireCollapsibleSections(c) BEFORE wirePanelCollapseAllControls(c, …), and the two');
+console.log('       functions genuinely interoperate: Collapse all touches every titled Admin card on');
+console.log('       the active tab, and a fresh set of cards (simulating a re-render) picks the');
+console.log('       persisted collapsed state back up immediately…');
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  // ── (a) source-order proof, mutation-provable — same "char-offset before
+  //      NOT after" discipline this file's boot-order scans already use
+  //      ([32]/[33] in boottest.mjs is the precedent for THIS shape; here
+  //      done locally since it's one function, one pair of call sites). ──
+  const { readFileSync: rfs64g } = await import('node:fs');
+  const raw64g = rfs64g(new URL('./js/app.js', import.meta.url), 'utf8');
+  const strip64g = (t) => t.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+    .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+  const src64g = strip64g(raw64g);
+  const bodyOfFn64g = (text, header) => {
+    const at = text.indexOf(header);
+    if (at < 0) return { at: -1, body: '' };
+    const open = text.indexOf('{', at) + 1;
+    let depth = 1;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}') { depth--; if (depth === 0) return { at, body: text.slice(open, i + 1) }; }
+    }
+    return { at, body: '' };
+  };
+  const checkOrder64g = (body) => {
+    const wireAt = body.indexOf('wireCollapsibleSections(c);');
+    const pairAt = body.indexOf('wirePanelCollapseAllControls(c, {');
+    return { wireAt, pairAt, ok: wireAt >= 0 && pairAt >= 0 && wireAt < pairAt };
+  };
+
+  const { body: adminBody64g, at: adminAt64g } = bodyOfFn64g(src64g, 'export function renderAdminPage()');
+  assert(adminAt64g >= 0, '[64g] (a) fixture: renderAdminPage() was located in js/app.js');
+  const order64g = checkOrder64g(adminBody64g);
+  assert(order64g.ok,
+    `[64g] (a) renderAdminPage() calls wireCollapsibleSections(c) STRICTLY BEFORE wirePanelCollapseAllControls(c, …) — the Admin panel's per-card toggle/chevron/persistence has to exist before the heading-row pair can act on it (wireAt=${order64g.wireAt}, pairAt=${order64g.pairAt})`);
+
+  // MUTATION-PROOF: strip the wireCollapsibleSections(c) call out of a COPY
+  // of the real body text (never the live file) and confirm the SAME check
+  // goes red — this is what the reviewer's "mutation: skip the wire call ->
+  // red" names, run as a canary rather than a real-file mutation (CLAUDE.md's
+  // own commit-before-mutate discipline, scoped down since this is a string
+  // copy, not a file write).
+  const poisoned64g = adminBody64g.replace('wireCollapsibleSections(c);\n', '');
+  assert(adminBody64g.length !== poisoned64g.length, '[64g] (a) fixture: the poison actually removed something');
+  const poisonedOrder64g = checkOrder64g(poisoned64g);
+  assert(poisonedOrder64g.ok === false,
+    `[64g] (a) MUTATION-PROOF: with the wireCollapsibleSections(c) call removed, the SAME order check goes RED (ok=${poisonedOrder64g.ok}) — proving this is a real assertion, not a vacuous pass`);
+
+  // ── (b)/(c) wireCollapsibleSections(), driven DIRECTLY (same reason as
+  //      [64f]'s own header comment: FakeEl.querySelectorAll() is a stub
+  //      that always returns [], so nothing here is reachable through the
+  //      real render path) — proves per-card wiring AND that it re-applies
+  //      settings.commPanelSectionsCollapsed on every call, which is what
+  //      "persists across a re-render" actually means: a re-render hands
+  //      this function a FRESH set of card objects, and it has to pick the
+  //      persisted state back up on ITS OWN, not rely on stale DOM state
+  //      surviving. ──────────────────────────────────────────────────────
+  assert(typeof app._wireCollapsibleSectionsForTest === 'function',
+    '[64g] (b) fixture: the wireCollapsibleSections() test seam is exported');
+
+  function fakeChevron64g() { return { className: '', textContent: '' }; }
+  function fakeTitleEl64g(text) {
+    const t = { textContent: text, _classes: new Set(), _listeners: [], _children: [] };
+    t.classList = { add: (c) => t._classes.add(c), contains: (c) => t._classes.has(c) };
+    t.querySelector = (sel) => (sel === '.section-chevron' ? t._children.find((c) => c.className === 'section-chevron') || null : null);
+    t.appendChild = (el) => { t._children.push(el); return el; };
+    t.addEventListener = (type, fn) => { if (type === 'click') t._listeners.push(fn); };
+    t._click = (e = { target: { closest: () => null } }) => t._listeners.forEach((fn) => fn(e));
+    return t;
+  }
+  function fakeSection64g(title) {
+    const sec = { dataset: {}, _classes: new Set(), _title: fakeTitleEl64g(title) };
+    sec.classList = {
+      add: (c) => sec._classes.add(c), contains: (c) => sec._classes.has(c),
+      remove: (c) => sec._classes.delete(c),
+      toggle: (c, force) => { const want = force === undefined ? !sec._classes.has(c) : !!force; if (want) sec._classes.add(c); else sec._classes.delete(c); return want; },
+    };
+    sec.querySelector = (sel) => (sel === '.admin-section-title' ? sec._title : null);
+    return sec;
+  }
+  function fakeAdminContainer64g(sections) {
+    return { querySelectorAll: (sel) => (sel === '.admin-section' ? sections : []) };
+  }
+  // document.createElement() is used INSIDE wireCollapsibleSections() for
+  // the chevron span — this file's own global `document` stub (freshDom(),
+  // top of file) already provides a real FakeEl-backed createElement(),
+  // reused as-is, no override needed.
+
+  storage.setBackendMode('local');
+  // Seed collapsed state BEFORE the first "render" — this is the re-render
+  // proof's setup: a card the commissioner collapsed on a PREVIOUS render is
+  // already recorded, and this render's cards start with NO classes at all
+  // (exactly what a fresh renderAdminPage() paint hands this function).
+  storage.saveSetting('commPanelSectionsCollapsed', { 'card-one': true });
+
+  const cardOne64g = fakeSection64g('Card One');
+  const cardTwo64g = fakeSection64g('Card Two');
+  const container64g = fakeAdminContainer64g([cardOne64g, cardTwo64g]);
+  assert(!cardOne64g.classList.contains('admin-section-collapsed'),
+    '[64g] (b) fixture: cardOne starts with NO collapsed class (a fresh render, before wiring runs)');
+
+  app._wireCollapsibleSectionsForTest(container64g);
+
+  assert(cardOne64g.classList.contains('admin-section-collapsed'),
+    '[64g] (b) MUTATION-PROOF (re-render): a card whose slug is ALREADY true in settings.commPanelSectionsCollapsed is re-collapsed the MOMENT wireCollapsibleSections() runs on it — a version that skips reading `collapsed[slug]` fails this directly');
+  assert(!cardTwo64g.classList.contains('admin-section-collapsed'),
+    '[64g] (b) …and a card with NO persisted entry stays expanded — not everything collapses by accident');
+  assert(cardOne64g._title.classList.contains('admin-section-title-toggle') && cardTwo64g._title.classList.contains('admin-section-title-toggle'),
+    '[64g] (b) both titles get the click-to-collapse affordance class');
+  assert(cardOne64g._title._children.some((c) => c.className === 'section-chevron') && cardTwo64g._title._children.some((c) => c.className === 'section-chevron'),
+    '[64g] (b) …and both get a chevron appended');
+  assert(cardOne64g._title._listeners.length === 1 && cardTwo64g._title._listeners.length === 1,
+    '[64g] (b) …and both titles have their own bound click-to-collapse listener');
+
+  // A real click still works through the seam (corroborates [64e] (b)'s
+  // source-scan proxy with a REAL execution).
+  cardTwo64g._title._click();
+  assert(cardTwo64g.classList.contains('admin-section-collapsed'),
+    '[64g] (b) clicking cardTwo\'s title collapses it for real');
+  const afterClick64g = storage.getSettings().commPanelSectionsCollapsed || {};
+  assert(afterClick64g['card-two'] === true,
+    `[64g] (b) …and persists it under the SAME slug function (got ${JSON.stringify(afterClick64g)})`);
+
+  // ── (c) the full pipeline, Admin-shaped: wireCollapsibleSections() THEN
+  //      wirePanelCollapseAllControls() on the SAME cards — Collapse all
+  //      must touch every titled card the FIRST function just wired. ──────
+  storage.saveSetting('commPanelSectionsCollapsed', {});
+  function fakeSectionWithTab64g(title, tabAttrName, tabValue) {
+    const sec = fakeSection64g(title);
+    sec._attrs = { [tabAttrName]: tabValue };
+    sec.getAttribute = (k) => (k in sec._attrs ? sec._attrs[k] : null);
+    return sec;
+  }
+  const adminCardA64g = fakeSectionWithTab64g('Data Source Mode', 'data-admin-tab', 'week');
+  const adminCardB64g = fakeSectionWithTab64g('Demo Simulation', 'data-admin-tab', 'week');
+  const adminContainer64g = fakeAdminContainer64g([adminCardA64g, adminCardB64g]);
+  app._wireCollapsibleSectionsForTest(adminContainer64g);   // (a)'s call, run for real
+  assert(!adminCardA64g.classList.contains('admin-section-collapsed') && !adminCardB64g.classList.contains('admin-section-collapsed'),
+    '[64g] (c) fixture: both Admin cards start expanded');
+
+  function fakeAdminPanel64g(cards) {
+    const expectedSel = '.admin-section[data-admin-tab]';
+    return {
+      getAttribute: (k) => (k === 'data-admin-active' ? 'week' : null),
+      querySelectorAll: (sel) => (sel === expectedSel ? cards : []),
+    };
+  }
+  function fakeBtn64g() {
+    const listeners = [];
+    return { addEventListener: (t, fn) => { if (t === 'click') listeners.push(fn); }, _fire: () => listeners.forEach((fn) => fn()) };
+  }
+  const adminPanel64g = fakeAdminPanel64g([adminCardA64g, adminCardB64g]);
+  const adminCollapseBtn64g = fakeBtn64g();
+  const adminExpandBtn64g = fakeBtn64g();
+  app._wirePanelCollapseAllControlsForTest(adminPanel64g, {
+    collapseBtn: adminCollapseBtn64g, expandBtn: adminExpandBtn64g,
+    cardAttr: 'data-admin-tab', activeAttr: 'data-admin-active',
+  });
+  adminCollapseBtn64g._fire();
+  assert(adminCardA64g.classList.contains('admin-section-collapsed') && adminCardB64g.classList.contains('admin-section-collapsed'),
+    '[64g] (c) B1: "Collapse all" on the Admin panel collapses EVERY titled card wireCollapsibleSections() just wired on the active tab — the fix under test');
+
+  // ── Simulate a re-render: a FRESH set of card objects (new renderAdminPage()
+  //    paint), never touched by anything above — must pick the persisted
+  //    collapsed state back up the moment wireCollapsibleSections() runs. ──
+  const adminCardA64g_r2 = fakeSectionWithTab64g('Data Source Mode', 'data-admin-tab', 'week');
+  const adminCardB64g_r2 = fakeSectionWithTab64g('Demo Simulation', 'data-admin-tab', 'week');
+  assert(!adminCardA64g_r2.classList.contains('admin-section-collapsed'),
+    '[64g] (c) fixture: the fresh re-render\'s cards start with NO class at all — a brand new paint, not the same objects');
+  app._wireCollapsibleSectionsForTest(fakeAdminContainer64g([adminCardA64g_r2, adminCardB64g_r2]));
+  assert(adminCardA64g_r2.classList.contains('admin-section-collapsed') && adminCardB64g_r2.classList.contains('admin-section-collapsed'),
+    '[64g] (c) B1: …and a RE-RENDER (fresh cards, same persisted settings) re-collapses them immediately — before this fix, nothing on Admin ever re-applied settings.commPanelSectionsCollapsed at all, so every async cache landing silently expanded everything again');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[65] STEP B (third pass) — join-code terminal error state (1) + the S-2 static scans (2),');
 console.log('     each scan with a poisoned canary proving it can go red…');
 {
@@ -13312,6 +13860,459 @@ console.log('     native bubble); a filled one still signs in once; the gate not
     }
   } finally {
     console.warn = realWarn;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[74] DI-411…416 (UN-366…371, 2026-09-28) — WIZARD_SLATE, driven through the REAL');
+console.log('     wizard sheet + Games tab (not just the pure predicates): Step 2 gate, "Edit slate');
+console.log('     in Games tab"/"Continue set up" round trip, Build Slate hidden past DRAFT, Step 6');
+console.log('     other-week notice…');
+{
+  const realWarn74 = console.warn; const realInfo74 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM74 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u74' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u74', email: '74@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-74', memberId: 'm74', role: 'commissioner', displayName: 'Drew', leagueName: 'League 74' }]);
+    auth.setActiveLeagueId('L-74');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    assert(app.isContentWithheld() === false, '[74] fixture: signed in, un-withheld');
+
+    // DI-416's own other-week fixture — already OPEN before the new draft is
+    // ever created, so the notice is live the instant Step 6 is reached.
+    storage.saveWeek({ weekId: 'wk74_other', season: '2026', weekNumber: 1, label: 'Week 1', status: 'open',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+
+    // ── (a) DI-411 — Step 1 -> Step 2, cold, via forceNew (mirrors [64d]'s
+    //        own "New Week" path) ──────────────────────────────────────────
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    const wrap74 = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrap74, '[74a] fixture: the sheet opened');
+    const body74 = wrap74.querySelector('#week-wizard-body');
+    assert(/id="wiz-step1-create"/.test(body74.innerHTML), '[74a] fixture: landed cold on Step 1 (create)');
+    // FakeEl carries no `.value` at all until something sets one (this
+    // file's own stub, ~line 50) — Step 1's create handler reads every field
+    // unconditionally.
+    body74.querySelector('#wiz-cw-season').value = '2026';
+    body74.querySelector('#wiz-cw-num').value = '50';
+    body74.querySelector('#wiz-cw-round').value = '';
+    body74.querySelector('#wiz-cw-start').value = '2026-09-01';
+    body74.querySelector('#wiz-cw-end').value = '2026-09-07';
+    body74.querySelector('#wiz-step1-create').dispatch('click', { target: body74.querySelector('#wiz-step1-create') });
+    const targetId74 = app._weekWizardSessionForTest().targetWeekId;
+    assert(!!targetId74 && targetId74 !== 'wk74_other', '[74a] fixture: Step 1 minted a new draft week, distinct from wk74_other');
+    assert(app._weekWizardSessionForTest().step === 2, '[74a] fixture: Step 1\'s create handler advanced to Step 2');
+
+    // ── DI-411, row 1/6 — no "Skip to slate" anywhere, ever ────────────────
+    assert(!/Skip to slate/.test(body74.innerHTML), '74-1: "Skip to slate" does not exist on Step 2');
+    assert(!/wiz-step2-skip/.test(body74.innerHTML), '74-2: …nor its id');
+    // ── DI-411, row 2 — "Fetch ESPN…" dropped from the wizard's own copy ───
+    assert(/Fetch Games</.test(body74.innerHTML) && !/Fetch ESPN/i.test(body74.innerHTML),
+      `74-3: the fetch button reads "Fetch Games", never "Fetch ESPN" (got ${body74.innerHTML.slice(0, 400)})`);
+    // ── DI-411, row 3/6 — "Add a game manually" secondary control present ──
+    assert(/id="wiz-step2-add-manual"[^>]*>Add a game manually</.test(body74.innerHTML),
+      '74-4: "Add a game manually" secondary control renders beside Fetch');
+    // ── DI-411, row 1 — Next exists and is DISABLED with zero games ────────
+    assert(/id="wiz-step2-next"[^>]*disabled[^>]*>Next</.test(body74.innerHTML),
+      `74-5: Next is disabled with an empty slate (got ${body74.innerHTML.match(/id="wiz-step2-next"[^>]*>Next</)?.[0]})`);
+
+    // ── (b) manual-add actually persists AND re-evaluates Next's disabled
+    //        state — the fix for the DI's own literal onSave callback
+    //        (which discarded `data`, matching Step 3's pre-existing call
+    //        site) had to be corrected for THIS to be possible at all ─────
+    body74.querySelector('#wiz-step2-add-manual').dispatch('click', { target: body74.querySelector('#wiz-step2-add-manual') });
+    const ov74 = document.body.lastChild;
+    assert(!!ov74 && /id="m-home"/.test(ov74.innerHTML), '[74b] fixture: the manual-add modal opened (a brand-new game — every field editable)');
+    // showGameModal() itself reads its form fields two DIFFERENT ways — some
+    // through a closure-captured `ov.querySelector('#id')` (mult/manual/espn
+    // controls), most others through a GLOBAL `document.getElementById(id)`
+    // (the ID-scan the modal's own `ov.innerHTML=` assignment populates, this
+    // file's FakeEl, ~line 71) — two DIFFERENT stub objects per id. Setting
+    // both sides for every field this brand-new game's save touches is the
+    // simplest way to be correct regardless of which path a given field uses.
+    const setBoth74 = (id, val) => { const g = document.getElementById(id); if (g) g.value = val; const l = ov74.querySelector('#' + id); if (l) l.value = val; };
+    setBoth74('m-home', 'DI411 Home');
+    setBoth74('m-away', 'DI411 Away');
+    setBoth74('m-home-mascot', '');
+    setBoth74('m-away-mascot', '');
+    setBoth74('m-kickoff', '2026-09-05T17:00');
+    setBoth74('m-spread-fav', '');
+    setBoth74('m-spread-margin', '');
+    setBoth74('m-mult-preset', '1');
+    setBoth74('m-venue', '');
+    setBoth74('m-hconf', '');
+    setBoth74('m-aconf', '');
+    setBoth74('m-hrank', '');
+    setBoth74('m-arank', '');
+    // The CLICK LISTENER itself was bound via `ov.querySelector('#m-save')`
+    // (ov's own LOCAL memoized sub-element) — that is the one that has to fire.
+    ov74.querySelector('#m-save').dispatch('click', { target: ov74.querySelector('#m-save') });
+    const games74 = storage.getGames(targetId74);
+    assert(games74.length === 1 && games74[0].homeTeam === 'DI411 Home',
+      `74-6: "Add a game manually" actually PERSISTS the game (got ${JSON.stringify(games74.map(g => g.homeTeam))})`);
+    assert(/id="wiz-step2-next"[^>]*>Next</.test(body74.innerHTML) && !/id="wiz-step2-next"[^>]*disabled/.test(body74.innerHTML),
+      `74-7: Next is now ENABLED the instant a game exists (got ${body74.innerHTML.match(/id="wiz-step2-next"[^>]*>Next</)?.[0]})`);
+
+    // ── (c) forward to Step 3, then DI-412's "Edit slate in Games tab" ─────
+    body74.querySelector('#wiz-step2-next').dispatch('click', { target: body74.querySelector('#wiz-step2-next') });
+    assert(app._weekWizardSessionForTest().step === 3 && /Confirm slate \+ spreads/.test(body74.innerHTML),
+      '[74c] fixture: Next actually advanced to Step 3');
+    assert(/id="wiz-step3-edit-in-games-tab"[^>]*>Edit slate in Games tab</.test(body74.innerHTML),
+      '74-8: Step 3 carries the "Edit slate in Games tab" button');
+    body74.querySelector('#wiz-step3-edit-in-games-tab').dispatch('click', { target: body74.querySelector('#wiz-step3-edit-in-games-tab') });
+    assert(document.getElementById('week-wizard-sheet-wrap') === null,
+      '74-9: the sheet is GONE from the DOM after "Edit slate in Games tab"');
+    const session74c = app._weekWizardSessionForTest();
+    assert(session74c.step === 3 && session74c.targetWeekId === targetId74,
+      `74-10: …but the in-progress SESSION survives — step and target week UNCHANGED (never closeWeekWizardSheet()'s own reset) (got ${JSON.stringify(session74c)})`);
+    assert(app.state.commTab === 'games' && app.state.currentTab === 'commissioner',
+      `74-11: …and navigation actually landed on the Commissioner panel's Games tab (got tab=${app.state.currentTab}, commTab=${app.state.commTab})`);
+
+    // ── (d) the Games tab: "Continue set up" card present (DI-412) + Build
+    //        Slate live while DRAFT (DI-413) ───────────────────────────────
+    const commEl74 = new FakeEl(); commEl74.id = 'page-commissioner'; registry.set('page-commissioner', commEl74);
+    app.renderCommPage();
+    assert(/id="games-tab-continue-setup-btn"[^>]*>Continue set up</.test(commEl74.innerHTML),
+      '74-12: the Games tab shows "Continue set up" — a create-flow session (step 3) is in progress for the week this tab is showing');
+    assert(/id="comm-build-slate-btn"[^>]*>Build slate</.test(commEl74.innerHTML),
+      '74-13: Build Slate is still LIVE — the week is still DRAFT');
+    assert(!/Slate is built/.test(commEl74.innerHTML), '74-14: …and the "Slate is built" one-liner is absent while DRAFT');
+
+    // ── (e) DI-412's resume path — "Continue set up" reopens on the SAME
+    //        step, never Step 1 ──────────────────────────────────────────
+    document.getElementById('games-tab-continue-setup-btn').dispatch('click', { target: document.getElementById('games-tab-continue-setup-btn') });
+    const wrap74b = document.getElementById('week-wizard-sheet-wrap');
+    assert(!!wrap74b, '74-15: "Continue set up" reopened the sheet');
+    const body74b = wrap74b.querySelector('#week-wizard-body');
+    assert(/Confirm slate \+ spreads/.test(body74b.innerHTML) && !/id="wiz-step1-create"/.test(body74b.innerHTML),
+      `74-16: …landed on Step 3, NOT reset to Step 1 (got ${body74b.innerHTML.slice(0, 120)})`);
+
+    // ── (f) DI-413 — Build Slate hides once the week leaves DRAFT ──────────
+    storage.saveWeek({ ...storage.getWeek(targetId74), status: 'open' });
+    const commEl74b = new FakeEl(); commEl74b.id = 'page-commissioner'; registry.set('page-commissioner', commEl74b);
+    app.renderCommPage();
+    assert(!/id="comm-build-slate-btn"/.test(commEl74b.innerHTML),
+      '74-17: Build Slate is GONE (not merely disabled) once the week leaves DRAFT');
+    assert(/Slate is built — edit games below\./.test(commEl74b.innerHTML),
+      '74-18: …replaced by the one-line state');
+    // …and the "Continue set up" card is also gone now (DI-412's own 3rd
+    // condition — the target week is no longer DRAFT).
+    assert(!/id="games-tab-continue-setup-btn"/.test(commEl74b.innerHTML),
+      '74-19: "Continue set up" disappears once the week it was tracking leaves DRAFT');
+    // Restore DRAFT for the rest of this section's own flow.
+    storage.saveWeek({ ...storage.getWeek(targetId74), status: 'draft' });
+
+    // ── (g) CONTINUE FROM THE STILL-OPEN SHEET (body74b, left on Step 3 by
+    //        (e) — reopening fresh here would invoke selectEntry() again,
+    //        and once a spread is on the game that resolves straight to
+    //        Step 6, never Step 4, which is the leg (g) exists to walk)
+    //        forward through Step 4 to Step 6 (Step 4's Next skips the
+    //        optional Step 5 by design — REVIEWER BLOCK item 5, this file's
+    //        own [64] neighbourhood) — DI-416's other-week notice ──────────
+    const body74c = body74b;
+    assert(/Confirm slate \+ spreads/.test(body74c.innerHTML), '[74g] fixture: still on Step 3, the sheet (e) left open');
+    body74c.querySelector('#wiz-step3-next').dispatch('click', { target: body74c.querySelector('#wiz-step3-next') });
+    assert(/Timing & auto-transitions/.test(body74c.innerHTML),
+      `[74g] fixture: on Step 4 (got ${body74c.innerHTML.slice(0, 120)})`);
+    // Give the one game a spread NOW (not before) — otherwise the REAL
+    // gating checklist (unit-proven separately, weekwizardtest.mjs [3])
+    // would leave Finish disabled regardless of the notice, and this
+    // section's "the notice never blocks" assertion could not tell the two
+    // apart. FakeEl.querySelectorAll() is always [] (this file's own stub,
+    // ~line 123) — [data-open-mode] buttons cannot be clicked through this
+    // harness, so the default NOW mode is used and made legitimately
+    // openable instead.
+    storage.saveGame({ ...games74[0], spread: -3, favorite: 'DI411 Home' });
+    body74c.querySelector('#wiz-step4-next').dispatch('click', { target: body74c.querySelector('#wiz-step4-next') });
+    assert(app._weekWizardSessionForTest().step === 6 && /Open for picks/.test(body74c.innerHTML),
+      '[74g] fixture: Step 4\'s Next skipped straight to Step 6');
+    assert(/warning-box[^>]*>⚠️ Week 1 is already open — opening this week too may cause players to see the wrong week\.</.test(body74c.innerHTML),
+      `74-20: Step 6 shows the DI-416 notice, naming the other week and its status (got ${body74c.innerHTML.match(/warning-box[^>]*>[^<]*</)?.[0]})`);
+    // …and it is NEVER a block: the slate is now legitimately openable (a
+    // spread was just added, above) — Finish ("Open for Picks", default NOW
+    // mode) must be enabled WITH the notice still showing, proving the
+    // notice itself never touches finishDisabled, only the real gate does.
+    assert(/id="wiz-open-btn"[^>]*>Open for Picks</.test(body74c.innerHTML) && !/id="wiz-open-btn" disabled/.test(body74c.innerHTML),
+      `74-21: Finish is NOT disabled once the real gate passes — the notice never sets finishDisabled on its own (got ${body74c.innerHTML.match(/id="wiz-open-btn"[^>]*>[^<]*</)?.[0]})`);
+  } finally {
+    globalThis.matchMedia = savedMM74;
+    console.warn = realWarn74; console.info = realInfo74;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[75] REVIEWER ROUND 2, B1 (DI-412 AMENDED, UN-367, 2026-09-28) — "Edit slate in');
+console.log('     Games tab" targets the wizard\'s PARKED week, not getCurrentWeek(), when');
+console.log('     another week is EXPLICITLY the active pointer (the exact DI-406 "New Week"');
+console.log('     scenario) — plus N12, wizardSetActiveWeekId()\'s null-pointer guard…');
+{
+  const realWarn75 = console.warn; const realInfo75 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM75 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u75' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u75', email: '75@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-75', memberId: 'm75', role: 'commissioner', displayName: 'Drew', leagueName: 'League 75' }]);
+    auth.setActiveLeagueId('L-75');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    globalThis.localStorage.removeItem('cfbp_active_week');
+
+    // ── B1's own regression fixture — the coordinator's EXACT sequence:
+    //    setActiveWeekId(<open week>) BEFORE forceNew, so the active-week
+    //    pointer EXPLICITLY names the open week (not merely resolved via
+    //    getCurrentWeek()'s status-scan fallback, which [74] already covers).
+    storage.saveWeek({ weekId: 'wk75_open', season: '2026', weekNumber: 1, label: 'Week 1', status: 'open',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    storage.saveGame({ gameId: 'g75_open', weekId: 'wk75_open', homeTeam: 'OpenHome', awayTeam: 'OpenAway',
+      spread: -3, favorite: 'OpenHome', status: 'scheduled', isManual: true });
+    storage.setActiveWeekId('wk75_open');
+    assert(storage.getCurrentWeek()?.weekId === 'wk75_open', '[75] fixture: the active pointer explicitly names the open week');
+
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    const wrap75 = document.getElementById('week-wizard-sheet-wrap');
+    const body75 = wrap75.querySelector('#week-wizard-body');
+    body75.querySelector('#wiz-cw-season').value = '2026';
+    body75.querySelector('#wiz-cw-num').value = '52';
+    body75.querySelector('#wiz-cw-round').value = '';
+    body75.querySelector('#wiz-cw-start').value = '2026-12-01';
+    body75.querySelector('#wiz-cw-end').value = '2026-12-07';
+    body75.querySelector('#wiz-step1-create').dispatch('click', { target: body75.querySelector('#wiz-step1-create') });
+    const targetId75 = app._weekWizardSessionForTest().targetWeekId;
+    assert(!!targetId75 && targetId75 !== 'wk75_open', '[75] fixture: Step 1 minted a NEW draft, distinct from the open week');
+    // THE BUG'S OWN PRECONDITION — wizardSetActiveWeekId() correctly refused
+    // to move the pointer off the open week (this half was never broken).
+    assert(storage.getActiveWeekId() === 'wk75_open',
+      `[75] fixture: the active pointer is STILL the open week (wizardSetActiveWeekId()'s own, pre-existing, correct refusal) — got ${storage.getActiveWeekId()}`);
+    assert(storage.getCurrentWeek()?.weekId === 'wk75_open',
+      '[75] fixture: …so getCurrentWeek() STILL resolves to the open week, exactly the state that broke "Edit slate in Games tab" pre-fix');
+
+    // Every field a brand-new-game save reads unconditionally — same
+    // pattern as [74b]'s own setBoth74 helper.
+    const fillManualGame75 = (home, away, kickoff) => {
+      document.getElementById('m-home').value = home;
+      document.getElementById('m-away').value = away;
+      document.getElementById('m-home-mascot').value = '';
+      document.getElementById('m-away-mascot').value = '';
+      document.getElementById('m-kickoff').value = kickoff;
+      document.getElementById('m-spread-fav').value = '';
+      document.getElementById('m-spread-margin').value = '';
+      document.getElementById('m-venue').value = '';
+      document.getElementById('m-hconf').value = '';
+      document.getElementById('m-aconf').value = '';
+      document.getElementById('m-hrank').value = '';
+      document.getElementById('m-arank').value = '';
+    };
+
+    body75.querySelector('#wiz-step2-add-manual').dispatch('click', { target: body75.querySelector('#wiz-step2-add-manual') });
+    const ov75 = document.body.lastChild;
+    fillManualGame75('DraftHome', 'DraftAway', '2026-12-05T17:00');
+    ov75.querySelector('#m-save').dispatch('click', { target: ov75.querySelector('#m-save') });
+    body75.querySelector('#wiz-step2-next').dispatch('click', { target: body75.querySelector('#wiz-step2-next') });
+    assert(app._weekWizardSessionForTest().step === 3, '[75] fixture: on Step 3 with one game on the draft');
+    body75.querySelector('#wiz-step3-edit-in-games-tab').dispatch('click', { target: body75.querySelector('#wiz-step3-edit-in-games-tab') });
+    assert(document.getElementById('week-wizard-sheet-wrap') === null, '[75] fixture: "Edit slate in Games tab" dismissed the sheet');
+
+    const commEl75 = new FakeEl(); commEl75.id = 'page-commissioner'; registry.set('page-commissioner', commEl75);
+    app.renderCommPage();
+    assert(/Selected Slate \(1\/10 games\)/.test(commEl75.innerHTML),
+      `75-1: THE FIX — the Games tab shows the DRAFT's ONE game, not the open week's (got ${commEl75.innerHTML.match(/Selected Slate \([^)]*\)/)?.[0]})`);
+    assert(!/DraftHome/.test('') && /DraftHome/.test(commEl75.innerHTML.match(/id="admin-games-list"[\s\S]*?<\/div>\s*<\/div>/)?.[0] || commEl75.innerHTML),
+      '75-2: …and the row on it is the draft\'s own game');
+    assert(/id="games-tab-continue-setup-btn"/.test(commEl75.innerHTML),
+      '75-3: the "Continue set up" card is present — it follows the SAME target (gamesTabTargetWeek())');
+    assert(!/id="comm-denied-card"/.test(commEl75.innerHTML), '75-3b: fixture — this really is the commissioner panel body, not a denial card');
+
+    // Add Manually on the Games tab adds to the DRAFT, never the open week.
+    document.getElementById('add-manual-game-btn').dispatch('click', { target: document.getElementById('add-manual-game-btn') });
+    const ov75b = document.body.lastChild;
+    fillManualGame75('DraftHome2', 'DraftAway2', '2026-12-06T17:00');
+    ov75b.querySelector('#m-save').dispatch('click', { target: ov75b.querySelector('#m-save') });
+    assert(storage.getGames(targetId75).length === 2 && storage.getGames('wk75_open').length === 1,
+      `75-4: "Add Manually" added to the DRAFT (now ${storage.getGames(targetId75).length} games) — the open week's own slate is untouched (still ${storage.getGames('wk75_open').length})`);
+
+    // ── R1 (reviewer round 3, BLOCK) — the three LIVE-week-only buttons are
+    //    ABSENT while the Games tab shows a parked DRAFT that HAS games.
+    const commEl75c = new FakeEl(); commEl75c.id = 'page-commissioner'; registry.set('page-commissioner', commEl75c);
+    app.renderCommPage();
+    assert(!/id="unlock-all-btn"/.test(commEl75c.innerHTML), '75-R1a: "Unlock All" is absent for a parked DRAFT (would wipe the OPEN week\'s own lock overrides too)');
+    assert(!/id="refresh-scores-btn"/.test(commEl75c.innerHTML), '75-R1b: "Refresh Scores" is absent for a parked DRAFT');
+    assert(!/id="finalize-scoring-btn"/.test(commEl75c.innerHTML), '75-R1c: "Calculate ATS" is absent for a parked DRAFT (would finalize a week with zero real picks)');
+    assert(document.getElementById('finalize-scoring-btn') === null,
+      '75-R1c-2: …and the id has never been registered at all in this run — the button never rendered, so finalizeWeek() can never be reached by a click');
+    assert(/id="clear-slate-btn"/.test(commEl75c.innerHTML), '75-R1d: "Clear All Slate Games" is STILL present — not one of the three gated buttons');
+    assert(/id="add-manual-game-btn"/.test(commEl75c.innerHTML), '75-R1e: "Add Manually" is still present');
+
+    // ── R1b (reviewer round 3, copy) — the banner says how to get back, and
+    //    "Close setup" actually restores the live week's Games tab.
+    assert(/Setting up [^<]*— the live week is untouched\. Close setup to return to [^<]*\./.test(commEl75c.innerHTML),
+      `75-R1b-1: the banner names both the parked week and how to get back (got ${commEl75c.innerHTML.match(/Setting up[^<]*\./)?.[0]})`);
+    assert(/id="games-tab-close-setup-btn"[^>]*>Close setup</.test(commEl75c.innerHTML), '75-R1b-2: the "Close setup" button renders');
+    document.getElementById('games-tab-close-setup-btn').dispatch('click', { target: document.getElementById('games-tab-close-setup-btn') });
+    assert(app._weekWizardSessionForTest().targetWeekId === null, '75-R1b-3: "Close setup" cleared the parked session');
+    assert(app.state.currentTab === 'commissioner', '75-R1b-4: still on the commissioner tab (navigateTo(\'commissioner\'), not a tab change)');
+    assert(!/id="games-tab-close-setup-btn"/.test(commEl75c.innerHTML) && !/Setting up/.test(commEl75c.innerHTML),
+      '75-R1b-5: the Games tab repainted WITHOUT the banner — back to the live week');
+    assert(/Selected Slate \(1\/10 games\)/.test(commEl75c.innerHTML),
+      `75-R1b-6: …and the LIVE week's own game count shows (1, the open week's — not the draft's 2) (got ${commEl75c.innerHTML.match(/Selected Slate \([^)]*\)/)?.[0]})`);
+    assert(/id="unlock-all-btn"/.test(commEl75c.innerHTML) && /id="refresh-scores-btn"/.test(commEl75c.innerHTML) && /id="finalize-scoring-btn"/.test(commEl75c.innerHTML),
+      '75-R1b-7: …and the three LIVE-week-only buttons are back — the open week is not a draft');
+
+    // Structural pin — the exact B1 derivation line 75-1..75-4 depend on.
+    // (The actual mutation proof — this line removed/replaced so
+    // renderCommPage() falls back to `week` unconditionally, confirming
+    // 75-1..75-4 go RED — is run per CLAUDE.md's protocol: commit first,
+    // mutate a REAL checked-out copy in scratch, restore from that copy,
+    // never a re-imported module from another directory, which cannot
+    // resolve this file's own relative `./…js` imports. Recorded as run in
+    // the handoff, not re-executed here on every suite run.)
+    {
+      const { readFileSync: rfs75 } = await import('node:fs');
+      const src75 = rfs75(new URL('./js/app.js', import.meta.url), 'utf8');
+      assert(src75.includes('const gamesTabWeek = parkedWizardWeek || week;'),
+        '[75-pin] the exact B1 derivation (renderCommPage()) is present, once — 75-1..75-4 above are mutation-proven against a scratch copy, not re-run here');
+    }
+
+    // ── N12 — wizardSetActiveWeekId()'s null-pointer guard, driven directly.
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_active_week');
+    storage.saveWeek({ weekId: 'wk75_live', season: '2026', weekNumber: 9, label: 'Week 9', status: 'live',
+      dataSourceMode: 'espn', lockedAt: new Date().toISOString(), finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    storage.saveWeek({ weekId: 'wk75_draft', season: '2026', weekNumber: 10, label: 'Week 10', status: 'draft',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    assert(storage.getActiveWeekId() === null, '[75-N12] fixture: NO explicit active pointer set on this device');
+    assert(storage.getCurrentWeek()?.weekId === 'wk75_live',
+      '[75-N12] fixture: getCurrentWeek() still resolves the LIVE week via its own status-scan fallback, with a null pointer');
+    app._wizardSetActiveWeekIdForTest('wk75_draft');
+    assert(storage.getActiveWeekId() !== 'wk75_draft',
+      `75-N12: THE FIX — a null pointer does NOT let the draft get set as active while another week is live (got ${JSON.stringify(storage.getActiveWeekId())})`);
+    assert(storage.getCurrentWeek()?.weekId === 'wk75_live',
+      '75-N12b: …and getCurrentWeek() still resolves the live week — no player\'s "current week" silently became the draft');
+
+    // A genuinely idle league (nothing live) still lets the pointer move —
+    // the guard must not become a blanket refusal.
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_active_week');
+    storage.saveWeek({ weekId: 'wk75_draft2', season: '2026', weekNumber: 1, label: 'Week 1', status: 'draft',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    app._wizardSetActiveWeekIdForTest('wk75_draft2');
+    assert(storage.getActiveWeekId() === 'wk75_draft2',
+      `75-N12c: …but with NOTHING live/locked/open anywhere, a null pointer still adopts the new draft normally (got ${JSON.stringify(storage.getActiveWeekId())})`);
+
+    // N12 note (reviewer round 3) — `activeNow` naming a week that's SINCE
+    // BEEN DELETED, while a DIFFERENT week is genuinely live. The old
+    // `activeNow ? getWeek(activeNow) : getCurrentWeek()` branch read a
+    // stale pointer's getWeek() as `undefined` and treated THAT as "nothing
+    // to protect" — the exact same gap the null-pointer case had, just
+    // reached from the other branch.
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_active_week');
+    storage.saveWeek({ weekId: 'wk75_live2', season: '2026', weekNumber: 11, label: 'Week 11', status: 'live',
+      dataSourceMode: 'espn', lockedAt: new Date().toISOString(), finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    storage.setActiveWeekId('wk75_deleted'); // never saved — a stale/deleted pointer
+    storage.saveWeek({ weekId: 'wk75_draft3', season: '2026', weekNumber: 12, label: 'Week 12', status: 'draft',
+      dataSourceMode: 'espn', lockedAt: null, finalizedAt: null, pendingFinalization: false,
+      tiebreakerQuestion: '', extraPointEnabled: false, groupId: null });
+    assert(storage.getWeek('wk75_deleted') === null, '[75-N12d] fixture: the active pointer names a week that does not exist');
+    assert(storage.getCurrentWeek()?.weekId === 'wk75_live2',
+      '[75-N12d] fixture: getCurrentWeek() falls back PAST the deleted pointer to the live week');
+    app._wizardSetActiveWeekIdForTest('wk75_draft3');
+    assert(storage.getActiveWeekId() !== 'wk75_draft3',
+      `75-N12d: THE FIX — a pointer naming a DELETED week does not let the draft get set as active while another week is genuinely live (got ${JSON.stringify(storage.getActiveWeekId())})`);
+  } finally {
+    globalThis.matchMedia = savedMM75;
+    console.warn = realWarn75; console.info = realInfo75;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[76] REVIEWER ROUND 3, R2 — closeWeekWizardSheet() only repaints (via');
+console.log('     navigateTo(), which carries dirty fields per RG-176) when a session was');
+console.log('     ACTUALLY parked; nothing parked -> no repaint at all…');
+{
+  const realWarn76 = console.warn; const realInfo76 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM76 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u76' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u76', email: '76@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-76', memberId: 'm76', role: 'commissioner', displayName: 'Drew', leagueName: 'League 76' }]);
+    auth.setActiveLeagueId('L-76');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    globalThis.localStorage.removeItem('cfbp_active_week');
+
+    // ── Case A — nothing parked (a fresh sheet, still cold on Step 1, no
+    //    week created yet) — closeWeekWizardSheet() must NOT repaint at all.
+    //    `document.body.dataset.tab` is navigateTo()'s OWN, unique side
+    //    effect (js/app.js ~5088) — a bare renderCommPage() call never
+    //    touches it, so it is the one observable signal in this harness that
+    //    tells "navigateTo() ran" apart from "nothing ran".
+    app.state.currentTab = 'commissioner';
+    const commEl76 = new FakeEl(); commEl76.id = 'page-commissioner'; registry.set('page-commissioner', commEl76);
+    app.renderCommPage();
+    document.getElementById('comm-announce-body').value = 'dirty announcement A';
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    const wrapA = document.getElementById('week-wizard-sheet-wrap');
+    assert(app._weekWizardSessionForTest().targetWeekId === null, '[76a] fixture: nothing parked yet — cold Step 1, forceNew, no week created');
+    delete document.body.dataset.tab;
+    wrapA.querySelector('#week-wizard-close').dispatch('click', { target: wrapA.querySelector('#week-wizard-close') });
+    assert(document.getElementById('week-wizard-sheet-wrap') === null, '[76a] fixture: the sheet closed');
+    assert(document.body.dataset.tab === undefined,
+      '76-R2a: nothing parked -> closeWeekWizardSheet() did NOT call navigateTo() (no repaint at all)');
+    assert(document.getElementById('comm-announce-body').value === 'dirty announcement A',
+      '76-R2a-2: fixture — the dirty announcement field is (trivially) untouched since nothing repainted');
+
+    // ── Case B — a genuinely parked draft — closeWeekWizardSheet() MUST
+    //    repaint via navigateTo('commissioner'), carrying the dirty field.
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    const wrapB = document.getElementById('week-wizard-sheet-wrap');
+    const bodyB = wrapB.querySelector('#week-wizard-body');
+    bodyB.querySelector('#wiz-cw-season').value = '2026';
+    bodyB.querySelector('#wiz-cw-num').value = '77';
+    bodyB.querySelector('#wiz-cw-round').value = '';
+    bodyB.querySelector('#wiz-cw-start').value = '2026-12-10';
+    bodyB.querySelector('#wiz-cw-end').value = '2026-12-16';
+    bodyB.querySelector('#wiz-step1-create').dispatch('click', { target: bodyB.querySelector('#wiz-step1-create') });
+    assert(!!app._weekWizardSessionForTest().targetWeekId && app._weekWizardSessionForTest().step === 2,
+      '[76b] fixture: Step 1 minted a draft and parked it (Step 2, target set, status draft)');
+    document.getElementById('comm-announce-body').value = 'dirty announcement B';
+    delete document.body.dataset.tab;
+    wrapB.querySelector('#week-wizard-close').dispatch('click', { target: wrapB.querySelector('#week-wizard-close') });
+    assert(document.getElementById('week-wizard-sheet-wrap') === null, '[76b] fixture: the sheet closed');
+    assert(document.body.dataset.tab === 'commissioner',
+      '76-R2b: a parked session -> closeWeekWizardSheet() DID call navigateTo(\'commissioner\') (a real repaint)');
+    assert(document.getElementById('comm-announce-body').value === 'dirty announcement B',
+      '76-R2b-2: …and the dirty announcement text SURVIVED the repaint — RG-176\'s captureDirtyFields()/restoreDirtyFields() carried it, exactly like every other navigateTo() repaint in the app');
+    assert(app._weekWizardSessionForTest().targetWeekId === null,
+      '76-R2b-3: fixture — the parked session really was cleared (closeWeekWizardSheet()\'s own hygiene, unchanged)');
+  } finally {
+    globalThis.matchMedia = savedMM76;
+    console.warn = realWarn76; console.info = realInfo76;
   }
 }
 

@@ -65,7 +65,20 @@ export const PULL_TO_REFRESH_SUCCESS_FADE_MS = 200;
 
 // DI-325 (T-27 WEEK-SWIPE)
 export const WEEK_SWIPE_EDGE_EXCLUDE_PX = 28; // left-edge zone reserved for T-13's drawer
-export const WEEK_SWIPE_BOUNCE_MAX_PX = 12;   // edge-of-list rubber-band bounce-back
+// DI-409 (2026-09-28) — retuned from the DI-325 scaffolding's original 12px.
+// The DI's own instruction: RUBBER_BAND_CAP_PX (24, below) "was sized for a
+// small VERTICAL overscroll; a visibly-too-small cap here would look like
+// the drag 'stopped working'" for a full-width HORIZONTAL drag — 12px was
+// smaller still. 48px is a first-pass, render-and-eyeball value (device-
+// verify item, DI-409 Part 5 note 4); nothing else reads this constant, so
+// retuning it is safe. Still reuses _rubberBandOffset()'s exact curve, just
+// scaled to this cap instead of RUBBER_BAND_CAP_PX (_weekSwipeRubberBand()).
+export const WEEK_SWIPE_BOUNCE_MAX_PX = 48;   // edge-of-list rubber-band bounce-back
+// Shared for BOTH the edge/cancel spring-back (Small-feedback bucket) AND
+// each half (exit, enter) of the commit hand-off (~140-150ms, half of the
+// 220-300ms Navigation budget, DI-409) — one animation-language duration,
+// not three ad-hoc literals. Matches css/styles.css's --motion-fast (150ms)
+// exactly.
 export const WEEK_SWIPE_BOUNCE_MS = 150;
 
 // DI-327 (T-29 SCROLL-BOUNCE)
@@ -151,6 +164,35 @@ function readScrollPos(scrollEl) {
   if (!scrollEl) return 0;
   if (typeof window !== 'undefined' && scrollEl === window) return window.scrollY ?? 0;
   return scrollEl.scrollTop ?? 0;
+}
+
+/**
+ * RG-281 / DI-399(b-ii) round 2 (2026-09-28, reviewer BLOCK 1) — a bounded
+ * scroller (Chat's `#chat-scroll`) is REPLACED wholesale on every repaint
+ * (`renderChatPage()`'s `c.innerHTML = ...`, driven through every
+ * inbound-message/Realtime/hydrate tick — every few seconds live). A
+ * binder whose `onTouchStart` reads a scroll element CAPTURED ONCE at bind
+ * time keeps reading that node after it is detached; a detached element
+ * reports `scrollTop`/`clientHeight`/`scrollHeight` as 0, which
+ * `_pullToRefreshEligible(0)` and `_bottomBounceEligible(0,0,0)` both read
+ * as "eligible" — a stale, long-detached binder answers TRUE forever and
+ * fires `refreshFn()` + a success haptic on any ≥ARM_PX drag, on ANY tab,
+ * not just Chat (`window` is still the real listen target). `window` (the
+ * OTHER scroller these binders read) never goes stale this way, but the
+ * check costs nothing there either — `window.isConnected` is undefined,
+ * so this returns `true` (never false-flags a live page scroll).
+ *
+ * This is why `bindPullToRefresh()`'s/`bindBottomPullToRefresh()`'s own
+ * `onTouchStart` re-resolves `getScrollEl()` FRESH on every touch (never
+ * trusts a `scrollEl` captured once at bind time) and calls this guard on
+ * the freshly-resolved element before trusting its metrics at all.
+ */
+function isScrollElLive(el) {
+  if (!el) return false;
+  if (typeof window !== 'undefined' && el === window) return true;
+  if ('isConnected' in el && el.isConnected === false) return false;
+  if ('clientHeight' in el && !(el.clientHeight > 0)) return false;
+  return true;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -510,8 +552,21 @@ export function _pullToRefreshEligible(scrollTop) {
 /**
  * Pure reducer. state = { phase, suspended, eligible }.
  * phase in idle|pulling|armed|refreshing|success|failed.
- * Events: suspend|resume|touchstart{scrollTop}|touchmove{dy}|touchend|
- *         refresh-success|refresh-fail|settle.
+ * Events: suspend|resume|touchstart{scrollTop|eligible}|touchmove{dy}|
+ *         touchend|refresh-success|refresh-fail|settle.
+ *
+ * `touchstart`'s eligibility input is EITHER shape, caller's choice:
+ *   - `scrollTop` (a number) — run through `_pullToRefreshEligible()`, the
+ *     TOP-edge "at true scroll-top" formula. This is the original, and
+ *     still `bindPullToRefresh()`'s own shape.
+ *   - `eligible` (a boolean) — trust it as-is. Reviewer round 2
+ *     (2026-09-28): `bindBottomPullToRefresh()` computes its OWN
+ *     eligibility via `_bottomBounceEligible()` (a different formula, the
+ *     bottom edge) combined with `isScrollElLive()` (RG-281) — passing a
+ *     fabricated `scrollTop` sentinel through the TOP formula to fake an
+ *     answer for a BOTTOM question was a hack this explicit field removes,
+ *     not a new pattern; the reducer's phase/threshold/settle mechanics
+ *     stay the ONE shared thing (still reused, not reimplemented).
  */
 function stepPullToRefresh(state, event) {
   switch (event.type) {
@@ -521,7 +576,7 @@ function stepPullToRefresh(state, event) {
       return { ...state, suspended: false };
     case 'touchstart': {
       if (state.suspended) return { ...state, eligible: false, axis: null };
-      const eligible = _pullToRefreshEligible(event.scrollTop);
+      const eligible = typeof event.eligible === 'boolean' ? event.eligible : _pullToRefreshEligible(event.scrollTop);
       return { ...state, eligible, phase: 'idle', axis: null };
     }
     case 'touchmove': {
@@ -606,11 +661,22 @@ export function _pullToRefreshStateMachine(events) {
  * `bindScrollDirection`'s: a second bind call for the same `scrollEl`
  * returns the already-bound unbind function rather than attaching a second
  * set of listeners.
+ *
+ * REVIEWER ROUND 3, RG-285 — `opts.isActive` (optional, defaults to
+ * always-active): `window` is bound once and never unbound (it is a
+ * STABLE identity, so the WeakMap idempotency guard above correctly
+ * treats every re-bind attempt as a no-op) — which also means its
+ * touchstart/touchmove/touchend listeners are permanently live and GLOBAL,
+ * not scoped to whichever tab was active when it first bound. A caller
+ * whose scroller can be "eligible" (scroll-top 0) for reasons that have
+ * nothing to do with the CURRENT tab (Chat never scrolls `window` at all)
+ * supplies this predicate so `onTouchStart` can refuse before even reading
+ * scroll position.
  */
 const pullToRefreshStates = new WeakMap();
 
 export function bindPullToRefresh(getScrollEl, refreshFn, opts = {}) {
-  const { onPhaseChange, onFail } = opts;
+  const { onPhaseChange, onFail, isActive } = opts;
   if (typeof refreshFn !== 'function' || typeof onFail !== 'function') return () => {};
   const scrollEl = getScrollElFrom(getScrollEl);
   if (!scrollEl || typeof scrollEl.addEventListener !== 'function') return () => {};
@@ -653,7 +719,38 @@ export function bindPullToRefresh(getScrollEl, refreshFn, opts = {}) {
     if (!t) return;
     startY = t.clientY;
     startX = t.clientX;
-    setState(stepPullToRefresh(state, { type: 'touchstart', scrollTop: readScrollPos(scrollEl) }));
+    // RG-285 (2026-09-28, reviewer round 3 BLOCK; RG-281…284 were taken by
+    // another thread's hotfix in the same hour) — `window` is a STABLE
+    // scroll-element identity, so it never goes stale the way a bounded
+    // scroller does (RG-281's own fix, immediately below) — but it is also
+    // GLOBAL: once bound (Picks/Dashboard's first visit), its touchstart/
+    // touchmove/touchend listeners sit on `window` for the rest of the
+    // page's life and fire on EVERY touch everywhere, including while a
+    // LATER tab (Chat) is the one on screen. Chat's own thread scrolls
+    // `#chat-scroll` internally, never the page, so `window.scrollY` stays
+    // 0 — `_pullToRefreshEligible(0)` reads that as "eligible" on every
+    // touch in chat history, and a downward drag ≥64px armed and released
+    // this binder, calling `refreshFn()` + a success haptic while the
+    // reader was just scrolling messages. `opts.isActive`, checked here,
+    // is the caller's own "is this binder's tab even the one showing"
+    // predicate (js/app.js's own call site: `body[data-tab]` is 'picks' or
+    // 'dashboard', never 'chat') — optional (defaults to always-active) so
+    // `bindBottomPullToRefresh()`'s own `isChatTabActive()` gate, which
+    // already does the same job for ITS caller, is not duplicated here.
+    if (typeof isActive === 'function' && !isActive()) { setState(stepPullToRefresh(state, { type: 'touchstart', eligible: false })); return; }
+    // RG-281 (2026-09-28, reviewer BLOCK) — re-resolve the scroll element
+    // FRESH here rather than trusting `scrollEl` (captured once, above, at
+    // bind time). `scrollEl` stays the WeakMap key (its identity IS the
+    // idempotency contract for the common `window` case, which never goes
+    // stale) but the ELIGIBILITY READ must reflect whatever getScrollEl()
+    // resolves to RIGHT NOW — for a bounded scroller a caller replaces on
+    // every render (never true for `window`, but true for the class of bug
+    // this guard exists for generally), a captured reference is a detached
+    // node forever after the first repaint, and isScrollElLive() below is
+    // what actually refuses to trust it.
+    const liveEl = getScrollElFrom(getScrollEl);
+    if (!isScrollElLive(liveEl)) { setState(stepPullToRefresh(state, { type: 'touchstart', eligible: false })); return; }
+    setState(stepPullToRefresh(state, { type: 'touchstart', scrollTop: readScrollPos(liveEl) }));
   }
   function onTouchMove(e) {
     if (startY === null) return;
@@ -728,6 +825,34 @@ export function chronologicalWeekIds(weeks) {
 }
 
 /**
+ * DI-409 — pure boundary check, SAME index math as `_weekSwipeResolve()`
+ * (which stays byte-for-byte UNCHANGED per the DI) but WITHOUT its
+ * SWIPE_COMMIT_PX gate, so the Dragging state can tell, on every
+ * `touchmove` (not just at commit), whether the CURRENT direction is
+ * already at an end of the list — the signal that switches 1:1 drag-follow
+ * to the rubber-band curve. `direction` is a signed dx; only its sign is
+ * read.
+ */
+export function _weekSwipeAtBound(weekIds, currentId, direction) {
+  if (!Array.isArray(weekIds) || weekIds.length === 0) return true;
+  const idx = weekIds.indexOf(currentId);
+  if (idx === -1) return true;
+  const targetIdx = direction > 0 ? idx - 1 : idx + 1;
+  return targetIdx < 0 || targetIdx >= weekIds.length;
+}
+
+/**
+ * DI-409 — horizontal rubber-band. Reuses `_rubberBandOffset()`'s exact
+ * diminishing-returns curve (T-29), scaled to WEEK_SWIPE_BOUNCE_MAX_PX
+ * instead of RUBBER_BAND_CAP_PX (the DI's own instruction: the 24px vertical
+ * cap "would look like the drag 'stopped working'" applied to a full-width
+ * horizontal drag) — one curve shape, not a second one reinvented.
+ */
+export function _weekSwipeRubberBand(overscrollPx) {
+  return _rubberBandOffset(overscrollPx) * (WEEK_SWIPE_BOUNCE_MAX_PX / RUBBER_BAND_CAP_PX);
+}
+
+/**
  * DOM binder — gesture-detection layer ONLY, per the DI ("feature-builder
  * may build and test the gesture-detection layer... but must not wire the
  * DOM binder to the real week-change call until B-02's fix is in the same
@@ -745,6 +870,31 @@ export function chronologicalWeekIds(weeks) {
  * replaces it — so N visits attached N listener sets, and one swipe fired
  * onNavigate() N times, walking N weeks per gesture. Guarded below, same
  * shape as `navHideStates`/`pullToRefreshStates`/`bottomBounceStates`.
+ *
+ * DI-409 (2026-09-28) — VISUAL layer added on top of the SAME resolve call:
+ * idle / dragging (1:1 `translateX(dx)`, no transition, or the rubber-band
+ * curve above once `_weekSwipeAtBound()` says the current direction is at
+ * an end) / committing (unchanged commit trigger — `Math.abs(dx) >=
+ * SWIPE_COMMIT_PX` mid-drag, not on release; slides fully off toward the
+ * commit direction, `haptic('light')` at that instant, replacing the
+ * drifted `haptic('selection')` call — js/haptics.js documents 'light' as
+ * "swipe commits") / cancelling (spring back to 0, no haptic — an
+ * incomplete or edge gesture is never a success). `--week-swipe-x` (a live
+ * px value while dragging, a signed CSS percent while animating) and
+ * `[data-week-swipe-animating]` (css/styles.css) are the only DOM writes
+ * this binder makes beyond the pre-existing `onNavigate()` call; the
+ * transition itself is CSS (`--motion-fast`/WEEK_SWIPE_BOUNCE_MS, one
+ * animation language), never a JS raf loop — same "CSS class/attribute +
+ * matched-duration timer" precedent already shipped for the dashboard-
+ * layout cross-fade (`js/app.js` ~2460-2465's `.dash-layout-fading`) and
+ * the League Page swipe-back (`js/app.js`'s `finishSlideThenRemove()` /
+ * `#league-page-overlay[data-dragging]`/`[data-no-transition]`) — this
+ * binder's own `afterTransition()` below is the SAME transitionend-plus-
+ * bounded-fallback idiom, kept LOCAL (not imported from app.js) so this
+ * module stays the dependency-free leaf its file header promises.
+ * `prefersReducedMotion()` short-circuits the whole visual layer to today's
+ * exact behavior: no live tracking, `onNavigate()` fires immediately on
+ * commit with no transform at all.
  */
 const weekSwipeStates = new WeakMap();
 
@@ -752,16 +902,135 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   if (!root || typeof root.addEventListener !== 'function') return () => {};
   if (weekSwipeStates.has(root)) return weekSwipeStates.get(root);
   const edgeExcludePx = opts.leftEdgeExcludePx ?? WEEK_SWIPE_EDGE_EXCLUDE_PX;
-  let start = null, axis = null, committed = false;
+  let start = null, axis = null, committed = false, busy = false;
+  let dragWeekIds = [], dragCurrentWeekId = null;
+
+  function setX(cssValue) {
+    if (typeof root.style?.setProperty === 'function') root.style.setProperty('--week-swipe-x', cssValue);
+  }
+  function setAnimating(on) {
+    if (!root.dataset) return;
+    if (on) root.dataset.weekSwipeAnimating = 'true';
+    else delete root.dataset.weekSwipeAnimating;
+  }
+
+  /**
+   * Same idiom as `js/app.js`'s `finishSlideThenRemove()` (League Page
+   * swipe-back / control-center drawer precedent, see this function's own
+   * doc comment above): waits for `transitionend` on `root`, with a bounded
+   * `setTimeout` fallback (a card mid-paint under load can miss the event —
+   * the DI's own words). `done` runs at most once. Kept local rather than
+   * imported so this module never depends on app.js.
+   */
+  function afterTransition(done) {
+    let finished = false;
+    let timer = null;
+    function finish(e) {
+      if (finished) return;
+      if (e && e.target !== root) return;
+      finished = true;
+      root.removeEventListener('transitionend', finish);
+      if (timer !== null) clearTimeout(timer);
+      done();
+    }
+    root.addEventListener('transitionend', finish);
+    timer = setTimeout(finish, WEEK_SWIPE_BOUNCE_MS + 60);
+  }
+
+  function springBack() {
+    // Cancelling, or a release at an edge — Small-feedback bucket, no
+    // haptic (an incomplete or edge gesture is never a success).
+    if (prefersReducedMotion()) { setAnimating(false); setX('0px'); return; }
+    setAnimating(true);
+    setX('0px');
+    afterTransition(() => setAnimating(false));
+  }
+
+  function commitSlide(dxAtCommit, targetWeekId) {
+    // Replaces the drifted haptic('selection') call — js/haptics.js's own
+    // kind table documents 'light' as "swipe commits" (DI-409's Touched-
+    // Function Audit finding).
+    haptic('light');
+    if (prefersReducedMotion()) {
+      // Today's exact reduced-motion behavior: no transform at all, instant
+      // navigate.
+      setAnimating(false);
+      setX('0px');
+      if (typeof onNavigate === 'function') onNavigate(targetWeekId);
+      return;
+    }
+    busy = true;
+    const exitPct = dxAtCommit > 0 ? 100 : -100; // exits toward the drag direction
+    setAnimating(true);
+    setX(`${exitPct}%`);
+    afterTransition(() => {
+      // C1 (reviewer round 2) — a throwing onNavigate (a render function
+      // failing) must not strand the page at the exit offset with the busy
+      // guard latched forever. try/finally guarantees the reset fires
+      // exactly when the call failed, then re-throws — this binder never
+      // swallows the caller's own error, only guarantees the gesture
+      // itself can't get stuck because of it.
+      let renderFailed = false;
+      try {
+        if (typeof onNavigate === 'function') onNavigate(targetWeekId);
+      } catch (err) {
+        renderFailed = true;
+        throw err;
+      } finally {
+        if (renderFailed) {
+          setAnimating(false);
+          setX('0px');
+          busy = false;
+        }
+      }
+      // Fresh content is now painted — root's own node persists across the
+      // repaint (only its innerHTML changed), so this same element carries
+      // the hand-off. Position it at the OPPOSITE edge from where the old
+      // content exited (a continuous filmstrip, not two independent
+      // jumps), transition off for one frame, then animate to 0.
+      setAnimating(false);
+      setX(`${-exitPct}%`);
+      // B1 (reviewer round 2) — force a reflow between this position-reset
+      // write and re-enabling the transition below. A single
+      // requestAnimationFrame() alone is not reliable: WebKit can dispatch
+      // it before flushing this intervening style write within the same
+      // frame (proven on the fallback-timer path; the normal path is
+      // likely affected on iOS too), so the enter half could animate FROM
+      // the same edge the old content just exited toward instead of from
+      // the opposite one. Real DOM elements always expose `offsetWidth`
+      // (0 if unrendered); a test fixture without it just reads
+      // `undefined`, harmlessly.
+      void root.offsetWidth;
+      const enter = () => {
+        setAnimating(true);
+        setX('0px');
+        afterTransition(() => { setAnimating(false); busy = false; });
+      };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(enter); else enter();
+    });
+  }
 
   function onTouchStart(e) {
-    if (gesturesSuspended()) { start = null; return; }
+    if (busy || gesturesSuspended()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
     if (t.clientX < edgeExcludePx) { start = null; return; } // reserved for T-13's drawer
+    // Defensive — clears any transition attribute a prior interrupted
+    // spring-back left behind, so a fresh drag always starts raw/untracked
+    // (never lagging the finger under a leftover transition).
+    setAnimating(false);
+    // C2 (reviewer round 2) — a background re-render mid-drag can replace
+    // the touched node before its own touchend/touchcancel ever arrives
+    // (the old node is simply gone), leaving --week-swipe-x parked at
+    // whatever dx it last held. A fresh drag always starts from a
+    // known-clean translateX(0), never inherited state.
+    setX('0px');
     start = { x: t.clientX, y: t.clientY };
     axis = null;
     committed = false;
+    const s = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null };
+    dragWeekIds = Array.isArray(s?.weekIds) ? s.weekIds : [];
+    dragCurrentWeekId = s?.currentWeekId ?? null;
   }
   function onTouchMove(e) {
     if (!start || committed) return;
@@ -772,20 +1041,42 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     if (axis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
     }
-    if (axis === 'x' && Math.abs(dx) >= SWIPE_COMMIT_PX) {
-      committed = true;
-      const { weekIds, currentWeekId } = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null };
-      const target = _weekSwipeResolve(weekIds, currentWeekId, dx);
+    if (axis !== 'x') return; // never fights vertical scroll — no transform touched
+    const atBound = _weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx);
+    // B2 (reviewer round 2) — a bound NEVER commits, however far past
+    // SWIPE_COMMIT_PX the drag goes; it only ever keeps rubber-banding
+    // until release. The DI is explicit that spring-back happens ON
+    // RELEASE (clear(), below), not the instant the threshold is crossed —
+    // committing early here made the page snap back UNDER the still-down
+    // finger and capped the rubber-band offset at whatever it happened to
+    // be right at the 40px crossing (~23px), nowhere near
+    // WEEK_SWIPE_BOUNCE_MAX_PX's own asymptote.
+    if (!atBound && Math.abs(dx) >= SWIPE_COMMIT_PX) {
+      const target = _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, dx);
       if (target != null) {
-        haptic('selection');
-        if (typeof onNavigate === 'function') onNavigate(target);
+        committed = true;
+        commitSlide(dx, target);
+        return;
       }
-      // target === null (at either end): a small rubber-band bounce-back,
-      // no navigation, no haptic (an edge isn't a success) — visual-only,
-      // left to the caller's render layer per this pass's scope.
+      // Defensive — the boundary check and the resolve function disagreed
+      // (should not normally happen); fall through to ordinary tracking
+      // below rather than forcing an early spring.
+    }
+    if (prefersReducedMotion()) return; // no live tracking under reduced motion
+    if (atBound) {
+      const rb = _weekSwipeRubberBand(Math.abs(dx));
+      setX(`${dx < 0 ? -rb : rb}px`);
+    } else {
+      setX(`${dx}px`);
     }
   }
-  function clear() { start = null; axis = null; committed = false; }
+  function clear() {
+    // A release before commit — cancelling. Only worth animating back if
+    // the axis actually locked to 'x' (otherwise no transform was ever
+    // applied and there is nothing to spring back from).
+    if (start && !committed && axis === 'x') springBack();
+    start = null; axis = null; committed = false;
+  }
 
   root.addEventListener('touchstart', onTouchStart, { passive: true });
   root.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -807,9 +1098,14 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
 // DI-327 — T-29 SCROLL-BOUNCE (non-WebKit web fallback, bottom-edge only)
 // ═════════════════════════════════════════════════════════════════════════
 
-/** Bottom-edge eligibility — the JS fallback only ever engages at true scroll-bottom. */
+/** Bottom-edge eligibility — the JS fallback only ever engages at true
+ *  scroll-bottom. Reviewer round 2 (2026-09-28) — a 1px tolerance, mirroring
+ *  `_pullToRefreshEligible()`'s own FIX ROUND 1 ITEM 5 (some engines report
+ *  scroll metrics off by a sub-pixel at rest); `scrollHeight - 1` rather
+ *  than strict `>=`, so this never fails to arm at a real device's own
+ *  rounding. */
 export function _bottomBounceEligible(scrollY, innerHeight, scrollHeight) {
-  return scrollY + innerHeight >= scrollHeight;
+  return scrollY + innerHeight >= scrollHeight - 1;
 }
 
 /**
@@ -855,10 +1151,23 @@ export function _rubberBandOffset(overscrollPx) {
  *
  * FIX ROUND 1, ITEM 7 — WeakMap idempotency guard, same shape as
  * `bindScrollDirection`'s/`bindPullToRefresh`'s.
+ *
+ * RG-289 (live v0.27.0, Drew 2026-09-28: Chat "has the rubber band scroll at
+ * the top and bottom … it should remain static") — `opts.isActive`, the SAME
+ * option and the SAME check position as `bindPullToRefresh()`'s RG-285 one
+ * (optional, defaults to always-active). The `window` binding is made once,
+ * on the first non-Chat tab, and never again (stable WeakMap key), so its
+ * window-level touch listeners stay live on Chat — where `window` never
+ * scrolls, so the window "true bottom" test (scrollY 0 + innerHeight >=
+ * scrollHeight - 1) passed on EVERY touch and every upward drag anywhere on
+ * Chat, mid-history included, lifted the whole page ~20px. Unbind-on-Chat
+ * is not an option: `unbind` does not clear the WeakMap entry, so the next
+ * Picks bind would return the stale unbind and Picks would lose its bounce.
  */
 const bottomBounceStates = new WeakMap();
 
-export function bindBottomBounce(getScrollEl, target) {
+export function bindBottomBounce(getScrollEl, target, opts = {}) {
+  const { isActive } = opts;
   if (!target || typeof target.addEventListener !== 'function') return () => {};
   const scrollEl = getScrollElFrom(getScrollEl);
   if (!scrollEl) return () => {};
@@ -876,6 +1185,8 @@ export function bindBottomBounce(getScrollEl, target) {
 
   function onTouchStart(e) {
     if (gesturesSuspended()) { eligible = false; return; }
+    // RG-289 — refuse before any scroll-position read (RG-285's placement).
+    if (typeof isActive === 'function' && !isActive()) { eligible = false; startY = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
     const scrollY = readScrollPos(scrollEl);
@@ -930,6 +1241,176 @@ export function bindBottomBounce(getScrollEl, target) {
     listenTarget.removeEventListener('touchcancel', onTouchEnd);
   };
   bottomBounceStates.set(scrollEl, { unbind });
+  return unbind;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// DI-399(b-ii) — CHAT'S BOTTOM-EDGE PULL-TO-REFRESH (UN-359, 2026-09-28)
+// ═════════════════════════════════════════════════════════════════════════
+//
+// Drew's own testing (matrix row 2c, 2026-09-28): dragging DOWN from Chat's
+// top scrolls the thread toward OLDER messages — correct, expected list
+// behavior for a bottom-anchored thread — so Chat's own bindPullToRefresh
+// bind is removed (see the handoff/app.js's per-tab wiring) and this binder
+// mirrors the SAME Pull-to-Refresh pattern (Interaction Principles
+// §Pull-to-Refresh: "native spinner, smooth completion, optional completion
+// haptic, never abruptly replace all content") to Chat's own bottom edge —
+// dragging UP past the newest message. Not a new pattern: the Principles do
+// not name a list orientation, and a bottom-anchored thread's "top of
+// content" IS its oldest end, so this is the mirror of the one pattern, not
+// an invented second one.
+//
+// REUSE, NOT REIMPLEMENTATION — named per binder, so a later edit can see
+// exactly what came from where:
+//   - `stepPullToRefresh` (above) — the SAME phase reducer, SAME
+//     PULL_TO_REFRESH_ARM_PX/PULL_TO_REFRESH_SUCCESS_FADE_MS constants, SAME
+//     axis-lock (AXIS_DEAD_ZONE_PX). Its `touchmove`/`touchend`/
+//     `refresh-*`/`settle` branches don't know or care which edge armed
+//     them — only `event.dy`'s SIGN matters, and this binder feeds it
+//     `dragUp` (see below) instead of a literal top-drag `dy`, so the exact
+//     same arm-at-64px/settle-after-fade mechanics apply unchanged.
+//   - `_bottomBounceEligible` — the SAME "true bottom" formula
+//     `bindBottomBounce` already uses on this same scroller, not a second
+//     bottom-eligibility formula. `stepPullToRefresh`'s `touchstart` branch
+//     takes an explicit `eligible` boolean (reviewer round 2, 2026-09-28 —
+//     an earlier version of this binder faked a `scrollTop` sentinel
+//     through the TOP-edge formula to get the same branch to agree; the
+//     reducer now says what it means).
+//   - `dragUp = startY - t.clientY` — the exact signed quantity
+//     `bindBottomBounce`'s own `onTouchMove` already computes, reused as
+//     this binder's positive axis rather than a new sign convention.
+//   - `_rubberBandOffset` — the SAME resistance curve `bindBottomBounce`
+//     draws with, available for an optional `target` element. RG-289
+//     (2026-09-28): production passes NO target for Chat — the page must
+//     stay static, so the feedback is the "Pull up to sync" pill plus the
+//     thread's own native bounce (`overscroll-behavior:contain`); the
+//     window `bindBottomBounce` is gated off Chat via `isActive`.
+//
+// Suspended while the keyboard is up, IN ADDITION to `gesturesSuspended()`
+// — deliberately, and named as a difference from the top-edge binder: the
+// composer sits at exactly this gesture's edge, so a drag that starts
+// inside/near it while typing must resolve to normal text-field
+// interaction, never an armed refresh. `gesturesSuspended()` alone does not
+// cover the keyboard (by its own header's amendment — DI-322's keyboard
+// input feeds T-24's nav-hide reducer directly, never that function), so
+// `isKeyboardUp()` is checked here explicitly, the same exported predicate
+// `bindScrollDirection` already reads.
+const bottomPullToRefreshStates = new WeakMap();
+
+export function bindBottomPullToRefresh(getScrollEl, target, refreshFn, opts = {}) {
+  const { onPhaseChange, onFail } = opts;
+  if (typeof refreshFn !== 'function' || typeof onFail !== 'function') return () => {};
+  const scrollEl = getScrollElFrom(getScrollEl);
+  if (!scrollEl || typeof scrollEl.addEventListener !== 'function') return () => {};
+  if (bottomPullToRefreshStates.has(scrollEl)) return bottomPullToRefreshStates.get(scrollEl).unbind;
+
+  let state = { phase: 'idle', suspended: false, eligible: false };
+  let startY = null, startX = null;
+
+  function setState(next) {
+    if (next.phase !== state.phase && typeof onPhaseChange === 'function') onPhaseChange(next.phase);
+    state = next;
+  }
+
+  function applyRubberBand(dragUp) {
+    if (!target || typeof target.style === 'undefined') return;
+    if (dragUp <= 0) { target.style.transform = ''; return; }
+    const offset = _rubberBandOffset(dragUp);
+    target.style.transform = offset > 0 ? `translateY(-${offset}px)` : '';
+  }
+  function settleRubberBand() {
+    if (!target || typeof target.style === 'undefined') return;
+    if (prefersReducedMotion()) { target.style.transform = ''; return; }
+    target.style.transition = `transform ${RUBBER_BAND_SPRING_MS}ms ease-out`;
+    target.style.transform = '';
+    setTimeout(() => { target.style.transition = ''; }, RUBBER_BAND_SPRING_MS);
+  }
+
+  async function runRefresh() {
+    try {
+      await refreshFn();
+      setState(stepPullToRefresh(state, { type: 'refresh-success' }));
+      haptic('light'); // Design Philosophy: "Soft impact — Pull-to-refresh completes" (same as the top-edge binder)
+      await new Promise(resolve => setTimeout(resolve, PULL_TO_REFRESH_SUCCESS_FADE_MS));
+    } catch (err) {
+      setState(stepPullToRefresh(state, { type: 'refresh-fail' }));
+      onFail(err);
+    } finally {
+      setState(stepPullToRefresh(state, { type: 'settle' }));
+    }
+  }
+
+  // RG-281 (reviewer round 2, 2026-09-28) — Chat's own #chat-scroll is
+  // REPLACED wholesale on every repaint (renderChatPage(), every inbound
+  // message/Realtime/hydrate tick). `scrollEl` above is only the bind-time
+  // WeakMap key; every ELIGIBILITY read below re-resolves getScrollEl()
+  // fresh and refuses a detached/collapsed node via isScrollElLive() — see
+  // that helper's own header for the mechanism this closes. Belt-and-
+  // suspenders per the reviewer's own note: also refuse when Chat is not
+  // even the active tab (body[data-tab], js/app.js's navigateTo()) — this
+  // binder exists for exactly one surface, and the STRONG fix is app.js
+  // unbinding the previous instance before every rebind (see the per-tab
+  // wiring's own comment), not this guard alone.
+  function isChatTabActive() {
+    return typeof document !== 'undefined' && document.body?.dataset?.tab === 'chat';
+  }
+
+  function onTouchStart(e) {
+    const suspended = gesturesSuspended() || isKeyboardUp();
+    setState(stepPullToRefresh(state, suspended ? { type: 'suspend' } : { type: 'resume' }));
+    if (suspended) return;
+    const t = e.touches?.[0];
+    if (!t) return;
+    startY = t.clientY;
+    startX = t.clientX;
+    const liveEl = getScrollElFrom(getScrollEl);
+    if (!isChatTabActive() || !isScrollElLive(liveEl)) {
+      setState(stepPullToRefresh(state, { type: 'touchstart', eligible: false }));
+      return;
+    }
+    const isWindowScroller = typeof window !== 'undefined' && liveEl === window;
+    const scrollY = readScrollPos(liveEl);
+    const innerHeight = isWindowScroller
+      ? (typeof window !== 'undefined' ? window.innerHeight : 0)
+      : (liveEl.clientHeight ?? 0);
+    const scrollHeight = isWindowScroller
+      ? (typeof document !== 'undefined' ? document.documentElement?.scrollHeight ?? 0 : 0)
+      : (liveEl.scrollHeight ?? 0);
+    const isEligible = _bottomBounceEligible(scrollY, innerHeight, scrollHeight);
+    setState(stepPullToRefresh(state, { type: 'touchstart', eligible: isEligible }));
+  }
+  function onTouchMove(e) {
+    if (startY === null) return;
+    const t = e.touches?.[0];
+    if (!t) return;
+    const dragUp = startY - t.clientY; // positive = dragging up past the bottom (bindBottomBounce's own sign)
+    const dx = typeof startX === 'number' ? t.clientX - startX : 0;
+    setState(stepPullToRefresh(state, { type: 'touchmove', dy: dragUp, dx }));
+    if (!state.suspended && state.eligible) applyRubberBand(Math.max(0, dragUp));
+  }
+  function onTouchEnd() {
+    if (startY === null) return;
+    startY = null;
+    const prevPhase = state.phase;
+    setState(stepPullToRefresh(state, { type: 'touchend' }));
+    settleRubberBand();
+    if (prevPhase === 'armed') runRefresh();
+  }
+
+  const listenTarget = typeof window !== 'undefined' ? window : scrollEl;
+  listenTarget.addEventListener('touchstart', onTouchStart, { passive: true });
+  listenTarget.addEventListener('touchmove', onTouchMove, { passive: true });
+  listenTarget.addEventListener('touchend', onTouchEnd, { passive: true });
+  listenTarget.addEventListener('touchcancel', onTouchEnd, { passive: true });
+
+  const unbind = () => {
+    listenTarget.removeEventListener('touchstart', onTouchStart);
+    listenTarget.removeEventListener('touchmove', onTouchMove);
+    listenTarget.removeEventListener('touchend', onTouchEnd);
+    listenTarget.removeEventListener('touchcancel', onTouchEnd);
+    bottomPullToRefreshStates.delete(scrollEl);
+  };
+  bottomPullToRefreshStates.set(scrollEl, { unbind });
   return unbind;
 }
 

@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.27.0';
-export const APP_VERSION_DATE = '2026-09-27';
+export const APP_VERSION = 'v0.27.1';
+export const APP_VERSION_DATE = '2026-09-28';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -99,6 +99,24 @@ export const APP_VERSION_DATE = '2026-09-27';
 // FIRST item is SCRIBE's chat-post headline (whatsNewHeadline()'s 90-char
 // cut). CAP: v0.22.5, the oldest, drops to keep 12.
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.27.1',
+    date: '2026-09-28',
+    added: [
+      'Swiping between weeks now moves the page with your finger and slides the next week in.',
+      'The sync icon is a button — tap it to sync now. In Chat, pull up past the last message to refresh.',
+      'The header shows your league and the sport you\'re viewing.',
+      'Commissioners: a New Week button, Collapse all / Expand all on the panel, and a week setup that won\'t let you review an empty slate — "Fetch Games" first, or add one by hand.',
+      'Commissioners: from the setup review, jump to the Games tab to edit the slate and pick up where you left off with "Continue set up".',
+    ],
+    fixed: [
+      'The menu now opens when you tap the mark, top left.',
+      'Chat stays put while you read older messages, and the page no longer bounces — only the thread scrolls.',
+      'Saving a game no longer shifts its kickoff by your time zone (this had quietly been happening since the season started). Scheduled opens fire on time too.',
+      'The week setup sheet scrolls, the game editor opens on top of it, and spreads entered there actually save.',
+      'Only the spread, favorite and multiplier can be edited on games that come from the feed.',
+    ],
+  },
   {
     version: 'v0.27.0',
     date: '2026-09-27',
@@ -416,6 +434,9 @@ import {
   obligationRole, obligationNextStatus, obligationStatusDisplay, isObligationActive,
   getEffectiveGroupId, weeksInGroup, getGroupTiebreakerWeek,
   isGroupTiebreakerAmbiguous, formatWeekGroupLabel,
+  // DI-417 (UN-372, 2026-09-28) — the header league pill's sport label/short
+  // code source. One "sport -> display strings" object, not a second map.
+  ESPN_SPORT_ENDPOINTS,
 } from './data-model.js';
 
 import {
@@ -661,7 +682,7 @@ import {
   // for the game-thread sheet it removes.
   resetGameChatSheetForTeardown,
 } from './chat-ui.js';
-import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox } from './chat.js';
+import { setPollMode, sendEvent as sendChatEvent, sendMessage as sendChatMessage, sendGameReact, getMessage as getChatMessage, getRetentionDays, retentionStats, isChatEnabled, refreshChatEnabled, startFreshChat, getChatEpochSeq, getChatEpochSetAt, epochStats, unreadCount, mentionUnreadCount, isChatImagePreviewEnabled, wakeChat, clearOutbox, forceRefresh } from './chat.js';
 // RG-176 — the ONE generic answer to the repaint hazard RG-174 fixed in one
 // place. Wired at navigateTo() below, which is the single render chokepoint
 // every Supabase Realtime repaint lands on. See js/field-preserve.js.
@@ -785,6 +806,7 @@ import { haptic } from './haptics.js';
 import {
   bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe, chronologicalWeekIds,
   bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
+  bindBottomPullToRefresh,
 } from './nav-gestures.js';
 import {
   mountControlCenter, renderStarredPanels, renderSettingsAccordion,
@@ -795,10 +817,15 @@ import {
   renderLeagueStandingsView, renderCreateLeagueStubCard, renderAddSportStubCard,
   makeShowComingSoonToast, comingSoonCopy, leaguePageBackAffordances,
   deriveLeagueSports,
+  // DI-417 (UN-372) — the header league pill's sport normalization reuses
+  // deriveLeagueSports()'s own db-code -> ESPN-key map, not a second one.
+  normalizeSportKey,
 } from './leagues-home.js';
 import {
   createWeekWizard, WIZARD_STEPS, WIZARD_STEP_COUNT, WIZARD_COPY, countMissingSpreads,
   narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, FINALIZE_STEP_COUNT,
+  // DI-416 (UN-371) — Step 6's "another week already open" notice predicate.
+  anotherWeekAlreadyOpen,
   // DI-359 — the two Finalize-flow summary functions NOT wrapped in
   // createWeekWizard()'s deps-bound instance (they take no deps at all —
   // pure reads over `games`/`week`), so they're imported directly.
@@ -2428,6 +2455,10 @@ async function boot() {
   // called once here, unlike bindScrollDirection/bindPullToRefresh/
   // bindBottomBounce/bindWeekSwipe, which are rebound per tab in navigateTo().
   try { mountControlCenterDrawer(); } catch (e) { console.warn('[control-center] mount failed', e); }
+  // DI-399(a) (UN-359, 2026-09-28) — one-time chrome binding, same as the
+  // drawer trigger immediately above: #sync-badge is static markup in
+  // index.html (never rebuilt by a page render), so this binds once, here.
+  try { bindSyncBadgeTap(); } catch (e) { console.warn('[sync-badge] tap bind failed', e); }
   try { bindKeyboardAvoid(); } catch (e) { console.warn('[nav-gestures] bindKeyboardAvoid failed', e); }
   try { bindComingSoonDispatcher(); } catch (e) { console.warn('[leagues-home] coming-soon dispatcher bind failed', e); }
   // Item A — independent of the score auto-refresh interval (which the
@@ -2451,6 +2482,12 @@ async function boot() {
       if (typeof requestAnimationFrame === 'function') requestAnimationFrame(_refitLeaguePill);
       else _refitLeaguePill();
     });
+    // DI-417 reviewer N1 (2026-09-28) — the pill is measured, and the first fit
+    // can run in the fallback font before Oswald (fonts.gstatic.com, not in the
+    // service-worker cache) swaps in; the wider fallback drops the sport at
+    // phone widths, so a cold start would show the league name alone until the
+    // next refreshHeader(). Refit once the web fonts have settled.
+    try { document.fonts?.ready?.then(() => { if (typeof requestAnimationFrame === 'function') requestAnimationFrame(_refitLeaguePill); else _refitLeaguePill(); }); } catch { /* no Font Loading API — the next refreshHeader() refits */ }
     let _dashLayoutResizeTimer = null;
     window.addEventListener('resize', () => {
       if (state.currentTab !== 'dashboard') return;
@@ -3128,14 +3165,17 @@ function showBackendErrorBanner(message, opts = {}) {
  */
 function reportWizardFetchFailure({ message, statusEl, onRetry }) {
   const title = "Couldn't populate this week's games.";
-  const hint = 'Retry, or use "Skip to slate" below to build it manually from the Games tab after this wizard.';
+  // DI-411 (UN-366) — "Skip to slate" no longer exists (Step 2's forward
+  // control is now a real, gated "Next"); this hint dangled at the removed
+  // button, so it changes in the same pass.
+  const hint = 'Retry, add a game manually below, or edit the slate from the Games tab after this wizard.';
   const shown = showBackendErrorBanner(message, { owner: 'wizard', title, hint, onRetry });
   if (shown) {
     if (statusEl) { statusEl.textContent = ''; statusEl.classList?.remove?.('wiz-fetch-status-error'); }
     return 'banner';
   }
   if (statusEl) {
-    statusEl.textContent = `${title} ${message} Tap Fetch again to retry, or skip to the slate.`;
+    statusEl.textContent = `${title} ${message} Tap Fetch again to retry, or add a game manually.`;
     statusEl.classList?.add?.('wiz-fetch-status-error');
     statusEl.setAttribute?.('role', 'alert');
   }
@@ -3404,11 +3444,27 @@ const SYNC_LABEL_BY_STATUS = {
   refused: 'Sync problem',
   offline: 'Offline',
 };
+// DI-399(a) (UN-359, 2026-09-28) — the header sync icon becomes a REAL
+// tappable control on web AND native (no PARITY-BY-DESIGN split needed —
+// the behavior is identical on both). This is the accessible name of the
+// INTERACTIVE element (#sync-badge itself, `role="button"`), distinct from
+// SYNC_LABEL_BY_STATUS's plain status wording: `synced`/`offline` read
+// "Sync now" (the natural "nothing's wrong but let me force it" case),
+// `error`/`refused` add "tap to retry" so the tap affordance is legible
+// from the label alone, and `syncing` stays a plain status word — that
+// state is INERT (see updateSyncBadge() below), never "tap to do X".
+const SYNC_TAP_LABEL_BY_STATUS = {
+  synced: 'Sync now',
+  syncing: 'Syncing…',
+  error: 'Sync problem — tap to retry',
+  refused: 'Sync problem — tap to retry',
+  offline: 'Sync now',
+};
 function updateSyncBadge(status) {
   const el = document.getElementById('sync-badge');
   if (el) {
     const iconName = SYNC_ICON_BY_STATUS[status] || 'cloudData';
-    const label = SYNC_LABEL_BY_STATUS[status] || 'Sync status';
+    const tapLabel = SYNC_TAP_LABEL_BY_STATUS[status] || SYNC_LABEL_BY_STATUS[status] || 'Sync status';
     // iconstest [8d] resolves an icon() host from the STATIC template text
     // around the call, not the `el.className` assignment below (a separate
     // statement it cannot see as this element's ancestor) — so the glyph
@@ -3418,10 +3474,31 @@ function updateSyncBadge(status) {
     // #sync-badge[data-sync="…"], so no state colour ever reached the svg.
     // Exactly one `.header-sync-icon` now: #sync-badge itself, carrying
     // data-sync (headermetatest [sync]).
-    el.innerHTML = `<span class="header-sync-glyph">${icon(iconName, { label })}</span>`;
+    // DI-399(a) — no `{ label }` passed to icon() any more: #sync-badge
+    // ITSELF is now the interactive control and carries its own
+    // aria-label (below), so the glyph is decorative (icon() with no
+    // `label` renders `aria-hidden="true"`, js/icons.js) — one accessible
+    // name per control, not two (xsstest EXEMPTIONS re-derived to match).
+    el.innerHTML = `<span class="header-sync-glyph">${icon(iconName)}</span>`;
     el.className = 'header-sync-icon';
     if (el.dataset) el.dataset.sync = status;
     else el.setAttribute('data-sync', status);
+    // DI-399(a) — role="button"/tabindex stay set on every status (the
+    // control is always reachable); aria-label follows the tap-label map;
+    // aria-disabled reflects the ONE inert state this function itself
+    // knows about (`syncing` — "never abruptly replace all content", a
+    // second tap mid-sync must not restart it). The OTHER named inert case
+    // (the sign-in gate / no session resolved) is checked live, at tap
+    // time, by bindSyncBadgeTap()'s handler below, via the same
+    // isContentWithheld() gate mountControlCenterDrawer()'s trigger already
+    // reuses — this function has no reactive hook into that state changing
+    // independent of a sync-status event, so it is not baked into a static
+    // attribute here (named, not silently skipped).
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', tapLabel);
+    if (status === 'syncing') el.setAttribute('aria-disabled', 'true');
+    else el.removeAttribute('aria-disabled');
   }
   // DI §5.2 — kept for #chat-sync-badge below: the difference between "we
   // could not reach the server" and "the server read your request and said
@@ -3442,6 +3519,197 @@ function updateSyncBadge(status) {
   }
 }
 export const _updateSyncBadgeForTest = updateSyncBadge;   // headermetatest [sync]
+
+/**
+ * Reviewer round 3, note 3 (2026-09-28, "do it") — every manual-sync
+ * trigger's own loud-fail banner ("Pull-to-refresh couldn't reach the
+ * server." / "Sync couldn't reach the server.") and the adapter's own
+ * `#supabase-offline-banner` (shown automatically on a REAL
+ * OFFLINE-READONLY/ACTIVE-STALE status event — `showSupabaseOfflineBanner()`,
+ * called from `onSupabaseDataStatus()` above) are two different UI
+ * elements for what is very often the SAME underlying fact: the manual
+ * sync's own rejection (DI-399, reviewer round 2 finding 4) fires
+ * precisely when `sb.getState()` settles on one of those exact states.
+ * When the offline banner is already up, a second, stacked "couldn't
+ * reach the server" banner is redundant noise, not a second piece of
+ * information — one loud signal, not two. The REJECTION itself is
+ * unchanged: the gesture still settles as failed and the success haptic
+ * is still suppressed (AD-06's loud-fail contract is about the STATE, not
+ * about how many banners paint) — this only decides whether a SECOND
+ * banner stacks on top of an already-visible one.
+ */
+function showSyncFailureBanner(message) {
+  if (document.getElementById('supabase-offline-banner')) return;
+  showBackendErrorBanner(message);
+}
+export const _showSyncFailureBannerForTest = showSyncFailureBanner;
+
+/**
+ * DI-399(a) (UN-359, 2026-09-28) — CONVENTIONS #21, one refresh path, not
+ * two: the exact body that used to be inline inside bindPullToRefresh()'s
+ * `refreshFn` (js/app.js, per-tab gesture rebind in navigateTo()) below,
+ * unchanged, now named so both the pull gesture AND the header sync icon's
+ * tap/keyboard handler call the SAME function. Loud-fail is the CALLER's
+ * job (this can reject — see both call sites' own try/catch), matching the
+ * pre-extraction behavior exactly: `doRefreshScores()`'s own per-game ESPN
+ * errors are still swallowed here (soft-fail by design, AD-06's actual
+ * subject is the hydrate step, not every ESPN fetch).
+ *
+ * `reason` labels the hydrate the same way `ensureSupabaseDataHydrated()`'s
+ * own callers already do — reviewer round 2 (2026-09-28): the tap path
+ * (`onSyncBadgeActivate()`) passes 'sync-tap' rather than the gesture's own
+ * 'pull-to-refresh', so a device log can tell the two triggers apart.
+ *
+ * REVIEWER ROUND 2, finding 4 — this used to IGNORE
+ * `ensureSupabaseDataHydrated()`'s own boolean entirely, so a hydrate that
+ * landed on ACTIVE-STALE or OFFLINE-READONLY (the adapter answering from a
+ * probe that is not actually current) still fired the pull-to-refresh
+ * success haptic and settled the gesture as though the sync worked. Fixed
+ * by reading the SAME state `afterSupabaseHydrate()` itself branches on
+ * (`sb.getState()`) and rejecting when it settled anywhere but 'ACTIVE' —
+ * but ONLY when a hydrate was actually attempted: `isSupabaseDataMode()`
+ * false (PINS mode) or `noIdentityEverProven()` true (the identity is
+ * merely DEFERRED, `ensureSupabaseDataHydrated()`'s own documented, correct
+ * no-op) are not failures, and stay silent — a manual sync tap in PINS
+ * mode, or on a device that has not finished signing in yet, must not
+ * paint the loud-fail banner for a hydrate that was never eligible to run.
+ */
+/**
+ * Parametrized (same technique as `makeChatManualSync()` below) so a test
+ * can drive the ACTIVE/ACTIVE-STALE/deferred-identity branches directly —
+ * standing up a real Supabase hydrate cycle (client, league, session) just
+ * to observe which branch this function takes would be disproportionate to
+ * what these three tests are actually about. Every real call site
+ * (`runManualSync`, below) uses the defaults.
+ *
+ * REVIEWER ROUND 3, finding 2 (2026-09-28) — the default predicate used to
+ * read `isSupabaseDataMode() && !noIdentityEverProven()` only, omitting
+ * `ensureSupabaseDataHydrated()`'s own THIRD early-return
+ * (`!getActiveLeagueId()`, above). With no active league selected yet, the
+ * real hydrate is a documented no-op (returns `false` immediately,
+ * touching nothing) and `sb.getState()` stays wherever it already was
+ * (typically 'IDLE') — but this predicate still said "applicable",  so the
+ * ACTIVE check ran anyway and threw on a state the hydrate never had a
+ * chance to change: a false loud-fail banner on a device that simply
+ * hasn't picked a league yet. Fixed by mirroring the SAME three-clause
+ * gate `ensureSupabaseDataHydrated()` itself uses, in the SAME order — the
+ * "better" fix (having the hydrate return an outcome so the two functions
+ * cannot drift apart again) is named but not built this pass; this is the
+ * narrower, requested fix.
+ */
+function makeRunManualSync(
+  hydrateFn = ensureSupabaseDataHydrated,
+  getHydrateState = () => sb.getState(),
+  hydrateIsApplicable = () => isSupabaseDataMode() && !!getActiveLeagueId() && !noIdentityEverProven(),
+) {
+  return async function (reason = 'pull-to-refresh') {
+    const hydrateWasApplicable = hydrateIsApplicable();
+    await hydrateFn(reason);
+    if (hydrateWasApplicable) {
+      const hydrateState = getHydrateState();
+      if (hydrateState !== 'ACTIVE') {
+        throw new Error(`Sync did not complete — the league data is not current (state: ${hydrateState})`);
+      }
+    }
+    const week = getCurrentWeek();
+    if (week) { try { await doRefreshScores(week, getGames(week.weekId)); } catch {} }
+    if (state.currentTab === 'dashboard') renderDashboard();
+  };
+}
+const runManualSync = makeRunManualSync();
+export const _makeRunManualSyncForTest = makeRunManualSync;
+
+/**
+ * DI-399(b-ii) reviewer round 2 (2026-09-28, finding 2) — Chat's OWN
+ * refreshFn: BOTH existing single paths, composed, never a third
+ * reimplementation. `runManualSync()` alone (league hydrate + ESPN +
+ * dashboard re-render) never touches the chat transport at all (AD-16 —
+ * `js/chatTransport.js` is the only module that touches the chat backend),
+ * so a Chat-tab pull/tap that called only it showed "Syncing…" and fired
+ * the success haptic without a single new message ever being fetched.
+ * `forceRefresh()` (js/chat.js) is chat's own one path — the SAME function
+ * the header refresh control's own tap already calls
+ * (`onChatRefreshTap()`, js/chat-ui.js).
+ *
+ * Parametrized (not a bare closure over the two module-level imports) so a
+ * test can spy on each half independently, with no module-mocking
+ * machinery — every real call site below uses the defaults.
+ */
+function makeChatManualSync(syncFn = runManualSync, chatRefreshFn = forceRefresh) {
+  return () => Promise.all([syncFn('chat-pull-to-refresh'), chatRefreshFn()]).then(() => {});
+}
+const runChatManualSync = makeChatManualSync();
+export const _makeChatManualSyncForTest = makeChatManualSync;
+
+/**
+ * RG-281 (reviewer round 2, 2026-09-28) — the CALLER'S unbind-before-rebind
+ * discipline, same shape as js/chat-ui.js's own `_unbindChatThreadAnchor`
+ * (RG-279's own fix, js/chat-ui.js:2364/2639-2640/2668). `#chat-scroll` is
+ * replaced wholesale on EVERY chat repaint, and navigateTo('chat') runs on
+ * every inbound message / Realtime / hydrate tick — every few seconds
+ * live. `bindBottomPullToRefresh()`'s own WeakMap idempotency (like every
+ * other binder in js/nav-gestures.js) is keyed on the RESOLVED scroll
+ * element, which is a DIFFERENT node object every one of those repaints —
+ * so without this, every repaint attached a FRESH set of listeners to
+ * `window` and NONE of the earlier ones ever got removed: five repaints,
+ * five live binders, five refreshes (and five success haptics) from one
+ * real drag. Unbinding the PREVIOUS instance before every (re)bind —
+ * unconditionally, on every navigateTo() call, not only chat's own —
+ * guarantees exactly one live instance at any time, independent of
+ * js/nav-gestures.js's own node-identity-based guard (which still helps
+ * for the ordinary case where the SAME node is passed twice).
+ */
+let _unbindChatBottomPullToRefresh = () => {};
+
+/**
+ * DI-399(a) — click (web) and Enter/Space (keyboard) both fire
+ * runManualSync() through this one handler. Inert (no-op) while a sync is
+ * already in flight (`aria-disabled`, set by updateSyncBadge() above) or
+ * while content is withheld (isContentWithheld() — the SAME gate
+ * mountControlCenterDrawer()'s trigger already reuses, per the DI's own
+ * instruction not to invent a second, parallel gate condition). Touch-down
+ * visual feedback is CSS-only (`.header-sync-icon[role="button"]:active`,
+ * reusing the app's one `scale(.97)` convention — see css/styles.css);
+ * nothing here needs to drive it. `haptic('light')` — the SAME completion
+ * haptic bindPullToRefresh() already fires on a successful GESTURE
+ * (js/nav-gestures.js:631, "Soft impact — Pull-to-refresh completes") —
+ * fires once here for the TAP trigger; the two never double-fire for one
+ * interaction because each trigger owns exactly one call site.
+ */
+async function onSyncBadgeActivate() {
+  const el = document.getElementById('sync-badge');
+  if (!el || el.getAttribute('aria-disabled') === 'true') return;
+  if (isContentWithheld()) return;
+  try {
+    await runManualSync('sync-tap'); // reviewer round 2 — distinct from the gesture's own 'pull-to-refresh' label
+    haptic('light'); // Design Philosophy: "Soft impact — Pull-to-refresh completes"
+  } catch (err) {
+    console.warn('[sync-badge] manual sync failed', err);
+    showSyncFailureBanner("Sync couldn't reach the server."); // reviewer round 3, note 3 — suppressed if #supabase-offline-banner is already up
+  }
+}
+function bindSyncBadgeTap() {
+  const el = document.getElementById('sync-badge');
+  if (!el) return;
+  // Reviewer round 2 (2026-09-28) — the icon must not visually compress on
+  // press while content is withheld (the sign-in gate / no session
+  // resolved case, isContentWithheld() — see onSyncBadgeActivate()'s own
+  // header for why this state isn't baked into aria-disabled: no reactive
+  // hook fires when it changes on its own). Re-computed on every press
+  // START (never left stale) via a SEPARATE class from aria-disabled — the
+  // 'syncing' inert state keeps its own, unrelated attribute and meaning.
+  el.addEventListener('pointerdown', () => {
+    el.classList.toggle('sync-withheld', isContentWithheld());
+  });
+  el.addEventListener('click', () => { onSyncBadgeActivate(); });
+  el.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+    e.preventDefault();
+    onSyncBadgeActivate();
+  });
+}
+export const _onSyncBadgeActivateForTest = onSyncBadgeActivate; // headermetatest [sync]
+export const _bindSyncBadgeTapForTest = bindSyncBadgeTap;       // headermetatest [sync]
 
 function setupNav() {
   document.querySelectorAll('.nav-item').forEach(i => i.addEventListener('click', () => navigateTo(i.dataset.tab)));
@@ -3687,7 +3955,11 @@ function bindControlCenterBodies(scopeEl, rowState) {
   // resolved) rather than calling with no argument, which used to fall back
   // to `document` inside bindPrefsPanel() and silently bind to whichever
   // `#pref-nick`/etc. happened to be first in document order — wrong when
-  // the Chat tab's own copy is also mounted.
+  // the Chat tab's own copy was ALSO mounted. DI-398 (2026-09-28) — that
+  // second copy is gone now (the Chat tab's own ⚙ trigger and its unscoped
+  // bindPrefsPanel() call were removed, not merely stopped rendering the
+  // panel), so this scoping is no longer disambiguating between two hosts
+  // — it is simply still correct, container-scoped practice.
   bindOnceIn(scopeEl, 'cc-body-chat', (el) => bindPrefsPanel(el));
   bindOnceIn(scopeEl, 'cc-body-scribe', (el) => bindScribeFileBody(el));
   if (rowState?.settingsOpenRow === 'notifications' && !_lastNotifSettingsHTML) {
@@ -4836,6 +5108,23 @@ function navigateTo(tab) {
   });
   document.querySelectorAll('.page-section').forEach(el => el.classList.toggle('active', el.id === `page-${tab}`));
   applyChatNavVisibility();
+  // DI-417 (UN-372) fix (reviewer round 2, BLOCK 2, 2026-09-28) — the header
+  // is `display:none` on Chat (css/styles.css:1443, UN-110). A
+  // renderLeaguePill() that runs WHILE chat is showing (a Realtime
+  // re-hydrate reaches navigateTo() as a same-tab repaint, app.js:2066)
+  // still writes the FULL sport content, but _fitLeaguePill()'s degrade/hide
+  // steps bail out immediately (`el.getClientRects().length` reads 0 under
+  // `display:none` — the same "not laid out" guard the 48px hide check
+  // already relies on), so the stale, un-degraded content is never
+  // corrected. Leaving chat does not itself re-render the pill, so that
+  // stale content sat there — "IRB Pick 'Ems · Colle…" clipped by the CSS
+  // ellipsis — until some unrelated refreshHeader() call happened to fire.
+  // The dataset write two lines up is what flips the header's CSS from
+  // `display:none` back to visible; re-fit right after it, exactly on the
+  // one transition that matters (leaving chat), never on every navigation.
+  if (_priorTab === 'chat' && tab !== 'chat' && typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(_refitLeaguePill);
+  }
   // DI-181a — a signed-in supabase account with zero (or unresolved,
   // multi-membership) league context sees the join/create landing or the
   // league selector INSTEAD OF whichever tab it tapped, "in place of a
@@ -4922,31 +5211,87 @@ function navigateTo(tab) {
   try {
     const getScrollEl = tab === 'chat' ? () => document.getElementById('chat-scroll') : () => window;
     bindScrollDirection(getScrollEl);
-    bindPullToRefresh(getScrollEl, async () => {
-      await ensureSupabaseDataHydrated('pull-to-refresh');
-      const week = getCurrentWeek();
-      // Matches the existing "↻ Refresh" manual button's own precedent
-      // (app.js's #manual-refresh-btn handler) exactly — doRefreshScores()
-      // is soft-fail by design (per-game ESPN errors are data, not a
-      // rejection), so onFail below is the hydrate step's loud-fail
-      // guarantee (AD-06's actual subject, cross-device sync), not a claim
-      // that every ESPN fetch inside this call is individually guaranteed.
-      if (week) { try { await doRefreshScores(week, getGames(week.weekId)); } catch {} }
-      // Reviewer BLOCK (2026-09-25), F12 — `bindPullToRefresh()` is WeakMap-
-      // idempotent, keyed on the RESOLVED scroll element (`window`, for
-      // every non-chat tab). The FIRST non-chat tab visited wins the bind
-      // forever; every later re-navigation's fresh closure — including this
-      // one's `tab` parameter — is discarded, never re-attached. Reading
-      // `tab` here (closed over at BIND time) meant Dashboard's own refresh
-      // branch fired only if Dashboard happened to be the first non-chat tab
-      // visited this page-load. `state.currentTab` is read LIVE, at FIRE
-      // time (this callback runs on a real pull gesture, well after bind),
-      // so it always reflects whichever tab is actually on screen right now.
-      if (state.currentTab === 'dashboard') renderDashboard();
-    }, {
-      onFail: () => showBackendErrorBanner("Pull-to-refresh couldn't reach the server."),
-    });
-    bindBottomBounce(getScrollEl, document.querySelector('.page-wrapper') || document.body);
+    // DI-399(a) (UN-359, 2026-09-28) — CONVENTIONS #21, one refresh path:
+    // this body used to be inline here; it is now runManualSync() (defined
+    // near updateSyncBadge()), called by BOTH this gesture binder and the
+    // header sync icon's tap/keyboard handler (bindSyncBadgeTap()). Reviewer
+    // BLOCK (2026-09-25), F12's fix is preserved by construction —
+    // runManualSync() reads `state.currentTab` LIVE, at fire/call time, not
+    // at bind time, exactly as this closure did before extraction.
+    // DI-399(b-ii) (UN-359, 2026-09-28) — Chat's own top pull-down is
+    // disabled (Drew's own testing: dragging down from Chat's top scrolls
+    // to OLDER messages — correct list behavior, not "reached the top") and
+    // replaced by the mirrored bottom-edge pull-up; `bindBottomBounce` is
+    // not bound for Chat's scroller, and the WINDOW bounce binder is gated
+    // off Chat (RG-289, `isActive`). The pull-up moves NO page element —
+    // the page is static on Chat; its feedback is the pill above the
+    // composer plus the thread's native bounce. Picks/Dashboard are
+    // unaffected — same top pull-to-refresh, same plain T-29 bounce.
+    // RG-281 (reviewer round 2) — unbind the PREVIOUS chat bottom-pull
+    // binder unconditionally, before doing anything else, on EVERY
+    // navigateTo() call (entering chat, leaving chat, or a same-tab
+    // repaint) — see _unbindChatBottomPullToRefresh's own header for why
+    // this cannot rely on js/nav-gestures.js's own node-identity guard
+    // alone.
+    _unbindChatBottomPullToRefresh();
+    _unbindChatBottomPullToRefresh = () => {};
+    if (tab === 'chat') {
+      // DI-399(b-ii) reviewer round 2, finding 2 — runChatManualSync(), not
+      // bare runManualSync(): Chat's own refresh must also reach the chat
+      // transport (see makeChatManualSync()'s own header, AD-16).
+      // RG-289 (live v0.27.0, Drew 2026-09-28: Chat "should remain static.
+      // Any vertical scrolling on this page should only be the chat thread")
+      // — NO rubber-band target. It was `.page-wrapper`, so arming the
+      // pull-up (a drag up while the thread sits at its newest message, the
+      // default state, starting ANYWHERE on the page) lifted the header,
+      // thread and composer together — the page moving. The gesture, its
+      // phases and the refresh are unchanged; the visible feedback is the
+      // #chat-pull-refresh pill above the composer plus the thread's OWN
+      // native bounce (`#page-chat .chat-scroll{overscroll-behavior:
+      // contain}`, css/styles.css RG-289 block). The binder already treats a
+      // null target as "no visual" (applyRubberBand/settleRubberBand).
+      _unbindChatBottomPullToRefresh = bindBottomPullToRefresh(getScrollEl, null, runChatManualSync, {
+        onFail: () => showSyncFailureBanner("Pull-to-refresh couldn't reach the server."), // reviewer round 3, note 3 — suppressed if #supabase-offline-banner is already up
+        onPhaseChange: (phase) => {
+          const el = document.getElementById('chat-pull-refresh');
+          if (!el) return;
+          el.dataset.phase = phase;
+          // Reviewer round 2 — 'success' had a label ("Synced") that could
+          // never actually be seen: the CSS only shows opacity:1 for
+          // pulling/armed/refreshing, so the text was set on an invisible
+          // node for the whole PULL_TO_REFRESH_SUCCESS_FADE_MS window and
+          // then thrown away at 'settle'. Dropped rather than adding a
+          // fourth visible phase for a 200ms window — matches 'failed',
+          // which already resolves to no text (the red banner is that
+          // phase's own visible signal).
+          const LABEL = { idle: '', pulling: 'Pull up to sync', armed: 'Release to sync', refreshing: 'Syncing…', success: '', failed: '' };
+          el.textContent = LABEL[phase] || '';
+        },
+      });
+    } else {
+      bindPullToRefresh(getScrollEl, runManualSync, {
+        onFail: () => showSyncFailureBanner("Pull-to-refresh couldn't reach the server."), // reviewer round 3, note 3 — suppressed if #supabase-offline-banner is already up
+        // RG-285 (reviewer round 3, finding 1) — this binder is on `window`,
+        // bound once and never unbound (stable identity); without this, its
+        // listeners stay live and global while Chat is showing, and Chat
+        // never scrolls `window` (its own thread scrolls internally), so
+        // `window.scrollY` reads 0 — eligible — on every touch in chat
+        // history.
+        // RG-285 (reviewer round 4, 2026-09-28): a DENYLIST, not an allowlist —
+        // DI-324 places pull-to-refresh on every page except the sign-in gate
+        // and sheets/modals; Chat is the one tab whose content scrolls inside
+        // its own container (so window.scrollY reads 0 there and the window
+        // binder would arm on any history drag). Standings/Comm/Admin/Rules keep it.
+        isActive: () => document.body.dataset.tab !== 'chat',
+      });
+      // RG-289 — the SAME Chat denylist as the window pull-to-refresh above
+      // (RG-285): this `window` binding is made once and its listeners stay
+      // live on Chat, where window "is at its bottom" on every touch, so
+      // every upward drag on Chat lifted the whole page ~20px.
+      bindBottomBounce(getScrollEl, document.querySelector('.page-wrapper') || document.body, {
+        isActive: () => document.body.dataset.tab !== 'chat',
+      });
+    }
     // T-27 (DI-325) — B-02 (Picks week-arrows bug) is closed by ruling, so
     // this IS wired to the real prev/next-week state, not merely built and
     // tested in isolation. Mirrors bindPicksWeekNav()'s/the week-selector's
@@ -5039,10 +5384,14 @@ function refreshHeader() {
     el.innerHTML = `<strong>${escHtml(getShellBrandName())}</strong>`;
   } else {
     // REVIEWER note 3 (v0.27.0 APPROVE WITH NOTES) — this used to repeat
-    // `getShellBrandName()` here too, but the web trigger (renderControlCenterTrigger(),
-    // below) now ALSO shows the brand name right beside it (reviewer note 4)
-    // — the same word twice in the same header strip reads as a mistake, not
-    // chrome. "No week yet" names the actual state instead.
+    // `getShellBrandName()` here too, which duplicated the brand name the
+    // web trigger (renderControlCenterTrigger(), below) ALSO showed at the
+    // time (reviewer note 4) — the same word twice in the same header strip
+    // read as a mistake, not chrome. REVIEWER ROUND 2 (2026-09-28) — DI-405
+    // has since made the web trigger icon-only (no visible brand name at
+    // all), so that duplication can no longer happen either way; "No week
+    // yet" stays because it is still the correct copy for the state, not
+    // because of the now-retired duplication concern.
     el.innerHTML = `<span class="text-muted">No week yet</span>`;
   }
 }
@@ -5055,26 +5404,27 @@ function refreshHeader() {
 // already fills the header (and re-runs on every auth resolution). Content is
 // per SHELL only — never league data — so it renders under a hold too; the
 // hold gates the CLICK (.app-header inert + the handler's isContentWithheld()).
-// Native: the Munera temple mark, icon only. Web: the SAME Munera mark plus
-// the brand name — no trailing chevron (REVIEWER note 4, v0.27.0 APPROVE
-// WITH NOTES: Drew expects a LOGO top-left, and a trailing "›" reads as
-// push-forward navigation on iOS, not "open a drawer" — the coordinator's
-// design ruling replacing the chevron this trigger shipped with). Idempotent:
-// rewritten only when missing or the shell changed.
+// DI-405 (UN-360, 2026-09-28, Drew: "Munera mark on web too") — both branches
+// now render the SAME icon-only markup: the Munera temple mark, no text, no
+// trailing chevron. Before this, web additionally showed the brand-name text
+// span (REVIEWER note 4, v0.27.0), which correctly avoided a chevron but
+// still treated the trigger as a brand-NAME slot rather than a LOGO slot —
+// Drew's ruling is that the mark is chrome (D-1's app-wide icon rule), not
+// the league-vs-shell distinction DI-213a/h drew for OTHER call sites
+// (sign-in gate wordmark, version footer, etc. — untouched, still call
+// getShellBrandName() themselves). Idempotent: rewritten only when missing or
+// the shell changed.
 function renderControlCenterTrigger() {
   const el = document.getElementById('control-center-trigger');
   if (!el) return;
   const kind = isNativeShell() ? 'native' : 'web';
   if (el.dataset?.filled === kind && el.innerHTML) return;
-  const brandName = getShellBrandName();
-  el.innerHTML = kind === 'native'
-    ? `<span class="control-center-trigger-mark">${icon('munera')}</span>`
-    : `<span class="control-center-trigger-mark">${icon('munera')}</span><span class="control-center-trigger-name">${escHtml(brandName)}</span>`;
-  // REVIEWER note 2 — the web trigger's visible name should be in its
-  // accessible name too (Interaction Principles' Accessibility: "Support
-  // VoiceOver"). Native's trigger is icon-only chrome with no visible name to
-  // echo, so it keeps index.html's plain "Open control center" default.
-  if (kind === 'web') el.setAttribute('aria-label', `${brandName}, open control center`);
+  el.innerHTML = `<span class="control-center-trigger-mark">${icon('munera')}</span>`;
+  // DI-405 — with no visible name on either branch, there is nothing to echo
+  // into the accessible name (Interaction Principles' Accessibility:
+  // "Support VoiceOver" — an echoed label is only needed when a visible label
+  // exists). Both branches now keep index.html's plain "Open control center"
+  // default rather than setting an aria-label here.
   if (el.dataset) el.dataset.filled = kind;
 }
 
@@ -5174,17 +5524,99 @@ function _leaguePillKeydown(e) {
 // bordered sliver with an ellipsis is not a readable label (css #league-pill).
 const LEAGUE_PILL_MIN_PX = 48;
 /**
+ * DI-417 (UN-372, 2026-09-28) — the active sport, looked up for the header
+ * league pill. Reuses `normalizeSportKey()` (js/leagues-home.js) — the SAME
+ * db-code ('cfb') -> ESPN-key ('college-football') map deriveLeagueSports()
+ * already uses, not a second normalization — and `ESPN_SPORT_ENDPOINTS`
+ * (js/data-model.js) for the label/short-code pair.
+ *
+ * FIX (reviewer round 2, BLOCK 1, 2026-09-28) — `week.sport` NEVER survives
+ * the Supabase round trip in live data. `js/supabase-projection.js`'s own
+ * WEEK_COLS comment: "`sport` has NO legacy counterpart at all... it is a
+ * Supabase-only column and will therefore ALWAYS be recorded absent" on the
+ * way out, which means `fromRows()` deletes it on the way back in —
+ * `createWeek()` (js/data-model.js) never sets `.sport` at all, so a real
+ * week object never carries one. Reading only `getCurrentWeek()?.sport`
+ * meant every live IRB week showed the league name alone, never the sport —
+ * the DI's own need unmet. `getCachedMemberships().find(...)?.sportDefault`
+ * is the SAME fallback the League Page overlay already uses
+ * (app.js:27577-27586, `active?.sportDefault`), reused here rather than a
+ * second lookup. Coordinator amendment (round 2): the sportDefault fallback
+ * applies whenever the week doesn't carry a sport — INCLUDING when there is
+ * no current week at all ("the sport you're currently viewing" names the
+ * league's sport, not only a week-scoped one). Returns null only when
+ * NEITHER source resolves to a known ESPN_SPORT_ENDPOINTS key — the pill
+ * then degrades to "league name alone", matching DI-184c's existing "hold
+ * the slot empty rather than guess" rule.
+ */
+function _leaguePillSportInfo() {
+  const week = getCurrentWeek();
+  const membershipSport = getCachedMemberships().find(m => m.leagueId === getActiveLeagueId())?.sportDefault;
+  const key = normalizeSportKey(week?.sport) || normalizeSportKey(membershipSport);
+  const meta = key ? ESPN_SPORT_ENDPOINTS[key] : null;
+  return meta ? { label: meta.label, code: meta.code || meta.label } : null;
+}
+/**
+ * DI-417 — the three content strings _fitLeaguePill()'s graceful-degradation
+ * steps choose between: full sport name, short code, league name alone.
+ * `sport` is `_leaguePillSportInfo()`'s result or null (no sport data — all
+ * three variants collapse to the same "league name alone" string, so
+ * degradation is a no-op, matching pre-DI-417 behavior exactly).
+ */
+function _leaguePillContentVariants(name, sport, interactive) {
+  const caret = interactive ? ' <span aria-hidden="true">▾</span>' : '';
+  const leagueOnly = `${escHtml(name)}${caret}`;
+  if (!sport) return { full: leagueOnly, code: leagueOnly, leagueOnly };
+  const sportSpan = (text) => ` <span class="league-pill-sport">· ${escHtml(text)}</span>`;
+  return {
+    full: `${escHtml(name)}${sportSpan(sport.label)}${caret}`,
+    code: `${escHtml(name)}${sportSpan(sport.code)}${caret}`,
+    leagueOnly,
+  };
+}
+// DI-417 — the same overflow test `_updateScrollFadeState()` already uses
+// (js/app.js, `hasOverflow = el.scrollWidth > el.clientWidth + 1`): strictly
+// greater means the box's own `text-overflow:ellipsis` has actually
+// engaged, not just that it theoretically could. Reads false when a test
+// fixture doesn't model scroll/client width at all (most of
+// headermetatest.mjs's [pill] fixtures, which never exercise sport
+// degradation) — conservative, since every real DOM element carries both.
+function _pillOverflowing(el) {
+  if (typeof el.scrollWidth !== 'number' || typeof el.clientWidth !== 'number') return false;
+  return el.scrollWidth > el.clientWidth + 1;
+}
+/**
  * 2026-09-28 (web header overflow fix) — measured AFTER the header has laid
  * out, so the week name refreshHeader() writes after renderLeaguePill() is
  * already in the row. Skipped when the pill is not being rendered at all
  * (hidden, or the header is display:none on the chat tab), where a 0 width
  * means "not laid out", not "no room". Re-evaluated on every
  * renderLeaguePill(), which unhides first, so a wider row brings it back.
+ *
+ * DI-417 (UN-372, 2026-09-28) — BEFORE the 48px hide check: graceful
+ * degradation of the sport portion, full sport name -> short code -> league
+ * name alone. Always retried from the top (`variants.full`) on every call,
+ * never only narrowed — the same "unhide before re-measuring" idea this
+ * function already applies to visibility, applied here to content, so a
+ * resize that WIDENS the row (a rotation) can bring the full label back,
+ * not only ever lose it. `el._pillSportVariants` is null whenever there is
+ * no sport to degrade (renderLeaguePill() only sets it when
+ * `_leaguePillSportInfo()` resolves), so a plain single-league pill with no
+ * sport data falls straight through to the width check, byte-identical to
+ * before this DI.
  */
 function _fitLeaguePill(el) {
   if (!el || el.hidden) return;
   if (typeof el.getClientRects !== 'function' || typeof el.getBoundingClientRect !== 'function') return;
   if (!el.getClientRects().length) return;
+  const variants = el._pillSportVariants;
+  if (variants) {
+    el.innerHTML = variants.full;
+    if (_pillOverflowing(el)) {
+      el.innerHTML = variants.code;
+      if (_pillOverflowing(el)) el.innerHTML = variants.leagueOnly;
+    }
+  }
   if (el.getBoundingClientRect().width < LEAGUE_PILL_MIN_PX) el.hidden = true;
 }
 export const _fitLeaguePillForTest = _fitLeaguePill;
@@ -5206,6 +5638,11 @@ export const _refitLeaguePillForTest = _refitLeaguePill;
 function _clearLeaguePill(el) {
   el.hidden = true;
   el.innerHTML = '';
+  // DI-417 (UN-372) — same discipline as DI-184j below: stashed state gets
+  // cleared, not merely left stale, so a later _refitLeaguePill() (which
+  // bails out before this only because textContent is now empty) can never
+  // resurrect a previous account's sport variants onto this pill.
+  el._pillSportVariants = null;
   el.removeEventListener('click', _leaguePillClick);
   el.removeEventListener('keydown', _leaguePillKeydown);
   el.removeAttribute?.('role');
@@ -5242,24 +5679,41 @@ export function renderLeaguePill() {
   // above it (no session, memberships unresolved) already do exactly this.
   if (!name) { _clearLeaguePill(el); return; }
   const memberships = getCachedMemberships();
+  const interactive = memberships.length > 1;
+  // DI-417 (UN-372, 2026-09-28) — "<league name> · <sport>", sport from the
+  // active week. null when unresolvable (no current week, or an unmapped
+  // sport key) — the pill degrades straight to the league name alone, the
+  // same as before this DI.
+  const sport = _leaguePillSportInfo();
+  const variants = _leaguePillContentVariants(name, sport, interactive);
   // Bind/unbind EVERY render against the same named handler, so the "no click
   // handler" half of DI-184b is a fact about the element a test can read, not
   // a claim about a code path — and so a re-render can never stack listeners.
   el.removeEventListener('click', _leaguePillClick);
   el.removeEventListener('keydown', _leaguePillKeydown);
   el.hidden = false;
-  if (memberships.length > 1) {
+  // Stashed for _fitLeaguePill()'s graceful-degradation steps; null when
+  // there is nothing to degrade, so that function skips straight to the
+  // 48px width check, byte-identical to before this DI.
+  el._pillSportVariants = sport ? variants : null;
+  el.innerHTML = variants.full;
+  if (interactive) {
     el.setAttribute('role', 'button');
     el.setAttribute('tabindex', '0');
-    el.setAttribute('aria-label', `Active league: ${name}. Tap to switch.`);
-    el.innerHTML = `${escHtml(name)} <span aria-hidden="true">▾</span>`;
+    // DI-417's own aria-label rule: names BOTH league and sport (when known)
+    // regardless of which visual degradation step is on screen — the
+    // accessible name states the fact, the visible pill is what compresses.
+    el.setAttribute('aria-label', sport
+      ? `Active league: ${name}, viewing: ${sport.label}. Tap to switch.`
+      : `Active league: ${name}. Tap to switch.`);
     el.addEventListener('click', _leaguePillClick);
     el.addEventListener('keydown', _leaguePillKeydown);
   } else {
     el.removeAttribute?.('role');
     el.removeAttribute?.('tabindex');
-    el.setAttribute('aria-label', `Active league: ${name}`);
-    el.innerHTML = `${escHtml(name)}`;
+    el.setAttribute('aria-label', sport
+      ? `Active league: ${name}, viewing: ${sport.label}`
+      : `Active league: ${name}`);
   }
   // After this frame's synchronous header writes (refreshHeader() fills the
   // week name AFTER calling this), before paint — so no visible flash.
@@ -11913,9 +12367,56 @@ export function renderCommPage() {
     const closingAnchorFilled = builtSlate.closingAnchorFilled;
     const rejectedCount = week ? getRejectedSuggestions(week.weekId).length : 0;
 
+    // DI-412 AMENDED (UN-367, reviewer round 2 B1, 2026-09-28) — the Games
+    // tab's OWN week/games/pool, independent of `week` above whenever a
+    // wizard create-flow session is parked on a different draft (see
+    // gamesTabTargetWeek()'s own header). Every card below tagged
+    // `data-comm-tab="games"` reads from these, never from `week`/`games`
+    // directly; every OTHER tab (Week/Players/Rules/SCRIBE) keeps using
+    // `week`/`games` (getCurrentWeek()) exactly as before — unaffected.
+    const parkedWizardWeek = gamesTabTargetWeek();
+    const gamesTabWeek = parkedWizardWeek || week;
+    // `!parkedWizardWeek` (never object identity — `parkedWizardWeek` is a
+    // FRESH getWeek() lookup and can equal `week` by weekId without being
+    // the same object reference, e.g. the wizard is parked on the one week
+    // that also happens to be getCurrentWeek()) is the correct "reuse the
+    // already-computed live-week values" test.
+    const gamesTabIsLive = !parkedWizardWeek;
+    const gamesTabGames = gamesTabIsLive ? games : getGames(gamesTabWeek.weekId);
+    const gamesTabAvailGames = gamesTabIsLive ? availGames : getAvailableGames(gamesTabWeek.weekId);
+    const gamesTabCandidatePool = gamesTabIsLive ? candidatePool
+      : gamesTabAvailGames.filter(g => !isSuggestionRejected(gamesTabWeek.weekId, g));
+    const gamesTabScoredCandidates = gamesTabIsLive ? scoredCandidates
+      : (gamesTabCandidatePool.length > 0 ? scoreCandidateGames(gamesTabCandidatePool, gamesTabWeek.weekId) : []);
+    const gamesTabBuiltSlate = gamesTabIsLive ? builtSlate : buildSuggestedSlate(gamesTabScoredCandidates, 10);
+    const gamesTabSuggested = gamesTabBuiltSlate.slate;
+    const gamesTabShortlist = gamesTabBuiltSlate.shortlist;
+    const gamesTabAlmaCount = gamesTabBuiltSlate.almaCount;
+    const gamesTabMorningAnchorFilled = gamesTabBuiltSlate.morningAnchorFilled;
+    const gamesTabClosingAnchorFilled = gamesTabBuiltSlate.closingAnchorFilled;
+    const gamesTabRejectedCount = gamesTabIsLive ? rejectedCount : getRejectedSuggestions(gamesTabWeek.weekId).length;
+    // The one-line banner (§Empty/Info States register — informational, not
+    // a warning) only when the Games tab is ACTUALLY showing a week other
+    // than the live one — a brand-new league with no live week at all has
+    // nothing to disambiguate, so no banner.
+    // R1b (reviewer round 3, copy) — the banner named WHAT was being set up
+    // but never said how to get back. Adds the sentence + a ghost "Close
+    // setup" button that ends the parked session and returns to the live
+    // week's own Games tab, wired in bindCommEventListeners() below.
+    const gamesTabBannerHTML = (parkedWizardWeek && week && parkedWizardWeek.weekId !== week.weekId)
+      ? `<div class="admin-section" data-comm-tab="games"><div class="info-box">Setting up ${escHtml(formatWeekLabel(parkedWizardWeek))} — the live week is untouched. Close setup to return to ${escHtml(formatWeekLabel(week))}.<div class="mt-sm"><button type="button" class="btn btn-ghost btn-sm" id="games-tab-close-setup-btn">Close setup</button></div></div></div>`
+      : '';
+
     const sections = [];
 
-    sections.push(`<div class="section-header"><h2>Commissioner Panel</h2></div>`);
+    // DI-408 AMENDED (UN-363, 2026-09-28) — the "Collapse all / Expand all"
+    // pair, right-aligned on the SAME row as the panel heading (above the
+    // tab bar, so it's visible on every tab) — see panelCollapseActionsHTML()
+    // and wirePanelCollapseAllControls(), both above wireCollapsibleSections().
+    sections.push(`<div class="section-header section-header-layout">
+      <div class="section-header-main"><h2>Commissioner Panel</h2></div>
+      ${panelCollapseActionsHTML('comm-panel')}
+    </div>`);
 
     // Tab bar — groups the 18 admin sections into 5 buckets so the panel
     // doesn't require infinite scrolling. The active tab is held in
@@ -12010,16 +12511,53 @@ export function renderCommPage() {
     // "Load Historical Demo Week" actions moved to Admin → Games (folded
     // into the 'espn-source' card — see renderEspnSourceBody()'s own header
     // for why a new admin card key wasn't used).
+    // DI-407 (UN-362, 2026-09-28, Drew: "the build slate button under games
+    // should be centered and larger like manage this week, can get rid of
+    // the text 'pull this week's games and spreads'") — matches the wizard
+    // entry button's own pattern exactly: btn-primary.btn-block, no wrapping
+    // flex row (there was only ever the one button in it), direct child of
+    // .card. Helper <p> line removed per Drew's literal ask; the status line
+    // and "Last fetch" timestamp stay — real information, not decoration.
+    //
+    // DI-412 AMENDED (UN-367, reviewer round 2 B1, 2026-09-28) — the banner
+    // that names WHICH week the cards below are showing, whenever it isn't
+    // the live one (gamesTabBannerHTML computed above, near gamesTabWeek).
+    sections.push(gamesTabBannerHTML);
+    // DI-412 (UN-367, 2026-09-28) — "Continue set up" card, immediately ABOVE
+    // Build Slate, so it is the first thing the commissioner sees on this
+    // tab whenever the wizard has an in-progress create-flow session (steps
+    // 1-5) for the SAME week this tab is currently showing (now `gamesTabWeek`
+    // — B1's own target, not necessarily `week`/getCurrentWeek()). Reuses
+    // weekWizardEntryCardHTML()'s own single-`.btn-primary.btn-block`-inside-
+    // a-`.card` shape and its "Continue set up" copy literally.
+    if (shouldShowGamesTabContinueSetupCard(gamesTabWeek, _weekWizardTargetWeekId, _weekWizardStep)) {
+      sections.push(`
+        <div class="admin-section" data-comm-tab="games">
+          <div class="card">
+            <button type="button" class="btn btn-primary btn-block" id="games-tab-continue-setup-btn">Continue set up</button>
+          </div>
+        </div>`);
+    }
+    // DI-413 (UN-368, 2026-09-28) — once the week leaves DRAFT, "Build slate"
+    // is HIDDEN (not disabled) and replaced with a one-line state: running
+    // setup again is not merely inadvisable once players are picking against
+    // the slate, it's a step that already happened. The button stays live and
+    // re-clickable throughout DRAFT regardless of game count
+    // (fetchAndApplySuggestedSlate() is additive/idempotent, js/week-wizard.js
+    // ~424) — the trigger is week status leaving DRAFT, never "has ≥1 game."
+    // The no-week-selected case is unaffected (existing upstream guard in the
+    // click handler); this only swaps the card's CONTENTS, never its position
+    // or data-comm-tab. B1: reads `gamesTabWeek`, so a parked wizard target
+    // renders ITS OWN Build Slate state, not the live week's.
     sections.push(`
       <div class="admin-section" data-comm-tab="games">
         <div class="admin-section-title">Build Slate</div>
         <div class="card">
-          <div class="flex gap-sm flex-wrap">
-            <button class="btn btn-primary btn-sm" id="comm-build-slate-btn">Build slate</button>
-          </div>
-          <p class="text-muted text-xs mt-sm">Pull this week's games and spreads</p>
+          ${gamesTabWeek && gamesTabWeek.status !== WEEK_STATUS.DRAFT
+            ? `<p class="text-muted text-sm">Slate is built — edit games below.</p>`
+            : `<button class="btn btn-primary btn-block" id="comm-build-slate-btn">Build slate</button>
           <div id="comm-build-slate-status" class="text-sm mt-sm"></div>
-          ${ps.lastFetchTimestamp?`<p class="text-muted text-xs mt-sm">Last fetch: ${new Date(ps.lastFetchTimestamp).toLocaleString()} · ${ps.lastRawEventCount} events</p>`:''}
+          ${ps.lastFetchTimestamp?`<p class="text-muted text-xs mt-sm">Last fetch: ${new Date(ps.lastFetchTimestamp).toLocaleString()} · ${ps.lastRawEventCount} events</p>`:''}`}
         </div>
       </div>`);
 
@@ -12052,42 +12590,69 @@ export function renderCommPage() {
     // Available Games pool so it is read before the pool it comments on.
     // Pushed unconditionally: the pool section below is gated on
     // availGames.length, and a request for a week nobody has fetched yet is
-    // exactly the case this card exists for.
-    sections.push(renderGameRequestsAdminSectionHTML(week, availGames, games));
+    // exactly the case this card exists for. B1: `gamesTabWeek`/games/pool.
+    sections.push(renderGameRequestsAdminSectionHTML(gamesTabWeek, gamesTabAvailGames, gamesTabGames));
 
-    // Available Games Pool
-    if (availGames.length) {
+    // Available Games Pool — B1: every read below is `gamesTabWeek`-scoped.
+    if (gamesTabAvailGames.length) {
       sections.push(`
         <div class="admin-section" data-comm-tab="games">
-          <div class="admin-section-title">📋 Available Games (${availGames.length} from ESPN)</div>
+          <div class="admin-section-title">📋 Available Games (${gamesTabAvailGames.length} from ESPN)</div>
           <div class="card mb-sm">
             <div class="flex gap-sm mb-md flex-wrap">
               <button class="btn btn-primary btn-sm" id="apply-suggested-btn">✅ Apply Suggested 10</button>
               <button class="btn btn-ghost btn-sm" id="clear-pool-btn">🗑 Clear Pool</button>
-              ${rejectedCount>0?`<button class="btn btn-ghost btn-sm" id="restore-rejected-btn">↩ Restore ${rejectedCount} dismissed</button>`:''}
+              ${gamesTabRejectedCount>0?`<button class="btn btn-ghost btn-sm" id="restore-rejected-btn">↩ Restore ${gamesTabRejectedCount} dismissed</button>`:''}
             </div>
-            ${renderSuggestedSlatePreview({suggested, shortlist, almaCount, morningAnchorFilled, closingAnchorFilled}, games, week)}
+            ${renderSuggestedSlatePreview({suggested: gamesTabSuggested, shortlist: gamesTabShortlist, almaCount: gamesTabAlmaCount, morningAnchorFilled: gamesTabMorningAnchorFilled, closingAnchorFilled: gamesTabClosingAnchorFilled}, gamesTabGames, gamesTabWeek)}
             <div class="card-title mb-sm mt-md">All Available Games</div>
-            ${renderAvailFilterBar(availGames)}
-            <div id="avail-groups-list">${renderAvailableGroups(availGames, games, week)}</div>
+            ${renderAvailFilterBar(gamesTabAvailGames)}
+            <div id="avail-groups-list">${renderAvailableGroups(gamesTabAvailGames, gamesTabGames, gamesTabWeek)}</div>
           </div>
         </div>`);
     }
 
-    // Selected Slate
-    sections.push(`
-      <div class="admin-section" data-comm-tab="games">
-        <div class="admin-section-title">🏈 Selected Slate (${games.length}/10 games)</div>
-        <div class="flex gap-sm mb-md flex-wrap">
+    // Selected Slate — B1: `gamesTabGames`/`gamesTabWeek`, so edit rows act
+    // on the wizard's parked target when one exists.
+    // R1 (reviewer round 3, BLOCK) — three of these buttons are LIVE-week-
+    // only actions that make no sense (and are actively dangerous) run
+    // against a DRAFT the wizard is still building: "Calculate ATS" would
+    // finalize a draft with zero real picks (results/obligations/a
+    // week-final chat event, from a week nobody has opened yet); "Unlock
+    // All" calls clearAllLockOverrides(), which wipes EVERY week's lock
+    // overrides, including the LIVE week's, just because the Games tab
+    // happens to be showing a parked draft; "Refresh Scores" polls a slate
+    // with no real kickoffs against it yet. Gated on the DRAFT status
+    // itself (`gamesTabWeek.status !== WEEK_STATUS.DRAFT`), not merely
+    // `gamesTabIsLive` — this also closes the OLDER, pre-existing hazard
+    // where the CURRENT week itself was a draft (no parked wizard session
+    // involved at all) and these three buttons were already live against it
+    // before this batch ever touched this card.
+    const gamesTabPastDraft = !!gamesTabWeek && gamesTabWeek.status !== WEEK_STATUS.DRAFT;
+    // Extracted to its own function — same xsstest.mjs [9c-2] reason as
+    // gameSourceLockedHTML()/manualLinkEditableHTML() in showGameModal()
+    // (round 1 of this review): a nested ternary inside a multi-line
+    // template is exactly where that classifier gives up tracing an
+    // interpolation, even though every branch here is plain literal markup
+    // with no user data in it. A named call ("every return classifies") is
+    // the shape the classifier resolves.
+    const slateControlsHTML = () => `
           <button class="btn btn-ghost btn-sm" id="add-manual-game-btn">➕ Add Manually</button>
-          <button class="btn btn-ghost btn-sm" id="unlock-all-btn">🔓 Unlock All</button>
-          ${games.length?`
+          ${gamesTabPastDraft?`<button class="btn btn-ghost btn-sm" id="unlock-all-btn">🔓 Unlock All</button>`:''}
+          ${gamesTabGames.length?slateControlsWithGamesHTML():''}
+        `;
+    const slateControlsWithGamesHTML = () => `
+            ${gamesTabPastDraft?`
             <button class="btn btn-secondary btn-sm" id="refresh-scores-btn">🔄 Refresh Scores</button>
             <button class="btn btn-secondary btn-sm" id="finalize-scoring-btn">✅ Calculate ATS</button>
+            `:''}
             <button class="btn btn-danger btn-sm" id="clear-slate-btn">🗑 Clear All Slate Games</button>
-          `:''}
-        </div>
-        <div id="admin-games-list">${renderAdminGamesList(games,week,getGameLockOverrides())}</div>
+          `;
+    sections.push(`
+      <div class="admin-section" data-comm-tab="games">
+        <div class="admin-section-title">🏈 Selected Slate (${gamesTabGames.length}/10 games)</div>
+        <div class="flex gap-sm mb-md flex-wrap">${slateControlsHTML()}</div>
+        <div id="admin-games-list">${renderAdminGamesList(gamesTabGames,gamesTabWeek,getGameLockOverrides())}</div>
       </div>`);
 
     // Export Data moved whole to Admin → Data (DI-320, UX Revamp wiring pass
@@ -12373,7 +12938,21 @@ export function renderCommPage() {
       });
     });
     wireCollapsibleSections(c);
-    bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist);
+    // DI-408 AMENDED — the heading-row pair, scoped to state.commTab via
+    // data-comm-tab/data-comm-active (the same attribute the tab click
+    // handler above sets on `c`).
+    wirePanelCollapseAllControls(c, {
+      collapseBtn: c.querySelector('#comm-panel-collapse-all-btn'),
+      expandBtn: c.querySelector('#comm-panel-expand-all-btn'),
+      cardAttr: 'data-comm-tab',
+      activeAttr: 'data-comm-active',
+    });
+    // DI-412 AMENDED (UN-367, reviewer round 2 B1) — `suggested`/`shortlist`
+    // become the GAMES-TAB-scoped pool (they are only ever read by
+    // Games-tab handlers inside bindCommEventListeners()); the new final arg
+    // is the games-tab target week itself, so every games-tab action binds
+    // against `gtWeek`/`gtGames` there, never the live `week`/`games`.
+    bindCommEventListeners(week, games, availGames, gamesTabSuggested, settings, allWeeks, gamesTabShortlist, gamesTabWeek);
     renderCommExtrasV16(week, games);   // v0.16.0 — Extra Point + Chat/SCRIBE admin
     initScrollFades(c);   // UN-105a — this panel's own scroll-fade wrappers
 
@@ -13063,6 +13642,31 @@ export function renderAdminPage() {
   });
   c.setAttribute('data-admin-active', state.adminTab || 'week');
 
+  // REVIEWER ROUND 2 B1 (2026-09-28) — the Admin panel genuinely SHARES the
+  // collapse mechanism now, not just the CSS class it happened to reuse.
+  // Before this fix, only the Comm panel ever called
+  // wireCollapsibleSections() (renderCommPage(), above), so Admin cards had
+  // no per-card click-to-collapse, no chevron, and — the worse half —
+  // nothing here ever RE-APPLIED settings.commPanelSectionsCollapsed on
+  // render, so every re-render of this page (an async cache landing:
+  // refreshAllLeaguesCache()/refreshPlatformKvCache()/
+  // refreshUsersAcrossLeaguesCache(), below; any Admin action's own
+  // re-render) silently expanded every card again. Admin card titles
+  // (ADMIN_CARD_TITLE, js/admin-panel.js) don't collide with the
+  // Commissioner panel's own titles, so sharing one settings key is safe —
+  // confirmed by direct comparison, not assumed.
+  wireCollapsibleSections(c);
+  // DI-408 AMENDED (UN-363, 2026-09-28) — mirrors the Commissioner panel's
+  // own heading-row pair (renderCommPage(), above); same
+  // wirePanelCollapseAllControls() function, same commPanelSectionsCollapsed
+  // key, scoped to data-admin-tab/data-admin-active instead.
+  wirePanelCollapseAllControls(c, {
+    collapseBtn: c.querySelector('#admin-panel-collapse-all-btn'),
+    expandBtn: c.querySelector('#admin-panel-expand-all-btn'),
+    cardAttr: 'data-admin-tab',
+    activeAttr: 'data-admin-active',
+  });
+
   // AD-06 loud-fail — a refused/failed cross-league users read is surfaced,
   // never silently presented as "no members found." Appended after the
   // Users Across Leagues card rather than threaded through
@@ -13617,8 +14221,22 @@ export function renderAdminGamesList(games, week, overrides) {
 // ─── COLLAPSIBLE COMMISSIONER SECTIONS ───────────────────────────────────────
 // Each .admin-section title becomes a click-to-collapse header; open/closed
 // state persists in settings.commPanelSectionsCollapsed keyed by a stable slug
-// derived from the title. A "Sections" menu pinned at top of the panel toggles
-// visibility of any section (lets the commissioner hide noise entirely).
+// derived from the title.
+//
+// DI-408 AMENDED (UN-363, 2026-09-28, Drew: "I want the per-card collapse
+// kept, and an option to collapse or expand all somewhere that makes
+// sense") — the bottom-of-panel "📚 Sections" menu (Expand all/Collapse
+// all/Show all + a per-section hide checkbox for every card) is RETIRED
+// here in full, along with the per-section HIDE behavior it drove
+// (settings.commPanelSectionsHidden stops being written or read — a
+// previously-hidden card on an old device simply comes back; the key stays
+// a valid, allowlisted settings key, never deleted, per "never delete
+// data"). The per-card click-to-collapse below is UNCHANGED — same
+// settings.commPanelSectionsCollapsed key, same admin-section-collapsed
+// class, same chevron. What replaces the bottom menu is a "Collapse all /
+// Expand all" pair on the PANEL'S OWN HEADING ROW instead
+// (wirePanelCollapseAllControls(), below) — reachable without scrolling,
+// acting on the active tab only, one mechanism either way drives.
 
 function sectionSlug(title) {
   return String(title || '').toLowerCase()
@@ -13630,37 +14248,8 @@ function wireCollapsibleSections(container) {
   if (!sections.length) return;
   const settings = getSettings();
   const collapsed = settings.commPanelSectionsCollapsed || {};
-  const hidden    = settings.commPanelSectionsHidden    || {};
 
-  // Build a compact "Sections" menu at the BOTTOM of the Commissioner panel
-  // (secondary controls — primary workflow stays at the top). Collapsed by
-  // default so it's out of the way until needed.
-  if (!container.querySelector('.section-menu')) {
-    const menuEl = document.createElement('div');
-    menuEl.className = 'admin-section section-menu admin-section-collapsed';
-    menuEl.dataset.section = '_section_menu';
-    menuEl.dataset.sectionTitle = 'Sections';
-    menuEl.innerHTML = `
-      <div class="admin-section-title admin-section-title-toggle section-menu-title">📚 Sections
-        <span class="section-menu-actions">
-          <button class="btn btn-ghost btn-sm" id="sec-expand-all">Expand all</button>
-          <button class="btn btn-ghost btn-sm" id="sec-collapse-all">Collapse all</button>
-          <button class="btn btn-ghost btn-sm" id="sec-show-all">Show all</button>
-        </span>
-        <span class="section-chevron">▾</span>
-      </div>
-      <div class="section-menu-grid" id="section-menu-grid"></div>`;
-    container.appendChild(menuEl);
-    // Click the title (but not the buttons) to expand/collapse the menu itself
-    menuEl.querySelector('.admin-section-title-toggle')?.addEventListener('click', (e) => {
-      if (e.target.closest('button')) return;
-      menuEl.classList.toggle('admin-section-collapsed');
-    });
-  }
-
-  // Wrap each section's body so we can collapse it without losing event bindings.
   sections.forEach((sec) => {
-    if (sec.classList.contains('section-menu')) return;
     const titleEl = sec.querySelector('.admin-section-title');
     if (!titleEl) return;
     // Use textContent for the slug to avoid HTML/emoji noise variance.
@@ -13668,9 +14257,6 @@ function wireCollapsibleSections(container) {
     const slug  = sectionSlug(title);
     sec.dataset.section = slug;
     sec.dataset.sectionTitle = title;
-
-    // Hidden takes precedence — fully remove from view.
-    if (hidden[slug]) { sec.style.display = 'none'; }
 
     // Collapse marker
     if (collapsed[slug]) sec.classList.add('admin-section-collapsed');
@@ -13684,7 +14270,6 @@ function wireCollapsibleSections(container) {
     }
     // Click anywhere on title to toggle collapse
     titleEl.addEventListener('click', (e) => {
-      // Don't collapse when clicking the chevron-area buttons inside the menu
       if (e.target.closest('button')) return;
       sec.classList.toggle('admin-section-collapsed');
       const c = getSettings().commPanelSectionsCollapsed || {};
@@ -13692,54 +14277,76 @@ function wireCollapsibleSections(container) {
       saveSetting('commPanelSectionsCollapsed', c);
     });
   });
+}
+// REVIEWER ROUND 2 B1 test seam (2026-09-28) — same convention as
+// `_wirePanelCollapseAllControlsForTest`, below: authtest.mjs's shared
+// FakeEl.querySelectorAll() is a hardcoded stub that always returns [], so
+// a test cannot exercise this function's real per-card wiring (chevron,
+// click-to-collapse, re-applying settings.commPanelSectionsCollapsed on
+// call) through the full renderCommPage()/renderAdminPage() DOM path. This
+// export lets a test drive the REAL function directly against small
+// purpose-built fakes instead.
+export const _wireCollapsibleSectionsForTest = wireCollapsibleSections;
 
-  // Render the menu grid (show/hide checkboxes)
-  const grid = container.querySelector('#section-menu-grid');
-  if (grid) {
-    grid.innerHTML = sections
-      .filter(s => !s.classList.contains('section-menu'))
-      .map(s => {
-        const slug = s.dataset.section;
-        const title = s.dataset.sectionTitle;
-        const isHidden = !!hidden[slug];
-        return `<label class="section-menu-item${isHidden?' is-hidden':''}">
-          <input type="checkbox" class="section-toggle" data-slug="${escHtml(slug)}" ${isHidden?'':'checked'} />
-          <span>${escHtml(title)}</span>
-        </label>`;
-      }).join('');
-    grid.querySelectorAll('.section-toggle').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const slug = cb.dataset.slug;
-        const sec  = container.querySelector(`.admin-section[data-section="${slug}"]`);
-        if (!sec) return;
-        const h = getSettings().commPanelSectionsHidden || {};
-        if (cb.checked) { sec.style.display = ''; delete h[slug]; }
-        else            { sec.style.display = 'none'; h[slug] = true; }
-        saveSetting('commPanelSectionsHidden', h);
-        cb.parentElement.classList.toggle('is-hidden', !cb.checked);
-      });
-    });
-  }
-
-  // Expand / Collapse / Show-all shortcuts
-  container.querySelector('#sec-expand-all')?.addEventListener('click', () => {
-    sections.forEach(s => s.classList.remove('admin-section-collapsed'));
-    saveSetting('commPanelSectionsCollapsed', {});
-  });
-  container.querySelector('#sec-collapse-all')?.addEventListener('click', () => {
-    const c = {};
-    sections.forEach(s => {
-      if (s.classList.contains('section-menu')) return;
-      s.classList.add('admin-section-collapsed');
-      c[s.dataset.section] = true;
+/**
+ * DI-408 AMENDED (UN-363, 2026-09-28) — the "Collapse all / Expand all"
+ * pair on a panel's own heading row (rendered above the tab bar — see
+ * `js/app.js` ~11919 for the Commissioner panel's heading, `renderAdminHeader()`
+ * in `js/admin-panel.js` for the Admin panel's). Shares the EXACT same
+ * mechanism `wireCollapsibleSections()` (above) drives per-card: the
+ * `admin-section-collapsed` class and `settings.commPanelSectionsCollapsed`
+ * map — one collapse mechanism, two ways to reach it, not a second one.
+ *
+ * Acts ONLY on the ACTIVE TAB's cards, read from the SAME
+ * data-comm-active/data-admin-active attribute the tab-visibility CSS
+ * itself keys on (css/styles.css ~2695-2734) — never the whole panel at
+ * once, matching the DI's stated scope ("every card on the active tab").
+ *
+ * Cards with no `.admin-section-title` child (e.g. Admin → Week/Games'
+ * bare league-selector button section, `renderLeagueSelectorButton()`) are
+ * skipped: collapsing one would hide its only content with no per-card
+ * click affordance to bring it back (RG-10 card tagging is otherwise
+ * unchanged — every card keeps its data-comm-tab/data-admin-tab).
+ */
+function wirePanelCollapseAllControls(panelEl, { collapseBtn, expandBtn, cardAttr, activeAttr }) {
+  if (!panelEl || (!collapseBtn && !expandBtn)) return;
+  const activeCards = () => {
+    const active = panelEl.getAttribute(activeAttr);
+    return [...panelEl.querySelectorAll(`.admin-section[${cardAttr}]`)]
+      .filter((sec) => (!active || sec.getAttribute(cardAttr) === active) && sec.querySelector('.admin-section-title'));
+  };
+  const setAll = (value) => {
+    const c = getSettings().commPanelSectionsCollapsed || {};
+    activeCards().forEach((sec) => {
+      sec.classList.toggle('admin-section-collapsed', value);
+      const slug = sec.dataset.section || sectionSlug(sec.querySelector('.admin-section-title')?.textContent?.trim());
+      if (slug) c[slug] = value;
     });
     saveSetting('commPanelSectionsCollapsed', c);
-  });
-  container.querySelector('#sec-show-all')?.addEventListener('click', () => {
-    sections.forEach(s => { s.style.display = ''; });
-    saveSetting('commPanelSectionsHidden', {});
-    grid?.querySelectorAll('.section-toggle').forEach(cb => { cb.checked = true; cb.parentElement.classList.remove('is-hidden'); });
-  });
+  };
+  collapseBtn?.addEventListener('click', () => setAll(true));
+  expandBtn?.addEventListener('click', () => setAll(false));
+}
+// DI-408 test seam — a real browser's querySelectorAll/classList make this
+// function trivial to drive through a real rendered page; the standalone
+// test harnesses in this repo (authtest.mjs's FakeEl in particular) do not
+// implement attribute-selector querySelectorAll, so this export lets a test
+// drive the REAL function directly against small purpose-built fakes
+// instead of re-implementing its logic to test it.
+export const _wirePanelCollapseAllControlsForTest = wirePanelCollapseAllControls;
+
+/** Shared markup for the heading-row pair — DI-408's "ghost text buttons,
+ *  44pt hit targets" (Interaction Principles §Button Behavior): reuses the
+ *  `.btn`/`.btn-ghost` base (so the standard touch-down scale(.97) and
+ *  hover/focus treatment come for free, CONVENTIONS "extend, don't
+ *  invent"), sized via `.panel-collapse-actions .btn` in css/styles.css
+ *  rather than `.btn-sm` (34px — under the 44pt floor this DI names). */
+function panelCollapseActionsHTML(idPrefix) {
+  return `<div class="panel-collapse-actions">
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-collapse-all-btn">Collapse all</button>
+      <span class="panel-collapse-divider text-muted" aria-hidden="true">·</span>
+      <button type="button" class="btn btn-ghost" id="${idPrefix}-expand-all-btn">Expand all</button>
+    </div>`;
 }
 
 // ─── COMMISSIONER EVENT LISTENERS ─────────────────────────────────────────────
@@ -13755,7 +14362,22 @@ function wireCollapsibleSections(container) {
 // 6-arg shape; inserting a required positional param in the middle would
 // silently misalign every arg after it in both files (settings ending up as
 // allWeeks, allWeeks as undefined) without either file failing loudly.
-export function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist = []) {
+// `gamesTabWeek` (DI-412 AMENDED, UN-367, reviewer round 2 B1, 2026-09-28) is
+// appended LAST for the identical reason: defaults to `null`, every existing
+// 6/7-arg caller (gradetest.mjs, ranktest.mjs, renderAdminPage()'s own call)
+// is unaffected.
+export function bindCommEventListeners(week, games, availGames, suggested, settings, allWeeks, shortlist = [], gamesTabWeek = null) {
+  // DI-412 AMENDED — every GAMES-TAB action (Build Slate, Add Manually, edit
+  // rows, the Available Games pool, Selected Slate controls) reads `gtWeek`/
+  // `gtGames`, never `week`/`games` directly: `gamesTabWeek` is the wizard's
+  // PARKED create-flow target when one exists (renderCommPage()'s own
+  // gamesTabTargetWeek()), else it is `null` and this just falls back to
+  // `week`/`games` — today's behavior, byte-identical. `week`/`games`
+  // themselves stay reserved for the LIVE week's own actions (Week tab,
+  // announcement, tiebreaker, CSV exports, etc.), which this DI never
+  // touches.
+  const gtWeek = gamesTabWeek || week;
+  const gtGames = gamesTabWeek ? getGames(gamesTabWeek.weekId) : games;
 
   // Week manager
   document.getElementById('active-week-selector')?.addEventListener('change', e => {
@@ -13764,6 +14386,28 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // DI-355 (UN-313) — "create-week-btn" retired along with showCreateWeekModal().
   // DI-C1 §2.1 — the Week Setup Wizard's entry point.
   document.getElementById('week-wizard-entry-btn')?.addEventListener('click', () => openWeekWizardSheet());
+  // DI-406 (UN-361) — only rendered when the entry button reads "Manage This
+  // Week" (weekWizardEntryCardHTML(), above); opens the SAME sheet cold,
+  // straight into create-mode, via openWeekWizardSheet({ forceNew: true }).
+  document.getElementById('week-wizard-new-week-btn')?.addEventListener('click', () => openWeekWizardSheet({ forceNew: true }));
+  // DI-412 (UN-367) — the Games tab's "Continue set up" card (only rendered
+  // by shouldShowGamesTabContinueSetupCard(), above). Resumes the wizard
+  // sheet at the SAME step it was left on — never a fresh openWeekWizardSheet()
+  // call, which would re-derive the target week from getCurrentWeek()/
+  // continuable-drafts and could overwrite this in-progress session.
+  document.getElementById('games-tab-continue-setup-btn')?.addEventListener('click', () => resumeWeekWizardSheet());
+  // R1b (reviewer round 3, copy) — "Close setup" on the games-tab banner
+  // (only rendered when a parked wizard session is showing a week other than
+  // the live one). Ends the session — clears the target week and resets the
+  // step — WITHOUT touching the sheet's own DOM (it is not open; the
+  // commissioner is looking at the Games tab), then repaints via
+  // navigateTo('commissioner'), which re-resolves gamesTabTargetWeek() to
+  // null and falls back to the live week.
+  document.getElementById('games-tab-close-setup-btn')?.addEventListener('click', () => {
+    _weekWizardTargetWeekId = null;
+    _weekWizardStep = 1;
+    navigateTo('commissioner');
+  });
   // Groups A/B (2026-09-10, DI-B5) — Commissioner Announcement send control.
   // States: empty -> disabled; sending -> brief loading label; sent -> toast
   // + textarea clears (matches DI's exact states table).
@@ -14041,13 +14685,13 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // this week's dates, then score + apply the suggested 10, all in one tap.
   // No "ESPN"/"fetch" in any user-visible copy this handler writes.
   document.getElementById('comm-build-slate-btn')?.addEventListener('click', async () => {
-    if (!week) { showToast('Select a week first', 'error'); return; }
+    if (!gtWeek) { showToast('Select a week first', 'error'); return; }
     const btn = document.getElementById('comm-build-slate-btn');
     const status = document.getElementById('comm-build-slate-status');
     if (btn) btn.disabled = true;
     if (status) status.textContent = "Building this week's slate…";
     try {
-      const result = await weekWizardApi().fetchAndApplySuggestedSlate(week);
+      const result = await weekWizardApi().fetchAndApplySuggestedSlate(gtWeek);
       if (!result.ok) {
         if (status) status.textContent = result.reason === 'no_games' ? WIZARD_COPY.FETCH_ZERO : WIZARD_COPY.FETCH_FAILED;
         if (btn) btn.disabled = false;
@@ -14107,13 +14751,15 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     refreshHeader(); renderCommPage();
   });
 
-  // Suggested slate — apply all 10 at once
+  // Suggested slate — apply all 10 at once. B1: acts on `gtWeek` — `suggested`
+  // is already the GAMES-TAB-scoped pool (renderCommPage() passes
+  // `gamesTabSuggested` into this param).
   document.getElementById('apply-suggested-btn')?.addEventListener('click', ()=>{
-    if(!week||!suggested.length)return;
+    if(!gtWeek||!suggested.length)return;
     let added=0;
     for(const game of suggested){
-      const alreadyOn=getGames(week.weekId).some(g=>g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
-      if(!alreadyOn){saveGame(createGame(week.weekId,{...game,weekId:week.weekId}));added++;}
+      const alreadyOn=getGames(gtWeek.weekId).some(g=>g.homeTeam===game.homeTeam&&g.awayTeam===game.awayTeam);
+      if(!alreadyOn){saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));added++;}
     }
     showToast(`✅ ${added} suggested games added to slate`,'success'); renderCommPage();
   });
@@ -14121,10 +14767,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // Add suggested game individually
   document.querySelectorAll('.add-suggested-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
-      if(!week)return;
+      if(!gtWeek)return;
       const idx=parseInt(btn.dataset.idx);
       const game=suggested[idx]; if(!game)return;
-      saveGame(createGame(week.weekId,{...game,weekId:week.weekId}));
+      saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));
       showToast(`✅ ${td(game,'home')} vs ${td(game,'away')} added`,'success'); renderCommPage();
     });
   });
@@ -14135,10 +14781,10 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // existing ✕ Remove in the built slate; no new removal mechanism here.
   document.querySelectorAll('.add-shortlist-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
-      if(!week)return;
+      if(!gtWeek)return;
       const idx=parseInt(btn.dataset.idx);
       const game=(shortlist||[])[idx]; if(!game)return;
-      saveGame(createGame(week.weekId,{...game,weekId:week.weekId}));
+      saveGame(createGame(gtWeek.weekId,{...game,weekId:gtWeek.weekId}));
       showToast(`✅ ${td(game,'home')} vs ${td(game,'away')} added`,'success'); renderCommPage();
     });
   });
@@ -14146,18 +14792,18 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   // Dismiss (reject) a suggested game so it stops reappearing
   document.querySelectorAll('.reject-suggested-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
-      if(!week)return;
+      if(!gtWeek)return;
       const idx=parseInt(btn.dataset.idx);
       const game=suggested[idx]; if(!game)return;
-      rejectSuggestion(week.weekId, game);
+      rejectSuggestion(gtWeek.weekId, game);
       showToast(`Suggestion dismissed — ${td(game,'home')} vs ${td(game,'away')}`,'warning'); renderCommPage();
     });
   });
 
   // Restore all dismissed suggestions for the week
   document.getElementById('restore-rejected-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    clearRejectedSuggestions(week.weekId);
+    if(!gtWeek)return;
+    clearRejectedSuggestions(gtWeek.weekId);
     showToast('Dismissed suggestions restored','success'); renderCommPage();
   });
 
@@ -14175,19 +14821,19 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
 
   // Clear pool
   document.getElementById('clear-pool-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
-    clearAvailableGames(week.weekId);
+    if(!gtWeek)return;
+    clearAvailableGames(gtWeek.weekId);
     showToast('Available pool cleared','warning'); renderCommPage();
   });
 
   // ── Available-games filter bar (group/conf/rank/alma/search) ──
   // Re-renders only the groups container (not the whole panel) on each change
-  // so the user keeps their focus / scroll position.
+  // so the user keeps their focus / scroll position. B1: `gtWeek`/`gtGames`.
   const reRenderAvail = () => {
     const c = document.getElementById('avail-groups-list');
-    if (c) c.innerHTML = renderAvailableGroups(getAvailableGames(week?.weekId||''), games, week);
+    if (c) c.innerHTML = renderAvailableGroups(getAvailableGames(gtWeek?.weekId||''), gtGames, gtWeek);
     // Re-bind buttons inside the freshly rendered list
-    bindAvailGroupHandlers(week, games);
+    bindAvailGroupHandlers(gtWeek, gtGames);
   };
   document.getElementById('avail-group')?.addEventListener('change', e => {
     state.availFilter.groupBy = e.target.value; reRenderAvail();
@@ -14229,37 +14875,43 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.getElementById('avail-reset-filters')?.addEventListener('click', resetFilters);
   document.getElementById('avail-reset-filters-inline')?.addEventListener('click', resetFilters);
   // Wire add/remove buttons inside the initial render of the groups
-  bindAvailGroupHandlers(week, games);
+  bindAvailGroupHandlers(gtWeek, gtGames);
 
-  // Slate controls
+  // Slate controls — B1: `gtWeek`/`gtGames` throughout.
   document.getElementById('clear-slate-btn')?.addEventListener('click', ()=>{
-    if(!week||!confirm('Remove all games from the slate? This does not affect picks already submitted.'))return;
-    clearSlateForWeek(week.weekId);
+    if(!gtWeek||!confirm('Remove all games from the slate? This does not affect picks already submitted.'))return;
+    clearSlateForWeek(gtWeek.weekId);
     showToast('Slate cleared','warning'); renderCommPage();
   });
   document.getElementById('add-manual-game-btn')?.addEventListener('click', ()=>{
-    if(week)showGameModal(null,week,data=>{saveGame(createGame(week.weekId,data));showToast('Game added','success');renderCommPage();});
+    if(gtWeek)showGameModal(null,gtWeek,data=>{saveGame(createGame(gtWeek.weekId,data));showToast('Game added','success');renderCommPage();});
   });
+  // R1 (reviewer round 3, BLOCK) — DRAFT-gated at the handler, not just at
+  // the DOM (the button not rendering already covers a real click, but a
+  // handler that would silently do the dangerous thing anyway is the wrong
+  // shape to leave behind — belt and suspenders, same posture as every other
+  // `if(!gtWeek)return;` guard in this file).
   document.getElementById('unlock-all-btn')?.addEventListener('click', ()=>{
+    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
     clearAllLockOverrides();
-    getGames(week?.weekId).forEach(g=>setGameLockOverride(g.gameId,true));
+    getGames(gtWeek.weekId).forEach(g=>setGameLockOverride(g.gameId,true));
     showToast('🔓 All games unlocked','warning'); renderCommPage();
   });
   document.getElementById('refresh-scores-btn')?.addEventListener('click', async()=>{
-    if(!week)return;
+    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
     showToast('⏳ Refreshing scores…','warning');
-    await doRefreshScores(week,getGames(week.weekId));
+    await doRefreshScores(gtWeek,getGames(gtWeek.weekId));
     showToast('✅ Scores updated','success'); renderCommPage();
   });
   document.getElementById('finalize-scoring-btn')?.addEventListener('click', ()=>{
-    if(!week)return;
+    if(!gtWeek||(getWeek(gtWeek.weekId)||gtWeek).status===WEEK_STATUS.DRAFT)return; // RG-256 precedent: fresh status, not the render-time snapshot
     let count=0;
-    getGames(week.weekId).forEach(g=>{
+    getGames(gtWeek.weekId).forEach(g=>{
       if(g.status===GAME_STATUS.FINAL&&g.lockedSpread!==null){
         saveGame({...g,atsWinner:calculateAtsWinner(g)});count++;
       }
     });
-    finalizeWeek(week);
+    finalizeWeek(gtWeek);
     showToast(`✅ ATS calculated for ${count} games`,'success'); renderCommPage();
   });
 
@@ -14795,7 +15447,17 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
   document.querySelectorAll('.edit-game-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       const g=getGame(btn.dataset.gameId);
-      if(g)showGameModal(g,null,data=>{saveGame({...g,...data,updatedAt:new Date().toISOString()});showToast('Updated','success');renderCommPage();});
+      // DI-415 (UN-370) fix — this passed `null` for `week`, which
+      // `gameModalFieldLocks()` reads to decide whether a manual game's
+      // static fields have left their DRAFT-only editable phase
+      // (`!week` was read as "treat as draft," so a manual game past DRAFT
+      // could never actually lock through THIS call site — the Games tab's
+      // own primary edit entry point). The real week was available and
+      // simply not passed. B1 (reviewer round 2): that week is now `gtWeek`
+      // — the wizard's parked target when one exists, not necessarily the
+      // live `week` — so the lock reflects the week this row is ACTUALLY
+      // being edited under.
+      if(g)showGameModal(g,gtWeek,data=>{saveGame({...g,...data,updatedAt:new Date().toISOString()});showToast('Updated','success');renderCommPage();});
     });
   });
 
@@ -16444,8 +17106,83 @@ export function carryForwardBroadcastFields(existingGame) {
   };
 }
 
+/**
+ * DI-415 (UN-370, 2026-09-28) — which fields `showGameModal()` locks to
+ * read-only display, and why. `game` is `null`/`undefined` for a brand-new
+ * game (creation is always fully editable — there is no ESPN source, and no
+ * prior hand-entry, to defer to yet). Reuses `isEspnRefreshableGame()`
+ * (`doRefreshScores()`'s own filter, extracted above) rather than a second
+ * definition that could drift from it. A pure function of its two inputs, so
+ * it is directly unit-testable without driving the full modal.
+ *
+ *   staticLocked      Team/mascot/kickoff/venue/conference/rank — ESPN owns
+ *                      these the instant a game is refreshable, with NO
+ *                      DRAFT exemption (an ESPN game never had a genuine
+ *                      hand-entry phase). A pure manual (non-refreshable)
+ *                      game keeps them editable only while the week is
+ *                      still DRAFT — its own hand-entry setup phase; once
+ *                      picks are live against it, its identity locks too,
+ *                      by the identical rationale Drew gave for ESPN games.
+ *   scoreStatusLocked Final score + status. ESPN drives them whenever the
+ *                      game is refreshable, at every week status. A
+ *                      NON-refreshable manual game keeps this modal as its
+ *                      only score-entry surface (confirmed against
+ *                      `mayPersistGameGrading()`/`doRefreshScores()`/the
+ *                      Demo Simulation grid — there is no other location)
+ *                      — editable at every status, never locked.
+ *   manualLinkLocked  The manual/ESPN-link fields (the isManual toggle
+ *                      itself, league label, ESPN sport, ESPN event ID) —
+ *                      how a commissioner opts a game IN or OUT of the ESPN
+ *                      pipeline. A setup-time decision: locks ONLY for a
+ *                      pure manual (non-refreshable) game once the week has
+ *                      left DRAFT. An ESPN-sourced game's own link fields
+ *                      stay editable at every status — Drew's sentence never
+ *                      named them (DI-415's own "not named" row).
+ */
+function gameModalFieldLocks(game, week) {
+  if (!game) {
+    return { staticLocked: false, scoreStatusLocked: false, manualLinkLocked: false };
+  }
+  const refreshable = isEspnRefreshableGame(game);
+  const weekIsDraft = !week || week.status === WEEK_STATUS.DRAFT;
+  return {
+    staticLocked: refreshable || !weekIsDraft,
+    scoreStatusLocked: refreshable,
+    manualLinkLocked: !refreshable && !weekIsDraft,
+  };
+}
+export const _gameModalFieldLocksForTest = gameModalFieldLocks;
+
+/** N5 (reviewer round 2, 2026-09-28) — the read-only Status field shows the
+ *  SAME display label the editable `<select>` below it already uses
+ *  ("Scheduled"/"Live"/"Final"), never the raw `game.status` enum value. */
+const GAME_STATUS_DISPLAY_LABEL = { scheduled: 'Scheduled', live: 'Live', final: 'Final' };
+
+/**
+ * RG-286 (2026-09-28) — an ISO instant as a `<input type="datetime-local">`
+ * value: the device's LOCAL wall time, `YYYY-MM-DDTHH:MM`. The input has no
+ * timezone; the browser reads its value back as LOCAL time (and so does
+ * `new Date('YYYY-MM-DDTHH:MM')`, per spec). Filling it from
+ * `toISOString().slice(0,16)` wrote UTC wall time into a field read back as
+ * local, so every save moved the instant by the device's UTC offset (+5 h in
+ * Chicago under CDT). Never fill a datetime-local from toISOString().
+ */
+function isoToLocalDateTimeInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+export const _isoToLocalDateTimeInputForTest = isoToLocalDateTimeInput;
+
 function showGameModal(game, week, onSave) {
   const ov=document.createElement('div');ov.className='modal-overlay centered';
+  // RG-286 — what the kickoff field SHOWS (local wall time). Save compares
+  // against it: an untouched field carries the stored instant and its flags
+  // over byte-for-byte instead of re-deriving them from a minute-truncated
+  // round trip (the field has no seconds and no zone).
+  const shownKickoff = isoToLocalDateTimeInput(game?.kickoff);
   // Derive initial favorite/margin from any existing signed spread so editing
   // an existing game prefills correctly. Convention: home-perspective signed.
   let initFav = game?.favorite || '';
@@ -16467,20 +17204,81 @@ function showGameModal(game, week, onSave) {
   // the original value so save() can prompt for confirmation.
   const originalMultiplier = initMultiplier;
   const gameHasScored = game && game.status && game.status !== 'scheduled';
+  // DI-415 (UN-370) — which fields lock to read-only display, computed once.
+  const locks = gameModalFieldLocks(game, week);
+  // Read-only display for a locked field — matches the app's existing
+  // read-only-field convention (the Manage screen's effective-times
+  // preview): plain text, never a disabled <input>/<select> a commissioner
+  // could still try to click into.
+  const roText = (value) => `<p class="form-value-static">${escHtml(value || '—')}</p>`;
+  // Precomputed OUTSIDE the template (a plain string, not a nested ternary
+  // inside a template literal) so roText() below reads as the same simple
+  // "identifier passed to a helper that escHtml()s it" shape every other
+  // read-only field in this modal already uses — xsstest.mjs [9c-2].
+  const gameSourceLabel = initIsManual ? `Manual${initLeagueLabel ? ' — ' + initLeagueLabel : ''}` : 'ESPN';
+  // Extracted to its own function (rather than a nested template literal
+  // inline in the ternary below) — a THREE-deep template-in-ternary-in-
+  // template nesting is exactly where xsstest.mjs [9c-2]'s classifier gives
+  // up tracing an interpolation back to escHtml(), even though roText()
+  // itself always escapes. A named call reads the same as every other
+  // roText() use in this file.
+  const gameSourceLockedHTML = () => `
+      <label class="form-label">Game Source</label>
+      ${roText(gameSourceLabel)}
+      <p class="text-muted text-xs mt-xs">Locked once the week leaves Draft — re-linking a game to ESPN is a setup-time decision.</p>
+      `;
+  // The pre-DI-415 checkbox + manual-fields block, byte-identical, moved into
+  // its own function for the SAME xsstest.mjs [9c-2] reason as
+  // gameSourceLockedHTML() above — both ternary branches are now calls the
+  // classifier can resolve ("a call whose EVERY return classifies"), never an
+  // inline multi-line template nested inside the ternary itself.
+  const manualLinkEditableHTML = () => `
+      <label class="checkbox-row">
+        <input type="checkbox" id="m-is-manual" ${initIsManual?'checked':''} />
+        <span><strong>This is a one-off / out-of-league game</strong>
+          <span class="text-muted text-xs"> — e.g. NFL Thanksgiving, special event</span>
+        </span>
+      </label>
+      <div id="m-manual-fields" style="${initIsManual?'':'display:none'}" class="manual-fields">
+        <div class="form-group">
+          <label class="form-label">League Label
+            <span class="text-muted text-xs">(shown as a small chip on the game — e.g. "NFL", "Special")</span>
+          </label>
+          <input class="form-input" id="m-league-label" placeholder="NFL" value="${escHtml(initLeagueLabel)}" maxlength="20" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">ESPN Live Scoring
+            <span class="text-muted text-xs">(optional — auto-updates scores if set)</span>
+          </label>
+          <div class="espn-input-row">
+            <select class="form-select" id="m-espn-sport">
+              <option value=""${!initEspnSport?' selected':''}>None (Manual entry only)</option>
+              <option value="college-football"${initEspnSport==='college-football'?' selected':''}>College Football</option>
+              <option value="nfl"${initEspnSport==='nfl'?' selected':''}>NFL</option>
+            </select>
+            <input class="form-input" id="m-espn-eventid"
+              placeholder="ESPN event ID or gamecast URL"
+              value="${escHtml(initEspnEventId)}" />
+          </div>
+          <div class="espn-mode-indicator" id="m-espn-mode">${initEspnSport && initEspnEventId ? '<span class="mode-pill mode-auto">🔄 Auto (ESPN-linked) — scores will update automatically</span>' : '<span class="mode-pill mode-manual">✍️ Manual entry only — you\'ll enter scores yourself</span>'}</div>
+          <p class="text-muted text-xs mt-sm">Paste the ESPN gamecast URL and we'll extract the event ID automatically. Ex: <code>https://www.espn.com/nfl/game/_/gameId/401671626</code></p>
+        </div>
+      </div>
+      `;
 
   ov.innerHTML=`<div class="modal">
     <div class="modal-header"><h3>${game?'Edit Game':'Add Game'}</h3><button class="modal-close" id="mc">✕</button></div>
     <div class="flex gap-sm">
-      <div class="form-group" style="flex:2"><label class="form-label">Home Team</label><input class="form-input" id="m-home" value="${escHtml(game?.homeTeam||'')}" placeholder="e.g. Oklahoma" /></div>
-      <div class="form-group" style="flex:1"><label class="form-label">Home Mascot</label><input class="form-input" id="m-home-mascot" value="${escHtml(game?.homeMascot||'')}" placeholder="Sooners" /></div>
+      <div class="form-group" style="flex:2"><label class="form-label">Home Team</label>${locks.staticLocked ? roText(game?.homeTeam) : `<input class="form-input" id="m-home" value="${escHtml(game?.homeTeam||'')}" placeholder="e.g. Oklahoma" />`}</div>
+      <div class="form-group" style="flex:1"><label class="form-label">Home Mascot</label>${locks.staticLocked ? roText(game?.homeMascot) : `<input class="form-input" id="m-home-mascot" value="${escHtml(game?.homeMascot||'')}" placeholder="Sooners" />`}</div>
     </div>
     <div class="flex gap-sm">
-      <div class="form-group" style="flex:2"><label class="form-label">Away Team</label><input class="form-input" id="m-away" value="${escHtml(game?.awayTeam||'')}" placeholder="e.g. Texas" /></div>
-      <div class="form-group" style="flex:1"><label class="form-label">Away Mascot</label><input class="form-input" id="m-away-mascot" value="${escHtml(game?.awayMascot||'')}" placeholder="Longhorns" /></div>
+      <div class="form-group" style="flex:2"><label class="form-label">Away Team</label>${locks.staticLocked ? roText(game?.awayTeam) : `<input class="form-input" id="m-away" value="${escHtml(game?.awayTeam||'')}" placeholder="e.g. Texas" />`}</div>
+      <div class="form-group" style="flex:1"><label class="form-label">Away Mascot</label>${locks.staticLocked ? roText(game?.awayMascot) : `<input class="form-input" id="m-away-mascot" value="${escHtml(game?.awayMascot||'')}" placeholder="Longhorns" />`}</div>
     </div>
-    <p class="text-muted text-xs mb-md">Display will be "School (Mascot)" — leave Mascot blank to use the auto lookup.</p>
+    ${locks.staticLocked ? '' : '<p class="text-muted text-xs mb-md">Display will be "School (Mascot)" — leave Mascot blank to use the auto lookup.</p>'}
     <div class="form-group"><label class="form-label">Kickoff (local time)</label>
-      <input class="form-input" id="m-kickoff" type="datetime-local" value="${game?.kickoff?new Date(game.kickoff).toISOString().slice(0,16):''}" /></div>
+      ${locks.staticLocked ? roText(game?.kickoff ? formatGameTime(game.kickoff, getTimezone(), game) : null) : `<input class="form-input" id="m-kickoff" type="datetime-local" value="${escHtml(shownKickoff)}" />`}</div>
 
     <div class="form-group"><label class="form-label">Spread</label>
       <div class="spread-input-row">
@@ -16522,52 +17320,24 @@ function showGameModal(game, week, onSave) {
          game (or similar) can flow through the SAME scoring + polling
          pipeline as CFB games. -->
     <div class="form-group modal-subsection">
-      <label class="checkbox-row">
-        <input type="checkbox" id="m-is-manual" ${initIsManual?'checked':''} />
-        <span><strong>This is a one-off / out-of-league game</strong>
-          <span class="text-muted text-xs"> — e.g. NFL Thanksgiving, special event</span>
-        </span>
-      </label>
-      <div id="m-manual-fields" style="${initIsManual?'':'display:none'}" class="manual-fields">
-        <div class="form-group">
-          <label class="form-label">League Label
-            <span class="text-muted text-xs">(shown as a small chip on the game — e.g. "NFL", "Special")</span>
-          </label>
-          <input class="form-input" id="m-league-label" placeholder="NFL" value="${escHtml(initLeagueLabel)}" maxlength="20" />
-        </div>
-        <div class="form-group">
-          <label class="form-label">ESPN Live Scoring
-            <span class="text-muted text-xs">(optional — auto-updates scores if set)</span>
-          </label>
-          <div class="espn-input-row">
-            <select class="form-select" id="m-espn-sport">
-              <option value=""${!initEspnSport?' selected':''}>None (Manual entry only)</option>
-              <option value="college-football"${initEspnSport==='college-football'?' selected':''}>College Football</option>
-              <option value="nfl"${initEspnSport==='nfl'?' selected':''}>NFL</option>
-            </select>
-            <input class="form-input" id="m-espn-eventid"
-              placeholder="ESPN event ID or gamecast URL"
-              value="${escHtml(initEspnEventId)}" />
-          </div>
-          <div class="espn-mode-indicator" id="m-espn-mode">${initEspnSport && initEspnEventId ? '<span class="mode-pill mode-auto">🔄 Auto (ESPN-linked) — scores will update automatically</span>' : '<span class="mode-pill mode-manual">✍️ Manual entry only — you\'ll enter scores yourself</span>'}</div>
-          <p class="text-muted text-xs mt-sm">Paste the ESPN gamecast URL and we'll extract the event ID automatically. Ex: <code>https://www.espn.com/nfl/game/_/gameId/401671626</code></p>
-        </div>
-      </div>
+      ${locks.manualLinkLocked ? gameSourceLockedHTML() : manualLinkEditableHTML()}
     </div>
 
-    <div class="form-group"><label class="form-label">Venue (optional)</label><input class="form-input" id="m-venue" value="${escHtml(game?.venue||'')}" /></div>
-    <div class="form-group"><label class="form-label">Home Conference</label><input class="form-input" id="m-hconf" value="${escHtml(game?.homeConference||'')}" /></div>
-    <div class="form-group"><label class="form-label">Away Conference</label><input class="form-input" id="m-aconf" value="${escHtml(game?.awayConference||'')}" /></div>
-    <div class="form-group"><label class="form-label">Home Rank (blank=unranked)</label><input class="form-input" id="m-hrank" type="number" value="${numHtml(game?.homeRank)}" /></div>
-    <div class="form-group"><label class="form-label">Away Rank</label><input class="form-input" id="m-arank" type="number" value="${numHtml(game?.awayRank)}" /></div>
-    ${game?`<div class="form-group"><label class="form-label">Home Final Score</label><input class="form-input" id="m-hs" type="number" value="${numHtml(game.homeScore)}" /></div>
+    <div class="form-group"><label class="form-label">Venue (optional)</label>${locks.staticLocked ? roText(game?.venue) : `<input class="form-input" id="m-venue" value="${escHtml(game?.venue||'')}" />`}</div>
+    <div class="form-group"><label class="form-label">Home Conference</label>${locks.staticLocked ? roText(game?.homeConference) : `<input class="form-input" id="m-hconf" value="${escHtml(game?.homeConference||'')}" />`}</div>
+    <div class="form-group"><label class="form-label">Away Conference</label>${locks.staticLocked ? roText(game?.awayConference) : `<input class="form-input" id="m-aconf" value="${escHtml(game?.awayConference||'')}" />`}</div>
+    <div class="form-group"><label class="form-label">Home Rank (blank=unranked)</label>${locks.staticLocked ? roText(game?.homeRank != null ? String(game.homeRank) : null) : `<input class="form-input" id="m-hrank" type="number" value="${numHtml(game?.homeRank)}" />`}</div>
+    <div class="form-group"><label class="form-label">Away Rank</label>${locks.staticLocked ? roText(game?.awayRank != null ? String(game.awayRank) : null) : `<input class="form-input" id="m-arank" type="number" value="${numHtml(game?.awayRank)}" />`}</div>
+    ${game?(locks.scoreStatusLocked ? `<div class="form-group"><label class="form-label">Home Final Score</label>${roText(game.homeScore != null ? String(game.homeScore) : null)}</div>
+    <div class="form-group"><label class="form-label">Away Final Score</label>${roText(game.awayScore != null ? String(game.awayScore) : null)}</div>
+    <div class="form-group"><label class="form-label">Status</label>${roText(GAME_STATUS_DISPLAY_LABEL[game.status] || game.status)}</div>` : `<div class="form-group"><label class="form-label">Home Final Score</label><input class="form-input" id="m-hs" type="number" value="${numHtml(game.homeScore)}" /></div>
     <div class="form-group"><label class="form-label">Away Final Score</label><input class="form-input" id="m-as" type="number" value="${numHtml(game.awayScore)}" /></div>
     <div class="form-group"><label class="form-label">Status</label>
       <select class="form-select" id="m-status">
         <option value="scheduled"${game.status==='scheduled'?' selected':''}>Scheduled</option>
         <option value="live"${game.status==='live'?' selected':''}>Live</option>
         <option value="final"${game.status==='final'?' selected':''}>Final</option>
-      </select></div>`:''}
+      </select></div>`):''}
     <button class="btn btn-primary btn-block" id="m-save">Save Game</button>
   </div>`;
   document.body.appendChild(ov);
@@ -16609,13 +17379,25 @@ function showGameModal(game, week, onSave) {
   espnEvIdInp?.addEventListener('input', updateEspnMode);
 
   ov.querySelector('#m-save')?.addEventListener('click',()=>{
-    const ht=document.getElementById('m-home')?.value.trim();
-    const at=document.getElementById('m-away')?.value.trim();
+    // DI-415 (UN-370) — locked fields are never read from the DOM (they were
+    // never rendered as inputs at all); they carry the EXISTING stored value
+    // forward unchanged. `game` is always truthy whenever `locks.staticLocked`
+    // is true (gameModalFieldLocks() only locks an existing game), so these
+    // reads are safe.
+    const ht = locks.staticLocked ? (game?.homeTeam || '') : (document.getElementById('m-home')?.value.trim() || '');
+    const at = locks.staticLocked ? (game?.awayTeam || '') : (document.getElementById('m-away')?.value.trim() || '');
     if(!ht||!at){showToast('Teams required','error');return;}
-    const hMasc=document.getElementById('m-home-mascot')?.value.trim()||'';
-    const aMasc=document.getElementById('m-away-mascot')?.value.trim()||'';
-    const kr=document.getElementById('m-kickoff')?.value;
-    const kickoff=kr?new Date(kr).toISOString():null;
+    const hMasc = locks.staticLocked ? (game?.homeMascot || '') : (document.getElementById('m-home-mascot')?.value.trim()||'');
+    const aMasc = locks.staticLocked ? (game?.awayMascot || '') : (document.getElementById('m-away-mascot')?.value.trim()||'');
+    // DI-415: a locked kickoff field never rendered #m-kickoff at all, so
+    // there is nothing to read from the DOM for it — never touched.
+    // RG-286: an UNLOCKED field that is genuinely untouched still carries the
+    // stored instant forward byte-for-byte (never re-derived through a
+    // minute-truncated round trip); edited ⇒ the typed LOCAL wall time
+    // (new Date() on a zone-less value is local).
+    const kr = locks.staticLocked ? '' : document.getElementById('m-kickoff')?.value;
+    const kickoffUnchanged = !!game && (locks.staticLocked || (kr || '') === shownKickoff);
+    const kickoff = kickoffUnchanged ? (game.kickoff ?? null) : (kr ? new Date(kr).toISOString() : null);
     if(!kickoff && !game){
       if(!confirm('No kickoff date/time is set. This game will be hidden from players and shown as "pending confirmation" until you set a date. Add it anyway?')) return;
     }
@@ -16647,13 +17429,18 @@ function showGameModal(game, week, onSave) {
       if (!ok) return;
     }
 
-    // Manual game fields
-    const isManual = !!document.getElementById('m-is-manual')?.checked;
-    const leagueLabel = isManual ? (document.getElementById('m-league-label')?.value.trim() || '') : '';
-    const espnSport = isManual ? (document.getElementById('m-espn-sport')?.value || null) || null : null;
-    // ESPN event ID: accept either the bare ID or a gamecast URL; extract the digits.
-    let espnEventId = null;
-    if (isManual) {
+    // Manual game fields — DI-415's manualLinkLocked: a pure manual game,
+    // once the week has left DRAFT, carries these forward unchanged too
+    // (un-linking/re-linking a game mid-week is a setup-time decision).
+    const isManual = locks.manualLinkLocked ? initIsManual : !!document.getElementById('m-is-manual')?.checked;
+    const leagueLabel = locks.manualLinkLocked ? initLeagueLabel : (isManual ? (document.getElementById('m-league-label')?.value.trim() || '') : '');
+    let espnSport = null, espnEventId = null;
+    if (locks.manualLinkLocked) {
+      espnSport = initEspnSport || null;
+      espnEventId = initEspnEventId || null;
+    } else if (isManual) {
+      espnSport = (document.getElementById('m-espn-sport')?.value || null) || null;
+      // ESPN event ID: accept either the bare ID or a gamecast URL; extract the digits.
       const raw = (document.getElementById('m-espn-eventid')?.value || '').trim();
       if (raw) {
         // URLs look like https://www.espn.com/nfl/game/_/gameId/401671626
@@ -16665,16 +17452,16 @@ function showGameModal(game, week, onSave) {
       espnEventId = game?.espnEventId || null;
     }
 
-    const venue=document.getElementById('m-venue')?.value.trim()||null;
-    const hconf=document.getElementById('m-hconf')?.value.trim()||'';
-    const aconf=document.getElementById('m-aconf')?.value.trim()||'';
-    const hr=parseInt(document.getElementById('m-hrank')?.value)||null;
-    const ar=parseInt(document.getElementById('m-arank')?.value)||null;
-    const hs=game?(document.getElementById('m-hs')?.value!==''?parseFloat(document.getElementById('m-hs')?.value):null):null;
-    const as_=game?(document.getElementById('m-as')?.value!==''?parseFloat(document.getElementById('m-as')?.value):null):null;
-    const status=game?document.getElementById('m-status')?.value||'scheduled':'scheduled';
+    const venue = locks.staticLocked ? (game?.venue || null) : (document.getElementById('m-venue')?.value.trim()||null);
+    const hconf = locks.staticLocked ? (game?.homeConference || '') : (document.getElementById('m-hconf')?.value.trim()||'');
+    const aconf = locks.staticLocked ? (game?.awayConference || '') : (document.getElementById('m-aconf')?.value.trim()||'');
+    const hr = locks.staticLocked ? (game?.homeRank ?? null) : (parseInt(document.getElementById('m-hrank')?.value)||null);
+    const ar = locks.staticLocked ? (game?.awayRank ?? null) : (parseInt(document.getElementById('m-arank')?.value)||null);
+    const hs = game ? (locks.scoreStatusLocked ? (game.homeScore ?? null) : (document.getElementById('m-hs')?.value!==''?parseFloat(document.getElementById('m-hs')?.value):null)) : null;
+    const as_ = game ? (locks.scoreStatusLocked ? (game.awayScore ?? null) : (document.getElementById('m-as')?.value!==''?parseFloat(document.getElementById('m-as')?.value):null)) : null;
+    const status = game ? (locks.scoreStatusLocked ? (game.status || 'scheduled') : (document.getElementById('m-status')?.value||'scheduled')) : 'scheduled';
     const isAlma=!!(getAlmaMaterMatch(ht,claimedAlmaMaters()) || getAlmaMaterMatch(at,claimedAlmaMaters()));
-    const tw=getTimeWindow(kickoff);
+    const tw=kickoffUnchanged ? (game.timeWindow ?? getTimeWindow(kickoff)) : getTimeWindow(kickoff);
     let actualWinner=null;
     if(status==='final'&&hs!==null&&as_!==null){if(hs>as_)actualWinner=ht;else if(as_>hs)actualWinner=at;}
     // Grade the game AS THE MODAL WILL SAVE IT — new teams, new scores, new
@@ -16694,7 +17481,11 @@ function showGameModal(game, week, onSave) {
       ...carryForwardBroadcastFields(game),
       multiplier, isManual, leagueLabel, espnSport, espnEventId,
       timeWindow:tw,spreadSource:'manual',dataQuality:'manual',dataSource:'manual',
-      kickoffConfirmed:!!kickoff,
+      // RG-286 — untouched: the stored flags, never re-derived (a TBD game
+      // stays TBD). Edited: an explicitly typed time is a CONFIRMED time, in
+      // exactly one state (RG-57's rule: never confirmed AND date-only).
+      kickoffConfirmed: kickoffUnchanged ? (game.kickoffConfirmed ?? !!kickoff) : !!kickoff,
+      kickoffDateOnly: kickoffUnchanged ? (game.kickoffDateOnly ?? false) : (kickoff ? false : (game?.kickoffDateOnly ?? false)),
       lastUpdated:new Date().toISOString()});
     ov.remove();
   });
@@ -21312,22 +22103,30 @@ function mayPersistGameGrading() {
   return !!(s && s.isAdmin);
 }
 
+/**
+ * Which games should we ask ESPN about?
+ *   - Regular CFB pipeline games (isManual falsy, espnEventId set)      → yes
+ *   - Manual out-of-league games with FULL ESPN linking (both espnSport
+ *     AND espnEventId set)                                              → yes
+ *   - Manual games without a sport/ID (commissioner enters scores)      → no
+ *   - Demo-tagged games                                                 → no
+ *
+ * Extracted from `doRefreshScores()`'s own inline filter (DI-415, UN-370,
+ * 2026-09-28) so `showGameModal()` can reuse the EXACT same predicate to
+ * decide which fields ESPN owns — never a second definition that could
+ * drift from this one.
+ */
+export function isEspnRefreshableGame(g) {
+  if (!g?.espnEventId) return false;
+  if (g.dataSource === 'demo') return false;
+  if (!g.isManual) return true;                       // normal CFB path
+  return !!g.espnSport && !!g.espnEventId;            // manual w/ full ESPN linking
+}
+
 export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
-  // Which games should we ask ESPN about?
-  //   - Regular CFB pipeline games (isManual falsy, espnEventId set)      → yes
-  //   - Manual out-of-league games with FULL ESPN linking (both espnSport
-  //     AND espnEventId set)                                              → yes
-  //   - Manual games without a sport/ID (commissioner enters scores)      → no
-  //   - Demo-tagged games                                                 → no
-  //
   // The outer setupAutoRefresh already short-circuits demo/manual WEEKS, so
   // this per-game filter is the second line of defense for mixed slates.
-  const refreshable = games.filter(g => {
-    if (!g?.espnEventId) return false;
-    if (g.dataSource === 'demo') return false;
-    if (!g.isManual) return true;                       // normal CFB path
-    return !!g.espnSport && !!g.espnEventId;            // manual w/ full ESPN linking
-  });
+  const refreshable = games.filter(isEspnRefreshableGame);
   if (!refreshable.length) return;
   const{updated,errors,liveStatusByEventId}=await refreshScoresByEventIds(
     refreshable.map(g=>g.espnEventId).filter(Boolean), refreshable
@@ -27457,6 +28256,48 @@ function weekWizardContinuableDrafts() {
     .sort((a, b) => (a.weekNumber || 0) - (b.weekNumber || 0));
 }
 /**
+ * DI-412 AMENDED (UN-367, reviewer round 2 B1, 2026-09-28) — the week the
+ * Games tab actually renders (Build Slate / Continue set up / Available
+ * Games / Selected Slate / Player Requests — everything tagged
+ * `data-comm-tab="games"`). "Edit slate in Games tab" was landing on the
+ * WRONG week whenever another week is open/locked/live: `getCurrentWeek()`
+ * keeps resolving to THAT in-progress week (`wizardSetActiveWeekId()`,
+ * below, correctly refuses to move the pointer off it), so a commissioner
+ * mid-setup on a brand-new draft (the DI-406 "New Week" path — reached
+ * every ordinary mid-season week, since a week is almost always open) saw
+ * the LIVE week's slate, never the one the wizard was actually building.
+ *
+ * Returns the wizard's PARKED create-flow target (steps 1-5, a real DRAFT
+ * week) when one exists, else `null` — the caller falls back to
+ * `getCurrentWeek()`. Every OTHER Commissioner tab (Week/Players/Rules/
+ * SCRIBE) is UNCHANGED by this function and keeps showing the live week;
+ * only the Games tab's own cards read this.
+ */
+function gamesTabTargetWeek() {
+  if (!_weekWizardTargetWeekId) return null;
+  if (_weekWizardStep < 1 || _weekWizardStep > 5) return null;
+  const w = getWeek(_weekWizardTargetWeekId);
+  return (w && w.status === WEEK_STATUS.DRAFT) ? w : null;
+}
+export const _gamesTabTargetWeekForTest = gamesTabTargetWeek;
+/**
+ * DI-412 (UN-367, 2026-09-28) — the Games tab's "Continue set up" card is
+ * shown only when ALL of: (1) the tab is currently showing week `week`
+ * (renderCommPage()'s own `getCurrentWeek()`), (2) the wizard's OWN target
+ * (`_weekWizardTargetWeekId`, independent of the active-week pointer — see
+ * `weekWizardTargetWeek()` above) is that SAME week, (3) that week is still
+ * DRAFT, and (4) the wizard's in-progress step is inside the create-flow
+ * (1-5) — a wizard sitting in Manage/Finalize for a non-draft week is a
+ * different state with its own entry points and does not need this card. A
+ * pure function of its three inputs (no DOM), so it is directly testable.
+ */
+function shouldShowGamesTabContinueSetupCard(week, wizardTargetWeekId, wizardStep) {
+  if (!week || week.status !== WEEK_STATUS.DRAFT) return false;
+  if (!wizardTargetWeekId || wizardTargetWeekId !== week.weekId) return false;
+  return wizardStep >= 1 && wizardStep <= 5;
+}
+export const _shouldShowGamesTabContinueSetupCardForTest = shouldShowGamesTabContinueSetupCard;
+/**
  * Coordinator fix (2026-09-27) — the ONE call site `createWeekFromWizard()`
  * uses to point the app's global "current week" at whatever it just
  * created/edited (`js/week-wizard.js:364`). Creating or continuing a draft
@@ -27468,15 +28309,38 @@ function weekWizardContinuableDrafts() {
  * all — weekWizardTargetWeek() (above) tracks the week it is building
  * independently — so this only ADOPTS the new/edited week as "current" when
  * nothing else genuinely is one.
+ *
+ * N12 (reviewer round 2, pre-existing — fixed here since it is this exact
+ * function) — `activeNow` can be NULL (no EXPLICIT pointer ever set on this
+ * device) while a real week is still in progress: `getCurrentWeek()`
+ * (`js/storage.js`) resolves a null pointer via its OWN status-scan
+ * fallback (`weeks.find(w => ['open','locked','live'].includes(w.status))`).
+ * The old guard read ONLY `getWeek(activeNow)` — with `activeNow` null that
+ * lookup never ran at all, so this function would set the pointer straight
+ * onto a brand-new DRAFT even while another week was genuinely
+ * open/locked/live, moving every player's "current week" (Picks/Dashboard)
+ * onto a draft nobody should see yet. Resolving through `getCurrentWeek()`
+ * itself when there is no explicit pointer asks the SAME question every
+ * other reader in the app already asks, rather than a narrower one that
+ * happens to miss the no-pointer case.
  */
 function wizardSetActiveWeekId(weekId) {
-  const activeNow = getActiveWeekId();
-  if (activeNow && activeNow !== weekId) {
-    const cur = getWeek(activeNow);
-    if (cur && ['open', 'locked', 'live'].includes(cur.status)) return;
+  // N12 note (reviewer round 3) — unconditionally getCurrentWeek(), not
+  // `activeNow ? getWeek(activeNow) : getCurrentWeek()`: the explicit-pointer
+  // branch had the SAME gap the null-pointer one did — `getWeek(activeNow)`
+  // returns `undefined` for a pointer naming a WEEK THAT'S SINCE BEEN
+  // DELETED, which the old guard read as "nothing to protect," even while a
+  // different week was genuinely open/locked/live. getCurrentWeek() already
+  // handles a stale/deleted pointer via its own fallback (js/storage.js) —
+  // asking it, always, is the same question every other reader in the app
+  // already asks, not a narrower one with its own gap.
+  const currentResolved = getCurrentWeek();
+  if (currentResolved && currentResolved.weekId !== weekId && ['open', 'locked', 'live'].includes(currentResolved.status)) {
+    return;
   }
   setActiveWeekId(weekId);
 }
+export const _wizardSetActiveWeekIdForTest = wizardSetActiveWeekId;
 // DI-358 (amended 2026-09-27) — the scheduled-open BLOCKED notice's
 // once-per-week dedup, so `tickAutoTransition()`'s new DRAFT→OPEN leg warns
 // the commissioner once (not every tick, ~once a minute) when a week's
@@ -27545,14 +28409,30 @@ export const _weekWizardEntryLabelForTest = weekWizardEntryLabel;
 export const _weekWizardContinuableDraftsForTest = weekWizardContinuableDrafts;
 
 /** DI-C1 §2.1 — a single primary button at the TOP of the Week tab, above
- *  the existing Week Manager / Week Settings / Available Games cards. */
+ *  the existing Week Manager / Week Settings / Available Games cards.
+ *  DI-406 (UN-361, 2026-09-28) — a secondary "New Week" button renders
+ *  directly beneath it, but ONLY in the one label state that has no other
+ *  visible entry point to starting the next week: `weekWizardEntryLabel() ===
+ *  'Manage This Week'` means a current week exists, is not a draft, and has
+ *  no continuable draft — every OTHER label state already has the
+ *  commissioner mid-setup of a week, where a second "start yet another week"
+ *  button would compete with the primary one, not complement it. */
 function weekWizardEntryCardHTML(week) {
+  const label = weekWizardEntryLabel(week);
+  const newWeekBtnHTML = label === 'Manage This Week'
+    ? `<button type="button" class="btn btn-secondary btn-block mt-sm" id="week-wizard-new-week-btn">New Week</button>`
+    : '';
   return `<div class="admin-section" data-comm-tab="week">
     <div class="card" id="week-wizard-entry-card">
-      <button type="button" class="btn btn-primary btn-block" id="week-wizard-entry-btn">${escHtml(weekWizardEntryLabel(week))}</button>
+      <button type="button" class="btn btn-primary btn-block" id="week-wizard-entry-btn">${escHtml(label)}</button>
+      ${newWeekBtnHTML}
     </div>
   </div>`;
 }
+// DI-406 test seam — a pure function of storage state (no DOM), same
+// convention as `_weekWizardEntryLabelForTest`/`_weekWizardContinuableDraftsForTest`
+// just above, so a test can drive the card's markup shape directly.
+export const _weekWizardEntryCardHTMLForTest = weekWizardEntryCardHTML;
 
 // REVIEWER minor finding (916bdb7 review, 2026-09-25) — the parameter was
 // named `step`, a common-enough generic identifier that xsstest.mjs's
@@ -27649,15 +28529,36 @@ function renderWeekWizardStep2HTML(week) {
     return `<p class="text-muted text-sm">Create the week first (Step 1).</p>
       <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button></div>`;
   }
+  // DI-411 (UN-366, 2026-09-28) — no more "Skip to slate": the forward
+  // control is a real "Next," gated on the slate actually holding a game
+  // (fetched OR manually added — Drew's own words cover both paths). "Fetch
+  // ESPN…" copy drops "ESPN" throughout this step (wizard-scoped only; the
+  // Admin panel's diagnostic "Fetch ESPN Data" card, DI-352, is untouched).
+  const hasGames = getGames(week.weekId).length > 0;
   return `<div class="admin-section-title">Populate games</div>
-    <button type="button" class="btn btn-primary btn-block" id="wiz-fetch-apply-btn">Fetch ESPN + Apply Suggested 10</button>
+    <button type="button" class="btn btn-primary btn-block" id="wiz-fetch-apply-btn">Fetch Games</button>
+    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step2-add-manual">Add a game manually</button>
     <div id="wiz-fetch-status" class="text-sm mt-sm text-muted"></div>
     <div id="wiz-fetch-skeleton" class="week-wizard-skeleton-rows" style="display:none" aria-busy="true">${Array.from({ length: 10 }, () => '<div class="week-wizard-skeleton-row"></div>').join('')}</div>
-    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button><button type="button" class="btn btn-ghost" id="wiz-step2-skip">Skip to slate</button></div>`;
+    ${hasGames ? '' : '<p class="text-muted text-xs mt-sm">Add at least one game to continue.</p>'}
+    <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step2-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step2-next" ${hasGames ? '' : 'disabled'}>Next</button></div>`;
 }
 function bindWeekWizardStep2(bodyEl, week) {
   bodyEl.querySelector('#wiz-step2-back')?.addEventListener('click', () => { _weekWizardStep = 1; renderWeekWizardSheetBody(); });
-  bodyEl.querySelector('#wiz-step2-skip')?.addEventListener('click', () => { _weekWizardStep = 3; renderWeekWizardSheetBody(); });
+  bodyEl.querySelector('#wiz-step2-next')?.addEventListener('click', () => {
+    if (getGames(week.weekId).length === 0) return; // disabled in the DOM too — belt and suspenders
+    _weekWizardStep = 3;
+    renderWeekWizardSheetBody();
+  });
+  // DI-411 — reuses showGameModal() VERBATIM (the exact single-game editor
+  // Step 3's own rows already reuse, AD-03), never a second game-creation UI.
+  // onSave actually persists (saveGame(createGame(...)), matching the SAME
+  // pattern the Games tab's own "Add Manually" button already uses,
+  // js/app.js:14298) — the wizard's own body re-render afterward re-evaluates
+  // the Next button's disabled state.
+  bodyEl.querySelector('#wiz-step2-add-manual')?.addEventListener('click', () => {
+    showGameModal(null, week, (data) => { saveGame(createGame(week.weekId, data)); renderWeekWizardSheetBody(); });
+  });
   const fetchBtn = bodyEl.querySelector('#wiz-fetch-apply-btn');
   fetchBtn?.addEventListener('click', async () => {
     if (!week) return;
@@ -27700,7 +28601,14 @@ function bindWeekWizardStep2(bodyEl, week) {
       hideBackendErrorBanner('wizard');
       status?.classList?.remove?.('wiz-fetch-status-error');
       if (status) status.textContent = result.partial ? WIZARD_COPY.FETCH_PARTIAL(result.fetched) : WIZARD_COPY.FETCH_SUCCESS(result.added);
-      _weekWizardStep = 3;
+      // DI-411 item 5 — a fetch can report `ok:true` (ESPN answered) while
+      // adding zero games to the slate (every candidate already on it, or
+      // the suggested-slate builder kept none). That must NOT auto-advance
+      // to an empty Step 3 — only re-render Step 2, where the Next button
+      // (now correctly still disabled) and its status line stay visible.
+      if (getGames(week.weekId).length > 0) {
+        _weekWizardStep = 3;
+      }
       renderWeekWizardSheetBody();
     } catch (e) {
       console.warn('[week-wizard] fetch+apply failed', e);
@@ -27727,17 +28635,39 @@ function renderWeekWizardStep3HTML(games) {
   }).join('');
   return `<div class="admin-section-title">Confirm slate + spreads</div>
     ${banner}<div class="week-wizard-game-list">${rows || '<p class="text-muted text-sm">No games on the slate yet.</p>'}</div>
+    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step3-edit-in-games-tab">Edit slate in Games tab</button>
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step3-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step3-next">Next</button></div>`;
 }
 function bindWeekWizardStep3(bodyEl, week, games) {
   bodyEl.querySelector('#wiz-step3-back')?.addEventListener('click', () => { _weekWizardStep = 2; renderWeekWizardSheetBody(); });
   bodyEl.querySelector('#wiz-step3-next')?.addEventListener('click', () => { _weekWizardStep = 4; renderWeekWizardSheetBody(); });
+  // DI-412 (UN-367) — a LATERAL move (Games tab, richer editor), not a step
+  // forward/back: dismisses the sheet WITHOUT clearing wizard state (never
+  // closeWeekWizardSheet()), then reuses the SAME tab-switch mechanism the
+  // Comm nav icon itself resolves through (navigateTo('commissioner') reads
+  // state.commTab when it paints renderCommPage()).
+  bodyEl.querySelector('#wiz-step3-edit-in-games-tab')?.addEventListener('click', () => {
+    dismissWizardSheetForNavigation();
+    state.commTab = 'games';
+    navigateTo('commissioner');
+  });
   bodyEl.querySelectorAll('[data-game-id]').forEach((row) => {
     row.addEventListener('click', () => {
       const game = games.find((g) => g.gameId === row.dataset.gameId);
       if (!game) return;
       // DI-C1 §2.3 Step 3 — reuse, never a second spread-entry UI (AD-03).
-      showGameModal(game, week, () => renderWeekWizardSheetBody());
+      // RG-284 (2026-09-28) — showGameModal() never saves on its own: it
+      // hands the edited fields to onSave(data), and every other caller
+      // persists them (the Comm page's editor: `saveGame({...g, ...data,
+      // updatedAt})`). This callback used to be `() => renderWeekWizardSheetBody()`,
+      // which DISCARDED `data` — hidden until now only because RG-283 kept the
+      // modal buried under the sheet. Same save as the Comm page, but over the
+      // mirror's CURRENT row (RG-256 class: `game` is this render's closure).
+      showGameModal(game, week, (data) => {
+        const current = getGames(week.weekId).find((g) => g.gameId === game.gameId) || game;
+        saveGame({ ...current, ...data, updatedAt: new Date().toISOString() });
+        renderWeekWizardSheetBody();
+      });
     });
   });
 }
@@ -27753,7 +28683,7 @@ function renderWeekWizardTimingFieldsHTML(week, games) {
   return `
     <div class="form-group">
       <label class="form-label">Auto-Open At</label>
-      <input class="form-input" type="datetime-local" id="wiz-picks-open-at" value="${week.picksOpenAt ? new Date(week.picksOpenAt).toISOString().slice(0, 16) : ''}" />
+      <input class="form-input" type="datetime-local" id="wiz-picks-open-at" value="${escHtml(isoToLocalDateTimeInput(week.picksOpenAt))}" />
     </div>
     <div class="form-group">
       <label class="form-label">Lock N minutes before first kickoff <span class="text-muted text-xs">— default 30</span></label>
@@ -27762,10 +28692,6 @@ function renderWeekWizardTimingFieldsHTML(week, games) {
     <div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
       <input type="checkbox" id="wiz-auto-live-enabled" ${getAutoLiveEnabled(week) ? 'checked' : ''} />
       <span class="form-label" style="margin:0">Auto-transition LOCKED → LIVE at first kickoff</span>
-    </label></div>
-    <div class="form-group"><label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-      <input type="checkbox" id="wiz-auto-final-enabled" ${getAutoFinalizeEnabled(week) ? 'checked' : ''} />
-      <span class="form-label" style="margin:0">Prompt for finalization when all games are final</span>
     </label></div>
     <div class="effective-times-preview">
       <div><strong>Effective lock:</strong> ${escHtml(fmt(lockAt))}</div>
@@ -27777,7 +28703,8 @@ function saveWizardTiming(bodyEl, week) {
   const offsetRaw = parseInt(bodyEl.querySelector('#wiz-auto-lock-offset')?.value, 10);
   const autoLockOffsetMinutes = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 30;
   const autoLiveEnabled = bodyEl.querySelector('#wiz-auto-live-enabled')?.checked !== false;
-  const autoFinalizeEnabled = bodyEl.querySelector('#wiz-auto-final-enabled')?.checked !== false;
+  // DI-414 (UN-369) — `#wiz-auto-final-enabled` no longer exists; this save
+  // never reads or writes `autoFinalizeEnabled` again, in either direction.
   // SECURITY GATE FINDING 2 (916bdb7 review, 2026-09-25) — re-read the week
   // at SAVE time, not the one captured when the sheet opened. The wizard
   // sheet deliberately does not repaint on Realtime (DI-C1's own design —
@@ -27791,10 +28718,17 @@ function saveWizardTiming(bodyEl, week) {
   // just locked. Falls back to the captured `week` only if it has since
   // been deleted (should not happen in practice; keeps this from throwing).
   const liveWeek = getWeeks().find(w => w.weekId === week.weekId) || week;
+  // RG-287 (2026-09-28) — same datetime-local defect as RG-286: the field was
+  // filled with UTC wall time and parsed back as local, so every Step 4 /
+  // Manage save moved a scheduled open by the device's UTC offset (hours
+  // late west of Greenwich). `week` is the object this field was rendered
+  // from, so its local wall time is exactly what the field showed: untouched
+  // ⇒ carry the live stored instant; edited ⇒ the typed local wall time.
+  const openUnchanged = (openRaw || '') === isoToLocalDateTimeInput(week.picksOpenAt);
   saveWeek({
     ...liveWeek,
-    picksOpenAt: openRaw ? new Date(openRaw).toISOString() : null,
-    autoLockOffsetMinutes, autoLiveEnabled, autoFinalizeEnabled,
+    picksOpenAt: openUnchanged ? (liveWeek.picksOpenAt ?? null) : (openRaw ? new Date(openRaw).toISOString() : null),
+    autoLockOffsetMinutes, autoLiveEnabled,
   });
   refreshHeader();
 }
@@ -27886,6 +28820,16 @@ function renderWeekWizardStep6HTML(week, games) {
   const gate = weekWizardApi().gatingChecklist({ gamesCount: games.length, missingSpreadCount: missing, timingConfigured });
   const row = (ok, label) => `<div class="week-wizard-check-row${ok ? ' ok' : ''}"><span aria-hidden="true">${ok ? '✓' : '○'}</span> ${escHtml(label)}</div>`;
 
+  // DI-416 (UN-371) — general awareness, not a checklist item: rendered near
+  // the top, above the gating checklist, and never touches `canOpen`/
+  // `finishDisabled` below. A NOTICE, never a block (DI-406 N1's own flag) —
+  // running two weeks open at once is unusual but occasionally intentional
+  // (overlapping bowl-season weeks), so this warns rather than refuses.
+  const otherOpenWeek = anotherWeekAlreadyOpen(getWeeks(), week.weekId);
+  const otherWeekNoticeHTML = otherOpenWeek
+    ? `<div class="warning-box mb-sm">⚠️ Week ${escHtml(String(otherOpenWeek.weekNumber))} is already ${escHtml(otherOpenWeek.status)} — opening this week too may cause players to see the wrong week.</div>`
+    : '';
+
   // DI-357 — tiebreaker question + calc-basis caption, reusing the exact
   // field the standalone Tiebreaker card already writes.
   const tb = weekWizardApi().tiebreakerStepSummary(week);
@@ -27940,6 +28884,7 @@ function renderWeekWizardStep6HTML(week, games) {
   const finishDisabled = mode !== OPEN_MODES.DRAFT && !gate.canOpen;
 
   return `<div class="admin-section-title">Open for picks</div>
+    ${otherWeekNoticeHTML}
     ${row(gate.gamesOk, gate.gamesLabel)}${row(gate.spreadsOk, gate.spreadsLabel)}${row(gate.timingOk, gate.timingLabel)}
     <div class="admin-section-title mt-md">Tiebreaker</div>
     <div class="form-group">
@@ -28558,44 +29503,35 @@ function renderWeekWizardSheetBody() {
  *  competes with `#week-wizard-body`'s own vertical scroll (Interaction
  *  Principles' Gestures: "avoid creating competing gestures"). */
 let _unbindWizardSheetDismiss = null;
-function openWeekWizardSheet() {
-  // SECURITY GATE FINDING 1 (2026-09-25) — same reasoning as
-  // showLeaguePageOverlay()'s identical guard, just above.
-  if (isContentWithheld()) return;
+/**
+ * DI-406 (UN-361, 2026-09-28) — `{ forceNew }` lets the new top-level "New
+ * Week" button (weekWizardEntryCardHTML(), only rendered when the entry
+ * button reads "Manage This Week") open the sheet COLD, straight into
+ * create-mode Step 1, bypassing the currentWeek/continuable-drafts
+ * resolution below entirely — the same end state
+ * `#wiz-manage-setup-next`'s click handler (bindWeekWizardManage(), above)
+ * already produces once inside the Manage screen, just reached from one
+ * screen shallower. No new guard: creating a new draft week is always safe
+ * (getCurrentWeek() prioritizes any open/locked/live week over a newer
+ * draft — see bindWeekWizardManage()'s own comment on `nextWeekNum`), so
+ * `forceNew` skips straight past the branch that would otherwise route back
+ * into the EXISTING week's Manage screen.
+ */
+/**
+ * N1 (reviewer round 2, 2026-09-28) — the DOM-shell tail `openWeekWizardSheet()`
+ * and `resumeWeekWizardSheet()` used to build independently (mount, header,
+ * backdrop/close bindings, the first `renderWeekWizardSheetBody()` paint, and
+ * the swipe-to-dismiss bind) — duplicated only because the parallel
+ * `hotfix/wizard-sheet` branch was still mid-flight against
+ * `openWeekWizardSheet()`'s own mount mechanics at build time; that branch is
+ * merged into this one now (release/v0.27.1, 02841a7), so the reason for the
+ * duplication is gone. Neither caller resolves `week`/`_weekWizardStep`
+ * here — that stays each caller's OWN job, done strictly BEFORE this runs
+ * (`openWeekWizardSheet()`'s full resolution chain; `resumeWeekWizardSheet()`'s
+ * deliberate "do not re-derive, they're already correct").
+ */
+function mountWeekWizardSheetShell() {
   document.getElementById('week-wizard-sheet-wrap')?.remove();
-  const currentWeek = getCurrentWeek();
-  // BLOCK fix (b) (app-shell part 3A review, 2026-09-27) — the entry button
-  // used to ALWAYS target getCurrentWeek(), so once that week finalized (or
-  // no week existed yet after one was deleted) with a newer draft ALREADY
-  // sitting untouched (Duplicate, or a prior "Set up Week N+1"), there was no
-  // way back into it except starting a THIRD week by accident. Fresh open
-  // never starts forced/picker (cleared every time, below) — recomputed here.
-  _weekWizardForceNewWeek = false;
-  _weekWizardShowContinuePicker = false;
-  let week = currentWeek;
-  if (currentWeek && currentWeek.status !== WEEK_STATUS.DRAFT) {
-    const drafts = weekWizardContinuableDrafts();
-    if (drafts.length === 1) {
-      week = drafts[0]; // exactly one — no ambiguity, go straight to it
-    } else if (drafts.length > 1) {
-      _weekWizardShowContinuePicker = true; // genuine ambiguity — ask
-      week = null;
-    }
-    // drafts.length === 0 — nothing to continue, `week` stays currentWeek
-    // (the Manage screen, which itself now offers "Set up Week N+1").
-  }
-  // Coordinator fix (2026-09-27) — the wizard now tracks its OWN target week
-  // (weekWizardTargetWeek(), above), independent of the active-week pointer.
-  _weekWizardTargetWeekId = week?.weekId || null;
-  // DI-358 — fresh open-mode selection each time the sheet opens.
-  _weekWizardOpenMode = null;
-  _weekWizardScheduleAt = null;
-  // DI-359 — a fresh open never starts inside the Finalize flow; it is only
-  // ever entered explicitly from the Manage screen's own button.
-  _finalizeStep = null;
-  const games = week ? getGames(week.weekId) : [];
-  const entry = weekWizardApi().selectEntry({ week, games, timingConfigured: true });
-  _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
   const wrap = document.createElement('div');
   wrap.id = 'week-wizard-sheet-wrap';
   // SECURITY GATE FINDING 1 — swept by tearDownRenderedContentForHold() if a
@@ -28617,7 +29553,7 @@ function openWeekWizardSheet() {
   renderWeekWizardSheetBody();
   // Drag-to-dismiss, header/handle only — see the file comment just above.
   // No-ops on web (bindSwipeToDismiss() is native-only). Bound ONCE per
-  // open; renderWeekWizardSheetBody() only ever repaints #week-wizard-body,
+  // mount; renderWeekWizardSheetBody() only ever repaints #week-wizard-body,
   // never the header, so this never needs rebinding mid-flow.
   const sheetEl = wrap.querySelector('#week-wizard-sheet');
   const headerEl = wrap.querySelector('.chat-sheet-header');
@@ -28631,6 +29567,56 @@ function openWeekWizardSheet() {
     onProgress: (progress) => wizardSheetDragProgress(wrap, sheetEl, progress),
     onSettle: (result) => settleWizardSheetDrag(wrap, sheetEl, result),
   }) : null;
+}
+
+function openWeekWizardSheet({ forceNew = false } = {}) {
+  // SECURITY GATE FINDING 1 (2026-09-25) — same reasoning as
+  // showLeaguePageOverlay()'s identical guard, just above.
+  if (isContentWithheld()) return;
+  document.getElementById('week-wizard-sheet-wrap')?.remove();
+  // BLOCK fix (b) (app-shell part 3A review, 2026-09-27) — the entry button
+  // used to ALWAYS target getCurrentWeek(), so once that week finalized (or
+  // no week existed yet after one was deleted) with a newer draft ALREADY
+  // sitting untouched (Duplicate, or a prior "Set up Week N+1"), there was no
+  // way back into it except starting a THIRD week by accident. Fresh open
+  // never starts forced/picker (cleared every time, below) — recomputed here.
+  _weekWizardForceNewWeek = forceNew;
+  _weekWizardShowContinuePicker = false;
+  let week = null;
+  if (forceNew) {
+    // DI-406 — cold start into create-mode: no currentWeek/drafts
+    // resolution at all, matching `#wiz-manage-setup-next`'s own
+    // `_weekWizardTargetWeekId = null` shape exactly.
+  } else {
+    const currentWeek = getCurrentWeek();
+    week = currentWeek;
+    if (currentWeek && currentWeek.status !== WEEK_STATUS.DRAFT) {
+      const drafts = weekWizardContinuableDrafts();
+      if (drafts.length === 1) {
+        week = drafts[0]; // exactly one — no ambiguity, go straight to it
+      } else if (drafts.length > 1) {
+        _weekWizardShowContinuePicker = true; // genuine ambiguity — ask
+        week = null;
+      }
+      // drafts.length === 0 — nothing to continue, `week` stays currentWeek
+      // (the Manage screen, which itself now offers "Set up Week N+1").
+    }
+  }
+  // Coordinator fix (2026-09-27) — the wizard now tracks its OWN target week
+  // (weekWizardTargetWeek(), above), independent of the active-week pointer.
+  _weekWizardTargetWeekId = week?.weekId || null;
+  // DI-358 — fresh open-mode selection each time the sheet opens.
+  _weekWizardOpenMode = null;
+  _weekWizardScheduleAt = null;
+  // DI-359 — a fresh open never starts inside the Finalize flow; it is only
+  // ever entered explicitly from the Manage screen's own button.
+  _finalizeStep = null;
+  const games = week ? getGames(week.weekId) : [];
+  const entry = weekWizardApi().selectEntry({ week, games, timingConfigured: true });
+  _weekWizardStep = entry.mode === 'steps' ? entry.step : 1;
+  // N1 — the DOM-shell tail (mount, header, backdrop/close bindings, first
+  // paint, swipe-to-dismiss) is now shared with resumeWeekWizardSheet().
+  mountWeekWizardSheetShell();
 }
 
 /**
@@ -28670,6 +29656,11 @@ function wizardStatusIconHTML(b) {
   return b && typeof b.icon === 'string' ? icon(b.icon) : '';
 }
 function closeWeekWizardSheet() {
+  // R2 (reviewer round 3) — captured BEFORE `_weekWizardTargetWeekId` is
+  // cleared below (gamesTabTargetWeek() would otherwise always answer
+  // `null` and this could never tell "there was a parked session" from
+  // "there never was one").
+  const hadParked = !!gamesTabTargetWeek();
   _unbindWizardSheetDismiss?.();
   _unbindWizardSheetDismiss = null;
   document.getElementById('week-wizard-sheet-wrap')?.remove();
@@ -28683,6 +29674,76 @@ function closeWeekWizardSheet() {
   // the picker" state from a sheet that already closed.
   _weekWizardForceNewWeek = false;
   _weekWizardShowContinuePicker = false;
+  // N8 (reviewer round 2)/R2 (reviewer round 3) — clearing
+  // `_weekWizardTargetWeekId` just above means `gamesTabTargetWeek()` now
+  // answers `null`, so the Games tab (if it is the page currently showing
+  // underneath) should fall back to the LIVE week again — its "Continue set
+  // up" card, banner, and Build Slate state were all keyed to the session
+  // this close just ended. R2's own fix: this ONLY needs to happen when a
+  // session actually WAS parked (`hadParked`) — an ordinary close with
+  // nothing parked has nothing stale to fix and must not repaint at all
+  // (RG-176: only navigateTo(), never a bare renderCommPage() call, carries
+  // a half-typed Comm-page field across a repaint via captureDirtyFields()).
+  // navigateTo('commissioner'), not renderCommPage() directly, for exactly
+  // that reason — the ✕/backdrop/swipe path can close the sheet while the
+  // commissioner has, e.g., a Weekly Blurb or Announcement draft in
+  // progress, and that must survive this repaint precisely like every other
+  // repaint in the app already does.
+  if (hadParked && state.currentTab === 'commissioner') navigateTo('commissioner');
+}
+
+/**
+ * DI-412 (UN-367, 2026-09-28) — "Edit slate in Games tab" (Step 3) dismisses
+ * the wizard sheet WITHOUT resetting its in-progress state, so "Continue set
+ * up" (the Games tab card, `resumeWeekWizardSheet()` below) has something to
+ * resume. Deliberately NOT `closeWeekWizardSheet()`, which nulls
+ * `_weekWizardTargetWeekId`/`_finalizeStep`/the force-new/picker flags AND
+ * (N8, reviewer round 2) now repaints the Comm page — neither is wanted here,
+ * since this IS the navigation TO that repaint, about to happen via
+ * `navigateTo('commissioner')` at the call site. A genuine close (✕, backdrop
+ * tap, swipe-to-dismiss) still goes through `closeWeekWizardSheet()`,
+ * unchanged. Only the DOM teardown — the exact one-line subset
+ * `closeWeekWizardSheet()` also performs — happens here.
+ */
+function dismissWizardSheetForNavigation() {
+  _unbindWizardSheetDismiss?.();
+  _unbindWizardSheetDismiss = null;
+  document.getElementById('week-wizard-sheet-wrap')?.remove();
+}
+export const _dismissWizardSheetForNavigationForTest = dismissWizardSheetForNavigation;
+
+/**
+ * DI-412 (UN-367, 2026-09-28) — reopens the wizard sheet exactly where it was
+ * left: `_weekWizardStep`/`_weekWizardTargetWeekId` are NOT re-derived (they
+ * are already correct — this is a RESUME, not a fresh open). Deliberately not
+ * a call into `openWeekWizardSheet()` UNCONDITIONALLY, which recomputes the
+ * target week from `getCurrentWeek()`/continuable-drafts and would silently
+ * overwrite an in-progress session — N1 (reviewer round 2): the DOM-shell
+ * mount itself is now the SAME shared `mountWeekWizardSheetShell()`
+ * `openWeekWizardSheet()` uses, factored out once the parallel
+ * `hotfix/wizard-sheet` branch (the original reason these two built the
+ * shell independently) merged into this one. N8 (reviewer round 2) — if
+ * there is genuinely nothing parked to resume (`_weekWizardTargetWeekId` is
+ * null — the "Continue set up" card should never render in that state, but
+ * a stale card or a direct test call could still reach here), this falls
+ * back to a normal `openWeekWizardSheet()` rather than mounting a sheet with
+ * nothing to show.
+ */
+function resumeWeekWizardSheet() {
+  // SECURITY GATE FINDING 1 — same guard every wizard-sheet entry point uses.
+  if (isContentWithheld()) return;
+  // N8 (reviewer round 2) — nothing parked to resume; behave like a normal
+  // open rather than mounting an empty/wrong sheet.
+  if (!_weekWizardTargetWeekId) { openWeekWizardSheet(); return; }
+  mountWeekWizardSheetShell();
+}
+export const _resumeWeekWizardSheetForTest = resumeWeekWizardSheet;
+
+/** DI-412 test seam — the wizard's in-progress session, read without a full
+ *  DOM open, so the "teardown keeps state" / "resume lands on the same step"
+ *  proof can drive it directly. */
+export function _weekWizardSessionForTest() {
+  return { step: _weekWizardStep, targetWeekId: _weekWizardTargetWeekId, forceNew: _weekWizardForceNewWeek };
 }
 
 window.navigateTo=navigateTo;

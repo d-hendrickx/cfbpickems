@@ -273,19 +273,28 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // plus a pre-existing drift this pass also found and closed rather than
   // compounding — same sites, only the line numbers moved, matched by text).
   // Re-derived 2026-09-28 (fix-final-v0270: logo-merge gate, league-pill fit, sync-glyph span ahead of these sites) — line numbers only, same sites, same texts, matched by exact text.
+  // Re-derived 2026-09-28 (DI-406/407/408: New Week button, Build Slate
+  // resizing, and the "Collapse all / Expand all" heading-row pair
+  // (wireCollapsibleSections()'s rewrite + wirePanelCollapseAllControls()),
+  // all land ahead of these sites) — line numbers only, same three sites,
+  // matched by exact text.
+  // Re-derived 2026-09-28 (REVIEWER ROUND 2 B1 — renderAdminPage() now calls
+  // wireCollapsibleSections(c) for real, plus the DI-405/DI-408 stale-
+  // comment fixes above these sites) — line numbers only, same three
+  // sites, matched by exact text.
   const ENUMERATED_CALL_SITES = [
     // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
     // pass — code added above both sites shifted their line numbers only;
     // same two sites, matched by exact text).
-    { file: 'app.js', line: 3533, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
-    { file: 'app.js', line: 12594, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', line: 3801, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', line: 13173, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
     // UX Revamp wiring pass 3a (2026-09-25) — renderAdminPage()'s own
     // cross-league users-read gate (WIRING_CHECKLIST_B_092526.md
     // §Window(b)): only fetch listUsersAcrossLeagues() when the composed
     // viewer bag says isPlatformAdmin, the same chrome-gating shape every
     // other enumerated site here already uses. Text updated, wiring pass
     // 3a-bis (BLOCK 2's `attempted` guard replaces `rows == null`).
-    { file: 'app.js', line: 13005, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
+    { file: 'app.js', line: 13584, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
   ];
 
   function findIdentifierHits(src, ident) {
@@ -918,14 +927,22 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
   // pass — code added above every one of these five sites shifted their
   // line numbers only; same five sites, matched by exact text).
+  // Re-derived 2026-09-28 (DI-406/407/408: New Week button, Build Slate
+  // resizing, and the "Collapse all / Expand all" heading-row pair, all
+  // land ahead of these sites) — line numbers only, same five sites,
+  // matched by exact text.
+  // Re-derived 2026-09-28 (REVIEWER ROUND 2 B1 — renderAdminPage() now calls
+  // wireCollapsibleSections(c) for real, plus the DI-405/DI-408 stale-
+  // comment fixes above these sites) — line numbers only, same five sites,
+  // matched by exact text.
   const ENUMERATED_SUPER_CALL_SITES = [
-    { file: 'app.js', line: 3534, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 12595, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 12982, text: 'if (viewer.isSuperAdmin) {' },
+    { file: 'app.js', line: 3802, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 13174, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 13561, text: 'if (viewer.isSuperAdmin) {' },
     // Text updated, wiring pass 3a-bis (BLOCK 2's `attempted` guard replaces
     // `loaded`/`loading`-only).
-    { file: 'app.js', line: 12997, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
-    { file: 'app.js', line: 13165, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
+    { file: 'app.js', line: 13576, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
+    { file: 'app.js', line: 13769, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
   ];
 
   function findIdentifierHitsLocal(src, ident) {

@@ -164,6 +164,16 @@ function mkPage(id) {
     return [...p._own].map(i => els.get(i)).filter(el => el && (
       (wantInput && el.tagName === 'input') || (wantTextarea && el.tagName === 'textarea')));
   };
+  // DI-398 (2026-09-28) — a real `#id` lookup SCOPED to this section, the way
+  // js/chat-ui.js's `_prefsField(root, id)` needs it for a non-document
+  // `scopeEl` (`root?.querySelector?.('#'+id)`, js/chat-ui.js:3886). mkEl()'s
+  // base stub always returns null here, which silently dropped every
+  // listener bindPrefsPanel(CC_BODY_CHAT) tried to attach — found by this
+  // section going red (setChatNick() never called) before this fix.
+  p.querySelector = (sel) => {
+    const m = /^#([\w-]+)$/.exec(sel);
+    return (m && p._own.has(m[1])) ? (els.get(m[1]) || null) : null;
+  };
   Object.defineProperty(p, 'innerHTML', {
     get() { return this._html; },
     set(v) { this._html = v; buildFromHTML(v, this); },
@@ -177,13 +187,20 @@ const PAGE = mkPage('page-chat');
 // commissioner panel's text inputs live in its own section.
 const PAGE_RULES = mkPage('page-rules');
 const PAGE_COMM = mkPage('page-commissioner');
+// DI-398 (UN-358, 2026-09-28) — the ⚙ prefs panel's only host, after the
+// Chat tab's own trigger was removed, is the control center drawer's own
+// Chat settings accordion body (js/control-center.js, `rowId: 'chat'`,
+// `bodyHTML: ctx.bodies?.chatPrefsHTML`). It is a SEPARATE node from
+// #page-chat, painted by control-center.js's own paintMainContent(), never
+// by chat-ui.js's renderChatPage(). §10/§16 below open/repaint it here.
+const CC_BODY_CHAT = mkPage('cc-body-chat');
 
 const DOC = {
   body: mkEl('body'),
   activeElement: null,
   documentElement: { style: { setProperty() {}, removeProperty() {} } },
   createElement: t => mkEl(t),
-  getElementById: id => ({ 'page-chat': PAGE, 'page-rules': PAGE_RULES, 'page-commissioner': PAGE_COMM }[id]
+  getElementById: id => ({ 'page-chat': PAGE, 'page-rules': PAGE_RULES, 'page-commissioner': PAGE_COMM, 'cc-body-chat': CC_BODY_CHAT }[id]
     || els.get(id) || null),
   querySelector: sel => {
     if (sel === '#page-chat.active') return chatTabActive ? PAGE : null;
@@ -462,13 +479,35 @@ console.log('\n[9] Player A\'s draft is never restored into Player B\'s composer
 //   • the chat ⚙ prefs inputs   (chat-ui.js prefsPanelHTML, #pref-nick et al.)
 //   • #fb-body                  (app.js renderRulesPage, the feedback textarea)
 //   • the commissioner panel     (app.js renderCommPage — broadcast body, etc.)
-// The first is reachable from this harness through the REAL renderChatPage().
-// The other two are rebuilt by app.js's navigateTo(), which is module-private
-// and cannot be driven from a chat-scoped harness — so they are proven the way
-// §8 already proves app.js wiring: the BEHAVIOUR is asserted against the real
-// js/field-preserve.js functions over an honest page stub, and the WIRING is
+// All three are rebuilt by a render function this harness cannot call directly
+// (the chat ⚙ panel by js/control-center.js's paintMainContent(), DI-398,
+// 2026-09-28; the other two by app.js's navigateTo(), module-private) — so
+// all three are proven the way §8 already proves app.js wiring: the BEHAVIOUR
+// is asserted against the real js/field-preserve.js functions (and, for the
+// chat panel, the real chat-ui.js prefsPanelHTML()/bindPrefsPanel() its one
+// surviving host actually calls) over an honest page stub, and the WIRING is
 // asserted structurally. Same split, same labels.
 const fp = await import('./js/field-preserve.js');
+
+/** DI-398 (UN-358, 2026-09-28) — mirrors js/control-center.js's own
+ *  paintMainContent() repaint sequence (capture -> innerHTML write -> restore
+ *  -> stamp, js/control-center.js:973-978) for the ONE node that now hosts
+ *  the ⚙ prefs panel (`#cc-body-chat`), then binds it exactly the way
+ *  js/app.js's bindControlCenterBodies() does (js/app.js:3691,
+ *  `bindOnceIn(scopeEl, 'cc-body-chat', (el) => bindPrefsPanel(el))`). Not a
+ *  re-implementation: every line below calls a REAL exported function
+ *  (`chatUi._prefsPanelHTMLForTest`/`_bindPrefsPanelForTest`, `fp.*`) — only
+ *  the control-center.js dispatch/state tree around it (six unrelated
+ *  accordion rows, drag state, etc.) is left unstubbed, the same "exercise
+ *  the real functions, stub the render tree" split §11 already uses for the
+ *  Rules/commissioner pages app.js's own navigateTo() rebuilds. */
+function paintChatPrefsBody(ownerKey) {
+  const snap = ownerKey ? fp.captureDirtyFields(CC_BODY_CHAT, ownerKey) : null;
+  CC_BODY_CHAT.innerHTML = chatUi._prefsPanelHTMLForTest();
+  if (ownerKey) fp.restoreDirtyFields(snap, CC_BODY_CHAT, ownerKey);
+  chatUi._bindPrefsPanelForTest(CC_BODY_CHAT);
+  if (ownerKey) fp.stampFieldOwner(CC_BODY_CHAT, ownerKey);
+}
 
 // ── §10 The chat ⚙ prefs panel — DIRTY WINS, CLEAN LOSES ───────────────────
 // The rule Drew's design states and the composer's does not: `#pref-nick` is
@@ -477,11 +516,14 @@ const fp = await import('./js/field-preserve.js');
 // made on another device is clobbered by a stale copy held in this node.
 // (bindPrefsPanel() listens on 'change', which fires on BLUR — so a repaint
 // mid-edit doesn't merely lose the caret, it loses the edit entirely.)
+// RE-DERIVED (DI-398, UN-358, 2026-09-28): the panel's only host is now the
+// control center's own body (#cc-body-chat), opened/repainted below via
+// paintChatPrefsBody() — see that helper's header for what it does and does
+// not stub. `renderChatPage()` no longer touches this panel at all.
 console.log('\n[10] The chat ⚙ prefs panel survives a repaint — but only where it is DIRTY…');
 {
   storage.clearSession(); storage.setSession('p1', false, true);
-  chatUi.renderChatPage();
-  document.getElementById('chat-prefs-btn')?._fire('click');       // the REAL toggle
+  paintChatPrefsBody('p1');                                        // the control center's own first paint
   const nick = document.getElementById('pref-nick');
   assert(!!nick, 'fixture: the ⚙ panel is open and #pref-nick is on screen');
   assert(!!document.getElementById('pref-initials'), 'fixture: #pref-initials too (the panel has more than one text field)');
@@ -489,7 +531,7 @@ console.log('\n[10] The chat ⚙ prefs panel survives a repaint — but only whe
   nick.value = 'Drewbacca';                                        // typed, NOT yet blurred → never saved
   nick.setSelectionRange(4, 4);
   nick.focus();
-  chatUi.renderChatPage();                                         // an inbound message / Realtime repaint
+  paintChatPrefsBody('p1');                                        // an inbound message / Realtime repaint
   const after = document.getElementById('pref-nick');
   assert(after && after.value === 'Drewbacca',
     `an in-progress nickname edit survives the repaint — got ${JSON.stringify(after && after.value)} (THE BUG: '' or the stored value means the node was rebuilt under the player)`);
@@ -506,8 +548,22 @@ console.log('\n[10] The chat ⚙ prefs panel survives a repaint — but only whe
   document.getElementById('pref-nick')._fire('change');
   assert(storage.getChatNick() === 'Drewbacca',
     `fixture: blurring the field is what saves it — the stored nick is now ${JSON.stringify(storage.getChatNick())}`);
+  // NOTE (found while re-deriving this section for DI-398, flagged in the
+  // handoff, not fixed here — it is bindPrefsPanel()'s save behavior, which
+  // DI-398 says stays unmodified): the 'change' handler's own self-refresh
+  // is `renderChatPage()` (js/chat-ui.js, unchanged) — which repaints
+  // #page-chat, NOT #cc-body-chat. When #page-chat was this panel's host,
+  // that self-refresh also refreshed the field's OWN `defaultValue`
+  // baseline to the just-saved text, so the field read as clean again
+  // immediately. Now that #cc-body-chat is the only host, that baseline is
+  // only refreshed on #cc-body-chat's OWN next repaint (a theme/timezone
+  // change elsewhere in the drawer, in production) — modelled here as one
+  // more paintChatPrefsBody('p1') call BEFORE the cross-device write, so the
+  // field settles clean the way it will settle in production before the
+  // "untouched field" case below is exercised.
+  paintChatPrefsBody('p1');
   storage.setChatNick('FromOtherPhone');                           // ≤16 chars — a change arriving from another device
-  chatUi.renderChatPage();
+  paintChatPrefsBody('p1');
   const clean = document.getElementById('pref-nick');
   assert(clean && clean.value === 'FromOtherPhone',
     `an UNTOUCHED #pref-nick takes the freshly stored value, so a cross-device change is not clobbered — got ${JSON.stringify(clean && clean.value)}`);
@@ -517,15 +573,18 @@ console.log('\n[10] The chat ⚙ prefs panel survives a repaint — but only whe
 }
 {
   // Rule 2 on THIS surface. The session changes on another page (Picks → Log
-  // Out / Switch Player), which never re-renders chat, so A's typed nickname is
-  // still sitting in the node when B opens the ⚙ panel.
+  // Out / Switch Player), which never re-paints the drawer, so A's typed
+  // nickname is still sitting in the node when B opens the ⚙ panel — the
+  // control center's own ownerKey() (js/control-center.js, `ctx.session?.
+  // player?.id`) is what changes underneath it, mirrored here by passing a
+  // different ownerKey string into paintChatPrefsBody().
   storage.clearSession(); storage.setSession('p1', false, true);
-  chatUi.renderChatPage();
+  paintChatPrefsBody('p1');
   const a = document.getElementById('pref-nick');
   a.value = 'A-WAS-HERE'; a.focus();
   storage.clearSession();
   storage.setSession('p2', false, true);                           // B signs in elsewhere
-  chatUi.renderChatPage();
+  paintChatPrefsBody('p2');
   const b = document.getElementById('pref-nick');
   assert(b && b.value !== 'A-WAS-HERE',
     `Player A's unsaved nickname is NEVER restored into Player B's field — got ${JSON.stringify(b && b.value)} (a cross-session leak; one blur from saving A's text under B's name)`);
@@ -744,22 +803,32 @@ console.log('\n[15] app.js and chat-ui.js wire the generic mechanism [structural
 
 // ── §16 #page-chat has ONE owner (reviewer BLOCK on d554ae3) ────────────────
 // navigateTo() and renderChatPage() both stamped #page-chat, with different key
-// formats; the last stamp killed the other's next capture, so the ⚙ panel lost
-// the edit on roughly every other repaint. chat-ui.js owns the node; app.js must
-// neither capture, restore nor stamp it.
+// formats; the last stamp killed the other's next capture, so a dirty field
+// lost the edit on roughly every other repaint. chat-ui.js owns the node;
+// app.js must neither capture, restore nor stamp it.
+// RE-DERIVED (DI-398, UN-358, 2026-09-28): the fixture field moves from
+// #pref-nick (no longer rendered inside #page-chat at all — see §10 above)
+// to #chat-search-input (searchBarHTML(), still a plain dirty-trackable text
+// field inside #page-chat, carried by the SAME generic
+// `captureDirtyFields(c, me(), {skipIds:['chat-input']})` call in
+// renderChatPage() that #pref-nick used to be carried by) — the invariant
+// under test (exactly one stamper for #page-chat) is about the CONTAINER,
+// not about which field happens to be dirty inside it.
 console.log('\n[16] #page-chat is stamped by chat-ui.js alone…');
 {
   storage.clearSession(); storage.setSession('p1', false, true);
   chatUi.renderChatPage();
-  if (!document.getElementById('pref-nick')) document.getElementById('chat-prefs-btn')?._fire('click');
-  let nick = document.getElementById('pref-nick');
-  assert(!!nick, 'fixture: the ⚙ panel is open');
+  document.getElementById('chat-search-btn')?._fire('click');       // the REAL toggle — opens searchBarHTML()
+  let q = document.getElementById('chat-search-input');
+  assert(!!q, 'fixture: the search bar is open and #chat-search-input is on screen');
   // Non-vacuity: a FOREIGN stamp on the node (what app.js used to write) really does kill the next capture.
-  nick.value = 'HalfTyped'; nick.focus();
+  q.value = 'HalfTyped'; q.focus();
   fp.stampFieldOwner(PAGE, 'acct\u241flg\u241fp1');
   chatUi.renderChatPage();
-  assert(document.getElementById('pref-nick')?.value !== 'HalfTyped',
+  assert(document.getElementById('chat-search-input')?.value !== 'HalfTyped',
     'fixture: a second stamper with a different key format DOES lose the edit — the hazard is real, so the rule below is load-bearing');
+  document.getElementById('chat-search-close')?._fire('click');     // reset search state for the next section
+  document.getElementById('chat-search-btn')?._fire('click');
   // The rule, on comment-blanked app.js source.
   const blank = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const appCode = blank(await readFile(new URL('./js/app.js', import.meta.url), 'utf8'));
@@ -772,10 +841,42 @@ console.log('\n[16] #page-chat is stamped by chat-ui.js alone…');
   assert((appCode.match(/stampFieldOwner\(/g) || []).length === 1,
     'and that is app.js\'s only stampFieldOwner() call site');
   // And with a single owner, repeated repaints keep the edit every time, not every other time.
-  nick = document.getElementById('pref-nick'); nick.value = 'StillHere'; nick.focus();
+  q = document.getElementById('chat-search-input'); q.value = 'StillHere'; q.focus();
   for (let i = 0; i < 4; i++) chatUi.renderChatPage();
-  assert(document.getElementById('pref-nick')?.value === 'StillHere', 'four repaints in a row all keep the edit');
-  document.getElementById('pref-nick').value = document.getElementById('pref-nick').defaultValue;
+  assert(document.getElementById('chat-search-input')?.value === 'StillHere', 'four repaints in a row all keep the edit');
+  document.getElementById('chat-search-close')?._fire('click');     // leave search closed for the sections below
+}
+// DI-398 — dead-code confirmation: the Chat tab's own trigger, its handler
+// and the U.prefsOpen branch are GONE from chat-ui.js, not left inert; the
+// control center's accordion row (js/control-center.js) is the only
+// remaining stamper for the prefs panel's content.
+{
+  const uiCode = (await readFile(new URL('./js/chat-ui.js', import.meta.url), 'utf8'));
+  assert(!/chat-prefs-btn/.test(uiCode), 'chat-ui.js no longer renders or binds a Chat-tab prefs trigger (DI-398)');
+  assert(!/prefsOpen/.test(uiCode), 'the dead U.prefsOpen flag and its branch are gone, not left inert (DI-398)');
+  assert(/export function prefsPanelHTML\(\)/.test(uiCode) && /export function bindPrefsPanel\(/.test(uiCode),
+    'prefsPanelHTML()/bindPrefsPanel() themselves stay exported, unmodified — the control center is still their caller');
+  const ccCode = (await readFile(new URL('./js/control-center.js', import.meta.url), 'utf8'));
+  assert(/rowId: 'chat'/.test(ccCode) && /chatPrefsHTML/.test(ccCode),
+    'the control center\'s Chat settings accordion row is the one surviving host');
+  // Reviewer round 2 (2026-09-28) — bindChatPage() itself carries NO
+  // reference to bindPrefsPanel at all any more (not just "no unscoped
+  // call" — the whole call site is gone, per DI-398's own "what comes
+  // out" list). Sliced by function body, not a whole-file grep, so a
+  // future bindPrefsPanel() reintroduced ELSEWHERE in this file (its own
+  // definition, its two other exported test seams) cannot make this pass
+  // vacuously.
+  const bindChatPageStart = uiCode.indexOf('function bindChatPage()');
+  assert(bindChatPageStart > 0, 'fixture: bindChatPage() is a real function in js/chat-ui.js');
+  const nextFnAt = uiCode.indexOf('\nfunction ', bindChatPageStart + 10);
+  const bindChatPageBody = uiCode.slice(bindChatPageStart, nextFnAt > 0 ? nextFnAt : bindChatPageStart + 4000);
+  // Comment-blanked — this function's own removal note (above) names
+  // bindPrefsPanel() in PROSE ("prefsPanelHTML()/bindPrefsPanel() themselves
+  // are unchanged"), which a bare substring test would misread as the call
+  // site it is explicitly describing the absence of.
+  const bindChatPageCode = bindChatPageBody.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, '');
+  assert(!/bindPrefsPanel/.test(bindChatPageCode),
+    'bindChatPage() has no bindPrefsPanel() call at all — scoped or unscoped — the control center is its one caller now (DI-398)');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

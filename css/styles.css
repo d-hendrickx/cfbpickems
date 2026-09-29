@@ -528,12 +528,14 @@ body.theme-neutral[data-color-scheme="dark"] {
 }
 
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-/* DI-327 (T-29 SCROLL-BOUNCE) — defensive assertion-of-intent: neither html
-   nor body may ever set overscroll-behavior:none|contain, which would kill
-   native rubber-band bounce app-wide (the Design Philosophy's "never lock
-   the scroll"). Verified this pass by grep: no such rule existed anywhere in
-   this file before this line. Explicit `auto` (the default) so a future
-   edit reads as a deliberate change, not a silent omission. */
+/* DI-327 (T-29 SCROLL-BOUNCE) — html/body keep native rubber-band bounce on
+   every page that scrolls the window (the Design Philosophy's "never lock
+   the scroll"). Explicit `auto` (the default) so a future edit reads as a
+   deliberate change. ONE dated exception, RG-289 (2026-09-28, Drew: "this
+   tab should not be able to scroll up and down, it should remain static"):
+   on `body[data-tab="chat"]` the root is locked and its bounce is off — the
+   Chat thread is the only vertical scroller and keeps its own bounce. See
+   the "Chat page — static root" block further down. */
 html,body{overscroll-behavior:auto}
 html{height:100%;font-size:16px;-webkit-text-size-adjust:100%;scroll-behavior:smooth}
 /* RG-188 (B-c, 2026-09-19): `overflow-x:hidden` then `overflow-x:clip`, and the
@@ -697,6 +699,18 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    week text does" — no JS media-query logic needed, it falls out of the
    flex algorithm's own math once the flex factors are set this way. */
 .header-spacer{flex:1 1 0%;min-width:0}
+/* DI-393 amendment (Drew, 2026-09-28) — the LEADING spacer (index.html,
+   between the trigger and #league-pill). Two equal `.header-spacer`s split
+   the positive free space, so the pill is centred in the region between
+   the trigger and the week zone instead of hugging the trigger. Negative
+   space is unchanged: both spacers have a 0 basis and nothing to give, so
+   #league-pill still shrinks first and is hidden (<48px) before the week
+   name may ellipsize. margin-left:-10px cancels the trigger's own 10px
+   inline padding (.control-center-trigger{padding:0 10px}) so the centring
+   is VISUAL — measured from the trigger's text, not its padded tap box —
+   and hands that 10px back to the row. Engine-measured in
+   shellrendertest.mjs [B]; pinned in headermetatest.mjs [css5]. */
+.header-spacer--lead{margin-left:-10px}
 /* Center-right — "Week N · Status." #header-meta now holds ONLY the
    name+badge line (#header-meta-week) — DI-393 drops the date range from
    the header entirely (it moves to DI-394's viewing-week card) and the
@@ -729,7 +743,16 @@ h4{font-size:.9rem;text-transform:uppercase;letter-spacing:.08em}
    hidden (js/app.js _fitLeaguePill(), <48px) — and the sync icon always
    stays on screen. The badge never shrinks (.header-meta .badge, below).
    Pinned in headermetatest.mjs [css4]. */
-.header-meta{display:flex;align-items:center;flex:0 0 auto;min-width:0;max-width:60vw;font-size:.75rem;color:rgba(255,255,255,.75)}
+/* v0.27.1 merge (2026-09-28) — the 60vw ceiling REMOVED. With the STRICT
+   order in place (flex:0 0 auto here; shrinkable only via the
+   `#league-pill[hidden]~.header-meta` rule below) the ceiling was redundant
+   as a backstop and WRONG as a priority: once DI-405 made the trigger
+   icon-only, a 430px row had room for the whole pill AND a long round name
+   would still ellipsize at 60vw while the pill sat untouched — the exact
+   inversion DI-393 forbids (shellrendertest [B] caught it on the merge).
+   Overflow protection is the flex chain itself: the pill shrinks to its
+   padding, _fitLeaguePill() hides it, then this zone may shrink. */
+.header-meta{display:flex;align-items:center;flex:0 0 auto;min-width:0;font-size:.75rem;color:rgba(255,255,255,.75)}
 /* Reviewer BLOCK round 2 (fix-final-v0270, 2026-09-28) — STRICT truncation
    order, not a shrink ratio. `#league-pill` precedes `.header-meta` in
    index.html's header row, so this general-sibling rule turns the week zone
@@ -1083,6 +1106,23 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
    disabled-input rule existed before this pass (Tiebreaker/Extra Point had
    never been disablable). */
 .form-input:disabled,.form-select:disabled,.form-textarea:disabled{opacity:.55;cursor:not-allowed}
+/* DI-415 (UN-370, 2026-09-28) — read-only field display inside the game
+   editor: a <p>, never an <input>/<select> a commissioner could try to click
+   into.
+   N7 (reviewer round 2, 2026-09-28) — DROPPED the input-shaped box
+   (background/border/padding matching .form-input). An empty box that looks
+   like a field but never focuses reads as a broken input, not an
+   intentionally read-only one — the "web app smell" the Design Philosophy
+   itself warns against. The NATIVE read-only pattern (iOS Settings' own
+   label-over-value rows) is plain value text, full weight, with the LABEL
+   ABOVE it de-emphasized instead — so the label:has() rule just below does
+   the muting, not this element. */
+.form-value-static{color:var(--text-primary);font-family:'Inter',sans-serif;font-size:.95rem;line-height:1.4;padding:2px 0;margin:0}
+/* The label immediately before a read-only value — same `label:has()`
+   selector shape this file already uses elsewhere (e.g.
+   `label:has(#week-show-history)`, ~line 1858; `:has()` is an established
+   pattern in this file, not a new dependency). */
+label:has(+ .form-value-static){color:var(--text-muted);font-weight:500;font-size:.8rem}
 .form-textarea{min-height:100px;resize:vertical}
 .form-select{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239A8A7A' stroke-width='2' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:36px;cursor:pointer}
 .form-select option{background:var(--bg-card)}
@@ -1307,7 +1347,12 @@ body[data-keyboard-up] .bottom-nav{transform:translateY(calc(100% + var(--nav-pi
 /* UN-98 coupled change: once .app-header can grow taller in standalone (safe
    area padding above), a flat 76px no longer clears it — grow with the same
    inset so the toast never lands under the new taller header. */
-#toast-container{position:fixed;top:calc(76px + env(safe-area-inset-top,0px));right:16px;left:16px;z-index:1000;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:420px;margin:0 auto}
+/* RG-288 (2026-09-28) — was z-index:1000, UNDER the bottom sheets (8000):
+   every toast fired while the week wizard was up ("Teams required", "Timing
+   saved", reminder failures, the "Spread NOT locked" warning) painted under
+   its scrim or side panel. 8200 clears sheets (8000) and a modal opened from
+   one (8100); stays under the site gate (9000). See the Z-INDEX LADDER. */
+#toast-container{position:fixed;top:calc(76px + env(safe-area-inset-top,0px));right:16px;left:16px;z-index:8200;display:flex;flex-direction:column;gap:8px;pointer-events:none;max-width:420px;margin:0 auto}
 /* Reviewer BLOCK fix (2026-09-27, eed1d62 follow-up) — was a hardcoded
    #fff paired with color:var(--text-primary) — a permanently-white surface
    under dark-mode-flipped Marble text measured 1.27:1. */
@@ -1746,6 +1791,18 @@ input[id^="pin-"],input[id^="rp-pin"],input[id="comm-password-input"]{autocomple
 .league-pill{cursor:default}
 .league-pill[role="button"]{cursor:pointer}
 .league-pill[role="button"]:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+/* DI-417 (UN-372, 2026-09-28) — the sport portion of the pill
+   ("<league> · <sport>"), a lighter weight/opacity than the league name per
+   the Design Philosophy's Typography section ("spacing/weight communicate
+   hierarchy more than color"). opacity:.75 is not a new arbitrary value —
+   it is the header row's own muted-white token, used two zones over on the
+   week/status text (color:rgba(255,255,255,.75), see the app-header section
+   above), reused here as `opacity` because this pill sets a flat
+   color:#fff rather than an rgba — the two are the same visual result
+   against the same maroon chrome. (Deliberately not spelled out as a
+   selector in this comment — headermetatest.mjs's [css] block text-scans
+   for that literal string inside @media(min-width) chunks.) */
+.league-pill-sport{opacity:.75;font-weight:400}
 
 /* DI-181 — league flow (landing/join/create/selector). Reuses .card/.btn/
    .status-pill throughout; this is the one new layout primitive, a simple
@@ -1997,6 +2054,71 @@ label[for="week-show-history"],label:has(#week-show-history){
 .header-sync-icon[data-sync="refused"],.header-sync-icon[data-sync="error"]{color:#fff}
 @media (prefers-reduced-motion:reduce){.header-sync-icon[data-sync="syncing"]{animation:none}}
 
+/* DI-399(a) (UN-359, 2026-09-28) — #sync-badge becomes a real tappable
+   control (role="button", set by updateSyncBadge()). A ~40px invisible tap
+   target around the 24px glyph, WITHOUT growing the glyph, WITHOUT moving
+   its visual centre, and WITHOUT changing this item's own footprint in the
+   header's flex row (the strict truncation order DI-393/fix-final-v0270
+   built is unaffected).
+   TWO APPROACHES TRIED, ONE KEPT — named so the next edit here does not
+   re-walk this:
+   1. The DI's own suggested mechanism, padding + a matching negative
+      margin: does nothing under this file's global box-sizing:border-box
+      (line 530), which caps the OUTER box at the declared `width`
+      regardless of padding.
+   2. Grow width/height to 40px and pull back with an EQUAL negative margin
+      on every side (the border-box equivalent of #1): the flex row's
+      RESERVED space nets back to 24px, but `#sync-badge` is the LAST,
+      trailing-edge item in a row with ZERO slack on its right (measured —
+      shellrendertest.mjs's [B] block failed, `right 424 > contentRight
+      416` at 430px — the original 24px glyph's right edge already sat
+      exactly ON `.app-header-inner`'s padding boundary). An ASYMMETRIC
+      version (grow left only, to respect that boundary) then shifted the
+      GLYPH itself left by half the added width, because `.header-sync-icon`
+      centres its child via flexbox and the growth changes the centring
+      box's own geometry — a real, visible jump, not just an invisible
+      target change.
+   KEPT: an absolutely-positioned `::before`, sized via inset, on a
+   `position:relative` host. Out of flow entirely — `#sync-badge`'s own
+   box (what shellrendertest.mjs's `getBoundingClientRect()` measures, what
+   the flex row reserves space for, and what `.header-sync-glyph` centres
+   within) is COMPLETELY UNCHANGED, so every existing header-geometry
+   assertion (trailing-edge fit, the "flush against the sync icon" gap when
+   the league pill hides) keeps passing with no re-derivation. The `::before`
+   can safely extend 8px past the container's own padding on every side —
+   it has no layout presence, so nothing further right could ever collide
+   with it (`#sync-badge` is the header's last zone) — verified with a
+   headless-Chrome render at 375/390/430px (shellrendertest.mjs [B], see the
+   handoff) that it does not visually collide with `.header-meta`'s content
+   to its left (it does not paint anything; it only extends where clicks
+   are caught). */
+.header-sync-icon{position:relative;cursor:pointer}
+.header-sync-icon::before{content:'';position:absolute;top:-8px;right:-8px;bottom:-8px;left:-8px}
+.header-sync-icon[aria-disabled="true"]{cursor:default}
+.header-sync-icon[aria-disabled="true"]::before{cursor:default}
+/* Touch feedback — the SAME `scale(.97)` convention every `.btn:active:
+   not(:disabled)` in this file already uses (line 1063), reused rather
+   than a bespoke value (Interaction Principles §Button Behavior). Scoped to
+   `.header-sync-icon` itself, so the enlarged `::before` hit area and the
+   glyph compress together as one unit, matching how a real button's own
+   padding compresses. No animation while `aria-disabled` (mid-sync) — same
+   "disabled buttons: no animation" rule `.btn:disabled` already follows.
+   Reviewer round 2 (2026-09-28) — `.sync-withheld` is the SAME "no
+   animation" rule for the content-withheld inert case (the sign-in gate /
+   no session resolved), toggled fresh on every press by
+   bindSyncBadgeTap()'s own pointerdown listener (js/app.js) — a SEPARATE
+   class from `aria-disabled`, since that attribute's meaning stays scoped
+   to the 'syncing' status only (see onSyncBadgeActivate()'s own header). */
+.header-sync-icon[role="button"]:active:not([aria-disabled="true"]):not(.sync-withheld){transform:scale(.97)}
+@media (prefers-reduced-motion:reduce){.header-sync-icon[role="button"]:active{transform:none}}
+/* DI-184b's own #league-pill[role="button"]:focus-visible convention
+   (css:1760), mirrored — keyboard focus needs its own visible ring; the
+   Interaction Principles' §Accessibility large-tap-target rule this
+   element already meets via the ::before above says nothing about focus
+   visibility, which is a separate requirement this control had not yet
+   picked up. */
+.header-sync-icon[role="button"]:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+
 /* ── v13: Player admin row — pin / email / actions ─────────────────────────── */
 .player-admin-row{display:grid;grid-template-columns:minmax(140px,1fr) minmax(0,2fr);gap:14px;
   align-items:center;padding:10px 0;border-bottom:1px solid var(--border)}
@@ -2015,21 +2137,21 @@ label[for="week-show-history"],label:has(#week-show-history){
   .email-input{width:100%}
 }
 
-/* ── v13: Collapsible commissioner sections + section menu ─────────────────── */
+/* ── v13: Collapsible commissioner sections ─────────────────────────────────
+   DI-408 AMENDED (2026-09-28) — the bottom-of-panel "📚 Sections" menu
+   (.section-menu/.section-menu-title/.section-menu-actions/.section-menu-grid/
+   .section-menu-item) is retired along with wireCollapsibleSections()'s menu
+   construction; those rules had no other consumer (grepped before removal,
+   CONVENTIONS discipline — no orphaned CSS). The per-card click-to-collapse
+   rules below are UNCHANGED — loadtest.mjs [46]'s MUST_PASS_46 fixture list
+   keeps a hand-written `.admin-section-collapsed` string as a guard-behavior
+   proof independent of whether this class is still written anywhere real
+   (its own note). */
 .admin-section-title-toggle{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .admin-section-title-toggle:hover{color:var(--maroon-light-text,var(--maroon-text))}
 .section-chevron{font-size:.7rem;margin-left:6px;transition:transform .18s ease;opacity:.6;flex:0 0 auto}
 .admin-section-collapsed .section-chevron{transform:rotate(-90deg)}
 .admin-section-collapsed > :not(.admin-section-title){display:none!important}
-
-.section-menu{background:var(--bg-card-alt);border:1px solid var(--border)}
-.section-menu-title{cursor:default!important}
-.section-menu-actions{display:flex;gap:4px;flex-wrap:wrap;font-family:inherit;text-transform:none;letter-spacing:0;font-size:.7rem;font-weight:400}
-.section-menu-actions .btn{padding:3px 8px;font-size:.7rem}
-.section-menu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px 14px;margin-top:8px}
-.section-menu-item{display:flex;align-items:center;gap:6px;font-size:.78rem;cursor:pointer;padding:3px 0}
-.section-menu-item.is-hidden{opacity:.5}
-.section-menu-item input{cursor:pointer}
 
 /* ── v13: Theme select in header ───────────────────────────────────────────── */
 .theme-toggle-slot{display:inline-flex;align-items:center}
@@ -2932,6 +3054,45 @@ body.native-shell .picks-week-nav{justify-content:center}
 .picks-week-current{color:var(--text-muted);font-size:.7rem;font-weight:400}
 .picks-week-past{color:#B8860B;font-size:.7rem;font-weight:500}
 
+/* DI-409 (T-27, UN-364, 2026-09-28) — week-swipe drag-follow + slide hand-
+   off, SAME on both platforms (no PARITY-BY-DESIGN split — the DI's own
+   note: bindWeekSwipe() is not native-gated anywhere, so a shared CSS-
+   transform contract costs nothing extra on web touch/touch-emulation
+   either; the arrows-vs-gesture split just above this comment is a
+   SEPARATE, untouched decision). `--week-swipe-x` is written ONLY by
+   js/nav-gestures.js's bindWeekSwipe() — a live px value while dragging
+   (1:1 or the horizontal rubber-band curve), or a signed CSS percent
+   ('100%'/'-100%'/'0px') during the commit-exit/enter/cancel animation.
+   REVIEWER BLOCK B3 (round 2, 2026-09-28) — REMOVED the overflow-x pair
+   this rule shipped with (`overflow-x:hidden;overflow-x:clip`). It was
+   added on the DI's own "flagged explicitly, confirm with a real render"
+   instruction, and the render (headless Chrome over CDP, real TouchEvents,
+   390px and 1280px) is what caught the actual defect: at IDLE (translateX
+   0, no drag in progress) it hard-clipped every card's own side shadow
+   (--shadow-card's 16px blur) on both platforms — a permanent, un-asked-for
+   visual regression on every Picks/Dashboard card, not just during a swipe.
+   The SAME render confirmed dropping it entirely produces NO horizontal
+   overflow at either width — `.page-wrapper`/`.main-content`/`body` (RG-188,
+   ~line 539) already clip horizontally above this element in the ancestor
+   chain, so #page-picks/#page-dashboard clipping AGAIN, all the time, was
+   redundant even for the swipe's own off-screen/rubber-band positions. The
+   RG-188 SCROLL-CONTAINER hazard this pair was trying to dodge (below) is
+   therefore moot — there is nothing here to dodge it FOR. [data-week-swipe-
+   animating] is the SAME idiom as #league-page-overlay[data-dragging]/
+   [data-no-transition] (js/app.js's finishSlideThenRemove() precedent): the
+   transition is OFF by default (a live drag is raw, untransitioned 1:1
+   tracking — "a transition here would make the content visibly lag the
+   finger, which reads as latency, not polish," DI-409) and switched ON only
+   for the animated halves (commit-exit, enter, cancel/edge spring-back),
+   all sharing WEEK_SWIPE_BOUNCE_MS (150ms) via --motion-fast — one
+   animation language, not three ad-hoc durations. */
+#page-picks,#page-dashboard{transform:translateX(var(--week-swipe-x,0px))}
+#page-picks[data-week-swipe-animating="true"],#page-dashboard[data-week-swipe-animating="true"]{
+  transition:transform var(--motion-fast) ease-out}
+@media (prefers-reduced-motion:reduce){
+  #page-picks[data-week-swipe-animating="true"],#page-dashboard[data-week-swipe-animating="true"]{transition:none}
+}
+
 /* ── Historical read-only week view ── */
 .hist-game-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--bg-input);flex-wrap:wrap}
 .hist-game-row:last-child{border-bottom:none}
@@ -3139,6 +3300,52 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
 .chat-scroll{background:var(--bg-card);border-radius:var(--card-radius);padding:10px;box-shadow:0 1px 3px rgba(0,0,0,.06);
   overflow-y:auto;-webkit-overflow-scrolling:touch;
   flex:1 1 auto;min-height:0;max-height:none}
+/* ═══ RG-289 — CHAT IS A FIXED-LAYOUT MESSAGING SCREEN (live v0.27.0, Drew
+   2026-09-28: "the chat tab has the rubber band scroll at the top and bottom,
+   but this tab should not be able to scroll up and down it should remain
+   static. Any vertical scrolling on this page should only be the chat
+   thread"). The iMessage pattern: the screen never moves; the thread is the
+   ONE vertical scroller. The Design Philosophy §Scrolling's "never lock the
+   scroll" is about CONTENT — the content here is the thread, and it keeps
+   its momentum and its own rubber band (Interaction Principles §Lists /
+   §Scrolling: momentum and rubber-band on content).
+   ROOT CAUSE (CSS half; the JS half is RG-289's isActive gate on the window
+   bindBottomBounce() in app.js navigateTo()): the document stayed a live,
+   user-scrollable root on Chat with DI-327's overscroll-behavior:auto, so
+   WebKit (Safari tab, home-screen app, WKWebView — all bounce the root even
+   when the document fits) rubber-banded the whole page at top and bottom and
+   the thread's end-of-list overscroll chained to it; and in a Safari tab
+   `.page-wrapper{min-height:100vh}` is the LARGE viewport, so the document
+   was genuinely taller than the visible area by the toolbar height.
+   Four rules, every one keyed on Chat only:
+   1. The root is not user-scrollable while Chat is the tab. `:has()` on the
+      body's data-tab (set by navigateTo()), the RG-282 idiom — the lock
+      exists exactly as long as the attribute says Chat. Chosen over
+      `#page-chat.active{position:fixed}`: the page keeps its existing
+      bounded flex column (height:calc(100dvh - clearance)), so the T-25
+      keyboard layout (`body[data-keyboard-up]` zeroing the clearance), the
+      composer anchoring and bindBottomAnchor() are untouched, and iOS's own
+      focus-reveal still pans the visual viewport; a fixed page is pinned to
+      the LAYOUT viewport and fights that pan. Programmatic scrolling is
+      still allowed under overflow:hidden, and nothing on Chat asks for it.
+   2. The root's own bounce is off on Chat — a SCOPED exception to DI-327's
+      `html,body{overscroll-behavior:auto}` above, which stands on every
+      other tab (specificity 0,1,2 beats 0,0,1). WebKit reads this for the
+      page bounce (iOS 16+); body carries it too for engines that read the
+      body's value when the root's overflow propagates.
+   3. On Chat the document is the VISIBLE viewport (dvh), not the large one,
+      so there is no hidden scroll range for a focus-reveal or a carried-
+      over offset to strand the header in. Engines without dvh drop the
+      declaration and keep 100vh (rule 1 still holds the page).
+   4. The thread CONTAINS its overscroll (`contain`, never `none`): its own
+      bounce stays, nothing chains to the page.
+   NOT touched: overflow on body/.page-wrapper/.main-content (RG-188 — a
+   non-visible overflow-y there becomes a scroll container). Engine-measured
+   in chatpagetest.mjs [A]–[E]. */
+html:has(> body[data-tab="chat"]){overflow:hidden}
+html:has(> body[data-tab="chat"]),body[data-tab="chat"]{overscroll-behavior:none}
+body[data-tab="chat"] .page-wrapper{min-height:100dvh}
+#page-chat .chat-scroll{overscroll-behavior:contain}
 .chat-load-older{display:block;margin:0 auto 8px;background:var(--bg-input);border:none;border-radius:999px;padding:4px 12px;font-size:.7rem;color:var(--text-secondary);cursor:pointer}
 .chat-day-sep{text-align:center;font-size:.65rem;color:var(--text-muted);letter-spacing:.06em;text-transform:uppercase;margin:12px 0 6px}
 .chat-empty{text-align:center;color:var(--text-secondary);padding:28px 0;font-size:.9rem}
@@ -3426,6 +3633,68 @@ body[data-tab="chat"] .main-content{padding-bottom:0}
   transition:opacity var(--motion-nav) ease-out}
 #week-wizard-sheet-wrap[data-dragging="true"] .chat-sheet-backdrop{transition:none}
 @media (prefers-reduced-motion:reduce){#week-wizard-sheet-wrap .chat-sheet-backdrop{transition:none}}
+/* RG-282 (live v0.27.0 web, Drew 2026-09-28: "the actual wizard doesn't
+   scroll up and down but the page behind it scrolls when you swipe up and
+   down") — the page stays put while the sheet is up.
+   ROOT CAUSE: the document stayed a live, user-scrollable root scroller
+   under this position:fixed sheet, and nothing contained the sheet's own
+   scroller, so EVERY gesture the list did not itself consume chained to the
+   page: a swipe on the header/tracker, on the scrim, past either end of the
+   list, and anywhere on a step whose content does not overflow (the "wizard
+   doesn't scroll" half: nothing in it to scroll, so the page moved).
+   Two rules, both keyed on THIS sheet only:
+   1. The root is not user-scrollable while `#week-wizard-sheet-wrap` exists.
+      `:has()` rather than a class toggled by open/close, deliberately: the
+      lock exists exactly as long as the wrap does, including when the wrap
+      is removed WITHOUT closeWeekWizardSheet() (the security hold's
+      tearDownRenderedContentForHold() sweep, openWeekWizardSheet()'s own
+      re-open) — a class could be left behind and freeze the page. The same
+      "poll the DOM for the wrap" idiom gesturesSuspended() already uses.
+      overflow:hidden preserves the page's scroll offset (it is restored
+      untouched on close) and does NOT touch overscroll-behavior on html/body
+      (the DI-327 rule above stands). This is the native model, not a
+      "locked scroll": a presented iOS sheet owns every touch, and the view
+      behind it does not move. The sheet's own list keeps momentum and its
+      own rubber band. Engines without :has() ignore the rule (v0.27.0
+      behavior, no worse).
+   2. The list contains its overscroll (`contain`, never `none`: its own
+      bounce stays). Redundant with (1) in Chromium; WebKit's belt for the
+      end-of-list chain.
+   Pinned engine-measured in wizardsheettest.mjs [A]. */
+html:has(#week-wizard-sheet-wrap){overflow:hidden}
+#week-wizard-body{overscroll-behavior:contain}
+
+/* ═══ Z-INDEX LADDER (RG-283, 2026-09-28) ═══════════════════════════════════
+   One place that lists every stacking tier, lowest first. The values live
+   on their own rules; this comment is the map, and wizardsheettest.mjs [B]
+   pins the computed values that matter here.
+       20        .chat-actions / reaction rows inside a message
+       50        .submit-bar, sticky tab strips
+      100        .app-header, .bottom-nav
+      150        #league-page-overlay, body.native-shell::before status strip,
+                 .chat-msg .reaction-picker
+      200        .modal-overlay (every showXModal()), .backend-error-banner
+      500/501    #control-center-backdrop / #control-center (the drawer; a
+                 drawer row that opens a modal closes the drawer first, S2-2)
+     1200        .chat-toast
+     8000        #chat-sheet-wrap, #week-wizard-sheet-wrap (bottom sheets)
+     8100        a .modal-overlay mounted AFTER #week-wizard-sheet-wrap  ← here
+     8200        #toast-container (RG-288; was 1000, under the sheets)
+     9000        #site-gate-overlay       9500  #league-switch-overlay
+     9999        .site-gate, .update-available-banner
+    10000        #auth-banner-stack
+   RG-283 (live v0.27.0 web, Drew 2026-09-28: "When you click into a game on
+   the slate when building it pulls up an edit game option, but it pulls it
+   up behind the wizard"). showGameModal() (and every other modal the wizard
+   can raise: showCreateWeekModal() etc.) appends its `.modal-overlay` to
+   <body> AFTER the sheet wrap, at 200, so it painted UNDER the sheet (8000)
+   and the sheet's scrim took every tap. The general-sibling selector matches
+   exactly "a modal opened while this sheet was up", nothing else. A modal
+   mounted BEFORE the sheet stays at 200 and is correctly covered by it; every
+   other modal in the app keeps 200 (under the drawer, as S2-2 expects). The
+   modal's own scrim now sits on top, so a tap on it closes ONLY the modal,
+   never the wizard underneath. */
+#week-wizard-sheet-wrap ~ .modal-overlay{z-index:8100}
 /* DI-C1 §2.2 — the native grabber, and the header (the drag handle) owns its
    vertical touches so the WebView does not scroll/bounce under the drag. */
 body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;padding-top:14px;touch-action:none}
@@ -3541,6 +3810,45 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    fallback (90px) is a generous over-estimate on purpose, since sitting a
    little high is a much safer failure mode than sitting under the composer. */
 #page-chat .chat-jump-latest{bottom:calc(var(--nav-bar-clearance) + var(--chat-composer-h,90px) + 10px);z-index:46}
+
+/* DI-399(b-ii) (UN-359, 2026-09-28) — Chat's bottom-edge pull-to-refresh
+   indicator (js/chat-ui.js's `#chat-pull-refresh`, js/nav-gestures.js's
+   `bindBottomPullToRefresh()`'s `onPhaseChange`). Never above the thread
+   (that would read as "new content at the top", which is false — the
+   blind-rule/reveal-ritual language this app already uses for "something
+   changed" signals).
+   REVIEWER ROUND 2 (2026-09-28) — the FIRST version copied
+   `.chat-jump-latest`'s `position:sticky` + `--nav-bar-clearance +
+   --chat-composer-h` recipe, and that was wrong for THIS element two ways:
+   (1) `.chat-scroll{flex:1 1 auto}` (above) means ANY sibling that still
+   occupies flex-flow space — sticky boxes do — competes with the thread
+   for height, so growing from idle (empty) to armed (labelled) SHRANK
+   `#chat-scroll` mid-drag (measured: 708px -> 691px), which fed
+   `bindBottomAnchor()`'s own ResizeObserver an indirect double-write
+   during the gesture; (2) `#page-chat` already subtracts the nav
+   clearance from its OWN height (`body[data-tab="chat"] .main-content
+   {padding-bottom:0}`, above) so adding `--nav-bar-clearance` a SECOND
+   time in this element's own offset put it OVER the last message, not
+   above the composer.
+   FIXED: `.chat-pull-refresh-wrap` is a ZERO-HEIGHT flex-flow sibling
+   (between #chat-scroll and the composer, `flex:0 0 auto` + `height:0`) —
+   it occupies NO space regardless of what's inside it, so #chat-scroll's
+   own height is IDENTICAL across every phase, idle through refreshing.
+   The indicator itself is `position:absolute` INSIDE that wrapper,
+   anchored to the wrapper's own `bottom:0` (which flex flow already put
+   exactly between the thread and the composer) — no `--nav-bar-clearance`/
+   `--chat-composer-h` math needed at all, since the wrapper's position IS
+   "just above the composer" by construction. */
+.chat-pull-refresh-wrap{flex:0 0 auto;height:0;overflow:visible;position:relative}
+.chat-pull-refresh{position:absolute;bottom:0;left:50%;transform:translateX(-50%);
+  width:max-content;max-width:80vw;text-align:center;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:999px;
+  padding:6px 14px;font-size:.7rem;color:var(--text-muted);box-shadow:var(--shadow-card);
+  opacity:0;pointer-events:none;transition:opacity 150ms ease-out;z-index:45}
+.chat-pull-refresh[data-phase="pulling"],.chat-pull-refresh[data-phase="armed"],
+.chat-pull-refresh[data-phase="refreshing"]{opacity:1}
+.chat-pull-refresh[data-phase="armed"]{color:var(--maroon-text);border-color:var(--maroon-tint)}
+@media (prefers-reduced-motion:reduce){.chat-pull-refresh{transition:none}}
 .chat-flash{animation:chatFlash 1.2s ease-out}
 @keyframes chatFlash{0%{background:var(--gold-pale)}100%{background:transparent}}
 .chat-load-older{display:block;margin:0 auto 10px;background:none;border:1px solid var(--border);
@@ -3785,11 +4093,14 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 }
 
 /* ── F2 — header search toggle + search bar + results list ──────────────
-   Reuses .btn/.btn-ghost/.btn-sm (already used by #chat-prefs-btn) for the
-   new 🔍 button — no new button component. .chat-header-actions wraps BOTH
-   icon buttons so .chat-header-row's existing `justify-content:space-between`
-   (styles.css:1824) still distributes exactly two children (h2, this
-   wrapper) instead of being thrown off by a third top-level child. */
+   Reuses .btn/.btn-ghost/.btn-sm for the 🔍 button — no new button
+   component. .chat-header-actions wraps the header's icon buttons (search,
+   and the refresh control) so .chat-header-row's existing
+   `justify-content:space-between` (styles.css:1824) still distributes
+   exactly two children (h2, this wrapper) instead of being thrown off by a
+   third top-level child. DI-398 (2026-09-28) — the ⚙ prefs trigger that
+   used to sit here (#chat-prefs-btn) is gone; the control center's own
+   Chat settings row is the one surviving host, unrelated to this class. */
 .chat-header-actions{display:flex;align-items:center;gap:6px}
 
 /* Occupies the EXACT slot .chat-pills-scroll used to (renderChatPage() swaps
@@ -4122,8 +4433,11 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
 .layout-section{display:block}
 
 /* The page title bar becomes a flex row so the control sits opposite the
-   heading. SCOPED to the two pages that have the control — `.section-header`
-   itself is used on several other pages and is deliberately untouched. */
+   heading. SCOPED to the four consumers that use it (Dashboard's ⇅ Edit
+   layout row, Standings' own, and — REVIEWER ROUND 2 (2026-09-28) — the
+   Commissioner and Admin panel heading rows below, raised from "the two
+   pages" this comment used to name) — `.section-header` itself is used on
+   several OTHER pages too and is deliberately untouched there. */
 .section-header-layout{display:flex;justify-content:space-between;align-items:flex-start;
   flex-wrap:wrap;gap:8px}
 .section-header-layout .section-header-main{min-width:0}
@@ -4132,6 +4446,39 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    would reflow every compact row in the app (same narrow approach
    #notif-priming-btn and #chat-search-btn already take). */
 .layout-edit-btn,.layout-reset-btn{min-height:44px;min-width:44px;flex-shrink:0}
+
+/* DI-408 AMENDED (UN-363, 2026-09-28) — the Commissioner/Admin panel
+   heading-row "Collapse all · Expand all" pair. This rule strips the
+   visible border/background `.btn-ghost` normally carries and tightens
+   padding/type size, so the pair reads as "ghost TEXT buttons" (the DI's
+   own words) sitting quietly beside an <h2>, not a bordered button pair
+   competing with it. Touch feedback (scale(.97) on :active) and hover
+   color both come from the shared `.btn`/`.btn-ghost` rules, untouched —
+   reuse, not invention.
+   REVIEWER ROUND 2 B2 (2026-09-28, headless-Chrome measured at 375/393/
+   430 against the real markup+CSS, scratchpad/rv405check/ this pass) — the
+   original padding (4px 8px, .72rem, plus the base `.btn`'s
+   uppercase+letter-spacing) made the pair ~211px wide; combined with the
+   heading's own width, that wrapped BELOW the <h2> at Drew's own phone
+   width (393) rather than sharing its row, and `.section-header-layout`'s
+   `justify-content:space-between` left a single wrapped item at the LEFT
+   edge, not the right DI-408 asks for. Fixed two ways: (1) an EXPLICIT
+   `min-height:44px` on the button (padding this tight would otherwise pull
+   it under `.btn`'s own 46px base, which was the ONLY thing holding the
+   44pt floor before — CONVENTIONS #17's same shape as `.layout-edit-btn`
+   above), tighter padding/font and text-transform:none/letter-spacing:0 SO
+   THE PAIR ACTUALLY FITS beside "Commissioner Panel" on one row at 393
+   (measured: h2 + gap + actions ≈ 352px of 361px available — Admin's own,
+   shorter "Admin [ADMIN]" heading clears it with far more room); (2)
+   `margin-left:auto` as the DI's own "at minimum" fallback, so ANY width
+   narrower than this still right-aligns the pair on whichever line it
+   lands on, never reverting to the left-aligned wrap bug. */
+.panel-collapse-actions{display:flex;align-items:center;gap:4px;flex-shrink:0;margin-left:auto}
+/* Reviewer round 3 (2026-09-28): 9px type and a 42px-wide target failed the Design Pass (typography floor; 44pt §Button Behavior). Measured with Oswald loaded: 13px type + 6px padding + min-width 44 still fits the heading row at 375/393/430; if the webfont fails, margin-left:auto keeps a wrapped pair right-aligned. */
+.panel-collapse-actions .btn{padding:0 6px;font-size:.8125rem;min-width:44px;background:none;border:none;
+  text-transform:none;letter-spacing:0;font-weight:600;min-height:44px}
+.panel-collapse-actions .btn:hover{background:none}
+.panel-collapse-divider{font-size:.75rem;padding:0 1px}
 
 .layout-edit-strip{display:flex;flex-wrap:wrap;align-items:center;gap:8px;
   margin-bottom:14px;padding:10px 12px;background:var(--bg-input);
@@ -4352,7 +4699,7 @@ body.native-shell #week-wizard-sheet .chat-sheet-header{position:relative;paddin
    and .submit-bar (z-index 50, RG-188) — the strip is the thing those
    ordinary layers scroll or sit underneath — but strictly BELOW every
    overlay/modal/toast/gate in the stacking order: .modal-overlay/
-   .backend-error-banner (200), #toast-container (1000), .chat-toast (1200),
+   .backend-error-banner (200), #toast-container (8200, RG-288), .chat-toast (1200),
    #chat-sheet-wrap (8000), #site-gate-overlay (9000)/.site-gate (9999),
    #league-switch-overlay (9500), #auth-banner-stack (10000). z-index:150
    is the one value that clears the first group and clears none of the
@@ -4758,6 +5105,13 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
   opacity:.35;animation:skeleton-shimmer var(--skeleton-shimmer,1400ms) ease-in-out infinite}
 @media (prefers-reduced-motion:reduce){.week-wizard-skeleton-row{animation:none;opacity:.35}}
 
+/* N3 (reviewer round 2, 2026-09-28) — these two secondary wizard controls
+   are .btn-ghost.btn-sm (34px min-height by default, CONVENTIONS #17's 44pt
+   tap-target floor), scoped up the same way .scribe-pacing .btn-sm and
+   .gr-row-action .btn-sm already do — never a change to .btn-sm itself,
+   which plenty of genuinely dense rows still need at 34px. */
+#wiz-step2-add-manual,#wiz-step3-edit-in-games-tab,#games-tab-close-setup-btn{min-height:44px}
+
 /* DI-C1 §2.3 Step 3 — the slate-confirm game rows. Tapping one reuses
    showGameModal() verbatim (AD-03) — no spread value is ever entered here. */
 .week-wizard-game-list{display:flex;flex-direction:column;gap:var(--gap)}
@@ -4985,26 +5339,34 @@ body.native-shell .site-gate[data-gate-state="google"] .form-input{
 /* Full-app review Step 6 (2026-09-26) — the close glyph is icon('close'). */
 .control-center-close svg{width:18px;height:18px;display:block}
 
-/* DI-301 trigger — the header logo/mark that opens the drawer. Coordinator
-   follow-up (2026-09-27, post app-shell pass): web now renders the Munera
-   mark + brand name here (was name+chevron), so a 50% border-radius drew an
-   oval press/focus outline around the wider content — border-radius:999px
-   (a true pill) reads correctly at any content width; native's icon-only
-   render stays visually circular at 44x44 since a pill and a circle are
-   identical on a square box. min-width/min-height:44px unchanged (tap
-   target, Interaction Principles). */
+/* DI-301 trigger — the header logo/mark that opens the drawer.
+   REVIEWER ROUND 2 (2026-09-28) — this comment used to describe an
+   intermediate state (2026-09-27, post app-shell pass) where web rendered
+   the Munera mark PLUS the brand name (was name+chevron before that), so a
+   50% border-radius would have drawn an oval press/focus outline around
+   that wider content — border-radius:999px (a true pill) was chosen so it
+   would read correctly at any content width. DI-405 (2026-09-28) has since
+   made BOTH platforms icon-only, so the trigger is a fixed 24px square on
+   both — a pill and a circle are identical on a square box either way, so
+   999px is now equivalent to 50%, kept as-is (no functional change, just
+   no longer load-bearing the way this comment used to claim). min-width/
+   min-height:44px unchanged (tap target, Interaction Principles). */
 .control-center-trigger{background:none;border:none;cursor:pointer;color:#fff;
   display:flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;
   margin-left:-10px;border-radius:999px;transition:transform var(--motion-fast) ease-out}
 .control-center-trigger:active{transform:scale(.97)}
 /* v0.27.0 fix — the trigger's content (it shipped empty in v0.26.0).
-   Native: the 24px Munera mark. Web: the shell brand name in the header's
-   own week-name type (.header-meta strong: Oswald .82rem #fff) plus a muted
-   chevron affordance at the header-meta text tint. */
+   DI-405 (2026-09-28): both native and web render the SAME icon-only markup
+   — the 24px Munera mark, no text, no chevron. .control-center-trigger-name
+   (the web-only brand-name text span) is retired here — its markup is no
+   longer emitted by renderControlCenterTrigger(). */
 .control-center-trigger{gap:2px;padding:0 10px}
 .control-center-trigger-mark svg{width:24px;height:24px;display:block}
-.control-center-trigger-name{font-family:'Oswald',sans-serif;font-size:.82rem;font-weight:700;color:#fff;white-space:nowrap}
-.control-center-trigger-chevron svg{width:14px;height:14px;display:block;color:rgba(255,255,255,.75)}
+/* REVIEWER ROUND 2 (2026-09-28) — .control-center-trigger-chevron svg
+   removed: the trailing chevron this styled was retired from the markup
+   back in the v0.27.0 fix (REVIEWER note 4, well before DI-405), and
+   nothing else in js/*.js ever emitted that class since — confirmed by
+   grep before removal, CONVENTIONS discipline, no orphaned CSS. */
 
 /* Reviewer R4 (3c fix window, third pass) — the visually-hidden utility.
    Content stays in the accessibility tree (never display:none) but takes no

@@ -383,7 +383,12 @@ export function makeShowComingSoonToast(showToastFn) {
 // codes pass through unchanged (their label falls back to the raw key, as
 // before) rather than being dropped.
 const DB_SPORT_TO_ESPN_KEY = Object.freeze({ cfb: 'college-football', nfl: 'nfl' });
-function normalizeSportKey(k) {
+// DI-417 (UN-372, 2026-09-28) — EXPORTED. The header league pill needs the
+// exact same db-code -> ESPN-key normalization (`getCurrentWeek()?.sport`
+// carries the short DB code, e.g. 'cfb') so it can look up
+// ESPN_SPORT_ENDPOINTS by the same key deriveLeagueSports() already does.
+// One normalization implementation, not a second one in js/app.js.
+export function normalizeSportKey(k) {
   const s = typeof k === 'string' ? k.trim() : '';
   return s ? (DB_SPORT_TO_ESPN_KEY[s] || s) : '';
 }

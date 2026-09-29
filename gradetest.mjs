@@ -692,6 +692,197 @@ console.log('\n[6] [structural] app.js holds no second copy of the ATS compariso
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// 7. DI-415 (UN-370, 2026-09-28) — the game editor's field locks.
+//    "Poison" the DOM with values that, if the save handler actually read
+//    them, would corrupt the saved record — proves the handler never reads a
+//    LOCKED field from the DOM at all (it carries the stored value forward),
+//    while an UNLOCKED field's edit still saves correctly.
+//
+//    NOTE (harness limitation, named rather than silently relied on): this
+//    stub's `.innerHTML = string` is a plain property write, never parsed —
+//    ov.querySelector('#id') always resolves through the SAME global
+//    registry `driveModal()`/`poison()` pre-populate, regardless of whether
+//    showGameModal()'s real markup rendered that id as an <input> or as
+//    read-only text. So this section proves the SAVE HANDLER'S field-lock
+//    branching (the part that decides what gets WRITTEN — the actual
+//    data-integrity risk) exhaustively; it cannot itself prove the read-only
+//    <p class="form-value-static"> markup renders instead of an <input> —
+//    that half is a browser/device check (named in the handoff).
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[7] DI-415 — game editor field locks…');
+
+/** Poison every field DI-415 might lock with an obviously-wrong value. */
+function poisonAllFields() {
+  el('m-home').value = 'POISONED HOME';
+  el('m-away').value = 'POISONED AWAY';
+  el('m-home-mascot').value = 'Poisoned Mascot';
+  el('m-away-mascot').value = 'Poisoned Mascot';
+  el('m-kickoff').value = '2099-01-01T00:00';
+  el('m-venue').value = 'Poisoned Venue';
+  el('m-hconf').value = 'Poisoned Conf';
+  el('m-aconf').value = 'Poisoned Conf';
+  el('m-hrank').value = '99';
+  el('m-arank').value = '99';
+  el('m-hs').value = '999';
+  el('m-as').value = '999';
+  el('m-status').value = 'scheduled';
+  el('m-is-manual').checked = true;
+  el('m-league-label').value = 'POISONED';
+  el('m-espn-sport').value = 'nfl';
+  el('m-espn-eventid').value = '999999999';
+}
+
+{
+  // ── 7a. An ESPN-sourced (refreshable) game — static + score/status lock;
+  //        spread/multiplier stay editable and still save. ─────────────────
+  const week = { weekId: 'gt_w_espn', weekNumber: 90, status: 'final', season: 2026 };
+  const g = GAME({ gameId: 'gt_espn1', homeTeam: 'HOME', awayTeam: 'AWAY',
+    homeMascot: 'Realmascot', awayMascot: 'Realmascot2', venue: 'Real Venue',
+    homeConference: 'Real Conf', awayConference: 'Away Conf', homeRank: 5, awayRank: 10,
+    kickoff: '2026-09-05T17:00:00Z', spread: -3, favorite: 'HOME', status: 'final',
+    homeScore: 30, awayScore: 20, isManual: false, espnEventId: '401999999' });
+  resetDom();
+  localStorage.clear();
+  storage.saveWeek(week);
+  saveGame(g);
+  const games = storage.getGames(week.weekId);
+  const btn = prepareEditButton('gt_espn1');
+  bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
+  poisonAllFields();
+  el('m-spread-fav').value = 'away';
+  el('m-spread-margin').value = '6';
+  el('m-mult-preset').value = '2';
+  el('m-save');
+  btn._fire('click');
+  el('m-save')._fire('click');
+  const a = getGame('gt_espn1');
+  assert(a.homeTeam === 'HOME' && a.awayTeam === 'AWAY', '7a: ESPN-sourced game — team names carried forward, poisoned DOM ignored');
+  assert(a.homeMascot === 'Realmascot' && a.awayMascot === 'Realmascot2', '7a: mascots carried forward');
+  assert(a.venue === 'Real Venue' && a.homeConference === 'Real Conf' && a.awayConference === 'Away Conf', '7a: venue/conference carried forward');
+  assert(a.homeRank === 5 && a.awayRank === 10, '7a: ranks carried forward');
+  assert(a.kickoff === g.kickoff, '7a: kickoff carried forward');
+  assert(a.homeScore === 30 && a.awayScore === 20 && a.status === 'final', '7a: score/status carried forward — ESPN owns them');
+  assert(a.isManual === true && a.leagueLabel === 'POISONED' && a.espnSport === 'nfl' && a.espnEventId === '999999999',
+    '7a: manual/ESPN-link fields (checkbox/label/sport/eventId) STAY editable on an ESPN-sourced game — Drew\'s sentence never named them, DI-415\'s "not named" row — the poisoned edit correctly took effect');
+  assert(a.spread === 6 && a.favorite === 'AWAY', '7a: spread/favorite STILL editable on an ESPN-sourced game (AD-03 pattern unchanged)');
+  assert(a.multiplier === 2, '7a: multiplier still editable');
+}
+{
+  // ── 7b. A manual, non-ESPN-linked game, week still DRAFT — everything
+  //        editable, exactly as today (regression pin). ─────────────────────
+  const week = { weekId: 'gt_w_draft', weekNumber: 91, status: 'draft', season: 2026 };
+  const g = GAME({ gameId: 'gt_manual_draft', homeTeam: 'OLD HOME', awayTeam: 'OLD AWAY',
+    isManual: true, espnSport: null, espnEventId: null, status: 'scheduled' });
+  resetDom();
+  localStorage.clear();
+  storage.saveWeek(week);
+  saveGame(g);
+  const games = storage.getGames(week.weekId);
+  const btn = prepareEditButton('gt_manual_draft');
+  bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
+  el('m-home').value = 'NEW HOME';
+  el('m-away').value = 'NEW AWAY';
+  el('m-home-mascot').value = ''; el('m-away-mascot').value = '';
+  el('m-kickoff').value = '2026-09-05T17:00';
+  el('m-venue').value = 'New Venue';
+  el('m-hconf').value = 'New Conf'; el('m-aconf').value = '';
+  el('m-hrank').value = ''; el('m-arank').value = '';
+  el('m-spread-fav').value = ''; el('m-spread-margin').value = '';
+  el('m-mult-preset').value = '1';
+  el('m-hs').value = ''; el('m-as').value = ''; el('m-status').value = 'scheduled';
+  el('m-is-manual').checked = true;
+  el('m-league-label').value = 'Special';
+  el('m-espn-sport').value = ''; el('m-espn-eventid').value = '';
+  el('m-save');
+  btn._fire('click');
+  el('m-save')._fire('click');
+  const a = getGame('gt_manual_draft');
+  assert(a.homeTeam === 'NEW HOME' && a.awayTeam === 'NEW AWAY', '7b: DRAFT-week manual game — team names still fully editable');
+  assert(a.venue === 'New Venue' && a.homeConference === 'New Conf', '7b: venue/conference still editable in DRAFT');
+  assert(a.leagueLabel === 'Special', '7b: manual-link fields (league label) still editable in DRAFT');
+}
+{
+  // ── 7c. The SAME manual, non-ESPN-linked game, once the week leaves
+  //        DRAFT — static + manual-link fields lock; score/status STAY
+  //        editable (no other surface exists for them). ────────────────────
+  const week = { weekId: 'gt_w_open', weekNumber: 92, status: 'open', season: 2026 };
+  const g = GAME({ gameId: 'gt_manual_open', homeTeam: 'LOCKED HOME', awayTeam: 'LOCKED AWAY',
+    venue: 'Locked Venue', homeConference: 'Locked Conf', isManual: true,
+    espnSport: null, espnEventId: null, leagueLabel: 'Locked Label', status: 'scheduled' });
+  resetDom();
+  localStorage.clear();
+  storage.saveWeek(week);
+  saveGame(g);
+  const games = storage.getGames(week.weekId);
+  const btn = prepareEditButton('gt_manual_open');
+  bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
+  poisonAllFields();
+  el('m-hs').value = '17';
+  el('m-as').value = '14';
+  el('m-status').value = 'final';
+  el('m-save');
+  btn._fire('click');
+  el('m-save')._fire('click');
+  const a = getGame('gt_manual_open');
+  assert(a.homeTeam === 'LOCKED HOME' && a.awayTeam === 'LOCKED AWAY', '7c: manual game past DRAFT — team names now carried forward, poisoned DOM ignored');
+  assert(a.venue === 'Locked Venue' && a.homeConference === 'Locked Conf', '7c: venue/conference carried forward past DRAFT');
+  assert(a.isManual === true && a.leagueLabel === 'Locked Label', '7c: manual-link fields carried forward past DRAFT (poisoned checkbox/label ignored)');
+  assert(a.homeScore === 17 && a.awayScore === 14 && a.status === 'final', '7c: score/status STILL editable — no other surface exists for a non-refreshable game');
+}
+{
+  // ── 7d. A manual game with FULL ESPN linking (espnSport + espnEventId) —
+  //        treated as refreshable exactly like a pipeline game, even though
+  //        isManual is true. ────────────────────────────────────────────────
+  const week = { weekId: 'gt_w_linked', weekNumber: 93, status: 'open', season: 2026 };
+  const g = GAME({ gameId: 'gt_manual_linked', homeTeam: 'LINKED HOME', awayTeam: 'LINKED AWAY',
+    isManual: true, espnSport: 'nfl', espnEventId: '401555555', status: 'final',
+    homeScore: 21, awayScore: 20 });
+  resetDom();
+  localStorage.clear();
+  storage.saveWeek(week);
+  saveGame(g);
+  const games = storage.getGames(week.weekId);
+  const btn = prepareEditButton('gt_manual_linked');
+  bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
+  poisonAllFields();
+  el('m-save');
+  btn._fire('click');
+  el('m-save')._fire('click');
+  const a = getGame('gt_manual_linked');
+  assert(a.homeTeam === 'LINKED HOME' && a.homeScore === 21 && a.awayScore === 20 && a.status === 'final',
+    '7d: manual game with full ESPN linking is treated as refreshable — static AND score/status carried forward, matching doRefreshScores()\'s own predicate verbatim');
+}
+{
+  // ── 7e. Creating a BRAND NEW game (game === null) is always fully
+  //        editable, regardless of week status — DI-415's own "no game"
+  //        case (the wizard's own "Add a game manually," DI-411, depends on
+  //        this exact path). ────────────────────────────────────────────────
+  const week = { weekId: 'gt_w_new', weekNumber: 94, status: 'open', season: 2026 };
+  resetDom();
+  localStorage.clear();
+  storage.saveWeek(week);
+  const games = storage.getGames(week.weekId);
+  el('add-manual-game-btn');
+  bindCommEventListeners(week, games, [], [], storage.getSettings(), [week]);
+  el('m-home').value = 'BRAND NEW HOME';
+  el('m-away').value = 'BRAND NEW AWAY';
+  el('m-home-mascot').value = ''; el('m-away-mascot').value = '';
+  el('m-kickoff').value = '2026-09-05T17:00';
+  el('m-venue').value = 'Brand New Venue';
+  el('m-hconf').value = ''; el('m-aconf').value = '';
+  el('m-hrank').value = ''; el('m-arank').value = '';
+  el('m-spread-fav').value = ''; el('m-spread-margin').value = '';
+  el('m-mult-preset').value = '1';
+  el('m-is-manual').checked = false;
+  el('m-save');
+  el('add-manual-game-btn')._fire('click');
+  el('m-save')._fire('click');
+  const created = storage.getGames(week.weekId).find(x => x.homeTeam === 'BRAND NEW HOME');
+  assert(!!created, '7e: a brand-new game (week open, not draft) is created — creation is never locked, per DI-415\'s "no game" case');
+  assert(created?.venue === 'Brand New Venue', '7e: …and every field on it, including ones that WOULD be static-locked on an EXISTING game, is editable at creation time');
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 console.log('\n' + '═'.repeat(50));
 if (fail === 0) console.log(`✅ ALL PASS — ${pass} passed, 0 failed`);
 else { console.error(`❌ ${fail} FAILED — ${pass} passed, ${fail} failed`); process.exitCode = 1; }

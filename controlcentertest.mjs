@@ -1035,5 +1035,161 @@ console.log('\n[12] Finding 6 (app-shell part 3A review, 2026-09-27) — accordi
 }
 
 // ═════════════════════════════════════════════════════════════════════════
+console.log('\n[13] RG-278 (live v0.27.0 web, Drew 2026-09-28) — "grays out the screen but no settings or control center pops up": a TAP open/close must SETTLE --cc-drag-progress…');
+// ═════════════════════════════════════════════════════════════════════════
+// css/styles.css positions #control-center ONLY through
+//   transform:translateX(calc(-100% + (100% * var(--cc-drag-progress,0))))
+// — the settled states are "fully open = progress 1, fully closed = progress
+// 0" (that rule's own comment). The drag path honoured that (drag-end sets
+// 1/0), but the TAP path (api.open() from #control-center-trigger, and every
+// ✕/backdrop/row close) only changed `phase`, so a tap-open left the drawer
+// at translateX(-100%) while the backdrop (keyed on data-open) faded in —
+// the scrim with no panel. The pixel result is engine-measured in
+// shellrendertest.mjs [A]; this section pins the state contract that
+// produces it, through the REAL mountControlCenter() on the fake DOM.
+{
+  const savedWindow = globalThis.window;
+  const savedDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+  const progressOf = (root) => Number(root.querySelector('#control-center').style._props['--cc-drag-progress']);
+
+  // 13a/13b — the reported path: tap the trigger (api.open(), motion path).
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    assert(progressOf(root) === 0 || Number.isNaN(progressOf(root)), '13a-0: fixture — a freshly mounted, closed drawer is at progress 0 (off-screen)');
+    api.open();
+    assert(api.getState().phase === 'opening' && root.querySelector('#control-center').getAttribute('data-open') === 'true',
+      '13a-1: fixture — api.open() moved the phase to "opening" and data-open="true" (the backdrop\'s own key, so the scrim paints)');
+    assert(api.getState().dragProgress === 1 && progressOf(root) === 1,
+      `13a-2: THE BUG — a tap-open SETTLES the drawer at --cc-drag-progress 1 (fully on-screen), not 0 (got state ${api.getState().dragProgress}, style ${progressOf(root)}) — at 0 the panel stays at translateX(-100%) behind a visible scrim`);
+    api.close();
+    assert(api.getState().dragProgress === 0 && progressOf(root) === 0,
+      `13b: a tap-close (✕ / backdrop / Esc / a navigating row) settles it back at progress 0 (got state ${api.getState().dragProgress}, style ${progressOf(root)})`);
+    api.destroy();
+  }
+  // 13c — reduced motion takes the synchronous path (straight to "open") and must settle too.
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    globalThis.matchMedia = () => ({ matches: true });
+    try { api.open(); } finally { delete globalThis.matchMedia; }
+    assert(api.getState().phase === 'open' && progressOf(root) === 1,
+      `13c: reduced motion — phase "open" AND progress 1 in one step (got ${api.getState().phase} / ${progressOf(root)})`);
+    api.close({ immediate: true });
+    assert(api.getState().phase === 'closed' && progressOf(root) === 0,
+      `13c-2: an immediate close (sign-out, hold sweep) lands at "closed" AND progress 0 (got ${api.getState().phase} / ${progressOf(root)})`);
+    api.destroy();
+  }
+  // 13d — the mirror image of the bug: swipe OPEN (drag-end settles 1), then
+  // tap ✕. Before the fix progress stayed 1, so the panel stayed on screen,
+  // inert, after the scrim had gone.
+  {
+    const s = _controlCenterStateMachine([
+      { type: 'drag-start' }, { type: 'drag-move', progress: 0.8 },
+      { type: 'drag-end', settleOpen: true }, { type: 'transition-end' },
+      { type: 'close' }, { type: 'transition-end' },
+    ]);
+    assert(s[3].phase === 'open' && s[3].dragProgress === 1,
+      `13d-0: fixture — a swipe that settles open is phase "open" at progress 1 (got ${s[3].phase} / ${s[3].dragProgress})`);
+    assert(s[5].phase === 'closed' && s[5].dragProgress === 0,
+      `13d: swipe-open then TAP-close ends "closed" at progress 0 — never an inert panel left on screen (got ${s[5].phase} / ${s[5].dragProgress})`);
+  }
+  // 13e — a no-op open/close (already open / already closed) changes nothing.
+  {
+    const s = _controlCenterStateMachine([{ type: 'close' }, { type: 'open', reducedMotion: true }, { type: 'open', reducedMotion: true }]);
+    assert(s[0].phase === 'closed' && s[0].dragProgress === 0 && s[2].phase === 'open' && s[2].dragProgress === 1,
+      '13e: close-while-closed stays closed at 0; open-while-open stays open at 1');
+  }
+
+  globalThis.window = savedWindow;
+  globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[14] v0.27.1 round 2 (reviewer conditions/findings on 33243d1) — the scrim fades WITH the panel on close; an edge drag during "opening" never snaps the panel to 0…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow = globalThis.window;
+  const savedDocument = globalThis.document;
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, activeElement: null };
+
+  // 14a/14b — Condition 1. The backdrop's data-open followed
+  // isDrawerVisuallyOpen(), which is TRUE all through 'closing' (it has to be
+  // for the drawer itself — gesturesSuspended() reads the drawer's data-open),
+  // so the scrim sat fully dark for the whole 260 ms slide-out and only then
+  // faded: Drew's RG-278 symptom played in reverse.
+  {
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx());
+    const drawer = root.querySelector('#control-center'), scrim = root.querySelector('#control-center-backdrop');
+    api.open();
+    assert(api.getState().phase === 'opening' && scrim.getAttribute('data-open') === 'true',
+      `14a-0: opening — the scrim fades IN with the panel (scrim data-open ${scrim.getAttribute('data-open')})`);
+    api.close();
+    assert(api.getState().phase === 'closing', '14a-1: fixture — a motion close is in its transient "closing" phase');
+    assert(scrim.getAttribute('data-open') === 'false' && scrim.getAttribute('aria-hidden') === 'true',
+      `14a-2: CONDITION 1 — the scrim starts fading OUT the moment the close starts (scrim data-open ${scrim.getAttribute('data-open')}, aria-hidden ${scrim.getAttribute('aria-hidden')}) — not after the panel has already gone`);
+    assert(drawer.getAttribute('data-open') === 'true',
+      '14a-3: …while the DRAWER still reads data-open="true" through "closing" (the gesturesSuspended() hook is unchanged: no other gesture arms mid-slide)');
+    api.destroy();
+  }
+  {
+    const st = (o) => ({ ...initialControlCenterState(), ...o });
+    const scrimOf = (html) => (html.match(/id="control-center-backdrop"[^>]*data-open="(true|false)"/) || [])[1];
+    const ctx = baseCtx();
+    assert(scrimOf(renderControlCenter(ctx, st({ phase: 'closing' }))) === 'false',
+      '14b-1: rendered markup agrees — "closing" renders the scrim closed');
+    assert(scrimOf(renderControlCenter(ctx, st({ phase: 'open' }))) === 'true' && scrimOf(renderControlCenter(ctx, st({ phase: 'opening' }))) === 'true',
+      '14b-2: "open"/"opening" render the scrim open');
+    assert(scrimOf(renderControlCenter(ctx, st({ phase: 'closed', dragging: true, dragProgress: 0.3 }))) === 'true'
+      && scrimOf(renderControlCenter(ctx, st({ phase: 'closed', dragging: true, dragProgress: 0 }))) === 'false',
+      '14b-3: mid-drag the scrim is up while the panel is showing at all, and not before it has moved');
+  }
+
+  // 14c — Finding 7. drag-start derived its progress from `phase === 'open'`,
+  // so a drag that began during the 260 ms "opening" slide snapped the panel
+  // to 0 (off-screen) for a frame. It keeps the settled value now.
+  {
+    const s = _controlCenterStateMachine([{ type: 'open', reducedMotion: false }, { type: 'drag-start' }]);
+    assert(s[0].phase === 'opening' && s[1].dragProgress === 1,
+      `14c-1: FINDING 7 — a drag that starts while the drawer is "opening" keeps progress 1, never snaps to 0 (got ${s[1].dragProgress})`);
+    const c = _controlCenterStateMachine([{ type: 'drag-start' }]);
+    const o = _controlCenterStateMachine([{ type: 'open', reducedMotion: true }, { type: 'drag-start' }]);
+    assert(c[0].dragProgress === 0 && o[1].dragProgress === 1,
+      `14c-2: the settled cases are unchanged — from "closed" 0, from "open" 1 (got ${c[0].dragProgress} / ${o[1].dragProgress})`);
+  }
+  // 14d — …and the first MOVE continues from there. Driven through the REAL
+  // bindControlCenterEdgeSwipe() on a native window (the binder only exists
+  // in the native shell), same shape as 11g.
+  {
+    globalThis.window = {
+      Capacitor: { isNativePlatform: () => true }, _listeners: {},
+      addEventListener(type, fn) { this._listeners[type] = fn; },
+      removeEventListener(type) { delete this._listeners[type]; },
+      _fire(type, evt) { this._listeners[type]?.(evt); },
+    };
+    const root = new FakeElement('div');
+    const api = mountControlCenter(root, baseCtx(), {});
+    api.open();                                           // motion: "opening"
+    assert(api.getState().phase === 'opening', '14d-0: fixture — mid-"opening"');
+    globalThis.window._fire('touchstart', { touches: [{ clientX: 10, clientY: 300 }] });
+    globalThis.window._fire('touchmove', { touches: [{ clientX: 30, clientY: 300 }] });
+    const p = Number(root.querySelector('#control-center').style._props['--cc-drag-progress']);
+    assert(api.getState().dragging === true && p >= 0.99,
+      `14d-1: an edge drag caught during "opening" tracks from where the panel IS (progress ${p}), not from 0 — no one-frame snap off-screen`);
+    globalThis.window._fire('touchend', {});
+    assert(api.getState().phase === 'opening' || api.getState().phase === 'open',
+      `14d-2: …and settles open (phase ${api.getState().phase})`);
+    api.destroy();
+  }
+
+  globalThis.window = savedWindow;
+  globalThis.document = savedDocument;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
 console.log(`\n[control-center] ${pass} passed, ${fail} failed\n`);
 if (fail > 0) process.exit(1);

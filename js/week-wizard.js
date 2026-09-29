@@ -122,10 +122,13 @@ export const WIZARD_STEP_COUNT = WIZARD_STEPS.length;
 // ── Copy strings, quoted verbatim from the DI so the eventual DOM wiring
 //    does not re-derive or re-word them (§2.3's exact text). ────────────────
 export const WIZARD_COPY = Object.freeze({
-  FETCH_LOADING: "Fetching this week's games from ESPN…",
+  // DI-411 (UN-366, 2026-09-28) — "Fetch ESPN…" verbiage removed from every
+  // wizard-facing string (wizard-scoped only; the Admin panel's diagnostic
+  // "Fetch ESPN Data" card, DI-352, is untouched).
+  FETCH_LOADING: "Fetching this week's games…",
   FETCH_SUCCESS: (n) => `${n} games added to your slate.`,
   FETCH_PARTIAL: (n) => `Only ${n} games available — add the rest manually after this wizard, or adjust the week's dates.`,
-  FETCH_FAILED: "Couldn't reach ESPN — check your connection and try again.",
+  FETCH_FAILED: "Couldn't fetch games — check your connection and try again.",
   FETCH_ZERO: "No games found for these dates. Check the week's start/end dates in Step 1, or add games manually from the Games tab after this wizard.",
   MISSING_SPREADS: (n) => `${n} game${n === 1 ? '' : 's'} still need${n === 1 ? 's' : ''} a spread before you can open for picks.`,
   ANNOUNCE_SKIP_CONFIRM: 'You can send an announcement anytime from the Week tab — skip for now?',
@@ -214,6 +217,19 @@ export function gatingChecklist({ gamesCount = 0, missingSpreadCount = 0, timing
  *  not a missing one — CONVENTIONS #18's PK case). */
 export function countMissingSpreads(games) {
   return (games || []).filter((g) => g && !(typeof g.spread === 'number' && Number.isFinite(g.spread))).length;
+}
+
+/**
+ * DI-416 (UN-371, 2026-09-28) — Step 6's non-blocking notice trigger. True
+ * when some OTHER week (not `weekId`) is already open/locked/live —
+ * `getCurrentWeek()`'s own (js/storage.js) `weeks.find(w =>
+ * ['open','locked','live'].includes(w.status))` resolves the FIRST such
+ * match silently if more than one qualifies; this surfaces that ambiguity to
+ * the commissioner instead, as a warning, never a block. A pure function of
+ * the week list, so it is directly testable.
+ */
+export function anotherWeekAlreadyOpen(weeks, weekId) {
+  return (weeks || []).find((w) => w && w.weekId !== weekId && ['open', 'locked', 'live'].includes(w.status)) || null;
 }
 
 /**
