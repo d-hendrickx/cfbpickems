@@ -392,6 +392,12 @@ function installFakeSupabase(overrides) {
   };
 }
 function resetAll(overrides = {}) {
+  // UN-315 / DI-436.1 — signOut() now awaits (bounded, 2s) the push unlink BEFORE it clears the session, and the
+  // unlink only WAITS when the OneSignal SDK has answered ok on this page. `freshDom()` below is a new page, so the
+  // push module's readiness latch (an earlier scenario's "SDK ready") must be a new page's too — otherwise a
+  // scenario that never pumps the SDK queue would sit out the whole 2s bound and every fixed-tick wait after
+  // signOut() would read the world before sign-out finished. (The minter stand-in above is not per-page state.)
+  pushOs._setSdkReadyForTest(false);   // ONLY the readiness latch — the rest of the push module's state carries across scenarios as it always has
   auth._resetAuthForTest();
   app._resetAuthUIWiringForTest();   // auth._resetAuthForTest() dropped the listener set; drop app's latch with it, or a later wireAuthUIEvents() silently no-ops and proves nothing
   app._resetAuthHoldForTest();       // DI-180l — cancel the 20s re-check timer and drop the hold latch, or A7's "never take a hold gate down" rule fires in a section that has no hold
@@ -1005,10 +1011,12 @@ console.log('      Join/Create landing, and the signups_closed refusal copy…')
   const closedLanding = registry.get('page-dashboard');
   assert(closedLanding.innerHTML.includes("New leagues aren't being created right now — check back soon."),
     '[10b-3] the closed notice renders on the landing when signups_open is false');
-  assert(/id="league-join-btn"[^>]*disabled/.test(closedLanding.innerHTML) && /id="league-create-btn"[^>]*disabled/.test(closedLanding.innerHTML),
-    '[10b-4] both the Join and Create buttons render disabled');
-  assert(/id="league-join-code"[^>]*disabled/.test(closedLanding.innerHTML) && /id="league-create-name"[^>]*disabled/.test(closedLanding.innerHTML),
-    '[10b-5] both inputs render disabled too — not just the buttons');
+  // N1 (DI-430, 2026-09-30) — the landing's Create card is no longer a name-only form: it is the entry to the ONE New League sheet (`#league-create-open-btn`), and its
+  // field lives in the sheet. Closed signups (and the closed release gate) still render it DISABLED; the Join card is unchanged.
+  assert(/id="league-join-btn"[^>]*disabled/.test(closedLanding.innerHTML) && /id="league-create-open-btn"[^>]*disabled/.test(closedLanding.innerHTML),
+    '[10b-4] both the Join button and the Create-a-League entry button render disabled');
+  assert(/id="league-join-code"[^>]*disabled/.test(closedLanding.innerHTML) && !/id="league-create-name"/.test(closedLanding.innerHTML),
+    '[10b-5] the Join input renders disabled too — not just the button — and the landing no longer carries a name field of its own (the sheet does)');
 
   // (d) Reopened — the cache flips back, controls are live again, no stale notice.
   resetAll(rpcClient({ _from: () => ({ data: [{ key: 'signups_open', value: true }], error: null }) }));
@@ -1335,6 +1343,54 @@ console.log('\n[17] Reviewer B3 / SEC F3 — the session-change chokepoint…');
     assert(app.state.layoutEditing === false || app.state.layoutEditing === null, `…and layout edit mode is reset (got ${JSON.stringify(app.state.layoutEditing)})`);
     assert(loggedOut === true, 'logoutOneSignal() fired — a handed-off phone stops receiving the previous player\'s pushes (correction #2\'s whole point)');
     assert(loggedInWith === null, '…and nothing was logged IN during a sign-out');
+  }
+
+  // ── UN-315 / DI-436.1 (reviewer note 5, 2026-09-30) — THE TWO `signOut({ unlinkPush: false })` PATHS
+  //    STILL DROP THE PUSH BINDING. Both are involuntary, fail-closed refusals of a recovery session whose contract
+  //    is "cleared in the same tick", so they skip the AWAITED unlink that a deliberate sign-out does first — and
+  //    lean on the chokepoint's own logout when the SIGNED_OUT event lands. A call-site count (pushtest 17-29b) says
+  //    nothing about whether that backstop actually FIRES; these drive the REAL listener chain for each path and
+  //    observe the SDK's logout() being called, with the account's identity established beforehand (so there is a
+  //    binding to drop) and no login made during the refusal.
+  const refusalFixture = async () => {
+    resetAll();
+    wireRealAuthUI();
+    globalThis.window.OneSignalDeferred = [];
+    auth._setMembershipsForTest([{ leagueId: 'A', memberId: 'm1', role: 'player', displayName: 'x', leagueName: 'League A' }]);
+    auth.setActiveLeagueId('A');
+    await drainOneSignal({ login: () => {}, logout: () => {} });   // the identity the fixture establishes binds OneSignal to m1…
+    globalThis.window.OneSignalDeferred = [];                      // …so the queue is cleared and only the REFUSAL's traffic is measured
+    storeValidSession();
+  };
+  const recoverySession = () => ({ user: { id: 'u1', email: 'nia@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+  {
+    // PATH 1 — auth.js's INITIAL_SESSION arm: the recovery marker is on the device (a reload mid-recovery).
+    await refusalFixture();
+    localStorage.setItem(auth._RECOVERY_PENDING_KEY_FOR_TEST, '1');
+    auth._fireAuthEventForTest('INITIAL_SESSION', recoverySession());
+    let loggedOut = false;
+    const seq1 = [];
+    await drainOneSignal({ login: id => { seq1.push(`login:${id}`); }, logout: () => { loggedOut = true; seq1.push('logout'); } });
+    try { localStorage.removeItem(auth._RECOVERY_PENDING_KEY_FOR_TEST); } catch {}
+    assert(loggedOut === true,
+      'UN-315 refusal path 1 (INITIAL_SESSION with the recovery marker present): signOut({ unlinkPush:false }) skipped the awaited unlink, and the SIGNED_OUT backstop DID call the SDK\'s logout() — the device is not left bound to the account\'s alias');
+    assert(seq1[seq1.length - 1] === 'logout',
+      `…and the LAST SDK call is the logout (${JSON.stringify(seq1)}) — however the chokepoint interleaved a transient login of the very session being refused, the device ENDS unbound`);
+  }
+  {
+    // PATH 2 — auth.js's PASSWORD_RECOVERY arm: the device cannot persist the recovery marker (private browsing, a full quota).
+    await refusalFixture();
+    const realSetItem = globalThis.localStorage.setItem;
+    globalThis.localStorage.setItem = (k) => { throw new Error(`QuotaExceededError writing ${k}`); };
+    try { auth._fireAuthEventForTest('PASSWORD_RECOVERY', recoverySession()); }
+    finally { globalThis.localStorage.setItem = realSetItem; }
+    let loggedOut = false;
+    const seq2 = [];
+    await drainOneSignal({ login: id => { seq2.push(`login:${id}`); }, logout: () => { loggedOut = true; seq2.push('logout'); } });
+    assert(loggedOut === true,
+      'UN-315 refusal path 2 (PASSWORD_RECOVERY whose marker cannot be written): signOut({ unlinkPush:false }) skipped the awaited unlink, and the SIGNED_OUT backstop DID call the SDK\'s logout() — the device is not left bound to the account\'s alias');
+    assert(seq2[seq2.length - 1] === 'logout',
+      `…and the LAST SDK call is the logout (${JSON.stringify(seq2)}) — however the chokepoint interleaved a transient login of the very session being refused, the device ENDS unbound`);
   }
 
   // ── SIGN IN ─────────────────────────────────────────────────────────────
@@ -2046,9 +2102,11 @@ console.log('\n[17d] THE STATIC RULE — every identity-changing path routes thr
         /const list = await refreshMembershipsAndSession\(holdLeagueId \? \{ preferLeagueId: holdLeagueId \} : \{ preferMemberId: memberId \}\);\n  return \(list \|\| \[\]\)\.find\(m => m\.memberId === memberId\) \|\| null;/,
         'const list = await refreshMembershipsAndSession();\n  const joined = (list || []).find(m => m.memberId === memberId) || null;\n  if (joined) setActiveLeagueId(joined.leagueId);\n  return joined;')],
     ['createLeague() writes the pointer after the refresh again',
+      // Re-derived 2026-09-30 (N1, DI-430): createLeague() now takes `{ activate }` like joinLeague() and checks the refreshed list for the new row; the mutation still
+      // replaces that ONE refresh call with the 1d71cbf shape (bare refresh + a pointer write), so the defect it reintroduces is unchanged.
       s => s.replace(
-        /await refreshMembershipsAndSession\(\{ preferLeagueId: leagueId \}\);\n  return leagueId;/,
-        'await refreshMembershipsAndSession();\n  if (leagueId) setActiveLeagueId(leagueId);\n  return leagueId;')],
+        /const list = await refreshMembershipsAndSession\(holdLeagueId \? \{ preferLeagueId: holdLeagueId \} : \{ preferLeagueId: leagueId \}\);/,
+        'const list = await refreshMembershipsAndSession();\n  if (leagueId) setActiveLeagueId(leagueId);')],
     ['a NEW function assigns the account id with no notify (the class, not the two names)',
       s => s.replace('export function getAccountUserId() { return _accountUserId; }',
         'export function getAccountUserId() { return _accountUserId; }\nexport function _adoptAccount(uid) {\n  _accountUserId = uid;\n}')],
@@ -2439,8 +2497,15 @@ console.log('\n[19] SEC F5 — join/create input bounds + one error message per 
   const page = new FakeEl(); page.id = 'page-dashboard'; registry.set('page-dashboard', page);
   app.renderLeagueFlowScreen('dashboard');
   assert(/id="league-join-code"[^>]*maxlength="16"/.test(page.innerHTML), 'the join-code field is capped at maxlength="16"');
-  assert(/id="league-create-name"[^>]*maxlength="80"/.test(page.innerHTML),
-    'the league-name field is capped at maxlength="80" — the same bound create_league() itself enforces (0003_functions.sql), so the form cannot submit something the server will always reject');
+  // N1 (DI-430, 2026-09-30) — the name field moved into the New League sheet (js/league-create.js); the landing card is only its entry. The bound is unchanged: the SHEET's field
+  // is capped at maxlength="80", the same bound create_league() itself enforces (0003_functions.sql), so the form cannot submit something the server will always reject.
+  {
+    const LCmod = await import('./js/league-create.js');
+    const nameHtml = LCmod.nameStepHTML(LCmod.createInitialState({}), { escHtml: (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;') });
+    assert(/id="league-create-name"[^>]*maxlength="80"/.test(nameHtml),
+      'the league-name field (in the New League sheet) is capped at maxlength="80" — the same bound create_league() itself enforces (0003_functions.sql), so the form cannot submit something the server will always reject');
+    assert(!/id="league-create-name"/.test(page.innerHTML), '…and the zero-league landing carries no second name field');
+  }
 
   const { resolve, connectivity, unknown } = app._LEAGUE_RPC_ERROR_COPY_FOR_TEST;
   const distinct = new Set();
@@ -2464,8 +2529,10 @@ console.log('\n[19] SEC F5 — join/create input bounds + one error message per 
 
   // The copy reaches the DOM through textContent, never innerHTML.
   const appSrc19 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert(/joinErr\.textContent = leagueRpcErrorCopy\(err\)/.test(appSrc19) && /createErr\.textContent = leagueRpcErrorCopy\(err\)/.test(appSrc19),
-    'both inline errors are written with .textContent — a server-supplied string never reaches an innerHTML sink');
+  // N1 (DI-430): the create form's inline error is gone with the form (the sheet's failure is a fixed-copy banner, never a server string); the Join form's inline error is
+  // still written with .textContent, and the sheet's banners are fixed LC_COPY strings that go through escHtml().
+  assert(/joinErr\.textContent = leagueRpcErrorCopy\(err\)/.test(appSrc19) && !/createErr\.textContent/.test(appSrc19),
+    'the Join form\'s inline error is written with .textContent — a server-supplied string never reaches an innerHTML sink — and no create-form error sink remains');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2859,6 +2926,8 @@ console.log('\n[26] SEC F3 — sign-out leaves no auth artefact on the device…
   // RG-196 (2026-09-21) — the owner-stamped chat read cursor, seeded for the
   // same reason: it is a KEEP entry now, so the loop below must measure it.
   localStorage.setItem('cfbp_chat_lastseen2', '{"seq":84,"byTag":{},"owner":"1f2k960"}');
+  // N1 (DI-430 / S-4, 2026-09-30) — the pending invite `{code, exp}`, seeded so the sign-out below proves it does NOT survive a sign-out (it is a HANDOVER-only keep).
+  localStorage.setItem('cfbp_pending_join', '{"code":"K7QX9M2P","exp":9999999999999}');
   localStorage.setItem('someone_elses_app_key', 'not-ours');
   await auth.signOut();
   for (const k of ['cfbp_players', 'cfbp_picks', 'cfbp_comments', 'cfbp_supabase_active_league_notes']) {
@@ -2894,6 +2963,34 @@ console.log('\n[26] SEC F3 — sign-out leaves no auth artefact on the device…
   ];
   assert(JSON.stringify([...auth._CLEAR_KEEP_KEYS_FOR_TEST].sort()) === JSON.stringify([...EXPECTED_KEEP].sort()),
     `SEC F-1 / reviewer F-2 — the KEEP-list is exactly the eight justified entries and nothing else (got ${JSON.stringify(auth._CLEAR_KEEP_KEYS_FOR_TEST)}). A ninth entry added without a justification beside it, or one of these quietly dropped, is the whole failure mode an include-list had.`);
+  // N1 (S-4, 2026-09-30) — THE PENDING INVITE IS A HANDOVER-ONLY KEEP, NEVER A SIGN-OUT KEEP. It is deliberately NOT in the always-keep list above (the exact-list assertion
+  // just proved that); it is kept per MODE, the way the SDK token is. Asserted in BOTH directions, against the same seeded value:
+  assert(localStorage.getItem('cfbp_pending_join') === null,
+    'S-4 — cfbp_pending_join is GONE after a SIGN-OUT (nothing about that session survives an explicit sign-out; the always-keep list no longer carries it)');
+  assert(JSON.stringify([...auth._HANDOVER_ONLY_KEEP_KEYS_FOR_TEST]) === JSON.stringify(['cfbp_pending_join']),
+    'S-4 — the handover-only keep list is exactly the one pending-invite key, frozen');
+  assert(Object.isFrozen(auth._HANDOVER_ONLY_KEEP_KEYS_FOR_TEST),
+    'S-4 — the handover-only keep list is frozen (a pushed-on entry would exempt a key from every sign-out too)');
+  {
+    localStorage.setItem('cfbp_pending_join', '{"code":"K7QX9M2P","exp":9999999999999}');
+    assert(!auth._keysToClearForTest('handover').includes('cfbp_pending_join'),
+      'S-4 — a HANDOVER sweep does not list the pending invite (the invitee\'s code must ride the first-sign-in sweep)');
+    assert(auth._keysToClearForTest('signout').includes('cfbp_pending_join'),
+      'S-4 — a SIGN-OUT sweep DOES list it (mutation-visible: moving the key back onto the always-keep list turns this red)');
+    auth.clearDeviceLocalSessionData({ mode: 'handover' });
+    assert(localStorage.getItem('cfbp_pending_join') !== null,
+      'S-4 — after a real HANDOVER sweep the pending invite is still on the device (non-vacuity: the sign-out assertion above is measuring the mode, not a broken write)');
+    auth.clearDeviceLocalSessionData({ mode: 'signout' });
+    assert(localStorage.getItem('cfbp_pending_join') === null,
+      'S-4 — and the SAME value is swept by a SIGN-OUT-mode sweep');
+    // an unknown mode fails closed to \'signout\' and so also sweeps it
+    localStorage.setItem('cfbp_pending_join', '{"code":"K7QX9M2P","exp":9999999999999}');
+    const realWarnS4 = console.warn; console.warn = () => {};
+    try { auth.clearDeviceLocalSessionData({ mode: 'handoverr' }); } finally { console.warn = realWarnS4; }
+    assert(localStorage.getItem('cfbp_pending_join') === null,
+      'S-4 — an unrecognised mode (fails closed to sign-out) sweeps the pending invite too');
+    // put the store back as the sign-out above left it
+  }
   for (const k of EXPECTED_KEEP) {
     if (k === auth._DEVICE_DATA_OWNER_KEY_FOR_TEST || k === auth._ACTIVE_LEAGUE_KEY_FOR_TEST) continue;   // both removed by signOut() on its own lines
     assert(localStorage.getItem(k) !== null,
@@ -4049,7 +4146,7 @@ console.log('\n[31] A9 — expiry-clear and signOut() leave the SAME device-loca
       '…and it RE-ASKS the predicate after sweeping, so "complete" is read back rather than assumed (the same discipline the per-key getItem check uses) — and the re-ask fails on an UN-ENUMERABLE store too, not just on a leftover key');
     assert(/let complete = \w+\.enumerated;/.test(routine),
       'SECURITY F-1 (eighth gate) — `complete` STARTS from the enumeration verdict, so a store that could not be looked at can never report a clean sweep. Hardcoding `let complete = true` here is the whole cutover-blocker: the sweep found nothing because it could not look, said "done", and the caller stamped the owner marker over the previous player\'s data.');
-    const signOutFn = (code.match(/export async function signOut\(\)[\s\S]*?\n\}/) || [''])[0];
+    const signOutFn = (code.match(/export async function signOut\([^)]*\)[\s\S]*?\n\}/) || [''])[0];   // UN-315: signOut({ unlinkPush = true } = {}) — the signature is no longer empty
     assert(/clearDeviceLocalSessionData\(\{ mode: 'signout' \}\)/.test(signOutFn),
       'signOut() calls the shared routine, in SIGN-OUT mode — the one difference between the two callers is the token key, and it is a parameter rather than a hidden branch (security F-1)');
     // REVIEWER NIT (eighth gate) — the `|| /…/.test(code)` disjunction that used
@@ -8936,6 +9033,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     console.log('\n[44k4] tickAutoTransition() — DRAFT → OPEN at a scheduled picksOpenAt (DI-358)…');
     const scheduledWeek = (id, overrides = {}) => ({
       weekId: id, season: '2026', weekNumber: 9, label: 'Week 9',
+      blurb: 'Rivalry week — bring your A game.', // DI-404 (coordinator override, 2026-09-30): the tick holds a due draft with no valid blurb, so a fixture meant to OPEN carries one
       status: 'draft', dataSourceMode: 'espn',
       picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
       picksLockAt: new Date(Date.now() + 3600e3).toISOString(), // timingConfigured resolves (rule 1)
@@ -9021,6 +9119,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     console.log('\n[44k4b] tickAutoTransition() — two due drafts, ONE tick: only the first opens (Finding 2)…');
     const scheduledWeekB = (id, num, overrides = {}) => ({
       weekId: id, season: '2026', weekNumber: num, label: `Week ${num}`,
+      blurb: 'Rivalry week — bring your A game.', // DI-404 (coordinator override, 2026-09-30): the tick holds a due draft with no valid blurb, so a fixture meant to OPEN carries one
       status: 'draft', dataSourceMode: 'espn',
       picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
       picksLockAt: new Date(Date.now() + 3600e3).toISOString(),
@@ -9107,6 +9206,7 @@ console.log('\n[44] Step 4 Part B — hasSupabaseDataBackend() derives, the swit
     });
     const week6Scheduled = () => ({
       weekId: 'wk_6', season: '2026', weekNumber: 6, label: 'Week 6',
+      blurb: 'Rivalry week — bring your A game.', // DI-404 (coordinator override, 2026-09-30): the tick holds a due draft with no valid blurb, so a fixture meant to OPEN carries one
       status: 'draft', dataSourceMode: 'espn',
       picksOpenAt: new Date(Date.now() - 60e3).toISOString(),   // due
       picksLockAt: new Date(Date.now() + 3600e3).toISOString(),
@@ -11850,6 +11950,393 @@ console.log('     sheet, driven through the REAL app.js functions against the fa
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [57i] UN-389 / DI-446 (2026-09-30) — THE DELETE ACCOUNT SHEET FOR A SOLE COMMISSIONER, driven through its REAL handlers against the fake client.
+//
+// accountexittest.mjs proves the pure half (copy, the state machine, row kinds, the delete-enablement truth table, every renderer). This section owns what needs
+// app.js's DOM wiring and this file's fake-DOM harness: the preflight gate (none for a plain player), the skeleton -> rows path, a blocked league keeping Delete
+// disabled, the hand-off (one tap and the picker) through the real `admin_set_member_role` RPC, the archive QUEUED until the final tap, the final order
+// (`archive_league_on_exit` for each queued league, THEN `account-delete`, by spy order), an archive failure that stops before `account-delete` and names the league,
+// a stale server refusal that re-asks, a preflight that fails closed (PGRST202 included), the pilot row with no Archive control in the DOM, the auto-archive row with
+// none, dismissal that is inert while the sequence runs, escaped names — and the byte-stable ids + "Couldn't delete" prefix that [57d]-[57f] pin UNCHANGED.
+//
+// NOT covered (device only): the haptics' feel and ORDER, swipe-down with the keyboard up, the keyboard not covering Delete, VoiceOver, Dynamic Type, Reduce Motion
+// crossfades, the action sheet against the home indicator, no zoom on focusing the field in WKWebView.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[57i] UN-389 / DI-446 — the Delete Account sheet for a sole commissioner (real handlers, fake client, spy order)…');
+{
+  const tick57 = () => new Promise((r) => setTimeout(r, 0));
+  const flush57 = async (n = 14) => { for (let i = 0; i < n; i++) await tick57(); };
+  const quiet57 = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  const XSS57 = '<img src=x onerror=alert(1)>';
+  const cand57 = (id, name) => ({ member_id: id, display_name: name });
+  const wire57 = (o = {}) => ({ league_id: 'L1', league_name: 'Saturday Crew', pilot: false, blocks: true, auto_archive: false, candidates: [cand57('M1', 'Sam Rivera'), cand57('M2', 'Kai Ortiz')], ...o });
+  const SEAT57 = (leagueId, name, role = 'commissioner') => ({ leagueId, memberId: `me-${leagueId}`, role, displayName: 'Drew', leagueName: name, pilot: false, status: 'active' });
+  const ROWS57 = (list) => list.map((m) => ({ league_id: m.leagueId, id: m.memberId, role: m.role, display_name: 'Drew', active: true, leagues: { name: m.leagueName, pilot: m.pilot, status: m.status } }));
+
+  /** One harness per scenario: the fake client records every RPC and Edge Function call, IN ORDER, so the final tap's sequence is asserted by SPY ORDER. */
+  async function harness57({ seats = [SEAT57('L1', 'Saturday Crew')], exitRows = [wire57()], rpcs = {}, fn = null, exitReply = null } = {}) {
+    const calls = [];
+    const state = { exitRows, seats };
+    resetAll({
+      session: { user: { id: 'u-drew', email: 'drew@example.com' }, access_token: 't' },
+      rpc: (name, params) => {
+        calls.push({ kind: 'rpc', name, params });
+        if (rpcs[name]) return rpcs[name](params, state);
+        if (name === 'account_exit_leagues') return exitReply ? exitReply(state) : { data: state.exitRows, error: null };
+        return { data: null, error: null };
+      },
+      from: (table) => (table === 'league_members' ? { data: ROWS57(state.seats), error: null } : { data: [], error: null }),
+      functionsInvoke: async (name) => { calls.push({ kind: 'fn', name }); return fn ? fn(name, state) : { data: { ok: true, what: 'deleted' }, error: null }; },
+    });
+    // The same world [57d]-[57f] run in (resetAll's defaults: authMode 'supabase', the data backend stood in as live). NOT dataMode 'supabase': with an active league that arm of
+    // isContentWithheld() waits for the real adapter to serve, and a sheet refuses to open over withheld content — correctly, and irrelevant to what this section proves.
+    storeValidSession();
+    app._resetDeleteAccountSheetForTest();
+    auth._setMembershipsForTest(seats);
+    if (seats.length) auth.setActiveLeagueId(seats[0].leagueId);
+    const toastBox = document.createElement('div'); toastBox.id = 'toast-container'; registry.set('toast-container', toastBox);
+    return { calls, state, named: (n) => calls.filter((c) => c.name === n), order: () => calls.filter((c) => c.name !== 'account_exit_leagues').map((c) => (c.kind === 'fn' ? `fn:${c.name}` : `rpc:${c.name}`)) };
+  }
+  const wrap57 = () => document.getElementById('pwacct-delete-overlay');
+  const rows57 = () => wrap57()?.querySelector('#pwacct-delete-rows');
+  const picker57 = () => wrap57()?.querySelector('#pwacct-delete-picker');
+  const listPane57 = () => wrap57()?.querySelector('#pwacct-delete-list');
+  const sheetState57 = () => app._deleteAccountSheetStateForTest();
+  const submit57 = () => document.getElementById('pwacct-delete-submit');
+  const message57 = () => document.getElementById('pwacct-delete-message');
+  const caption57 = () => document.getElementById('pwacct-delete-caption');
+  const click57 = (action, attrs = {}) => wrap57().dispatch('click', { target: { closest: (sel) => (sel === '[data-ax-action]' ? { disabled: false, getAttribute: (k) => (k === 'data-ax-action' ? action : (attrs[k] ?? null)) } : null) } });
+  const type57 = (v = 'DELETE') => { const i = document.getElementById('pwacct-delete-confirm'); i.value = v; i.dispatch('input', {}); };
+  const esc57 = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const open57 = async () => { await quiet57(async () => { app._showDeleteAccountSheetForTest(); await flush57(); }); };
+
+  // ── (a) NO commissioner seat: today's sheet at once, NO preflight, no dependency on 0035 ─────────────────────────────────────────
+  {
+    const h = await harness57({ seats: [SEAT57('L1', 'Saturday Crew', 'player')] });
+    await open57();
+    assert(!!wrap57() && h.named('account_exit_leagues').length === 0, '[57i-1] a plain player (no commissioner seat cached) makes NO account_exit_leagues call — zero regression, no dependency on migration 0035');
+    assert(/id="pwacct-delete-rows"[^>]*><\/div>/.test(wrap57().querySelector('#pwacct-delete-body').innerHTML) && sheetState57().mode === 'skipped' && caption57().textContent === '', '[57i-2] …the rows region is empty, the mode is skipped, no caption');
+    assert(submit57().disabled === true, '[57i-3] Delete starts disabled');
+    type57();
+    assert(submit57().disabled === false, '[57i-4] …and typing DELETE alone enables it (today\'s behaviour)');
+    const body = wrap57().querySelector('#pwacct-delete-body').innerHTML;
+    assert(body.includes("visible only to league commissioners.") && !body.includes('visible only to your commissioner'), '[57i-5] the audit-history paragraph says "league commissioners" (true for a sole commissioner)');
+    assert(/enterkeyhint="done"/.test(body) && /autocapitalize="characters"/.test(body) && /autocorrect="off"/.test(body) && /spellcheck="false"/.test(body), '[57i-6] the typed field carries the keyboard hints');
+    const nav = wrap57().querySelector('#pwacct-delete-nav').innerHTML;
+    assert(/id="pwacct-delete-close"/.test(nav) && /data-icon|<svg/.test(nav) && !/✕/.test(nav), '[57i-7] the close control is the SVG icon under the byte-stable id (the ✕ glyph is gone)');
+    assert(/data-hold-teardown/.test(JSON.stringify(wrap57().attrs)), '[57i-8] the wrap carries data-hold-teardown (a hold / an identity change sweeps it)');
+    await quiet57(async () => { wrap57().querySelector('#pwacct-delete-body'); click57('close'); });
+    assert(sheetState57() === null, '[57i-9] the close control dismisses (the state is dropped with the sheet)');
+    // zero memberships: same
+    const h0 = await harness57({ seats: [] });
+    await open57();
+    assert(h0.named('account_exit_leagues').length === 0 && sheetState57().mode === 'skipped', '[57i-10] zero memberships: today\'s sheet, no preflight');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (b) a commissioner with members and no co-commissioner: skeleton -> rows -> hand-off through the picker -> Delete ─────────────
+  {
+    // The FIRST ask is held open on a gate so the pre-answer state (the skeleton) can be observed; every later ask answers at once.
+    let releaseFirst57 = null;
+    const gate57 = new Promise((r) => { releaseFirst57 = r; });
+    let asked57 = 0;
+    const h = await harness57({
+      rpcs: { admin_set_member_role: (p, st) => { st.exitRows = []; return { data: null, error: null }; } },
+      exitReply: (st) => (++asked57 === 1 ? gate57.then(() => ({ data: st.exitRows, error: null })) : { data: st.exitRows, error: null }),
+    });
+    quiet57(() => { app._showDeleteAccountSheetForTest(); });
+    assert(h.named('account_exit_leagues').length === 1 && sheetState57().checking === true, `[57i-11] a cached commissioner seat fires exactly ONE account_exit_leagues call as the sheet mounts (calls ${h.named('account_exit_leagues').length}, checking ${sheetState57()?.checking})`);
+    const firstPaint57 = wrap57().querySelector('#pwacct-delete-body').innerHTML;
+    assert(/ax-skel/.test(firstPaint57) && firstPaint57.includes('Saturday Crew') && rows57().attrs['aria-busy'] === 'true' && submit57().disabled === true,
+      '[57i-12] BEFORE the answer: a skeleton card with the cached name, the region aria-busy, Delete disabled (cached -> skeleton -> server list; no spinner)');
+    type57();
+    assert(submit57().disabled === true, '[57i-13] typing DELETE cannot enable Delete while the preflight is out');
+    releaseFirst57();
+    await flush57();
+    assert(/data-ax-state="blocked"/.test(rows57().innerHTML) && !/ax-skel/.test(rows57().innerHTML) && rows57().attrs['aria-busy'] === 'false', '[57i-14] the answer replaces the skeleton with the Blocked card');
+    assert(submit57().disabled === true && caption57().textContent === 'Choose what happens to Saturday Crew first.', '[57i-15] a BLOCKED league keeps Delete disabled even after typing DELETE, and the caption says why');
+    assert(/data-ax-action="choose"/.test(rows57().innerHTML) && !/data-ax-action="handoff-one"/.test(rows57().innerHTML) && /data-ax-action="ask-archive"/.test(rows57().innerHTML), '[57i-16] two candidates: Choose a New Commissioner (the picker) and Archive League');
+    click57('choose', { 'data-ax-league': 'L1' });
+    assert(sheetState57().step === 'picker' && picker57().hidden === false && listPane57().hidden === true, '[57i-17] Choose opens the picker pane in the SAME sheet (list pane hidden, not destroyed)');
+    const pk = picker57().innerHTML;
+    assert(pk.includes('Who should run Saturday Crew?') && pk.includes('Sam Rivera') && pk.includes('Kai Ortiz') && pk.includes('Tap a name to make them commissioner.'), '[57i-18] the picker lists the candidates the SERVER returned');
+    assert(wrap57().querySelector('#pwacct-delete-nav').innerHTML.includes('New Commissioner') && /data-ax-action="back"/.test(wrap57().querySelector('#pwacct-delete-nav').innerHTML), '[57i-19] the header becomes the picker\'s nav bar (back chevron + "New Commissioner")');
+    assert(document.getElementById('pwacct-delete-confirm').value === 'DELETE' && sheetState57().typed === 'DELETE', '[57i-20] the typed field is NOT re-rendered by the drill-in (the text survives, the keyboard is not dropped)');
+    click57('back');
+    assert(sheetState57().step === 'list' && picker57().hidden === true && listPane57().hidden === false, '[57i-21] Back pops to the list');
+    click57('choose', { 'data-ax-league': 'L1' });
+    const before = h.named('account_exit_leagues').length;
+    await quiet57(async () => { click57('pick', { 'data-ax-league': 'L1', 'data-ax-member': 'M1' }); await flush57(); });
+    const role = h.named('admin_set_member_role');
+    assert(role.length === 1 && role[0].params.p_league === 'L1' && role[0].params.p_member === 'M1' && role[0].params.p_role === 'commissioner',
+      `[57i-22] tapping a name calls admin_set_member_role(L1, M1, 'commissioner') — the existing RPC, exactly once (got ${JSON.stringify(role.map((c) => c.params))})`);
+    assert(h.named('account_exit_leagues').length === before + 1, '[57i-23] …and the sheet RE-RUNS the preflight after the change (server truth wins)');
+    assert(sheetState57().step === 'list' && /data-ax-state="handed"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Sam Rivera is now commissioner of Saturday Crew.'), '[57i-24] the picker pops and the row reads "Sam Rivera is now commissioner of Saturday Crew."');
+    assert(submit57().disabled === false && caption57().textContent === '', '[57i-25] with the answer current and nothing unresolved, Delete is enabled (the typed text survived) and the caption is gone');
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(); });
+    assert(h.order().join() === 'rpc:admin_set_member_role,fn:account-delete' && !h.named('archive_league_on_exit').length, `[57i-26] the final tap calls account-delete and NEVER archive_league_on_exit after a hand-off (order: ${h.order().join(' > ')})`);
+    assert(!wrap57(), '[57i-27] the sheet is gone on a confirmed deletion');
+  }
+
+  // ── (c) ONE candidate: a true one-tap ───────────────────────────────────────────────────────────────────────────────────────────────
+  {
+    const h = await harness57({ exitRows: [wire57({ candidates: [cand57('M1', 'Sam Rivera')] })], rpcs: { admin_set_member_role: (p, st) => { st.exitRows = []; return { data: null, error: null }; } } });
+    await open57();
+    assert(/data-ax-action="handoff-one" data-ax-league="L1" data-ax-member="M1"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Make Sam Rivera Commissioner') && !/data-ax-action="choose"/.test(rows57().innerHTML),
+      '[57i-28] exactly one candidate: the card carries "Make Sam Rivera Commissioner" and no picker');
+    await quiet57(async () => { click57('handoff-one', { 'data-ax-league': 'L1', 'data-ax-member': 'M1' }); await flush57(); });
+    assert(h.named('admin_set_member_role').length === 1 && /data-ax-state="handed"/.test(rows57().innerHTML) && sheetState57().step === 'list', '[57i-29] one tap runs the hand-off immediately and resolves the row (no picker)');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (d) ARCHIVE is QUEUED and runs only on the final tap: order, discard, failure ─────────────────────────────────────────────────
+  {
+    const h = await harness57({ exitRows: [wire57(), wire57({ league_id: 'L2', league_name: 'Second League', candidates: [cand57('M9', 'Pat')] })], seats: [SEAT57('L1', 'Saturday Crew'), SEAT57('L2', 'Second League')] });
+    await open57();
+    type57();
+    click57('ask-archive', { 'data-ax-league': 'L2' });
+    const prompt = document.getElementById('pwacct-delete-archive');
+    assert(!!prompt && prompt.innerHTML.includes('Archive Second League?') && prompt.innerHTML.includes("Nobody in it will be able to make picks or send messages."), '[57i-30] Archive League opens the action sheet ("Archive {League}?" with its message)');
+    assert(/class="lc-scrim" data-ax-action="cancel-archive"/.test(prompt.innerHTML) && /lc-as-danger" data-ax-action="confirm-archive">Archive League</.test(prompt.innerHTML) && /lc-as-bold" data-ax-action="cancel-archive">Cancel</.test(prompt.innerHTML),
+      '[57i-31] …the scrim and the bold Cancel both CANCEL; only the destructive row confirms');
+    assert(!h.named('archive_league_on_exit').length, '[57i-32] NOTHING is called when the action sheet opens');
+    click57('cancel-archive');
+    assert(!document.getElementById('pwacct-delete-archive') && sheetState57().queued.length === 0 && !h.named('archive_league_on_exit').length, '[57i-33] Cancel closes it and queues nothing');
+    click57('ask-archive', { 'data-ax-league': 'L2' });
+    click57('confirm-archive');
+    assert(sheetState57().queued.join() === 'L2' && /ax-pill">Will archive</.test(rows57().innerHTML) && !document.getElementById('pwacct-delete-archive'), '[57i-34] Archive League (confirmed) only QUEUES it: the row shows the gold "Will archive" pill and the sheet is gone');
+    assert(!h.named('archive_league_on_exit').length, '[57i-35] …and STILL nothing has been called on the server (D-5: the irreversible step waits for the last tap)');
+    assert(submit57().disabled === true && caption57().textContent === 'Choose what happens to Saturday Crew first.', '[57i-36] the other league is still unresolved: Delete disabled, the caption names it');
+    click57('ask-archive', { 'data-ax-league': 'L1' });
+    click57('confirm-archive');
+    assert(submit57().disabled === false && sheetState57().queued.join() === 'L2,L1', '[57i-37] both resolved (queued): Delete is enabled');
+    // discard: close the sheet, reopen — nothing was archived, the queue is gone
+    click57('close');
+    assert(sheetState57() === null && !h.named('archive_league_on_exit').length, '[57i-38] closing the sheet DISCARDS the queue — no archive was ever called');
+    assert(wrap57()?.attrs?.['data-closing'] === 'slide', '[57i-39] …and the sheet LEAVES on the slide (data-closing="slide"), its node removed only when the transition ends');
+    await quiet57(async () => { app._showDeleteAccountSheetForTest(); await flush57(); });
+    assert(sheetState57().queued.length === 0 && /data-ax-state="blocked"/.test(rows57().innerHTML), '[57i-40] reopening shows both leagues Blocked again (a person who backed out has frozen nothing)');
+    // the final run: queue both, type, Delete — order by spy
+    click57('ask-archive', { 'data-ax-league': 'L2' }); click57('confirm-archive');
+    click57('ask-archive', { 'data-ax-league': 'L1' }); click57('confirm-archive');
+    type57();
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(20); });
+    assert(h.order().join() === 'rpc:archive_league_on_exit,rpc:archive_league_on_exit,fn:account-delete', `[57i-41] the final order: archive_league_on_exit for EACH queued league, THEN account-delete (got ${h.order().join(' > ')})`);
+    assert(h.named('archive_league_on_exit').map((c) => c.params.p_league).join() === 'L1,L2', '[57i-42] …in LIST order (the order the rows appear: L1 then L2), not the order they were chosen');
+    assert(h.named('archive_league_on_exit').every((c) => Object.keys(c.params).join() === 'p_league'), '[57i-43] …each call carries exactly {p_league}');
+    assert(!wrap57(), '[57i-44] the sheet is gone after the deletion');
+  }
+
+  // ── (e) an archive FAILURE stops BEFORE account-delete, names the league, leaves the sheet up ───────────────────────────────────────
+  {
+    let archived = [];
+    const h = await harness57({
+      exitRows: [wire57(), wire57({ league_id: 'L2', league_name: 'Second League', candidates: [cand57('M9', 'Pat')] })], seats: [SEAT57('L1', 'Saturday Crew'), SEAT57('L2', 'Second League')],
+      rpcs: { archive_league_on_exit: (p, st) => {
+        if (p.p_league === 'L2') return { data: null, error: { message: 'connection reset', code: '' } };
+        archived.push(p.p_league); st.exitRows = st.exitRows.map((r) => (r.league_id === p.p_league ? { ...r, blocks: false } : r)); return { data: null, error: null };
+      } },
+    });
+    await open57();
+    click57('ask-archive', { 'data-ax-league': 'L1' }); click57('confirm-archive');
+    click57('ask-archive', { 'data-ax-league': 'L2' }); click57('confirm-archive');
+    type57();
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(20); });
+    assert(h.order().join() === 'rpc:archive_league_on_exit,rpc:archive_league_on_exit' && !h.named('account-delete').length && !h.calls.some((c) => c.kind === 'fn'),
+      `[57i-45] the archive that fails STOPS the run: account-delete was NEVER invoked (order: ${h.order().join(' > ')})`);
+    assert(!!wrap57() && message57().textContent === "Couldn't archive Second League. Your account hasn't been deleted. Check your connection and try again.", `[57i-46] the sheet stays open and the message NAMES the league and says the account is untouched (got "${message57().textContent}")`);
+    assert(/data-ax-state="archived"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Saturday Crew has been archived.'), '[57i-47] the league that DID archive shows as archived (the re-run preflight no longer lists it)');
+    assert(submit57().disabled === false, '[57i-48] once the re-asked answer lands, Delete is enabled again');
+    assert(message57().style.display === 'block', '[57i-49] the failure is visible (display:block), never a silent no-op');
+  }
+
+  // ── (f) a stale server refusal at the LAST step re-asks; never "check your connection" ──────────────────────────────────────────────
+  {
+    let delCalls = 0;
+    const h = await harness57({
+      exitRows: [], fn: () => { delCalls++; return { data: null, error: { name: 'FunctionsHttpError', context: { json: async () => ({ error: 'last_commissioner' }) } } }; },
+    });
+    await open57();
+    type57();
+    assert(submit57().disabled === false, '[57i-50] fixture: the answer was empty, so Delete is enabled');
+    const asks = h.named('account_exit_leagues').length;
+    h.state.exitRows = [wire57()];   // the world changed under the sheet: a co-commissioner left
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(20); });
+    assert(delCalls === 1 && h.named('account_exit_leagues').length === asks + 1, '[57i-51] a `last_commissioner` refusal from the server RE-RUNS the preflight');
+    assert(rows57().innerHTML.includes('Your leagues changed while you were here. Review them below.') && /data-ax-state="blocked"/.test(rows57().innerHTML), '[57i-52] …and says exactly that, with the league now shown Blocked');
+    assert(!/Couldn.t delete/.test(message57().textContent) && !/connection/.test(message57().textContent), '[57i-53] the refusal is NEVER painted as a transport failure ("check your connection" is wrong here)');
+    assert(submit57().disabled === true && !!wrap57(), '[57i-54] Delete is disabled again (a league is blocked) and the sheet stays open');
+  }
+
+  // ── (g) preflight FAILS CLOSED: a thrown error, PGRST202 (0035 not pasted), a non-list reply, an expired session ───────────────────
+  {
+    let mode = 'err';
+    const h = await harness57({ exitReply: (st) => (mode === 'err' ? { data: null, error: { message: 'boom', code: '500' } } : { data: st.exitRows, error: null }) });
+    await open57();
+    type57();
+    assert(/role="alert"/.test(rows57().innerHTML) && rows57().innerHTML.includes(esc57("Couldn't check your leagues. Check your connection and try again.")) && /data-ax-action="retry">Try Again</.test(rows57().innerHTML),
+      '[57i-55] a failed preflight shows the red banner with Try Again');
+    assert(submit57().disabled === true && !/Before you delete/.test(rows57().innerHTML), '[57i-56] …Delete stays disabled even with DELETE typed, and it is NOT rendered as an empty list ("nothing to resolve")');
+    mode = 'ok';
+    await quiet57(async () => { click57('retry'); await flush57(); });
+    assert(h.named('account_exit_leagues').length === 2 && /data-ax-state="blocked"/.test(rows57().innerHTML) && !/role="alert"/.test(rows57().innerHTML), '[57i-57] Try Again re-asks; the answer replaces the banner with the league');
+  }
+  {
+    const h = await harness57({ exitReply: () => ({ data: null, error: { code: 'PGRST202', message: 'Could not find the function public.account_exit_leagues without parameters in the schema cache' } }) });
+    await open57();
+    type57();
+    assert(/data-ax-action="retry"/.test(rows57().innerHTML) && submit57().disabled === true, '[57i-58] 0035 not pasted (PGRST202): the preflight-failed state, Delete disabled — loud and fail-closed, never "nothing to resolve"');
+  }
+  {
+    await harness57({ exitReply: () => ({ data: null, error: null }) });
+    await open57();
+    type57();
+    assert(/data-ax-action="retry"/.test(rows57().innerHTML) && submit57().disabled === true, '[57i-59] a reply that is not a list (null data, no error) also fails closed');
+  }
+  {
+    await harness57({ exitReply: () => ({ data: null, error: { status: 401, message: 'JWT expired' } }) });
+    await open57();
+    type57();
+    assert(rows57().innerHTML.includes('Your session expired. Sign in again to continue.') && !/data-ax-action="retry"/.test(rows57().innerHTML) && submit57().disabled === true, '[57i-60] an expired session says so (no retry that cannot work), Delete disabled');
+  }
+
+  // ── (h) the PILOT league: hand-off only — NO Archive control anywhere in the DOM; a forged action is refused ─────────────────────────
+  {
+    const h = await harness57({ exitRows: [wire57({ pilot: true, league_name: 'IRB' })], seats: [SEAT57('L1', 'IRB')] });
+    await open57();
+    const html = rows57().innerHTML;
+    assert(/data-ax-state="blockedPilot"/.test(html) && !/ask-archive/.test(html) && !/Archive League/.test(html) && html.includes(esc57("This league can't be archived. Choose a new commissioner to continue.")),
+      '[57i-61] the pilot league renders hand-off only: no Archive control in the DOM, with the reason');
+    click57('ask-archive', { 'data-ax-league': 'L1' });
+    assert(!document.getElementById('pwacct-delete-archive') && sheetState57().confirmArchive === null && sheetState57().queued.length === 0, '[57i-62] a forged ask-archive for the pilot is REFUSED by the state machine (no action sheet, nothing queued)');
+    type57();
+    assert(submit57().disabled === true, '[57i-63] Delete stays disabled until the pilot league is handed over');
+    click57('choose', { 'data-ax-league': 'L1' });
+    assert(!/ask-archive/.test(picker57().innerHTML), '[57i-64] the pilot\'s picker offers no Archive either');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (i) the AUTO-ARCHIVE row: no actions, never blocks, the client never archives it (the server does, with the deletion) ───────────
+  {
+    const h = await harness57({ exitRows: [wire57({ blocks: false, auto_archive: true, candidates: [], league_name: 'Solo Test' })], seats: [SEAT57('L1', 'Solo Test')] });
+    await open57();
+    assert(/data-ax-state="auto"/.test(rows57().innerHTML) && rows57().innerHTML.includes('Solo Test has no other members. It will be archived when you delete your account.') && !/<button/.test(rows57().innerHTML), '[57i-65] the auto-archive row is an info line with NO control');
+    type57();
+    assert(submit57().disabled === false && caption57().textContent === '', '[57i-66] it never blocks Delete');
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(); });
+    assert(h.order().join() === 'fn:account-delete' && !h.named('archive_league_on_exit').length, `[57i-67] the client does NOT archive it (the server archives it inside the deletion): order ${h.order().join(' > ')}`);
+  }
+
+  // ── (j) dismissal is inert while the sequence runs ───────────────────────────────────────────────────────────────────────────────────
+  {
+    let release = null;
+    const hold = new Promise((r) => { release = r; });
+    const h = await harness57({ exitRows: [wire57()], rpcs: { archive_league_on_exit: async () => { await hold; return { data: null, error: null }; } } });
+    await open57();
+    click57('ask-archive', { 'data-ax-league': 'L1' }); click57('confirm-archive');
+    type57();
+    // not running: Esc closes... asserted at the end on a fresh sheet; here start the run
+    const running = quiet57(async () => { await submit57().dispatch('click', {}); await flush57(6); });
+    await running;
+    assert(sheetState57()?.running === 'archiving' && submit57().textContent === 'Archiving…' && submit57().disabled === true, '[57i-68] while the queue runs the button reads "Archiving…" and is disabled');
+    assert(document.getElementById('pwacct-delete-confirm').disabled === true, '[57i-69] …and the typed field is locked');
+    click57('close');
+    document.fireDocEvent('keydown', { key: 'Escape' });
+    assert(!!wrap57() && sheetState57() !== null, '[57i-70] the close control and Esc are INERT while the sequence runs');
+    assert(app._isDeleteAccountDismissGestureBlockedForTest() === true, '[57i-71] …and so is the native swipe-down (its blocked predicate answers true)');
+    release();
+    await quiet57(async () => { await flush57(20); });
+    assert(h.order().join() === 'rpc:archive_league_on_exit,fn:account-delete' && !wrap57(), '[57i-72] released, the sequence finishes in order and the sheet goes');
+  }
+  {
+    await harness57({ seats: [SEAT57('L1', 'Saturday Crew', 'player')] });
+    await open57();
+    assert(app._isDeleteAccountDismissGestureBlockedForTest() === false, '[57i-73] idle, the swipe-down predicate answers "not blocked"');
+    document.fireDocEvent('keydown', { key: 'Escape' });
+    assert(sheetState57() === null, '[57i-74] Esc closes an idle sheet');
+    await harness57({ seats: [SEAT57('L1', 'Saturday Crew')] });
+    await open57();
+    click57('ask-archive', { 'data-ax-league': 'L1' });
+    assert(!!document.getElementById('pwacct-delete-archive'), '[57i-75] fixture: the action sheet is up');
+    document.fireDocEvent('keydown', { key: 'Escape' });
+    assert(!document.getElementById('pwacct-delete-archive') && sheetState57() !== null && sheetState57().confirmArchive === null, '[57i-76] Esc (like the scrim) while ASKING is Cancel: it closes the action sheet, not the Delete Account sheet');
+    assert(app._isDeleteAccountDismissGestureBlockedForTest() === false, '[57i-77] (idle again, swipe-down not blocked)');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (k) names are data: a league and a member named <img onerror> render escaped, through the real paint ─────────────────────────────
+  {
+    await harness57({ exitRows: [wire57({ league_name: XSS57, candidates: [cand57('M1', XSS57), cand57('M2', 'Kai')] })], seats: [SEAT57('L1', XSS57)] });
+    await open57();
+    assert(!rows57().innerHTML.includes('<img') && rows57().innerHTML.includes('&lt;img src=x onerror=alert(1)&gt;'), '[57i-78] a hostile league name is escaped in the rows region');
+    click57('choose', { 'data-ax-league': 'L1' });
+    assert(!picker57().innerHTML.includes('<img') && !wrap57().querySelector('#pwacct-delete-nav').innerHTML.includes('<img'), '[57i-79] …and in the picker');
+    click57('back');
+    click57('ask-archive', { 'data-ax-league': 'L1' });
+    assert(!document.getElementById('pwacct-delete-archive').innerHTML.includes('<img'), '[57i-80] …and in the action sheet\'s title');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (l) a hand-off that FAILS: the picker says so, nothing resolves, the preflight is re-asked so the truth shows ─────────────────────
+  {
+    const h = await harness57({ rpcs: { admin_set_member_role: () => ({ data: null, error: { message: 'connection reset', code: '' } }) } });
+    await open57();
+    click57('choose', { 'data-ax-league': 'L1' });
+    const asks = h.named('account_exit_leagues').length;
+    await quiet57(async () => { click57('pick', { 'data-ax-league': 'L1', 'data-ax-member': 'M1' }); await flush57(); });
+    assert(sheetState57().step === 'picker' && picker57().innerHTML.includes(esc57("Couldn't make Sam Rivera commissioner. Nothing was changed. Check your connection and try again.")), '[57i-81] a failed hand-off keeps the picker open with the inline banner');
+    assert(!/data-ax-state="handed"/.test(rows57().innerHTML) && h.named('account_exit_leagues').length === asks + 1, '[57i-82] …resolves nothing, and re-asks the server so "nothing was changed" is only ever as true as the answer we have');
+    app._resetDeleteAccountSheetForTest();
+  }
+  {
+    // the ONE-TAP hand-off (no picker) that fails: the failure is said in the rows region, where the person tapped
+    const h = await harness57({ exitRows: [wire57({ candidates: [cand57('M1', 'Sam Rivera')] })], rpcs: { admin_set_member_role: () => ({ data: null, error: { message: 'connection reset', code: '' } }) } });
+    await open57();
+    await quiet57(async () => { click57('handoff-one', { 'data-ax-league': 'L1', 'data-ax-member': 'M1' }); await flush57(); });
+    assert(sheetState57().step === 'list' && /role="alert"/.test(rows57().innerHTML) && rows57().innerHTML.includes(esc57("Couldn't make Sam Rivera commissioner. Nothing was changed. Check your connection and try again.")),
+      '[57i-81b] a one-tap hand-off that fails says so in the rows region (there is no picker on screen to carry it)');
+    assert(!/data-ax-state="handed"/.test(rows57().innerHTML) && /data-ax-action="handoff-one"[^>]*aria-label/.test(rows57().innerHTML) && !/data-ax-action="handoff-one"[^>]*disabled/.test(rows57().innerHTML), '[57i-82b] …nothing resolved, and the one-tap button is tappable again');
+    app._resetDeleteAccountSheetForTest();
+  }
+  {
+    // a MAPPED server refusal uses the shared sentence
+    const h = await harness57({ rpcs: { admin_set_member_role: () => ({ data: null, error: { message: 'not_commissioner', code: 'P0001' } }) } });
+    await open57();
+    click57('choose', { 'data-ax-league': 'L1' });
+    await quiet57(async () => { click57('pick', { 'data-ax-league': 'L1', 'data-ax-member': 'M1' }); await flush57(); });
+    assert(picker57().innerHTML.includes('Only a commissioner can do that.'), '[57i-83] a mapped refusal (not_commissioner) shows the shared sentence, not the generic one');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (m) a delete that FAILS in live mode keeps the "Couldn't delete" prefix and re-enables Delete ──────────────────────────────────────
+  {
+    await harness57({ exitRows: [], fn: () => { throw new Error('network down'); } });
+    await open57();
+    type57();
+    await quiet57(async () => { await submit57().dispatch('click', {}); await flush57(); });
+    assert(!!wrap57() && message57().textContent.startsWith("Couldn't delete") && !/tell your commissioner/.test(message57().textContent), '[57i-84] a failed delete stays open with the "Couldn\'t delete" copy, and the wrong-for-a-commissioner tail is gone');
+    assert(submit57().disabled === false && submit57().textContent === 'Delete My Account', '[57i-85] Delete is enabled again and the label is back');
+    app._resetDeleteAccountSheetForTest();
+  }
+
+  // ── (n) the identity sweep: a swept sheet leaves no dangling state, and a re-open is clean ────────────────────────────────────────────
+  {
+    await harness57({ seats: [SEAT57('L1', 'Saturday Crew', 'player')] });
+    await open57();
+    wrap57().remove();   // what tearDownRenderedContentForHold() / the identity chokepoint does to every [data-hold-teardown] node
+    document.fireDocEvent('keydown', { key: 'Escape' });
+    assert(sheetState57() === null, '[57i-86] Esc after the node was swept drops the orphaned state (no dangling listener acting on nothing)');
+    await open57();
+    assert(!!wrap57() && sheetState57() !== null, '[57i-87] …and the sheet can be opened again');
+    app._resetDeleteAccountSheetForTest();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[58] SECURITY GATE F1 (3c fix window, 2026-09-25) — the REAL listener chain:');
 console.log('     PASSWORD_RECOVERY, then SIGNED_IN/TOKEN_REFRESHED/USER_UPDATED each');
 console.log('     re-fired mid-recovery, must never drop the gate or read memberships;');
@@ -12190,6 +12677,10 @@ console.log('     listener chain, lands on the sign-in gate (never stranded, sig
     assert(!!before && before.getAttribute('data-recovery-variant') === 'form',
       'fixture: the new-password form is on screen');
     document.getElementById('pwacct-recovery-back-btn').click();
+    // UN-315 / DI-436.1 — signOut() now awaits the push unlink before it clears the session, and this scenario's
+    // SDK is "ready" (the sign-in chokepoint above initialised it), so the unlink's logout() has to be ANSWERED
+    // like a live SDK answers it — the harness's pump does exactly that, by polling (RG-192), not by tick count.
+    await pumpOneSignalQueue({ login: async () => {}, logout: async () => {} });
     for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
     const after = document.getElementById('site-gate-overlay');
     assert(!!after && /Continue with Google/.test(after.innerHTML || '') && !/data-gate-state="recovery"/.test(after.innerHTML || ''),
@@ -14091,8 +14582,18 @@ console.log('     other-week notice…');
     // openable instead.
     storage.saveGame({ ...games74[0], spread: -3, favorite: 'DI411 Home' });
     body74c.querySelector('#wiz-step4-next').dispatch('click', { target: body74c.querySelector('#wiz-step4-next') });
+    // DI-404 (UN-388, 2026-09-29) — REWRITTEN. This used to assert Step 4's Next
+    // SKIPPED Step 5 (the optional, always-blank blurb step). The blurb is now
+    // required before a week opens, so a blank draft lands ON Step 5; write a
+    // valid one and Next carries on to Step 6, which is what this section's
+    // DI-416 notice checks need. (The skip-forward itself survives for a week
+    // that already holds a valid blurb — [81].)
+    assert(app._weekWizardSessionForTest().step === 5 && /Weekly Blurb/.test(body74c.innerHTML),
+      '[74g] fixture: Step 4\'s Next lands on Step 5 (Weekly Blurb) — this draft has no blurb yet (DI-404)');
+    body74c.querySelector('#wiz-blurb-body').value = 'Week one kickoff — good luck, everyone.';
+    body74c.querySelector('#wiz-step5-next').dispatch('click', { target: body74c.querySelector('#wiz-step5-next') });
     assert(app._weekWizardSessionForTest().step === 6 && /Open for picks/.test(body74c.innerHTML),
-      '[74g] fixture: Step 4\'s Next skipped straight to Step 6');
+      '[74g] fixture: a valid blurb on Step 5 carries Next on to Step 6');
     assert(/warning-box[^>]*>⚠️ Week 1 is already open — opening this week too may cause players to see the wrong week\.</.test(body74c.innerHTML),
       `74-20: Step 6 shows the DI-416 notice, naming the other week and its status (got ${body74c.innerHTML.match(/warning-box[^>]*>[^<]*</)?.[0]})`);
     // …and it is NEVER a block: the slate is now legitimately openable (a
@@ -14598,21 +15099,21 @@ console.log('     wrapper, and the three Comm→SCRIBE tools relocated to Admin�
     body77.querySelector('#wiz-step3-next').dispatch('click', { target: body77.querySelector('#wiz-step3-next') });
     assert(app._weekWizardSessionForTest().step === 4, '[77a] fixture: advanced to Step 4');
     body77.querySelector('#wiz-step4-next').dispatch('click', { target: body77.querySelector('#wiz-step4-next') });
-    assert(app._weekWizardSessionForTest().step === 6,
-      '77-1: Step 4\'s Next still skips straight to Step 6 — DI-424 does not touch step navigation');
-
-    // Step 6's shortcut is now "Edit weekly blurb" (was "Add an announcement").
-    assert(/id="wiz-step6-blurb"[^>]*>Edit weekly blurb</.test(body77.innerHTML),
-      `77-2: Step 6 carries the renamed "Edit weekly blurb" button, not the stale "Add an announcement" (got ${body77.innerHTML.match(/id="wiz-step6-[a-z]+"[^>]*>[^<]*</)?.[0]})`);
-    assert(!/Add an announcement/.test(body77.innerHTML), '77-3: "Add an announcement" text is gone from Step 6 entirely');
+    // DI-404 (UN-388, 2026-09-29) — REWRITTEN. 77-1 used to pin that Step 4's
+    // Next SKIPPED Step 5 ("DI-424 does not touch step navigation"). DI-404
+    // does: the blurb is required before a week opens, so this brand-new
+    // (blank) draft now lands ON Step 5. The old order — reach Step 5 via Step
+    // 6's shortcut — is reversed to match: Step 5 first, then Step 6, whose
+    // "Edit weekly blurb" shortcut (rendered once the blurb is written) is
+    // checked below.
+    assert(app._weekWizardSessionForTest().step === 5,
+      '77-1: Step 4\'s Next now lands on Step 5 for a blank draft — the skip-forward is gone (DI-404); [81] pins that it survives for a week that already has a blurb');
 
     const commentsBefore77 = storage.getComments().length;
-    body77.querySelector('#wiz-step6-blurb').dispatch('click', { target: body77.querySelector('#wiz-step6-blurb') });
-    assert(app._weekWizardSessionForTest().step === 5, '[77a] fixture: "Edit weekly blurb" landed on Step 5');
-
     // Step 5 itself: title, textarea bound to week.blurb (starts blank — a
     // brand-new draft), Back/Next only (no Skip/Send, no announce textarea).
-    assert(/Weekly Blurb \(optional\)/.test(body77.innerHTML), '77-4: Step 5\'s title reads "Weekly Blurb (optional)"');
+    assert(/>Weekly Blurb</.test(body77.innerHTML) && !/Weekly Blurb \(optional\)/.test(body77.innerHTML),
+      '77-4: Step 5\'s title reads "Weekly Blurb" — "(optional)" is gone (DI-404)');
     assert(!/Announce \(optional\)/.test(body77.innerHTML), '77-5: the old "Announce (optional)" title is gone');
     // NOTE: FakeEl.querySelector('#id') always returns a (lazily-memoized)
     // element for ANY id, whether or not that id truly appears in the
@@ -14633,9 +15134,20 @@ console.log('     wrapper, and the three Comm→SCRIBE tools relocated to Admin�
     body77.querySelector('#wiz-step5-next').dispatch('click', { target: body77.querySelector('#wiz-step5-next') });
     assert(storage.getWeek(targetId77)?.blurb === 'Rivalry week — bring your A game.',
       `77-10: week.blurb persisted through the SAME saveWeek() call the standalone Week-tab card uses (got ${JSON.stringify(storage.getWeek(targetId77)?.blurb)})`);
-    assert(app._weekWizardSessionForTest().step === 6, '77-11: Next advances back to Step 6');
+    assert(app._weekWizardSessionForTest().step === 6, '77-11: Next advances to Step 6');
     assert(storage.getComments().length === commentsBefore77,
       `77-12: NO announcement/chat post fired from the wizard's blurb save (comments before=${commentsBefore77}, after=${storage.getComments().length})`);
+
+    // Step 6's shortcut is "Edit weekly blurb" (was "Add an announcement") —
+    // DI-404: shown once the blurb is written (until then the checklist row's
+    // "Write it" takes its place; [81]).
+    assert(/id="wiz-step6-blurb"[^>]*>Edit weekly blurb</.test(body77.innerHTML),
+      `77-2: Step 6 carries the renamed "Edit weekly blurb" button, not the stale "Add an announcement" (got ${body77.innerHTML.match(/id="wiz-step6-[a-z-]+"[^>]*>[^<]*</)?.[0]})`);
+    assert(!/Add an announcement/.test(body77.innerHTML), '77-3: "Add an announcement" text is gone from Step 6 entirely');
+    body77.querySelector('#wiz-step6-blurb').dispatch('click', { target: body77.querySelector('#wiz-step6-blurb') });
+    assert(app._weekWizardSessionForTest().step === 5, '[77a] fixture: "Edit weekly blurb" landed on Step 5');
+    body77.querySelector('#wiz-step5-next').dispatch('click', { target: body77.querySelector('#wiz-step5-next') });
+    assert(app._weekWizardSessionForTest().step === 6, '[77a] fixture: an unchanged, valid blurb carries Next back to Step 6');
 
     // Re-open Step 5 via Back from Step 6 — the just-saved value round-trips
     // back into the textarea (proves the render side reads week.blurb, not
@@ -15121,8 +15633,9 @@ console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league swi
       `[79] fixture: signed in, ONE membership, scoped to League A and hydrated ACTIVE (league ${r.before.league}, state ${r.before.state})`);
     assert(r.pillBound && r.selectorOk && r.joinSheetOk,
       `[79] fixture: the REAL controls — the pill is bound, a tap opens "Choose a League", its "Join a League" row opens the join sheet (bound ${r.pillBound}, selector ${r.selectorOk}, join sheet ${r.joinSheetOk})`);
-    assert(r.joinArgs?.name === 'join_league' && r.joinArgs?.args?.p_code === 'IRB-4F2K',
-      `[79] fixture: the join RPC really ran with the typed code (${JSON.stringify(r.joinArgs)})`);
+    // N1 (DI-430, 2026-09-30): joinLeague() removes spaces and hyphens before the RPC (`join_league` only does upper(trim())), so the typed `IRB-4F2K` arrives as `IRB4F2K`.
+    assert(r.joinArgs?.name === 'join_league' && r.joinArgs?.args?.p_code === 'IRB4F2K',
+      `[79] fixture: the join RPC really ran with the typed code, spaces and hyphens removed by joinLeague() (${JSON.stringify(r.joinArgs)})`);
     assert(r.coverAppended && r.coverSeenWhileSwitching,
       `[79a] R3 — the "Switching leagues…" cover (#league-switch-overlay) was put up, and was up when SWITCH_START fired (appended ${r.coverAppended}, up at SWITCH_START ${r.coverSeenWhileSwitching})`);
     const seq = r.states.map(x => x.state);
@@ -15182,6 +15695,1406 @@ console.log('\n[79] REVIEWER R3 — Join from the pill sheet runs the league swi
       assert(joined?.leagueId === 'L-B' && auth.getActiveLeagueId() === expectLeague && auth.getCachedMemberships().length === 2,
         `[79g] joinLeague(${label}) returns the new membership and leaves the pointer on ${expectLeague} (got ${auth.getActiveLeagueId()}, ${auth.getCachedMemberships().length} memberships cached)`);
     }
+  }
+}
+
+console.log('\n[80] RG-TBD-B1 (bug batch B, N6, Drew 2026-09-29: "weekly blurb is still not a');
+console.log('     collapsible card") — the Comm→Week Weekly Blurb card carries the');
+console.log('     .admin-section-title every collapsible Comm card needs…');
+{
+  // ROOT CAUSE: DI-356 (v0.27.0, 2edd39e) lifted the Weekly Blurb field out
+  // of the retired "Week Settings — Week N" card — which HAD a title and so
+  // was collapsible — into a card of its own with NO .admin-section-title.
+  // wireCollapsibleSections() skips any .admin-section without one
+  // (`if (!titleEl) return;`) and wirePanelCollapseAllControls() filters it
+  // out too, so it was the one content card on the Week tab with no chevron,
+  // no tap-to-collapse and no part in "Collapse all". The title is read from
+  // the REAL renderCommPage() markup below, then handed to the REAL
+  // wireCollapsibleSections() through its seam (FakeEl.querySelectorAll()
+  // always returns [] — the [77d]/[78b] reason).
+  const realWarn80 = console.warn; const realInfo80 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM80 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  try {
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u80' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u80', email: '80@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-80', memberId: 'm80', role: 'commissioner', displayName: 'Drew', leagueName: 'League 80' }]);
+    auth.setActiveLeagueId('L-80');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    const { createWeek: createWeek80 } = await import('./js/data-model.js');
+    const wk80 = { ...createWeek80(2026, 80), status: 'open', blurb: 'Rivalry week.' };
+    storage.saveWeek(wk80);
+    storage.setActiveWeekId(wk80.weekId);
+
+    const commEl80 = new FakeEl(); commEl80.id = 'page-commissioner'; registry.set('page-commissioner', commEl80);
+    app.state.currentTab = 'commissioner';
+    app.state.commTab = 'week';
+    app.renderCommPage();
+    const html80 = commEl80.innerHTML;
+    assert(html80.includes('id="blurb-input"') && html80.includes('Rivalry week.'),
+      '[80] fixture: the Weekly Blurb card renders on Comm→Week with the week\'s blurb in it — not vacuous');
+
+    // The .admin-section that holds #blurb-input, cut from the real markup.
+    const secs80 = html80.split('<div class="admin-section"').slice(1).map((s) => '<div class="admin-section"' + s);
+    const blurbSec80 = secs80.find((s) => s.includes('id="blurb-input"')) || '';
+    const titleMatch80 = blurbSec80.match(/^<div class="admin-section" data-comm-tab="week">\s*<div class="admin-section-title">([^<]*)<\/div>\s*<div class="card">/);
+    assert(!!titleMatch80,
+      `80-1: THE BUG — the Weekly Blurb card's FIRST child is an .admin-section-title sibling of its .card (the shape wireCollapsibleSections() requires); got: ${JSON.stringify(blurbSec80.slice(0, 140))}`);
+    const title80 = titleMatch80 ? titleMatch80[1].trim() : null;
+    assert(title80 === 'Weekly Blurb', `80-2: the card's title reads "Weekly Blurb" — a STABLE title, so its saved collapsed state survives every week change (got ${JSON.stringify(title80)})`);
+    assert(!/<label class="form-label">Weekly Blurb<\/label>/.test(blurbSec80) && /id="blurb-input"[^>]*aria-label="Weekly blurb"/.test(blurbSec80),
+      '80-3: the in-card "Weekly Blurb" label is not repeated under the new title; the textarea keeps an accessible name (aria-label) for VoiceOver');
+
+    // Behavior, through the REAL wireCollapsibleSections(): a previously
+    // collapsed Weekly Blurb card re-applies that state on render, gets the
+    // chevron + one click listener, and a tap persists the new state.
+    function fakeTitleEl80(text) {
+      const t = { textContent: text, _classes: new Set(), _listeners: [], _children: [] };
+      t.classList = { add: (c) => t._classes.add(c), contains: (c) => t._classes.has(c) };
+      t.querySelector = (sel) => (sel === '.section-chevron' ? t._children.find((c) => c.className === 'section-chevron') || null : null);
+      t.appendChild = (el) => { t._children.push(el); return el; };
+      t.addEventListener = (type, fn) => { if (type === 'click') t._listeners.push(fn); };
+      return t;
+    }
+    const sec80 = { dataset: {}, _classes: new Set() };
+    sec80.classList = {
+      add: (c) => sec80._classes.add(c), contains: (c) => sec80._classes.has(c), remove: (c) => sec80._classes.delete(c),
+      toggle: (c, force) => { const want = force === undefined ? !sec80._classes.has(c) : !!force; if (want) sec80._classes.add(c); else sec80._classes.delete(c); return want; },
+    };
+    const titleEl80 = title80 === null ? null : fakeTitleEl80(title80);
+    sec80.querySelector = (sel) => (sel === '.admin-section-title' ? titleEl80 : null);
+    storage.saveSetting('commPanelSectionsCollapsed', { 'weekly-blurb': true });
+    app._wireCollapsibleSectionsForTest({ querySelectorAll: (sel) => (sel === '.admin-section' ? [sec80] : []) });
+    assert(sec80._classes.has('admin-section-collapsed'),
+      '80-4: THE BUG, behaviorally — a commissioner who collapsed Weekly Blurb sees it STAY collapsed on the next render (settings.commPanelSectionsCollapsed["weekly-blurb"] re-applied)');
+    assert(!!titleEl80 && titleEl80._classes.has('admin-section-title-toggle') && titleEl80._listeners.length === 1
+      && titleEl80._children.some((c) => c.className === 'section-chevron'),
+      '80-5: …and its title is wired like every sibling card: toggle class, the ▾ chevron, exactly one click listener');
+    if (titleEl80?._listeners[0]) titleEl80._listeners[0]({ target: { closest: () => null } });
+    assert(!sec80._classes.has('admin-section-collapsed') && storage.getSettings().commPanelSectionsCollapsed?.['weekly-blurb'] === false,
+      '80-6: a tap on the title expands it and persists that through the storage seam (saveSetting), same key every Comm card uses');
+
+    // Guard: every Comm→Week card that holds a FORM FIELD is collapsible
+    // (has a title). Single-button action cards (the wizard entry card,
+    // "Continue set up") are deliberately title-less — the collapse-all
+    // contract skips them (wirePanelCollapseAllControls()'s doc comment).
+    const untitledFieldCards80 = secs80
+      .filter((s) => /data-comm-tab="week"/.test(s.slice(0, 60)) && /<(textarea|select|input)\b/.test(s))
+      .filter((s) => !/^<div class="admin-section" data-comm-tab="week">\s*<div class="admin-section-title">/.test(s))
+      .map((s) => (s.match(/id="([^"]+)"/) || [])[1] || s.slice(0, 80));
+    assert(untitledFieldCards80.length === 0,
+      `80-7: GUARD — no Comm→Week card with a form field is missing its .admin-section-title (would be silently excluded from per-card collapse and "Collapse all"); offenders: ${JSON.stringify(untitledFieldCards80)}`);
+  } finally {
+    globalThis.matchMedia = savedMM80;
+    console.warn = realWarn80; console.info = realInfo80;
+  }
+}
+
+console.log('\n[81] DI-404 (UN-388, N16, 2026-09-29) — the MANDATORY weekly blurb, driven through the REAL');
+console.log('     wizard sheet, the REAL Week-tab card and the REAL scheduled-open tick (not just the pure predicates)…');
+{
+  const realWarn81 = console.warn; const realInfo81 = console.info;
+  console.warn = () => {}; console.info = () => {};
+  const savedMM81 = globalThis.matchMedia;
+  globalThis.matchMedia = () => ({ matches: false });
+  const realAlert81 = globalThis.alert;
+  let alertCalls81 = 0;
+  globalThis.alert = () => { alertCalls81++; };
+  const realQSA81 = FakeEl.prototype.querySelectorAll;
+  // REAL-DOM FIDELITY. In a browser, assigning innerHTML DISCARDS the old child
+  // elements and their listeners. FakeEl instead memoizes children by id forever, so
+  // every re-render of a step piled another listener onto the same object — and a
+  // "focus called once" / "toasted once" assertion would count the harness's
+  // accumulated bindings, not the app's. (It also let an old render's stale-`week`
+  // closure answer a click meant for the new one.) For THIS section only, innerHTML
+  // assignment forgets the children it replaces, exactly as the DOM does; restored
+  // in `finally`. References taken before a re-render go stale, as they would in a browser.
+  const realInnerHTML81 = Object.getOwnPropertyDescriptor(FakeEl.prototype, 'innerHTML');
+  Object.defineProperty(FakeEl.prototype, 'innerHTML', {
+    configurable: true, enumerable: realInnerHTML81.enumerable, get: realInnerHTML81.get,
+    set(v) {
+      for (const m of String(this._html).matchAll(/\bid="([^"]+)"/g)) { if (registry.get(m[1]) !== this) registry.delete(m[1]); }
+      this._subEls = {};
+      realInnerHTML81.set.call(this, v);
+    },
+  });
+  try {
+    const wizard81 = await import('./js/week-wizard.js');
+    const { createWeek: createWeek81 } = await import('./js/data-model.js');
+    const COPY81 = wizard81.WIZARD_COPY;
+    const GOOD81 = 'Rivalry week — bring your A game.';
+    resetAll({ getSession: async () => ({ data: { session: { user: { id: 'u81' }, access_token: 't' } } }) });
+    wireRealAuthUI();
+    storeValidSession();
+    auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'u81', email: '81@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+    for (let i = 0; i < 6; i++) await new Promise((r) => setTimeout(r, 0));
+    auth._setMembershipsForTest([{ leagueId: 'L-81', memberId: 'm81', role: 'commissioner', displayName: 'Drew', leagueName: 'League 81' }]);
+    auth.setActiveLeagueId('L-81');
+    storage.setBackendMode('local');
+    globalThis.localStorage.removeItem('cfbp_weeks');
+    globalThis.localStorage.removeItem('cfbp_games');
+    // showToast() renders into #toast-container; appendChild is RECORDED, so what
+    // the app told the commissioner is readable (the [44k4]/[54c] seam).
+    const toastHost81 = new FakeEl(); toastHost81.id = 'toast-container'; registry.set('toast-container', toastHost81);
+    const toastTexts81 = () => (toastHost81.children || []).map((c) => c.textContent);
+    const commEl81 = new FakeEl(); commEl81.id = 'page-commissioner'; registry.set('page-commissioner', commEl81);
+    app.state.currentTab = 'commissioner'; app.state.commTab = 'week';
+
+    // FakeEl.querySelectorAll() is a stub that answers []; Step 6's Now/Scheduled/
+    // Draft dial is found with querySelectorAll('[data-open-mode]'), so the two
+    // other modes could never be reached. Rebuild the buttons from the markup the
+    // sheet just rendered — one fresh object per render, so a click reaches the
+    // handler bound at THAT render — and restore the stub in `finally`.
+    let modeBtns81 = [];
+    FakeEl.prototype.querySelectorAll = function (sel) {
+      if (sel === '[data-open-mode]') {
+        modeBtns81 = [...String(this._html).matchAll(/data-open-mode="([a-z]+)"/g)]
+          .map((m) => ({ dataset: { openMode: m[1] }, _l: [], addEventListener(t, fn) { if (t === 'click') this._l.push(fn); } }));
+        return modeBtns81;
+      }
+      return realQSA81.call(this, sel);
+    };
+    const pickMode81 = (mode) => { const b = modeBtns81.find((x) => x.dataset.openMode === mode); b._l.forEach((fn) => fn({ target: b })); };
+    const bodyOf81 = () => document.getElementById('week-wizard-sheet-wrap').querySelector('#week-wizard-body');
+    const openFresh81 = () => { app._openWeekWizardSheetForTest(); return bodyOf81(); };
+    const click81 = (body, id) => body.querySelector(id).dispatch('click', { target: body.querySelector(id) });
+    const step81 = () => app._weekWizardSessionForTest().step;
+
+    // ── (a) the real walk: Step 1 -> game with a spread -> Step 4 ─────────────
+    app._openWeekWizardSheetForTest({ forceNew: true });
+    let body81 = bodyOf81();
+    body81.querySelector('#wiz-cw-season').value = '2026';
+    body81.querySelector('#wiz-cw-num').value = '81';
+    body81.querySelector('#wiz-cw-round').value = '';
+    body81.querySelector('#wiz-cw-start').value = '2026-10-10';
+    body81.querySelector('#wiz-cw-end').value = '2026-10-16';
+    click81(body81, '#wiz-step1-create');
+    const id81 = app._weekWizardSessionForTest().targetWeekId;
+    assert(!!id81 && step81() === 2, '[81a] fixture: Step 1 minted a draft and advanced to Step 2');
+    click81(body81, '#wiz-step2-add-manual');
+    const ov81 = document.body.lastChild;
+    const setBoth81 = (id, val) => { const g = document.getElementById(id); if (g) g.value = val; const l = ov81.querySelector('#' + id); if (l) l.value = val; };
+    setBoth81('m-home', 'DI404 Home'); setBoth81('m-away', 'DI404 Away');
+    setBoth81('m-home-mascot', ''); setBoth81('m-away-mascot', '');
+    setBoth81('m-kickoff', '2026-10-10T17:00');
+    setBoth81('m-spread-fav', ''); setBoth81('m-spread-margin', '');
+    setBoth81('m-mult-preset', '1'); setBoth81('m-venue', '');
+    setBoth81('m-hconf', ''); setBoth81('m-aconf', ''); setBoth81('m-hrank', ''); setBoth81('m-arank', '');
+    ov81.querySelector('#m-save').dispatch('click', { target: ov81.querySelector('#m-save') });
+    assert(storage.getGames(id81).length === 1, '[81a] fixture: the manual game persisted');
+    click81(body81, '#wiz-step2-next');
+    // A spread on the one game, so the REAL three-item checklist is satisfied and
+    // the blurb is the ONLY thing left that can block Open (the [74g] technique).
+    storage.saveGame({ ...storage.getGames(id81)[0], spread: -3, favorite: 'DI404 Home' });
+    click81(body81, '#wiz-step3-next');
+    assert(step81() === 4 && /Timing & auto-transitions/.test(body81.innerHTML), '[81a] fixture: on Step 4');
+    assert(!storage.getWeek(id81).blurb, '[81a] fixture: the draft has NO blurb yet');
+
+    // ── (a2) COORDINATOR OVERRIDE (2026-09-30) — Step 4's Auto-Open At needs a blurb ─
+    // Setting (or confirming) an Auto-Open time on a week with no valid blurb is REFUSED,
+    // inline and loud, exactly like Open now / Schedule Open — otherwise a draft could open
+    // blank through this field.
+    // Reviewer note 3: a fresh Step 4 says NOTHING about the blurb and reserves NO space.
+    const s4Fresh = body81.innerHTML;
+    assert(!/Weekly blurb not written yet|wiz-step4-blurb-write|wiz-open-at-error|form-field-error|aria-describedby="wiz-open-at-error"/.test(s4Fresh),
+      '81-80: a fresh Step 4 (no Auto-Open time) shows no "not written yet" row, no message slot and no aria-describedby — nothing about the blurb until a time is entered');
+    assert(/<div id="wiz-open-at-guard"><\/div>/.test(s4Fresh),
+      '81-80b: the guard wrapper is EMPTY — a childless div has no height, so no gap is reserved');
+    const guard81 = body81.querySelector('#wiz-open-at-guard');
+    const openAt81 = body81.querySelector('#wiz-picks-open-at');
+    const openFocus81 = [];
+    openAt81.focus = () => openFocus81.push('wiz-picks-open-at');
+    const toastsS4 = toastTexts81().length;
+    // Typing (input, not yet committed) must not shift the layout under the picker.
+    openAt81.value = '2099-01-01T10:00'; openAt81.dispatch('input', {});
+    assert(guard81.innerHTML === '', '81-80c: an uncommitted `input` reveals nothing — the layout does not move while the picker is open');
+    // A COMMITTED time (change) on a blurb-less week reveals the guard, still neutral.
+    openAt81.dispatch('change', {});
+    assert(/<div class="week-wizard-check-row"><span aria-hidden="true">○<\/span> Weekly blurb not written yet<button type="button" class="btn btn-secondary btn-sm" id="wiz-step4-blurb-write">Write it<\/button><\/div><div class="form-field-error" id="wiz-open-at-error" role="alert"><\/div>/.test(guard81.innerHTML)
+      && openAt81.attrs['aria-describedby'] === 'wiz-open-at-error',
+      '81-80d: once a time is committed the guard appears DIRECTLY under the field — the neutral "○ Weekly blurb not written yet [Write it]" row and the role="alert" slot — and the field points at the slot');
+    assert(guard81.querySelector('#wiz-open-at-error').textContent === '' && openAt81.attrs['aria-invalid'] === undefined,
+      '81-80e: …but it is not scolding yet — no message, no aria-invalid before Next is tried');
+    openAt81.value = ''; openAt81.dispatch('change', {});
+    assert(guard81.innerHTML === '' && openAt81.attrs['aria-describedby'] === undefined,
+      '81-80f: clearing the time takes the guard away again — nothing reserved, describedby gone');
+    // Next with a time and NO blurb: refused, inline.
+    openAt81.value = '2099-01-01T10:00';
+    click81(body81, '#wiz-step4-next');
+    assert(step81() === 4, '81-81: Next with an Auto-Open time and NO blurb STAYS on Step 4');
+    const openErr81 = guard81.querySelector('#wiz-open-at-error');
+    assert(openErr81.textContent === COPY81.BLURB_REQUIRED_AT_OPEN,
+      `81-82: the refusal is inline, in Step 6's exact words — and the guard appears with it even if no change event ever fired (got ${JSON.stringify(openErr81.textContent)})`);
+    assert(openAt81.attrs['aria-invalid'] === 'true' && openFocus81.length === 1,
+      `81-83: the Auto-Open field is aria-invalid and focus returns to it (invalid ${openAt81.attrs['aria-invalid']}, focus ${openFocus81.length})`);
+    assert(!storage.getWeek(id81).picksOpenAt, '81-84: NO Auto-Open time was saved');
+    assert(alertCalls81 === 0 && toastTexts81().length === toastsS4, '81-85: inline only — no alert(), no toast');
+    openAt81.value = ''; openAt81.dispatch('input', {});
+    assert(guard81.innerHTML === '' && openAt81.attrs['aria-invalid'] === undefined && openAt81.attrs['aria-describedby'] === undefined,
+      '81-86: after a refusal the field validates live — clearing the time removes the guard, the message and the invalid state');
+    openAt81.value = '2099-01-01T10:00'; openAt81.dispatch('change', {});
+    assert(/Weekly blurb not written yet/.test(guard81.innerHTML) && guard81.querySelector('#wiz-open-at-error').textContent === '' && openAt81.attrs['aria-invalid'] === undefined,
+      '81-87: …and committing a time again brings the NEUTRAL guard back (disarmed — no scolding before the next Next; iOS date pickers fire change)');
+    // "Write it": the way forward. Keeps the OTHER timing edits, and CARRIES the typed time.
+    body81.querySelector('#wiz-auto-lock-offset').value = '45';
+    guard81.querySelector('#wiz-step4-blurb-write').dispatch('click', { target: guard81.querySelector('#wiz-step4-blurb-write') });
+    assert(step81() === 5, '81-88: "Write it" goes to Step 5');
+    assert(storage.getWeek(id81).autoLockOffsetMinutes === 45 && !storage.getWeek(id81).picksOpenAt,
+      `81-89: …saving the lock offset but NOT persisting the Auto-Open time yet (offset ${storage.getWeek(id81).autoLockOffsetMinutes}, openAt ${storage.getWeek(id81).picksOpenAt})`);
+    click81(body81, '#wiz-step5-back');
+    assert(step81() === 4, '[81a2] fixture: back on Step 4');
+    assert(/id="wiz-picks-open-at" aria-describedby="wiz-open-at-error" value="2099-01-01T10:00" \/>\s*<\/div><div id="wiz-open-at-guard"><div class="week-wizard-check-row">/.test(body81.innerHTML),
+      `81-89b: coming back from Step 5 the typed time is STILL in the field — never dropped — and the guard is rendered with it (got ${body81.innerHTML.match(/id="wiz-picks-open-at"[^>]*>/)?.[0]})`);
+
+    // ── (b) Step 4 Next lands on Step 5 when the blurb is blank ──────────────
+    click81(body81, '#wiz-step4-next');
+    assert(step81() === 5, '81-1: Step 4\'s Next lands on Step 5 (not Step 6) while the week has no blurb');
+    assert(/<div class="admin-section-title">Weekly Blurb<\/div>/.test(body81.innerHTML) && !/optional/i.test(body81.innerHTML),
+      '81-2: Step 5 is titled "Weekly Blurb" — no "(optional)" anywhere on the step');
+    assert(/id="wiz-blurb-body"[^>]*aria-required="true"/.test(body81.innerHTML) && /aria-describedby="wiz-blurb-error"/.test(body81.innerHTML),
+      '81-3: the textarea is aria-required and points at its message slot (VoiceOver hears both)');
+    assert(/<div class="form-field-error" id="wiz-blurb-error" role="alert"><\/div>/.test(body81.innerHTML),
+      '81-4: the message slot is ALWAYS in the layout, empty, role="alert" — appearing later moves nothing');
+    assert(!/aria-invalid/.test(body81.innerHTML), '81-5: a fresh Step 5 does not scold — no aria-invalid before anything is attempted');
+
+    // ── (c) validation: inline, loud, stays put, keyboard up, live only after ─
+    const field81 = body81.querySelector('#wiz-blurb-body');
+    const err81 = body81.querySelector('#wiz-blurb-error');
+    const focused81 = [];
+    field81.focus = () => focused81.push('wiz-blurb-body');
+    const toastsBefore81 = toastTexts81().length;
+    field81.value = 'ab'; field81.dispatch('input', {});
+    assert(err81.textContent === '' && field81.attrs['aria-invalid'] === undefined,
+      '81-6: typing BEFORE any failed attempt is never scolded — live re-validation is not armed yet');
+    field81.value = '';
+    click81(body81, '#wiz-step5-next');
+    assert(step81() === 5, '81-7: a blank Next STAYS on Step 5 — it does not advance');
+    assert(err81.textContent === COPY81.BLURB_EMPTY, `81-8: the empty message is the DI\'s exact copy, inline (got ${JSON.stringify(err81.textContent)})`);
+    assert(field81.attrs['aria-invalid'] === 'true', '81-9: the field is aria-invalid (the red var(--loss) border reads from it)');
+    assert(focused81.length === 1, `81-10: focus goes straight back into the field — the keyboard stays up (focus calls ${focused81.length})`);
+    assert(!storage.getWeek(id81).blurb, '81-11: nothing was written');
+    assert(alertCalls81 === 0 && toastTexts81().length === toastsBefore81,
+      `81-12: NO alert() and NO toast — the failure is inline only (alerts ${alertCalls81}, new toasts ${JSON.stringify(toastTexts81().slice(toastsBefore81))})`);
+    field81.value = 'abcdefghi'; field81.dispatch('input', {});
+    assert(err81.textContent === COPY81.BLURB_SHORT && field81.attrs['aria-invalid'] === 'true',
+      '81-13: AFTER the first failure it validates live — nine characters reads "A little longer, please — at least 10 characters."');
+    field81.value = '   '; field81.dispatch('input', {});
+    assert(err81.textContent === COPY81.BLURB_EMPTY, '81-14: live: spaces only is EMPTY, not a passing blurb');
+    field81.value = 'abcdefghij'; field81.dispatch('input', {});
+    assert(err81.textContent === '' && field81.attrs['aria-invalid'] === undefined,
+      '81-15: live: ten characters clears the message AND the aria-invalid state');
+    field81.value = 'abcdefghi';
+    click81(body81, '#wiz-step5-next');
+    assert(step81() === 5 && err81.textContent === COPY81.BLURB_SHORT && !storage.getWeek(id81).blurb && focused81.length === 2,
+      `81-16: a NINE-character Next through the real button stays put, shows the short copy, saves nothing, refocuses the field (step ${step81()}, err ${JSON.stringify(err81.textContent)}, blurb ${JSON.stringify(storage.getWeek(id81).blurb)}, focus ${focused81.length})`);
+    field81.value = GOOD81;
+    click81(body81, '#wiz-step5-next');
+    assert(step81() === 6 && storage.getWeek(id81).blurb === GOOD81,
+      `81-17: a valid blurb Next saves what was TYPED (raw) and advances to Step 6 (got ${JSON.stringify(storage.getWeek(id81).blurb)})`);
+    assert(toastTexts81().includes('Blurb saved'), '81-18: the existing "Blurb saved" toast confirms a real save');
+
+    // ── (d) Step 6 with a written blurb ───────────────────────────────────────
+    assert(/<div class="week-wizard-check-row ok"><span aria-hidden="true">✓<\/span> Weekly blurb written<\/div>/.test(body81.innerHTML),
+      '81-19: Step 6 shows the fourth checklist row ticked: "✓ Weekly blurb written"');
+    assert(!/wiz-step6-blurb-write/.test(body81.innerHTML) && /id="wiz-step6-blurb"[^>]*>Edit weekly blurb</.test(body81.innerHTML),
+      '81-20: no "Write it" once written — the quieter "Edit weekly blurb" is what remains');
+    assert(!/wiz-blurb-reason/.test(body81.innerHTML), '81-21: no blocking reason is shown when nothing blocks');
+    assert(/id="wiz-open-btn"[^>]*>Open for Picks</.test(body81.innerHTML) && !/id="wiz-open-btn"[^>]*disabled/.test(body81.innerHTML),
+      '81-22: with games, spreads, timing AND the blurb, Open for Picks is enabled');
+
+    // ── (e) the Step 4 skip-forward: gone for a blank week, KEPT where there is nothing to ask ──
+    const baseWeek81 = storage.getWeek(id81);
+    const stepAfterStep4 = (patch) => {
+      storage.saveWeek({ ...baseWeek81, ...patch });
+      let b = openFresh81();                           // games + spreads => Step 6
+      if (step81() !== 6) return `entered at ${step81()}`;
+      click81(b, '#wiz-step6-back'); click81(b, '#wiz-step5-back');
+      if (step81() !== 4) return `Back landed on ${step81()}`;
+      click81(b, '#wiz-step4-next');
+      return step81();
+    };
+    assert(stepAfterStep4({ blurb: GOOD81 }) === 6, '81-23: a week that ALREADY holds a valid blurb still skips Step 5 — Step 4 Next goes straight to 6 (no extra tap)');
+    assert(stepAfterStep4({ blurb: '' }) === 5, '81-24: blank ⇒ Step 5');
+    assert(stepAfterStep4({ blurb: 'TBD' }) === 5, '81-25: a too-short blurb ("TBD") is not "written" ⇒ Step 5');
+    assert(stepAfterStep4({ blurb: '', dataSourceMode: 'demo' }) === 6, '81-26: a blank DEMO week is exempt ⇒ Step 4 Next still skips to Step 6');
+    // …and Step 5 on that exempt week does not enforce either
+    {
+      storage.saveWeek({ ...baseWeek81, blurb: '', dataSourceMode: 'demo' });
+      const b = openFresh81(); click81(b, '#wiz-step6-back');
+      assert(step81() === 5 && !/aria-required/.test(b.innerHTML), '81-27: on a DEMO week the textarea is not aria-required');
+      b.querySelector('#wiz-blurb-body').value = '';
+      click81(b, '#wiz-step5-next');
+      assert(step81() === 6 && !storage.getWeek(id81).blurb, '81-28: a blank Next on a DEMO week advances — exempt, and nothing is invented');
+    }
+    // …and the Auto-Open At rule across every kind of week (coordinator override, 2026-09-30).
+    const step4Try = (patch, openAtValue) => {
+      storage.saveWeek({ ...baseWeek81, picksOpenAt: null, ...patch });
+      const b = openFresh81();                       // games + spreads => Step 6
+      if (step81() !== 6) return { note: `entered at ${step81()}` };
+      click81(b, '#wiz-step6-back'); click81(b, '#wiz-step5-back');
+      b.querySelector('#wiz-picks-open-at').value = openAtValue;
+      click81(b, '#wiz-step4-next');
+      return { step: step81(), openAt: storage.getWeek(id81).picksOpenAt || null };
+    };
+    const at81 = '2099-01-01T10:00';
+    const r1 = step4Try({ blurb: GOOD81 }, at81);
+    assert(r1.step === 6 && !!r1.openAt && new Date(r1.openAt).getTime() === new Date(at81).getTime(),
+      `81-90: a VALID blurb + an Auto-Open time saves the time and moves on (${JSON.stringify(r1)})`);
+    const r2 = step4Try({ blurb: '' }, at81);
+    assert(r2.step === 4 && r2.openAt === null, `81-91: a BLANK blurb + a time is refused and saves nothing (${JSON.stringify(r2)})`);
+    const r3 = step4Try({ blurb: 'TBD' }, at81);
+    assert(r3.step === 4 && r3.openAt === null, `81-92: a too-short blurb + a time is refused too (${JSON.stringify(r3)})`);
+    const r4 = step4Try({ blurb: '' }, '');
+    assert(r4.step === 5 && r4.openAt === null, `81-93: a blank blurb with NO time still goes on to Step 5 — the refusal is about the time, not the step (${JSON.stringify(r4)})`);
+    const r5 = step4Try({ blurb: '', dataSourceMode: 'demo' }, at81);
+    assert(r5.step === 6 && !!r5.openAt, `81-94: a blank DEMO week may set a time — exempt (${JSON.stringify(r5)})`);
+    const legacyAt81 = new Date(Date.now() + 86400e3).toISOString();
+    const r6 = step4Try({ blurb: '', picksOpenAt: legacyAt81 }, at81);
+    assert(r6.step === 4 && r6.openAt === legacyAt81,
+      `81-95: CONFIRMING a time already stored on a blank-blurb week (legacy) is refused too, and the stored time is left exactly as it was (${JSON.stringify(r6)})`);
+    const r7 = step4Try({ blurb: '', picksOpenAt: legacyAt81 }, '');
+    assert(r7.step === 5 && r7.openAt === null, `81-96: clearing that legacy time is allowed — it removes the schedule instead of confirming it (${JSON.stringify(r7)})`);
+
+    // ── (e2) reviewer note 1 — a typed Auto-Open time is CARRIED to Step 6, never dropped ──
+    // Real DOM inputs hold what was typed; FakeEl inputs do not read their markup, so the
+    // field's value is set by hand wherever the browser would already have it there.
+    storage.saveWeek({ ...baseWeek81, blurb: '', picksOpenAt: null });
+    let b2 = openFresh81();                                   // games + spreads => Step 6
+    click81(b2, '#wiz-step6-back'); click81(b2, '#wiz-step5-back');
+    assert(step81() === 4, '[81e2] fixture: on Step 4 of a blank-blurb draft');
+    b2.querySelector('#wiz-picks-open-at').value = at81;
+    b2.querySelector('#wiz-picks-open-at').dispatch('change', {});
+    b2.querySelector('#wiz-open-at-guard').querySelector('#wiz-step4-blurb-write').dispatch('click', { target: {} });
+    assert(step81() === 5 && !storage.getWeek(id81).picksOpenAt, '81-100: "Write it" goes to Step 5 and does NOT persist the time (it may not be set without a blurb)');
+    b2.querySelector('#wiz-blurb-body').value = GOOD81;
+    click81(b2, '#wiz-step5-next');
+    assert(step81() === 6, '[81e2] fixture: a valid blurb carried Next on to Step 6');
+    assert(/data-open-mode="scheduled"[^>]*aria-checked="true"/.test(b2.innerHTML) && !/data-open-mode="now"[^>]*aria-checked="true"/.test(b2.innerHTML),
+      '81-101: Step 6 opens on "Open at a scheduled time" — the time the commissioner typed is the choice they already made');
+    assert(new RegExp(`id="wiz-schedule-at" value="${at81}"`).test(b2.innerHTML),
+      `81-102: …and its schedule field is PREFILLED with that time (got ${b2.innerHTML.match(/id="wiz-schedule-at"[^>]*>/)?.[0]})`);
+    assert(/id="wiz-open-btn"[^>]*>Schedule Open</.test(b2.innerHTML) && !/id="wiz-open-btn"[^>]*disabled/.test(b2.innerHTML),
+      '81-103: Schedule Open is ENABLED (the blurb now exists) and is the action that applies it');
+    assert(!storage.getWeek(id81).picksOpenAt, '81-104: nothing is applied until Schedule Open is tapped');
+    click81(b2, '#wiz-open-btn');
+    assert(new Date(storage.getWeek(id81).picksOpenAt).getTime() === new Date(at81).getTime() && storage.getWeek(id81).status === 'draft',
+      `81-105: Schedule Open APPLIES the carried time — picksOpenAt is saved, the week stays a draft for the tick (got ${storage.getWeek(id81).picksOpenAt})`);
+    assert(document.getElementById('week-wizard-sheet-wrap') === null, '81-106: …and the sheet closes');
+    // No leak into the next session: park a carried time (Write it), then open a FRESH sheet.
+    storage.saveWeek({ ...baseWeek81, blurb: '', picksOpenAt: null });
+    b2 = openFresh81(); click81(b2, '#wiz-step6-back'); click81(b2, '#wiz-step5-back');
+    b2.querySelector('#wiz-picks-open-at').value = at81;
+    b2.querySelector('#wiz-picks-open-at').dispatch('change', {});
+    b2.querySelector('#wiz-open-at-guard').querySelector('#wiz-step4-blurb-write').dispatch('click', { target: {} });
+    assert(step81() === 5, '[81e2] fixture: a time is parked in the carry (Write it, now on Step 5)');
+    storage.saveWeek({ ...baseWeek81, blurb: GOOD81, picksOpenAt: null });
+    b2 = openFresh81();
+    // The leak would only bite when the NEW session passes Step 5's Next (that is where a carried
+    // time is handed over) — so walk Step 6 -> Step 5 -> Next -> Step 6 in the fresh sheet.
+    click81(b2, '#wiz-step6-back');
+    b2.querySelector('#wiz-blurb-body').value = GOOD81;                     // (a real textarea already holds it)
+    click81(b2, '#wiz-step5-next');
+    assert(step81() === 6 && /data-open-mode="now"[^>]*aria-checked="true"/.test(b2.innerHTML) && !/id="wiz-schedule-at"/.test(b2.innerHTML),
+      '81-107: a fresh sheet starts on "Open now" — a time carried by the PREVIOUS sheet never leaks into another session, even through Step 5\'s Next');
+    // A carried time is also dropped once Step 4 saves normally (the blurb was written meanwhile).
+    storage.saveWeek({ ...baseWeek81, blurb: '', picksOpenAt: null });
+    b2 = openFresh81(); click81(b2, '#wiz-step6-back'); click81(b2, '#wiz-step5-back');
+    b2.querySelector('#wiz-picks-open-at').value = at81;
+    b2.querySelector('#wiz-picks-open-at').dispatch('change', {});
+    b2.querySelector('#wiz-open-at-guard').querySelector('#wiz-step4-blurb-write').dispatch('click', { target: {} });
+    storage.saveWeek({ ...storage.getWeek(id81), blurb: GOOD81 });              // written elsewhere (the Week-tab card)
+    click81(b2, '#wiz-step5-back');
+    b2.querySelector('#wiz-picks-open-at').value = at81;
+    click81(b2, '#wiz-step4-next');
+    assert(step81() === 6 && new Date(storage.getWeek(id81).picksOpenAt).getTime() === new Date(at81).getTime(),
+      `81-108: with the blurb now valid, Step 4's own Next saves the (carried, still-shown) time the ordinary way and moves on (step ${step81()}, openAt ${storage.getWeek(id81).picksOpenAt})`);
+    assert(!/data-open-mode="scheduled"[^>]*aria-checked="true"/.test(b2.innerHTML),
+      '81-109: …and nothing is left to carry — Step 6 is on its default mode, not a second scheduling of the same time');
+
+    // ── (f) Step 6 with NO blurb: the row, the reason, the disabled Open ─────
+    storage.saveWeek({ ...baseWeek81, blurb: '' });
+    body81 = openFresh81();
+    assert(step81() === 6, '[81f] fixture: a pre-existing blank draft with games + spreads opens straight on Step 6');
+    assert(/<div class="week-wizard-check-row"><span aria-hidden="true">○<\/span> Weekly blurb not written yet<button type="button" class="btn btn-secondary btn-sm" id="wiz-step6-blurb-write">Write it<\/button><\/div>/.test(body81.innerHTML),
+      `81-29: the fourth row reads "○ Weekly blurb not written yet" with a "Write it" button (got ${body81.innerHTML.match(/week-wizard-check-row[^>]*><span aria-hidden="true">[○✓][^]{0,140}blurb[^]{0,120}/)?.[0]})`);
+    assert(!/id="wiz-step6-blurb"/.test(body81.innerHTML), '81-30: the quieter "Edit weekly blurb" is replaced by "Write it" while blank — one path to Step 5, not two');
+    assert(/class="text-xs mt-xs wiz-blurb-reason" id="wiz-blurb-reason">Write the weekly blurb before opening this week\.<\/p>/.test(body81.innerHTML),
+      '81-31: the reason is shown BESIDE the disabled button, in the DI\'s exact words (a disabled button cannot be tapped to ask why)');
+    assert(/id="wiz-open-btn" aria-describedby="wiz-blurb-reason" disabled>Open for Picks</.test(body81.innerHTML),
+      '81-32: Open for Picks is DISABLED and points at its reason (aria-describedby)');
+    // Schedule Open — the second gated mode
+    pickMode81('scheduled');
+    assert(/data-open-mode="scheduled"[^>]*aria-checked="true"/.test(body81.innerHTML)
+      && /id="wiz-open-btn" aria-describedby="wiz-blurb-reason" disabled>Schedule Open</.test(body81.innerHTML),
+      '81-33: Schedule Open is disabled by the blank blurb too');
+    // Keep as draft — exempt
+    pickMode81('draft');
+    assert(/id="wiz-open-btn"[^>]*>Save as Draft</.test(body81.innerHTML) && !/id="wiz-open-btn"[^>]*disabled/.test(body81.innerHTML),
+      '81-34: "Keep as draft" is EXEMPT — Save as Draft stays enabled with no blurb');
+    assert(/wiz-blurb-reason is-muted"/.test(body81.innerHTML),
+      '81-35: …and the reason drops to the muted heads-up register there (colour only — the line is still in the layout, so switching modes never jumps)');
+    // The backstop: a click that reaches the handler anyway (a blurb removed on another device
+    // after the sheet painted; disabled is not a security boundary). FakeEl.dispatch ignores `disabled`.
+    pickMode81('scheduled');
+    body81.querySelector('#wiz-schedule-at').dispatch('change', { target: { value: '2099-01-01T10:00' } });
+    click81(body81, '#wiz-open-btn');
+    assert(body81.querySelector('#wiz-schedule-refusal').textContent === COPY81.BLURB_REQUIRED_AT_OPEN,
+      `81-36: a click on Schedule Open with no blurb shows "Write the weekly blurb before opening this week." in #wiz-schedule-refusal (got ${JSON.stringify(body81.querySelector('#wiz-schedule-refusal').textContent)})`);
+    assert(storage.getWeek(id81).status === 'draft' && !storage.getWeek(id81).picksOpenAt,
+      '81-37: …the week stays a draft and NO picksOpenAt was saved — nothing scheduled');
+    pickMode81('now');
+    click81(body81, '#wiz-open-btn');
+    assert(body81.querySelector('#wiz-schedule-refusal').textContent === COPY81.BLURB_REQUIRED_AT_OPEN && storage.getWeek(id81).status === 'draft',
+      '81-38: a click on Open now with no blurb is refused the same way — still a draft');
+    assert(document.getElementById('week-wizard-sheet-wrap') !== null, '81-39: …and the sheet stays open (no silent close)');
+    // Keep as draft through the real button: closes, week stays a blank draft
+    pickMode81('draft');
+    click81(body81, '#wiz-open-btn');
+    assert(document.getElementById('week-wizard-sheet-wrap') === null && storage.getWeek(id81).status === 'draft' && !storage.getWeek(id81).blurb,
+      '81-40: Save as Draft with a blank blurb closes the sheet and leaves a blank DRAFT — a draft is invisible to players, so it saves');
+
+    // "Write it" -> Step 5 -> valid -> Step 6 -> the same week now opens
+    body81 = openFresh81();
+    click81(body81, '#wiz-step6-blurb-write');
+    assert(step81() === 5, '81-41: "Write it" goes to Step 5');
+    body81.querySelector('#wiz-blurb-body').value = GOOD81;
+    click81(body81, '#wiz-step5-next');
+    assert(step81() === 6 && /Weekly blurb written/.test(body81.innerHTML) && !/id="wiz-open-btn"[^>]*disabled/.test(body81.innerHTML),
+      '81-42: after writing it the row ticks and Open for Picks enables');
+    click81(body81, '#wiz-open-btn');
+    assert(storage.getWeek(id81).status === 'open' && storage.getWeek(id81).blurb === GOOD81,
+      `81-43: the week OPENS through the real button, carrying the blurb (status ${storage.getWeek(id81).status})`);
+    assert(toastTexts81().includes(COPY81.OPEN_SUCCESS(81)), '81-44: …with the existing "Week 81 is open" success toast');
+
+    // ── (g) the Week-tab blurb card cannot blank an existing blurb ────────────
+    // Explicit weekIds: createWeek() stamps `w_${Date.now()}`, so two weeks minted in the same
+    // millisecond COLLIDE and the second silently overwrites the first — a flake this section hit.
+    const wkCard81 = { ...createWeek81(2026, 82), weekId: 'wk81_card', status: 'open', blurb: GOOD81 };
+    storage.saveWeek(wkCard81);
+    storage.setActiveWeekId(wkCard81.weekId);
+    app.renderCommPage();
+    const card81 = commEl81.innerHTML;
+    assert(/id="blurb-input"[^>]*aria-describedby="blurb-error"/.test(card81) && /<div class="form-field-error" id="blurb-error" role="alert"><\/div>/.test(card81),
+      '81-45: the card carries the same reserved, role="alert" message slot as Step 5');
+    const cIn = document.getElementById('blurb-input'); const cErr = document.getElementById('blurb-error'); const cBtn = document.getElementById('save-blurb-btn');
+    const cFocus = []; cIn.focus = () => cFocus.push(1);
+    const cToasts0 = toastTexts81().length;
+    cIn.value = '';
+    cBtn.click();
+    assert(storage.getWeek(wkCard81.weekId).blurb === GOOD81,
+      `81-46: THE RULE — Save with the field emptied does NOT blank the existing blurb (still ${JSON.stringify(storage.getWeek(wkCard81.weekId).blurb)})`);
+    assert(cErr.textContent === COPY81.BLURB_EMPTY && cIn.attrs['aria-invalid'] === 'true' && cFocus.length === 1,
+      `81-47: …the empty message shows inline, the field is aria-invalid, focus stays in it (err ${JSON.stringify(cErr.textContent)}, invalid ${cIn.attrs['aria-invalid']}, focus ${cFocus.length})`);
+    assert(toastTexts81().length === cToasts0 && alertCalls81 === 0, '81-48: …with no toast and no alert()');
+    cIn.value = 'abc';
+    cBtn.click();
+    assert(storage.getWeek(wkCard81.weekId).blurb === GOOD81 && cErr.textContent === COPY81.BLURB_SHORT,
+      '81-49: a too-short replacement is refused with the short copy — the card enforces the same minimum');
+    cIn.value = 'abcdefghi'; cIn.dispatch('input', {});
+    assert(cErr.textContent === COPY81.BLURB_SHORT, '81-50: after that first failure the card validates live');
+    cIn.value = GOOD81; cIn.dispatch('input', {});
+    assert(cErr.textContent === '' && cIn.attrs['aria-invalid'] === undefined,
+      '81-51: typing back to the SAVED text is not scolded (Save is a silent no-op there)');
+    const rawBefore81 = globalThis.localStorage.getItem('cfbp_weeks');
+    cBtn.click();
+    assert(toastTexts81().length === cToasts0 && globalThis.localStorage.getItem('cfbp_weeks') === rawBefore81 && cErr.textContent === '',
+      '81-52: Save with an UNCHANGED value is a silent no-op — no toast, no message, nothing written');
+    cIn.value = 'A fresh note for week 82.';
+    cBtn.click();
+    assert(storage.getWeek(wkCard81.weekId).blurb === 'A fresh note for week 82.' && toastTexts81().slice(cToasts0).join('|') === 'Blurb saved'
+      && cErr.textContent === '' && cIn.attrs['aria-invalid'] === undefined,
+      `81-53: a valid replacement saves what was typed, toasts "Blurb saved" once and leaves no error behind (blurb ${JSON.stringify(storage.getWeek(wkCard81.weekId).blurb)}, toasts ${JSON.stringify(toastTexts81().slice(cToasts0))}, err ${JSON.stringify(cErr.textContent)}, invalid ${cIn.attrs['aria-invalid']})`);
+    // blank -> blank through the seam: silent no-op (the second half of the rule)
+    storage.saveWeek({ ...createWeek81(2026, 84), weekId: 'wk81_blank', status: 'draft', blurb: '' });
+    const blankWk81 = storage.getWeeks().find((w) => w.weekNumber === 84);
+    const fakeField81 = { value: '', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; }, focus() { throw new Error('must not steal focus on a no-op'); } };
+    const fakeErr81 = { textContent: 'stale', classList: { toggle() {} } };
+    const toastsBlank0 = toastTexts81().length;
+    const blankRes = app._saveWeekTabBlurbForTest(fakeField81, fakeErr81, blankWk81);
+    assert(blankRes.ok === true && blankRes.saved === false && fakeErr81.textContent === '' && toastTexts81().length === toastsBlank0,
+      '81-54: blank -> blank is a silent no-op that also clears any stale message (no write, no toast)');
+
+    // ── (h) Duplicate Week is NOT exempt ──────────────────────────────────────
+    storage.setActiveWeekId(wkCard81.weekId);
+    app.renderCommPage();
+    document.getElementById('duplicate-week-btn').click();
+    const dup81 = storage.getWeeks().find((w) => w.weekNumber === 83 && w.status === 'draft');
+    assert(!!dup81 && dup81.blurb === '', '81-55: Duplicate Week lands as a DRAFT with a BLANK blurb (it copies nothing of the note)');
+    const dupGate81 = wizard81.blurbGate(dup81);
+    assert(dupGate81.required && !dupGate81.ok, '81-56: …so the duplicate is GATED like any new draft');
+    const dupOpen81 = wizard81.finishWeekSetupFromWizard({ week: dup81, mode: 'now', gamesCount: 10, missingSpreadCount: 0, timingConfigured: true, deps: { applyWeekStatusChange: () => { throw new Error('must not open'); } } });
+    assert(dupOpen81.ok === false && dupOpen81.reason === 'blurb_required', '81-57: …and opening it without a blurb is refused');
+
+    // ── (i) the scheduled-open TICK holds a due draft that has no valid blurb ─
+    // COORDINATOR OVERRIDE (2026-09-30). [81-58] used to pin the OPPOSITE — that a
+    // blank-blurb draft still opened when its time arrived (so a week scheduled before
+    // N16 shipped was not stranded). That is exactly how a week could open blank through
+    // Step 4's Auto-Open At. Now the tick does NOT open it: it raises the commissioner's
+    // alert (the existing "Scheduled open is blocked" error toast, once per week) and the
+    // week opens on the first tick after a valid blurb exists. Demo weeks stay exempt.
+    resetAll();
+    storage.setBackendMode('local');
+    const tickToasts81 = new FakeEl(); tickToasts81.id = 'toast-container'; registry.set('toast-container', tickToasts81);
+    const tickWeek81 = (id, overrides = {}) => ({
+      weekId: id, season: '2026', weekNumber: 9, label: 'Week 9', status: 'draft', dataSourceMode: 'espn',
+      picksOpenAt: new Date(Date.now() - 60e3).toISOString(), picksLockAt: new Date(Date.now() + 3600e3).toISOString(),
+      autoLockEnabled: true, autoLiveEnabled: true, autoFinalizeEnabled: false, lockedAt: null, lockedAlmaMaters: null,
+      pendingFinalization: false, tiebreakerQuestion: '', extraPointEnabled: false, groupId: null, blurb: '', ...overrides,
+    });
+    const tickGame81 = (id, weekId) => ({ gameId: id, weekId, homeTeam: 'Home', awayTeam: 'Away', kickoffAt: new Date(Date.now() + 3600e3).toISOString(),
+      spread: -3, status: 'scheduled', homeScore: null, awayScore: null, lockedSpread: null, multiplier: 1 });
+    // A blank DEMO draft, due, alongside — exempt from the reminder (and, as before, never auto-opened by the tick).
+    storage.saveWeek(tickWeek81('wk_tick81_demo', { weekNumber: 8, label: 'Week 8', dataSourceMode: 'demo' }));
+    storage.saveGame(tickGame81('g_tick81_demo', 'wk_tick81_demo'));
+    storage.saveWeek(tickWeek81('wk_tick81'));
+    storage.saveGame(tickGame81('g_tick81', 'wk_tick81'));
+    storage.setActiveWeekId('wk_tick81');
+    const tickMsgs81 = () => (tickToasts81.children || []).map((c) => c.textContent);
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81')?.status === 'draft',
+      `81-58: a due DRAFT with a BLANK blurb is NOT opened by the tick (got ${storage.getWeek('wk_tick81')?.status})`);
+    assert(tickMsgs81().length === 1 && tickMsgs81()[0] === `Scheduled open is blocked: ${COPY81.BLURB_REQUIRED_AT_OPEN}`
+      && (tickToasts81.children[0].className || '').includes('error'),
+      `81-59: …and the commissioner gets ONE loud reminder through the existing alert path — the error toast "Scheduled open is blocked: Write the weekly blurb before opening this week." (got ${JSON.stringify(tickMsgs81())}, class ${JSON.stringify(tickToasts81.children?.[0]?.className)})`);
+    app.tickAutoTransition(); app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81')?.status === 'draft' && tickMsgs81().length === 1,
+      `81-60: later ticks keep holding it and do NOT repeat the reminder every minute (toasts ${tickMsgs81().length})`);
+    assert(storage.getWeek('wk_tick81_demo')?.status === 'draft' && tickMsgs81().length === 1,
+      '81-61: the blank DEMO week raised no reminder of its own — demo weeks are exempt');
+    storage.saveWeek({ ...storage.getWeek('wk_tick81'), blurb: 'abcdefghi' });
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81')?.status === 'draft', '81-62: nine characters is held too — the tick reads the same blurbCheck as every other surface');
+    storage.saveWeek({ ...storage.getWeek('wk_tick81'), blurb: GOOD81 });
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81')?.status === 'open',
+      `81-63: the very next tick after a valid blurb exists OPENS it (got ${storage.getWeek('wk_tick81')?.status})`);
+    assert(storage.getWeek('wk_tick81')?.blurb === GOOD81, '81-64: …carrying that blurb');
+
+    // ── (i2) reviewer note 2 — the once-only alert is remembered per week AND per reason ──
+    // It used to be keyed by week alone, so a week already toasted for missing SPREADS never
+    // got its own BLURB toast once the spreads were fixed. Two games both missing a spread,
+    // a valid blurb: toast #1 (spreads). One spread fixed: same reason, the COUNT in the
+    // label changed — no repeat. Both fixed but the blurb blanked: a NEW reason — toast #2.
+    const t2Toasts81 = new FakeEl(); t2Toasts81.id = 'toast-container'; registry.set('toast-container', t2Toasts81);
+    const t2Msgs81 = () => (t2Toasts81.children || []).map((c) => c.textContent);
+    storage.saveWeek(tickWeek81('wk_tick81c', { weekNumber: 11, label: 'Week 11', blurb: GOOD81 }));
+    storage.saveGame({ ...tickGame81('g_tick81c1', 'wk_tick81c'), spread: null });
+    storage.saveGame({ ...tickGame81('g_tick81c2', 'wk_tick81c'), spread: null });
+    storage.setActiveWeekId('wk_tick81c');
+    app.tickAutoTransition();
+    assert(t2Msgs81().length === 1 && /Scheduled open is blocked: 2 games still need a spread/.test(t2Msgs81()[0]) && !t2Msgs81()[0].includes(COPY81.BLURB_REQUIRED_AT_OPEN),
+      `81-110: a due week missing spreads (blurb fine) gets ONE alert naming the spreads only (got ${JSON.stringify(t2Msgs81())})`);
+    app.tickAutoTransition();
+    assert(t2Msgs81().length === 1, '81-111: …and it is not repeated');
+    storage.saveGame({ ...tickGame81('g_tick81c1', 'wk_tick81c'), spread: -3 });
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81c')?.status === 'draft' && t2Msgs81().length === 1,
+      `81-112: one spread fixed — the label now says "1 game" but the REASON is unchanged, so no second alert (toasts ${t2Msgs81().length})`);
+    storage.saveGame({ ...tickGame81('g_tick81c2', 'wk_tick81c'), spread: -3 });
+    storage.saveWeek({ ...storage.getWeek('wk_tick81c'), blurb: '' });
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81c')?.status === 'draft' && t2Msgs81().length === 2 && t2Msgs81()[1] === `Scheduled open is blocked: ${COPY81.BLURB_REQUIRED_AT_OPEN}`,
+      `81-113: THE NOTE — spreads fixed but the blurb blank is a NEW reason, so the week already alerted for spreads gets its own blurb alert (got ${JSON.stringify(t2Msgs81())})`);
+    app.tickAutoTransition();
+    assert(t2Msgs81().length === 2, '81-114: …once');
+    storage.saveWeek({ ...storage.getWeek('wk_tick81c'), blurb: GOOD81 });
+    app.tickAutoTransition();
+    assert(storage.getWeek('wk_tick81c')?.status === 'open', '81-115: with a blurb the next tick opens it, as before');
+
+    // ── (j) same behavior on web and iOS; the polish is real CSS ─────────────
+    const appSrc81 = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+    const fnSrc81 = (name) => {
+      const at = appSrc81.indexOf(`function ${name}(`);
+      const end = appSrc81.indexOf('\nfunction ', at + 10);
+      return at < 0 ? '' : appSrc81.slice(at, end < 0 ? undefined : end);
+    };
+    for (const name of ['paintBlurbFieldError', 'bindBlurbLiveValidation', 'saveWizardBlurb', 'saveWeekTabBlurb', 'bindWeekWizardStep5', 'bindWeekWizardStep4']) {
+      const src = fnSrc81(name);
+      assert(src.length > 40 && !/isNativeShell|isNativeOrigin|nativeHaptic|haptic\(/.test(src.replace(/\/\/.*$/gm, '')),
+        `81-70 (${name}): no platform branch and no haptic — behavior is identical on web and iOS`);
+    }
+    const css81 = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+    assert(/\.form-field-error\{[^}]*min-height:calc\(2 \* 1\.3em\)[^}]*color:var\(--loss\)[^}]*opacity:0;transition:opacity var\(--transition\)\}/.test(css81),
+      '81-71: .form-field-error reserves two lines, uses var(--loss) (no hard-coded colour) and fades opacity only, over the shared token');
+    assert(/--transition:\.16s ease/.test(css81), '81-72: …and that token is 160 ms, inside the <=180 ms the DI allows');
+    assert(/@media \(prefers-reduced-motion:reduce\)\{\.form-field-error\{transition:none\}\}/.test(css81), '81-73: Reduce Motion turns the fade off');
+    assert(/\.form-textarea\[aria-invalid="true"\]:focus\{border-color:var\(--loss\)\}/.test(css81) || /\.form-textarea\[aria-invalid="true"\]:focus\{border-color:var\(--loss\)\}/.test(css81.replace(/\s+/g, ' ')),
+      '81-74: the red border survives :focus (the keyboard stays up on a failed attempt)');
+    assert(/\.week-wizard-check-row \.btn\{[^}]*min-height:44px/.test(css81), '81-75: the "Write it" button is held to the 44 px touch-target floor');
+    assert(/#wiz-step6-blurb[^{]*\{min-height:44px\}/.test(css81) && /#save-blurb-btn[^{]*\{min-height:44px\}/.test(css81),
+      '81-76: touched-screen audit — "Edit weekly blurb" (Step 6) and the card\'s "Save Blurb", both 34px .btn-sm before, are held to 44 px too');
+  } finally {
+    FakeEl.prototype.querySelectorAll = realQSA81;
+    Object.defineProperty(FakeEl.prototype, 'innerHTML', realInnerHTML81);
+    if (realAlert81 === undefined) delete globalThis.alert; else globalThis.alert = realAlert81;
+    globalThis.matchMedia = savedMM81;
+    console.warn = realWarn81; console.info = realInfo81;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [80] N1 league creation (DI-430 / DI-433, 2026-09-30) — the APP-LEVEL wiring, driven through the real handlers.
+//
+// leaguecreatetest.mjs proves the pure half (copy, codes, the step machine, the pending invite, the real first-sign-in sweep, the twin with 0034, the source
+// tripwires). This section owns what needs app.js's DOM wiring and this file's fake-DOM harness: the zero-membership claim screen's invite card (S-9), the
+// landing's Create card and the release gate, the New League sheet driven through its real click/input handlers into the real `create_league` RPC, the identity
+// chokepoint's one exemption, a pending invite offered to a player already in a league, the OAuth redirect staying origin-only, and the Super Admin gate toggle.
+//
+// NOT covered (device only): the keyboard, swipe-down, haptics, the native share sheet, Reduce Motion and every animation.
+// ═══════════════════════════════════════════════════════════════════════════
+console.log('\n[80] N1 league creation — the claim screen, the landing, the sheet, the sweep, the gate (app-level wiring)…');
+{
+  const LC80 = await import('./js/league-create.js');
+  const sb80 = await import('./js/supabase-backend.js');
+  const KEY80 = 'cfbp_pending_join';
+  const tick80 = () => new Promise((r) => setTimeout(r, 0));
+  const flush80 = async (n = 14) => { for (let i = 0; i < n; i++) await tick80(); };
+  const quiet80 = async (fn) => {
+    const rl = console.log, rw = console.warn, re = console.error, ri = console.info;
+    console.log = () => {}; console.warn = () => {}; console.error = () => {}; console.info = () => {};
+    try { return await fn(); } finally { console.log = rl; console.warn = rw; console.error = re; console.info = ri; }
+  };
+  const scriptClient80 = (script, calls) => ({
+    session: script._session || { user: { id: 'u-sam', email: 'sam@example.com' } },
+    rpc: (name, params) => { calls.push({ name, params }); const fn = script[name]; return fn ? fn(params) : { data: null, error: null }; },
+    from: (table, b) => (script._from ? script._from(table, b) : { data: [], error: null }),
+  });
+  const ROW_NEW = { league_id: 'L-NEW', id: 'mNEW', role: 'commissioner', display_name: 'Sam', active: true, leagues: { name: 'Weekend Crew', pilot: false } };
+  const ROW_JOINED = { league_id: 'L-INV', id: 'mINV', role: 'player', display_name: 'Sam', active: true, leagues: { name: 'Invited League', pilot: false } };
+  const GATE_ROWS = [{ key: 'league_creation_open', value: true }, { key: 'offered_sports', value: ['cfb', 'nfl'] }, { key: 'signups_open', value: true }, { key: 'maintenance_banner', value: '' }];
+  const toasts80 = () => (registry.get('toast-container')?.children || []).map((t) => ({ cls: t.className, text: t.textContent }));
+  const makeToastBox80 = () => { const c = document.createElement('div'); c.id = 'toast-container'; registry.set('toast-container', c); return c; };
+  const shippingFlags80 = async (script) => {
+    const calls = [];
+    resetAll(scriptClient80(script, calls));
+    auth._setHasSupabaseDataBackendForTest(null);
+    auth._resetSupabaseDataBackendForTest();
+    sb80._resetForTest();
+    sb80.init({ register: auth.registerSupabaseDataBackend, getClient: () => null, getActiveLeagueId: auth.getActiveLeagueId });
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+    auth.clearMaintenanceBannerCacheOnIdentityChange();   // every fixture starts with the release gate CLOSED (the shipping default); a block that needs it open reads it through the real cache path
+    storeValidSession();
+    app._resetLinkFlowForTest();
+    app._resetClaimScreenModeForTest();
+    app._resetLeagueCreateForTest();
+    localStorage.removeItem(KEY80);
+    auth._setMembershipsForTest([]);
+    makeToastBox80();
+    return calls;
+  };
+  const dashPage80 = () => { const p = new FakeEl(); p.id = 'page-dashboard'; registry.set('page-dashboard', p); return p; };
+
+  // ── (a) THE CLAIM SCREEN (S-9) ─────────────────────────────────────────────────────────────────────────────────────────────
+  {
+    let rows = [];
+    const calls = await shippingFlags80({
+      link_member_by_email: () => ({ data: [], error: null }),
+      join_league: () => { rows = [ROW_JOINED]; return { data: 'mINV', error: null }; },
+      _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: rows, error: null }),
+    });
+    // R-F1 / S-9: the segmented control and the invite card exist only while `league_creation_open` is true, so this block opens the door through the REAL cache read first
+    // (the closed screen is pinned byte-for-byte in (a2) below).
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    assert(auth.getCachedLeagueCreationOpen() === true, '[80a0] fixture: the release gate is OPEN (a real platform_kv read) for the segmented claim screen');
+    assert(await app.attemptAutoLink() === 'unmatched' && app.linkFlowScreen() === 'claim', '[80a] fixture: a proven account with zero memberships lands on the claim-code screen (the ordinary path)');
+    const page = dashPage80();
+    const segClaim = new FakeEl(); segClaim.attrs['data-lc-seg'] = 'claim';
+    const segInvite = new FakeEl(); segInvite.attrs['data-lc-seg'] = 'invite';
+    page.querySelectorAll = (sel) => (sel === '[data-lc-seg]' ? [segClaim, segInvite] : []);
+    app.renderLinkFlowScreen('dashboard');
+    const html0 = page.innerHTML;
+    assert(html0.includes('I have a claim code') && html0.includes('I have an invite code') && /role="tablist"/.test(html0) && /lc-seg lc-seg-on" role="tab" aria-selected="true" data-lc-seg="claim"/.test(html0),
+      '[80b] with NO pending invite the screen is today\'s claim card plus the two-segment control, "claim" active');
+    assert(/Enter the code your commissioner gave you\./.test(html0) && /id="link-claim-code"/.test(html0) && !/league-join-code|league-join-btn|Join a League/.test(html0),
+      '[80c] …and the claim card is unchanged, with NO join field or button in the DOM (the [43i] rule holds in the default state)');
+    assert(app.linkFlowScreen() === 'claim', '[80d] linkFlowScreen() still answers "claim" (the arbitration is unchanged)');
+
+    // choosing the invite segment swaps the card; the join form is the REUSED one
+    segInvite.click();
+    const html1 = page.innerHTML;
+    assert(/id="link-invite-card"/.test(html1) && /id="league-join-code"[^>]*placeholder="e\.g\. K7QX 9M2P"/.test(html1) && /id="league-join-btn"/.test(html1) && !/id="link-claim-code"/.test(html1),
+      '[80e] tapping "I have an invite code" shows the invite card — the shared Join form (same ids, neutral placeholder) — and hides the claim card');
+    assert(!/You opened an invite link/.test(html1) && !/value="K7QX/.test(html1), '[80f] …with no note and no prefill when no link was opened');
+    assert(/aria-selected="true" data-lc-seg="invite"/.test(html1), '[80g] …and the invite segment is the marked one');
+    segClaim.click();
+    assert(/id="link-claim-code"/.test(page.innerHTML) && !/id="league-join-code"/.test(page.innerHTML), '[80h] …and the claim segment brings the claim card back');
+
+    // a VALID pending invite: the screen opens on the invite card, prefilled, with the note, and joins NOTHING until the tap
+    app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 }));
+    app.renderLinkFlowScreen('dashboard');
+    const html2 = page.innerHTML;
+    assert(/id="link-invite-card"/.test(html2) && /id="league-join-code"[^>]*value="K7QX 9M2P"/.test(html2), '[80i] a valid pending ?join= code opens the screen ON the invite card with the code prefilled (shown 4+4)');
+    assert(html2.includes('You opened an invite link. Check the code, then tap Join League.') && html2.includes('I have a claim code instead'), '[80j] …with the DI\'s note and the text link back to the claim card');
+    assert(calls.filter((c) => c.name === 'join_league').length === 0, '[80k] NO join RPC has been made — opening the invite card never joins (one visible tap)');
+    // claim-instead
+    segClaim.click();
+    assert(/id="link-claim-code"/.test(page.innerHTML) && localStorage.getItem(KEY80) !== null, '[80m] choosing the claim card instead shows it and does NOT throw the stored invite away (it expires by itself)');
+    // now join for real: the tap
+    app._resetClaimScreenModeForTest();
+    app.renderLinkFlowScreen('dashboard');
+    page.querySelector('#league-join-code').value = 'K7QX 9M2P';
+    await quiet80(async () => { page.querySelector('#league-join-btn').click(); await flush80(); });
+    const jl = calls.filter((c) => c.name === 'join_league');
+    assert(jl.length === 1 && jl[0].params.p_code === 'K7QX9M2P', `[80n] the tap makes exactly ONE join_league RPC, with the code's spaces stripped (got ${JSON.stringify(jl.map((c) => c.params))})`);
+    assert(localStorage.getItem(KEY80) === null, '[80o] a SUCCESSFUL join clears cfbp_pending_join');
+  }
+  {
+    // an EXPIRED invite is loud, never silent, and survives a repaint (door OPEN — with it closed the invite surface does not exist at all, see (a2))
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    await app.attemptAutoLink();
+    const page = dashPage80();
+    app._resetPendingInviteViewForTest();
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() - 1 }));
+    app.renderLinkFlowScreen('dashboard');
+    const html = page.innerHTML;
+    assert(html.includes('That invite link has expired. Ask whoever invited you to send it again.') && /data-lc-banner="err"/.test(html), '[80p] an EXPIRED link shows the DI\'s loud message in a red alert banner');
+    assert(/id="link-claim-code"/.test(html) && !/id="link-invite-card"/.test(html), '[80q] …and the screen falls back to the claim card (there is no usable code to prefill)');
+    assert(localStorage.getItem(KEY80) === null, '[80r] …and the dead value is removed');
+    app.renderLinkFlowScreen('dashboard');
+    assert(page.innerHTML.includes('That invite link has expired.'), '[80s] a REPAINT (a Realtime event) does not swallow the message — it stays until the person acts');
+    // MALFORMED (forged / garbled)
+    app._resetPendingInviteViewForTest();
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'k7qx9m2p!!', exp: Date.now() + 600_000 }));
+    app.renderLinkFlowScreen('dashboard');
+    assert(page.innerHTML.includes('That invite link has expired.') && !/id="link-invite-card"/.test(page.innerHTML) && localStorage.getItem(KEY80) === null, '[80t] a forged or malformed stored value is said out loud too, yields no invite card, and is removed');
+    // the arbitration is not moved by a pending invite
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 }));
+    assert(app.linkFlowScreen() === 'claim', '[80u] a pending invite does not change linkFlowScreen() (still "claim")');
+    app._recordResolvedLinkForTest('L-A', 'mA');
+    assert(app.linkFlowScreen() === 'confirm', '[80v] …and a resolved link still owes the confirmation card first, invite or not (DI-183h)');
+    app._resetLinkFlowForTest();
+    localStorage.removeItem(KEY80);
+  }
+
+  // ── (a2) THE CLAIM SCREEN WITH THE DOOR CLOSED (R-F1 / S-9, coordinator ruling 2026-09-30) — BYTE-IDENTICAL TO TODAY'S ─────────────────────────────────────────────
+  // Drew: "S-9: invite-code choice stays behind the flag." With `league_creation_open` false (the shipping default) an unmatched account is offered the claim card and NOTHING else
+  // (DI-183 §3d) — no segmented control, no invite card, no loud invite notice, no "Create a league". The expectation below is the v0.27.3 claim-code template FROZEN AS A
+  // LITERAL, not a call to the app's own function, so a change to the closed screen goes red here whichever way it is made.
+  {
+    const GOLDEN_CLAIM_80 = (attemptNote) => `
+    <div class="card" id="link-claim-card">
+      <h2>Enter the code your commissioner gave you.</h2>
+      ${attemptNote}
+      <div class="form-group">
+        <label for="link-claim-code">Claim code</label>
+        <input type="text" id="link-claim-code" placeholder="e.g. 7XK4P2QR" autocomplete="off" maxlength="12"
+               inputmode="text" autocapitalize="characters" spellcheck="false" />
+      </div>
+      <div class="site-gate-error" id="link-claim-error" style="display:none;color:var(--loss)"></div>
+      <button type="button" class="btn btn-primary btn-block" id="link-claim-btn">Link My Account</button>
+    </div>`;
+    const ERR_NOTE_80 = `<p class="text-muted" style="font-size:.8rem">We couldn't check your email automatically just now, so you'll need the code.</p>`;
+    const NEVER_80 = /data-lc-seg|role="tablist"|link-invite-card|league-join-code|league-join-btn|link-create-league-btn|Create a league|I have an invite code|I have a claim code|invite link|expired/;
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: () => ({ data: [], error: null }) });
+    assert(auth.getCachedLeagueCreationOpen() === false, '[80a2a] fixture: the door is CLOSED (the shipping default; nothing has read platform_kv)');
+    assert(await app.attemptAutoLink() === 'unmatched' && app.linkFlowScreen() === 'claim', '[80a2b] fixture: an unmatched account lands on the claim-code screen');
+    const page = dashPage80();
+    // (1) a VALID invite is waiting: the closed screen ignores it entirely
+    const pendingValid = JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 });
+    localStorage.setItem(KEY80, pendingValid);
+    app._resetClaimScreenModeForTest(); app._resetPendingInviteViewForTest();
+    app.renderLinkFlowScreen('dashboard');
+    assert(page.innerHTML === GOLDEN_CLAIM_80(''), '[80a2c] door CLOSED + a valid pending invite: the screen is the pre-N1 claim card, byte for byte');
+    assert(!NEVER_80.test(page.innerHTML), '[80a2d] …no segmented control, no invite card, no invite note, no Create choice, in the markup at all');
+    assert(localStorage.getItem(KEY80) === pendingValid, '[80a2e] …and the stored invite is left exactly as it was (it expires by itself; a closed screen neither reads nor consumes it)');
+    // (2) an EXPIRED / forged value: still silent on the closed screen (the loud notice belongs to the invite surface, which does not exist while closed)
+    const pendingDead = JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() - 1 });
+    localStorage.setItem(KEY80, pendingDead);
+    app._resetPendingInviteViewForTest();
+    app.renderLinkFlowScreen('dashboard');
+    assert(page.innerHTML === GOLDEN_CLAIM_80('') && localStorage.getItem(KEY80) === pendingDead, '[80a2f] door CLOSED + an expired invite: still the byte-identical claim card, no invite message, value untouched');
+    // (3) the error state keeps its own note and nothing else
+    localStorage.removeItem(KEY80);
+    await shippingFlags80({ link_member_by_email: () => ({ data: null, error: { message: 'boom' } }), _from: () => ({ data: [], error: null }) });
+    const errRes = await quiet80(() => app.attemptAutoLink());
+    const pageErr = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(errRes === 'error' && pageErr.innerHTML === GOLDEN_CLAIM_80(ERR_NOTE_80), `[80a2g] door CLOSED + an auto-link ERROR: the pre-N1 claim card with its "we couldn't check your email" note, byte for byte (auto-link returned ${errRes})`);
+    // (4) the door opening later brings the segments in (non-vacuity: the golden above is the CLOSED state, not a screen that can never change)
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    await app.attemptAutoLink();
+    const pageOpen = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(pageOpen.innerHTML !== GOLDEN_CLAIM_80('') && /data-lc-seg="invite"/.test(pageOpen.innerHTML) && /link-create-league-btn/.test(pageOpen.innerHTML), '[80a2h] non-vacuity: with the door OPEN the same account gets the segments and the Create choice — so [80a2c] measured the gate, not a screen that never changes');
+    app._resetLinkFlowForTest();
+    localStorage.removeItem(KEY80);
+  }
+
+  // ── (b) THE LANDING AND THE RELEASE GATE ────────────────────────────────────────────────────────────────────────────────────
+  {
+    await shippingFlags80({ _from: () => ({ data: [], error: null }) });
+    const page = dashPage80();
+    app.renderLeagueFlowScreen('dashboard');
+    let html = page.innerHTML;
+    assert(auth.getCachedLeagueCreationOpen() === false, '[80w] fixture: the gate cache is CLOSED before any read');
+    assert(/id="league-create-open-btn"[^>]*disabled/.test(html) && html.includes("Creating leagues isn't available yet — it's coming in a future update."), '[80x] gate CLOSED: the landing\'s Create card is a disabled control with the DI\'s "isn\'t available yet" line');
+    assert(!/data-action="create-league"/.test(html) && !/id="league-create-name"/.test(html) && /placeholder="e\.g\. K7QX 9M2P"/.test(html) && !/IRB/.test(html), '[80y] …no create action, no inline name form, the neutral Join placeholder, and no IRB string on the screen');
+    // open the gate through the real cache read
+    await shippingFlags80({ _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    assert(auth.getCachedLeagueCreationOpen() === true && JSON.stringify(auth.getCachedOfferedSports()) === '["cfb","nfl"]', '[80z] a real platform_kv read opens the cache (league_creation_open === true) and carries offered_sports');
+    const page2 = dashPage80();
+    app.renderLeagueFlowScreen('dashboard');
+    assert(/id="league-create-open-btn" data-action="create-league"/.test(page2.innerHTML) && !/id="league-create-open-btn"[^>]*disabled/.test(page2.innerHTML), '[80aa] gate OPEN: the same card is an enabled entry to the sheet');
+    // an identity change re-arms the CLOSED default (never the previous account's open door)
+    auth.clearMaintenanceBannerCacheOnIdentityChange();
+    assert(auth.getCachedLeagueCreationOpen() === false && auth.getCachedOfferedSports().length === 0, '[80ab] an identity change resets the gate cache to CLOSED');
+  }
+
+  // ── (c) THE SHEET, THROUGH ITS REAL HANDLERS, INTO THE REAL RPC ───────────────────────────────────────────────────────────────
+  async function sheetHarness80({ rowsAfter = [ROW_NEW], createResult, extra = {} } = {}) {
+    let rows = [];
+    let createArgs = null;
+    const calls = await shippingFlags80({
+      link_member_by_email: () => ({ data: [], error: null }),
+      create_league: (p) => {
+        createArgs = p;
+        if (createResult) return createResult(p);
+        rows = rowsAfter;
+        return { data: 'L-NEW', error: null };
+      },
+      _from: (table, b) => {
+        if (table === 'platform_kv') return { data: GATE_ROWS, error: null };
+        if (table === 'leagues') return { data: { join_code: 'K7QX9M2P' }, error: null };
+        return { data: rows, error: null };
+      },
+      ...extra,
+    });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    app._bindCreateLeagueDispatcherForTest();
+    const page = dashPage80();
+    await app.attemptAutoLink();
+    app.renderLinkFlowScreen('dashboard');
+    return { calls, page, get createArgs() { return createArgs; }, setRows: (r) => { rows = r; } };
+  }
+  const sheetEls80 = () => {
+    const wrap = document.getElementById('league-create-sheet-wrap');
+    return { wrap, body: wrap?.querySelector('#league-create-body'), nav: wrap?.querySelector('#league-create-nav') };
+  };
+  const clickAction80 = (wrap, action) => wrap.dispatch('click', { target: { closest: (sel) => (sel === '[data-lc-action]' ? { getAttribute: (k) => (k === 'data-lc-action' ? action : null), disabled: false } : null) } });
+  const clickSport80 = (wrap, key) => wrap.dispatch('click', { target: { closest: (sel) => (sel === '[data-lc-sport]' ? { getAttribute: () => key } : null) } });
+  const typeName80 = (wrap, value) => wrap.dispatch('input', { target: { id: 'league-create-name', value } });
+  const stateNow80 = () => app._leagueCreateStateForTest();
+  // R-F9: the sheet now LEAVES (300ms slide / 150ms Reduce Motion crossfade) and its node is removed when that ends. Every close is followed by this wait before the node is
+  // asserted gone — and before the next open, so a stale exit timer can never unregister a re-opened sheet's id in this fake DOM (the app itself guards the same case).
+  const waitExit80 = (kind = 'slide') => new Promise((r) => setTimeout(r, app._LC_EXIT_MS_FOR_TEST[kind] + 40));
+
+  {
+    const h = await sheetHarness80();
+    assert(/id="link-create-league-btn" data-action="create-league"/.test(h.page.innerHTML), '[80cz] fixture: the claim screen this sheet opens FROM carries the third choice (gate open, auto-link found nothing)');
+    // the entry: the document-level dispatcher, from the landing's enabled card
+    document.fireDocEvent('click', { target: { closest: (sel) => (sel === '[data-action="create-league"]' ? { closest: () => null, disabled: false } : null) } });
+    let { wrap, body, nav } = sheetEls80();
+    assert(!!wrap && stateNow80()?.step === 'name', '[80ac] the [data-action="create-league"] tap opens the New League sheet on the NAME step');
+    assert(/data-hold-teardown/.test(JSON.stringify(wrap.attrs)) && wrap.id === 'league-create-sheet-wrap', '[80ad] the sheet carries data-hold-teardown (a security hold sweeps it)');
+    assert(/id="league-create-name"[^>]*maxlength="80"/.test(body.innerHTML) && /data-lc-action="next"[^>]*disabled/.test(nav.innerHTML) && /New League/.test(nav.innerHTML), '[80ae] frame 2/12: the field (maxlength 80), Next dimmed on an empty name, the nav bar title');
+    clickAction80(wrap, 'next');
+    assert(stateNow80().step === 'name', '[80af] Next with an empty name does nothing');
+    typeName80(wrap, '   ');
+    clickAction80(wrap, 'next');
+    assert(stateNow80().step === 'name', '[80ag] a name of only spaces does nothing either');
+    typeName80(wrap, 'Weekend Crew');
+    assert(stateNow80().name === 'Weekend Crew', '[80ah] typing updates the state (in place — no repaint)');
+    clickAction80(wrap, 'next');
+    ({ body, nav } = sheetEls80());
+    assert(stateNow80().step === 'sports' && /College Football/.test(body.innerHTML) && /NFL/.test(body.innerHTML) && !/class="lc-sec">Tournaments</.test(body.innerHTML), '[80ai] frame 3: the sports step lists exactly what is registered AND offered (CFB, NFL), and no Tournaments section');
+    assert(!/March Madness|NBA|NHL|coming soon/i.test(body.innerHTML), '[80aj] …no "coming soon" rows');
+    const before = h.calls.filter((c) => c.name === 'create_league').length;
+    clickAction80(wrap, 'create');
+    await flush80(4);
+    assert(h.calls.filter((c) => c.name === 'create_league').length === before && stateNow80().phase === 'idle', '[80ak] Create with nothing ticked makes NO call');
+    clickSport80(wrap, 'nfl'); clickSport80(wrap, 'cfb');
+    ({ body } = sheetEls80());
+    assert(/aria-label="NFL, main, selected"/.test(body.innerHTML) && /aria-label="College Football, selected"/.test(body.innerHTML), '[80al] the FIRST ticked season is Main (NFL, ticked first) — and it says so to VoiceOver');
+    clickSport80(wrap, 'nfl');
+    ({ body } = sheetEls80());
+    assert(/aria-label="College Football, main, selected"/.test(body.innerHTML), '[80am] unticking Main promotes the next');
+    clickSport80(wrap, 'nfl');
+    // the ONE server call
+    await quiet80(async () => { clickAction80(wrap, 'create'); await flush80(20); });
+    const cl = h.calls.filter((c) => c.name === 'create_league');
+    assert(cl.length === 1 && cl[0].params.p_name === 'Weekend Crew' && JSON.stringify(cl[0].params.p_sports) === JSON.stringify(['cfb', 'nfl']),
+      `[80an] Create makes exactly ONE create_league RPC with the trimmed name and the ordered sports (got ${JSON.stringify(cl.map((c) => c.params))})`);
+    assert(!h.calls.some((c) => c.name === 'join_league' || c.name === 'link_member'), '[80ao] …and nothing else on the way (no join, no claim-code link; the by-email attempt was this fixture\'s own setup)');
+    ({ wrap, body, nav } = sheetEls80());
+    assert(!!wrap && !wrap._removed, '[80ap] THE SHEET SURVIVED the identity change that creating a first league causes (same account, pointer moved from nothing to the new league)');
+    assert(stateNow80()?.step === 'created' && stateNow80().created.leagueId === 'L-NEW', '[80aq] frame 4: the Created screen');
+    assert(body.innerHTML.includes('Weekend Crew is ready') && body.innerHTML.includes('SCRIBE is on (Dry, Balanced)') && (body.innerHTML.match(/data-lc-on=/g) || []).length === 5, '[80ar] …"Weekend Crew is ready" and the five already-on rows');
+    assert(auth.getActiveLeagueId() === 'L-NEW', '[80as] the zero-league creator\'s pointer is on the new league (the default activate)');
+    // Invite Friends -> the code
+    await quiet80(async () => { clickAction80(wrap, 'invite'); await flush80(); });
+    ({ body } = sheetEls80());
+    assert(stateNow80().step === 'invite' && body.innerHTML.includes('K7QX 9M2P'), '[80at] frame 5: Invite Friends shows the league\'s own join code, 4+4');
+    // Copy Code, Share Invite (web: copies the LINK)
+    const copied = [];
+    const realClip = globalThis.navigator.clipboard;
+    globalThis.navigator.clipboard = { writeText: async (t) => { copied.push(t); } };
+    try {
+      await quiet80(async () => { clickAction80(wrap, 'copy-code'); await flush80(); });
+      assert(copied[0] === 'K7QX9M2P', '[80au] Copy Code copies the 8 characters (no space)');
+      assert(toasts80().some((t) => t.text === 'Code copied'), '[80av] …and toasts "Code copied"');
+      await quiet80(async () => { clickAction80(wrap, 'share'); await flush80(); });
+      assert(copied[1] === 'https://irbfootball.com/?join=K7QX9M2P' && toasts80().some((t) => t.text === 'Invite link copied'), '[80aw] Share Invite on web copies the LINK and toasts "Invite link copied"');
+    } finally { globalThis.navigator.clipboard = realClip; }
+    // Done closes and lands on the new league (already active, so no switch)
+    await quiet80(async () => { clickAction80(wrap, 'done'); await flush80(); });
+    assert(stateNow80() === null, '[80ax] Done drops the sheet state at once');
+    // R-F9: the exit MIRRORS the entry — the slide is driven by the sheet's own 300ms --ease-native transition (--lc-drag-y -> 1), the wrap takes no touches while closing, and the node stays until the transition ends
+    assert(wrap.attrs['data-closing'] === 'slide' && wrap.style['--lc-drag-y'] === '1' && wrap._removed !== true && document.getElementById('league-create-sheet-wrap') === wrap,
+      '[80ax2] R-F9: Done starts the exit (data-closing="slide", the sheet driven to fully off-screen) and the node is STILL mounted while it plays');
+    assert(app._LC_EXIT_MS_FOR_TEST.slide === 380 && app._LC_EXIT_MS_FOR_TEST.fade === 230, `[80ax3] R-F9: the bounded fallbacks are the motion tokens plus a margin — 300ms modal slide, 150ms Reduce Motion fade (got ${JSON.stringify(app._LC_EXIT_MS_FOR_TEST)})`);
+    await waitExit80();
+    assert(wrap._removed === true && !document.getElementById('league-create-sheet-wrap'), '[80ax4] R-F9: …and the node is removed once the exit has played');
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // R-F9 under Reduce Motion: no movement at all — a --motion-fast opacity crossfade of the whole wrap
+    const savedMM80 = globalThis.matchMedia;
+    globalThis.matchMedia = (q) => ({ matches: /reduce/.test(String(q)) });
+    try {
+      await sheetHarness80();
+      app._openLeagueCreateSheetForTest();
+      const { wrap } = sheetEls80();
+      clickAction80(wrap, 'cancel');
+      assert(wrap.attrs['data-closing'] === 'fade' && wrap.style['--lc-drag-y'] === undefined && stateNow80() === null, '[80ax5] R-F9: with Reduce Motion the sheet closes with a crossfade (data-closing="fade") and NO slide');
+      await waitExit80('fade');
+      assert(wrap._removed === true, '[80ax6] R-F9: …and the node is removed after the shorter fade');
+    } finally { globalThis.matchMedia = savedMM80; }
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // R-F9: a sheet RE-OPENED during the exit is a different node and must survive the old node's removal timer
+    await sheetHarness80();
+    app._openLeagueCreateSheetForTest();
+    const first = sheetEls80().wrap;
+    clickAction80(first, 'cancel');
+    app._openLeagueCreateSheetForTest();
+    const second = sheetEls80().wrap;
+    assert(second && second !== first && stateNow80()?.step === 'name', '[80ax7] R-F9 fixture: the sheet was re-opened while the first was still leaving (a NEW node, fresh state)');
+    await waitExit80();
+    assert(document.getElementById('league-create-sheet-wrap') === second && second._removed !== true && stateNow80()?.step === 'name', '[80ax8] R-F9: the first node\'s removal timer did not touch the re-opened sheet');
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // FAILURE keeps the input; Try Again works; a limit is a gold refusal; paused returns to the name step
+    const h = await sheetHarness80({ createResult: () => ({ data: null, error: { message: 'boom' } }) });
+    app._openLeagueCreateSheetForTest();
+    let { wrap, body } = sheetEls80();
+    typeName80(wrap, 'Crew'); clickAction80(wrap, 'next'); clickSport80(wrap, 'cfb');
+    await quiet80(async () => { clickAction80(wrap, 'create'); await flush80(); });
+    ({ body } = sheetEls80());
+    assert(stateNow80().phase === 'failed' && /data-lc-banner="err"/.test(body.innerHTML) && body.innerHTML.includes('Nothing was saved') && body.innerHTML.includes('Try Again'), '[80ay] a failed create: the red persistent banner ("Nothing was saved…") and Try Again');
+    assert(stateNow80().name === 'Crew' && stateNow80().ticked.join() === 'cfb', '[80az] …the name and the ticks are KEPT');
+    assert(document.getElementById('league-create-sheet-wrap') && LC80.dismissMode(stateNow80()) === 'confirm', '[80ba] …and the sheet is still up (a failure never closes it)');
+    app._resetLeagueCreateForTest();
+  }
+  for (const [label, message, phase] of [['a per-account limit', 'league_limit', 'limit'], ['the daily rate', 'creation_rate', 'limit'], ['the platform breaker', 'creation_paused', 'limit'], ['the closed gate/valve', 'creation_closed', 'paused']]) {
+    const h = await sheetHarness80({ createResult: () => ({ data: null, error: { message: `P0001: ${message}` } }) });
+    app._openLeagueCreateSheetForTest();
+    const { wrap } = sheetEls80();
+    typeName80(wrap, 'Crew'); clickAction80(wrap, 'next'); clickSport80(wrap, 'cfb');
+    await quiet80(async () => { clickAction80(wrap, 'create'); await flush80(); });
+    const { body } = sheetEls80();
+    const st = stateNow80();
+    if (phase === 'limit') assert(st.phase === 'limit' && /data-lc-banner="info"/.test(body.innerHTML) && body.innerHTML.includes('reached the limit for new leagues') && /done-limit/.test(body.innerHTML), `[80bb] ${label} (${message}) → the ONE gold limit banner and Done (no cap is disclosed)`);
+    else assert(st.phase === 'paused' && st.step === 'name', `[80bb] ${label} (${message}) → back to the name step, paused (frame 10)`);
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // CREATED, BUT THIS DEVICE COULD NOT LOAD IT (frame 13): the server said yes, the refresh does not show the row
+    const h = await sheetHarness80({ rowsAfter: [] });
+    app._openLeagueCreateSheetForTest();
+    const { wrap } = sheetEls80();
+    typeName80(wrap, 'Weekend Crew'); clickAction80(wrap, 'next'); clickSport80(wrap, 'cfb');
+    await quiet80(async () => { clickAction80(wrap, 'create'); await flush80(20); });
+    await waitExit80();
+    assert(!document.getElementById('league-create-sheet-wrap'), '[80bc] frame 13: the sheet closes (the league exists; there is nothing to retry)');
+    const notice = app._leaguesHomeNoticeForTest();
+    assert(notice && notice.leagueId === 'L-NEW' && notice.text === "Weekend Crew was created, but this device couldn't load it.", `[80bd] …and the loud notice is held for the Leagues Home surface, WITHOUT the old "Pull down to refresh." (that gesture does nothing under the overlay — R-F4) (got ${JSON.stringify(notice)})`);
+    assert(h.calls.filter((c) => c.name === 'create_league').length === 1, '[80be] …and nothing was retried (a second create would spend a second allowance)');
+    // R-F4 — the banner carries a TRY AGAIN (Interaction Principles' error-state pattern: what happened + a visible way to retry, state kept, never a toast)
+    let repaints = 0;
+    const container80 = new FakeEl();
+    const retryBtn = container80.querySelector('#leagues-notice-retry');
+    app._bindLeaguesHomeNoticeForTest(container80, () => { repaints++; });
+    retryBtn.click();
+    assert(retryBtn.disabled === true && retryBtn.textContent === LC80.LC_COPY.retrying, '[80bd1] R-F4: tapping Try Again busies the button itself (disabled, "Trying…") while the membership list is re-read');
+    await quiet80(() => flush80(30));
+    assert(app._leaguesHomeNoticeForTest() !== null && repaints === 0 && retryBtn.disabled === false && retryBtn.textContent === LC80.LC_COPY.tryAgain,
+      '[80bd2] R-F4: when the league STILL is not in the list the banner STAYS, the button comes back as "Try Again", and nothing repaints (loud-fail — never a silent success)');
+    h.setRows([ROW_NEW]);
+    await quiet80(async () => { retryBtn.click(); await flush80(30); });
+    assert(app._leaguesHomeNoticeForTest() === null && repaints === 1, `[80bd3] R-F4: once the list shows the league the notice is cleared and the surface it sat on repaints exactly once (repaints ${repaints})`);
+    assert(h.calls.filter((c) => c.name === 'create_league').length === 1, '[80bd4] R-F4: Try Again only re-READS memberships — it never re-runs create_league');
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // DISCARD (frame 11) and the create-in-flight lock
+    const h = await sheetHarness80();
+    app._openLeagueCreateSheetForTest();
+    let { wrap } = sheetEls80();
+    clickAction80(wrap, 'cancel');
+    assert(stateNow80() === null && wrap.attrs['data-closing'] === 'slide', '[80bf] Cancel with nothing entered dismisses immediately (the state drops at once and the exit begins)');
+    await waitExit80();
+    assert(!document.getElementById('league-create-sheet-wrap'), '[80bf2] …and the sheet is gone once the exit has played');
+    app._openLeagueCreateSheetForTest();
+    ({ wrap } = sheetEls80());
+    typeName80(wrap, 'Half typed');
+    clickAction80(wrap, 'cancel');
+    assert(!!document.getElementById('league-create-sheet-wrap') && stateNow80().discardPrompt === true, '[80bg] Cancel with a typed name asks first (Discard new league?) and the sheet stays');
+    clickAction80(wrap, 'keep-editing');
+    assert(stateNow80().discardPrompt === false && stateNow80().name === 'Half typed', '[80bh] Keep Editing puts the input back untouched');
+    clickAction80(wrap, 'cancel');
+    clickAction80(wrap, 'discard');
+    assert(stateNow80() === null, '[80bi] Discard drops the state at once');
+    await waitExit80();
+    assert(!document.getElementById('league-create-sheet-wrap'), '[80bi2] …and the sheet is gone once the exit has played');
+    // in flight: nothing can abandon it
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    const h2 = await sheetHarness80({ createResult: () => gate.then(() => ({ data: 'L-NEW', error: null })) });
+    void h2;
+    app._openLeagueCreateSheetForTest();
+    ({ wrap } = sheetEls80());
+    typeName80(wrap, 'Crew'); clickAction80(wrap, 'next'); clickSport80(wrap, 'cfb');
+    clickAction80(wrap, 'create');
+    await flush80(4);
+    assert(stateNow80().phase === 'creating', '[80bj] fixture: the create is in flight');
+    clickAction80(wrap, 'cancel'); wrap.dispatch('click', { target: { closest: () => null } });
+    assert(!!document.getElementById('league-create-sheet-wrap') && stateNow80().discardPrompt === false, '[80bk] while creating, Cancel (and the backdrop) cannot abandon it — the sheet stays, no prompt');
+    assert(app._isLeagueCreateDismissGestureBlockedForTest() === true, '[80bl] …and the swipe-down gesture is blocked');
+    clickAction80(wrap, 'create'); await flush80(2);
+    assert(h2.calls.filter((c) => c.name === 'create_league').length === 1, '[80bm] …and a second tap on Create does not fire a second call');
+    release();
+    await quiet80(() => flush80(30));
+    app._resetLeagueCreateForTest();
+  }
+  {
+    // THE IDENTITY SWEEP: a DIFFERENT account removes the sheet and drops its state; the SAME account (above) does not
+    const chatUi80 = null; void chatUi80;
+    await quiet80(async () => {
+      resetAll({ getSession: async () => ({ data: { session: { user: { id: 'uA' }, access_token: 't' } } }) });
+      wireRealAuthUI();
+      storeValidSession();
+      auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uA', email: 'a@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+      await flush80(6);
+    });
+    await quiet80(async () => {
+      auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uA', email: 'a@example.com' }, access_token: 't', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+      await flush80(6);
+      auth.refreshMaintenanceBannerCache && await auth.refreshMaintenanceBannerCache().catch(() => {});
+    });
+    // The gate cache is closed here; open the sheet through its invite entry (which needs no gate) for a league A already has.
+    auth._setMembershipsForTest([{ leagueId: 'L-A', memberId: 'mA', leagueName: 'League A', role: 'commissioner', pilot: false, active: true }]);
+    auth.setActiveLeagueId('L-A');
+    app._resetLeagueCreateForTest();
+    app._openLeagueCreateSheetForTest({ invite: { leagueId: 'L-A', name: 'League A', code: 'K7QX9M2P' } });
+    const wrap = document.getElementById('league-create-sheet-wrap');
+    assert(!!wrap && stateNow80()?.step === 'invite', '[80bn] fixture: the sheet is open on the Invite step for League A (the League Page\'s "Invite Friends" entry)');
+    setClassEls('[data-hold-teardown]', [wrap]);
+    await quiet80(async () => {
+      auth._fireAuthEventForTest('SIGNED_IN', { user: { id: 'uB', email: 'b@example.com' }, access_token: 't2', expires_at: Math.floor(Date.now() / 1000) + 3600 });
+      await flush80(8);
+    });
+    assert(wrap._removed === true, '[80bo] a DIFFERENT account signing in sweeps the New League sheet away');
+    app._openLeagueCreateSheetForTest({ invite: { leagueId: 'L-B', name: 'League B', code: 'ABCDEFGH' } });
+    assert(!!document.getElementById('league-create-sheet-wrap') && stateNow80()?.created?.leagueId === 'L-B', '[80bp] …and the orphaned state is dropped, so the sheet can be opened again (it is not stuck "already open")');
+    setClassEls('[data-hold-teardown]', []);
+    app._resetLeagueCreateForTest();
+  }
+
+  // ── (d) A PENDING INVITE FOR A PLAYER WHO IS ALREADY IN A LEAGUE ─────────────────────────────────────────────────────────────
+  {
+    const calls = await shippingFlags80({ join_league: () => ({ data: 'mINV', error: null }), _from: () => ({ data: [{ league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Sam', active: true, leagues: { name: 'League A' } }], error: null }) });
+    // The app is still HYDRATING at the instant memberships land (the ordinary boot): the prompt must WAIT, not open a modal over a skeleton or a hold.
+    await quiet80(async () => { await auth.refreshMembershipsAndSession(); await sb80._setStateForTest('HYDRATING', 'authtest-80: still hydrating'); });
+    assert(auth.getCachedMemberships().length === 1 && app.isContentWithheld() === true, '[80bq] fixture: the player is already in one league and the app is still withheld (hydrating)');
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 }));
+    app._resetPendingInviteViewForTest();
+    const realST80 = globalThis.setTimeout;
+    let scheduled80 = [];
+    const captureTimers80 = (fn) => { const real = globalThis.setTimeout; globalThis.setTimeout = (f, ms) => { scheduled80.push({ f, ms }); return 0; }; try { return fn(); } finally { globalThis.setTimeout = real; } };
+    const before = document.body.lastChild;
+    captureTimers80(() => app._maybePromptPendingInviteForTest('MEMBERSHIPS_REFRESHED'));
+    assert(document.body.lastChild === before && scheduled80.length === 1 && scheduled80[0].ms === 1500, `[80bq2] while withheld the prompt does NOT open a sheet; it schedules ONE bounded retry at 1.5s (got ${JSON.stringify(scheduled80.map((x) => x.ms))})`);
+    assert(localStorage.getItem(KEY80) !== null, '[80bq3] …and the stored invite is untouched while it waits');
+    await quiet80(() => sb80._setStateForTest('ACTIVE', 'authtest-80: serving'));
+    const retry = scheduled80[0].f; scheduled80 = [];
+    app._maybePromptPendingInviteForTest('TOKEN_REFRESHED');
+    await flush80(2);
+    assert(document.body.lastChild === before && scheduled80.length === 0, '[80br] only MEMBERSHIPS_REFRESHED triggers the prompt (a token refresh does not)');
+    captureTimers80(() => retry());
+    assert(scheduled80.length === 1 && scheduled80[0].ms === 0, '[80bq4] the retry, once the app is serving, opens the sheet (on the next tick)');
+    scheduled80[0].f();
+    await flush80(3);
+    void realST80;
+    const sheet = document.body.lastChild;
+    assert(sheet && sheet !== before && /league-join-sheet/.test(sheet.innerHTML) && /value="K7QX 9M2P"/.test(sheet.innerHTML) && /You opened an invite link/.test(sheet.innerHTML), '[80bs] the Join sheet opens PREFILLED with the invite note');
+    assert(calls.filter((c) => c.name === 'join_league').length === 0, '[80bt] …and NOTHING is joined until the tap');
+    const nBefore = document.body.lastChild;
+    app._maybePromptPendingInviteForTest('MEMBERSHIPS_REFRESHED');
+    await flush80(2);
+    assert(document.body.lastChild === nBefore, '[80bu] the prompt is latched: it opens once per page, not on every membership refresh');
+    // expired -> a loud toast, and the value is removed
+    await shippingFlags80({ _from: () => ({ data: [{ league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Sam', active: true, leagues: { name: 'League A' } }], error: null }) });
+    await quiet80(async () => { await auth.refreshMembershipsAndSession(); await sb80._setStateForTest('ACTIVE', 'authtest-80: serving'); });
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() - 5 }));
+    app._resetPendingInviteViewForTest();
+    app._maybePromptPendingInviteForTest('MEMBERSHIPS_REFRESHED');
+    await flush80(2);
+    const tt = toasts80();
+    assert(tt.some((t) => t.text === 'That invite link has expired. Ask whoever invited you to send it again.' && /error/.test(t.cls)) && localStorage.getItem(KEY80) === null, '[80bv] an EXPIRED link for a player already in a league is an error toast (loud) and the value is removed');
+  }
+
+  // ── (e) THE OAUTH REDIRECT IS ORIGIN-ONLY, WHATEVER IS PENDING ─────────────────────────────────────────────────────────────────
+  {
+    resetAll();
+    let captured = null;
+    installFakeSupabase({ signInWithOAuth: async (opts) => { captured = opts; return { data: {}, error: null }; } });
+    const realLoc = globalThis.location;
+    globalThis.location = { origin: 'https://irbfootball.test', href: 'https://irbfootball.test/?join=K7QX9M2P', search: '?join=K7QX9M2P', pathname: '/', hash: '' };
+    localStorage.setItem(KEY80, JSON.stringify({ code: 'K7QX9M2P', exp: Date.now() + 600_000 }));
+    try { await auth.signInWithGoogle(); } finally { globalThis.location = realLoc; }
+    assert(captured?.options?.redirectTo === 'https://irbfootball.test' && !/join|K7QX/.test(JSON.stringify(captured)), `[80bw] with ?join= in the URL and an invite pending, redirectTo is the ORIGIN only — the code never leaves the device (got ${JSON.stringify(captured?.options)})`);
+    localStorage.removeItem(KEY80);
+  }
+
+  // ── (e1) THE THIRD LANDING CHOICE (coordinator ruling 2026-09-30): "Create a league", hidden while the gate is closed, only after auto-link found nothing ──────
+  {
+    // Before the auto-link attempt has run the claim screen is NOT owed at all (the landing/none is): the third choice cannot appear ahead of auto-link.
+    const calls0 = await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: () => ({ data: [], error: null }) });
+    assert(app.linkFlowScreen() === '' && calls0.filter((c) => c.name === 'link_member_by_email').length === 0, '[80cha] fixture: before the auto-link attempt no claim screen is owed and no e-mail link has been tried');
+    // GATE CLOSED (the default): the choice is ABSENT — not disabled — and the screen is what it always was.
+    await app.attemptAutoLink();
+    const page0 = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(calls0[0]?.name === 'link_member_by_email' && app.linkFlowScreen() === 'claim', '[80chb] auto-link ran FIRST and found nothing; only then is the claim screen (and its choices) painted');
+    assert(auth.getCachedLeagueCreationOpen() === false, '[80chc] fixture: the gate cache is CLOSED');
+    assert(!/Create a league|create-league|link-create-league-btn/.test(page0.innerHTML) && !/data-lc-seg=/.test(page0.innerHTML) && page0.innerHTML.includes('id="link-claim-card"'),
+      '[80chd] gate CLOSED: "Create a league" is HIDDEN entirely (not rendered disabled), the segments are absent too (R-F1), and the claim card is what remains');
+    // GATE OPEN: present, once, in BOTH modes, under the card; the segments are still two.
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    await app.attemptAutoLink();
+    const page1 = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    let h1 = page1.innerHTML;
+    assert(auth.getCachedLeagueCreationOpen() === true && (h1.match(/id="link-create-league-btn"/g) || []).length === 1 && h1.includes('>Create a league<'),
+      '[80che] gate OPEN: exactly ONE "Create a league" control on the claim screen');
+    assert(h1.indexOf('link-claim-card') < h1.indexOf('link-create-league-btn') && (h1.match(/data-lc-seg=/g) || []).length === 2,
+      '[80chf] …it sits UNDER the claim card, and the two-segment control (claim / invite) is unchanged');
+    assert(!/link-create-league-btn"[^>]*disabled/.test(h1), '[80chg] …an enabled entry, not a dimmed one');
+    app._resetClaimScreenModeForTest();
+    const segInvite1 = new FakeEl(); segInvite1.attrs['data-lc-seg'] = 'invite';
+    page1.querySelectorAll = (sel) => (sel === '[data-lc-seg]' ? [segInvite1] : []);
+    app.renderLinkFlowScreen('dashboard');
+    segInvite1.click();
+    h1 = page1.innerHTML;
+    assert(/id="link-invite-card"/.test(h1) && (h1.match(/id="link-create-league-btn"/g) || []).length === 1, '[80chh] in the INVITE mode the third choice is still there, still once');
+    // it opens the approved create flow
+    app._bindCreateLeagueDispatcherForTest();
+    document.fireDocEvent('click', { target: { closest: (sel) => (sel === '[data-action="create-league"]' ? { closest: () => null, disabled: false } : null) } });
+    assert(!!document.getElementById('league-create-sheet-wrap') && app._leagueCreateStateForTest()?.step === 'name', '[80chi] tapping it opens the New League sheet on the NAME step (the approved flow)');
+    app._resetLeagueCreateForTest();
+    // a match found by auto-link never shows it (the confirmation card owns the screen)
+    await shippingFlags80({ link_member_by_email: () => ({ data: [{ league_id: 'L-A', member_id: 'mA' }], error: null }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [{ league_id: 'L-A', id: 'mA', role: 'player', display_name: 'Sam', active: true, leagues: { name: 'League A' } }], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    await quiet80(async () => { await app.attemptAutoLink(); await sb80._setStateForTest('ACTIVE', 'authtest-80: serving'); });   // the linked league's data is being served
+    const page2 = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(app.linkFlowScreen() === 'confirm' && !/create-league|Create a league/.test(page2.innerHTML), '[80chj] when auto-link MATCHES, the confirmation card is shown and there is no Create choice on it');
+    // the gate closing again (an identity change re-arms the closed default) takes the control away on the next paint
+    await shippingFlags80({ link_member_by_email: () => ({ data: [], error: null }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    await app.attemptAutoLink();
+    const page3 = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(/link-create-league-btn/.test(page3.innerHTML), '[80chk] fixture: open again');
+    auth.clearMaintenanceBannerCacheOnIdentityChange();
+    app.renderLinkFlowScreen('dashboard');
+    assert(!/link-create-league-btn|Create a league/.test(page3.innerHTML), '[80chl] once the cache is re-armed CLOSED the control is gone on the next paint');
+    // R-F8 — an auto-link that ERRORED (the server could not be asked) never offers to create a league, even with the door OPEN: the loud "we couldn't check" note stays and
+    // the Create choice does not appear on top of an unanswered question. Only a clean "found nothing" ('unmatched') offers it — proven just above by [80che] on the same fixture.
+    await shippingFlags80({ link_member_by_email: () => ({ data: null, error: { message: 'boom' } }), _from: (table) => (table === 'platform_kv' ? { data: GATE_ROWS, error: null } : { data: [], error: null }) });
+    await quiet80(() => auth.refreshMaintenanceBannerCache());
+    const errRes2 = await quiet80(() => app.attemptAutoLink());
+    const pageE = dashPage80();
+    app.renderLinkFlowScreen('dashboard');
+    assert(errRes2 === 'error' && auth.getCachedLeagueCreationOpen() === true, `[80chm] fixture: the door is OPEN and the auto-link ERRORED (got ${errRes2})`);
+    assert(/We couldn't check your email automatically just now/.test(pageE.innerHTML) && !/link-create-league-btn|Create a league|data-action="create-league"/.test(pageE.innerHTML),
+      '[80chn] R-F8: after an auto-link ERROR the screen keeps its loud note and shows NO "Create a league" (only an unmatched, answered lookup does)');
+    assert(/data-lc-seg="invite"/.test(pageE.innerHTML), '[80cho] …while the rest of the open-door screen (the two segments) is unchanged');
+  }
+
+  // ── (e1b) THE SIX-SCHOOL FALLBACK IS PILOT-ONLY IN CODE (coordinator ruling 2026-09-30) ──────────────────────────────────────────────────────────────────────────────
+  {
+    await shippingFlags80({ _from: () => ({ data: [], error: null }) });
+    const memb = (pilot) => [{ leagueId: 'L-X', memberId: 'mX', leagueName: 'Some League', role: 'commissioner', pilot, active: true }];
+    auth._setMembershipsForTest(memb(false)); auth.setActiveLeagueId('L-X');
+    assert(app._almaMaterCatalogFallbackForTest().length === 0, '[80cm] an ACTIVE NON-PILOT league\'s offline alma-mater fallback is EMPTY — it falls through to the full ESPN list, never the six founders\' schools');
+    auth._setMembershipsForTest(memb(true));
+    const six = app._almaMaterCatalogFallbackForTest();
+    assert(six.length === 6 && six.every((o) => typeof o.location === 'string' && o.location.length > 0 && typeof o.displayName === 'string') && six[0].location === 'Oklahoma', '[80cn2] the PILOT league still gets its six (as {location, displayName} options), unchanged');
+    auth.setActiveLeagueId(null); auth._setMembershipsForTest([]);
+    assert(app._almaMaterCatalogFallbackForTest().length === 0, '[80co2] with NO active league resolved (fail closed) it is empty too');
+    auth.configureAuth({ authMode: 'pins' });
+    assert(app._almaMaterCatalogFallbackForTest().length === 6, '[80cp2] a local-only (PIN-era) device IS the founding league\'s device: its fallback is unchanged');
+    auth.configureAuth({ authMode: 'supabase', dataMode: 'supabase', authModeKnown: true, supabaseUrl: 'https://x.test', supabaseAnonKey: 'anon-key' });
+  }
+
+  // ── (e2) THE ZERO-WEEK EMPTY STATE (DI-430 touched-screen audit) ─────────────────────────────────────────────────────────────
+  {
+    await shippingFlags80({ _from: () => ({ data: [], error: null }) });
+    for (const [label, isAdmin] of [['commissioner', true], ['player', false]]) {
+      const realGetSession = storage.getSession;
+      void realGetSession;
+      auth._setMembershipsForTest([{ leagueId: 'L-Z', memberId: 'mZ', leagueName: 'Fresh League', role: isAdmin ? 'commissioner' : 'player', pilot: false, active: true }]);
+      auth.setActiveLeagueId('L-Z');
+      const html = app._zeroWeekEmptyStateHTMLForTest();
+      assert(/No picks to make yet/.test(html) && /data-league-empty="/.test(html) && /data-icon|<svg/.test(html), `[80cd] (${label}) the zero-week empty state says WHAT ("No picks to make yet") with a Munera glyph, not an emoji`);
+      assert(!/IRB|2025|2K25|Kihoon|Brayden|Kevin|Koby|Jacob|📊/.test(html), `[80ce] (${label}) …and carries no IRB copy, no roster name, no chart emoji`);
+      if (isAdmin) assert(/Set up your first week to open picks for your league\./.test(html) && /data-action="zero-week-setup"/.test(html) && /Set up first week/.test(html), '[80cf] the COMMISSIONER is told why and gets the next step as a button');
+      else assert(html.includes("Your commissioner hasn't opened a week yet.") && !/<button/.test(html), '[80cg] a PLAYER gets the one sentence and NO button');
+      auth.setActiveLeagueId(null);
+    }
+  }
+
+  // ── (e3) DI-432 §8 — BOOT ORDER: the pilot flag arrives WITH the membership read, and the 42703 retry is loud and never runs on a migrated database ────────────
+  {
+    const PO80 = await import('./js/pilot-only.js');
+    const PILOT_ROW = { league_id: 'L-IRB', id: 'mDrew', role: 'commissioner', display_name: 'Drew', active: true,
+      leagues: { name: "IRB Pick 'Ems", pilot: true, status: 'active', sport_default: 'cfb' } };
+    const events80 = [];
+    const realDispatch80 = globalThis.dispatchEvent;
+    globalThis.dispatchEvent = (e) => { events80.push(e && e.type); return true; };
+    const errs80 = [];
+    const realErr80 = console.error;
+    try {
+      // (1) A migrated database: ONE read, carrying `pilot`; no retry, no migration event.
+      const selects = [];
+      await shippingFlags80({ _from: (table, b) => { if (table === 'league_members') selects.push(b._select); return { data: [PILOT_ROW], error: null }; } });
+      auth.setActiveLeagueId(null);
+      assert(PO80.isPilotOnlyAllowed('irbCopy') === false && PO80.isPilotOnlyAllowed('recap2025') === false,
+        '[80cn] BEFORE the memberships resolve, every pilot-only gate is CLOSED (fail closed: an unloaded league is never shown another league\'s content, and IRB\'s own first paint waits for the flag)');
+      await quiet80(() => auth.refreshMembershipsAndSession());
+      assert(auth.getCachedMemberships()[0]?.pilot === true && auth.getActiveLeagueId() === 'L-IRB', '[80co] the membership read carries `pilot: true` and the lone league is the active one');
+      assert(PO80.isPilotOnlyAllowed('irbCopy') === true && PO80.isPilotOnlyAllowed('season2025Record') === true, '[80cp] …and once it lands, IRB\'s pilot-only content is allowed (the SAME read that gives the league its name gives it its pilot flag — one chokepoint)');
+      assert(selects.length >= 1 && selects.every((x) => /pilot/.test(String(x))) && !events80.includes('cfbp:migration-pending'),
+        `[80cq] on a migrated database every membership read selects \`pilot\` and the 42703 retry NEVER runs (reads: ${selects.length}, migration events: ${JSON.stringify(events80)})`);
+
+      // (2) A database that has not had 0026: the first read fails 42703; the retry is LOUD, drops pilot, and the pilot gates stay CLOSED.
+      events80.length = 0;
+      const sel2 = [];
+      await shippingFlags80({ _from: (table, b) => {
+        if (table !== 'league_members') return { data: [], error: null };
+        sel2.push(b._select);
+        if (/pilot/.test(String(b._select))) return { data: null, error: { code: '42703', message: 'column leagues_1.pilot does not exist' } };
+        return { data: [{ league_id: 'L-IRB', id: 'mDrew', role: 'commissioner', display_name: 'Drew', active: true, leagues: { name: "IRB Pick 'Ems" } }], error: null };
+      } });
+      auth.setActiveLeagueId(null);
+      console.error = (...a) => { errs80.push(a.map(String).join(' ')); };
+      await quiet80(() => auth.refreshMembershipsAndSession());
+      console.error = realErr80;
+      assert(sel2.length >= 2 && /pilot/.test(String(sel2[0])) && !/pilot/.test(String(sel2[1])), `[80cr] a 42703 re-issues the read WITHOUT pilot/status (selects: ${JSON.stringify(sel2.map((x) => /pilot/.test(String(x))))})`);
+      assert(events80.includes('cfbp:migration-pending'), '[80cs] …loudly: the migration-pending event that becomes the red banner fires');
+      assert(auth.getCachedMemberships()[0]?.pilot === false && PO80.isPilotOnlyAllowed('irbCopy') === false,
+        '[80ct] …and the retried row reads pilot:false, so every pilot-only gate stays CLOSED (it never quietly treats an unknown database as the pilot)');
+    } finally {
+      console.error = realErr80;
+      if (realDispatch80) globalThis.dispatchEvent = realDispatch80; else delete globalThis.dispatchEvent;
+      auth.setActiveLeagueId(null);
+    }
+  }
+
+  // ── (f) THE SUPER ADMIN GATE TOGGLE ─────────────────────────────────────────────────────────────────────────────────────────
+  {
+    const AP = await import('./js/admin-panel.js');
+    const esc80 = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    const html = (kv) => AP.renderSuperAdminPlaceholder({ escHtml: esc80, leagues: [], platformKv: kv, users: [] });
+    const closed = html({ maintenanceBanner: '', signupsOpen: true, loading: false, loaded: true, error: null });
+    assert(/id="super-creation-open-btn" data-next-open="true"/.test(closed) && closed.includes('Closed') && closed.includes('Open creation') && closed.includes('Open only when every one of these is true:'),
+      '[80bx] a kv WITHOUT the key renders creation CLOSED (the default-when-missing direction) with an "Open creation" button and the precondition list');
+    // R-F7 / S-1: the card lists EVERY flip precondition, and the first one is database-visible (the marker) and defaults to NOT live
+    assert(/id="super-creation-preconditions"/.test(closed) && (closed.match(/<li>/g) || []).length === 4 &&
+      closed.includes('Multi-league push (migration 0035) is applied, alias mode is live, and it is marked live in the database:') &&
+      closed.includes("Build 4 is installed on every player&#39;s phone.") && closed.includes('The security review of this release has passed.') && closed.includes('One clean IRB weekend has run on it.'),
+      '[80bx2] R-F7: the Super Admin gate lists all four preconditions — alias mode (0035) live and marked, build 4 installed, the security review passed, one clean IRB weekend');
+    assert(/id="super-alias-status" data-alias-live="false">not marked live</.test(closed) && closed.includes('Opening is refused while it is not marked.'),
+      '[80bx3] R-F7: with no marker in the read (or an unread kv) the first precondition reads "not marked live" — the default-when-missing direction is NOT live, like the gate itself');
+    const marked = html({ maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: true, loaded: true, error: null });
+    assert(/id="super-alias-status" data-alias-live="true">marked live</.test(marked) && !/data-alias-live="false"/.test(marked),
+      '[80bx4] R-F7: a read with push_alias_mode_live exactly true shows "marked live"');
+    assert(!/data-alias-live="true"/.test(html({ maintenanceBanner: '', signupsOpen: true, pushAliasModeLive: 'true', loaded: true, error: null })),
+      '[80bx5] R-F7: only the boolean true counts (the string "true" does not)');
+    const open = html({ maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: true, loaded: true, error: null });
+    assert(/data-next-open="false"/.test(open) && open.includes('Close creation') && />Open</.test(open), '[80by] an open gate offers "Close creation"');
+    assert(/id="super-creation-open-btn"[^>]*disabled/.test(html({ maintenanceBanner: '', error: 'x', loaded: false })), '[80bz] an unreadable platform read disables the toggle (never write a value that was never read)');
+    // two-tap confirm with the 350ms floor, into the real RPC
+    for (const [phase, wait] of [['too-fast', 0], ['after-floor', 400]]) {
+      const rpcs = [];
+      resetAll({ rpc: (name, params) => { rpcs.push({ name, params }); return { data: null, error: null }; } });
+      makeToastBox80();
+      const btn = document.createElement('button');
+      btn.id = 'super-creation-open-btn'; btn.dataset.nextOpen = 'true'; btn.textContent = 'Open creation';
+      registry.set('super-creation-open-btn', btn);
+      app.bindSuperAdminControls();
+      btn.click();
+      assert(rpcs.length === 0 && btn.dataset.confirmArmed === '1' && btn.textContent === 'Tap again to open', `[80ca] (${phase}) the FIRST tap only arms the confirm — no RPC`);
+      if (wait) btn.dataset.armedAt = String(Date.now() - wait);
+      btn.click();
+      await quiet80(() => flush80(6));
+      if (phase === 'too-fast') assert(rpcs.length === 0, '[80cb] a second tap under the 350ms floor is IGNORED');
+      else assert(rpcs.length === 1 && rpcs[0].name === 'super_set_platform_kv' && rpcs[0].params.p_key === 'league_creation_open' && rpcs[0].params.p_value === true,
+        `[80cc] after the floor the confirm fires super_set_platform_kv({p_key:'league_creation_open', p_value:true}) (got ${JSON.stringify(rpcs)})`);
+    }
+    // R-F7 / S-1 — the SERVER refuses (`push_alias_not_live`, possibly SQLSTATE-prefixed by PostgREST): the toast says why in words, the control is usable again with its ORIGINAL label
+    // (never left on "Tap again to open"), the local cache is untouched, and the raw code is never shown.
+    for (const message of ['push_alias_not_live', 'P0001: push_alias_not_live']) {
+      const rpcs = [];
+      resetAll({ rpc: (name, params) => { rpcs.push({ name, params }); return { data: null, error: { message } }; } });
+      makeToastBox80();
+      const btn = document.createElement('button');
+      btn.id = 'super-creation-open-btn'; btn.dataset.nextOpen = 'true'; btn.textContent = 'Open creation';
+      registry.set('super-creation-open-btn', btn);
+      app.bindSuperAdminControls();
+      btn.click();
+      btn.dataset.armedAt = String(Date.now() - 400);
+      btn.click();
+      await quiet80(() => flush80(8));
+      const tt = toasts80();
+      assert(rpcs.length === 1 && rpcs[0].params.p_key === 'league_creation_open' && rpcs[0].params.p_value === true &&
+        tt.some((t) => /error/.test(t.cls) && t.text === "Can't open creation yet — push alias mode isn't marked live in the database. Check the list above.") && !tt.some((t) => /push_alias_not_live/.test(t.text)),
+        `[80cc2] R-F7: a refused open (${JSON.stringify(message)}) toasts the calm reason and never the raw code (got ${JSON.stringify(tt.map((t) => t.text))})`);
+      assert(btn.disabled === false && btn.dataset.confirmArmed === '0' && btn.textContent === 'Open creation',
+        '[80cc3] R-F7: …and the control is back to its original label, unarmed and enabled, so the operator can read the list and try again later');
+    }
+  }
+
+  // ── (g) R-F6 — THE MONTHLY SCRIBE BUDGET NEVER READS MORE THAN THE SERVER HONORS ────────────────────────────────────────────────
+  // The server clamps every league to $0..$25 (league_platform_limits CHECK + effectiveMonthlyBudgetUsd's minimum), so a client control that accepted 100 would look live and
+  // not be. There is no writable budget field in the client today; the ONE reader goes through this clamp, and any future writer must parse through it too (source-pinned below).
+  {
+    const K = app.clampScribeMonthlyBudgetUsd;
+    assert(app.SCRIBE_BUDGET_SERVER_MAX_USD === 25, '[80cu] the client mirrors the server ceiling: $25');
+    assert(K(100) === 25 && K(25.01) === 25 && K(25) === 25 && K(24.99) === 24.99 && K(1e9) === 25, '[80cv] R-F6: nothing above $25 is ever accepted, whatever was stored');
+    assert(K(100, 5) === 5 && K(4, 5) === 4 && K(5, 5) === 5, '[80cw] a non-pilot league (cap $5) is held to ITS cap, and may go lower');
+    assert(K(100, 1000) === 25 && K(100, 25) === 25, '[80cx] a cap larger than the server ceiling is itself clamped to $25 (the helper cannot be talked into a higher limit by its second argument)');
+    assert(K(undefined) === 25 && K(null, 5) === 5 && K('', 5) === 5 && K('abc', 5) === 5 && K(NaN) === 25 && K(Infinity) === 25 && K(-3, 5) === 5,
+      '[80cy] a missing, empty, non-numeric, non-finite or negative value is the cap itself — the server\'s default-when-missing');
+    assert(K(0) === 0 && K('7.5', 25) === 7.5 && K(10, -1) === 10 && K(10, 'x') === 10, '[80cz2] a zero budget is honored (it pauses SCRIBE), numeric strings parse, and an invalid cap argument falls back to the server ceiling');
+    const codeLines = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l));
+    const uses = codeLines.filter((l) => /monthlyBudgetUsd/.test(l));
+    assert(uses.length === 1 && /clampScribeMonthlyBudgetUsd\(\(getSettings\(\)\.scribe \|\| \{\}\)\.monthlyBudgetUsd, scribeLeagueCapUsd\(\)\)/.test(uses[0]),
+      `[80cz3] R-F6 source pin: app.js touches scribe.monthlyBudgetUsd in exactly ONE code line and it is the clamped read (a second reader or a writer must go through clampScribeMonthlyBudgetUsd and update this pin on purpose) (found ${uses.length})`);
   }
 }
 

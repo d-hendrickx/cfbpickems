@@ -48,6 +48,15 @@ export const SIGNAL_POINTS = Object.freeze({
   // guard — so "reliably" means "clears the DIAL", never "bypasses the
   // floors" (SCRIBE.md §14, ruling 7(e): the floors never flex).
   roastOfScribe: 50,
+  // ── DI-440 (N8, UN-384/UN-314, 2026-09-29) — A REAL UPSET, LIVE. 55: alone it
+  //    clears Balanced (45) and the two looser levels, and does NOT clear
+  //    Reserved (65) or Quiet (85) — the commissioner who asked for a quieter
+  //    SCRIBE gets silence, not a named call-out. It is scored as the bare
+  //    `[trigger]` on BOTH sides (the client sends `signals:[{signal:'liveUpset'}]`
+  //    and the handler DISCARDS `evidence.points` for this trigger), so a request
+  //    padded with extra signal names cannot lift a Reserved league over its
+  //    threshold. `interacttest.mjs` pins this table equal to js/scribeLines.js's.
+  liveUpset: 55,
   chartLeadChange: 45,
   milestone: 40,
   streak: 35,
@@ -256,4 +265,121 @@ export function heatedExchangeRun(rows, { minLen = HEATED_MIN_LEN, windowMs = HE
     if (String(tail[i].author) === String(tail[i - 1].author)) return none;
   }
   return { heated: true, authors: authors.slice().sort(), count: tail.length, spanMs };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// N8 (DI-439 / DI-440, 2026-09-29) — THE LIVE-UPSET PREDICATES, IN ONE PLACE.
+// ══════════════════════════════════════════════════════════════════════════
+// The CLIENT detects a live cover turn or an alma mater going behind, and the
+// SERVER re-derives the same facts from its own rows before a cent is spent.
+// "Re-derived" only means something if both runtimes ran one implementation, so
+// the three small pure rules they share live here beside `heatedExchangeRun`:
+// this module is imported by `js/chat-ui.js` AND by `_shared/scribe-evidence.mjs`
+// (`js/chat-ui.js` cannot be imported into a Deno Edge Function, and neither
+// runtime may import the other's world).
+
+/** DI-439 §2 — ONE SPORT RESOLVER, CLIENT AND SERVER.
+ *
+ *  A game row's `espnSport` is null (every ordinary ESPN college game), the legacy
+ *  ESPN path key `'college-football'`, or `'nfl'` — NEVER `'cfb'` (data-model.js
+ *  createGame). So "an unknown sport is silent" would, read literally against the
+ *  stored value, have silenced EVERY college game. The resolver maps the stored
+ *  spellings onto the dbCode space Multi-Sport's Phase 0 registry keys profiles by
+ *  (`js/sports/index.js`, R1): null / undefined / 'college-football' -> 'cfb',
+ *  'nfl' -> 'nfl', ANY OTHER STRING -> null (silent: a sport this build has no
+ *  second-half rule for must never be guessed at).
+ *
+ *  Interim: at CORE's merge this becomes a delegate to the registry. Until then
+ *  `liveupsettest.mjs` pins it against `listProfiles()` so the two cannot drift. */
+export function sportDbCodeForGame(game) {
+  if (!game || typeof game !== 'object') return null;
+  const raw = game.espnSport;
+  if (raw === null || raw === undefined) return 'cfb';
+  if (typeof raw !== 'string') return null;
+  if (raw === 'college-football') return 'cfb';
+  if (raw === 'nfl') return 'nfl';
+  return null;
+}
+
+/** DI-439 §2 — the FIRST in-game period that counts as "the second half", per
+ *  sport, as ESPN numbers periods. Football's fourth-quarter game has its second
+ *  half start in period 3; a two-half sport (college basketball, March Madness)
+ *  in period 2; hockey has no half at all (`null` = the sport never fires; a
+ *  three-period game's "late" is a different rule this build does not invent).
+ *
+ *  INTERIM TABLE. The interface addition is a new `SportProfile` slot,
+ *  `secondHalfFromPeriod: integer | null` (an IN-GAME period — not the excluded
+ *  competition-level `period` slot, DI-223), which Multi-Sport CORE (DI-219)
+ *  ratifies. `cfb` and `nfl` already carry it on their profiles
+ *  (`js/sports/{cfb,nfl}.js`); the other five keys land with their phases. Same
+ *  keys, frozen, pinned to the profile values by `liveupsettest.mjs`. */
+export const SECOND_HALF_FROM_PERIOD = Object.freeze({
+  cfb: 3, nfl: 3, nba: 3, cbb: 2, mm: 2, nhl: null, wjc: null,
+});
+
+/** The first second-half period for a dbCode, or `null` (silent) when the sport
+ *  is unknown, hockey, or anything not on the table. Own-property lookup: a
+ *  dbCode of 'constructor' is unknown, not a hit on Object.prototype. */
+export function secondHalfFromPeriod(dbCode) {
+  if (typeof dbCode !== 'string') return null;
+  if (!Object.prototype.hasOwnProperty.call(SECOND_HALF_FROM_PERIOD, dbCode)) return null;
+  const n = SECOND_HALF_FROM_PERIOD[dbCode];
+  return Number.isInteger(n) && n >= 1 ? n : null;
+}
+
+/** DI-439 §3 — DEFINITION A, THE CROWD RULE. `L` = distinct players whose pick is
+ *  the team now NOT covering; `G` = those on the covering team. A "real upset in
+ *  spread coverage" is one where the room is on the wrong side of it: fire only
+ *  when **L >= 2 and L > G**. (1,0) is one player — a private matter; (2,2) and
+ *  (3,3) are a split room, nobody is being caught out; (0,2) is the room being
+ *  RIGHT. (2,1) fires. Anything that is not a finite count is silent. Pure. */
+export function crowdTurn(L, G) {
+  const l = Number(L), g = Number(G);
+  if (!Number.isFinite(l) || !Number.isFinite(g)) return false;
+  return l >= 2 && l > g;
+}
+
+/** DI-439 §4 as RULED 2026-09-29 (Drew, coordinator relay: the alma call-out "fires
+ *  on BOTH conditions") — is this team's school BEHIND right now?
+ *
+ *    `su`   the team is LOSING STRAIGHT-UP (its score is strictly below the other's;
+ *           a tie is "on the number", not behind — the Alma Mater Watch surface's own
+ *           straight-up reading);
+ *    `ats`  the team is NOT COVERING (the OTHER side covers, strictly; exactly on the
+ *           number is not "not covering"). Needs a line: a null / non-finite spread
+ *           means `ats` is false, never a guess.
+ *
+ *  Signed home-perspective spread, the same margin every cover check in the app
+ *  uses (AD-03): `(home + spread) - away > 0` means HOME covers.
+ *
+ *  One state per (game, side), and the machine on both runtimes watches whether
+ *  EITHER is true — a team that is losing straight-up AND not covering is ONE alma
+ *  situation, so it is one post, never two (the dedupe Drew asked for).
+ *
+ *  `side` is the team the question is about: 'home' | 'away'. Returns `null` when a
+ *  score is missing — an unknown state is not a state, and the caller treats it as
+ *  "no observation". Pure; the client passes the ESPN-fresh scores and the server
+ *  passes an `audit_log` row's, through this one function. */
+export function almaSideState({ homeScore, awayScore, spread, side } = {}) {
+  if (side !== 'home' && side !== 'away') return null;
+  if (homeScore === null || homeScore === undefined || awayScore === null || awayScore === undefined) return null;
+  const h = Number(homeScore), a = Number(awayScore);
+  if (!Number.isFinite(h) || !Number.isFinite(a)) return null;
+  const su = side === 'home' ? h < a : a < h;
+  let ats = false;
+  if (spread !== null && spread !== undefined && spread !== '' && Number.isFinite(Number(spread))) {
+    const margin = (h + Number(spread)) - a;   // >0 home covering
+    ats = side === 'home' ? margin < 0 : margin > 0;
+  }
+  return { su, ats };
+}
+
+/** Which condition(s) a `{su, ats}` state satisfies: 'su' (losing outright, the line
+ *  not failing it), 'ats' (only failing the number), 'both', or null (not behind). */
+export function almaCondition(state) {
+  if (!state) return null;
+  if (state.su && state.ats) return 'both';
+  if (state.su) return 'su';
+  if (state.ats) return 'ats';
+  return null;
 }

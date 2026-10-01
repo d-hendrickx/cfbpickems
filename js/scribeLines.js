@@ -70,7 +70,7 @@ import {
 // WHICH voice pool generated the line it's rating, months later. Deliberately
 // NOT tied to APP_VERSION itself — SCRIBE's voice can change independently of
 // an app release. Carried on every SCRIBE post via scribeTrigger() below.
-export const SCRIBE_VERSION = '3.0';
+export const SCRIBE_VERSION = '3.1';
 
 const LEDGER_KEY = 'cfbp_scribe_ledger';   // { lineHash: lastUsedMs }
 const LAST_POST_KEY = 'cfbp_scribe_lastpost'; // { rateKey: lastMs } ('' = main room, gameId = per-game)
@@ -114,12 +114,59 @@ export const SCRIBE_POOLS = {
   // "Filed.", "Noted.", "Documented.", "— SCRIBE") and the SOAP-note-as-default
   // template are gone as DEFAULTS per docs/SCRIBE.md §6. Same jokes, fewer
   // costumes. "The chart" reverts to "the standings" throughout.
+  // ── N8 (2026-09-30, DI-439/DI-441): THE THREE LIVE-UPSET FALLBACK POOLS. ─────
+  // `coverageFlip`, `almaTrailing` and `almaNotCovering` are the UNNAMED tier-0
+  // stand-ins that chat-ui.js's routeLiveUpset() posts ONLY when the server path
+  // is unavailable (autonomy off / latched off). Every other refusal posts
+  // nothing, and the named roll call is the model's, never these.
+  //
+  //   - They fire only in the second half and only after a held turn, so no line
+  //     frames a quarter, a clock or "early". They also fire only on a public
+  //     week (the blind rule), so a line about who is on which side is allowed;
+  //     it still never predicts an outcome and never calls a game decided
+  //     (SCRIBE.md rules 6 and 9, v3.1).
+  //   - scribeTrigger() passes NO vars for these three, so pickLine() would render
+  //     {NAME} as "gentlemen", {N} as "several" and {TEAM} as "the underdog" — all
+  //     wrong here. These lines use no placeholder at all.
+  //   - They name no player, no school and no team: hard lines cannot load on this
+  //     path (DI-441 §2), so the only safe subject is "one of ours".
+  //   - Posted in the game's own thread, so "this one" is the game itself.
+  //
+  // The crowd rule (crowdTurn: L >= 2 and L > G) is what makes "more of you" true
+  // in coverageFlip: L is the pickers of the side that WAS covering and no longer
+  // is, G the pickers of the side covering now.
   coverageFlip: [
-    'The number just flipped. Adjust your blood pressure accordingly.',
-    'The cover just flipped. You should probably be watching this one.',
-    'The spread and the scoreboard just swapped places.',
-    'Big reversal. A few of you are in trouble now.',
-    'The cover has changed hands. No further comment at this time.',
+    'The cover changed sides, and more of you are on the wrong end of it.',
+    'The side more of you picked was covering. It stopped.',
+    'Covering the other way now, which happens to be the side fewer of you took.',
+    'The majority pick on this one has lost the cover.',
+    'Some of you are now on the side that isn\'t covering.',
+    'The picks on this one leaned one way. The cover has gone the other.',
+  ],
+  // almaTrailing fires whenever the school's team is behind on the SCOREBOARD at the
+  // moment of the call (chat-ui.js `almaFallbackPool`: state.su), whichever
+  // condition turned — including an ATS turn by a team already losing outright.
+  // Nothing here claims anything about the spread; the last line only sets it aside.
+  almaTrailing: [
+    'Somebody\'s alma mater is losing this one.',
+    'A school somebody here went to is behind on the scoreboard.',
+    'Alma Mater Watch: one of ours is on the wrong end of the score.',
+    'One of our schools is behind. Whoever went there knows who they are.',
+    'Straight up, one of our alma maters is losing. No spread required.',
+  ],
+  // almaNotCovering fires ONLY when the team is failing the number AND is NOT behind
+  // on the scoreboard (tied or ahead) at the moment of the call (chat-ui.js
+  // `almaFallbackPool`: !state.su && state.ats — the CURRENT state, not the
+  // condition that turned; reviewer BLOCK N1, 2026-09-30). Lines 3 and 4 lean on
+  // that ("has no complaints", "Not losing"); if that routing ever widens to a team
+  // losing outright, those two must go (liveupsettest [7b] sweeps it). None of them
+  // says "winning" or "ahead": a tie is possible.
+  almaNotCovering: [
+    'Somebody here went to a school that isn\'t covering.',
+    'The spread has turned on one of our alma maters.',
+    'The scoreboard has no complaints about one of our schools. The spread does.',
+    'Not losing, not covering. One of our schools should pick a lane.',
+    'Failing the number is its own kind of losing, and one of our alma maters has found it.',
   ],
   upsetWatch: [
     'The underdog isn\'t cooperating with anyone\'s picks.',
@@ -320,8 +367,20 @@ function pickLine(poolKey, vars = {}) {
   const dayKey = Math.floor(now / 86400000);
   const line = fresh[dayKey % fresh.length];
   const led2 = ledger(); led2[hashLine(line)] = now; saveLedger(led2);
+  // DI-439 §7 (N8, 2026-09-29) — `{TEAM}` WAS NEVER SUBSTITUTED. The upsetWatch pool
+  // has carried "{TEAM} clearly didn't see the spread." since v0.17 and this function
+  // replaced only {NAME} and {N}, so the line posted with its braces literal. The caller
+  // (chat-ui.js's upset watch) has passed `vars: { TEAM: dog }` all along.
+  //
+  // A FUNCTION REPLACER, deliberately. A string replacement treats `$&`, `$1` and `$$`
+  // as patterns, and the team name comes from a game row — which a commissioner can type
+  // by hand. `() => team` makes every character of it inert. (`{NAME}`/`{N}` keep their
+  // string replacements: `name` is a roster display name that has been through the same
+  // trust boundary since v0.15 and is not what this change touches.)
+  const team = vars.TEAM != null && String(vars.TEAM).trim() ? String(vars.TEAM) : 'the underdog';
   return line.replace(/\{NAME\}/g, vars.name || 'gentlemen')
-             .replace(/\{N\}/g, vars.n != null ? String(vars.n) : 'several');
+             .replace(/\{N\}/g, vars.n != null ? String(vars.n) : 'several')
+             .replace(/\{TEAM\}/g, () => team);
 }
 
 /** Time bucket for deterministic ids (10-minute granularity). */
@@ -629,7 +688,7 @@ export function scribeTrigger(trigger, { gameTag = '', subject = '', vars = {}, 
   // that caused this response — is only ever supplied by
   // scribeInspectMessage() (message-driven triggers: mention/drinkDebt/
   // verbosity/lastPlaceTaunt); event-driven triggers (callout, extraPoint*,
-  // coverageFlip, upsetWatch, anniversary) correctly omit it — `callout`
+  // coverageFlip, almaTrailing, almaNotCovering, upsetWatch, anniversary) correctly omit it — `callout`
   // already carries the equivalent pointer via `meta.quote.id`, and the rest
   // have no single triggering human message at all.
   // `meta.activeLearningSnapshot` is RESERVED for E3/E4 (later) — deliberately
@@ -884,6 +943,12 @@ export const SIGNAL_POINTS = {
   // an edit to one side without the other goes red rather than quietly
   // splitting the client's detector from the server's scorer.
   roastOfScribe: 50,
+  // DI-440 (N8, 2026-09-29) — a real upset, live: an alma mater going behind, or the
+  // crowd on the wrong side of a cover that just turned. 55 clears Balanced and the two
+  // looser levels ALONE and does not clear Reserved/Quiet. Scored as the bare `[trigger]`
+  // on both sides (see js/scribe-scoring.js's copy for the whole argument); the tables
+  // are pinned equal, key order included, by loadtest [89-3] and interacttest.
+  liveUpset: 55,
   chartLeadChange: 45,
   milestone: 40,
   streak: 35,
@@ -1163,7 +1228,7 @@ function autonomousConsecutiveBlocked(gameTag) {
  * `promise` resolves once the server has answered — tests await it; nothing
  * in the app does.
  */
-export function considerAutonomous(trigger, { subject = '', gameTag = '', weekId = '', playerId = '', signals = null, triggerMessageId = '', now = Date.now() } = {}) {
+export function considerAutonomous(trigger, { subject = '', gameTag = '', weekId = '', playerId = '', signals = null, triggerMessageId = '', reason = '', now = Date.now() } = {}) {
   if (!trigger || trigger === 'mention') return { fired: false, reason: 'not_a_candidate', score: 0, threshold: 0 };
   if (!isScribeAutonomousReady()) return { fired: false, reason: 'not_ready', score: 0, threshold: 0 };
   if (now < autonomyOffUntil) return { fired: false, reason: 'server_off_latch', score: 0, threshold: 0 };
@@ -1234,7 +1299,12 @@ export function considerAutonomous(trigger, { subject = '', gameTag = '', weekId
   const promise = scribeAutonomousRemote({
     trigger, subject, playerId,
     evidence: { signal: trigger, points: scored.counted, score: scored.score, gameTag, weekId,
-                ...(triggerMessageId ? { triggerMessageId } : {}) },
+                ...(triggerMessageId ? { triggerMessageId } : {}),
+                // DI-440 §3 — `liveUpset` only: WHICH check the server should run
+                // (`crowd` | `alma`). It selects a verifier branch and nothing else;
+                // the game, the side and the post subject are all re-derived from
+                // the server's own rows.
+                ...(reason ? { reason } : {}) },
   }).then(r => {
     if (r && r.posted === true) return r;
     // F4 (reviewer, Build 3 pass 1) — A DEDUPE IS A POST. `deduped:true`

@@ -417,16 +417,32 @@ function legacyFromRow(row, cols) {
   return obj;
 }
 
+/** Drop `names` from a projected row's `extra.__absent`, and the marker itself once it is empty.
+ *  Used for columns whose ABSENCE is restored explicitly by that key's `restoreRow` (a null/false column
+ *  restores as NO key), so the marker adds nothing — and recording it would make every EXISTING row
+ *  differ from the server's copy (whose `extra` predates the new field) and the adapter's row diff would
+ *  PATCH every week/game/player on the first save after deploy. Multi-Sport DI-220 (migration 0033). */
+function quietAbsent(row, names) {
+  const a = row.extra && row.extra.__absent;
+  if (!Array.isArray(a) || !names.length) return row;
+  const kept = a.filter((n) => !names.includes(n));
+  if (kept.length === a.length) return row;
+  const extra = { ...row.extra };
+  if (kept.length) extra.__absent = kept; else delete extra.__absent;
+  row.extra = extra;
+  return row;
+}
+
 /** A key whose value is an ARRAY of legacy objects, each becoming one row in
  *  ONE table (players/weeks/games/picks/results/obligations/feedback/
  *  comments/notifications — DI's "rows" kind). */
-function rowsKind(table, cols, { defaults = {}, credentialKey = null, decorateRow = null, restoreRow = null } = {}) {
+function rowsKind(table, cols, { defaults = {}, credentialKey = null, decorateRow = null, restoreRow = null, quietAbsentFields = [] } = {}) {
   return {
     toRows(list, ctx) {
       const arr = Array.isArray(list) ? list : [];
       const stripped = credentialKey ? stripCredentials(credentialKey, arr) : arr;
       const rows = stripped.map((item) => {
-        const row = rowFromLegacy(item, cols, defaults);
+        const row = quietAbsent(rowFromLegacy(item, cols, defaults), quietAbsentFields);
         row.league_id = ctx && ctx.leagueId ? ctx.leagueId : null;
         return decorateRow ? decorateRow(row, item, ctx) : row;
       });
@@ -552,6 +568,13 @@ const PLAYER_COLS = [
   { legacy: 'phoneVerified', column: 'phone_verified', type: 'bool' },
   { legacy: 'notifyPrefs', column: 'notify_prefs' },
   { legacy: 'preferences', column: 'preferences' },
+  // Multi-Sport DI-403 (migration 0033) — a TYPED column, never `extra`: `extra` is member-editable, this
+  // flag decides who is in a season roster. Commissioner-set only (league_members_guard refuses a
+  // non-commissioner change with 42501). Absent on the legacy object means "no opinion": the players
+  // rowsKind below never emits the column for an absent field and restores it ONLY when the column is
+  // true (the players restoreRow below), so a legacy player object never carries a false flag and a
+  // stale object can never write `false` over a commissioner's `true`.
+  { legacy: 'tournamentOnlyGuest', column: 'tournament_only_guest', type: 'bool' },
   { legacy: 'createdAt', column: 'created_at', type: 'ts' },
   { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
 ];
@@ -597,6 +620,11 @@ const WEEK_COLS = [
   { legacy: 'lockedAt', column: 'locked_at', type: 'ts' },
   { legacy: 'finalizedAt', column: 'finalized_at', type: 'ts' },
   { legacy: 'lockedAlmaMaters', column: 'locked_alma_maters' },
+  // Multi-Sport DI-220 (migration 0033) — which competition this week belongs to. NULL/absent is the
+  // league's DEFAULT competition and is resolved ONLY through competitionForWeek() (R1). Uuid string, no
+  // coercion. Same absent/null discipline as tournamentOnlyGuest (see the weeks rowsKind below): an
+  // absent field never writes the column, and a null column is never restored as an explicit null.
+  { legacy: 'competitionId', column: 'competition_id' },
   { legacy: 'createdAt', column: 'created_at', type: 'ts' },
   { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
 ];
@@ -650,7 +678,40 @@ const GAME_COLS = [
   // `extra.awayLogo` instead. Named here explicitly, not left implicit.
   { legacy: 'homeLogo', column: 'home_logo' },
   { legacy: 'awayLogo', column: 'away_logo' },
+  // Multi-Sport DI-220 round 3 / DI-231 / DI-401 (migration 0033) — WITHOUT these entries the four
+  // fields would be unmodeled legacy fields, `rowFromLegacy()` would put them in `extra`, and the
+  // typed columns (and the FK / CHECKs / game_pickable parent check built on them) would sit forever
+  // null while the real value shadowed them from inside `extra` — the exact 0028 trap named above.
+  // The two jsonb columns pass through untyped (same convention as `lockedAlmaMaters`). `periodGoals`/
+  // `feedStats` are written ONLY by the wjc-feed function; the client only reads them.
+  // `providerEventId` is a fourth entry beyond DI-220's own list of three: DI-401 puts the column in the
+  // same combined migration, and an unmapped column is the trap above (flagged in the 1a handoff).
+  { legacy: 'parentGameId', column: 'parent_game_id' },
+  { legacy: 'periodGoals', column: 'period_goals' },
+  { legacy: 'feedStats', column: 'feed_stats' },
+  { legacy: 'providerEventId', column: 'provider_event_id' },
   { legacy: 'lastUpdated', column: 'last_updated', type: 'ts' },
+  { legacy: 'createdAt', column: 'created_at', type: 'ts' },
+  { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
+];
+
+// competitions — Multi-Sport DI-220 (AD-74), migration 0033. The legacy object is camelCase like every
+// other rows-kind key; `league_id` is assigned from ctx, never carried on the object. No `defaults` are
+// supplied on purpose: an absent field projects to null, and the adapter's NOT NULL rule then OMITS it
+// (an insert takes the column default, a patch leaves the server's value) — so a partial object can
+// never write a made-up `kind`/`enrollment`/`settings` over a real one, and `sport` (NOT NULL, no
+// default) makes an INSERT without one fail loudly rather than guess.
+const COMPETITION_COLS = [
+  { legacy: 'id', column: 'id' },                    // the competition's own key is `id` (DI-220 client API reads c.id); a WEEK's reference is `competitionId`
+  { legacy: 'sport', column: 'sport' },
+  { legacy: 'kind', column: 'kind' },
+  { legacy: 'seasonLabel', column: 'season_label' },
+  { legacy: 'parentCompetitionId', column: 'parent_competition_id' },
+  { legacy: 'enrollment', column: 'enrollment' },
+  { legacy: 'isDefault', column: 'is_default', type: 'bool' },
+  { legacy: 'archivedAt', column: 'archived_at', type: 'ts' },
+  { legacy: 'activeWeekId', column: 'active_week_id' },
+  { legacy: 'settings', column: 'settings' },
   { legacy: 'createdAt', column: 'created_at', type: 'ts' },
   { legacy: 'updatedAt', column: 'updated_at', type: 'ts' },
 ];
@@ -828,6 +889,8 @@ export const KEY_TABLES = {
   cfbp_scribe_canon: { tables: ['scribe_canon'], kind: 'scalar' },
   cfbp_scribe_reports: { tables: ['scribe_reports'], kind: 'scalar' },
   cfbp_game_requests: { tables: ['game_requests'], kind: 'rows' },
+  // Multi-Sport DI-220 (AD-74) — migration 0033.
+  cfbp_competitions: { tables: ['competitions'], kind: 'rows' },
   // Not a `cfbp_*` storage key — history-2025.js's exported constant. Kept in
   // this same dictionary (synthetic key) so the importer has one dispatch
   // table instead of two (DI-183g).
@@ -939,7 +1002,13 @@ function contactEntryFor(ctx, memberId) {
   const r = rowsKind('league_members', PLAYER_COLS, {
     defaults: _DEFAULT_PLAYER,
     credentialKey: 'cfbp_players',
+    quietAbsentFields: ['tournamentOnlyGuest'],
     decorateRow(row, item) {
+      // Multi-Sport DI-403 — never emit `tournament_only_guest` for a player object that does not carry
+      // the field (the DI-T7.6 pattern below, for the same reason): the factory default would write
+      // `false` over a commissioner's `true` from any stale or rebuilt object. (The absence is NOT
+      // recorded in `extra.__absent` either — `quietAbsentFields` above — because restoreRow re-derives it.)
+      if (!present(item, 'tournamentOnlyGuest')) delete row.tournament_only_guest;
       // DI-T7.7: lower-cased unconditionally, and NOTHING is written into
       // `extra` to remember the original spelling. `extra` is member-readable;
       // a copy of the address there would undo DI-T7.1's revoke.
@@ -953,6 +1022,13 @@ function contactEntryFor(ctx, memberId) {
       return row;
     },
     restoreRow(obj, row, ctx) {
+      // Multi-Sport DI-403 — the flag comes ONLY from the typed column, and only when it is TRUE.
+      // `extra.__absent` can be wrong about a column (it is written by a client that did not have the
+      // field, and a direct SQL flip never touches it), so a `true` column must win over it — the same
+      // F-10(b) precedence the contact fields use — and a false/null column leaves NO key on the object,
+      // which is exactly the shape a player had before 0033 (CFB byte-identical).
+      if (row && row.tournament_only_guest === true) obj.tournamentOnlyGuest = true;
+      else delete obj.tournamentOnlyGuest;
       // DI-T7.6. (There is no case-marker restore here any more — DI-T7.7
       // deleted the marker, so the only thing that could put an address on
       // this object is a column or a contacts entry, both of which are gated.)
@@ -1047,13 +1123,41 @@ function contactEntryFor(ctx, memberId) {
 // weeks
 {
   const defaults = { ..._DEFAULT_WEEK, sport: 'cfb' };
-  const r = rowsKind('weeks', WEEK_COLS, { defaults });
+  const r = rowsKind('weeks', WEEK_COLS, {
+    defaults,
+    quietAbsentFields: ['competitionId'],
+    // Multi-Sport DI-220: a week object without `competitionId` never writes the column (a stale or
+    // rebuilt object must not move a non-default competition's week back to the default), and a NULL
+    // column restores as NO key — every pre-0033 week reads exactly as it did. A non-null column always
+    // restores, over any `__absent` marker (F-10(b) precedence).
+    decorateRow(row, item) {
+      if (!present(item, 'competitionId')) delete row.competition_id;
+      return row;
+    },
+    restoreRow(obj, row) {
+      if (row && row.competition_id != null) obj.competitionId = row.competition_id;
+      else delete obj.competitionId;
+      return obj;
+    },
+  });
   toRows.cfbp_weeks = r.toRows;
   fromRows.cfbp_weeks = r.fromRows;
 }
 // games
 {
-  const r = rowsKind('games', GAME_COLS, { defaults: _DEFAULT_GAME });
+  const r = rowsKind('games', GAME_COLS, {
+    defaults: _DEFAULT_GAME,
+    quietAbsentFields: ['parentGameId', 'periodGoals', 'feedStats', 'providerEventId'],
+    // Multi-Sport DI-220/231/401: the four new columns are NULL on every ordinary game, and a NULL
+    // restores as NO key, so a pre-0033 game object is byte-identical after the round trip (0028's
+    // logos put an explicit `homeLogo: null` on every game; these do not).
+    restoreRow(obj) {
+      for (const k of ['parentGameId', 'periodGoals', 'feedStats', 'providerEventId']) {
+        if (obj[k] === null) delete obj[k];
+      }
+      return obj;
+    },
+  });
   toRows.cfbp_games = r.toRows;
   fromRows.cfbp_games = r.fromRows;
 }
@@ -1074,6 +1178,12 @@ function contactEntryFor(ctx, memberId) {
   const r = rowsKind('obligations', OBLIGATION_COLS, { defaults: _DEFAULT_OBLIGATION });
   toRows.cfbp_obligations = r.toRows;
   fromRows.cfbp_obligations = r.fromRows;
+}
+// competitions — Multi-Sport DI-220. `defaults: {}` on purpose (see COMPETITION_COLS).
+{
+  const r = rowsKind('competitions', COMPETITION_COLS, { defaults: {} });
+  toRows.cfbp_competitions = r.toRows;
+  fromRows.cfbp_competitions = r.fromRows;
 }
 // nicknames / lock_overrides / rejected_suggestions / active_week /
 // fetch_proof / feedback_excluded_ids — all plain league_kv passthroughs.

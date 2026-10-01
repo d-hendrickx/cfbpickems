@@ -99,6 +99,10 @@ export const WEEK_SWIPE_BOUNCE_MS = 150;
 // same token, same bucket, same "this is a real navigation event" reasoning
 // Drew is pointing at. Matches css/styles.css's --motion-nav (260ms) exactly.
 export const WEEK_SWIPE_COMMIT_MS = 260;
+// RG-TBD-A1 (2026-09-29) — the Reduce Motion cross-fade that replaces the
+// commit slide there. Small-feedback bucket: matches css/styles.css's
+// --motion-fast (150ms), the token the `="fade"` rule animates with.
+export const WEEK_SWIPE_FADE_MS = 150;
 
 // DI-419 (2026-09-28, Drew ruling A) — the ONE shared drawer-open-vs-
 // week-swipe arbitration zone. Replaces WEEK_SWIPE_EDGE_EXCLUDE_PX's (28px)
@@ -227,6 +231,12 @@ export function gesturesSuspended() {
   // missing from this list, so a window-level gesture (pull-to-refresh in
   // particular — the RG-285 class of defect) could still arm underneath it.
   if (document.getElementById?.('leagues-home-overlay')) return true;
+  // N1 (DI-430, 2026-09-30) — the New League sheet (`#league-create-sheet-wrap`) is a FOURTH body-appended full-screen surface, the same shape as the wizard sheet
+  // just above (it is built on the same shell). A week-swipe or pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('league-create-sheet-wrap')) return true;
+  // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet (`#pwacct-delete-overlay`) used to be a `.modal-overlay` (counted by the line above); converted to the shared sheet shell it is a
+  // FIFTH body-appended surface of the same shape, and a week-swipe or pull-to-refresh on the page beneath must not arm while it is up.
+  if (document.getElementById?.('pwacct-delete-overlay')) return true;
   // T-13 (control-center drawer), wired this window. `#control-center`'s own
   // `data-open` attribute is driven by js/control-center.js's
   // `isDrawerVisuallyOpen(state)` — true for 'open'/'opening'/'closing', and
@@ -261,6 +271,125 @@ export function prefersReducedMotion() {
     return false;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// RG-TBD-A2 (Drew, 2026-09-29: "when pressing a name in the compact
+// dashboard and rearranging the order, the phone gets confused and thinks
+// i'm trying to swipe between weeks") — ONE OWNER PER TOUCH.
+//
+// The compact Dashboard's long-press reorder (js/app.js
+// bindColumnReorderHandlers()) lives on the chips; the week swipe lives on
+// #page-dashboard (an ancestor) and the control-center edge swipe on
+// `window`. All three hear the SAME touch, and before this nothing let one
+// of them say "this touch is mine" — `preventDefault()` in the reorder's
+// touchmove stops the browser's scroll, not a sibling listener. So a reorder
+// drag across the chip row dragged the week (and changed it at 40 px), or,
+// from the left quarter, opened the drawer.
+//
+// A recognizer CLAIMS the touch at the instant it commits to it (the week
+// swipe when its axis locks horizontal; the reorder when its long-press
+// fires) and releases it when the touch ends. `claimTouch()` refuses while
+// another owner holds it, so whichever recognizer commits first wins and the
+// other stands down for the rest of that touch. Module state rather than a
+// DOM flag because every party already imports this module and a flag on
+// <body> is one more thing a re-render can strip mid-gesture.
+// ─────────────────────────────────────────────────────────────────────────
+let touchOwner = null;
+/** bindWeekSwipe()'s own claim name (js/app.js's reorder uses its own). */
+const WEEK_SWIPE_TOUCH_OWNER = 'week-swipe';
+
+/** Take the current touch for `owner`. True if it is (now) theirs, false if
+ *  another recognizer already committed to it. */
+export function claimTouch(owner) {
+  if (touchOwner !== null && touchOwner !== owner) return false;
+  touchOwner = owner;
+  return true;
+}
+
+/** Give the touch back — a no-op unless `owner` holds it. */
+export function releaseTouch(owner) {
+  if (touchOwner === owner) touchOwner = null;
+}
+
+/** Who owns the current touch, or null. */
+export function touchClaimedBy() {
+  return touchOwner;
+}
+
+/** Call from a touchstart: a fresh ONE-finger touch begins a new gesture, so
+ *  any claim still held belongs to a touch whose end never reached its owner
+ *  (a stale claim would otherwise silence every other recognizer for good).
+ *  Nobody claims AT touchstart, so clearing here never takes a live claim. */
+export function clearStaleTouchClaim(e) {
+  if ((e?.touches?.length ?? 0) !== 1) return;
+  const wasWeekSwipe = touchOwner === WEEK_SWIPE_TOUCH_OWNER;
+  touchOwner = null;
+  if (wasWeekSwipe) flushDeferredRendersAfterThisTouch();   // never strand a deferred repaint
+}
+
+// Reviewer note on c7f8bee (2026-09-29) — the stale-claim flush must never
+// replace the node under the NEW finger: this runs inside that touch's own
+// touchstart, and a repaint now (or in a microtask/rAF, which still lands
+// before the first touchmove) would detach the node the rest of the touch is
+// delivered to — killing the very swipe that just began. So the parked
+// repaints wait for THIS touch to end: a one-shot capture-phase window
+// touchend/touchcancel listener, then a macrotask, so every binder's own
+// touchend has run first. With no window listener API (a bare test
+// environment) there is no touch to protect and they run at once.
+let flushAfterTouchArmed = false;
+function flushDeferredRendersAfterThisTouch() {
+  if (!deferredRenders.size) return;
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') { flushDeferredRenders(); return; }
+  if (flushAfterTouchArmed) return;
+  flushAfterTouchArmed = true;
+  const done = () => {
+    window.removeEventListener('touchend', done, true);
+    window.removeEventListener('touchcancel', done, true);
+    flushAfterTouchArmed = false;
+    setTimeout(() => flushDeferredRenders(), 0);
+  };
+  window.addEventListener('touchend', done, true);
+  window.addEventListener('touchcancel', done, true);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Reviewer note on RG-TBD-A1 (2026-09-29, "stranding during re-render") —
+// DEFER A PICKS/DASHBOARD REPAINT WHILE A WEEK SWIPE OWNS THE TOUCH.
+// A live-score tick, a Realtime repaint (navigateTo() on the same tab) or
+// the auto-refresh rebuilds the page with innerHTML. Mid-drag that REPLACES
+// the node under the finger; the browser keeps sending the rest of the
+// touch to the detached node, the page root never hears touchend, and the
+// week is left parked at the finger's last offset until the next touch —
+// and since RG-TBD-A1 the whole drag (not just 40 px) is exposed to it.
+// iOS never repaints a page out from under an active pan, so neither do
+// we: renderPicksPage()/renderDashboard() hand themselves to
+// deferRenderWhileWeekSwiping() first, which parks the LATEST repaint per
+// page (a burst of ticks collapses to one) and returns true while a week
+// swipe owns the touch. bindWeekSwipe() runs them on release — except the
+// swiped page's own when the release commits, since onNavigate() repaints
+// that page from the same (now current) data anyway.
+// ─────────────────────────────────────────────────────────────────────────
+const deferredRenders = new Map();
+
+/** True (and the render parked) while a week swipe owns the touch; false —
+ *  render now — otherwise. `key` is the page ('picks' | 'dashboard'). */
+export function deferRenderWhileWeekSwiping(key, render) {
+  if (touchOwner !== WEEK_SWIPE_TOUCH_OWNER || typeof render !== 'function') return false;
+  deferredRenders.set(key, render);
+  return true;
+}
+
+function flushDeferredRenders(skipKey) {
+  if (!deferredRenders.size) return;
+  const run = [...deferredRenders.entries()].filter(([k]) => k !== skipKey).map(([, fn]) => fn);
+  deferredRenders.clear();
+  for (const fn of run) {
+    try { fn(); } catch (err) { if (typeof console !== 'undefined') console.warn('[nav-gestures] deferred repaint failed', err); }
+  }
+}
+
+/** Test hook — how many repaints are parked right now. */
+export function _deferredRenderCount() { return deferredRenders.size; }
 
 function getScrollElFrom(getScrollEl) {
   return typeof getScrollEl === 'function' ? getScrollEl() : getScrollEl;
@@ -958,6 +1087,56 @@ export function _weekSwipeRubberBand(overscrollPx) {
   return _rubberBandOffset(overscrollPx) * (WEEK_SWIPE_BOUNCE_MAX_PX / RUBBER_BAND_CAP_PX);
 }
 
+// Reviewer note on RG-TBD-A1 (2026-09-29, "velocity commit") — iOS paging
+// decides on the finger's motion at release, not on distance alone.
+export const WEEK_SWIPE_VELOCITY_WINDOW_MS = 80;   // how much of the drag's tail the release reads
+export const WEEK_SWIPE_BACKTRACK_PX_MS = 0.05;    // heading back toward the start at least this fast = changed mind
+// The flick threshold is DISMISS_FLICK_VELOCITY_PX_MS (0.3 px/ms, below) —
+// the SAME number the sheet/drawer flicks already use, one motion language.
+
+/**
+ * Pure release decision for a week swipe. `dx` is the signed offset at
+ * release; `samples` are the drag's `{ t, dx }` points (t in ms, the event
+ * timeStamp — or null when the events carried none, e.g. a synthetic test
+ * sequence, which leaves the decision to distance alone); `releaseT` is the
+ * touchend's own time. Velocity is measured from the first sample inside the
+ * last WEEK_SWIPE_VELOCITY_WINDOW_MS (or the one just before it) up to the
+ * RELEASE, so a finger that stopped and held still before lifting reads as
+ * ~0, however fast it moved earlier.
+ *
+ *   heading back toward the start (≥ WEEK_SWIPE_BACKTRACK_PX_MS) → cancel,
+ *     however far out the drag went — "follows the final direction";
+ *   otherwise |dx| ≥ SWIPE_COMMIT_PX                              → commit;
+ *   otherwise a flick outward (≥ DISMISS_FLICK_VELOCITY_PX_MS)    → commit;
+ *   otherwise                                                     → cancel.
+ *
+ * Judgment call, documented: out to 150 px then SLOWLY back to 45 px and
+ * released while still moving back cancels (the last thing the finger said
+ * was "back"); the same drag held still at 45 px before lifting commits
+ * (≥ 40 px, and nothing says otherwise) — the way a UIScrollView page snaps
+ * by position when released at rest.
+ */
+export function _weekSwipeShouldCommit(dx, samples, releaseT) {
+  if (!dx) return false;
+  const dir = Math.sign(dx);
+  let vOut = 0;
+  const timed = Array.isArray(samples) && samples.length > 0 && samples.every(s => typeof s?.t === 'number')
+    && typeof releaseT === 'number';
+  if (timed) {
+    const from = releaseT - WEEK_SWIPE_VELOCITY_WINDOW_MS;
+    let i = samples.findIndex(s => s.t >= from);
+    if (i !== -1) {
+      if (i === samples.length - 1 && i > 0) i -= 1;   // one point in the window: span from the one before
+      const start = samples[i];
+      const last = samples[samples.length - 1];
+      vOut = ((last.dx - start.dx) / Math.max(1, releaseT - start.t)) * dir;
+    }
+  }
+  if (vOut <= -WEEK_SWIPE_BACKTRACK_PX_MS) return false;
+  if (Math.abs(dx) >= SWIPE_COMMIT_PX) return true;
+  return vOut >= DISMISS_FLICK_VELOCITY_PX_MS;
+}
+
 /**
  * DOM binder — gesture-detection layer ONLY, per the DI ("feature-builder
  * may build and test the gesture-detection layer... but must not wire the
@@ -981,7 +1160,8 @@ export function _weekSwipeRubberBand(overscrollPx) {
  * idle / dragging (1:1 `translateX(dx)`, no transition, or the rubber-band
  * curve above once `_weekSwipeAtBound()` says the current direction is at
  * an end) / committing (unchanged commit trigger — `Math.abs(dx) >=
- * SWIPE_COMMIT_PX` mid-drag, not on release; slides fully off toward the
+ * SWIPE_COMMIT_PX` mid-drag, not on release [SUPERSEDED by RG-TBD-A1,
+ * below: release decides]; slides fully off toward the
  * commit direction, `haptic('light')` at that instant, replacing the
  * drifted `haptic('selection')` call — js/haptics.js documents 'light' as
  * "swipe commits") / cancelling (spring back to 0, no haptic — an
@@ -999,7 +1179,10 @@ export function _weekSwipeRubberBand(overscrollPx) {
  * module stays the dependency-free leaf its file header promises.
  * `prefersReducedMotion()` short-circuits the whole visual layer to today's
  * exact behavior: no live tracking, `onNavigate()` fires immediately on
- * commit with no transform at all.
+ * commit with no transform at all [AMENDED by RG-TBD-A1, below: the drag
+ * now TRACKS the finger under Reduce Motion too; only the release stops
+ * animating movement — a cross-fade to commit, an immediate settle to
+ * cancel].
  *
  * DI-420 (2026-09-28, amends DI-409) — `[data-week-swipe-animating]` now
  * carries which of TWO durations is playing, not a single boolean:
@@ -1021,14 +1204,63 @@ export function _weekSwipeRubberBand(overscrollPx) {
  * rubber-band, no commit, no spring-back for this gesture. R→L, or an L→R
  * start OUTSIDE the zone, is completely unaffected — see the yield check
  * below for the full reasoning.
+ *
+ * RG-TBD-A1 (Drew, 2026-09-29, live v0.27.2: "I still dont have the visual
+ * feedback of the screen swiping left and right, instead it just jumps to
+ * the next week. I want to watch the current week slide out and the next
+ * week slide in.") — COMMIT MOVED FROM THE 40 px CROSSING TO RELEASE. The
+ * DI-409 layer committed the instant a drag crossed SWIPE_COMMIT_PX, with
+ * the finger still down: the page followed the finger for the first ~32 px
+ * (one or two touchmoves at a normal swipe speed), then the week was
+ * replaced under the finger and the rest of the drag was ignored — so the
+ * player never drags the week anywhere; it jumps. Now the week follows the
+ * finger for the WHOLE drag (1:1, or the rubber band at the first/last
+ * week), nothing navigates while the finger is down, and on RELEASE past
+ * SWIPE_COMMIT_PX (the same threshold, the same `_weekSwipeResolve()`) the
+ * outgoing week slides the rest of the way out while the incoming one
+ * slides in flush beside it — the unchanged commitSlide() filmstrip, now
+ * starting from wherever the finger let go. Short of the threshold, or at
+ * an end of the list, release springs back. `touchcancel` resolves exactly
+ * like a release (one handler for both, as before — WebKit's cancel timing
+ * under a concurrent native scroll is not something to bet the week change
+ * on).
+ *
+ * Reduce Motion (coordinator-approved rule, 2026-09-29, the same one the
+ * chat reply swipe follows — batch B's B4): the content ALWAYS tracks the
+ * finger during a drag, Reduce Motion on or off. Direct manipulation is
+ * not an animation (iOS keeps it under Reduce Motion), and dropping it was
+ * exactly the "it just jumps" Drew reported: with no tracking, a swipe
+ * showed nothing until the week swapped. What Reduce Motion changes is the
+ * RELEASE — it never animates movement: a commit cross-fades (`="fade"`,
+ * --motion-fast; the outgoing week fades out where the finger left it
+ * while the incoming one fades in at rest), and a cancel settles back to 0
+ * immediately instead of springing. Supersedes DI-409's "no live tracking
+ * under reduced motion".
  */
 const weekSwipeStates = new WeakMap();
+// Test/diagnostic hook — the inputs and outcome of the most recent release.
+let lastRelease = null;
+export function _weekSwipeLastRelease() { return lastRelease; }
 
 export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   if (!root || typeof root.addEventListener !== 'function') return () => {};
   if (weekSwipeStates.has(root)) return weekSwipeStates.get(root);
-  let start = null, axis = null, committed = false, busy = false;
+  // RG-TBD-A1 — `lastDx` is the drag's signed offset at its last touchmove:
+  // the value the page is painted from, and the one release decides on.
+  let start = null, axis = null, busy = false, lastDx = 0;
   let dragWeekIds = [], dragCurrentWeekId = null, dragTab = null, dragTarget = null;
+  // Velocity commit (reviewer note) — the drag's `{ t, dx }` tail, read by
+  // _weekSwipeShouldCommit() at release. `t` is the event's own timeStamp;
+  // a real event whose timeStamp reads 0 (Chrome's DevTools-synthesized
+  // touches do) is stamped with performance.now() as it is handled; an
+  // object with no timeStamp at all (a hand-built test sequence) gets null,
+  // and then distance alone decides.
+  let samples = [];
+  const stamp = (e) => {
+    if (typeof e?.timeStamp !== 'number') return null;
+    if (e.timeStamp > 0) return e.timeStamp;
+    return (typeof performance !== 'undefined' && typeof performance.now === 'function') ? performance.now() : null;
+  };
   // REVIEWER ROUND 3 (N-a, 2026-09-29) — the px offset root is ACTUALLY
   // painted at (the last live drag write), so commitSlide() can start the
   // incoming layer flush against the clone instead of a full width away.
@@ -1068,10 +1300,14 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       if (e && e.target !== root) return;
       finished = true;
       root.removeEventListener('transitionend', finish);
+      root.removeEventListener('animationend', finish);
       if (timer !== null) clearTimeout(timer);
       done();
     }
     root.addEventListener('transitionend', finish);
+    // RG-TBD-A1 — the Reduce Motion cross-fade is a CSS animation on root
+    // (`[data-week-swipe-animating="fade"]`), not a transition.
+    root.addEventListener('animationend', finish);
     // DI-420 — the bounded fallback tracks whichever duration is ACTUALLY
     // playing (WEEK_SWIPE_COMMIT_MS for a commit-exit/enter half,
     // WEEK_SWIPE_BOUNCE_MS for a cancel/edge spring-back), never a single
@@ -1128,24 +1364,22 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
    *   4. `busy` releases and the clone is removed ONCE, on root's own
    *      transitionend (or the matched fallback timer) — ONE transition
    *      window, not two.
-   * Reduced motion: unchanged — instant navigate, no transform, no clone
-   * ever created. The cancel/edge spring-back (`springBack()`, above) is
-   * untouched — still 150ms/--motion-fast, B5 only rebuilds the COMMIT
-   * path.
+   * Reduced motion (RG-TBD-A1, 2026-09-29 — was an instant swap): the SAME
+   * clone and the same onNavigate(), then a cross-fade in place — the clone
+   * fades out where the finger left it while root, back at 0, fades in
+   * (`="fade"`, WEEK_SWIPE_FADE_MS / --motion-fast) — no animated
+   * movement on either. The cancel/edge spring-back (`springBack()`,
+   * above) is untouched — still 150ms/--motion-fast, and an immediate
+   * settle under Reduce Motion.
+   * Since RG-TBD-A1 this runs on RELEASE (onTouchEnd, below), not at the
+   * 40 px crossing; `liveOffsetPx` is wherever the finger let go.
    */
   function commitSlide(dxAtCommit, targetWeekId) {
     // Replaces the drifted haptic('selection') call — js/haptics.js's own
     // kind table documents 'light' as "swipe commits" (DI-409's Touched-
     // Function Audit finding).
     haptic('light');
-    if (prefersReducedMotion()) {
-      // Today's exact reduced-motion behavior: no transform at all, instant
-      // navigate.
-      setAnimating(false);
-      setX('0px');
-      if (typeof onNavigate === 'function') onNavigate(targetWeekId);
-      return;
-    }
+    const reduceMotion = prefersReducedMotion();
     busy = true;
     const exitPct = dxAtCommit > 0 ? 100 : -100; // OLD content exits toward the drag direction
 
@@ -1215,6 +1449,26 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
       busy = false;
       throw err;
     }
+    if (reduceMotion) {
+      // RG-TBD-A1 — Reduce Motion: a cross-fade, nothing ANIMATES moving.
+      // The clone (the outgoing week) stays exactly where the finger let go
+      // and fades out; root drops straight to 0 holding the incoming week
+      // and fades in. Attribute off + reflow first so a fade that is still
+      // finishing restarts cleanly rather than being skipped.
+      setX('0px');
+      setAnimating(false);
+      void root.offsetWidth;
+      setAnimating('fade');
+      if (clone) clone.style.transition = `opacity ${WEEK_SWIPE_FADE_MS}ms ease-out`;
+      const fadeOut = () => { if (clone && clone.parentNode) clone.style.opacity = '0'; };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(fadeOut); else fadeOut();
+      afterTransition(() => {
+        removeClone();
+        setAnimating(false);
+        busy = false;
+      }, WEEK_SWIPE_FADE_MS);
+      return;
+    }
     // Fresh content is now painted — root's own node persists across the
     // repaint (only its innerHTML changed). Position it at the OPPOSITE
     // edge from where the clone is about to exit toward (continuous
@@ -1257,6 +1511,9 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
   }
 
   function onTouchStart(e) {
+    // RG-TBD-A2 — cleared first, before any early return, so a leftover
+    // claim can never leave the week swipe standing down forever.
+    clearStaleTouchClaim(e);
     if (busy || gesturesSuspended()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
@@ -1276,7 +1533,8 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     setX('0px');
     start = { x: t.clientX, y: t.clientY };
     axis = null;
-    committed = false;
+    lastDx = 0;
+    samples = [];
     dragTarget = e.target ?? null;
     const s = typeof getState === 'function' ? getState() : { weekIds: [], currentWeekId: null, tab: null };
     dragWeekIds = Array.isArray(s?.weekIds) ? s.weekIds : [];
@@ -1284,9 +1542,18 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
     dragTab = s?.tab ?? null;
   }
   function onTouchMove(e) {
-    if (!start || committed) return;
+    if (!start) return;
     const t = e.touches?.[0];
     if (!t) return;
+    // RG-TBD-A2 — another recognizer committed to this touch first (the
+    // compact Dashboard's long-press reorder): stand down for the rest of
+    // it. If the week had already been following the finger, put it back.
+    const owner = touchClaimedBy();
+    if (owner !== null && owner !== WEEK_SWIPE_TOUCH_OWNER) {
+      if (axis === 'x') springBack();
+      start = null; axis = null; lastDx = 0;
+      return;
+    }
     const dx = t.clientX - start.x;
     const dy = t.clientY - start.y;
     if (axis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
@@ -1319,57 +1586,103 @@ export function bindWeekSwipe(root, getState, onNavigate, opts = {}) {
         isInDrawerOpenZone({ tab: dragTab, clientX: start.x, viewportWidthPx: viewportWidthPx() }) ||
         _isDrawerYieldTarget(dragTarget)
       )) {
-        start = null; axis = null; committed = false;
+        start = null; axis = null; lastDx = 0;
+        return;
+      }
+      // RG-TBD-A2 — locked horizontal: this touch is now the week swipe's.
+      // From here the reorder's long-press can no longer start on it.
+      if (axis === 'x' && !claimTouch(WEEK_SWIPE_TOUCH_OWNER)) {
+        start = null; axis = null; lastDx = 0;
         return;
       }
     }
     if (axis !== 'x') return; // never fights vertical scroll — no transform touched
-    const atBound = _weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx);
-    // B2 (reviewer round 2) — a bound NEVER commits, however far past
-    // SWIPE_COMMIT_PX the drag goes; it only ever keeps rubber-banding
-    // until release. The DI is explicit that spring-back happens ON
-    // RELEASE (clear(), below), not the instant the threshold is crossed —
-    // committing early here made the page snap back UNDER the still-down
-    // finger and capped the rubber-band offset at whatever it happened to
-    // be right at the 40px crossing (~23px), nowhere near
-    // WEEK_SWIPE_BOUNCE_MAX_PX's own asymptote.
-    if (!atBound && Math.abs(dx) >= SWIPE_COMMIT_PX) {
-      const target = _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, dx);
-      if (target != null) {
-        committed = true;
-        commitSlide(dx, target);
-        return;
-      }
-      // Defensive — the boundary check and the resolve function disagreed
-      // (should not normally happen); fall through to ordinary tracking
-      // below rather than forcing an early spring.
-    }
-    if (prefersReducedMotion()) return; // no live tracking under reduced motion
-    if (atBound) {
+    // RG-TBD-A1 — no commit while the finger is down: the page follows it
+    // for the whole drag and release decides (onTouchEnd, below).
+    lastDx = dx;
+    samples.push({ t: stamp(e), dx });
+    if (samples.length > 24) samples.shift();
+    // Reduce Motion does NOT stop the page following the finger (see the
+    // RG-TBD-A1 note above this binder) — only the release's own motion.
+    if (_weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx)) {
+      // An end of the list — resist; release springs back (B2, round 2:
+      // never snap back under the still-down finger).
       const rb = _weekSwipeRubberBand(Math.abs(dx));
       setX(`${dx < 0 ? -rb : rb}px`);
     } else {
       setX(`${dx}px`);
     }
   }
-  function clear() {
-    // A release before commit — cancelling. Only worth animating back if
-    // the axis actually locked to 'x' (otherwise no transform was ever
-    // applied and there is nothing to spring back from).
-    if (start && !committed && axis === 'x') springBack();
-    start = null; axis = null; committed = false;
+  function onTouchEnd(e) {
+    // RG-TBD-A1 — RELEASE decides. Toward a week that exists, and
+    // _weekSwipeShouldCommit() says go (past SWIPE_COMMIT_PX, or a flick
+    // outward, and not heading back — reviewer's velocity note): the
+    // outgoing week slides the rest of the way out from where the finger
+    // let go and the next one slides in beside it. Otherwise, or at an end
+    // of the list: spring back. Only a drag that locked to 'x' ever moved
+    // anything, so nothing else needs undoing. touchcancel lands here too —
+    // one handler for both, exactly as the pre-RG-TBD-A1 binder treated them.
+    const dx = lastDx;
+    const wasHorizontal = !!start && axis === 'x';
+    const releaseT = stamp(e) ?? (samples.length ? samples[samples.length - 1].t : null);
+    const go = wasHorizontal && !_weekSwipeAtBound(dragWeekIds, dragCurrentWeekId, dx)
+      && _weekSwipeShouldCommit(dx, samples, releaseT);
+    lastRelease = { dx, releaseT, samples: samples.slice(), go };
+    // A flick can commit short of SWIPE_COMMIT_PX; _weekSwipeResolve() keeps
+    // its own distance gate, so hand it the same DIRECTION at least that far.
+    const target = go ? _weekSwipeResolve(dragWeekIds, dragCurrentWeekId, Math.sign(dx) * Math.max(Math.abs(dx), SWIPE_COMMIT_PX)) : null;
+    const swipedPage = dragTab;
+    start = null; axis = null; lastDx = 0; samples = [];
+    const heldTouch = touchClaimedBy() === WEEK_SWIPE_TOUCH_OWNER;
+    releaseTouch(WEEK_SWIPE_TOUCH_OWNER);
+    if (!wasHorizontal) { if (heldTouch) flushDeferredRenders(); return; }
+    if (target != null) {
+      // onNavigate() repaints the swiped page itself, from current data —
+      // its parked repaint is redundant; any OTHER page's still runs.
+      try { commitSlide(dx, target); } finally { flushDeferredRenders(swipedPage); }
+    } else {
+      springBack();
+      flushDeferredRenders();
+    }
   }
+
+  /**
+   * Reviewer note on c7f8bee (2026-09-29) — SAFETY NET. If the app is
+   * backgrounded mid-drag (app switcher, lock screen, a call) iOS may never
+   * deliver the touch's end, leaving the week parked at the finger's offset,
+   * the claim held and any repaint parked. On the way back (hidden → visible)
+   * and on pagehide, abandon that drag: put the page at rest, give the touch
+   * back, and run the parked repaints — no finger is on the glass then, so
+   * nothing can be replaced under one. A commit/spring animation already in
+   * flight (`busy`) is left to finish on its own.
+   */
+  function recoverAbandonedDrag() {
+    const hadDrag = !!start || liveOffsetPx !== 0;
+    start = null; axis = null; lastDx = 0; samples = [];
+    if (hadDrag && !busy) { setAnimating(false); setX('0px'); }
+    releaseTouch(WEEK_SWIPE_TOUCH_OWNER);
+    flushDeferredRenders();
+  }
+  const onVisibility = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'visible') recoverAbandonedDrag();
+  };
+  const canDoc = typeof document !== 'undefined' && typeof document.addEventListener === 'function';
+  const canWin = typeof window !== 'undefined' && typeof window.addEventListener === 'function';
 
   root.addEventListener('touchstart', onTouchStart, { passive: true });
   root.addEventListener('touchmove', onTouchMove, { passive: true });
-  root.addEventListener('touchend', clear, { passive: true });
-  root.addEventListener('touchcancel', clear, { passive: true });
+  root.addEventListener('touchend', onTouchEnd, { passive: true });
+  root.addEventListener('touchcancel', onTouchEnd, { passive: true });
+  if (canDoc) document.addEventListener('visibilitychange', onVisibility);
+  if (canWin) window.addEventListener('pagehide', recoverAbandonedDrag);
 
   const unbind = () => {
     root.removeEventListener('touchstart', onTouchStart);
     root.removeEventListener('touchmove', onTouchMove);
-    root.removeEventListener('touchend', clear);
-    root.removeEventListener('touchcancel', clear);
+    root.removeEventListener('touchend', onTouchEnd);
+    root.removeEventListener('touchcancel', onTouchEnd);
+    if (canDoc) document.removeEventListener('visibilitychange', onVisibility);
+    if (canWin) window.removeEventListener('pagehide', recoverAbandonedDrag);
     weekSwipeStates.delete(root);
   };
   weekSwipeStates.set(root, unbind);
@@ -1421,6 +1734,16 @@ export function _rubberBandOffset(overscrollPx) {
  * from pure JS is not reliable, so this binder is opt-in: the coordinator
  * calls it only where it's actually needed (see the handoff checklist), not
  * unconditionally on every platform.
+ *
+ * RG-TBD-A4 (2026-09-29, Drew on the iOS app: "barely rubberband overscolls
+ * on the bottom and doesn't at all on the top") — the premise above was
+ * wrong for native: the shell's own project had no `bounces:false`, but
+ * Capacitor's CAPBridgeViewController.prepareWebView() sets
+ * `scrollView.bounces = false` itself (Capacitor iOS 8.5.2, line 301), so
+ * the app had NO engine bounce and this 24 px fallback was all Drew saw, at
+ * the bottom only. The iOS shell now re-enables the native bounce (its own
+ * MuneraBridgeViewController subclass), and js/app.js binds this fallback
+ * only when `!isNativeShell()` — the web behavior is unchanged.
  *
  * FIX ROUND 1, ITEM 3 (reviewer BLOCK) — `scrollEl` may be a BOUNDED
  * scroller (Chat's `#chat-scroll`), not `window`. The eligibility check

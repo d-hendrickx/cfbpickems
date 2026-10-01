@@ -105,6 +105,20 @@
  * is off on web too but this module was written after that fact was
  * reconfirmed for native explicitly in the task brief.
  *
+ * ── UN-315 / DI-436 (2026-09-29) — THE DEVICE FOLLOWS THE ACCOUNT, NOT THE LEAGUE ──
+ * The identity `plugin.login({ externalId })` binds is now the signed-in account's PRIVATE ALIAS
+ * (a random uuid, migration 0035), fetched from `push-identity-token` for `{ scope:'user' }` and
+ * held IN MEMORY ONLY. One phone therefore hears EVERY league its owner belongs to, and:
+ *   • a LEAGUE SWITCH makes ZERO plugin calls once the device is bound (`loginNativePush()`
+ *     returns early for the same account) — logout happens only on sign-out or an account change;
+ *   • the persisted flag (N-4, below) stores a MARKER, never the alias and never a member id;
+ *   • `dual` (or unknown) falls back to the MEMBER id when the alias mint fails, and retries the
+ *     alias on the bounded ladder; `alias` mode has no fallback; `legacy` (the operator's rollback)
+ *     asserts the member id exactly as builds 1-3 did;
+ *   • a notification tap names its league (`data.league_id`): the click resolver returns it,
+ *     validated as a uuid, and app.js's `routeToLeague()` switches BEFORE navigating.
+ * No new plugin, no new capability: the same `login`/`logout`/`addListener` calls as before.
+ *
  * ── AD-67 — NATIVE NEVER SENDS ────────────────────────────────────────────
  * `NativePushAdapter.send()` is a documented, intentional no-op. Every push
  * this app delivers is server-side (`notify-fanout`/`reminders` Edge
@@ -216,30 +230,62 @@ export function initNativePush() {
  *  safe default is "nothing to log out of yet"). */
 function _initAttempted() { return _initPromise !== null; }
 
-// ─── DI-254 — wired, currently unusable (see header). Mirrors
-//    js/push-onesignal.js's `_mintIdentityToken()` shape, not its code:
-//    reached only via `await import('./auth.js')` so this module creates no
-//    static edge into the auth graph. ────────────────────────────────────
+// ─── DI-254 / UN-315 — the identity mint. Mirrors js/push-onesignal.js's `_mintIdentityToken()` in
+//    shape, not code: reached only via `await import('./auth.js')` so this module creates no static
+//    edge into the auth graph. THE TOKEN IS STILL UNUSABLE HERE (the plugin's login takes none —
+//    header); what this call is FOR now is the ALIAS: the server returns the account's private
+//    external id, and only this call can obtain it (no client role can read it — migration 0035).
+//    `_identityMinter` (test seam) stands in for the whole `push-identity-token` call.
 let _identityMinter = null;
-/** Test seam ONLY — mirrors push-onesignal.js's `_setIdentityMinterForTest`. */
+/** Test seam ONLY — mirrors push-onesignal.js's `_setIdentityMinterForTest`. It is handed
+ *  `{ scope:'user' }` and answers `{ ok, externalId?, mode? }` (an answer with none of the last two
+ *  is a pre-DI-434 server's, and means "assert the member id"). */
 export function _setIdentityMinterForTest(fn) { _identityMinter = typeof fn === 'function' ? fn : null; }
-async function fetchIdentityToken(memberId) {
+async function fetchNativeIdentity() {
   if (typeof _identityMinter === 'function') {
-    try { return await _identityMinter(memberId); } catch { return { ok: false, reason: 'mint-threw' }; }
+    try { return await _identityMinter({ scope: 'user' }); } catch { return { ok: false, reason: 'mint-threw' }; }
   }
   try {
-    const { getSupabaseClient, getActiveLeagueId } = await import('./auth.js');
+    const { getSupabaseClient } = await import('./auth.js');
     const client = getSupabaseClient();
-    const leagueId = getActiveLeagueId();
-    if (!client || !leagueId) return { ok: false, reason: 'no-session' };
-    const { data, error } = await client.functions.invoke('push-identity-token', { body: { league_id: leagueId } });
+    if (!client) return { ok: false, reason: 'no-session' };
+    const { data, error } = await client.functions.invoke('push-identity-token', { body: { scope: 'user' } });
     if (error) return { ok: false, reason: 'unreachable' };
-    const token = data && typeof data.token === 'string' ? data.token : '';
-    if (!token) return { ok: false, reason: String((data && data.skipped) || 'no-token') };
-    return { ok: true, token };
+    const mode = data && typeof data.mode === 'string' ? data.mode : undefined;
+    const externalId = data && typeof data.externalId === 'string' ? data.externalId : '';
+    // `{ mode:'legacy' }` is a complete, successful answer with no alias in it by design.
+    if (!externalId) return { ok: mode === 'legacy', reason: String((data && data.skipped) || 'no-alias'), mode };
+    return { ok: true, externalId, mode };
   } catch {
     return { ok: false, reason: 'unreachable' };
   }
+}
+
+/** The server's last word on the addressing mode, from a SUCCESSFUL alias mint ('' = never heard).
+ *  In `alias` mode the member id is no longer addressed, so a failed mint must NOT fall back to it. */
+let _lastServerMode = '';
+
+/**
+ * What to assert for `memberId` on behalf of `accountId`: `{ kind:'alias'|'member', externalId,
+ * upgrade? }` or null when nothing may be asserted (alias mode + a failed mint: the ladder retries).
+ * A pre-DI-434 answer (ok, no alias, no mode) and `mode:'legacy'` are both "assert the member id".
+ */
+async function _resolveNativeIdentity(memberId) {
+  const minted = await fetchNativeIdentity();
+  const mode = minted && typeof minted.mode === 'string' ? minted.mode : '';
+  if (minted && minted.ok && typeof minted.externalId === 'string' && minted.externalId && mode !== 'legacy') {
+    _lastServerMode = mode === 'alias' ? 'alias' : 'dual';
+    return { kind: 'alias', externalId: minted.externalId };
+  }
+  if (minted && minted.ok) {
+    if (mode === 'legacy') _lastServerMode = 'legacy';
+    return { kind: 'member', externalId: memberId };                 // legacy, or a pre-DI-434 answer
+  }
+  if (_lastServerMode === 'alias') return null;                       // no fallback in alias mode
+  // dual / unknown, and the mint failed: the member id is still addressed (dual is lossless) — assert
+  // it, and `upgrade` arms one more attempt at the alias on the same bounded ladder.
+  console.info('[push-native] the account alias is unavailable; binding the member id for now:', minted && minted.reason);
+  return { kind: 'member', externalId: memberId, upgrade: true };
 }
 
 // ══ N-4 (security gate, 2026-09-23) — THE BINDING SURVIVES PROCESS DEATH ═══
@@ -284,10 +330,17 @@ async function _readPersistedIdentityFlag() {
     return !!(r && typeof r.value === 'string' && r.value.length > 0);
   } catch (err) { console.warn('[push-native] Preferences read failed (identity flag)', err); return false; }
 }
-async function _writePersistedIdentityFlag(target) {
+/** UN-315 / DI-436.1 — WHAT THE FLAG STORES. It used to hold the member id that had been bound; the
+ *  device is now bound to the account's private ALIAS, and the flag lives in the Preferences store
+ *  (on-disk, outliving the process) — so it holds a MARKER and nothing identifying: not the alias,
+ *  not a member id. Its only job (N-4) is "an identity was attached before", which is all
+ *  `_readPersistedIdentityFlag()` has ever tested (any non-empty string). An older build's flag
+ *  (a member id) still reads as set. */
+const NATIVE_PUSH_IDENTITY_MARKER = '1';
+async function _writePersistedIdentityFlag() {
   const prefs = _preferences();
   if (!prefs) return;
-  try { await prefs.set({ key: NATIVE_PUSH_IDENTITY_KEY, value: String(target) }); }
+  try { await prefs.set({ key: NATIVE_PUSH_IDENTITY_KEY, value: NATIVE_PUSH_IDENTITY_MARKER }); }
   catch (err) { console.warn('[push-native] Preferences write failed (identity flag)', err); }
 }
 async function _clearPersistedIdentityFlag() {
@@ -305,6 +358,14 @@ let _chain = Promise.resolve();
 function _queue(fn) { _chain = _chain.then(fn, fn); return _chain; }
 let _gen = 0;
 let _desiredTarget = '';
+/** UN-315 / DI-436.1 — what KIND of id the plugin is bound to ('alias' | 'member' | ''), and for an
+ *  alias, the ACCOUNT it belongs to. MEMORY ONLY. A league switch keeps the account and so keeps the
+ *  binding; `loginNativePush()` reads these to make it a no-op. */
+let _boundKind = '';
+let _boundAccountId = '';
+let _desiredAccountId = '';
+/** The account whose login is being worked on right now (asked, not yet settled). */
+let _inflightAccountId = '';
 
 async function _assertNativeIdentity(target, gen, attempt = 0) {
   if (attempt > 0 && gen !== _gen) return;
@@ -343,22 +404,32 @@ async function _assertNativeIdentity(target, gen, attempt = 0) {
   if (attempt > 0 && gen !== _gen) return;
   if (!init.ok) {
     if (init.reason === 'init-failed') _scheduleRetry(target, gen, attempt);
+    else _inflightAccountId = '';
     return; // 'not-configured' / 'plugin-unavailable' are settled facts, not worth retrying
   }
-  // DI-254 — fire-and-forget; the mint's result is unused past this log line
-  // until a plugin version accepts a second `login()` argument (see header).
-  // THE ONE LINE THAT CHANGES WHEN THAT LANDS is the `plugin.login({...})`
-  // call below, which would gain a `token:` field here.
-  try { const minted = await fetchIdentityToken(target); if (!minted.ok) console.info('[push-native] identity token unavailable (expected while Identity Verification is off):', minted.reason); }
-  catch { /* never blocks login — DI-222 */ }
+  // UN-315 / DI-436.1 — WHAT TO BIND: the account's private alias when the server hands one out,
+  // the member id when it says `legacy` or (dual / unknown) when the alias mint fails — see
+  // `_resolveNativeIdentity()`. The mint's failure NEVER blocks the login (DI-222): in dual it is
+  // exactly the case that falls back to the member id. `null` (alias mode, mint failed) retries.
+  const accountAtRequest = _desiredAccountId;
+  const identity = await _resolveNativeIdentity(String(target));
   if (attempt > 0 && gen !== _gen) return;
+  if (!identity) { _scheduleRetry(target, gen, attempt); return; }
   const plugin = _plugin();
   if (!plugin) { _scheduleRetry(target, gen, attempt); return; }
   try {
-    await plugin.login({ externalId: String(target) });
+    await plugin.login({ externalId: String(identity.externalId) });
     // N-4 — record the binding AFTER a successful login(), so the persisted
     // flag can never claim an attachment that did not happen.
-    await _writePersistedIdentityFlag(target);
+    await _writePersistedIdentityFlag();
+    if (gen === _gen) {
+      _boundKind = identity.kind;
+      _boundAccountId = identity.kind === 'alias' ? accountAtRequest : '';
+      _inflightAccountId = '';
+      // Fell back to the member id because the ALIAS mint failed: one more attempt at the alias, on
+      // the SAME bounded ladder (never a new timer, never unbounded).
+      if (identity.upgrade) _scheduleRetry(target, gen, attempt);
+    }
   } catch (err) {
     console.warn('[push-native] login() failed', err);
     _scheduleRetry(target, gen, attempt);
@@ -368,6 +439,10 @@ function _scheduleRetry(target, gen, attempt) {
   const delay = IDENTITY_RETRY_DELAYS_MS[attempt];
   if (delay === undefined) {
     console.warn('[push-native] could not attach the native push identity after', IDENTITY_RETRY_DELAYS_MS.length + 1, 'attempts');
+    // UN-315 (security finding 2) — the ladder is spent, so the "in flight" claim ends (see push-onesignal.js's
+    // _scheduleIdentityRetry): left set, every later loginNativePush(m, sameAccount) would early-return forever.
+    // Only the CURRENT attempt clears it; a newer login owns the claim now.
+    if (gen === _gen) _inflightAccountId = '';
     return;
   }
   const t = setTimeout(() => {
@@ -379,19 +454,39 @@ function _scheduleRetry(target, gen, attempt) {
 
 /** Called from app.js's session chokepoint (`resyncPlayerPreferences()`),
  *  beside the existing `loginOneSignal()` call, whenever `isNativeOrigin()`.
- *  Idempotent, safe on every login/logout/league-switch. */
-export function loginNativePush(memberId) {
+ *  Idempotent, safe on every login/logout/league-switch.
+ *
+ *  UN-315 / DI-436.1 — `memberId` is the ACTIVE league's member id (the legacy identity and the
+ *  fallback); `accountId` is the signed-in account (app.js passes `getAccountUserId()`), which is what
+ *  the device is bound to now. A LEAGUE SWITCH IS A NO-OP HERE: when the plugin is already bound to
+ *  this account's alias — or a login for this account is already in flight — this returns without a
+ *  single plugin call and without a mint. `accountId` absent never early-returns (always asserts, as
+ *  before this DI); `force` bypasses it for the explicit Turn On repair. A DIFFERENT account is not an
+ *  early return: it re-asserts, replacing the previous occupant's binding. */
+export function loginNativePush(memberId, accountId = '', { force = false } = {}) {
   if (!isNativeShell() || !memberId) return Promise.resolve();
+  const account = accountId ? String(accountId) : '';
+  if (!force && account
+      && ((_boundKind === 'alias' && _boundAccountId === account) || _inflightAccountId === account)) {
+    return Promise.resolve();
+  }
   const gen = ++_gen;
   _desiredTarget = String(memberId);
+  _desiredAccountId = account;
+  _inflightAccountId = account;
   return _queue(() => _assertNativeIdentity(String(memberId), gen));
 }
-/** Correction #2's native counterpart — MUST be called on sign-out and on
- *  league switch. */
+/** Correction #2's native counterpart — MUST be called on sign-out and on account change. It is
+ *  awaited by js/auth.js's `signOut()` (bounded to 2s there) BEFORE the session is cleared, so an
+ *  account-wide alias is never left bound to a handed-off phone. */
 export function logoutNativePush() {
   if (!isNativeShell()) return Promise.resolve();
   const gen = ++_gen;
   _desiredTarget = '';
+  _desiredAccountId = '';
+  _inflightAccountId = '';
+  _boundKind = '';
+  _boundAccountId = '';
   return _queue(() => _assertNativeIdentity('', gen));
 }
 
@@ -448,7 +543,7 @@ export async function requestNativePushPermission(memberId) {
   if (!plugin || typeof plugin.requestPermission !== 'function') return { ok: false, reason: 'plugin-unavailable' };
   try {
     const res = await plugin.requestPermission({ fallbackToSettings: false });
-    if (memberId) { try { await loginNativePush(memberId); } catch { /* best-effort */ } }
+    if (memberId) { try { await loginNativePush(memberId, '', { force: true }); } catch { /* best-effort */ } }
     return { ok: !!res?.permission, reason: res?.permission ? 'granted' : 'denied' };
   } catch (err) {
     console.warn('[push-native] requestPermission() failed', err);
@@ -507,7 +602,7 @@ let _foregroundWired = false;
  *  shown by NOT calling `preventDefault` for it — see `proceedWithWillDisplay`
  *  below, which is what re-enables the default-display behavior a listener's
  *  mere presence otherwise suppresses (Finding 4). */
-export function wireNativeForeground(onForegroundPush) {
+export function wireNativeForeground(onForegroundPush, activeLeagueId = null) {
   if (!isNativeShell() || _foregroundWired) return;
   const plugin = _plugin();
   if (!plugin || typeof plugin.addListener !== 'function') return;
@@ -515,7 +610,15 @@ export function wireNativeForeground(onForegroundPush) {
   plugin.addListener('notificationForegroundWillDisplay', async (data) => {
     try {
       const event = data?.additionalData?.event || null;
-      if (typeof onForegroundPush === 'function') {
+      // UN-315 / DI-436.3 — the chat fetch (`wakeChat()`) reads the ACTIVE league's room, so it runs
+      // only for a push FROM the active league. A push from another league (`data.league_id` names it)
+      // still shows its banner — native NEVER suppresses (DI-241, unchanged; the `finally` below
+      // always calls proceedWithWillDisplay) — it just does not poke the wrong room. A payload with no
+      // league_id behaves exactly as before.
+      const pushLeague = data?.additionalData?.league_id;
+      const activeLeague = typeof activeLeagueId === 'function' ? activeLeagueId() : '';
+      const foreignLeague = typeof pushLeague === 'string' && !!pushLeague && !!activeLeague && pushLeague !== activeLeague;
+      if (typeof onForegroundPush === 'function' && !foreignLeague) {
         try { onForegroundPush(event); } catch (err) { console.warn('[push-native] foreground hook failed', err); }
       }
     } finally {
@@ -560,6 +663,8 @@ export function markNativeBootReady() {
 // `url`/`launchURL` are NEVER READ here, on either the foreground or click
 // path — native navigation is driven exclusively by `route`/`params`/`event`.
 const NATIVE_ROUTE_ALLOW_LIST = new Set(['picks', 'dashboard', 'leaderboard', 'commissioner', 'rules', 'chat']);
+/** A league id is a uuid (8-4-4-4-12 hex) — the shape `leagues.id` has. Nothing else is accepted. */
+const LEAGUE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Resolves a safe `{tab, params}` from a click event's `additionalData`, or
  *  `null` when there is nothing safe to navigate to. `params` is passed
@@ -568,6 +673,30 @@ const NATIVE_ROUTE_ALLOW_LIST = new Set(['picks', 'dashboard', 'leaderboard', 'c
  *  a URL — the caller (app.js's `deepLinkTo()`) is what owns doing that
  *  safely, exactly as it already does for the web push path. */
 function _resolveClickDestination(additionalData) {
+  // ── UN-315 / DI-436.2 — THE LEAGUE THE PUSH CAME FROM. `additionalData.league_id` arrives from a
+  // push PAYLOAD (server-authored, but untrusted at this boundary like `route`): it is accepted ONLY
+  // as a well-formed uuid. A `league_id` that is PRESENT and malformed makes the tap resolve to
+  // NOTHING — the same rule `route` follows ("an invalid route is not missing, it is malformed, and
+  // guessing is not safer than declining"). ABSENT is fine: no switch, the tap navigates within the
+  // active league exactly as before. A well-formed id is still only a HINT: app.js's
+  // `routeToLeague()` checks it against the account's own memberships, and `switchActiveLeague()`
+  // throws for a league the account is not a member of.
+  const rawLeague = additionalData ? additionalData.league_id : undefined;
+  let leagueId = null;
+  if (rawLeague !== undefined && rawLeague !== null) {
+    if (typeof rawLeague !== 'string' || !LEAGUE_ID_RE.test(rawLeague)) {
+      console.warn('[push-native] ignored a notification tap with a malformed league id');
+      return null;
+    }
+    leagueId = rawLeague.toLowerCase();
+  }
+  const dest = _resolveClickTarget(additionalData);
+  if (!dest) return null;
+  return leagueId ? { ...dest, leagueId } : dest;
+}
+
+/** The tab + params half of `_resolveClickDestination()` — the DI-241 / security-C2 logic, unchanged. */
+function _resolveClickTarget(additionalData) {
   const event = (additionalData && typeof additionalData.event === 'string') ? additionalData.event : null;
   const route = additionalData && additionalData.route;
   if (route !== undefined && route !== null) {
@@ -619,6 +748,11 @@ export function _resetForTest() {
   _chain = Promise.resolve();
   _gen = 0;
   _desiredTarget = '';
+  _boundKind = '';
+  _boundAccountId = '';
+  _desiredAccountId = '';
+  _inflightAccountId = '';
+  _lastServerMode = '';
   _foregroundWired = false;
   _clickWired = false;
   _bootReady = false;

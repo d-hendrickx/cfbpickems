@@ -99,7 +99,12 @@ console.log('\n[1]–[7] AD-67 — no module in js/ can reach Apps Script from A
 {
   const { readdirSync } = await import('node:fs');
   const jsDir = new URL('./js/', import.meta.url);
-  const files = readdirSync(jsDir).filter((f) => f.endsWith('.js'));
+  // Multi-Sport Phase 0/1a: js/sports/*.js is part of the shipped tree, so the scan is RECURSIVE one level
+  // (the registry and its profiles were added after this scan was written and it never looked in there).
+  const files = [
+    ...readdirSync(jsDir).filter((f) => f.endsWith('.js')),
+    ...readdirSync(new URL('sports/', jsDir)).filter((f) => f.endsWith('.js')).map((f) => 'sports/' + f),
+  ];
   assert(files.length >= 25, `fixture: the scan enumerated js/ (${files.length} modules) — an empty readdir would make every rule below vacuous`);
 
   const offenders = [];

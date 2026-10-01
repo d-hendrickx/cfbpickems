@@ -6008,20 +6008,22 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
 
+  // Re-derived 2026-09-29 (bug batch B — RG-TBD-B3 (alma-mater catalog notes + reviewer follow-ups, ~app.js:4030–4190) and RG-TBD-B1 (Weekly Blurb card title, ~app.js:12960) sit above these sites) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the sweep's time-zone/display-name/initials repaints (+22) in buildControlCenterCtx() sit above every site from 5098 on; 575/1322/1750 unchanged) — line numbers only, matched by exact text.
   const ENUMERATED_HVS_SITES = [
     // The import itself — not a "call site," but unavoidable to use the
     // function at all; excluded here rather than by file-level exemption
     // (rolestest's "the module itself" shape) so a SECOND import line
     // elsewhere in the file still gets caught.
-    { line: 575, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
+    { line: 612, text: "hasValidSupabaseSession, isSessionExpired, clearSessionExpired," },
     // The sdk-unavailable hold ([33-N1d]'s own pin, same site) — the ONE
     // place a raw token question is still the right question: no vendored
     // SDK means isSignedInForApp() cannot even be asked yet.
-    { line: 1322, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
+    { line: 1377, text: "if (!sdkReady && !hasValidSupabaseSession()) {" },
     // The deps object handed to other modules — a bare reference, never
     // called from here; whatever THAT module does with it is its own
     // concern, not this file's gate logic.
-    { line: 1750, text: "hasValidSupabaseSession," },
+    { line: 1805, text: "hasValidSupabaseSession," },
     // noIdentityEverProven() — deliberately asks the token question directly
     // (an identity that was never even attempted is a narrower, and correct,
     // question than "is the app-level identity signed in").
@@ -6032,10 +6034,10 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // and doSwitchActiveLeague()'s boolean return all sit above one or more of
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
-    { line: 5046, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
+    { line: 5225, text: "try { return isRecoverySession() || (!hasValidSupabaseSession() && !getAccountUserId()); }" },
     // isSignedInForApp() itself — the ONE place allowed to compose the raw
     // token question into the app-level answer everything else must use.
-    { line: 5068, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
+    { line: 5247, text: "try { return hasValidSupabaseSession() && !isRecoverySession(); }" },
     // The expiry classifier — SIGNED_OUT/TOKEN_REFRESHED path, deciding
     // whether THIS payload proves the token is fresh; a narrower question
     // than "is the app signed in," and correctly so.
@@ -6060,7 +6062,12 @@ console.log('     every gate/release site the security probe reverted reads isSi
     // exact text against the merged tree.
     // Re-derived AGAIN 2026-09-28 (REVIEWER ROUND 2 merge — feat/control-center-v0272's
     // round 2 merged in too) — line number only, matched by exact text.
-    { line: 26968, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
+    // Re-derived 2026-09-29 (UN-312 / DI-437, the Munera sign-in gate rebuild: showGoogleSignInGate()'s
+    // one template, the shared slot helper and the four gate screens' markup all sit ABOVE this site
+    // in source order, net +140 lines) — line number only, same site, matched by exact text.
+    // Re-derived 2026-09-30 (UN-389 / DI-446 — the Delete Account sheet's imports and section, above every site) — line numbers only, same six sites, matched by exact text.
+    // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every site) — line numbers only, same sites, same texts, matched by exact text.
+    { line: 27894, text: "|| (AUTH_SESSION_EVENTS.includes(event) && !(payload && hasValidSupabaseSession()) && isSessionExpired());" },
   ];
 
   // SECURITY AUDIT (full-app, 2026-09-26) — the scan used to skip any line
@@ -6187,18 +6194,26 @@ console.log('     every gate/release site the security probe reverted reads isSi
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
   // Re-derived 2026-09-29 (v0.27.2 STAMP — the WHATS_NEW v0.27.2 entry at app.js:102 sits above every site) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-29 (bug batch B — RG-TBD-B3 (alma-mater catalog notes + reviewer follow-ups, ~app.js:4030–4190) and RG-TBD-B1 (Weekly Blurb card title, ~app.js:12960) sit above these sites) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the sweep's time-zone/display-name/initials repaints (+22) sit above every one of these eight sites) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-30 (UN-389 / DI-446 — the Delete Account sheet: its imports at the top of app.js and its section above several of these sites) — line numbers only,
+  // same eight sites, same texts, matched by exact text.
+  // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every one of these eight sites) — line numbers only, matched by exact text.
   const ENUMERATED_ISFA_SITES = [
-    { line: 5861, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
-    { line: 24817, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
-    { line: 24883, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
-    { line: 24934, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
+    { line: 6040, fn: 'renderLeaguePill() — league pill', text: "if (!isSignedInForApp() || !hasResolvedMemberships()) { _clearLeaguePill(el); return; }" },
+    { line: 25277, fn: 'armBootIdentityCover() — boot cover arm', text: "try { if (isSignedInForApp()) return; } catch { /* treat as unknown */ }" },
+    { line: 25343, fn: 'releaseBootIdentityCover() — release', text: "if (!isSignedInForApp() && !getAccountUserId()) return false;" },
+    { line: 25394, fn: 'fireSignInGateDeadline() — deadline release', text: "if (isSignedInForApp()) { releaseBootIdentityCover(); return; }" },
     // Re-derived, security round 3 N-2 (2026-09-26) — same four sites, only
     // the line numbers moved (see the note on the hasValidSupabaseSession
     // pin above).
-    { line: 26811, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
-    { line: 27117, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
-    { line: 27825, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
-    { line: 27855, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
+    // Re-derived 2026-09-29 (UN-312 / DI-437 — the sign-in gate rebuild above these four sites, net +140
+    // lines; the first four sites in this list sit ABOVE it and did not move) — line numbers only, same
+    // eight sites, matched by exact text.
+    { line: 27737, fn: 'refreshAuthUI() — MEMBERSHIPS_REFRESHED auto-link', text: "&& isSignedInForApp() && !getMembershipsError()" },
+    { line: 28043, fn: 'needsLeagueFlowScreen()', text: "if (!isSignedInForApp()) return false;      // the sign-in gate owns this state (incl. a recovery session — Security N1)" },
+    { line: 28753, fn: 'linkFlowScreen()', text: "if (!isSignedInForApp()) return '';" },
+    { line: 28783, fn: 'attemptAutoLink()', text: "if (!isSignedInForApp()) return 'idle';" },
   ];
   const linesN1 = srcN1raw.split('\n');
   const isfaMismatches = ENUMERATED_ISFA_SITES.filter((c) => (linesN1[c.line - 1] || '').trim() !== c.text);
@@ -6236,7 +6251,7 @@ console.log('\n[40] REVIEWER BLOCK B1 — Profile\'s alma-mater catalog is shape
   // Every real ALMA_MATERS school renders as a NON-EMPTY <option value="...">
   // — the exact defect: before the fix, every fallback option's value was ''.
   const dataModel40 = await import('./js/data-model.js');
-  const missingOrEmpty40 = dataModel40.ALMA_MATERS.filter(school => {
+  const missingOrEmpty40 = dataModel40.getAlmaMaters({ pilot: true }).filter(school => {
     const re = new RegExp(`<option value="${school.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}"[^>]*>`);
     return !re.test(optionsHtml40);
   });

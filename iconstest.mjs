@@ -82,7 +82,11 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
   // unreachable by tap). Same family shape as every other entry — the [1c-1i]
   // loop below scans it like the rest.
   assert(names.includes('munera'), '[1b10] v0.27.0 set present: munera (the native header mark that opens the control center)');
-  assert(names.length === 27, `[1b6] ICONS carries exactly 27 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  // Raised 27 -> 34, N1 league creation (DI-430, 2026-09-30) — the seven glyphs the New League flow's mockup names: plus, share, copy, clear, sportBasketball, sportHockey, trophy.
+  assert(names.length === 34, `[1b6] ICONS carries exactly 34 entries this pass (found ${names.length}: ${names.join(', ')}) — a raised count here is a deliberate signal to re-check this assertion, not a floor to silently exceed`);
+  for (const n of ['plus', 'share', 'copy', 'clear', 'sportBasketball', 'sportHockey', 'trophy']) {
+    assert(names.includes(n), `[1b11] N1 set present: ${n} (the New League flow's mockup glyph)`);
+  }
 
   for (const name of names) {
     const svg = ICONS[name];
@@ -129,6 +133,83 @@ console.log('\n[1] ICONS entries — structural validity, shared convention…')
   assert(sf.includes('x1="5.5" y1="3" x2="16.5" y2="14"'), '[1j-7] the second blade\'s long diagonal stroke is present — the two blades cross');
   assert(!sf.includes('<rect') && !sf.includes('<polyline') && !sf.includes('<circle'),
     '[1j-8] the new glyph is drawn ENTIRELY from <line> elements — no other primitive');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [1k] DI-443 (UN-386, 2026-09-29) — the alma-mater glyph IS the games glyph.
+//      Drew: "the crossed swords that is used for games, not the trident". The
+//      shipped glyph was a laurel sprig (a stem + two mirrored pairs of curved
+//      leaf strokes) that read as a trident at the 14px the badge hosts render.
+//      ONE constant (`CROSSED_SWORDS`, js/icons.js) feeds BOTH keys, so the two
+//      can never drift; every render path reads the key through icon().
+//      Mutation-proven below: the same predicate is run on a laurel fixture and
+//      must REJECT it, and the shared-constant source check is run on a source
+//      where `almaMater` is a literal laurel and must fail too.
+// ─────────────────────────────────────────────────────────────────────────────
+console.log('\n[1k] DI-443 — alma mater = the games crossed swords: one constant, two keys, every render path, the labels…');
+{
+  const isCrossedSwordsOnly = svg => svg === ICONS.sportFootball
+    && (svg.match(/<line\b/g) || []).length === 6
+    && !svg.includes('M12 21V5') && !svg.includes('<path') && !svg.includes('<circle') && !svg.includes('<rect');
+  assert(ICONS.almaMater === ICONS.sportFootball,
+    '[1k-1] ICONS.almaMater === ICONS.sportFootball — the alma-mater marker is byte-for-byte the games glyph');
+  assert(!ICONS.almaMater.includes('M12 21V5'),
+    '[1k-2] the laurel sprig\'s stem (M12 21V5) is gone from almaMater');
+  assert((ICONS.almaMater.match(/<line\b/g) || []).length === 6 && !ICONS.almaMater.includes('<path'),
+    '[1k-3] almaMater is drawn from exactly 6 <line> elements (two blades × 3 segments) and no <path>');
+  assert(isCrossedSwordsOnly(ICONS.almaMater), '[1k-4] the crossed-swords predicate accepts the shipped almaMater');
+  const LAUREL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V5"/><path d="M12 15c2.5 0 4.5-1.8 4.5-4.5"/><path d="M12 9c2.2 0 4-1.6 4-4"/><path d="M12 15c-2.5 0-4.5-1.8-4.5-4.5"/><path d="M12 9c-2.2 0-4-1.6-4-4"/></svg>';
+  assert(!isCrossedSwordsOnly(LAUREL) && LAUREL !== ICONS.sportFootball,
+    '[1k-5] MUTATION: the same predicate REJECTS the old laurel sprig — restoring it fails [1k-1..4]');
+
+  const iconsSrc = await readFile(new URL('./js/icons.js', import.meta.url), 'utf8');
+  // Comment-stripped: only real code counts (the file's own comments quote the glyph's history).
+  const iconsCode = iconsSrc.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  const sharedConstantOk = code => (code.match(/const CROSSED_SWORDS = '<svg /g) || []).length === 1
+    && /\balmaMater:\s*CROSSED_SWORDS\s*,/.test(code) && /\bsportFootball:\s*CROSSED_SWORDS\s*,/.test(code)
+    && (code.match(/x1="18\.5" y1="3" x2="7\.5" y2="14"/g) || []).length === 1;
+  assert(sharedConstantOk(iconsCode),
+    '[1k-6] js/icons.js: ONE `const CROSSED_SWORDS`, both `almaMater:` and `sportFootball:` read it, and the blade markup appears exactly once (no second literal copy to drift)');
+  const mutantSrc = iconsCode.replace(/\balmaMater:\s*CROSSED_SWORDS\s*,/, `almaMater: '${LAUREL}',`);
+  assert(mutantSrc !== iconsCode && !sharedConstantOk(mutantSrc),
+    '[1k-7] MUTATION: a source where almaMater is a literal laurel again FAILS the shared-constant check');
+  const dupSrc = iconsCode.replace(/\balmaMater:\s*CROSSED_SWORDS\s*,/, `almaMater: '${ICONS.sportFootball}',`);
+  assert(dupSrc !== iconsCode && !sharedConstantOk(dupSrc),
+    '[1k-8] MUTATION: a source that pastes a SECOND literal copy of the swords into almaMater FAILS it too (the constant must be shared, not duplicated)');
+  assert(!/laurel|trident/i.test(iconsCode), '[1k-9] no live code path or key in icons.js still mentions the laurel');
+
+  // Every alma-mater render path. The keys reach the screen only through icon() (js/icons.js).
+  const appSrc = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+  const sites = [...appSrc.matchAll(/icon\('almaMater'(?:, \{ label: '([^']*)' \})?\)/g)];
+  assert(sites.length === 7, `[1k-10] js/app.js renders the alma-mater glyph at exactly 7 sites, all via icon('almaMater'…) (found ${sites.length}) — the game-card badge, Alma Mater Watch, Alma Mater Rankings, Alma maters & home teams, the Comm → Games filter chip, and the two Games-tab badges`);
+  assert(!/alma-mater-badge[^`]*`[^`]*⭐/.test(appSrc) && !appSrc.includes('M12 21V5'),
+    '[1k-11] js/app.js carries no emoji or hand-drawn alma-mater glyph of its own — every site is the shared key');
+  // The two ICON-ONLY badges (nothing but the glyph inside the span) carry an aria-label; the text-bearing sites do not need one.
+  const iconOnly = [...appSrc.matchAll(/<span class="alma-mater-badge[^"]*">\$\{icon\('almaMater'([^)]*)\)\}<\/span>/g)];
+  assert(iconOnly.length === 2, `[1k-12] exactly two icon-only alma-mater badges exist in app.js (found ${iconOnly.length}: the Games-tab slate row and the games-admin card)`);
+  assert(iconOnly.every(m => m[1].trim() === ", { label: 'Alma mater game' }"),
+    `[1k-13] BOTH icon-only badges carry {label:'Alma mater game'} so VoiceOver names them (a title does not fire on touch): ${JSON.stringify(iconOnly.map(m => m[1]))}`);
+  const rendered = icon('almaMater', { label: 'Alma mater game' });
+  assert(rendered.includes('role="img"') && rendered.includes('aria-label="Alma mater game"') && !rendered.includes('aria-hidden') && rendered.includes('x1="18.5" y1="3"'),
+    '[1k-14] icon(\'almaMater\', { label }) renders role="img" + the label + the swords (and is not aria-hidden)');
+  const textSites = sites.filter(m => m[1] === undefined).length;
+  assert(textSites === 5 && sites.length - textSites === 2,
+    `[1k-15] the other five sites keep the decorative default (aria-hidden — each sits beside visible text, e.g. "Alma Mater", "Alma Mater Watch"): ${textSites} decorative + ${sites.length - textSites} labelled`);
+  assert(/<span class="alma-mater-badge">\$\{icon\('almaMater'\)\} Alma Mater<\/span>/.test(appSrc),
+    '[1k-16] the game-card badge stays glyph + the visible words "Alma Mater" (the ambiguity with the games glyph is resolved by its label)');
+
+  // The Profile label (control-center.js) resolves the SAME key through the injected icon().
+  const cc = await import('./js/control-center.js');
+  const profile = cc.renderProfileScreen({
+    escHtml: v => String(v ?? ''), icon, session: { player: { id: 'p1', displayName: 'D', initials: 'D', almaMater: 'X' } },
+    bodies: { almaMaterOptionsHTML: '<option>X</option>' },
+  });
+  assert(profile.includes(ICONS.almaMater.replace('<svg ', '<svg aria-hidden="true" focusable="false" ')) && (profile.match(/x1="18\.5" y1="3"/g) || []).length === 1,
+    '[1k-17] the Control Center Profile "Alma mater & home teams" label renders the crossed swords through the real icon() (controlcentertest.mjs pins its wiring with a stub)');
+  // Size: the crossed swords are busier than the laurel, so the alma-mater badge (only) takes the DI's pre-authorized 16px step.
+  const cssSrc = await readFile(new URL('./css/styles.css', import.meta.url), 'utf8');
+  assert(/\.alma-mater-badge svg \{ width: 16px; height: 16px;/.test(cssSrc) && /\.alma-mater-badge svg,\s*\n\.card-title svg,/.test(cssSrc),
+    '[1k-18] .alma-mater-badge svg renders at 16px (DI-443 pre-authorized fallback: the swords are muddy at 14px) while the shared 14px host rule (card titles, section titles, chips, Rules headings) is untouched');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -419,7 +500,7 @@ console.log('\n[8] S1-A — every icon() host in app.js / leagues-home.js has an
 
   const sized = sizedSelectors(cssRaw);
   const all = [];
-  for (const f of ['./js/app.js', './js/leagues-home.js']) {
+  for (const f of ['./js/app.js', './js/leagues-home.js', './js/league-create.js']) {
     all.push(...audit(stripJs(readFileSync(new URL(f, import.meta.url), 'utf8')), f.slice(2), sized));
   }
   assert(all.length >= 25, `[8c] fixture: the derivation found a real population of icon() call sites (${all.length}) — a matcher that found none would make [8d] vacuous`);

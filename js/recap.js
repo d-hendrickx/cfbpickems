@@ -20,6 +20,8 @@ import { calculateSeasonStandings, calculateAtsWinner } from './scoring.js';
 import { formatWeekLabel } from './data-model.js';
 import { gradeWeekExtraPoint } from './extra-point.js';
 import { SEASON_2025, season2025Nets } from './history-2025.js';
+// N1 (DI-432 §7, 2026-09-30) — the 2K25 Permanent Record is the PILOT league's; the gate is the shared pilot-only predicate, answering for the ACTIVE league through the resolver app.js installs.
+import { isPilotOnlyAllowed } from './pilot-only.js';
 
 function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -193,7 +195,7 @@ export function renderSeasonSummaryHTML(currentWeek) {
   // Week-1 Permanent Record renders with ZERO commissioner setup. This was the
   // root cause of the empty footer: the old path could only summarize prior
   // seasons that lived in app storage, and 2K25 lived in a spreadsheet.
-  if (String(Number(season) - 1) === SEASON_2025.season) {
+  if (String(Number(season) - 1) === SEASON_2025.season && isPilotOnlyAllowed('recap2025')) {
     const nets = season2025Nets();
     const fmtNet = n => (n > 0 ? `+${n}` : `${n}`);
     return `

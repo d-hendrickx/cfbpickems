@@ -31,6 +31,29 @@
  * is the reference when that work is scheduled.
  */
 
+// ─── The crossed-swords glyph — ONE constant, two keys (DI-443) ───────────
+//
+// DI-410 (UN-365, 2026-09-28, Drew's pick) — crossed swords/gladii,
+// arena/games reading, replacing the rect-and-divider "matchup" concept
+// DI-349 (2026-09-27, UN-307) had shipped for the scoreboard tile. Two
+// spaced blades, each drawn as three short segments (a long diagonal stroke
+// plus two shorter guard/tip strokes) rather than one continuous line, so
+// the crossing point reads as two distinct swords overlapping instead of one
+// bent line.
+//
+// DI-443 (UN-386, 2026-09-29, Drew: "the crossed swords that is used for
+// games, not the trident") — the alma-mater marker is now THIS glyph too.
+// The laurel sprig it replaced (a stem with two mirrored pairs of curved leaf
+// strokes) read as a trident at the 14px the badge hosts render it. Both
+// keys below read this one constant, so the two can never drift apart (the
+// AD-20 "one shared source" rule, for markup): `sportFootball` (Comm/Admin ->
+// Games tabs, Leagues Home's football card) and `almaMater` (the game-card
+// badge, the Alma Mater Watch / Rankings / Alma maters & home teams titles,
+// the Comm -> Games filter chip and badges, the Profile label). One glyph,
+// two meanings, is Drew's recorded call; every text-bearing site carries a
+// visible label, and the two icon-only badges carry an aria-label instead.
+const CROSSED_SWORDS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18.5" y1="3" x2="7.5" y2="14"/><line x1="5.5" y1="12" x2="9.5" y2="16"/><line x1="7.5" y1="14" x2="4.5" y2="17"/><line x1="5.5" y1="3" x2="16.5" y2="14"/><line x1="14.5" y1="16" x2="18.5" y2="12"/><line x1="16.5" y1="14" x2="19.5" y2="17"/></svg>';
+
 // ─── Phase 1 icon set (DI-330) ────────────────────────────────────────────
 
 export const ICONS = {
@@ -38,11 +61,10 @@ export const ICONS = {
   bell: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 3.5 1.2 5.2 2 6.2.4.5 0 1.3-.6 1.3H4.6c-.6 0-1-.8-.6-1.3.8-1 2-2.7 2-6.2Z"/><path d="M9.5 18a2.5 2.5 0 0 0 5 0"/></svg>',
 
   // T-09c — replaces ⭐ across all 9 Alma Mater Watch call sites (DI-330).
-  // A laurel sprig: one stem, two mirrored pairs of curved leaf strokes,
-  // reusing the branding profile's own "Palma"/laurel vocabulary. Every one
-  // of the 9 sites converts together in the same future batch — this entry
-  // is the single source all 9 will read.
-  almaMater: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21V5"/><path d="M12 15c2.5 0 4.5-1.8 4.5-4.5"/><path d="M12 9c2.2 0 4-1.6 4-4"/><path d="M12 15c-2.5 0-4.5-1.8-4.5-4.5"/><path d="M12 9c-2.2 0-4-1.6-4-4"/></svg>',
+  // DI-443 (UN-386, 2026-09-29): the SAME crossed-swords glyph the games use
+  // (see CROSSED_SWORDS above) — the laurel sprig this entry used to hold read
+  // as a trident at 14px. Key unchanged, so every call site inherits it.
+  almaMater: CROSSED_SWORDS,
 
   // T-16 — supplied to group A's bottom-nav DI for the new Settings slot
   // (D-3). A three-row "sliders" glyph — deliberately NOT a gear/cog, so its
@@ -61,27 +83,14 @@ export const ICONS = {
   // Replaces literal '‹' on the new league cards.
   chevronLeft: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"/></svg>',
 
-  // DI-349 (2026-09-27, UN-307): scoreboard tile — replaces the original
-  // football-outline glyph (an ellipse rotated 45° + a diagonal lace line
-  // with 3 cross-ticks), which was the most detailed glyph in the family at
-  // the smallest render size in the app and read muddy at that scale. The
-  // new glyph is a rounded rect split by a vertical divider with a short
-  // tick in each half — reads as "two teams, a matchup, a score" rather
-  // than "a ball," reuses the same rect-based grammar the `tv` glyph above
-  // already established (visual-family consistency), and has a cleaner
-  // silhouette at 20px than any ellipse/diagonal-line composition. Concept
-  // B of three presented in the DI; Drew's coordinator-approved pick.
+  // DI-349 (2026-09-27, UN-307) made this a scoreboard tile; DI-410 (UN-365,
+  // 2026-09-28, Drew's pick) replaced that with the crossed swords, now the
+  // CROSSED_SWORDS constant above (shared with `almaMater`, DI-443).
   // KEY UNCHANGED — still `ICONS.sportFootball`, still read by Comm → Games
-  // tab (js/comm-panel-layout.js:62), Admin → Games tab
-  // (js/admin-panel.js:122), and Leagues Home's football sport-card glyph
-  // (js/leagues-home.js:440) — no call-site edits needed for this swap.
-  // DI-410 (UN-365, 2026-09-28, Drew's pick) — crossed swords/gladii,
-  // arena/games reading, replacing the rect-and-divider "matchup" concept
-  // above. Two spaced blades, each drawn as three short segments (a long
-  // diagonal stroke plus two shorter guard/tip strokes) rather than one
-  // continuous line, so the crossing point reads as two distinct swords
-  // overlapping instead of one bent line.
-  sportFootball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18.5" y1="3" x2="7.5" y2="14"/><line x1="5.5" y1="12" x2="9.5" y2="16"/><line x1="7.5" y1="14" x2="4.5" y2="17"/><line x1="5.5" y1="3" x2="16.5" y2="14"/><line x1="14.5" y1="16" x2="18.5" y2="12"/><line x1="16.5" y1="14" x2="19.5" y2="17"/></svg>',
+  // tab (js/comm-panel-layout.js), Admin → Games tab (js/admin-panel.js), and
+  // Leagues Home's football sport-card glyph (js/leagues-home.js) — no
+  // call-site edits needed.
+  sportFootball: CROSSED_SWORDS,
 
   // ── Coordinator follow-up, 2026-09-25 (commissioner/admin panel tab
   // glyphs) — same convention as everything above. ─────────────────────────
@@ -93,7 +102,7 @@ export const ICONS = {
 
   // Two overlapping person outlines (head + shoulder arc each) — a
   // conventional "group of players" glyph, distinct in silhouette from
-  // `almaMater` (laurel) and `settings` (sliders).
+  // `almaMater` (crossed swords) and `settings` (sliders).
   playersGroup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M4 19c0-3 2-5 5-5s5 2 5 5"/><circle cx="16.5" cy="9" r="2.3"/><path d="M14.8 19c.3-2.3 1.9-4 3.9-4 2 0 3.5 1.5 3.8 3.7"/></svg>',
 
   // Reuses the exact shape the bottom-nav's own pre-D-3 Rules icon used
@@ -118,8 +127,8 @@ export const ICONS = {
   cloudData: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 0 1-.5-7.96A5 5 0 0 1 16.2 9.1 4.5 4.5 0 0 1 17 18Z"/></svg>',
 
   // A shield outline with an inset checkmark — for an "Admin"/permissions
-  // tab. Distinct silhouette from `almaMater`'s laurel and from the existing
-  // Commissioner nav icon (circle + radiating lines).
+  // tab. Distinct silhouette from `almaMater`'s crossed swords and from the
+  // existing Commissioner nav icon (circle + radiating lines).
   shieldAdmin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z"/><polyline points="8.5 12 11 14.5 15.5 9.5"/></svg>',
 
   // ── F8 (WIRING_CHECKLIST_B_092526.md) — icon inventory on rows/lists that
@@ -184,6 +193,23 @@ export const ICONS = {
   // temple mark to the family grid. Fills #control-center-trigger on the
   // native shell (js/app.js renderControlCenterTrigger()).
   munera: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9 12 4.5 20.5 9Z"/><line x1="7" y1="12" x2="7" y2="16"/><line x1="12" y1="12" x2="12" y2="16"/><line x1="17" y1="12" x2="17" y2="16"/><line x1="4" y1="19.5" x2="20" y2="19.5"/></svg>',
+
+  // ── N1 league creation (DI-430, 2026-09-30) — SEVEN icons for the New League flow, drawn to the family grid from the approved mockup's symbol sheet
+  // (docs/mockups/league-create.html). Same convention as everything above; no emoji anywhere in the flow's chrome. ─────────────────────────────────
+  // A plus (two strokes). The "+ Create new league" entry card (Leagues Home) and the landing's create card.
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
+  // The iOS share glyph: an arrow leaving an open-topped box. Share Invite.
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><polyline points="8 7 12 3 16 7"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>',
+  // Two overlapping sheets. Copy Code.
+  copy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>',
+  // A circle with a cross: the text field's clear control (the standard iOS "clear text" affordance).
+  clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="9" y1="9" x2="15" y2="15"/><line x1="15" y1="9" x2="9" y2="15"/></svg>',
+  // A ball with seams. NBA and College Basketball rows of the New League sports picker.
+  sportBasketball: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/><path d="M5.5 5.5c4 3 4 10 0 13M18.5 5.5c-4 3-4 10 0 13"/></svg>',
+  // A puck seen at an angle (two ellipse arcs and the side wall). The NHL row.
+  sportHockey: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="9" rx="8" ry="3.5"/><path d="M4 9v5c0 2 3.6 3.5 8 3.5s8-1.5 8-3.5V9"/></svg>',
+  // A cup with two handles. March Madness and World Juniors (the picker's Tournaments group).
+  trophy: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4h8v5a4 4 0 0 1-8 0z"/><path d="M8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4"/><line x1="12" y1="13" x2="12" y2="17"/><line x1="8" y1="20" x2="16" y2="20"/></svg>',
 
   // Phase 2 entries added incrementally, same shape — see DI-330's backlog
   // table (design-matrix-pm's §6) for the ordered candidate list.

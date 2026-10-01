@@ -1251,6 +1251,393 @@ try {
     `N4-c1: a deliberate release while armed commits the reply (reply bar ${commit.after?.replying ? 'open' : 'absent'})`);
   await evaluate(`document.getElementById('chat-cancel-reply')?.click()`);
   await sleep(200);
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[M13] RG-TBD-M13 — the text typed into the chat box is readable in every theme, both OS schemes, web and native…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // Drew, 2026-09-29: "the text in the chat box is white and it's really hard
+  // to see". ROOT CAUSE (css/styles.css `.chat-input`): the rule painted a
+  // background (`var(--bg-input)`) but never a `color`, so a <textarea> used
+  // the UA's `fieldtext`, which follows the USED color-scheme — and index.html
+  // declares `<meta name="color-scheme" content="light dark">`, so with the OS
+  // in dark mode the UA colour is WHITE. Only `body.theme-neutral` in dark
+  // mode also flips the tokens (and sets color-scheme:dark on the body); the
+  // six school themes and Munera's explicit "Light" are light-token surfaces
+  // (--bg-input #F2EFE9 / #F5F2EE), so the typed text went white on cream
+  // (≈1.2:1). `.form-input` has always carried `color:var(--text-primary)`;
+  // `.chat-input` never did, and it had no ::placeholder rule at all.
+  // Measured in the REAL engine against the real stylesheet: OS scheme
+  // emulated via Emulation.setEmulatedMedia, the palette by the same body
+  // class/attribute applyTheme()/applyColorScheme() write, native by the
+  // `native-shell` body class js/app.js stamps. WCAG 2.x relative-luminance
+  // contrast of the computed text colour, the computed ::placeholder colour
+  // and the caret against the composer's own painted surface.
+  await viewport(390, 844);
+  await evaluate(`window.navigateTo('chat')`);
+  await waitFor(`document.getElementById('chat-input')`);
+  await sleep(300);
+  const M13_JS = `(() => {
+    const parse = s => { const m = /rgba?\\(([^)]+)\\)/.exec(s || ''); if (!m) return null; const p = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const over = (top, bot) => ({ r: top.r * top.a + bot.r * (1 - top.a), g: top.g * top.a + bot.g * (1 - top.a), b: top.b * top.a + bot.b * (1 - top.a), a: 1 });
+    const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const el = document.getElementById('chat-input');
+    // The surface BEHIND the text: the textarea's own paint, composited down
+    // through every ancestor onto the canvas (white if nothing opaque).
+    let bg = { r: 255, g: 255, b: 255, a: 1 };
+    const chain = []; for (let n = el; n; n = n.parentElement) chain.push(n);
+    for (const n of chain.reverse()) { const c = parse(getComputedStyle(n).backgroundColor); if (c && c.a > 0) bg = over(c, bg); }
+    const cs = getComputedStyle(el);
+    const text = parse(cs.color), fill = parse(cs.webkitTextFillColor), ph = parse(getComputedStyle(el, '::placeholder').color);
+    const caretRaw = cs.caretColor; const caret = /rgb/.test(caretRaw) ? parse(caretRaw) : text;   // 'auto' = currentcolor
+    return { text: ratio(text, bg), ph: ratio(ph, bg), caret: ratio(caret, bg), fillSame: !!fill && fill.r === text.r && fill.g === text.g && fill.b === text.b,
+      rgb: cs.color, phRgb: getComputedStyle(el, '::placeholder').color, bg: 'rgb(' + [bg.r, bg.g, bg.b].map(Math.round).join(',') + ')' };
+  })()`;
+  const PAINT = (theme, scheme, native) => evaluate(`(() => {
+    const b = document.body; [...b.classList].forEach(c => { if (c.startsWith('theme-')) b.classList.remove(c); });
+    b.classList.add('theme-' + ${JSON.stringify(theme)});
+    if (${JSON.stringify(scheme)} === 'system') delete b.dataset.colorScheme; else b.dataset.colorScheme = ${JSON.stringify(scheme)};
+    b.classList.toggle('native-shell', ${!!native});
+  })()`);
+  const palettes = [
+    ['neutral', 'system'], ['neutral', 'light'], ['neutral', 'dark'],
+    ['aggie', 'system'], ['sooner', 'system'], ['trojan', 'system'], ['irish', 'system'], ['boilermaker', 'system'], ['razorback', 'system'],
+  ];
+  const m13Rows = [];
+  for (const os of ['light', 'dark']) {
+    await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: os }] });
+    for (const native of [false, true]) {
+      for (const [theme, scheme] of palettes) {
+        await PAINT(theme, scheme, native);
+        const r = await evaluate(M13_JS);
+        m13Rows.push({ os, native, theme, scheme, ...r });
+        assert(r.text >= 4.5 && r.ph >= 4.5 && r.caret >= 3 && r.fillSame,
+          `M13-${os}${native ? '-native' : '-web'}-${theme}${scheme === 'system' ? '' : '-' + scheme}: OS ${os}, ${native ? 'native shell' : 'web'}, theme ${theme}${scheme === 'system' ? '' : ' (' + scheme + ')'} — typed text ${r.rgb} is ${r.text.toFixed(2)}:1 on ${r.bg} (≥4.5), placeholder ${r.phRgb} ${r.ph.toFixed(2)}:1 (≥4.5), caret ${r.caret.toFixed(2)}:1 (≥3), text-fill follows colour (${r.fillSame})`);
+      }
+    }
+  }
+  // Both composers share the rule: the game-thread sheet's textarea is also
+  // `.chat-input`, inside `.chat-sheet` (outside #page-chat). Proven on the
+  // real class chain with a scratch node under the sheet's own wrapper classes.
+  await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
+  await PAINT('aggie', 'system', false);
+  const sheetRatio = await evaluate(`(() => {
+    const wrap = document.createElement('div'); wrap.id = 'm13-scratch'; wrap.innerHTML = '<div class="chat-sheet"><div class="chat-composer"><textarea class="chat-input" id="m13-sheet-input" placeholder="x"></textarea></div></div>';
+    document.body.appendChild(wrap);
+    const el = document.getElementById('m13-sheet-input'), cs = getComputedStyle(el);
+    const p = s => { const m = /rgba?\\(([^)]+)\\)/.exec(s); const v = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number); return { r: v[0], g: v[1], b: v[2] }; };
+    const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const a = lum(p(cs.color)), b = lum(p(cs.backgroundColor)); const out = (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    wrap.remove(); return out; })()`);
+  assert(sheetRatio >= 4.5, `M13-sheet: the game-thread sheet's composer (.chat-sheet .chat-input) shares the fix — OS dark + a school theme, typed text ${sheetRatio.toFixed(2)}:1 (≥4.5)`);
+
+  // ── [M13b] RG-309 — the SAME class, swept: every control the stylesheet gives a background must bring its own text colour.
+  // controlcolortest.mjs proves it statically over the whole stylesheet; this renders each control this pass fixed, with the
+  // markup shape the app builds, on the surface it really sits on, in the engine — and measures the ink actually painted.
+  // `.chat-sheet-close` is the reviewer's sibling: white ✕ on --bg-input under OS dark + a light palette.
+  const M13B_JS = `(() => {
+    const parse = s => { const m = /rgba?\\(([^)]+)\\)/.exec(s || ''); if (!m) return null; const p = m[1].split(/[ ,\\/]+/).filter(Boolean).map(Number); return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 }; };
+    const over = (top, bot) => ({ r: top.r * top.a + bot.r * (1 - top.a), g: top.g * top.a + bot.g * (1 - top.a), b: top.b * top.a + bot.b * (1 - top.a), a: 1 });
+    const lum = c => { const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b); };
+    const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+    const host = document.createElement('div'); host.id = 'm13b-scratch';
+    // each: [label, markup]. Wrappers stand in for the real surface: the chat surface / sheet / drawer are --bg-card.
+    const CASES = [
+      ['.chat-sheet-close', '<button class="chat-sheet-close">✕</button>'],
+      ['.chat-act', '<button class="chat-act">↩</button>'],
+      ['.chat-mention-opt', '<button class="chat-mention-opt">Brayden</button>'],
+      ['.chat-bubble-btn', '<button class="chat-bubble-btn chat-bubble-read">💬</button>'],
+      ['.reaction-pick-option', '<button class="reaction-pick-option">👍</button>'],
+      ['.chat-react-pill', '<button class="chat-react-pill">👍 2</button>'],
+      ['.chat-react-pill.me', '<button class="chat-react-pill me">👍 2</button>'],
+      ['.chat-search-result', '<button class="chat-search-result"><span>plain text</span></button>'],
+      ['.player-tile', '<button class="player-tile">Drew</button>'],
+      ['.control-center-identity-tap', '<button class="control-center-identity-tap">Drew</button>'],
+      ['.chat-replying button', '<div class="chat-replying">↩ replying <button>✕</button></div>'],
+    ];
+    host.innerHTML = CASES.map(([l, html], i) => '<div data-case="' + i + '" style="background:var(--bg-card);color:var(--text-primary);padding:8px">' + html + '</div>').join('');
+    document.body.appendChild(host);
+    const out = CASES.map(([label], i) => {
+      const wrap = host.querySelector('[data-case="' + i + '"]');
+      const el = wrap.querySelector('button');
+      let bg = { r: 255, g: 255, b: 255, a: 1 };
+      const chain = []; for (let n = el; n; n = n.parentElement) chain.push(n);
+      for (const n of chain.reverse()) { const c = parse(getComputedStyle(n).backgroundColor); if (c && c.a > 0) bg = over(c, bg); }
+      const ink = parse(getComputedStyle(el).color);
+      return { label, ink: getComputedStyle(el).color, ratio: ratio(ink, bg) };
+    });
+    host.remove();
+    return out;
+  })()`;
+  const b13 = [];
+  for (const [os, theme, scheme] of [['dark', 'aggie', 'system'], ['dark', 'neutral', 'light'], ['light', 'neutral', 'dark'], ['dark', 'neutral', 'system'], ['light', 'razorback', 'system']]) {
+    await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: os }] });
+    await PAINT(theme, scheme, false);
+    const rows = await evaluate(M13B_JS);
+    b13.push(...rows.map(r => ({ ...r, os, theme, scheme })));
+    const bad = rows.filter(r => r.ratio < 4.5);
+    assert(bad.length === 0,
+      `M13b-${os}-${theme}${scheme === 'system' ? '' : '-' + scheme}: OS ${os}, ${theme}${scheme === 'system' ? '' : ' (' + scheme + ')'} — all ${rows.length} fixed controls paint readable ink (worst ${Math.min(...rows.map(r => r.ratio)).toFixed(2)}:1)${bad.length ? ' — UNREADABLE: ' + bad.map(r => `${r.label} ${r.ink} ${r.ratio.toFixed(2)}:1`).join(', ') : ''}`);
+  }
+  assert(b13.length === 55 && b13.every(r => r.ratio >= 4.5), `M13b-all: ${b13.length} control × palette × OS combinations measured, every one ≥ 4.5:1 (worst ${Math.min(...b13.map(r => r.ratio)).toFixed(2)}:1)`);
+  await pg.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'light' }] });
+  await PAINT('neutral', 'system', false);
+  await pg.send('Emulation.setEmulatedMedia', { features: [] });
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[M1] DI-442 (UN-385) — the composer is the bottom section of ONE thread surface, lifted 8px off the tab bar (390×844)…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // Drew, 2026-09-29: the composer should read as "the bottom of the chat
+  // thread bubble" ("to save space"), "moved up a hair vertically so that it
+  // is not right on top of the tab bar". Before: `.chat-scroll` and
+  // `.chat-composer` were two separate cards 10px apart, and the composer's
+  // bottom edge sat exactly on the nav pill's top (zero gap). Now
+  // `.chat-surface` wraps thread + pull indicator + ↓ latest + composer (or
+  // the signed-out prompt) and carries the ONE card's chrome; the page's own
+  // padding-bottom (--chat-nav-gap, 8px) is the lift, above the pill or, with
+  // the keyboard up, above the keyboard.
+  const M1_JS = `(() => {
+    const r = e => { if (!e) return null; const b = e.getBoundingClientRect(); return { t: b.top, b: b.bottom, l: b.left, r: b.right, h: b.height }; };
+    const page = document.getElementById('page-chat'), surf = page.querySelector('.chat-surface'), th = document.getElementById('chat-scroll');
+    const comp = page.querySelector('.chat-composer, .chat-login-prompt'), jump = document.getElementById('chat-jump');
+    const wrap = page.querySelector('.chat-pull-refresh-wrap'), nav = document.querySelector('.bottom-nav');
+    // The pill's RESTING top edge (viewport − its bottom offset − its height): the nav
+    // auto-hides on scroll (a translateY), which moves getBoundingClientRect().top but
+    // is not the layout the lift is measured against.
+    const navNat = nav ? innerHeight - parseFloat(getComputedStyle(nav).bottom) - nav.offsetHeight : null;
+    const cs = e => e ? getComputedStyle(e) : null;
+    const sc = cs(surf), tc = cs(th), cc = cs(comp);
+    return { vh: innerHeight, surf: r(surf), th: r(th), comp: r(comp), jump: r(jump), wrap: r(wrap), nav: r(nav), navNat, page: r(page),
+      inSurf: surf ? { thread: surf.contains(th), comp: surf.contains(comp), jump: surf.contains(jump), wrap: surf.contains(wrap), input: !!surf.querySelector('#chat-input, #chat-login-btn') } : null,
+      jumpShown: jump ? jump.style.display : null,
+      surfCss: sc && { bg: sc.backgroundColor, shadow: sc.boxShadow, rad: sc.borderTopLeftRadius + '/' + sc.borderBottomLeftRadius, ov: sc.overflow, flex: sc.flexGrow + ' ' + sc.flexShrink, minH: sc.minHeight },
+      thCss: { bg: tc.backgroundColor, shadow: tc.boxShadow, radBL: tc.borderBottomLeftRadius, radTL: tc.borderTopLeftRadius, padB: tc.paddingBottom, ovY: tc.overflowY },
+      compCss: cc && { bg: cc.backgroundColor, shadow: cc.boxShadow, rad: cc.borderTopLeftRadius + '/' + cc.borderBottomLeftRadius, mt: cc.marginTop, btw: cc.borderTopWidth, bts: cc.borderTopStyle, btc: cc.borderTopColor, bbw: cc.borderBottomWidth, blw: cc.borderLeftWidth },
+      pagePadB: cs(page).paddingBottom, swipingAttrHost: document.getElementById('chat-scroll')?.id };
+  })()`;
+  const sbSeen = (m1, what) => `${what}: surface ${m1.surf ? m1.surf.t.toFixed(1) + '…' + m1.surf.b.toFixed(1) : 'ABSENT'}`;
+  await viewport(390, 844);
+  await evaluate(`document.activeElement?.blur?.()`);
+  await evaluate(`window.navigateTo('picks')`); await sleep(200);
+  await evaluate(`window.navigateTo('chat')`);
+  await waitFor(`document.getElementById('chat-input')`);
+  await sleep(500);
+  let s1 = await evaluate(M1_JS);
+  assert(!!s1.surf && s1.inSurf.thread && s1.inSurf.comp && s1.inSurf.wrap && s1.inSurf.jump && s1.inSurf.input,
+    `M1-A1a: the thread, the pull indicator, ↓ latest and the composer share ONE .chat-surface (${JSON.stringify(s1.inSurf)})`);
+  assert(!!s1.surf && s1.comp.t - s1.th.b <= 1 && s1.comp.t - s1.th.b >= -1,
+    `M1-A1b: THE BUG — the thread and the composer meet with no gap (composer top ${s1.comp?.t?.toFixed(1)} − thread bottom ${s1.th?.b?.toFixed(1)} = ${s1.comp && s1.th ? (s1.comp.t - s1.th.b).toFixed(1) : '?'}px; before: 10px margin + a second card)`);
+  assert(!!s1.surf && s1.surfCss.bg !== 'rgba(0, 0, 0, 0)' && s1.surfCss.shadow !== 'none' && parseFloat(s1.surfCss.rad) > 0 && s1.surfCss.rad.split('/').every(v => parseFloat(v) > 0),
+    `M1-A1c: the surface carries the ONE card's chrome — background ${s1.surfCss?.bg}, shadow present (${s1.surfCss?.shadow !== 'none'}), radius ${s1.surfCss?.rad}`);
+  assert(!!s1.surf && s1.surfCss.ov === 'visible',
+    `M1-A1d: the surface sets no overflow (it would clip the reply-swipe's own-bubble overhang and the pull indicator) — overflow "${s1.surfCss?.ov}"`);
+  assert(s1.thCss.bg === 'rgba(0, 0, 0, 0)' && s1.thCss.shadow === 'none' && parseFloat(s1.thCss.radBL) === 0 && parseFloat(s1.thCss.padB) === 0,
+    `M1-A1e: the thread loses its own card — background ${s1.thCss.bg}, shadow ${s1.thCss.shadow}, bottom radius ${s1.thCss.radBL}, bottom padding ${s1.thCss.padB}`);
+  assert(!!s1.compCss && s1.compCss.bg === 'rgba(0, 0, 0, 0)' && s1.compCss.shadow === 'none' && parseFloat(s1.compCss.mt) === 0 && s1.compCss.rad === '0px/0px',
+    `M1-A1f: the composer loses its margin-top, radius, shadow and own background (${JSON.stringify({ mt: s1.compCss?.mt, rad: s1.compCss?.rad, shadow: s1.compCss?.shadow, bg: s1.compCss?.bg })})`);
+  assert(!!s1.compCss && s1.compCss.btw === '1px' && s1.compCss.bts === 'solid' && s1.compCss.btc !== 'rgba(0, 0, 0, 0)' && s1.compCss.bbw === '0px' && s1.compCss.blw === '0px',
+    `M1-A1g: …and gains a 1px hairline top border in the theme's --border (${s1.compCss?.btw} ${s1.compCss?.bts} ${s1.compCss?.btc}; other sides ${s1.compCss?.bbw}/${s1.compCss?.blw})`);
+  assert(s1.pagePadB === '8px' && s1.surf && Math.abs(s1.surf.b - (s1.page.b - 8)) <= 1,
+    `M1-A2a: the lift is one 8-pt step — #page-chat padding-bottom ${s1.pagePadB}, the surface ends ${s1.surf ? (s1.page.b - s1.surf.b).toFixed(1) : '?'}px above the page's bottom edge`);
+  console.log('   ' + sbSeen(s1, 'keyboard down, no inset') + `, nav pill resting top ${s1.navNat.toFixed(1)}, jump ${s1.jumpShown}`);
+  assert(!!s1.surf && Math.abs((s1.navNat - s1.surf.b) - 8) <= 1,
+    `M1-A2b: THE BUG — keyboard down, the surface ends 8px above the tab bar (pill resting top ${s1.navNat.toFixed(1)} − surface bottom ${s1.surf?.b?.toFixed(1)} = ${s1.surf ? (s1.navNat - s1.surf.b).toFixed(1) : '?'}px; before: 0 — the composer sat on the pill)`);
+
+  // A2 again with a home-indicator device (34px bottom inset) — the gap is
+  // measured to the pill, whose own position already includes the inset.
+  let insets34 = true;
+  try { await pg.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: 59, topMax: 59, bottom: 34, bottomMax: 34, left: 0, leftMax: 0, right: 0, rightMax: 0 } }); } catch { insets34 = false; }
+  assert(insets34, 'M1-A2c-0: fixture — the engine accepted the 34px safe-area inset override');
+  await evaluate(`window.navigateTo('picks')`); await sleep(200);
+  await evaluate(`window.navigateTo('chat')`); await sleep(500);
+  const s2 = await evaluate(M1_JS);
+  assert(!!s2.surf && Math.abs((s2.navNat - s2.surf.b) - 8) <= 1,
+    `M1-A2c: with a 34px safe area the surface still ends 8px above the tab bar (pill resting top ${s2.navNat.toFixed(1)} − surface bottom ${s2.surf?.b?.toFixed(1)} = ${s2.surf ? (s2.navNat - s2.surf.b).toFixed(1) : '?'}px; vh ${s2.vh})`);
+  await pg.send('Emulation.setSafeAreaInsetsOverride', { insets: {} }).catch(() => {});
+  await evaluate(`window.navigateTo('picks')`); await sleep(200);
+  await evaluate(`window.navigateTo('chat')`); await sleep(500);
+
+  // A3: keyboard up — the 8px is measured from the KEYBOARD (viewport bottom).
+  assert(await raiseKeyboard(), 'M1-A3-0: fixture — composer focused, the REAL bindKeyboardAvoid() flagged body[data-keyboard-up]');
+  await sleep(300);
+  await evaluate(`(() => { window.__m1Node = document.getElementById('chat-input'); window.__m1Node.value = 'm1 draft'; window.__m1Node.setSelectionRange(3, 3); })()`);
+  let s3 = await evaluate(M1_JS);
+  assert(!!s3.surf && Math.abs((s3.vh - s3.surf.b) - 8) <= 1,
+    `M1-A3a: THE BUG — keyboard up, the surface ends 8px above the keyboard (viewport bottom ${s3.vh} − surface bottom ${s3.surf?.b?.toFixed(1)} = ${s3.surf ? (s3.vh - s3.surf.b).toFixed(1) : '?'}px; before: 0)`);
+  await evaluate(`(async () => { const chat = await import('./js/chat.js');
+    chat.ingest([{ id: 'm1in1', seq: 9951, ts: Date.now(), type: 'message', author: 'p3', gameTag: '', body: 'm1 inbound', replyTo: '', notify: true, meta: null, targetId: '' }]); })()`);
+  await sleep(400);
+  let s3b = await evaluate(`(() => { const i = document.getElementById('chat-input'); return { same: i === window.__m1Node, active: document.activeElement?.id, kbd: document.body.hasAttribute('data-keyboard-up'), val: i.value, caret: [i.selectionStart, i.selectionEnd] }; })()`);
+  assert(s3b.same && s3b.active === 'chat-input' && s3b.kbd && s3b.val === 'm1 draft' && s3b.caret[0] === 3,
+    `M1-A3b: the SAME textarea survives an inbound repaint through the extra ancestor level — focus, keyboard flag, draft and caret intact (${JSON.stringify(s3b)})`);
+  let g1 = await tapSel('#chat-send');
+  s3b = await evaluate(`(() => { const i = document.getElementById('chat-input'); return { same: i === window.__m1Node, active: document.activeElement?.id, kbd: document.body.hasAttribute('data-keyboard-up'), val: i.value }; })()`);
+  assert(g1.hit >= 1 && s3b.same && s3b.active === 'chat-input' && s3b.kbd && s3b.val === '',
+    `M1-A3c: …and through a send (➤ hit ${g1.hit}×): the same textarea, still focused, keyboard still up, draft consumed (${JSON.stringify(s3b)})`);
+  s3 = await evaluate(M1_JS);
+  assert(!!s3.surf && Math.abs((s3.vh - s3.surf.b) - 8) <= 1, `M1-A3d: …and the surface is still 8px above the keyboard after both repaints (${s3.surf ? (s3.vh - s3.surf.b).toFixed(1) : '?'}px)`);
+
+  // A4: ↓ latest — tappable, and clear of the composer by ≥8px.
+  assert(await scrollUpForJump(), 'M1-A4-0: fixture — scrolled up into history, the "↓ latest" button is showing');
+  let s4 = await evaluate(M1_JS);
+  const jc = s4.jump ? { x: Math.round((s4.jump.l + s4.jump.r) / 2), y: Math.round((s4.jump.t + s4.jump.b) / 2) } : null;
+  const jumpTop = jc ? await evaluate(`(() => { const el = document.elementFromPoint(${jc.x}, ${jc.y}); return el?.id || el?.className || el?.tagName; })()`) : null;
+  console.log(`   ↓ latest ${s4.jump ? s4.jump.t.toFixed(1) + '…' + s4.jump.b.toFixed(1) : 'n/a'}, composer top ${s4.comp?.t?.toFixed(1)}, gap ${s4.jump ? (s4.comp.t - s4.jump.b).toFixed(1) : '?'}px`);
+  assert(!!s4.jump && s4.comp.t - s4.jump.b >= 8 && s4.jump.b <= s4.surf?.b && s4.jump.t >= s4.th.t,
+    `M1-A4a: "↓ latest" clears the composer by ≥8px (gap ${s4.jump ? (s4.comp.t - s4.jump.b).toFixed(1) : '?'}px) and sits inside the surface, in the strip under the thread's scroll area (${s4.jump?.t?.toFixed(1)}…${s4.jump?.b?.toFixed(1)}; thread ${s4.th?.t?.toFixed(1)}…${s4.th?.b?.toFixed(1)}, surface bottom ${s4.surf?.b?.toFixed(1)})`);
+  assert(jumpTop === 'chat-jump', `M1-A4b: …and is the topmost element at its own centre, so it is tappable (element there: "${jumpTop}")`);
+  assert(!!s4.jump && Math.abs((s4.comp.t - s4.jump.b) - 8) <= 1,
+    `M1-A4c: keyboard UP — the gap is the 8px margin exactly (${s4.jump ? (s4.comp.t - s4.jump.b).toFixed(1) : '?'}px)`);
+  await evaluate(`document.activeElement?.blur?.()`);
+  await viewport(390, 844);
+  await waitFor(`!document.body.hasAttribute('data-keyboard-up')`, 3000);
+  await sleep(300);
+  assert(await scrollUpForJump(), 'M1-A4d-0: fixture — keyboard down, scrolled up, "↓ latest" showing');
+  const s4d = await evaluate(M1_JS);
+  const jcd = s4d.jump ? { x: Math.round((s4d.jump.l + s4d.jump.r) / 2), y: Math.round((s4d.jump.t + s4d.jump.b) / 2) } : null;
+  const jumpTopD = jcd ? await evaluate(`(() => { const el = document.elementFromPoint(${jcd.x}, ${jcd.y}); return el?.id || el?.className || el?.tagName; })()`) : null;
+  console.log(`   keyboard down: ↓ latest ${s4d.jump ? s4d.jump.t.toFixed(1) + '…' + s4d.jump.b.toFixed(1) : 'n/a'}, composer top ${s4d.comp?.t?.toFixed(1)}, gap ${s4d.jump ? (s4d.comp.t - s4d.jump.b).toFixed(1) : '?'}px`);
+  assert(!!s4d.jump && Math.abs((s4d.comp.t - s4d.jump.b) - 8) <= 1 && jumpTopD === 'chat-jump',
+    `M1-A4d: THE BUG — keyboard DOWN the button sits the SAME 8px above the composer (${s4d.jump ? (s4d.comp.t - s4d.jump.b).toFixed(1) : '?'}px; the old formula's --nav-bar-clearance term rode it ~56px up) and is tappable (element there "${jumpTopD}")`);
+  await evaluate(`(() => { const s = document.getElementById('chat-scroll'); s.scrollTop = s.scrollHeight; s.dispatchEvent(new Event('scroll')); })()`);
+  await sleep(200);
+
+  // A5: the reply-swipe still runs on #chat-scroll (B4's pins are the N4 block
+  // above; here only the structural claim this DI makes).
+  await evaluate(`window.navigateTo('chat')`); await sleep(400); await bottomOut(); await sleep(200);
+  const swipeRow = '#chat-scroll .chat-msg:not(.chat-mine):not(.chat-scribe):not(.chat-system):not(.chat-gamereact)';
+  const rowRect = await evaluate(`(() => { const b = [...document.querySelectorAll(${JSON.stringify(swipeRow)})].pop()?.querySelector('.chat-bubble')?.getBoundingClientRect(); return b ? { l: b.left, t: b.top, b: b.bottom, w: b.width } : null; })()`);
+  let swipingHost = null;
+  if (rowRect) {
+    const x0 = Math.round(rowRect.l + Math.min(20, rowRect.w / 2)), y0 = Math.round((rowRect.t + rowRect.b) / 2);
+    await pg.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: x0, y: y0 }] });
+    for (let i = 1; i <= 8; i++) { await pg.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x0 + Math.round(60 * i / 8), y: y0 }] }); await sleep(16); }
+    swipingHost = await evaluate(`(() => { const h = document.querySelector('[data-reply-swiping]'); return h ? { id: h.id, cls: h.className, inSurf: !!h.closest('.chat-surface') } : null; })()`);
+    await pg.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    await sleep(400);
+  }
+  assert(!!rowRect && swipingHost && swipingHost.id === 'chat-scroll' && swipingHost.inSurf,
+    `M1-A5: during a reply drag data-reply-swiping is on #chat-scroll (inside the surface) — ${JSON.stringify(swipingHost)}`);
+
+  // A6: signed out — the prompt is the surface's bottom section too; the
+  // game-sheet composer (outside #page-chat) is unchanged.
+  await evaluate(`(async () => { const st = await import('./js/storage.js'); st.clearSession(); (await import('./js/chat-ui.js')).renderChatPage(); })()`);
+  await sleep(300);
+  const s6 = await evaluate(M1_JS);
+  assert(!!s6.surf && s6.inSurf.comp && s6.inSurf.input && !!s6.compCss && s6.compCss.btw === '1px' && parseFloat(s6.compCss.mt) === 0 && s6.compCss.rad === '0px/0px' && s6.compCss.shadow === 'none' && s6.compCss.blw === '0px',
+    `M1-A6a: signed out, the login prompt is inside the surface, flush, hairline-topped, no margin/radius/shadow/side border (${JSON.stringify(s6.compCss)})`);
+  assert(!!s6.surf && Math.abs((s6.navNat - s6.surf.b) - 8) <= 1 && Math.abs((s6.comp.t - s6.th.b)) <= 1,
+    `M1-A6b: …and the same 8px lift and zero thread gap hold signed out (lift ${s6.surf ? (s6.navNat - s6.surf.b).toFixed(1) : '?'}px, gap ${s6.comp && s6.th ? (s6.comp.t - s6.th.b).toFixed(1) : '?'}px)`);
+  await evaluate(`(async () => { const st = await import('./js/storage.js'); st.setSession('p1', false, true); (await import('./js/chat-ui.js')).renderChatPage(); })()`);
+  await sleep(300);
+  const sheet = await evaluate(`(() => {
+    const wrap = document.createElement('div'); wrap.id = 'm1-scratch'; wrap.innerHTML = '<div class="chat-sheet"><div class="chat-composer"><textarea class="chat-input" id="m1-sheet-input"></textarea></div></div>';
+    document.body.appendChild(wrap); const c = getComputedStyle(wrap.querySelector('.chat-composer'));
+    const out = { mt: c.marginTop, rad: c.borderTopLeftRadius, shadow: c.boxShadow, bg: c.backgroundColor, btw: c.borderTopWidth }; wrap.remove(); return out; })()`);
+  assert(sheet.mt === '10px' && parseFloat(sheet.rad) > 0 && sheet.shadow !== 'none' && sheet.bg !== 'rgba(0, 0, 0, 0)' && sheet.btw === '0px',
+    `M1-A6c: the game-sheet composer (.chat-sheet .chat-composer, outside #page-chat) is unchanged — margin-top ${sheet.mt}, radius ${sheet.rad}, own shadow and background, no hairline (${JSON.stringify(sheet)})`);
+  await viewport(390, 844);
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[N12] DI-444 (UN-387) — no chat refresh button on native/touch (pull-to-sync is the one manual path); it stays on a desktop fine pointer…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // Drew, 2026-09-29: "Can get rid of refresh chat button now that we have
+  // swipe up to sync." Removed where the pull gesture exists — the native
+  // shell (isNativeShell()) and touch devices ((hover: none) and (pointer:
+  // coarse)); kept on desktop web with a fine pointer, where nothing pulls.
+  // The game-thread sheet's own button is NOT part of this change (the sheet
+  // has no pull gesture).
+  const N12_JS = `(() => ({
+    touchPrimary: matchMedia('(hover: none) and (pointer: coarse)').matches,
+    finePointer: matchMedia('(hover: hover) and (pointer: fine)').matches,
+    native: !!(window.Capacitor && typeof window.Capacitor.isNativePlatform === 'function' && window.Capacitor.isNativePlatform()),
+    btn: !!document.getElementById('chat-refresh-btn'), status: !!document.getElementById('chat-refresh-status'),
+    any: document.querySelectorAll('#page-chat [id^="chat-refresh"]').length,
+    search: !!document.getElementById('chat-search-btn'), searchLabel: document.getElementById('chat-search-btn')?.getAttribute('aria-label') || '',
+    actions: document.querySelector('#page-chat .chat-header-actions')?.children.length ?? -1,
+  }))()`;
+  const toChatFresh = async () => {
+    await evaluate(`window.navigateTo('picks')`); await sleep(200);
+    await evaluate(`window.navigateTo('chat')`);
+    await waitFor(`document.getElementById('chat-input')`);
+    await sleep(400);
+  };
+
+  // (a) touch — the engine's touch emulation is what the phone's own media queries answer
+  await viewport(390, 844);
+  await toChatFresh();
+  let n12 = await evaluate(N12_JS);
+  assert(n12.touchPrimary && !n12.finePointer && !n12.native,
+    `N12-a0: fixture — under touch emulation the page's own media query answers (hover: none) and (pointer: coarse) (${JSON.stringify({ touchPrimary: n12.touchPrimary, finePointer: n12.finePointer })}); not native`);
+  assert(!n12.btn && !n12.status && n12.any === 0,
+    `N12-a: THE CHANGE — on a touch device the chat header renders NO refresh button and no status text (button ${n12.btn}, status ${n12.status}, any #chat-refresh* node ${n12.any}) — no markup, so no listener can be bound to it`);
+  assert(n12.search && n12.searchLabel === 'Search chat' && n12.actions === 1,
+    `N12-a2: …the header keeps its search button (now VoiceOver-labelled "${n12.searchLabel}") as its only action (${n12.actions} child)`);
+
+  // (a3) …and pull-to-sync still works there: a real pull-up past the newest message refreshes
+  await bottomOut();
+  await sleep(200);
+  await evaluate(`document.querySelectorAll('#backend-error-banner').forEach(n => n.remove())`);
+  m = await evaluate(M);
+  d = await drag(cx, (m.thread.t + m.thread.b) / 2, -200);
+  await sleep(600);
+  const pulled = await evaluate(`({ phase: window.__phaseMax, banner: !!document.getElementById('backend-error-banner') })`);
+  assert(d.mid.phase === 'armed' || d.mid.phase === 'refreshing',
+    `N12-a3: with the button gone, the pull-up still ARMS (phase reached "${d.mid.phase}")`);
+  assert(pulled.phase === 'refreshing',
+    `N12-a4: …and on release it RUNS the refresh (phase reached "${pulled.phase}") — pull-to-sync is the manual path here (loud-fail banner up: ${pulled.banner} — compared with the button's own outcome in N12-e)`);
+  await sleep(1500);
+  await evaluate(`document.querySelectorAll('#backend-error-banner').forEach(n => n.remove())`);
+
+  // (b) desktop, fine pointer — the button is still there and still works
+  await pg.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await pg.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false });
+  await sleep(300);
+  await toChatFresh();
+  n12 = await evaluate(N12_JS);
+  assert(n12.finePointer && !n12.touchPrimary && !n12.native,
+    `N12-b0: fixture — desktop emulation answers (hover: hover) and (pointer: fine) (${JSON.stringify({ touchPrimary: n12.touchPrimary, finePointer: n12.finePointer })})`);
+  assert(n12.btn && n12.status && n12.actions === 3,
+    `N12-b: on a desktop fine pointer the refresh button and its status text ARE rendered (button ${n12.btn}, status ${n12.status}; header actions: search + button + status = ${n12.actions})`);
+  const rb = await evaluate(`(() => { const b = document.getElementById('chat-refresh-btn'); const r = b.getBoundingClientRect(); return { label: b.getAttribute('aria-label'), h: Math.round(r.height), w: Math.round(r.width), disabled: b.disabled }; })()`);
+  assert(rb.label === 'Refresh chat' && rb.h >= 44 && rb.w >= 44 && !rb.disabled,
+    `N12-b2: …unchanged — aria-label "${rb.label}", ${rb.w}×${rb.h} (≥44 tap floor), enabled`);
+  await evaluate(`document.getElementById('chat-refresh-btn').click()`);
+  const TERMINAL = `['Updated just now', "Couldn't refresh — tap to retry"].includes(document.getElementById('chat-refresh-status')?.textContent)`;
+  const refreshed = await waitFor(TERMINAL, 3000);
+  const buttonOutcome = await evaluate(`document.getElementById('chat-refresh-status')?.textContent`);
+  assert(refreshed, `N12-b3: …and its handler still runs the forced check and settles ("${buttonOutcome}")`);
+  // N12-e: it is the SAME forced check on both paths, so the outcome agrees:
+  // when forceRefresh() rejects (this fixture's chat transport has no server),
+  // the button says "Couldn't refresh" AND the pull path raised the loud-fail
+  // banner; when it resolves, neither did. Each surface's own loud-fail path.
+  const buttonFailed = buttonOutcome === "Couldn't refresh — tap to retry";
+  assert(pulled.banner === buttonFailed,
+    `N12-e: the pull-up and the button run the SAME forceRefresh(), so they fail (or succeed) together: button ${buttonFailed ? 'failed' : 'succeeded'} ("${buttonOutcome}"), pull ${pulled.banner ? 'raised the loud-fail banner' : 'settled quietly'}`);
+
+  // (c) native shell, even with a fine pointer — isNativeShell() wins; and the gate is live, not sticky
+  await evaluate(`window.Capacitor = { isNativePlatform: () => true, Plugins: {} }`);
+  await toChatFresh();
+  n12 = await evaluate(N12_JS);
+  assert(n12.native && n12.finePointer && !n12.btn && !n12.status && n12.any === 0,
+    `N12-c: inside the native shell (isNativeShell() true) the button is absent even under a fine pointer (native ${n12.native}, button ${n12.btn}, status ${n12.status})`);
+  await evaluate(`delete window.Capacitor`);
+  await toChatFresh();
+  n12 = await evaluate(N12_JS);
+  assert(!n12.native && n12.btn && n12.status,
+    `N12-c2: …and the predicate is re-read every render (native flag cleared → the desktop button is back: ${n12.btn})`);
+
+  // (d) the game-thread sheet's own button is not part of this change — no pull gesture exists there
+  const chatUiSrc = await readFile(join(ROOT, 'js/chat-ui.js'), 'utf8');
+  const chatUiCode = chatUiSrc.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+  assert(/\$\{refreshControlHTML\('chat-sheet-refresh'\)\}/.test(chatUiCode) && !/chatHeaderRefreshWanted\(\)\s*\?\s*refreshControlHTML\('chat-sheet-refresh'\)/.test(chatUiCode),
+    'N12-d: the game-thread sheet header still renders its refresh button unconditionally (the sheet has no pull-to-sync)');
+  assert(/\$\{chatHeaderRefreshWanted\(\) \? refreshControlHTML\('chat-refresh'\) : ''\}/.test(chatUiCode),
+    'N12-d2: the MAIN header\'s button is built only behind chatHeaderRefreshWanted() (source pin — a revert to the bare call goes red here and in N12-a)');
+
+  await pg.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await pg.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+  await viewport(390, 844);
 } catch (e) {
   assert(false, `the engine sections ran to completion (threw: ${e && e.message})`);
 } finally {

@@ -68,7 +68,7 @@
  * click.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -183,6 +183,7 @@ const GRANTS = {
   scribe_canon: ['select', 'update'],
   scribe_reports: ['select'],
   season_archives: ['select'],
+  competitions: ['select', 'insert', 'update'],       // 0033 — no delete: competitions are archived, never deleted
 };
 
 /** `league_members`' SELECT grant is a COLUMN LIST after 0007, and PostgREST
@@ -191,7 +192,8 @@ const GRANTS = {
  *  that is a real failure mode the adapter has to avoid (it enumerates the
  *  fifteen columns; `js/supabase-backend.js` SELECT_COLS). */
 const COLUMN_GRANTS = {
-  league_members: new Set('league_id,id,user_id,role,legacy_player_id,display_name,initials,alma_mater,active,notify_prefs,preferences,linked_at,extra,created_at,updated_at'.split(',')),
+  // + tournament_only_guest: 0033's additive column grant (DI-403).
+  league_members: new Set('league_id,id,user_id,role,legacy_player_id,display_name,initials,alma_mater,active,notify_prefs,preferences,linked_at,extra,created_at,updated_at,tournament_only_guest'.split(',')),
 };
 
 function makeStore() {
@@ -274,6 +276,9 @@ function makeStore() {
     game_requests: [
       row({ league_id: LEAGUE_A, id: 'gr1', kind: 'request', member_id: 'p2', target_request_id: null, created_at: new Date(NOW).toISOString(), payload: { homeTeam: 'Iowa', awayTeam: 'Iowa State', gameDate: '2026-09-12' } }),
     ],
+    // Multi-Sport 0033 — the backfill's ONE default competition per league. Starts empty here so the
+    // pre-existing sections read exactly what they always read; competitiontest.mjs seeds its own.
+    competitions: [],
   };
   return s;
 }
@@ -432,6 +437,13 @@ function makeClient(st, session, opts = {}) {
     scribe_learnings: { select: (r) => isMember(r.league_id), update: (r) => isCommissioner(r.league_id) },
     scribe_canon: { select: (r) => isMember(r.league_id), update: (r) => isCommissioner(r.league_id) },
     scribe_reports: { select: (r) => isMember(r.league_id) },
+    // 0033 — `competitions_select/_insert/_update` (the league_active() conjunct is modelled nowhere in
+    // this fake: it has no paused leagues).
+    competitions: {
+      select: (r) => isMember(r.league_id),
+      insert: (r) => isCommissioner(r.league_id),
+      update: (r) => isCommissioner(r.league_id),
+    },
   };
 
   /** The guard triggers of `0002_rls.sql:365-706`, as BEFORE-UPDATE rules that
@@ -453,7 +465,7 @@ function makeClient(st, session, opts = {}) {
         if (c in patch && patch[c] !== oldRow[c]) return 'league_members: identity/link columns require a linking RPC';
       }
       if (!isCommissioner(oldRow.league_id)) {
-        for (const c of ['role', 'active', 'email', 'phone_verified', 'created_at']) {
+        for (const c of ['role', 'active', 'email', 'phone_verified', 'created_at', 'tournament_only_guest']) {   // + 0033's DI-403 line
           if (c in patch && patch[c] !== oldRow[c]) {
             return 'league_members: only display_name, initials, alma_mater, phone, notify_prefs, preferences, extra may be self-edited';
           }
@@ -587,6 +599,17 @@ function makeClient(st, session, opts = {}) {
       // RPCs keep answering truthfully (an emptied league_members would make
       // the caller a non-member and the test would prove something else).
       if (opts.emptySelects && opts.emptySelects.includes(table)) return { data: [], error: null };
+      // A SELECT THAT FAILS FOR ONE TABLE ONLY (2026-09-30, [A-MS2]) — every other table answers normally.
+      // This is the shape of "the client shipped before its migration": PostgREST answers 404 / PGRST205
+      // ("Could not find the table 'public.competitions' in the schema cache") for the one table the new
+      // client reads and the database does not have yet. `failSelects` fails EVERY table, which cannot
+      // distinguish "the competitions read failed" from "the whole hydrate failed".
+      if (opts.failTables && opts.failTables[table]) {
+        const f = opts.failTables[table];
+        const res = { data: null, error: { code: f.code, message: f.message } };
+        if (f.status) res.status = f.status;
+        return res;
+      }
       // REVIEWER F1 — A SELECT THAT FAILS OUTRIGHT, with a caller-chosen code.
       // The three codes that matter to _fail()'s serveable test are different
       // KINDS of failure, not degrees of one: '08006' (the network did not
@@ -866,7 +889,7 @@ function makeFakeTimers() {
 }
 
 function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = null, emptySelects = null,
-  timers = null, refreshSession = null, random = null } = {}) {
+  failTables = null, timers = null, refreshSession = null, random = null } = {}) {
   sb._resetForTest();
   store.clear();
   statuses.length = 0;
@@ -874,7 +897,7 @@ function initAdapter({ who = 'commissioner', leagueId = LEAGUE_A, rpcOverride = 
   detailSeen.length = 0;
   ST = makeStore();
   const session = SESSIONS[who];
-  CLIENT = makeClient(ST, session, { rpcOverride, emptySelects });
+  CLIENT = makeClient(ST, session, { rpcOverride, emptySelects, failTables });
   ACCOUNT = session.userId || '';
   ACTIVE_LEAGUE = leagueId;
   EPOCH = 7;
@@ -996,7 +1019,9 @@ await section('\n[A2] the blind rule survives the hydrate: RLS is the only bound
   const selects = CLIENT._calls.selects.filter((s) => s.table === 'league_members');
   assert(selects.length === 1 && selects[0].cols !== '*',
     'league_members is selected by an explicit COLUMN LIST, never `*` (0007 made `*` a 42501)');
-  assert(selects[0].cols.split(',').length === 15, 'and the list is 0007’s fifteen columns');
+  // 15 = 0007's list; +1 = 0033's additive `tournament_only_guest` column grant (DI-403). Named, not just counted.
+  assert(selects[0].cols.split(',').length === 16 && selects[0].cols.split(',').includes('tournament_only_guest'),
+    'and the list is 0007’s fifteen columns plus 0033’s tournament_only_guest');
   assert(!/(^|,)(email|phone|phone_verified)(,|$)/.test(selects[0].cols),
     'and it names no contact column (those come only from get_member_contacts)');
   assert(CLIENT._calls.selects.every((s) => s.eq.some(([c, v]) => c === 'league_id' && v === LEAGUE_A)),
@@ -1444,24 +1469,87 @@ await section('\n[A7] hasSupabaseDataBackend() DERIVES from the state machine (e
   assert(captureConsole(() => sb.probe()) === false, 'and a throwing isPrivilegeHeld() is treated as HELD (false), never as permission');
 });
 
+/**
+ * THE SCHEMA, READ FROM EVERY MIGRATION IN ORDER (RG-TBD-N14, 2026-09-29).
+ *
+ * `table -> Map(column -> { name, notNull, def })`, where `def` is the DEFAULT's SQL text or null.
+ * `create table [if not exists] public.X (…)`, then every `alter table public.X add column …`,
+ * `alter column … set|drop not null` and `alter column … set|drop default` in file order. Comments
+ * are blanked first — 0024 carries a commented-out ROLLBACK block (`-- alter table … drop column`)
+ * that must not be read as schema. A parser that finds nothing proves nothing, so [A-NN] asserts it
+ * read both a 0001 column and a 0028 `add column` before anything is compared against it.
+ */
+function schemaFromMigrations() {
+  const dir = join(__dirname, 'supabase', 'migrations');
+  const files = readdirSync(dir).filter((f) => /^\d{4}_[^/]*\.sql$/.test(f)).sort();
+  const schema = {};
+  const colDef = (text) => {
+    const line = String(text).trim();
+    const mm = /^([a-z_][a-z0-9_]*)\s+[a-z]/i.exec(line);
+    if (!mm || ['primary', 'foreign', 'unique', 'check', 'constraint', 'exclude'].includes(mm[1].toLowerCase())) return null;
+    const d = /\bdefault\s+('(?:[^']|'')*'(?:::[a-z_]+(?:\[\])?)?|[a-z_]+\(\)|-?\d+(?:\.\d+)?|true|false|null)/i.exec(line);
+    return { name: mm[1], notNull: /\bnot null\b/i.test(line), def: d ? d[1] : null };
+  };
+  for (const f of files) {
+    const sql = readFileSync(join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/--[^\n]*/g, '');
+    for (const m of sql.matchAll(/create table (?:if not exists )?public\.([a-z_]+)\s*\(([\s\S]*?)\n\);/gi)) {
+      const cols = (schema[m[1]] = schema[m[1]] || new Map());
+      for (const raw of m[2].split('\n')) { const c = colDef(raw.replace(/,\s*$/, '')); if (c) cols.set(c.name, c); }
+    }
+    for (const m of sql.matchAll(/alter table (?:if exists )?(?:only )?public\.([a-z_]+)\s+(add column[^;]*);/gi)) {
+      if (!schema[m[1]]) continue;
+      for (const part of m[2].split(/,\s*(?=add column\b)/i)) {
+        const c = colDef(part.replace(/^add column\s+(?:if not exists\s+)?/i, ''));
+        if (c && !schema[m[1]].has(c.name)) schema[m[1]].set(c.name, c);
+      }
+    }
+    for (const m of sql.matchAll(/alter table (?:if exists )?(?:only )?public\.([a-z_]+)\s+alter column ([a-z_]+)\s+(set|drop) not null/gi)) {
+      const c = schema[m[1]] && schema[m[1]].get(m[2]);
+      if (c) c.notNull = m[3].toLowerCase() === 'set';
+    }
+    for (const m of sql.matchAll(/alter table (?:if exists )?(?:only )?public\.([a-z_]+)\s+alter column ([a-z_]+)\s+(?:set default\s+('(?:[^']|'')*'(?:::[a-z_]+)?|[a-z_]+\(\)|-?\d+(?:\.\d+)?|true|false)|drop default)/gi)) {
+      const c = schema[m[1]] && schema[m[1]].get(m[2]);
+      if (c) c.def = m[3] || null;
+    }
+  }
+  return schema;
+}
+
+/** A DEFAULT's SQL text as the value the server would store. `now()` is the suite's fixed instant; a
+ *  function this does not evaluate comes back as a marker string — still NOT NULL, which is all the
+ *  constraint check needs. */
+function evalSqlDefault(def) {
+  if (def == null || /^null$/i.test(def)) return null;
+  if (/^true$/i.test(def)) return true;
+  if (/^false$/i.test(def)) return false;
+  if (/^-?\d/.test(def)) return Number(def);
+  if (/^now\(\)$/i.test(def)) return new Date(NOW).toISOString();
+  const s = /^'((?:[^']|'')*)'(?:::([a-z_]+))?/i.exec(def);
+  if (s) { const v = s[1].replace(/''/g, "'"); return /^jsonb?$/i.test(s[2] || '') ? JSON.parse(v) : v; }
+  return `<default ${def}>`;
+}
+
 // ══════════════════════════════════════════════════════════════════════════
 await section('\n[A-NN] the planner NEVER sends null into a NOT NULL column (live cutover defect, 2026-09-19)…', async () => {
-  // (1) The map is the SCHEMA's. Derive it from 0001_schema.sql the same way the adapter's constant
-  //     was generated, and fail on drift — a new NOT NULL column with a default that this list does
-  //     not name is exactly the column whose null would refuse a whole row.
-  const sql = readFileSync(join(__dirname, 'supabase', 'migrations', '0001_schema.sql'), 'utf8');
+  // (1) The map is the SCHEMA's. Derive it from EVERY migration (not 0001 alone — RG-170's filed
+  //     follow-up, closed by RG-TBD-N14 on 2026-09-29: 0024 had added three NOT NULL columns this
+  //     check could not see) and fail on drift — a NOT NULL column with a default that this list
+  //     does not name is exactly the column whose null would refuse a whole row.
+  const SCHEMA = schemaFromMigrations();
   const mapped = sb._notNullColsForTest();
   assert(Object.keys(mapped).length >= 15, `[A-NN] fixture: the map covers the routed tables (got ${Object.keys(mapped).length})`);
+  assert(Object.keys(SCHEMA).length >= 15 && SCHEMA.games && SCHEMA.games.has('spread_source') && SCHEMA.games.has('home_logo'),
+    `[A-NN] fixture: the migration parser read 0001's tables AND a later migration's add column (games.home_logo, 0028) — ${Object.keys(SCHEMA).length} tables`);
+  const routedTables = [...new Set(Object.values(sb._routesForTest()).map((r) => r && r.table).filter(Boolean))];
+  for (const t of routedTables) {
+    assert(Array.isArray(mapped[t]), `[A-NN] every ROUTED table has a NOT_NULL_COLS entry (${t})`);
+  }
   for (const [table, cols] of Object.entries(mapped)) {
-    const m = new RegExp(`create table public\\.${table}\\s*\\(([\\s\\S]*?)\\n\\);`).exec(sql);
-    const derived = [];
-    for (const raw of (m ? m[1].split('\n') : [])) {
-      const line = raw.split('--')[0].trim();
-      const mm = /^([a-z_]+)\s+[a-z]/.exec(line);
-      if (mm && /\bnot null\b/.test(line) && !['primary', 'foreign', 'unique', 'check', 'constraint'].includes(mm[1])) derived.push(mm[1]);
-    }
-    assert(!!m && JSON.stringify(derived) === JSON.stringify(cols),
-      `[A-NN] NOT_NULL_COLS.${table} equals the NOT NULL columns 0001_schema.sql declares (derived ${derived.length}, mapped ${cols.length})`);
+    const derived = SCHEMA[table] ? [...SCHEMA[table].values()].filter((c) => c.notNull).map((c) => c.name).sort() : null;
+    const have = [...cols].sort();
+    assert(!!derived && JSON.stringify(derived) === JSON.stringify(have),
+      `[A-NN] NOT_NULL_COLS.${table} equals the NOT NULL columns ALL migrations declare (derived ${derived && derived.length}, mapped ${cols.length}`
+      + `${derived ? `; missing from map: ${JSON.stringify(derived.filter((c) => !have.includes(c)))}; extra in map: ${JSON.stringify(have.filter((c) => !derived.includes(c)))}` : ''})`);
   }
 
   // (2) THE LIVE DEFECT, driven: a player whose record has NO `preferences` key (the Sheet never
@@ -1491,6 +1579,303 @@ await section('\n[A-NN] the planner NEVER sends null into a NOT NULL column (liv
     assert(before == null || (wp.length === 1 && 'actual_tiebreaker_value' in wp[0].changed && wp[0].changed.actual_tiebreaker_value === null),
       '[A-NN] a nullable column (weeks.actual_tiebreaker_value) can still be cleared to null');
   }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+await section('\n[A-NN2] a MULTI-ROW insert never turns an omitted NOT NULL column into NULL — through the REAL SDK (live, 2026-09-29, games.spread_source)…', async () => {
+  // THE LIVE DEFECT (RG-TBD-N14). Drew's device, v0.27.2: "The server refused to save cfbp_games:
+  // null value in column "spread_source" of relation "games" violates not-null constraint."
+  //
+  // [A-NN]'s rule — "omit the key so the column DEFAULT applies" — is true for a ONE-row insert and
+  // FALSE for a batch. supabase-js 2.116.0 sends an array insert with `?columns=` set to the UNION
+  // of every row's keys, and PostgREST fills a column named there but absent from one object with
+  // NULL — the DEFAULT only under `Prefer: missing=default` (`defaultToNull: false`). So a slate
+  // that mixes a game ESPN has a line for (`spreadSource: 'espn'`) with one it has not posted yet
+  // (`extractSpread()` → `spreadSource: null`, data-provider.js) — "Apply Suggested", the week
+  // wizard's auto-build, two quick adds inside one debounce — sends ONE insert whose union names
+  // spread_source, and the line-less game's omitted key becomes NULL.
+  //
+  // This suite's fake `insert(rows)` stores whatever it is handed and never looks at `columns`, so
+  // it could not see this. Here ONLY the insert goes through the vendored SDK's own builder (the
+  // authtest [77] precedent), into a scripted fetch that applies PostgREST's rule and the schema's
+  // NOT NULL / DEFAULT from EVERY migration. It models PostgREST; it is not PostgREST — the live
+  // write is the proof, and the handoff names it.
+  const vm = await import('node:vm');
+  const dm = await import('./js/data-model.js');
+  const SCHEMA = schemaFromMigrations();
+  const sdkSrc = readFileSync(join(__dirname, 'vendor', 'supabase-js-2.116.0.js'), 'utf8');
+  const realm = { console, setTimeout, clearTimeout, setInterval, clearInterval, URL, URLSearchParams,
+    Headers, Request, Response, AbortController, TextEncoder, TextDecoder, queueMicrotask, structuredClone,
+    btoa, atob, crypto: globalThis.crypto, WebSocket: globalThis.WebSocket,
+    fetch: async () => { throw new Error('realm fetch unused — global.fetch is injected'); } };
+  realm.globalThis = realm; realm.self = realm; realm.window = realm;
+  vm.createContext(realm);
+  vm.runInContext(sdkSrc, realm);
+
+  const wire = [];                                   // every request the SDK put on the "wire"
+  const stored = [];                                 // every row the emulated server accepted
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  /** PostgREST's bulk-insert rule, over the migrations' schema. */
+  const postgrest = async (url, init) => {
+    const u = new URL(String(url));
+    const table = u.pathname.split('/rest/v1/')[1];
+    const prefer = String(new Headers(init && init.headers).get('prefer') || '').split(',').map((s) => s.trim());
+    const body = JSON.parse((init && init.body) || 'null');
+    const rows = Array.isArray(body) ? body : [body];
+    const named = u.searchParams.get('columns');
+    const cols = named ? named.split(',').map((c) => c.replace(/^"|"$/g, '')) : Object.keys(rows[0] || {});
+    wire.push({ table, method: init && init.method, cols, prefer, rows });
+    if ((init && init.method) !== 'POST') return json(501, { message: 'emulator: POST only' });
+    const tbl = SCHEMA[table];
+    if (!tbl) return json(404, { code: '42P01', message: `relation "public.${table}" does not exist` });
+    const unknown = cols.find((c) => !tbl.has(c));
+    if (unknown) return json(400, { code: 'PGRST204', message: `Could not find the '${unknown}' column of '${table}' in the schema cache` });
+    const out = [];
+    for (const r of rows) {
+      const full = {};
+      for (const [c, d] of tbl) {
+        if (!cols.includes(c)) full[c] = evalSqlDefault(d.def);                          // not in the INSERT list: DEFAULT
+        else if (Object.prototype.hasOwnProperty.call(r, c)) full[c] = r[c];              // present (an explicit null stays null)
+        else full[c] = prefer.includes('missing=default') ? evalSqlDefault(d.def) : null; // named, but absent from THIS object
+      }
+      const bad = [...tbl.values()].find((d) => d.notNull && full[d.name] == null);
+      if (bad) {
+        return json(400, { code: '23502', details: 'Failing row contains (…).', hint: null,
+          message: `null value in column "${bad.name}" of relation "${table}" violates not-null constraint` });
+      }
+      out.push(full);
+    }
+    stored.push(...out.map((r) => ({ table, row: r })));
+    return json(201, out);
+  };
+  const sdk = realm.supabase.createClient('https://x.test', 'anon-key', {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: postgrest },
+  });
+  /** Hydrate through the fake (reads, RLS model), then route ONLY `insert` to the real SDK builder. */
+  const hydratedWithRealInsert = async () => {
+    await hydrated({ who: 'commissioner' });
+    const fakeFrom = CLIENT.from;
+    CLIENT.from = (t) => { const b = fakeFrom(t); b.insert = (rows, o) => sdk.from(t).insert(rows, o); return b; };
+    wire.length = 0; stored.length = 0;
+  };
+  const refusedBanner = () => bannerSeen.find((b) => /not-null|violates/i.test(b)) || null;
+
+  // (0) THE MECHANISM, pinned on the vendored SDK itself: an array insert names the UNION of the
+  //     rows' keys in `?columns=`, so a key one row omits is still NAMED for that row.
+  wire.length = 0;
+  await sdk.from('games').insert([{ league_id: LEAGUE_A, id: 'probe1', week_id: 'w1', spread_source: 'espn' }, { league_id: LEAGUE_A, id: 'probe2', week_id: 'w1' }]).select('*');
+  assert(wire.length === 1 && wire[0].cols.includes('spread_source') && !('spread_source' in wire[0].rows[1]),
+    `[A-NN2] fixture — the vendored SDK names the UNION of keys in ?columns= (${JSON.stringify(wire[0] && wire[0].cols)}), so row 2's OMITTED spread_source is still a named column`);
+  assert(!wire[0].prefer.includes('missing=default'),
+    '[A-NN2] fixture — and by default (defaultToNull) it does NOT ask for missing=default: PostgREST fills that omitted key with NULL');
+
+  // (1) THE LIVE SHAPE: one slate save, one game with a posted line and one without.
+  await hydratedWithRealInsert();
+  const lined = dm.createGame('w1', { homeTeam: 'Iowa', awayTeam: 'Minnesota', dataSource: 'espn_live', dataQuality: 'confirmed',
+    spread: -7, favorite: 'Iowa', spreadSource: 'espn', oddsProvider: 'ESPN BET', espnEventId: '401999001' });
+  // Exactly what extractSpread() returns when ESPN has not posted odds (data-provider.js), carried
+  // through createGame()'s overrides — which REPLACE its own spreadSource:'manual' default with null.
+  const unlined = dm.createGame('w1', { homeTeam: 'Kansas State', awayTeam: 'Baylor', dataSource: 'espn_live', dataQuality: 'confirmed',
+    spread: null, favorite: null, spreadSource: null, oddsProvider: null, espnEventId: '401999002' });
+  assert(unlined.spreadSource === null && lined.spreadSource === 'espn', '[A-NN2] fixture — createGame() keeps the null spreadSource an odds-less ESPN game carries');
+  sb.set('cfbp_games', [...sb.get('cfbp_games'), lined, unlined]);
+  const r1 = await captureConsoleAsync(() => sb.flush());
+  const post = wire.filter((w) => w.table === 'games');
+  assert(post.length === 1 && post[0].rows.length === 2, `[A-NN2] fixture — ONE insert carrying BOTH games reached the wire (${post.length} request(s))`);
+  assert(!(r1 && r1.refused) && !refusedBanner(),
+    `[A-NN2] THE LIVE DEFECT — a slate mixing a lined and an unlined game SAVES (refused: ${JSON.stringify(r1 && r1.refused)}; banner: ${JSON.stringify(refusedBanner())})`);
+  const got = (id) => (stored.find((s) => s.table === 'games' && s.row.id === id) || {}).row || null;
+  assert(!!got(unlined.gameId) && got(unlined.gameId).spread_source === 'manual',
+    `[A-NN2] …the unlined game's omitted spread_source took the column DEFAULT 'manual' (stored: ${JSON.stringify(got(unlined.gameId) && got(unlined.gameId).spread_source)})`);
+  assert(!!got(lined.gameId) && got(lined.gameId).spread_source === 'espn', '[A-NN2] …and the lined game kept its own value (espn)');
+  assert(!!got(unlined.gameId) && got(unlined.gameId).spread === null && got(unlined.gameId).favorite === null,
+    '[A-NN2] …while an EXPLICIT null in a NULLABLE column stays null (spread/favorite — AD-03: no line is no line, never a defaulted one)');
+  assert(!sb._dirtyKeysForTest().includes('cfbp_games') && !sb._refusedKeysForTest().includes('cfbp_games'),
+    '[A-NN2] …cfbp_games is clean and NOT latched — sync stays on');
+
+  // (2) EVERY NOT NULL column of `games`, derived from the migrations — not a hand list. For each
+  //     one with a DEFAULT: two games in one save, one carrying the field and one with it nulled.
+  //     A column with no legacy field on createGame() must be one the projection never nulls.
+  const legacyKeys = Object.keys(dm.createGame(''));
+  const nnCols = [...SCHEMA.games.values()].filter((c) => c.notNull);
+  assert(nnCols.length >= 20 && nnCols.some((c) => c.name === 'spread_source'),
+    `[A-NN2] fixture — ${nnCols.length} NOT NULL columns of games derived from the migrations, spread_source among them`);
+  for (const c of nnCols) {
+    const legacy = legacyKeys.find((k) => k.toLowerCase() === c.name.replace(/_/g, ''));
+    if (c.def == null) {
+      // No DEFAULT (league_id, id, week_id): nothing to fall back to, so the projection must always fill it.
+      const row = (proj.toRows.cfbp_games([dm.createGame('w1', { homeTeam: 'A', awayTeam: 'B' })], { leagueId: LEAGUE_A }) || {}).games || [];
+      assert(row.length === 1 && row[0][c.name] != null, `[A-NN2] games.${c.name} has no DEFAULT, and the projection always fills it (${JSON.stringify(row[0] && row[0][c.name])})`);
+      continue;
+    }
+    if (!legacy) {
+      const row = (proj.toRows.cfbp_games([dm.createGame('w1', { homeTeam: 'A', awayTeam: 'B' })], { leagueId: LEAGUE_A }) || {}).games || [];
+      assert(row.length === 1 && row[0][c.name] != null, `[A-NN2] games.${c.name} has no createGame() field, and the projection never emits it null`);
+      continue;
+    }
+    await hydratedWithRealInsert();
+    const a = dm.createGame('w1', { homeTeam: `A ${c.name}`, awayTeam: 'Opp A' });
+    const b = dm.createGame('w1', { homeTeam: `B ${c.name}`, awayTeam: 'Opp B', [legacy]: null });
+    if (legacy === 'homeTeam') b.awayTeam = 'Opp B';
+    sb.set('cfbp_games', [...sb.get('cfbp_games'), a, b]);
+    const r = await captureConsoleAsync(() => sb.flush());
+    const sb2 = got(b.gameId);
+    assert(!(r && r.refused) && !!sb2 && sb2[c.name] != null,
+      `[A-NN2] games.${c.name} (${legacy}) — one game carrying it and one with it null, in ONE save: saved, the null one took the DEFAULT `
+      + `(stored ${JSON.stringify(sb2 && sb2[c.name])}; refused ${JSON.stringify(r && r.refused)}; ${refusedBanner() || 'no banner'})`);
+  }
+
+  // (3) THE SOURCE PIN: every insert the adapter makes asks for missing=default, so a future second
+  //     insert site cannot quietly reopen this. Comment-blanked; a scan that finds nothing fails.
+  const code = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const inserts = code.match(/\.(insert|upsert)\(/g) || [];
+  const safe = code.match(/\.(insert|upsert)\([^()]*,\s*\{\s*defaultToNull:\s*false\s*\}\)/g) || [];
+  assert(inserts.length >= 1 && safe.length === inserts.length,
+    `[A-NN2] every .insert()/.upsert() in the adapter passes { defaultToNull: false } (${safe.length} of ${inserts.length})`);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Multi-Sport Phase 1a (DI-220, migration 0033) — competitions, competition_id, the new games columns
+// and tournament_only_guest THROUGH THE REAL PLANNER. The fake models 0033's grants, policies and the
+// guard line; what this section proves is the ADAPTER's behaviour against them.
+await section('\n[A-MS] Multi-Sport 0033 — the adapter reads/writes competitions safely and CFB rows never re-diff…', async () => {
+  const COMP_D = '11111111-1111-4111-8111-111111111111';   // LEAGUE_A's default competition
+  const COMP_N = '22222222-2222-4222-8222-222222222222';   // an NFL competition
+  const seed = (who = 'commissioner') => {
+    initAdapter({ who });
+    ST.competitions.push(
+      row({ league_id: LEAGUE_A, id: COMP_D, sport: 'cfb', kind: 'season', enrollment: 'all', is_default: true, settings: {}, season_label: null, parent_competition_id: null, archived_at: null, active_week_id: null, created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() }),
+      row({ league_id: LEAGUE_A, id: COMP_N, sport: 'nfl', kind: 'season', enrollment: 'all', is_default: false, settings: { weeklyPrize: 'a steak' }, season_label: '2026', parent_competition_id: null, archived_at: null, active_week_id: 'wn1', created_at: new Date(NOW).toISOString(), updated_at: new Date(NOW).toISOString() }),
+    );
+    ST.weeks.push(row({ league_id: LEAGUE_A, id: 'wn1', sport: 'cfb', season: '2026', week_number: 1, label: 'NFL Week 1', status: 'open', competition_id: COMP_N, picks_lock_at: null, revealed_at: null }));
+    ST.league_members.find((m) => m.league_id === LEAGUE_A && m.id === 'p3').tournament_only_guest = true;
+  };
+  const hydrateNow = () => captureConsoleAsync(() => sb.hydrate(ACTIVE_LEAGUE, { epoch: EPOCH }));
+
+  // (1) READ — the new key is hydrated, projected camelCase, and the two hydrate lists know it.
+  seed(); await hydrateNow();
+  assert(sb._readTablesForTest().includes('competitions'), '[A-MS] hydrate() reads the `competitions` table');
+  assert(sb._routesForTest().cfbp_competitions && sb._routesForTest().cfbp_competitions.table === 'competitions'
+    && sb._routesForTest().cfbp_competitions.player === 'refuse' && sb._routesForTest().cfbp_competitions.noDelete === true,
+    '[A-MS] ROUTES.cfbp_competitions: rows for the commissioner, REFUSED for a player, never a delete');
+  const comps = sb.get('cfbp_competitions');
+  assert(Array.isArray(comps) && comps.length === 2, `[A-MS] the mirror holds both competitions (${comps && comps.length})`);
+  const cd = comps.find((c) => c.id === COMP_D);
+  const cn = comps.find((c) => c.id === COMP_N);
+  assert(cd && cd.isDefault === true && cd.sport === 'cfb' && cd.kind === 'season' && cd.enrollment === 'all',
+    '[A-MS] the default competition projects to {isDefault:true, sport:cfb, kind:season, enrollment:all}');
+  assert(cn && cn.sport === 'nfl' && cn.isDefault === false && cn.settings.weeklyPrize === 'a steak' && cn.activeWeekId === 'wn1' && cn.seasonLabel === '2026',
+    '[A-MS] a non-default competition keeps its settings, seasonLabel and activeWeekId');
+
+  // (2) READ — the new columns reach the objects ONLY when they carry a value (CFB rows unchanged).
+  const wks = sb.get('cfbp_weeks');
+  assert(wks.find((w) => w.weekId === 'wn1').competitionId === COMP_N, '[A-MS] a week in the NFL competition carries competitionId');
+  assert(wks.filter((w) => w.weekId !== 'wn1').every((w) => !('competitionId' in w)),
+    '[A-MS] every default-competition week has NO competitionId key at all (NULL restores as absent — CFB byte-identical)');
+  assert(sb.get('cfbp_games').every((g) => !('parentGameId' in g) && !('periodGoals' in g) && !('feedStats' in g) && !('providerEventId' in g)),
+    '[A-MS] no game carries parentGameId/periodGoals/feedStats/providerEventId keys (CFB games byte-identical)');
+  const pls = sb.get('cfbp_players');
+  assert(pls.find((p) => p.playerId === 'p3').tournamentOnlyGuest === true, '[A-MS] a tournament-only guest reads tournamentOnlyGuest === true (the typed column, over any __absent marker)');
+  assert(pls.filter((p) => p.playerId !== 'p3').every((p) => !('tournamentOnlyGuest' in p)), '[A-MS] every other player has NO tournamentOnlyGuest key (CFB byte-identical)');
+
+  // (3) THE ZERO-SPURIOUS-DIFF PROOF — untouched CFB rows must not become patches because the
+  //     projection gained columns. Re-saving every key the migration touches, unchanged, plans NOTHING.
+  seed('commissioner'); await hydrateNow();
+  for (const key of ['cfbp_weeks', 'cfbp_games', 'cfbp_players', 'cfbp_competitions']) sb.set(key, sb.get(key).map((r) => ({ ...r })));
+  const idle = captureConsole(() => sb.planFlush()).plan;
+  assert(idle.length === 0, `[A-MS] re-saving unchanged weeks/games/players/competitions plans ZERO operations (got ${JSON.stringify(idle.map((o) => `${o.key}:${o.op}:${o.rowId}`))})`);
+
+  // (4) DI-220's TOP RISK — saving a week in competition B emits ZERO deletes for competition A. The
+  //     write is exactly storage.js's saveWeek(): the WHOLE, unfiltered array with one row replaced.
+  seed('commissioner'); await hydrateNow();
+  const all = sb.get('cfbp_weeks').map((w) => ({ ...w }));
+  all.find((w) => w.weekId === 'wn1').blurb = 'NFL opener';
+  sb.set('cfbp_weeks', all);
+  const planB = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_weeks');
+  assert(planB.length === 1 && planB[0].op === 'patch' && planB[0].rowId === 'wn1' && planB[0].changed.blurb === 'NFL opener',
+    `[A-MS] saveWeek in competition B is ONE patch of that week (${JSON.stringify(planB.map((o) => `${o.op}:${o.rowId}`))})`);
+  assert(!planB.some((o) => o.op === 'delete'), '[A-MS] …and ZERO deletes for competition A\'s weeks');
+  // THE CONTROL: the same write built from a competition-FILTERED array is the hazard, and the planner
+  // DOES see it as "A's weeks were deleted" — so the assertion above is not vacuous. This is why
+  // getWeeksForCompetition() is read-only and storage.js's saveWeek/deleteWeek stay on getWeeks().
+  seed('commissioner'); await hydrateNow();
+  sb.set('cfbp_weeks', sb.get('cfbp_weeks').filter((w) => w.competitionId === COMP_N));
+  const planBad = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_weeks' && o.op === 'delete');
+  assert(planBad.length >= 2, `[A-MS] CONTROL: a write from a competition-filtered array DOES plan deletes for the other competition's weeks (${planBad.length}) — the hazard is real`);
+
+  // (5) A PLAYER device may not write competitions — the route refuses before the network does.
+  seed('player'); await hydrateNow();
+  const denied = thrown(() => sb.set('cfbp_competitions', sb.get('cfbp_competitions').concat([{ id: 'x', sport: 'nhl' }])));
+  assert(denied && /may not write it/.test(denied.message), `[A-MS] a player writing cfbp_competitions is refused loudly (${denied && denied.message})`);
+
+  // (6) A commissioner INSERT of a new competition omits every NOT NULL column it has no opinion on,
+  //     so the table defaults apply — and `sport` (NOT NULL, no default) is the one thing it must carry.
+  seed('commissioner'); await hydrateNow();
+  sb.set('cfbp_competitions', sb.get('cfbp_competitions').concat([{ id: '33333333-3333-4333-8333-333333333333', sport: 'nhl' }]));
+  const ins = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_competitions');
+  assert(ins.length === 1 && ins[0].op === 'insert' && ins[0].rows.length === 1, '[A-MS] a new competition plans exactly one INSERT');
+  const irow = ins[0].rows[0];
+  assert(irow.sport === 'nhl' && irow.id === '33333333-3333-4333-8333-333333333333' && irow.league_id === LEAGUE_A,
+    '[A-MS] …carrying id, sport and the active league');
+  assert(!('kind' in irow) && !('enrollment' in irow) && !('is_default' in irow) && !('settings' in irow) && !('created_at' in irow) && !('updated_at' in irow),
+    `[A-MS] …and OMITTING every NOT NULL column it has no value for, so the DEFAULTS apply (kind/enrollment/is_default/settings never invented) — ${JSON.stringify(Object.keys(irow))}`);
+  await captureConsoleAsync(() => sb.flush());
+  assert(ST.competitions.some((c) => c.id === '33333333-3333-4333-8333-333333333333'), '[A-MS] …and the commissioner\'s insert lands (RLS + grant modelled)');
+
+  // (7) tournament_only_guest — never written from a stale/rebuilt object, and a self-mark is fenced.
+  seed('commissioner'); await hydrateNow();
+  const stale = sb.get('cfbp_players').map((p) => ({ ...p }));
+  const koby = stale.find((p) => p.playerId === 'p3');
+  delete koby.tournamentOnlyGuest;                      // a rebuilt/stale object that lost the flag
+  koby.displayName = 'Koby Z';                          // one real change so a patch exists
+  sb.set('cfbp_players', stale);
+  const pp = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_players');
+  assert(pp.length === 1 && pp[0].changed.display_name === 'Koby Z' && !('tournament_only_guest' in pp[0].changed),
+    `[A-MS] an object that LOST tournamentOnlyGuest never writes tournament_only_guest=false over the server's true (${JSON.stringify(pp[0] && pp[0].changed)})`);
+  seed('commissioner'); await hydrateNow();
+  const unguest = sb.get('cfbp_players').map((p) => ({ ...p }));
+  unguest.find((p) => p.playerId === 'p3').tournamentOnlyGuest = false;
+  sb.set('cfbp_players', unguest);
+  const pu = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_players');
+  assert(pu.length === 1 && pu[0].changed.tournament_only_guest === false, '[A-MS] the commissioner\'s EXPLICIT un-guest does write tournament_only_guest=false');
+  seed('player'); await hydrateNow();
+  const selfMark = sb.get('cfbp_players').map((p) => ({ ...p }));
+  selfMark.find((p) => p.playerId === 'p2').tournamentOnlyGuest = true;
+  sb.set('cfbp_players', selfMark);
+  const sm = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_players');
+  assert(sm.length === 1 && sm[0].changed.tournament_only_guest === true, '[A-MS] (fixture) a player\'s self-mark plans a patch — the DB fence is what stops it');
+  await captureConsoleAsync(() => sb.flush());
+  assert(!ST.league_members.find((m) => m.id === 'p2' && m.league_id === LEAGUE_A).tournament_only_guest,
+    '[A-MS] …and the modelled league_members_guard refuses it (42501) — the flag never moved');
+
+  // (8) A week object that lost competitionId never moves the week back to the default competition.
+  seed('commissioner'); await hydrateNow();
+  const wk = sb.get('cfbp_weeks').map((w) => ({ ...w }));
+  const nfl = wk.find((w) => w.weekId === 'wn1');
+  delete nfl.competitionId; nfl.blurb = 'rebuilt';
+  sb.set('cfbp_weeks', wk);
+  const wp = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_weeks');
+  assert(wp.length === 1 && wp[0].changed.blurb === 'rebuilt' && !('competition_id' in wp[0].changed),
+    `[A-MS] a week object that lost competitionId never writes competition_id=null (${JSON.stringify(wp[0] && wp[0].changed)})`);
+
+  // (9) The new games columns round-trip when present (a Hockey Question row + a WJC parent).
+  seed('commissioner');
+  ST.games.push(
+    row({ league_id: LEAGUE_A, id: 'gq1', week_id: 'w1', home_team: 'A', away_team: 'B', status: 'scheduled', kickoff: null, spread: 0, multiplier: 1, parent_game_id: 'g1', espn_event_id: null }),
+    row({ league_id: LEAGUE_A, id: 'gw1', week_id: 'w1', home_team: 'C', away_team: 'D', status: 'scheduled', kickoff: null, spread: 0, multiplier: 1, provider_event_id: '123456', period_goals: [{ p: 1, h: 1, a: 0 }], feed_stats: { goalsSumOk: true } }),
+  );
+  await hydrateNow();
+  const gq = sb.get('cfbp_games').find((g) => g.gameId === 'gq1');
+  const gw = sb.get('cfbp_games').find((g) => g.gameId === 'gw1');
+  assert(gq.parentGameId === 'g1' && gw.providerEventId === '123456' && gw.periodGoals[0].h === 1 && gw.feedStats.goalsSumOk === true,
+    '[A-MS] a question row keeps parentGameId; a WJC game keeps providerEventId / periodGoals / feedStats');
+  const g2 = sb.get('cfbp_games').map((g) => ({ ...g }));
+  g2.find((g) => g.gameId === 'gq1').parentGameId = null;
+  sb.set('cfbp_games', g2);
+  const gp = captureConsole(() => sb.planFlush()).plan.filter((o) => o.key === 'cfbp_games');
+  assert(gp.length === 1 && gp[0].changed.parent_game_id === null, '[A-MS] clearing parentGameId is a real patch (a NULLABLE column still takes a null)');
 });
 
 await section('\n[A-ADD] Add Player is absent in Supabase mode (INSERT into league_members is forbidden by schema — reviewer F1, 2026-09-19)…', async () => {
@@ -3150,6 +3535,85 @@ await section('\n[SEC-F1] _fail() is an ALLOW-LIST of network failures; the defa
     "SEC-F1 class rule: _fail() serves ONLY on kind === 'network' and its else branch is HELD — the default is the closed state");
   assert(/allow-list of network failures; default HELD/i.test(src),
     'SEC-F1 class rule: …and the comment states the polarity in those exact words, on ONE line, so it cannot be half-read');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// [A-MS2] review 2026-09-30 (#10): the client shipped BEFORE migration 0033. The ONE table the new client reads
+// that the database does not have yet is `competitions`, and PostgREST answers it 404 / PGRST205. The adapter
+// must HOLD on that — the red "couldn't load your league" banner, no snapshot painted, no write path opened —
+// never fall to OFFLINE-READONLY (which serves the league behind an amber "you're offline" banner, the wrong
+// words for a server that answered) and never quietly hydrate without the table. CLAUDE.md prohibited move:
+// never silently fall back when sync fails.
+await section('\n[A-MS2] a 404 / PGRST205 on the competitions hydrate HOLDS the client (red banner, never the snapshot)…', async () => {
+  const MISSING = "Could not find the table 'public.competitions' in the schema cache";
+  const failComp = (status) => ({ competitions: { code: 'PGRST205', message: MISSING, ...(status ? { status } : {}) } });
+
+  // The classifier's own answer for both transports — neither may be 'network', the only class that serves.
+  assert(sb._classifyHydrateFailureForTest({ pgCode: 'PGRST205', httpStatus: 404 }) === 'http-status',
+    '[A-MS2] PGRST205 + HTTP 404 classifies as http-status (a response existed; something read the request and replied)');
+  assert(sb._classifyHydrateFailureForTest({ pgCode: 'PGRST205' }) === 'unclassified',
+    '[A-MS2] PGRST205 with NO status classifies as unclassified — the closed default, still not network');
+
+  // (1) FROM A LIVE PAGE — ACTIVE, then the next hydrate meets the missing table.
+  {
+    assert(await hydrated() === 'ACTIVE' && sb.get('cfbp_weeks').length >= 1,
+      '[A-MS2] fixture: a LIVE page — hydrated, ACTIVE, holding the league');
+    CLIENT = makeClient(ST, SESSIONS.commissioner, { failTables: failComp(404) });
+    bannerSeen.length = 0;
+    statuses.length = 0;
+    await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+    assert(sb.getState() === 'HELD',
+      '[A-MS2] ACTIVE + 404/PGRST205 on competitions -> HELD, not OFFLINE-READONLY (the server ANSWERED)');
+    assert(!statuses.some(([, st]) => st === 'OFFLINE-READONLY'),
+      '[A-MS2] …and OFFLINE-READONLY was never entered on the way (no amber "you are offline" serving state)');
+    assert(sb.isContentWithheldByAdapter() === true && sb.probe() === false,
+      '[A-MS2] …content is WITHHELD by the adapter and the write probe is false (nothing painted, nothing written)');
+    assert(bannerSeen.some((b) => /Couldn’t load your league/.test(b)),
+      `[A-MS2] …and the error was EMITTED with the red banner (${JSON.stringify(bannerSeen)})`);
+    assert(/competitions/.test(sb.getStatus().lastError || ''),
+      '[A-MS2] …whose last error names the missing table, so the failure is diagnosable and is not a generic hydrate failure');
+  }
+
+  // (2) FROM A SNAPSHOT — the device boots ACTIVE-STALE from a persisted snapshot; the hydrate then meets
+  //     the missing table. The snapshot must not be served as though nothing were wrong.
+  {
+    await hydrated();
+    const snap = localStorage.getItem(sb._snapshotKeyForTest());
+    assert(!!snap, '[A-MS2] fixture: a persisted snapshot exists to prime ACTIVE-STALE from');
+    initAdapter({ failTables: failComp(404) });
+    localStorage.setItem(sb._snapshotKeyForTest(), snap);
+    const primed = sb.primeFromSnapshot(OWNER, LEAGUE_A);
+    assert(primed > 0 && sb.getState() === 'ACTIVE-STALE', '[A-MS2] fixture: ACTIVE-STALE, painting the snapshot');
+    await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+    assert(sb.getState() === 'HELD' && sb.isContentWithheldByAdapter() === true && sb.probe() === false,
+      '[A-MS2] ACTIVE-STALE + 404/PGRST205 -> HELD, content withheld, probe false: the snapshot is NOT served');
+    assert(bannerSeen.some((b) => /Couldn’t load your league/.test(b)),
+      '[A-MS2] …with the red banner emitted');
+  }
+
+  // (3) THE FIRST HYDRATE ON A DEVICE WITH NOTHING — no snapshot, no prior state, no status on the error
+  //     (the second transport shape). HELD, and the mirror stays empty: the client does not build a league
+  //     out of the tables that did answer.
+  {
+    initAdapter({ failTables: failComp(0) });
+    await captureConsoleAsync(() => sb.hydrate(LEAGUE_A, { epoch: EPOCH }));
+    assert(sb.getState() === 'HELD' && sb.isReady() === false && sb.isContentWithheldByAdapter() === true,
+      '[A-MS2] a FIRST hydrate meeting PGRST205 (no status on the error) is HELD and not ready — it does not serve a partial league');
+    assert(bannerSeen.some((b) => /Couldn’t load your league/.test(b)),
+      '[A-MS2] …with the red banner emitted');
+  }
+
+  // (4) THE CONTROL — same store, same client, the table answering: ACTIVE. So (1)-(3) are the competitions
+  //     read and nothing else.
+  assert(await hydrated() === 'ACTIVE' && sb.isReady() === true,
+    '[A-MS2] control: the same fixture with the competitions table answering hydrates ACTIVE — the holds above are that one read');
+  // (5) The source pin: the hydrate does not swallow a failure of THIS table (a `catch` that continues
+  //     without it would turn the missing table into a silent, partial league).
+  {
+    const src = readFileSync(join(__dirname, 'js', 'supabase-backend.js'), 'utf8');
+    assert(/const READ_TABLES = \[[^\]]*'competitions'[^\]]*\]/.test(src),
+      '[A-MS2] source pin: competitions is in READ_TABLES, so its failure goes through the same _fail() as every other table');
+  }
 });
 
 // ══════════════════════════════════════════════════════════════════════════

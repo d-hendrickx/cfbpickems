@@ -422,7 +422,12 @@ export function renderAdminAccessDeniedCard({ escHtml } = {}) {
  */
 export function renderSuperAdminPlaceholder({ escHtml, leagues = [], allLeaguesLoading = false, platformKv, users = [], allLeaguesError = null } = {}) {
   const esc = typeof escHtml === 'function' ? escHtml : String;
-  const kv = platformKv || { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: false, error: null };
+  const kv = platformKv || { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, loading: false, loaded: false, error: null };
+  // N1 (DI-433, 2026-09-30) — the release gate reads OPEN only when the row is exactly `true`: the DEFAULT-WHEN-MISSING is CLOSED, deliberately the opposite of `signupsOpen`
+  // just above (an unread value must never render an open door, or invite an operator to "confirm" one).
+  const creationOpen = kv.leagueCreationOpen === true;
+  // R-F7 / S-1 — the first precondition is DATABASE-visible: the marker `push_alias_mode_live`. Same default direction as the gate: an unread or missing value is NOT live.
+  const aliasLive = kv.pushAliasModeLive === true;
 
   // REVIEWER FINDING 7 (2026-09-25) — a failed platform_kv read used to
   // degrade SILENTLY into the guessed defaults above, with the Save button
@@ -504,6 +509,22 @@ export function renderSuperAdminPlaceholder({ escHtml, leagues = [], allLeaguesL
           <input type="checkbox" id="super-signups-open-toggle" ${kv.signupsOpen !== false ? 'checked' : ''} ${kvUnreadable ? 'disabled' : ''} />
           <span class="form-label" style="margin:0">${esc('New signups open')}</span>
         </label>
+        <div class="divider"></div>
+        <div class="form-group" id="super-creation-gate">
+          <div class="form-label">${esc('New league creation')}
+            <span class="badge ${creationOpen ? 'badge-open' : ''}" id="super-creation-status" style="margin-left:6px">${esc(creationOpen ? 'Open' : 'Closed')}</span>
+          </div>
+          <p class="text-muted text-xs mb-sm">${esc('Open only when every one of these is true:')}</p>
+          <ol class="text-muted text-xs mb-sm" id="super-creation-preconditions" style="margin:0 0 8px 18px;padding:0">
+            <li>${esc('Multi-league push (migration 0035) is applied, alias mode is live, and it is marked live in the database:')}
+              <strong id="super-alias-status" data-alias-live="${aliasLive ? 'true' : 'false'}">${esc(aliasLive ? 'marked live' : 'not marked live')}</strong>.
+              ${esc('Opening is refused while it is not marked.')}</li>
+            <li>${esc("Build 4 is installed on every player's phone.")}</li>
+            <li>${esc('The security review of this release has passed.')}</li>
+            <li>${esc('One clean IRB weekend has run on it.')}</li>
+          </ol>
+          <button type="button" class="btn btn-ghost btn-sm" id="super-creation-open-btn" data-next-open="${creationOpen ? 'false' : 'true'}" ${kvUnreadable ? 'disabled' : ''}>${esc(creationOpen ? 'Close creation' : 'Open creation')}</button>
+        </div>
       </div>
       <div class="card">
         <div class="card-title mb-sm">${esc('Platform Admins (seed)')}</div>

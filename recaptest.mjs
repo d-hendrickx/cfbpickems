@@ -55,6 +55,11 @@ function assert(cond, label) {
 
 const recap = await import('./js/recap.js');
 const { findPreviousFinalizedWeek, renderPicksFooterHTML, renderPrevWeekRecapHTML } = recap;
+// N1 (DI-432 §7, 2026-09-30) — the 2K25 Permanent Record is the PILOT league's; recap.js asks the pilot-only registry, which answers for the ACTIVE league through a resolver.
+// This suite's fixtures are the production (pilot) league's own weeks, so it installs a pilot resolver — the section that PROVES the gate (a non-pilot league gets no 2K25 card)
+// is [4d] below, which swaps the resolver and puts it back.
+const pilotOnly = await import('./js/pilot-only.js');
+pilotOnly.setPilotOnlyLeagueResolver(() => ({ pilot: true }));
 
 console.log('[recaptest] recap.js imported —', Object.keys(recap).length, 'exports');
 
@@ -234,6 +239,17 @@ assert(wk1Footer.includes('The Permanent Record'),
   '[4b] Week 1 still renders the last-season Permanent Record stand-in');
 assert(wk1Footer.includes('CFP 2K25'),
   '[4c] …with the 2K25 season of record');
+// [4d] N1 — the SAME Week-1 fixture in a NON-pilot league: no 2K25 card, no "Permanent Record", no roster names from the pilot's record. And a league that has not resolved at all
+// (no league → fail closed) reads the same. Then the pilot resolver goes back, so the rest of the suite is unaffected.
+pilotOnly.setPilotOnlyLeagueResolver(() => ({ pilot: false }));
+const wk1NonPilot = renderPicksFooterHTML(LIVE_PART1_OPEN());
+assert(!wk1NonPilot.includes('The Permanent Record') && !wk1NonPilot.includes('CFP 2K25') && !wk1NonPilot.includes('Champion of record'),
+  '[4d] a NON-pilot league on Week 1 gets NO 2K25 Permanent Record (the pilot league\'s season of record never reaches another league)');
+pilotOnly.setPilotOnlyLeagueResolver(() => null);
+assert(!renderPicksFooterHTML(LIVE_PART1_OPEN()).includes('CFP 2K25'),
+  '[4e] …and with NO league resolved the card is withheld too (fail closed: an unloaded league is never shown another league\'s record)');
+pilotOnly.setPilotOnlyLeagueResolver(() => ({ pilot: true }));
+assert(renderPicksFooterHTML(LIVE_PART1_OPEN()).includes('CFP 2K25'), '[4f] control: the pilot resolver restored, the card is back');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [5] TIE-BREAK PRECEDENCE — weekNumber, then startDate, then createdAt

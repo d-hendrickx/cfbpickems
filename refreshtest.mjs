@@ -414,9 +414,18 @@ console.log('\n[5] R1/R2 — display-only polling and the idempotent kickoff/fin
       `5a-2: …and performs ZERO writes to cfbp_games (got ${gameWrites}) — the server is the single writer of score/status/actualWinner`);
     assert(JSON.stringify(storage.getGames('rw1')) === before,
       '5a-3: …and the stored row is byte-identical afterwards, including lastUpdated — a "write" that only stamps a timestamp is still a write and still broadcasts to six phones');
-    const flip = chat.getMessages({ tag: 'rg_a' }).find(m => m.id.startsWith('scribe_coverageFlip_'));
-    assert(!!flip,
-      '5a-4: …and scribeLiveGameCheck() STILL RAN — the coverage flip (home covering by 1 -> losing by 6) posted. This is the assertion that proves the `fresh` argument is a real in-memory merge of the ESPN payload: passing the STORED row twice makes before === after and no detector can ever fire');
+    // AMENDED RG-TBD-D1 (2026-09-29): a single poll no longer POSTS a coverage
+    // flip — the rule in js/chat-ui.js needs the second half, two of this
+    // device's own observations and 5 minutes held — so this reads the
+    // detector's baseline instead of the fold. The claim is unchanged: the
+    // stored row (7-3, home covering by 1) and the ESPN payload (7-10, away
+    // covering by 6) disagree, and only a real in-memory merge can make the
+    // detector record AWAY. coverfliptest.mjs [8] drives the display-only path
+    // through to the post itself.
+    const chatUi = await import('./js/chat-ui.js');
+    const flipState = chatUi._coverageFlipStateForTest('rg_a');
+    assert(!!flipState && flipState.settled === 'away',
+      `5a-4: …and scribeLiveGameCheck() STILL RAN against the merge — its coverage baseline for the game is AWAY covering, which only the ESPN payload says. This is the assertion that proves the \`fresh\` argument is a real in-memory merge of the ESPN payload: passing the STORED row twice would record HOME (got ${JSON.stringify(flipState)})`);
     assert(!!chat.getMessage('sys_kick_rg_a'),
       '5a-5: …and R2\'s reconcile is WIRED INTO THE TICK (call site i), not merely callable — the game is LIVE in the mirror with its kickoff passed, and the kickoff post arrived from the tick itself');
   }

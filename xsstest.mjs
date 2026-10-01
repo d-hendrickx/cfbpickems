@@ -1249,8 +1249,15 @@ function makeClassifier(sources, mainFile, { maxDepth = 10 } = {}) {
 // asserts each sweeps clean with NO exemption of its own.
 const SWEPT = ['js/app.js', 'js/chat-ui.js', 'js/extra-point.js', 'js/recap.js', 'js/notifications.js', 'js/auth.js', 'js/admin-panel.js',
   'js/control-center.js', 'js/leagues-home.js', 'js/week-wizard.js', 'js/icons.js'];
+// UN-312 (2026-09-29): 'js/brand.js' joins the resolvable set (it is a literal-only module, never swept). app.js
+// injects getGateMarkSVG() — the filled Munera logo, a fixed template literal with no interpolation — raw, exactly
+// like GOOGLE_G_MARK_SVG; a call the classifier cannot resolve is reported as a NEW unclassified site, so it has to
+// be able to read the function. HONEST LIMIT (mutation-checked 2026-09-29): the classifier resolves the call and
+// rejects a concatenated return, but it does not police an interpolation added INSIDE a returned template in this
+// module — brandtest.mjs [11c3] does that (getGateMarkSVG() must stay a parameterless, interpolation-free literal).
+// This edit widens what the ratchet can resolve; it loosens nothing.
 const RESOLVABLE = [...SWEPT, 'js/data-model.js', 'js/scoring.js', 'js/storage.js', 'js/chat.js',
-  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js', 'js/roles.js'];
+  'js/scribeLines.js', 'js/history-2025.js', 'js/data-provider.js', 'js/backend.js', 'js/chatTransport.js', 'js/roles.js', 'js/brand.js'];
 const SRC = {};
 for (const f of RESOLVABLE) SRC[f] = await readFile(new URL('./' + f, import.meta.url), 'utf8');
 
@@ -1369,6 +1376,12 @@ const EXEMPTIONS = [
   // literal '' branch elsewhere in this sweep.
   { file: 'js/app.js', expr: "icon('almaMater')",
     why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
+  // DI-443 (UN-386, 2026-09-29) — the two ICON-ONLY alma-mater badges (the Comm
+  // Games-tab slate row and the games-admin card) carry an aria-label so
+  // VoiceOver names them (a `title` does not fire on touch). Same triviality:
+  // name AND label are hard-coded string literals, never a variable.
+  { file: 'js/app.js', expr: "icon('almaMater', { label: 'Alma mater game' })",
+    why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
 
   // REVIEWER BLOCK 4 (pass-2, 2026-09-25) — renderSourceBadge()'s four
   // data-quality glyphs (icons.js:F8's converted badges). Same triviality as
@@ -1378,6 +1391,9 @@ const EXEMPTIONS = [
   // js/icons.js's _escAttr(), SECURITY N2 — this exemption is only about
   // whether js/app.js's OWN interpolation of the icon() call's return value
   // can carry player/game data, which it cannot: neither argument does.)
+  // N1 (DI-430 touched-screen audit, 2026-09-30) — the zero-week empty state's glyph on Picks and Dashboard: icon(name) called with a hard-coded string literal.
+  { file: 'js/app.js', expr: "icon('calendarWeek')",
+    why: "js/icons.js's icon(name) called with a hard-coded string literal — no data flows through this expression at all, so it cannot carry an injection" },
   { file: 'js/app.js', expr: "icon('calendarWeek', { label: 'ESPN Historical' })",
     why: "js/icons.js's icon(name, opts) called with two hard-coded string literals — no data flows through this expression" },
   // STEP B(14) (3c fix window, third pass) — the week wizard's status-button
@@ -1648,6 +1664,11 @@ const NEW_SWEPT_BACKLOG = {
     // name/current-value it emits — not provable by this file's classifier,
     // same shape as every other ctx.bodies.* injection in this module).
     { d: "f71a0bc689", n: 1, t: "ctx.bodies?.almaMaterOptionsHTML || ''" },
+    // RG-TBD-B3 (bug batch B, 2026-09-29) — the Profile alma-mater picker's
+    // caption (a fixed app.js string, almaMaterCatalogNoteText()), escaped
+    // through the SAME injected `ctx.escHtml(...)` every other row-text site in
+    // this file uses; later updates write textContent only.
+    { d: "e804098985", n: 1, t: "ctx.escHtml(almaNote)" },
     { d: "670edf0acc", n: 1, t: "state.pane" },
     { d: "c39e7b69be", n: 1, t: "state.phase" },
     { d: "b9f4c1ac11", n: 1, t: "iconOrNothing(ctx, 'close') || '✕'" },
@@ -1658,6 +1679,12 @@ const NEW_SWEPT_BACKLOG = {
     { d: "fd1890afaf", n: 1, t: "glyph" },
     { d: "8b0e1ec23b", n: 2, t: "icon('chevronLeft')" },
     { d: "b4076cf587", n: 1, t: "sportCards" },
+    // N1 league creation (DI-430, 2026-09-30) — two sources of pinned sites, both safe by construction:
+    //   • the OPEN "Create new league" card comes from js/league-create.js's entryCardHTML() (its OWN sweep, [9c-1e] below, requires an injected escHtml and escapes the label);
+    //     the call is unresolvable HERE because league-create.js is deliberately not in RESOLVABLE (see [9c-1e]);
+    //   • the League Page empty state's calendar glyph (`icon('calendarWeek')`, ×2 — commissioner and player variants), the injected icon family like every other glyph in this file.
+    { d: "fc7a681517", n: 1, t: "renderCreateLeagueStubCard({ escHtml, icon, open: createOpen === true })" },
+    { d: "ef259c9086", n: 2, t: "icon('calendarWeek')" },
   ],
   'js/icons.js': [
     { d: "2362533504", n: 1, t: "_escAttr(label)" },
@@ -1695,6 +1722,59 @@ function __xssNewSweptCanary(evil) { return \`<div title="\${evil.nsAttr}">\${ev
 function __xssWwCanary(evil) { return \`<b>\${evil.wwText}</b>\`; }`;
   assert(sweepFile('js/week-wizard.js', wwPoison).some(h => h.expr === 'evil.wwText'),
     '[9c-1c canary] js/week-wizard.js: an unwrapped site added to it IS reported (its zero is a real sweep, not an empty one)');
+}
+
+// [9c-1e] N1 league creation (DI-430, 2026-09-30) — js/league-create.js is SWEPT ON ITS OWN, as a ratchet. It renders a player-typed league NAME (the New League sheet's
+// field, the Created screen, the frame-13 notice), so it must be swept — but it is deliberately NOT added to SWEPT/RESOLVABLE: those lists build the classifier's cross-file
+// function table, and this module's parameters are NAMED `icon` and `escHtml` (injected, the leagues-home.js style), which would shadow the same-named imports for every
+// OTHER file and flip ~30 already-classified `icon(...)` sites in js/app.js to "unclassified". `sweepFile(file, overrideSrc)` reads the module from disk for its OWN sweep
+// only. Every site below is safe by construction: `icon(...)`/glyph keys are the injected family, `side`/`action`/`key` are string literals the module's own call sites pass,
+// `len`/`NEW_LEAGUE_NAME_MAX` are numbers, and `rows`/`webClose`/the tick span are fragments already built from escHtml()-wrapped parts. Every value that can carry a player's
+// text (the name, the code, the league name) goes through escHtml() and is therefore NOT in this list — that absence is the point.
+const LEAGUE_CREATE_BACKLOG = [
+  { d: "ea7bf4bb72", n: 1, t: "side" },
+  { d: "bd938c688f", n: 1, t: "action" },
+  { d: "8b0e1ec23b", n: 1, t: "icon('chevronLeft')" },
+  { d: "4b529285fb", n: 2, t: "icon('clear')" },
+  { d: "dbc268478e", n: 1, t: "webClose" },
+  { d: "9eea2de627", n: 1, t: "icon(isErr ? 'warning' : 'lock')" },
+  { d: "000c67df5d", n: 2, t: "NEW_LEAGUE_NAME_MAX" },
+  { d: "71fa9faaa6", n: 1, t: "len" },
+  { d: "dd7da97080", n: 1, t: "icon(s.glyphKey)" },
+  { d: "b694aea7c8", n: 1, t: "on ? `<span class=\"lc-tick-ic\">${icon('check')}</span>` : ''" },
+  { d: "714bcef005", n: 3, t: "icon('check')" },
+  { d: "bc51e9e65d", n: 1, t: "rows" },
+  { d: "442ac0c5cf", n: 1, t: "icon('copy')" },
+  { d: "a546c9b413", n: 1, t: "icon('share')" },
+  { d: "949b2ddaaf", n: 1, t: "icon('plus')" },
+  { d: "2c70e12b7a", n: 1, t: "key" },
+];
+{
+  const digest = e => createHash('sha256').update(e).digest('hex').slice(0, 10);
+  const LC_SRC = await readFile(new URL('./js/league-create.js', import.meta.url), 'utf8');
+  const hits = sweepFile('js/league-create.js', LC_SRC);
+  const pinned = new Map(LEAGUE_CREATE_BACKLOG.map(b => [b.d, b]));
+  const live = new Map();
+  for (const h of hits) { const d = digest(h.expr); live.set(d, (live.get(d) || 0) + 1); }
+  assert(pinned.size === LEAGUE_CREATE_BACKLOG.length && LEAGUE_CREATE_BACKLOG.every(b => Number.isInteger(b.n) && b.n >= 1),
+    '[9c-1e-a] js/league-create.js: every pin is well-formed and no digest is pinned twice');
+  const added = hits.filter(h => !pinned.has(digest(h.expr)));
+  assert(added.length === 0,
+    `[9c-1e-b] js/league-create.js: NO NEW unclassified interpolation — new: ${added.map(h => `${h.line}:${h.expr.slice(0, 90)}`).join(' | ')}`);
+  const grew = [...live.entries()].filter(([d, n]) => pinned.has(d) && n > pinned.get(d).n).map(([d, n]) => `${pinned.get(d).t.slice(0, 60)} (pinned ${pinned.get(d).n}, now ${n})`);
+  assert(grew.length === 0, `[9c-1e-c] js/league-create.js: NO ADDITIONAL site reuses a pinned expression — grew: ${grew.join(' | ')}`);
+  const shrunk = LEAGUE_CREATE_BACKLOG.filter(b => (live.get(b.d) || 0) < b.n).map(b => `${b.t.slice(0, 60)} (pinned ${b.n}, now ${live.get(b.d) || 0})`);
+  assert(shrunk.length === 0, `[9c-1e-d] js/league-create.js: the pinned backlog is current — stale pins hide the next regression: ${shrunk.join(' | ')}`);
+  // The player-typed values are NOT pinned: they are wrapped. Proof by mutation on an in-memory copy — unwrap the typed league name in the name field's value attribute (the
+  // typed text is echoed back into the field on Back) and the sweep must report it.
+  const unwrapped = LC_SRC.replace('value="${escHtml(state.name || \'\')}"', 'value="${state.name || \'\'}"');
+  assert(unwrapped !== LC_SRC && sweepFile('js/league-create.js', unwrapped).some(h => /state\.name/.test(h.expr)),
+    '[9c-1e-e] MUTATION: removing escHtml() from the typed league name in the field\'s value attribute IS reported by the sweep (the name\'s absence from the pin list is a real guarantee, not an empty sweep)');
+  const POISON = LC_SRC + `
+function __xssLcCanary(evil) { return \`<div title="\${evil.nsAttr}">\${evil.nsText}</div>\`; }`;
+  assert(sweepFile('js/league-create.js', POISON).some(h => h.expr === 'evil.nsAttr') && sweepFile('js/league-create.js', POISON).some(h => h.expr === 'evil.nsText'),
+    '[9c-1e canary] js/league-create.js: a NEW unwrapped site is REPORTED despite the pin');
+  console.log(`     ℹ js/league-create.js backlog: ${hits.length} sites (pinned: ${LEAGUE_CREATE_BACKLOG.reduce((a, b) => a + b.n, 0)} / ${LEAGUE_CREATE_BACKLOG.length} expressions) — pinned, not approved`);
 }
 
 // [9c-1b] SECURITY F3 (pass-2, 2026-09-25) — `js/admin-panel.js` was already in
@@ -1815,6 +1895,21 @@ function __xssAdminPanelCanary(evil) { return \`<div title="\${evil.apAttr}">\${
 // suite stayed green. Both release gates reproduced it (reviewer F1 /
 // security-reviewer F3-2a).
 const APP_BACKLOG = [
+  // N1 league creation (DI-430, 2026-09-30) — SEVEN sites, all SAFE BY CONSTRUCTION but not provable by this classifier: each interpolates markup that ANOTHER function has
+  // already escaped. js/league-create.js's renderers (bannerHTML, inviteLinkNoteHTML, claimInsteadHTML, landingCreateCardHTML, entryCardHTML) REQUIRE an injected escHtml and
+  // throw without one (leaguecreatetest [5ah]), and every string they emit passes through it (its own sweep, [9c-1e]); leaguesHomeNoticeHTML() and `inviteNotice` are
+  // exactly `LC.bannerHTML('err', <fixed copy or the held notice>, { escHtml, icon })` or ''. league-create.js is NOT in RESOLVABLE on purpose ([9c-1e]), so the call cannot
+  // be followed from here. Pinned, not approved — the ratchet still tightens.
+  // …and ONE more from the same pass (DI-430 touched-screen audit): the Picks locked/no-week card's glyph — a ternary of two hard-coded literals (the Munera calendar glyph when the
+  // league has no weeks, the padlock emoji otherwise); no data flows through either branch.
+  { d: "29f8826540", n: 1, t: "noWeek ? icon('calendarWeek') : '🔒'" },
+  { d: "6eb17cef4f", n: 1, t: "leaguesHomeNoticeHTML()" },
+  { d: "fc70f8ca2f", n: 1, t: "inviteNotice" },
+  { d: "ffb9990205", n: 1, t: "LC.landingCreateCardHTML({ open: getCachedLeagueCreationOpen(), signupsOpen, escHtml })" },
+  { d: "fb959b1beb", n: 1, t: "inv.code ? LC.inviteLinkNoteHTML({ escHtml }) : ''" },
+  { d: "ebcb84307e", n: 1, t: "inv.code ? LC.claimInsteadHTML({ escHtml }) : ''" },
+  { d: "a31c0aa181", n: 1, t: "renderCreateLeagueStubCard({ escHtml, icon, open: getCachedLeagueCreationOpen() })" },
+  { d: "89d8648f54", n: 1, t: "prefill ? LC.inviteLinkNoteHTML({ escHtml }) : ''" },
   // v0.27.0 UX Revamp post-deploy pass (2026-09-27, DI-356) — REMOVED, not
   // left stale: this IIFE's only site was the standalone "Week Settings"
   // card's own multi-part-grouping block, which is retired wholesale (the

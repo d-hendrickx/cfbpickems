@@ -599,8 +599,15 @@ console.log('\n[7] the warm hook -> router wiring…');
 
   const { readFileSync } = await import('node:fs');
   const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
-  assert(/wireNotificationClicks\(\(event, data\) => \{ wakeChat\(\); routeNotificationTap\(event, data\); \}\);/.test(appSrc),
+  // UN-315 / DI-436.3 (2026-09-29) — the hook USED TO be `{ wakeChat(); routeNotificationTap(event, data); }`.
+  // The chat fetch (BUG-12) reads the ACTIVE league's room, and a tap can now come from ANOTHER league, so the
+  // wake moved INSIDE the router where it is conditional on the tap's league (`if (!foreignLeague) wakeChat();`).
+  // The property this line always pinned — the hook goes to routeNotificationTap(), never a bare wakeChat() —
+  // is unchanged and is asserted first; the moved wake is asserted second, so it cannot be dropped silently.
+  assert(/wireNotificationClicks\(\(event, data\) => routeNotificationTap\(event, data\)\);/.test(appSrc),
     'app.js wires that hook to routeNotificationTap(), not to a bare wakeChat() — the warm tap has no ?ntab to fall back on, so this line IS the warm path [structural]');
+  assert(/function routeNotificationTap\(event, data\) \{[\s\S]*?if \(!foreignLeague\) wakeChat\(\);[\s\S]*?hasOwnProperty\.call\(LIFECYCLE_EVENTS, event\)/.test(appSrc),
+    '…and the router keeps BUG-12\'s fetch-first wake for a tap from the ACTIVE league (or one that names none) — and skips it for another league\'s, whose room is not the one on screen [structural]');
   assert(/function routeNotificationTap\(event, data\) \{[\s\S]*?hasOwnProperty\.call\(LIFECYCLE_EVENTS, event\)/.test(appSrc),
     '…and the router still resolves the tab from the lifecycle vocabulary rather than accepting one off the payload [structural]');
 }
@@ -713,6 +720,194 @@ console.log('\n[9] the account boundary — a held tap belongs to the account th
   });
   assert(appMod.state.currentTab === 'chat',
     `…is delivered to whoever the page resolves to (tab ${JSON.stringify(appMod.state.currentTab)}) — an account ARRIVING is not an account CHANGING, and treating it as one reinstates B-04`);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// [10] UN-315 / DI-436.2 — A TAP NAMES ITS LEAGUE, AND THE ROUTER SWITCHES BEFORE IT NAVIGATES
+// ══════════════════════════════════════════════════════════════════════════
+// One phone now hears every league its owner belongs to, so a tap can arrive for a league that is NOT on
+// screen. The three entries (cold `?nleague=`, warm `data.league_id`, native's validated `leagueId`) all end in
+// `routeToLeague()`. The DECISIONS are driven through its `deps` seam (every collaborator is a real module
+// function by default; a suite replaces one to drive one branch without booting a second league), and the WIRING
+// is driven for real in this file's own withheld-window world — a foreign id is banked WITH its league, replayed
+// through the same router, and switches NOTHING.
+console.log('\n[10] UN-315 — a tap names its league: switch first, never on a forged id…');
+{
+  const route = appMod._routeToLeagueForTest;
+  assert(typeof route === 'function', 'fixture: app.js exposes routeToLeague through its test seam');
+  const L_ACTIVE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const L_OTHER  = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const L_FORGED = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const DEST = { tab: 'chat', params: { messageId: 'm10' } };
+  const MEMBERS = [{ leagueId: L_ACTIVE, leagueName: 'IRB Football' }, { leagueId: L_OTHER, leagueName: 'Work League' }];
+
+  /** Every collaborator recorded, in order. */
+  const harness = (over = {}) => {
+    const log = [];
+    const deps = {
+      getActiveLeagueId: () => L_ACTIVE,
+      getMemberships: () => MEMBERS,
+      isWithheld: () => false,
+      doSwitch: async (id) => { log.push(['switch', id]); return true; },
+      deepLink: (d) => { log.push(['deepLink', d]); },
+      stash: (d) => { log.push(['stash', d]); },
+      toast: (msg, kind) => { log.push(['toast', msg, kind]); },
+      isNative: () => false,
+      haptic: (k) => { log.push(['haptic', k]); },
+      ...over,
+    };
+    return { log, deps };
+  };
+  const names = (log) => log.map((e) => e[0]).join(',');
+  const run = async (leagueId, over) => { const h = harness(over); const outcome = await quiet(() => route(leagueId, DEST, h.deps)); return { outcome, log: h.log }; };
+
+  // no league named → the EXISTING path, untouched
+  for (const none of [undefined, null, '']) {
+    const r = await run(none);
+    assert(r.outcome === 'no-league' && names(r.log) === 'deepLink' && r.log[0][1] === DEST,
+      `a tap that names NO league (${JSON.stringify(none)}) is exactly today's tap: deepLinkTo(destination), no switch, no toast (got ${r.outcome} ${names(r.log)})`);
+  }
+  // malformed → nothing at all
+  for (const bad of ['nope', `${L_OTHER}x`, 42, {}, 'L-IRB', `' or 1=1 --`]) {
+    const r = await run(bad);
+    assert(r.outcome === 'malformed' && r.log.length === 0,
+      `a MALFORMED league id (${JSON.stringify(bad)}) routes NOTHING — no navigation, no switch, no toast, no bank (got ${r.outcome} ${names(r.log)})`);
+  }
+  // the active league → deepLinkTo
+  {
+    const r = await run(L_ACTIVE.toUpperCase());
+    assert(r.outcome === 'same' && names(r.log) === 'deepLink', `a tap from the league ALREADY ACTIVE just navigates (case-insensitively) (got ${r.outcome} ${names(r.log)})`);
+  }
+  // a member league → switch FIRST, then navigate; no success toast; no haptic on web
+  {
+    const r = await run(L_OTHER);
+    assert(r.outcome === 'switched' && names(r.log) === 'switch,deepLink' && r.log[0][1] === L_OTHER && r.log[1][1] === DEST,
+      `a tap from another league the account is IN switches to it FIRST and only then navigates — the order is the feature (got ${r.outcome} ${names(r.log)})`);
+    assert(!r.log.some((e) => e[0] === 'toast') && !r.log.some((e) => e[0] === 'haptic'),
+      '…with NO success toast (the destination arriving is the acknowledgement) and NO haptic on web (Interaction Principles)');
+  }
+  {
+    const r = await run(L_OTHER, { isNative: () => true });
+    assert(r.outcome === 'switched' && names(r.log) === 'switch,haptic,deepLink' && r.log[1][1] === 'selection',
+      `…on NATIVE the same tap adds exactly ONE `+'`selection`'+` haptic, after the switch lands and before the destination paints (got ${names(r.log)} ${JSON.stringify(r.log[1])})`);
+    const failed = await run(L_OTHER, { isNative: () => true, doSwitch: async () => false });
+    assert(failed.outcome === 'switch-failed' && !failed.log.some((e) => e[0] === 'deepLink' || e[0] === 'haptic'),
+      `…and a switch that FAILS navigates nowhere and buzzes nothing (doSwitchActiveLeague already toasted why) (got ${failed.outcome} ${names(failed.log)})`);
+  }
+  // a league the account is NOT in → refused, and NOTHING is switched (the first of the two locks)
+  {
+    const r = await run(L_FORGED);
+    assert(r.outcome === 'refused' && names(r.log) === 'toast' && r.log[0][1] === "That league isn't on your account." && r.log[0][2] === 'error',
+      `a FORGED league id (well-formed, not in the account's memberships) switches NOTHING and says "That league isn't on your account." (got ${r.outcome} ${JSON.stringify(r.log)})`);
+  }
+  // not yet decidable → banked WITH its league; nothing else
+  {
+    const withheld = await run(L_OTHER, { isWithheld: () => true });
+    assert(withheld.outcome === 'stashed' && names(withheld.log) === 'stash'
+      && JSON.stringify(withheld.log[0][1]) === JSON.stringify({ ...DEST, leagueId: L_OTHER }),
+      `a tap while content is WITHHELD is banked WITH its league — never acted on (got ${withheld.outcome} ${JSON.stringify(withheld.log)})`);
+    const unresolved = await run(L_OTHER, { getMemberships: () => [] });
+    assert(unresolved.outcome === 'stashed' && names(unresolved.log) === 'stash',
+      `…and so is a tap that arrives before the memberships have resolved (got ${unresolved.outcome})`);
+    const noTab = await run(L_OTHER, { isWithheld: () => true });
+    const route2 = await quiet(() => route(L_OTHER, { params: {} }, harness({ isWithheld: () => true }).deps));
+    assert(route2 === 'stashed', '…(a destination with no tab is not banked — deepLinkTo\'s own rule — but is still not acted on)');
+    assert(noTab.log.length === 1, '…and a withheld tap costs exactly one bank write');
+  }
+  // never throws
+  {
+    const boom = await run(L_OTHER, { doSwitch: async () => { throw new Error('boom'); } });
+    assert(boom.outcome === 'error' && !boom.log.some((e) => e[0] === 'deepLink'), `a throwing collaborator is CAUGHT — routeToLeague never rejects into a tap handler (got ${boom.outcome})`);
+  }
+
+  // ── THE REAL WIRING, in this file's withheld-window world ─────────────────
+  const FOREIGN = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const routeWarm = appMod._routeNotificationTapForTest;
+  {
+    // A warm tap naming a league the account is NOT in, while the page is withheld: banked WITH the league…
+    await quiet(async () => {
+      appMod._resetPendingDeepLinkForTest();
+      SESSION = null; store.set('cfbp_supabase_session', staleSession()); authMod._setAccountUserIdForTest('');
+      appMod.state.currentTab = 'dashboard';
+      await settle(5);
+      routeWarm('CHAT_MESSAGE_CREATED', { ...SENDER_PAYLOAD('CHAT_MESSAGE_CREATED', 'chat', { messageId: 'm10w' }), league_id: FOREIGN });
+      await settle(10);
+    });
+    assert(appMod.isContentWithheld() === true && JSON.stringify(appMod._pendingDeepLinkForTest()) === JSON.stringify({ tab: 'chat', params: { messageId: 'm10w' }, leagueId: FOREIGN }),
+      `WARM: a tap that names a league is banked WITH it while the page is withheld (held ${JSON.stringify(appMod._pendingDeepLinkForTest())})`);
+    const activeBefore = authMod.getActiveLeagueId();
+    // …and when the withhold lifts it is replayed through the SAME router, which refuses a league the account is not in.
+    await quiet(async () => {
+      SESSION = freshSession(); store.set('cfbp_supabase_session', JSON.stringify(SESSION)); authMod._setAccountUserIdForTest(USER.id);
+      await appMod._ensureSupabaseDataHydratedForTest('memberships');
+      await settle(60);
+    });
+    assert(appMod.isContentWithheld() === false && appMod._pendingDeepLinkForTest() === null,
+      'fixture: the withhold lifted and the held tap was CONSUMED (replayed once)');
+    assert(authMod.getActiveLeagueId() === activeBefore && appMod.state.currentTab !== 'chat',
+      `…and the FORGED league switched NOTHING and navigated nowhere (active league ${JSON.stringify(authMod.getActiveLeagueId())} unchanged, tab ${JSON.stringify(appMod.state.currentTab)}) — the second lock, on the replay path`);
+  }
+  {
+    // A malformed league id in the payload declines the tap entirely (no bank, no navigation).
+    await quiet(async () => {
+      appMod._resetPendingDeepLinkForTest();
+      appMod.state.currentTab = 'dashboard';
+      routeWarm('CHAT_MESSAGE_CREATED', { ...SENDER_PAYLOAD('CHAT_MESSAGE_CREATED', 'chat', { messageId: 'm10x' }), league_id: 'not-a-uuid' });
+      await settle(20);
+    });
+    assert(appMod.state.currentTab === 'dashboard' && appMod._pendingDeepLinkForTest() === null,
+      `WARM: a PRESENT-but-malformed league_id declines the tap — nothing navigated, nothing banked (tab ${JSON.stringify(appMod.state.currentTab)})`);
+    // …while a tap that names NO league is byte-for-byte what it was (the [3] section drives the rest).
+    await quiet(async () => {
+      appMod.state.currentTab = 'dashboard';
+      routeWarm('CHAT_MESSAGE_CREATED', SENDER_PAYLOAD('CHAT_MESSAGE_CREATED', 'chat', { messageId: 'm10y' }));
+      await settle(20);
+    });
+    assert(appMod.state.currentTab === 'chat', 'WARM: a tap with NO league_id still navigates exactly as before (every older push)');
+  }
+
+  // ── STRUCTURAL: the three entries and the bank all end in the ONE router.
+  {
+    const { readFileSync } = await import('node:fs');
+    const appSrc = readFileSync(new URL('./js/app.js', import.meta.url), 'utf8');
+    const stripC = (t) => t.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const code = stripC(appSrc);
+    assert(/const nleague = params\.get\('nleague'\);/.test(code) && /params\.delete\('nleague'\);/.test(code) && /routeToLeague\(nleague, \{ tab: ntab, params: nparams \}\)/.test(code),
+      'COLD: the post-hydrate tail reads `nleague`, SCRUBS it off the URL with the other notification params, and hands the destination to routeToLeague() [structural]');
+    const coldTail = code.slice(code.indexOf("const ntab = params.get('ntab');"), code.indexOf("routeToLeague(nleague, { tab: ntab, params: nparams })"));
+    assert(coldTail.length > 0 && coldTail.indexOf("params.delete('nleague')") > -1
+      && coldTail.indexOf("params.delete('nleague')") < coldTail.indexOf('history.replaceState('),
+      '…the scrub happens BEFORE the URL is rewritten, so a reload or a bookmark can never re-trigger the switch [structural]');
+    assert(/native\.wireNativeNotificationClicks\(\(dest\) => \{[\s\S]*?routeToLeague\(dest\.leagueId, dest\);[\s\S]*?\}\);/.test(code),
+      'NATIVE: the click callback passes the resolver\'s validated `leagueId` to routeToLeague() [structural]');
+    const flush = code.slice(code.indexOf('function flushPendingDeepLink('), code.indexOf('export function _resetPendingDeepLinkForTest'));
+    assert(/if \(dest\.leagueId\) routeToLeague\(dest\.leagueId, dest\); else deepLinkTo\(dest\);/.test(flush),
+      'BANK: a held tap that carries a league is replayed through routeToLeague(), not deepLinkTo() — the league is switched to BEFORE the tab opens [structural]');
+    const doSwitch = code.slice(code.indexOf('export async function doSwitchActiveLeague'), code.indexOf('// ═══════════════════════════════════════════════════════════════════════════\n// DI-314/DI-315'));
+    assert(/Not a member of that league/.test(doSwitch) && /That league isn't on your account\./.test(doSwitch),
+      'the SECOND lock: switchActiveLeague() throwing "Not a member of that league" is mapped to the same sentence, not to the connection toast that would send the player to retry a thing that can never work [structural]');
+    // ── THE SWITCH COVER'S MOTION (Polish Pass, DI-436.5 touched-screen audit). A tap from another league now
+    //    puts the "Switching leagues…" cover up on a warm app, and it used to CUT in and CUT out. Interaction
+    //    Principles: motion within its ranges — fade IN 180-250ms, OUT 220-300ms — one animation language.
+    const css = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+    const inRule = /#league-switch-overlay\{[^}]*animation:league-switch-in (\d+)ms var\(--ease-entrance\) both\}/.exec(css);
+    assert(!!inRule && Number(inRule[1]) >= 180 && Number(inRule[1]) <= 250,
+      `COVER: the cover fades IN over ${inRule ? inRule[1] : '?'}ms — inside the 180-250ms range, on the shared entrance easing [structural]`);
+    const outRule = /\.league-switch-leaving\{[^}]*pointer-events:none;[^}]*animation:league-switch-out var\(--motion-nav\) var\(--ease-native\) both\}/.exec(css);
+    const nav = /--motion-nav:(\d+)ms/.exec(css);
+    assert(!!outRule && !!nav && Number(nav[1]) >= 220 && Number(nav[1]) <= 300,
+      `COVER: …and fades OUT over --motion-nav (${nav ? nav[1] : '?'}ms — inside 220-300ms) on the shared --ease-native token (no literal easing keyword), click-through while it does [structural]`);
+    assert(/@keyframes league-switch-in\{from\{opacity:0\}to\{opacity:1\}\}/.test(css) && /@keyframes league-switch-out\{from\{opacity:1\}to\{opacity:0\}\}/.test(css)
+      && /@media \(prefers-reduced-motion:reduce\)\{\s*#league-switch-overlay,\.league-switch-leaving\{animation-duration:1ms\}/.test(css),
+      'COVER: opacity only (no transform, no bounce), and reduced-motion collapses both fades [structural]');
+    const hideFn = code.slice(code.indexOf('function hideLeagueSwitchOverlay()'), code.indexOf('export async function doSwitchActiveLeague'));
+    assert(/el\.remove\(\);[\s\S]*?ghost\.className = 'league-switch-leaving';/.test(hideFn) && /addEventListener\('animationend', remove, \{ once: true \}\)/.test(hideFn) && /setTimeout\(remove, 400\)/.test(hideFn),
+      'COVER: hideLeagueSwitchOverlay() removes the blocking cover IMMEDIATELY (authtest [11]/[79] still read null), then fades a FRESH cover-coloured ghost that is removed on animationend with a timer backstop [structural]');
+    assert(/try \{\s*const ghost = document\.createElement/.test(hideFn) && /\}\s*catch \{\s*\}\s*\}\s*$/.test(hideFn.trim()),
+      'COVER: …and the ghost is best-effort — it can never throw out of doSwitchActiveLeague()\'s finally [structural]');
+    assert(!/leagueId:\s*(?:payload|data|additionalData)\.league_id/.test(code) && (code.match(/\.league_id/g) || []).length <= 6,
+      'the payload\'s league_id is read in ONE place (the warm router) and validated by isLeagueUuid before anything uses it [structural]');
+  }
 }
 
 console.log(`\n${fail === 0 ? '✅' : '❌'} deeplinktest: ${pass} passed, ${fail} failed`);

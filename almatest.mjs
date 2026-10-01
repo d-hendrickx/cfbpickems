@@ -305,7 +305,9 @@ const storage = await import('./js/storage.js');
 const dp = await import('./js/data-provider.js');
 const app = await import('./js/app.js');
 
-const { ALMA_MATERS, ALMA_MATER_EXCLUDE_PATTERNS, getAlmaMaterMatch, DEFAULT_SETTINGS, DEMO_PLAYERS, WEEK_STATUS, GAME_STATUS } = dm;
+// N1 (coordinator ruling 2026-09-30): the six-school list is pilot-only in code — read through getAlmaMaters(). These are the PILOT league's own fixtures, so the list is asked for as the pilot.
+const { getAlmaMaters, ALMA_MATER_EXCLUDE_PATTERNS, getAlmaMaterMatch, DEFAULT_SETTINGS, DEMO_PLAYERS, WEEK_STATUS, GAME_STATUS } = dm;
+const ALMA_MATERS = getAlmaMaters({ pilot: true });
 const { scoreCandidateGames, buildSuggestedSlate, fetchByDateRange, fetchEspnTeamsList } = dp;
 const {
   claimedAlmaMaters, recomputeAlmaMaterFlags, almaMatersForAutoCalc,
@@ -1203,6 +1205,9 @@ console.log('\n[14] F2 — restoring 8ae64f4\'s dropped ESPN-threading proof, pl
     // feedbacktest.mjs's createMutantDir() already does exactly this.
     await cp(MUTANT_JS_DIR, dir, { recursive: true });
     await writeFile(path.join(dir, 'data-provider.js'), mutatedSrc, 'utf8');
+    // N1: the mutant directory carries its OWN copy of pilot-only.js (a separate module instance), which has no resolver — so its default alma list would be [] and the
+    // "DELETE the trailing arg" mutation (whose default substitutes the pilot's six) would stop being visible. The mutant's copy is told it is the pilot league's.
+    (await import(new URL(`file://${path.join(dir, 'pilot-only.js')}`).href)).setPilotOnlyLeagueResolver(() => ({ pilot: true }));
     const url = new URL(`file://${path.join(dir, 'data-provider.js')}?t=${Date.now()}_${Math.random()}`);
     return import(url.href);
   }
@@ -1232,7 +1237,7 @@ console.log('\n[14] F2 — restoring 8ae64f4\'s dropped ESPN-threading proof, pl
     },
     {
       name: 'INVERT — pass the hardcoded ALMA_MATERS catalog instead of the caller\'s almaMaters',
-      apply: s => s.replace(CALL_SITE, `  const { games, report } = parseAndReport(uniqueEvents, lastEspnUrl, lastMethod, startDate, endDate, ALMA_MATERS);`),
+      apply: s => s.replace(CALL_SITE, `  const { games, report } = parseAndReport(uniqueEvents, lastEspnUrl, lastMethod, startDate, endDate, getAlmaMaters({ pilot: true }));`),
     },
   ];
 
@@ -1318,14 +1323,21 @@ console.log('\n[15] item 1 — fetchEspnTeamsList() parsing, duplicate-location 
   assert(new Set(miamis.map(t => t.displayName)).size === 2, 'the two same-location teams have DIFFERENT displayName values — the only thing that lets a human tell them apart in the dropdown');
   assert(miamis[0].location === miamis[1].location, 'fixture check, the documented collision itself: selecting EITHER one stores the identical `location` string — the collision is real and NOT resolved at the data level (see the handoff report)');
 
-  // 15b. Proxy-fallback path — direct fetch fails, first proxy succeeds.
+  // 15b. RETIRED proxy-fallback path — RG-TBD-B3 follow-up (reviewer security
+  // note, 2026-09-29): the catalog's direct endpoint (sports.core.api.espn.com,
+  // §22) sends Access-Control-Allow-Origin: *, so the anonymous proxies are no
+  // longer asked for it. A blocked direct fetch now THROWS — it never falls
+  // through to a third party (the old proxy success here would be ignored).
+  const calls15b = [];
   globalThis.fetch = async (url) => {
-    if (typeof url === 'string' && url.startsWith('https://site.api.espn.com')) throw new Error('direct blocked');
+    calls15b.push(String(url));
+    if (String(url).startsWith('https://sports.core.api.espn.com') || String(url).startsWith('https://site.api.espn.com')) throw new Error('direct blocked');
     return { ok: true, json: async () => mockEspnResponse };
   };
-  let proxyTeams;
-  try { proxyTeams = await fetchEspnTeamsList(); } finally { globalThis.fetch = savedFetch; }
-  assert(Array.isArray(proxyTeams) && proxyTeams.length === 4, 'the proxy-fallback path returns the same parsed shape when the direct fetch fails but a proxy succeeds');
+  let proxyTeams, threw15b = false;
+  try { proxyTeams = await fetchEspnTeamsList(); } catch { threw15b = true; } finally { globalThis.fetch = savedFetch; }
+  assert(threw15b && proxyTeams === undefined && calls15b.length === 1,
+    `15b a blocked direct fetch throws and contacts NOTHING else — no proxy fallback for the teams catalog (${calls15b.length} request(s): ${calls15b.map(u => u.slice(0, 40)).join(' | ')})`);
 
   // 15c. Total failure — throws (does NOT itself catch/fallback; that is
   // js/app.js's showEditPlayerModal()'s job, per fetchEspnTeamsList()'s own
@@ -1333,7 +1345,7 @@ console.log('\n[15] item 1 — fetchEspnTeamsList() parsing, duplicate-location 
   globalThis.fetch = async () => { throw new Error('network fully disabled'); };
   let threw = false;
   try { await fetchEspnTeamsList(); } catch { threw = true; } finally { globalThis.fetch = savedFetch; }
-  assert(threw === true, 'fetchEspnTeamsList() throws on total failure (direct + all 3 proxies exhausted) rather than returning an empty/partial list silently');
+  assert(threw === true, 'fetchEspnTeamsList() throws on total failure (the direct endpoint unreachable — no proxies since RG-TBD-B3) rather than returning an empty/partial list silently');
 
   // 15d. showEditPlayerModal()'s cache — "near-static; don't refetch on
   // every modal open." First call with no cache: the SYNCHRONOUS render
@@ -2524,6 +2536,257 @@ console.log('\n[21] REVIEWER ROUND 3 R2 — Profile\'s catalog landing patches t
   } finally {
     globalThis.fetch = savedFetch21;
     app._resetEspnTeamsCacheForTest();
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[22] RG-TBD-B3 (bug batch B, N9) — the Control Center alma-mater picker shows ESPN\'s FULL school list in a browser, and says so when it can\'t…');
+// Drew, 2026-09-29: "On alma mater selection in control center, it only shows
+// the 6 alma maters and not all of the cfb schools you can potentially choose
+// from". ROOT CAUSE, measured against the live endpoints 2026-09-29 (curl with
+// an Origin header, and a real headless Chrome page):
+//   site.api.espn.com/apis/site/v2/sports/football/college-football/teams?limit=1000
+//       200 with NO Access-Control-Allow-Origin → every browser/WKWebView blocks
+//       the read (the scoreboard on the same host DOES send `*`, which is why
+//       only this call ever failed);
+//   the three proxies: api.allorigins.win 522, corsproxy.io 403
+//       "keyless_legacy_url", api.codetabs.com 522 — all dead;
+//   sports.core.api.espn.com/v3/sports/football/college-football/teams?limit=1000
+//       200, Access-Control-Allow-Origin: *, the SAME 762 teams with identical
+//       location/displayName for every id (compared id-by-id), 268 KB vs 1.8 MB.
+// So fetchEspnTeamsList() threw on every device, maybeRefreshAlmaMaterCatalog()
+// swallowed it into a console.warn, and the picker sat on the 6-school
+// ALMA_MATERS fallback with nothing on screen saying so.
+{
+  const v3Team = (id, location, name, displayName) => ({ id, uid: `s:20~l:23~t:${id}`, slug: 'x', location, name, nickname: location, abbreviation: 'X', displayName: displayName || `${location} ${name}`, shortDisplayName: location, color: '000000', alternateColor: 'ffffff', active: true, allstar: false });
+  const v3Items = [
+    v3Team('245', 'Texas A&M', 'Aggies'), v3Team('30', 'USC', 'Trojans'), v3Team('201', 'Oklahoma', 'Sooners'),
+    v3Team('228', 'Clemson', 'Tigers'), v3Team('264', 'Washington', 'Huskies'), v3Team('87', 'Notre Dame', 'Fighting Irish'),
+    v3Team('194', 'Ohio State', 'Buckeyes'), v3Team('333', 'Alabama', 'Crimson Tide'), v3Team('265', 'Washington State', 'Cougars'),
+    v3Team('2390', 'Miami', 'Hurricanes'), v3Team('193', 'Miami', 'RedHawks', 'Miami (OH) RedHawks'), v3Team('2000', 'Abilene Christian', 'Wildcats'),
+    null,                                                   // malformed row — dropped
+    { id: '999', location: '', name: 'Nobody', displayName: '' },   // no location — unusable as a claim, dropped
+  ];
+  const v3Response = { count: v3Items.length, pageIndex: 1, pageSize: 1000, pageCount: 1, items: v3Items };
+  const V3_URL = 'https://sports.core.api.espn.com/v3/sports/football/college-football/teams?limit=1000';
+  // A browser, as measured: only the CORS-enabled core endpoint is readable.
+  // Everything else rejects the way WebKit reports a blocked/unreachable fetch.
+  const requested = [];
+  const browserFetch = async (url) => {
+    requested.push(String(url));
+    const u = new URL(String(url));
+    if (u.hostname === 'sports.core.api.espn.com' && u.pathname === '/v3/sports/football/college-football/teams') {
+      return { ok: true, status: 200, json: async () => v3Response };
+    }
+    throw new TypeError('Load failed');
+  };
+  const savedFetch22 = globalThis.fetch;
+  const savedWarn22 = console.warn;
+  console.warn = () => {};
+  try {
+    // ── 22a–22c: the catalog itself ──
+    globalThis.fetch = browserFetch;
+    let teams22 = null, threw22 = null;
+    try { teams22 = await fetchEspnTeamsList(); } catch (e) { threw22 = e; }
+    assert(threw22 === null && Array.isArray(teams22) && teams22.length === 12,
+      `22a THE BUG — in a browser fetchEspnTeamsList() returns ESPN's full list (12 usable of 14 fixture rows), not a throw that leaves the 6-school fallback (threw: ${threw22?.message || 'no'}, got ${teams22?.length})`);
+    assert(requested[0] === V3_URL,
+      `22b …read from the CORS-enabled core endpoint first — the one a browser can actually read (first request: ${requested[0]})`);
+    assert(Array.isArray(teams22) && teams22.every((t) => Object.keys(t).sort().join() === 'displayName,location')
+      && teams22.some((t) => t.location === 'Ohio State' && t.displayName === 'Ohio State Buckeyes')
+      && teams22.filter((t) => t.location === 'Miami').length === 2,
+      '22c …same { location, displayName } shape as before (RG-55 trim holds; duplicate locations kept apart by displayName)');
+
+    // ── 22d–22f: the Profile picker + the Chat-settings picker, end to end ──
+    const makeOptSelect = (id) => {
+      const e = el(id);
+      let html = '';
+      Object.defineProperty(e, 'innerHTML', { configurable: true, get: () => html, set(v) { html = String(v); } });
+      const unesc22 = (v) => v.replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+      Object.defineProperty(e, 'value', { configurable: true, get: () => unesc22((html.match(/<option value="([^"]*)" selected/) || [])[1] ?? ''), set() {} });
+      e.optionCount = () => (html.match(/<option /g) || []).length;
+      return e;
+    };
+    const open22 = (stored) => {
+      localStorage.clear();
+      resetDom();
+      app._resetEspnTeamsCacheForTest();
+      storage.addPlayer(freshPlayer({ playerId: 'b3_p', displayName: 'B3', active: true, almaMater: stored }));
+      storage.setSession('b3_p', false, true);
+      const ctx = app._buildControlCenterCtxForTest();
+      const prof = makeOptSelect('cc-field-alma-mater');
+      prof.innerHTML = ctx.bodies.almaMaterOptionsHTML;
+      const pref = makeOptSelect('pref-alma');
+      pref.innerHTML = ctx.bodies.almaMaterOptionsHTML;
+      const profNote = el('cc-field-alma-note'); profNote.hidden = true;
+      const prefNote = el('pref-alma-note'); prefNote.hidden = true;
+      return { ctx, prof, pref, profNote, prefNote };
+    };
+
+    // 22d: the success path lands the full list on BOTH control-center pickers.
+    {
+      globalThis.fetch = browserFetch;
+      const { prof, pref } = open22('Texas A&M');
+      assert(prof.optionCount() === 7, `22d fixture: Profile opens on the 6-school fallback + None (${prof.optionCount()} options) — not vacuous`);
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(prof.optionCount() === 13 && /Ohio State Buckeyes/.test(prof.innerHTML),
+        `22d THE BUG — Profile's picker now offers ESPN's full list (${prof.optionCount()} options incl. None; "Ohio State Buckeyes" offered)`);
+      assert(pref.optionCount() === 13 && /Abilene Christian Wildcats/.test(pref.innerHTML) && pref.value === 'Texas A&M',
+        `22e …and so does the Chat-settings row's alma-mater picker (#pref-alma), patched in place with the claim still selected (${pref.optionCount()} options, value "${pref.value}")`);
+    }
+    // 22f: ESPN unreachable → a LOUD, honest caption on both pickers; never a silent short list.
+    {
+      globalThis.fetch = async () => { throw new TypeError('Load failed'); };
+      const { ctx, prof, profNote, prefNote } = open22('Texas A&M');
+      assert(typeof ctx.bodies.almaMaterNoteText === 'string' && /Loading/i.test(ctx.bodies.almaMaterNoteText),
+        `22f-1 before the catalog lands, the Profile pane's ctx carries a "Loading…" caption for the picker (got ${JSON.stringify(ctx.bodies.almaMaterNoteText)})`);
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(prof.optionCount() === 7, '22f fixture: the fetch failed — the short fallback list is all there is');
+      for (const [label, note] of [['Profile (#cc-field-alma-note)', profNote], ['Chat settings (#pref-alma-note)', prefNote]]) {
+        assert(note.hidden === false && /ESPN/.test(note.textContent) && /short list/i.test(note.textContent),
+          `22f-2 THE BUG — ${label} SAYS the list is short and why (hidden=${note.hidden}, text ${JSON.stringify(note.textContent)})`);
+      }
+      assert(/short list/i.test(app._buildControlCenterCtxForTest().bodies.almaMaterNoteText || ''),
+        '22f-3 …and every later Profile paint (ctx rebuilt) carries the same caption, not "Loading…" forever');
+    }
+    // 22g: the catalog is fetched when the Chat-settings row is opened, not only Profile.
+    {
+      let calls = 0;
+      globalThis.fetch = async (u) => { calls++; return browserFetch(u); };
+      open22('Texas A&M');
+      assert(typeof app._bindControlCenterBodiesForTest === 'function', '22g fixture: bindControlCenterBodies() test seam is exported');
+      app._bindControlCenterBodiesForTest?.({ querySelector: () => null }, { pane: 'main', settingsOpenRow: 'chat' });
+      await new Promise((r) => setTimeout(r, 0));
+      assert(calls >= 1, `22g THE BUG — opening Control Center → Chat settings (which carries its own alma-mater picker) starts the catalog fetch too (${calls} call(s))`);
+    }
+    // 22h: the profile markup carries the caption slot, announced to VoiceOver.
+    {
+      const cc = await import('./js/control-center.js');
+      const html = cc.renderProfileScreen({ ...app._buildControlCenterCtxForTest(), bodies: { ...app._buildControlCenterCtxForTest().bodies, almaMaterNoteText: 'X note' } });
+      assert(/<p [^>]*id="cc-field-alma-note"[^>]*role="status"[^>]*>X note<\/p>/.test(html),
+        '22h renderProfileScreen() renders the caption under the picker as a role="status" line');
+    }
+  } finally {
+    globalThis.fetch = savedFetch22;
+    console.warn = savedWarn22;
+    app._resetEspnTeamsCacheForTest();
+    resetDom();
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+console.log('\n[23] RG-TBD-B3 reviewer follow-ups — no proxies, paging + truncation guard, retry on re-open, honest wording…');
+{
+  const V3 = 'https://sports.core.api.espn.com/v3/sports/football/college-football/teams?limit=1000';
+  const t23 = (i) => ({ id: String(900 + i), location: `School ${i}`, name: 'Mascots', displayName: `School ${i} Mascots` });
+  // A paged v3 catalog: count 5, pages of 2 (3 pages), exactly the live shape
+  // ESPN returns at a smaller limit (verified 2026-09-29: limit=300 → 3 pages).
+  const pageBody = (page) => ({ count: 5, pageIndex: page, pageSize: 2, pageCount: 3,
+    items: [t23(page * 2 - 1), t23(page * 2)].filter((t) => Number(t.id) - 900 <= 5) });
+  const pagedFetch = ({ failPage = 0, failAll = false } = {}) => {
+    const calls = [];
+    const fn = async (url) => {
+      calls.push(String(url));
+      const u = new URL(String(url));
+      if (failAll || u.hostname !== 'sports.core.api.espn.com') throw new TypeError('Load failed');
+      const page = Number(u.searchParams.get('page') || 1);
+      if (page === failPage) throw new TypeError('Load failed');
+      return { ok: true, status: 200, json: async () => pageBody(page) };
+    };
+    fn.calls = calls;
+    return fn;
+  };
+  const savedFetch23 = globalThis.fetch;
+  const savedWarn23 = console.warn;
+  console.warn = () => {};
+  try {
+    // 23a — the proxies are gone for this endpoint (security note).
+    {
+      const f = pagedFetch({ failAll: true });
+      globalThis.fetch = f;
+      let threw = false;
+      try { await fetchEspnTeamsList(); } catch { threw = true; }
+      assert(threw && f.calls.length === 1 && f.calls[0] === V3 && !f.calls.some((u) => /allorigins|corsproxy|codetabs/.test(u)),
+        `23a an unreachable catalog makes ONE direct request and no third-party proxy request (got ${f.calls.length}: ${f.calls.map((u) => new URL(u).hostname).join(', ')})`);
+    }
+    // 23b — paging: every page is fetched, the result is complete.
+    {
+      const f = pagedFetch();
+      globalThis.fetch = f;
+      const teams = await fetchEspnTeamsList();
+      assert(teams.length === 5 && !teams.incomplete && f.calls.includes(V3 + '&page=2') && f.calls.includes(V3 + '&page=3'),
+        `23b a paged catalog (count 5, 3 pages) is fetched in full — pages 2 and 3 requested, 5 teams, not flagged incomplete (got ${teams.length}; ${f.calls.length} requests)`);
+    }
+    // 23c — a page that fails is REPORTED, never silently dropped…
+    {
+      globalThis.fetch = pagedFetch({ failPage: 3 });
+      const teams = await fetchEspnTeamsList();
+      assert(teams.length === 4 && teams.incomplete?.got === 4 && teams.incomplete?.expected === 5,
+        `23c a missing page leaves the list SHORT of ESPN's own count and says so (incomplete ${JSON.stringify(teams.incomplete)}, ${teams.length} teams)`);
+      // …and the Control Center caption says how short.
+      localStorage.clear(); resetDom(); app._resetEspnTeamsCacheForTest();
+      storage.addPlayer(freshPlayer({ playerId: 'b3r_p', displayName: 'B3R', active: true, almaMater: 'Texas A&M' }));
+      storage.setSession('b3r_p', false, true);
+      const note = el('cc-field-alma-note');
+      globalThis.fetch = pagedFetch({ failPage: 3 });
+      await app._maybeRefreshAlmaMaterCatalogForTest();
+      assert(/4 of 5/.test(note.textContent) && /retry/i.test(note.textContent),
+        `23c-2 the Profile caption names the partial list ("${note.textContent}")`);
+    }
+    // 23d — a failed fetch is retried when the picker is OPENED again — never
+    // on a mere repaint of the same open pane (RG-298 minor (a)'s storm guard).
+    {
+      localStorage.clear(); resetDom(); app._resetEspnTeamsCacheForTest();
+      storage.addPlayer(freshPlayer({ playerId: 'b3d_p', displayName: 'B3D', active: true, almaMater: 'Texas A&M' }));
+      storage.setSession('b3d_p', false, true);
+      const note = el('cc-field-alma-note');
+      const scope = { querySelector: () => null };
+      const bind = (s) => app._bindControlCenterBodiesForTest(scope, s);
+      const tick = () => new Promise((r) => setTimeout(r, 0));
+      let f = pagedFetch({ failAll: true });
+      globalThis.fetch = f;
+      bind({ phase: 'open', pane: 'profile' }); await tick();
+      assert(f.calls.length === 1 && /Reopen to retry/.test(note.textContent) && !/close and reopen the app/i.test(note.textContent),
+        `23d-1 the first open tries once; the failure caption asks for a re-open, which is true on iOS (backgrounding keeps the page alive) ("${note.textContent}")`);
+      bind({ phase: 'open', pane: 'profile' }); await tick();
+      bind({ phase: 'open', pane: 'profile' }); await tick();
+      assert(f.calls.length === 1, `23d-2 repaints of the SAME open Profile never retry (${f.calls.length} request(s))`);
+      bind({ phase: 'open', pane: 'main' }); await tick();
+      assert(f.calls.length === 1, '23d-3 leaving Profile does not fetch');
+      f = pagedFetch();
+      globalThis.fetch = f;
+      bind({ phase: 'open', pane: 'profile' }); await tick(); await tick();
+      assert(f.calls.length >= 1 && /All 5 schools/.test(note.textContent),
+        `23d-4 THE FOLLOW-UP — re-opening Profile retries, and the full list lands (${f.calls.length} request(s), caption "${note.textContent}")`);
+      // The Chat settings row is the same picker: closing the drawer and
+      // re-opening that row retries too.
+      app._resetEspnTeamsCacheForTest();
+      f = pagedFetch({ failAll: true }); globalThis.fetch = f;
+      bind({ phase: 'open', pane: 'main', settingsOpenRow: 'chat' }); await tick();
+      bind({ phase: 'closed', pane: 'main', settingsOpenRow: 'chat' }); await tick();
+      f = pagedFetch(); globalThis.fetch = f;
+      bind({ phase: 'open', pane: 'main', settingsOpenRow: 'chat' }); await tick(); await tick();
+      assert(f.calls.length >= 1, `23d-5 …and re-opening Chat settings after closing the drawer retries as well (${f.calls.length} request(s))`);
+    }
+    // 23e — the caption line box is RESERVED: the slot renders (never
+    // `hidden`) even with nothing to say, so the Save button below it never
+    // moves when a caption arrives (engine-measured: shellrendertest [F]).
+    {
+      const cc = await import('./js/control-center.js');
+      const ctx0 = app._buildControlCenterCtxForTest();
+      const html = cc.renderProfileScreen({ ...ctx0, bodies: { ...ctx0.bodies, almaMaterNoteText: '' } });
+      const slot = (html.match(/<p [^>]*id="cc-field-alma-note"[^>]*>/) || [])[0] || '';
+      assert(slot && !/\bhidden\b/.test(slot) && /alma-catalog-note/.test(slot),
+        `23e an EMPTY caption still renders its slot (no hidden attribute; .alma-catalog-note reserves the line): ${slot}`);
+      const { readFileSync } = await import('node:fs');
+      const css = readFileSync(new URL('./css/styles.css', import.meta.url), 'utf8');
+      assert(/\.alma-catalog-note\{[^}]*min-height:/.test(css), '23e-2 styles.css gives .alma-catalog-note a reserved min-height');
+    }
+  } finally {
+    globalThis.fetch = savedFetch23;
+    console.warn = savedWarn23;
+    app._resetEspnTeamsCacheForTest();
+    resetDom();
   }
 }
 

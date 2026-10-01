@@ -93,7 +93,17 @@ import {
 import {
   scribeInspectMessage, scribeTrigger, resetScribeMemory,
   REASON_CHIP_COPY, REASON_CHIP_SECTION_COPY,
+  // N8 (DI-440 §2, 2026-09-29) — the live-upset detector offers a settled call to the
+  // SERVER path directly (the milestone / streak precedent) and only falls back to a
+  // tier-0 line when that path is unavailable.
+  considerAutonomous,
 } from './scribeLines.js';
+// N8 (DI-439, 2026-09-29) — the pure predicates the client detector and the server
+// verifier share (one implementation, so "verified" means the same thing twice).
+// scribe-scoring.js imports nothing, so this adds no cycle.
+import {
+  sportDbCodeForGame, secondHalfFromPeriod, crowdTurn, almaSideState, almaCondition,
+} from './scribe-scoring.js';
 import {
   recordFeedback, recordFeedbackReasons, getFeedbackFor, isScribeFeedbackEnabled,
 } from './scribeFeedback.js';
@@ -107,6 +117,9 @@ import {
 import {
   formatSpread, formatWeekLabel, GAME_STATUS, buildAbbrMap, REACTION_PALETTE, CHAT_ACCENTS,
   SCRIBE_FEEDBACK_REASON_CHIPS, SCRIBE_FEEDBACK_CHIP_FAMILY,
+  // N8 (DI-439 §4) — the pure "who claims this team's school" helper (data-model.js
+  // imports nothing, unlike app.js's claimedAlmaMaters(), which chat-ui must not import).
+  almaMaterPlayersForTeam,
 } from './data-model.js';
 import { calculateAtsWinner } from './scoring.js';
 // RG-176 — the generic repaint-survival mechanism. app.js wires it at
@@ -126,6 +139,9 @@ import { getActiveLeagueId, getCachedMemberships, getCachedMaintenanceBanner } f
 // internally by haptic() itself (isNativeShell()) — no extra gating needed
 // at any of this file's three call sites.
 import { haptic } from './haptics.js';
+// DI-444 (UN-387, 2026-09-29) — the ONE platform predicate (AD-68); zero
+// dependencies, so this adds no cycle. Read by chatHeaderRefreshWanted() only.
+import { isNativeShell } from './platform.js';
 // Step 6 (full-app review, 2026-09-26) — nav-gestures.js imports only
 // platform and haptics, so this adds no cycle. bindBottomAnchor (v0.27.x
 // bugfix, 2026-09-27) keeps the page thread pinned across the keyboard
@@ -252,6 +268,33 @@ function refreshControlHTML(idPrefix) {
       aria-label="${REFRESH_ARIA_LABEL[status]}">🔄</button>
     <span class="chat-refresh-status" id="${esc(idPrefix)}-status" aria-live="polite">${REFRESH_STATUS_TEXT[status]}</span>`;
 }
+
+/**
+ * DI-444 (UN-387, 2026-09-29) — does the MAIN chat header get a manual refresh
+ * button? Drew: "Can get rid of refresh chat button now that we have swipe up
+ * to sync." Pull-to-sync (js/app.js bindBottomPullToRefresh(), Chat's own
+ * bottom pull-up, DI-399 b-ii) is the single manual-sync path on the native
+ * iOS shell and on any touch device — the native iOS pattern (Interaction
+ * Principles, Pull-to-Refresh) — so the button is not rendered there (no
+ * markup, so no listener is ever bound: bindChatPage()'s lookup finds
+ * nothing). It STAYS on desktop web with a fine pointer, where no pull
+ * gesture exists and realtime is the only other path (the coordinator's call
+ * in DI-444, flagged to Drew, who may extend the removal to every surface).
+ * Not applied to the game-thread SHEET's button (`chat-sheet-refresh`): the
+ * sheet has no pull gesture, so its button remains the only manual path there.
+ *
+ * Evaluated at render time. Fails toward KEEPING the button: an engine
+ * without matchMedia (or one that throws) still has a way to force a check.
+ */
+const TOUCH_PRIMARY_QUERY = '(hover: none) and (pointer: coarse)';
+function chatHeaderRefreshWanted() {
+  if (isNativeShell()) return false;
+  try {
+    if (typeof matchMedia === 'function' && matchMedia(TOUCH_PRIMARY_QUERY).matches) return false;
+  } catch { /* matchMedia can throw in exotic embedded webviews — keep the button */ }
+  return true;
+}
+export const _chatHeaderRefreshWantedForTest = chatHeaderRefreshWanted;
 
 /** Patches BOTH refresh controls' DOM state directly rather than forcing a
  *  full renderChatPage()/renderSheetMessages() re-render for a status change
@@ -2565,13 +2608,26 @@ export function renderChatPage() {
       <div class="chat-header-row">
         <h2>Chat <span class="badge badge-beta" title="Still being tested — tell us if something looks wrong">BETA</span> ${_chatSyncBadgeHTML()}</h2>
         <div class="chat-header-actions">
-          <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat">🔍</button>
-          ${refreshControlHTML('chat-refresh')}
+          <button class="btn btn-ghost btn-sm" id="chat-search-btn" title="Search chat" aria-label="Search chat">🔍</button>
+          ${chatHeaderRefreshWanted() ? refreshControlHTML('chat-refresh') : ''}
         </div>
       </div>
       ${U.searchOpen ? searchBarHTML() : pillsHTML()}
       ${viewHeader}
     </div>
+    <!-- DI-442 (UN-385, 2026-09-29, Drew: the composer should read as "the
+         bottom of the chat thread bubble", "to save space", and sit "moved
+         up a hair vertically so that it is not right on top of the tab
+         bar") — ONE surface: .chat-surface carries the card chrome and
+         holds the thread, the pull indicator, "↓ latest" and the composer
+         (or the signed-out prompt) as its sections. No overflow on the
+         wrapper (it would clip the reply-swipe's own-bubble overhang and the
+         pull indicator); ids and classes inside are unchanged. The 8px lift
+         off the tab bar is #page-chat's own padding-bottom (--chat-nav-gap,
+         css/styles.css). carryComposerAcross() walks one more ancestor
+         level (the shape check compares both chains, so it still matches).
+         NO BACKTICKS IN HERE — this markup lives inside a template literal. -->
+    <div class="chat-surface">
     <div class="chat-scroll" id="chat-scroll">
       ${scrollBodyHTML}
     </div>
@@ -2601,6 +2657,7 @@ export function renderChatPage() {
     <div class="chat-pull-refresh-wrap"><div class="chat-pull-refresh" id="chat-pull-refresh" data-phase="idle" aria-hidden="true"></div></div>
     <button class="chat-jump-latest" id="chat-jump" style="display:none">↓ latest</button>
     ${self ? composerHTML() : loginPromptHTML()}
+    </div>
   `;
   // RG-297 — the SAME composer textarea stays in the document across the
   // repaint (focus, keyboard, draft, caret, IME and undo untouched); the rest
@@ -3365,6 +3422,9 @@ function bindChatPage() {
   // (js/control-center.js, `group: 'settings', rowId: 'chat'`) is the one
   // surviving host; prefsPanelHTML()/bindPrefsPanel() themselves are
   // unchanged.
+  // DI-444 — the button exists only where chatHeaderRefreshWanted() rendered it
+  // (desktop web, fine pointer); on native/touch this lookup finds nothing, so
+  // no handler is bound — none left dead.
   document.getElementById('chat-refresh-btn')?.addEventListener('click', onChatRefreshTap);
 
   document.getElementById('chat-load-older')?.addEventListener('click', async e => {
@@ -3761,9 +3821,10 @@ export const _bindMessageActionsContextMenu = bindMessageActionsContextMenu;
  * confirmation itself, not conditioned on the outcome) — over
  * WEEK_SWIPE_BOUNCE_MS/--motion-fast (150ms, Small-feedback bucket; DI-420's
  * Navigation-bucket fix is for a completed NAVIGATION and does not apply to
- * this in-place bounce). Reduced motion: no translate at all (detection/
- * commit/haptic unchanged either way — only the visual layer is gated),
- * matching DI-409's/DI-420's own rule.
+ * this in-place bounce). Reduced motion: AMENDED by RG-TBD-B4 (2026-09-29)
+ * — the drag-follow and the glyph run either way (direct manipulation, not
+ * animation; gating them left the haptic as the only feedback); under
+ * Reduce Motion only the spring-back's animation is dropped (it snaps home).
  *
  * ARBITRATION NOTE WITH THE DRAWER'S L→R GESTURE (DI-419) — RESOLVED,
  * reviewer round 2 (B1 BLOCK, 2026-09-28). Round 1 removed the old
@@ -3814,10 +3875,9 @@ export function _replySwipeDragOffset(dx) {
  * `openReplyFor()`) happens on release, ONLY if still armed at that instant
  * — dragging back under the threshold before releasing un-arms it (no
  * reply, still springs back). `armed` (the COMMIT decision) is computed
- * unconditionally, regardless of reduced motion — only the VISUAL layer
- * (`setDragX`/`setArmed`'s glyph) is gated on it, per DI-427's own
- * "detection/commit/haptic unchanged either way — only the visual layer is
- * gated" rule.
+ * unconditionally, regardless of reduced motion (and since RG-TBD-B4 the
+ * VISUAL layer — `setDragX`/`setArmed`'s glyph — is too; only springBack()'s
+ * animation reads prefersReducedMotion()).
  * The react-picker (R→L) direction is UNCHANGED — no visual layer, no arm
  * state, commits immediately mid-drag exactly as before (DI-427 never
  * touched that direction; N1 doesn't either).
@@ -3948,17 +4008,25 @@ function bindMessageSwipe(root) {
       const nowArmed = dx >= SWIPE_THRESHOLD_PX;
       if (nowArmed && !armed) haptic('light'); // DI-326 — native-only, gated internally by haptic() itself.
       armed = nowArmed;
-      // DI-427 — the VISUAL layer only: drag-follow + glyph, gated off
-      // reduced motion (detection/commit/haptic above are NOT gated).
-      if (!prefersReducedMotion()) {
-        placeGlyph(); // N4 — once per gesture, BEFORE the first transform write
-        // Reviewer round-3 note 1 — only a row with a bubble column moves,
-        // so only such a row can overflow the thread; a .chat-system row
-        // (data-mid, no .chat-bubble-col) never sets the clip.
-        if (targetColEl) setThreadClip(true);
-        setDragX(_replySwipeDragOffset(dx));
-        setArmed(armed);
-      }
+      // DI-427 — the VISUAL layer: drag-follow + glyph.
+      // RG-TBD-B4 (bug batch B, 2026-09-29, Drew: "I feel the haptic
+      // feedback but dont see the visual feedback") — this block used to sit
+      // behind `if (!prefersReducedMotion())`, so with iOS Reduce Motion on
+      // the haptic was the gesture's ONLY feedback. Finger-tracking is
+      // direct manipulation, not an animation (HIG, Motion: under Reduce
+      // Motion "track animations directly with people's gestures"; UIKit's
+      // interactive swipes keep tracking), and the ↩ glyph is a state, not
+      // motion (§Accessibility: "never make polish dependent on
+      // animation"). Reduce Motion is honoured where motion actually runs:
+      // springBack() snaps home with no transition, and the glyph's fade is
+      // CSS-gated (css/styles.css .chat-swipe-reply-icon).
+      placeGlyph(); // N4 — once per gesture, BEFORE the first transform write
+      // Reviewer round-3 note 1 — only a row with a bubble column moves,
+      // so only such a row can overflow the thread; a .chat-system row
+      // (data-mid, no .chat-bubble-col) never sets the clip.
+      if (targetColEl) setThreadClip(true);
+      setDragX(_replySwipeDragOffset(dx));
+      setArmed(armed);
     }
     // React-picker (R→L) — UNCHANGED shape: commits immediately mid-drag,
     // no visual layer, no arm state.
@@ -4196,6 +4264,11 @@ export function prefsPanelHTML() {
              value="${esc(player?.initials || '')}" placeholder="${esc((player?.displayName || '').charAt(0).toUpperCase())}" /></div>
     <div class="chat-prefs-row"><label>Alma mater</label>
       <select class="form-input" id="pref-alma">${almaOptionsHTML(player?.almaMater || '')}</select></div>
+    <!-- RG-TBD-B3 (2026-09-29) — the picker's one-line caption. Written by
+         js/app.js syncAlmaMaterCatalogNotes() right after the drawer paints and
+         again when the ESPN catalog fetch settles; its line box is reserved
+         (.alma-catalog-note) so the rows below never move. -->
+    <div class="chat-prefs-row text-muted alma-catalog-note" id="pref-alma-note" role="status" style="font-size:.75rem"></div>
     <div class="chat-prefs-row"><span class="text-muted" style="font-size:.75rem">Your commissioner can also set this for you.</span></div>
     <div class="chat-prefs-row"><label>Accent</label>
       <div class="chat-accent-row">${ACCENTS.map(a =>
@@ -4918,28 +4991,303 @@ export function emitWeekFinalEvent(week, rankedResults) {
 }
 
 // ── SCRIBE live-game observation (rides the existing score poll) ──────────────
-/** Called per game on each score refresh with the pre-update copy. */
-export function scribeLiveGameCheck(prevGame, nextGame) {
+//
+// RG-TBD-D1 (Drew, 2026-09-29: "it comments too much during the games about the
+// spread being flipped … only happen in the second half"). The coverage-flip
+// detector used to be stateless: every poll compared the mirror's stored row to
+// the ESPN-fresh row and posted on any sign change, in any quarter, as often as
+// a per-device 60-minute room cooldown and a 30-minute id bucket allowed. On a
+// player device the stored row is the SERVER's row (the score overlay is dropped
+// on every hydrate and every Realtime `games` event), so a lagging row also read
+// as a fresh flip. The rule now — all four must hold, coverfliptest.mjs pins it:
+//   1. SECOND HALF — the sport's own second-half period (football: ESPN period
+//      >= 3, so Q3, Q4 and every OT — N8 DI-439 §2 makes it per-sport) on the poll
+//      where this device first sees the change. No period, no flip (fail quiet).
+//   2. OBSERVED — the change is between two of THIS device's own observations;
+//      a device's first look at a game only sets its baseline.
+//   3. SUSTAINED — the new state holds on every poll for 5 minutes. A poll back on
+//      the old one, or exactly on the number, cancels it.
+//   4. ONCE PER DIRECTION — no post for this game in this direction (home / away)
+//      already in the shared chat log.
+//
+// N8 (DI-439 / DI-440, 2026-09-29; Drew's Q1-Q4 rulings, UN-314 / UN-384) puts THREE
+// detectors on that one poll, all behind the same gate and the same four rules:
+//   • the COVER TURN, definition A — a cover that turned against a real crowd
+//     (L >= 2 of the room on the team now not covering, and more of them than are
+//     on the team that is: `crowdTurn()`, js/scribe-scoring.js);
+//   • the ALMA MATER GOING BEHIND — a locked-in claimed school's team that turns to
+//     LOSING STRAIGHT-UP or to NOT COVERING (Drew, 2026-09-29, coordinator relay:
+//     "fires on BOTH conditions"); one situation is one post whichever applies;
+//   • the UPSET WATCH — an underdog leading by 9+ for 5 minutes AND the crowd rule.
+// Every one of them speaks only when `arePicksPublic(week)` (the blind rule — a
+// post about who is on the wrong side of a game is a post about picks), only for a
+// sport that has a second-half rule (`secondHalfFromPeriod`), and never for a
+// hockey-style question row. Routing (DI-440 §2): a settled call goes to the
+// SERVER path (`considerAutonomous('liveUpset', …)`, a named roll call re-derived
+// from the server's own rows). Only when that path is unavailable (`not_ready`,
+// `server_off_latch`) does the unnamed tier-0 line stand in; every other refusal —
+// the dial says quiet, a cooldown, a consecutive guard, a duplicate — posts nothing.
+//
+// Device-local and in memory only: one small entry per live game this session
+// has seen. Nothing here is persisted, and nothing is shared except the post.
+const COVERAGE_FLIP_SUSTAIN_MS = 5 * 60 * 1000;
+const coverageFlipState = new Map();   // gameId -> { settled: 'home'|'away', pending: { side, since } | null }
+// N8 — the alma machines run per (game, side): `${gameId}|${side}` -> { su, ats }, where each is its OWN
+// machine { settled: bool, pending: { to: bool, since } | null } over one condition: `su` = "this team is
+// LOSING STRAIGHT-UP", `ats` = "this team is NOT COVERING". Two parallel machines, not one combined flag
+// (reviewer BLOCK on DI-439 item 4): a favorite that has been leading-but-not-covering since half and then
+// loses the lead in Q3 has NEVER stopped being "behind" on a combined flag, yet its straight-up state just
+// turned. Each condition turns on its own; either turning is news.
+const almaBehindState = new Map();
+const upsetWatchState = new Map();     // gameId -> { since: number | null, done: boolean }
+export function _resetCoverageFlipStateForTest() { coverageFlipState.clear(); almaBehindState.clear(); upsetWatchState.clear(); }
+export function _coverageFlipStateForTest(gameId) {
+  const s = coverageFlipState.get(gameId);
+  return s ? { settled: s.settled, pending: s.pending ? { ...s.pending } : null } : null;
+}
+export function _almaBehindStateForTest(gameId, side) {
+  const s = almaBehindState.get(`${gameId}|${side}`);
+  if (!s) return null;
+  const view = m => (m ? { settled: m.settled, pending: m.pending ? { ...m.pending } : null } : null);
+  return { su: view(s.su), ats: view(s.ats) };
+}
+export function _upsetWatchStateForTest(gameId) {
+  const s = upsetWatchState.get(gameId);
+  return s ? { ...s } : null;
+}
+
+/** "Already spoken", read from the shared fold. The direction is part of every
+ *  tier-0 post id (`scribe_<trigger>_<gameId>_<side>_<suffix>`), so another
+ *  device's post counts the moment it arrives. A deleted post still counts.
+ *
+ *  THE CLIENT CHECKS THE TIER-0 PREFIXES ONLY, AND SKIPS THE AUTONOMOUS ONE
+ *  (`scribe_auto_liveUpset_…`) ON PURPOSE (DI-439 §5). A client cannot read
+ *  `messages.emitted_by`, and `chat_append_system` lets ANY member mint a row with
+ *  a `scribe_*` id; if this check honoured the autonomous prefix, a member-minted
+ *  `scribe_auto_liveUpset_<game>_crowd_home_0` row would silence the call-out for
+ *  everybody. The server's own check (`emitted_by IS NULL`, server-authored rows
+ *  only) is what guards that prefix. */
+function scribeRowExists(gameId, prefix) {
+  return getMessages({ tag: gameId }).some(m => m.author === 'scribe' && String(m.id || '').startsWith(prefix));
+}
+const scribeIdPrefix = (trigger, gameId, side) => `scribe_${trigger}_${gameId}_${side}_`.replace(/[^a-zA-Z0-9_:-]/g, '');
+function coverageFlipAlreadyPosted(gameId, side) {
+  return scribeRowExists(gameId, scribeIdPrefix('coverageFlip', gameId, side));
+}
+/** Alma: either tier-0 pool's prefix counts — one situation is one post, whichever
+ *  condition the line that went out described. */
+function almaAlreadyPosted(gameId, side) {
+  return scribeRowExists(gameId, scribeIdPrefix('almaTrailing', gameId, side))
+    || scribeRowExists(gameId, scribeIdPrefix('almaNotCovering', gameId, side));
+}
+function upsetWatchAlreadyPosted(gameId) {
+  return scribeRowExists(gameId, `scribe_upsetWatch_${gameId}_`.replace(/[^a-zA-Z0-9_:-]/g, ''));
+}
+
+/** Feeds one observation of the covering side into rules 1-3. Returns the side
+ *  that has JUST settled after a held turn (the caller decides whether the room
+ *  is on the wrong side of it), else null. */
+function observeCoverage(gameId, side, period, minPeriod, now) {
+  const st = coverageFlipState.get(gameId);
+  if (!st) {                                               // rule 2 — a baseline, never a flip
+    if (side) coverageFlipState.set(gameId, { settled: side, pending: null });
+    return null;
+  }
+  if (!side) { st.pending = null; return null; }          // exactly on the number: nothing is held
+  if (side === st.settled) { st.pending = null; return null; }   // back where it was: a pending flip is cancelled
+  if (st.pending && st.pending.side === side) {            // rule 3 — still holding?
+    if (now - st.pending.since < COVERAGE_FLIP_SUSTAIN_MS) return null;
+    st.settled = side;
+    st.pending = null;
+    return side;
+  }
+  if (Number(period) >= minPeriod) {                       // rule 1 — arm it, don't call it yet
+    st.pending = { side, since: now };
+  } else {                                                 // first half: track the cover, never call it
+    st.settled = side;
+    st.pending = null;
+  }
+  return null;
+}
+
+/** One alma condition's machine — the same four rules as `observeCoverage`, over a boolean
+ *  ("is this condition true of this team right now"). A baseline is recorded even when the condition is
+ *  NOT true (that is what makes "leading, then trailing" a turn), and a condition that was already true
+ *  at the first look never "turns". Returns true on the poll a held turn TO true settles; recovering
+ *  (a held turn to false) is not news. */
+function stepAlmaMachine(entry, name, holds, period, minPeriod, now) {
+  const st = entry[name];
+  if (!st) { entry[name] = { settled: holds, pending: null }; return false; }   // rule 2 — a baseline
+  if (holds === st.settled) { st.pending = null; return false; }
+  if (st.pending && st.pending.to === holds) {             // rule 3 — still holding?
+    if (now - st.pending.since < COVERAGE_FLIP_SUSTAIN_MS) return false;
+    st.settled = holds;
+    st.pending = null;
+    return holds;
+  }
+  if (Number(period) >= minPeriod) {                       // rule 1 — arm it, don't call it yet
+    st.pending = { to: holds, since: now };
+  } else {                                                 // first half: track, never call
+    st.settled = holds;
+    st.pending = null;
+  }
+  return false;
+}
+
+/** The alma detector's step: the straight-up machine and the ATS machine run in PARALLEL over the same
+ *  poll (DI-439 item 4), and EITHER turning is a call. Returns which turned at this poll — `'su'`,
+ *  `'ats'`, or `'both'` (both settled on the same poll: one situation, one call) — else null. If the
+ *  other one settles a poll or two later it is not a second call: the fold/prefix check ("one post per
+ *  game and side") and the room cooldown stop it, exactly as they stop a re-turn. */
+function observeAlma(key, state, period, minPeriod, now) {
+  let entry = almaBehindState.get(key);
+  if (!entry) { entry = { su: null, ats: null }; almaBehindState.set(key, entry); }
+  const su = stepAlmaMachine(entry, 'su', !!(state && state.su), period, minPeriod, now);
+  const ats = stepAlmaMachine(entry, 'ats', !!(state && state.ats), period, minPeriod, now);
+  return almaCondition({ su, ats });
+}
+
+/** Which unnamed alma pool may speak for this team RIGHT NOW (reviewer BLOCK N1, 2026-09-30).
+ *  The pool is chosen from the team's CURRENT `{su, ats}` state — never from which machine turned —
+ *  because a condition that turned is not the only thing true of the team at that poll: the underdog
+ *  that has trailed since half and just stopped covering turned on ATS, yet it is ALSO losing
+ *  outright, and `almaNotCovering`'s "Not losing, not covering" / "The scoreboard has no complaints"
+ *  would be false about it.
+ *    su          -> 'almaTrailing'     every line claims only "losing on the scoreboard" (true);
+ *    !su && ats  -> 'almaNotCovering'  its lines claim "not covering" and, two of them, "not losing";
+ *    neither     -> null               nothing true to say, so no fallback line. (Unreachable today — a
+ *                                      machine only settles to a condition that holds at that poll — and
+ *                                      kept so no future caller can route a false line.)
+ *  Pure. The server verifier picks no tier-0 pool (its named directive is built from facts). */
+function almaFallbackPool(state) {
+  if (!state) return null;
+  if (state.su) return 'almaTrailing';
+  if (state.ats) return 'almaNotCovering';
+  return null;
+}
+export function _almaFallbackPoolForTest(state) { return almaFallbackPool(state); }
+
+/** The upset watch's hold: `holds` (second half AND the underdog up by 9+) must be
+ *  true on every poll for 5 minutes. Once per game — `done` is never cleared. */
+function observeUpsetWatch(gameId, holds, now) {
+  let st = upsetWatchState.get(gameId);
+  if (!st) { st = { since: null, done: false }; upsetWatchState.set(gameId, st); }
+  if (st.done) return false;
+  if (!holds) { st.since = null; return false; }
+  if (st.since === null) { st.since = now; return false; }
+  if (now - st.since < COVERAGE_FLIP_SUSTAIN_MS) return false;
+  st.done = true;
+  return true;
+}
+
+/** DI-440 §2 — a settled call goes to the SERVER path directly (the milestone /
+ *  streak precedent), naming nobody: the client sends only WHICH check to run
+ *  (`reason`), and the server re-derives the game, the side and the roll call. The
+ *  unnamed tier-0 fallback runs ONLY when the server path is unavailable
+ *  (autonomy off, or latched off); `below_threshold` (the dial says quiet),
+ *  `cooldown`, `consecutive*`, `already_fired` and a server that declines all
+ *  post nothing (C1). */
+function routeLiveUpset({ gameId, weekId, reason, side, fallbackTrigger }) {
+  const outcome = considerAutonomous('liveUpset', {
+    subject: `${gameId}_${reason}_${side}`, gameTag: gameId, weekId,
+    signals: [{ signal: 'liveUpset' }], reason,
+  });
+  if (fallbackTrigger && outcome && (outcome.reason === 'not_ready' || outcome.reason === 'server_off_latch')) {
+    // The id carries NO time: one post per game per direction, so a time bucket
+    // could only split two phones' posts of the same event into two ids the
+    // server's on-conflict(id) would both keep. bucketMin 1e9 makes the suffix a
+    // constant `_0` (scribeLines.js bucket()), and the fold checks above match it.
+    scribeTrigger(fallbackTrigger, { gameTag: gameId, subject: `${gameId}_${side}`, bucketMin: 1e9 });
+  }
+  return outcome;
+}
+
+/** Called per game on each score refresh with the pre-update copy and the
+ *  poll's transient live status (`liveStatusById` shape; `period` is ESPN's).
+ *  `prevGame` is no longer the coverage-flip baseline (rule 2 above). */
+export function scribeLiveGameCheck(prevGame, nextGame, liveStatus = null) {
   try {
     if (!nextGame || nextGame.status !== GAME_STATUS.LIVE) return;
     const found = gameById(nextGame.gameId);
     const week = found?.week || getCurrentWeek();
-    const nPicks = week ? getPicks(week.weekId).filter(p => p.gameId === nextGame.gameId).length : 0;
-    if (nPicks < 3) return;   // only hotly-contested, widely-picked games
+    // DI-439 §1 — THE BLIND GATE, WHOLE FUNCTION. Every branch below names or counts
+    // who is on which side of a game, and that is a statement about picks; before
+    // picks are public it is forbidden (SCRIBE.md, rule 9).
+    if (!week || !arePicksPublic(week)) return;
+    // DI-439 §2 — a hockey-style question row or its child is not a game to call.
+    if (nextGame.market?.type === 'question' || nextGame.parentGameId) return;
+    const dbCode = sportDbCodeForGame(nextGame);
+    const minPeriod = secondHalfFromPeriod(dbCode);
+    if (minPeriod === null) return;                       // unknown sport, or one with no half: silent
+    if (nextGame.homeScore == null || nextGame.awayScore == null || prevGame?.homeScore == null) return;
+    const gameId = nextGame.gameId;
+    const period = liveStatus?.period;
+    const now = Date.now();
     const spread = nextGame.lockedSpread ?? nextGame.spread;
-    if (spread == null || nextGame.homeScore == null || prevGame?.homeScore == null) return;
-    const margin = g => (g.homeScore + spread) - g.awayScore;   // >0 home covering
-    const before = margin(prevGame), after = margin(nextGame);
-    if (Math.sign(before) !== Math.sign(after) && before !== 0 && after !== 0) {
-      scribeTrigger('coverageFlip', { gameTag: nextGame.gameId, subject: nextGame.gameId, bucketMin: 30 });
-      return;
+    const players = getPlayers().filter(p => p && p.active);
+    const activeIds = new Set(players.map(p => p.playerId));
+    const picksForGame = getPicks(week.weekId).filter(p => p.gameId === gameId);
+    const nPicks = picksForGame.length;
+    /** Distinct ACTIVE players whose pick on this game is `team`. */
+    const pickersOn = team => new Set(picksForGame
+      .filter(p => p.selectedTeam === team && activeIds.has(p.playerId)).map(p => p.playerId)).size;
+
+    // ── 1. THE COVER TURN, definition A. `nPicks < 3` stays on this path only.
+    if (spread != null && nPicks >= 3) {
+      const margin = (nextGame.homeScore + spread) - nextGame.awayScore;   // >0 home covering
+      const side = margin > 0 ? 'home' : margin < 0 ? 'away' : null;
+      const turned = observeCoverage(gameId, side, period, minPeriod, now);
+      if (turned) {
+        const coveringTeam = turned === 'home' ? nextGame.homeTeam : nextGame.awayTeam;
+        const losingTeam = turned === 'home' ? nextGame.awayTeam : nextGame.homeTeam;
+        if (crowdTurn(pickersOn(losingTeam), pickersOn(coveringTeam)) && !coverageFlipAlreadyPosted(gameId, turned)) {
+          routeLiveUpset({ gameId, weekId: week.weekId, reason: 'crowd', side: turned, fallbackTrigger: 'coverageFlip' });
+        }
+      }
     }
-    // Upset watch: the underdog leading outright by 9+
-    const homeIsFav = nextGame.favorite === nextGame.homeTeam;
-    const dogLead = homeIsFav ? nextGame.awayScore - nextGame.homeScore : nextGame.homeScore - nextGame.awayScore;
-    if (dogLead >= 9) {
-      const dog = homeIsFav ? nextGame.awayTeam : nextGame.homeTeam;
-      scribeTrigger('upsetWatch', { gameTag: nextGame.gameId, subject: nextGame.gameId, bucketMin: 60, vars: { TEAM: dog } });
+
+    // ── 2. AN ALMA MATER GOING BEHIND. No pick count — this is about a school, not
+    //    a crowd. The school must be one the week FROZE at lock (`lockedAlmaMaters`;
+    //    `alma_mater` is self-editable mid-game), and it is only ever named from the
+    //    GAME ROW's team name (`almaMaterPlayersForTeam` compares, never echoes).
+    const locked = week.lockedAlmaMaters;
+    if (Array.isArray(locked) && locked.length) {
+      for (const side of ['home', 'away']) {
+        const teamName = side === 'home' ? nextGame.homeTeam : nextGame.awayTeam;
+        if (!almaMaterPlayersForTeam(players, teamName, locked).length) continue;   // nobody in the room claims this school
+        const state = almaSideState({ homeScore: nextGame.homeScore, awayScore: nextGame.awayScore, spread, side });
+        const cond = observeAlma(`${gameId}|${side}`, state, period, minPeriod, now);
+        if (cond && !almaAlreadyPosted(gameId, side)) {
+          routeLiveUpset({
+            gameId, weekId: week.weekId, reason: 'alma', side,
+            // The unnamed stand-in's pool follows the CURRENT state, not the condition that
+            // turned (reviewer BLOCK N1): see `almaFallbackPool`.
+            fallbackTrigger: almaFallbackPool(state),
+          });
+        }
+      }
+    }
+
+    // ── 3. UPSET WATCH (Q4): the second half AND a real upset. The underdog leads by 9+
+    //    for 5 minutes, and the crowd rule applies — L pickers of the FAVORITE, G of
+    //    the underdog, fire only when L >= 2 and L > G. Football-scaled (nine points
+    //    means nothing in basketball), so cfb and nfl only. A null or PK favorite is
+    //    silent. Once per game. Unnamed tier-0 on purpose, no SIGNAL_POINTS entry.
+    if ((dbCode === 'cfb' || dbCode === 'nfl') && nPicks >= 3) {
+      const fav = nextGame.favorite;
+      const favSide = fav && fav === nextGame.homeTeam ? 'home' : fav && fav === nextGame.awayTeam ? 'away' : null;
+      let holds = false;
+      if (favSide && spread != null && Number(spread) !== 0 && Number(period) >= minPeriod) {
+        const dogLead = favSide === 'home' ? nextGame.awayScore - nextGame.homeScore : nextGame.homeScore - nextGame.awayScore;
+        holds = dogLead >= 9;
+      }
+      if (observeUpsetWatch(gameId, holds, now)) {
+        const favTeam = favSide === 'home' ? nextGame.homeTeam : nextGame.awayTeam;
+        const dog = favSide === 'home' ? nextGame.awayTeam : nextGame.homeTeam;
+        if (crowdTurn(pickersOn(favTeam), pickersOn(dog)) && !upsetWatchAlreadyPosted(gameId)) {
+          scribeTrigger('upsetWatch', { gameTag: gameId, subject: gameId, bucketMin: 1e9, vars: { TEAM: dog } });
+        }
+      }
     }
   } catch {}
 }

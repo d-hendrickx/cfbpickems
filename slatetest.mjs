@@ -161,7 +161,9 @@ const {
   exportWeekSlateCSV, carryForwardBroadcastFields,
   bindCommEventListeners, state,
 } = app;
-const { createGame, ALMA_MATERS } = dm;
+// N1 (coordinator ruling 2026-09-30): the six-school list is pilot-only in code — read through getAlmaMaters(). These are the PILOT league's own fixtures, so the list is asked for as the pilot.
+const { createGame, getAlmaMaters } = dm;
+const ALMA_MATERS = getAlmaMaters({ pilot: true });
 
 console.log('[slatetest] data-provider.js exports —', Object.keys(dp).length);
 console.log('[slatetest] app.js exports —', Object.keys(app).length);

@@ -116,6 +116,31 @@
  * card's exact `saveWeek()` call. `WIZARD_COPY.ANNOUNCE_SKIP_CONFIRM` is
  * retired (see its own former call site's comment); `shouldConfirmAnnouncementDiscard()`
  * is left in place — see its own updated header comment for why.
+ *
+ * ── DI-404 (UN-388, N16 — the mandatory weekly blurb, 2026-09-29) ──────────
+ * Drew: "when the commissioner is making the week it should be mandatory to
+ * make the weekly blurb." "Making the week" means PUBLISHING it (Step 6 Open
+ * now / Schedule Open); a draft is invisible to players, so Keep as draft
+ * stays exempt. This file owns the DOM-free half:
+ *   - `blurbCheck(text)` — the ONE definition of "filled": whitespace
+ *     collapsed, trimmed, at least `BLURB_MIN_LENGTH` (10) characters. Both
+ *     app.js surfaces (the wizard's Step 5 and the Week-tab blurb card) call
+ *     it, so the two can never disagree about what counts.
+ *   - `blurbGate(week)` / `blurbRequiredForOpen(week)` — who is gated: only a
+ *     draft, non-demo week. An open/locked/live/final week is never re-checked
+ *     (grandfathering), and a demo week (commissioner-only) is exempt.
+ *   - `openForPicksFromWizard()` and `finishWeekSetupFromWizard()` (NOW and
+ *     SCHEDULED) refuse with `reason: 'blurb_required'` after the three-item
+ *     checklist passes. DRAFT is untouched.
+ * `gatingChecklist()` is UNTOUCHED on purpose (its three items and shape are
+ * pinned). AMENDED (coordinator override, 2026-09-30): `dueForScheduledOpen()`
+ * now ALSO asks for the blurb. The DI first left the scheduled-open tick blind
+ * to it (so a week scheduled before N16 shipped would still open), which let a
+ * blank-blurb week open through Step 4's Auto-Open At — against Drew's rule
+ * that the blurb is mandatory when the commissioner makes the week. A due week
+ * with no valid blurb is now BLOCKED (the tick raises the commissioner alert,
+ * and the week opens on the first tick after a blurb exists); demo weeks stay
+ * exempt.
  */
 
 // ── Step metadata (§2.3's ASCII diagram) ────────────────────────────────────
@@ -131,7 +156,9 @@ export const WIZARD_STEPS = Object.freeze([
   // card already uses. The standalone "🎙 Commissioner Announcement" card
   // (Comm→Week) is UNCHANGED — a one-time announcement is still reachable
   // from there, just no longer duplicated inside the wizard.
-  { step: 5, id: 'blurb', title: 'Weekly Blurb (optional)' },
+  // DI-404 (UN-388, 2026-09-29) — "(optional)" is gone: the blurb is required
+  // before a week can be opened (Step 6), never before a draft is saved.
+  { step: 5, id: 'blurb', title: 'Weekly Blurb' },
   { step: 6, id: 'open', title: 'Open for picks' },
 ]);
 export const WIZARD_STEP_COUNT = WIZARD_STEPS.length;
@@ -169,6 +196,15 @@ export const WIZARD_COPY = Object.freeze({
   // glyph (js/icons.js, fill="none" stroke="currentColor"), not an emoji
   // baked into the copy string. The render site (renderFinalizeStep4HTML(),
   // js/app.js) prefixes icon('warning') now — see that function's own note.
+  // DI-404 (UN-388) — the mandatory weekly blurb. Quoted verbatim from the DI;
+  // shown INLINE (never a toast or alert) under the textarea on Step 5 and on
+  // the Week-tab blurb card, and beside the disabled Open button on Step 6.
+  BLURB_EMPTY: "Add a note for your players — it's the first thing they see on the Picks page.",
+  BLURB_SHORT: 'A little longer, please — at least 10 characters.',
+  BLURB_REQUIRED_AT_OPEN: 'Write the weekly blurb before opening this week.',
+  BLURB_ROW_MISSING: 'Weekly blurb not written yet',
+  BLURB_ROW_DONE: 'Weekly blurb written',
+  BLURB_WRITE_IT: 'Write it',
   UNRESOLVED_TIE_WARNING: 'This week has a tie in correct picks and no tiebreaker entered — the winner/loser will be decided arbitrarily until you enter one. Enter it in Confirm Tiebreaker, then continue to Finalize.',
 });
 
@@ -231,6 +267,77 @@ export function gatingChecklist({ gamesCount = 0, missingSpreadCount = 0, timing
     // The SINGLE gate §2.3's diagram names: `(disabled until ✓ x3)`.
     canOpen: gamesOk && spreadsOk && timingOk,
   };
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// DI-404 (UN-388) — THE MANDATORY WEEKLY BLURB. Pure, DOM-free, sport-blind:
+// the predicate reads no sport, so it holds for every week of every sport.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** A blurb must hold at least this many characters once whitespace is
+ *  collapsed and trimmed (DI-404 item 3). */
+export const BLURB_MIN_LENGTH = 10;
+
+/**
+ * The ONE definition of a filled blurb. Collapses every run of whitespace
+ * (newlines and tabs included) to one space, trims, then counts CHARACTERS as
+ * a person reads them — code points, so an emoji is one character, not two.
+ * `null`/`undefined`/non-strings read as empty. Returns
+ *   { ok, reason: null | 'empty' | 'short', length, text }
+ * where `text` is the collapsed form (used only for the count; callers save
+ * what the commissioner actually typed, never this normalised copy).
+ */
+export function blurbCheck(text) {
+  const collapsed = (typeof text === 'string' ? text : '').replace(/\s+/g, ' ').trim();
+  const length = Array.from(collapsed).length;
+  if (length === 0) return { ok: false, reason: 'empty', length: 0, text: '' };
+  if (length < BLURB_MIN_LENGTH) return { ok: false, reason: 'short', length, text: collapsed };
+  return { ok: true, reason: null, length, text: collapsed };
+}
+
+/** The inline message for a failed `blurbCheck()` reason ('' when it passed). */
+export function blurbErrorCopy(reason) {
+  if (reason === 'empty') return WIZARD_COPY.BLURB_EMPTY;
+  if (reason === 'short') return WIZARD_COPY.BLURB_SHORT;
+  // Step 4's Auto-Open At: a time is set/confirmed while the blurb is missing.
+  if (reason === 'required_at_open') return WIZARD_COPY.BLURB_REQUIRED_AT_OPEN;
+  return '';
+}
+
+const NON_DRAFT_STATUSES = Object.freeze(['open', 'locked', 'live', 'final']);
+
+/**
+ * Is `week` subject to the publish gate? Only a DRAFT (draft -> open is the one
+ * gated transition). Exempt: a week that is already open/locked/live/final
+ * (grandfathered — never re-checked) and a demo week (`dataSourceMode ===
+ * 'demo'`, commissioner-only). A missing status counts as a draft, so a
+ * malformed row errs toward asking for the blurb, never toward skipping it.
+ * `Keep as draft` is exempt by mode, not by this predicate (see
+ * `finishWeekSetupFromWizard`).
+ */
+export function blurbRequiredForOpen(week) {
+  if (!week) return false;
+  if (week.dataSourceMode === 'demo') return false;
+  return !NON_DRAFT_STATUSES.includes(week.status);
+}
+
+/**
+ * The gate, as one value: `required` (does the rule apply to this week),
+ * `check` (`blurbCheck(week.blurb)`), `satisfied` (the blurb is valid — what
+ * the Step 6 checklist row's tick shows) and `ok` (NOT blocked: not required,
+ * or satisfied — what enables Open / Schedule Open and lets Step 4 skip
+ * forward).
+ */
+export function blurbGate(week) {
+  const required = blurbRequiredForOpen(week);
+  const check = blurbCheck(week ? week.blurb : '');
+  return { required, check, satisfied: check.ok, ok: !required || check.ok };
+}
+
+/** `null` when the week may open, else the refusal both open paths return. */
+function blurbRefusalFor(week) {
+  const gate = blurbGate(week);
+  return gate.ok ? null : { ok: false, reason: 'blurb_required', blurb: gate.check };
 }
 
 /** Count of games on the slate with no spread recorded — a game "has a
@@ -478,6 +585,12 @@ export async function fetchAndApplySuggestedSlate({ week, deps }) {
 export function openForPicksFromWizard({ week, gamesCount, missingSpreadCount, timingConfigured, deps }) {
   const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
   if (!gate.canOpen) return { ok: false, gate };
+  // DI-404 (UN-388) — the weekly blurb is the fourth requirement, kept OUT of
+  // gatingChecklist() on purpose (that function's three items and shape are
+  // pinned; dueForScheduledOpen() adds the blurb beside it). Same refusal shape
+  // on both open paths.
+  const blurbRefusal = blurbRefusalFor(week);
+  if (blurbRefusal) return { ...blurbRefusal, gate };
   const { applyWeekStatusChange, showToast, nativeHapticImpact, isNativeShell } = deps;
   const updated = applyWeekStatusChange(week, 'open');
   if (showToast) showToast(WIZARD_COPY.OPEN_SUCCESS(week.weekNumber), 'success');
@@ -589,6 +702,9 @@ export const OPEN_MODES = Object.freeze({ NOW: 'now', SCHEDULED: 'scheduled', DR
  *               timestamp is `tickAutoTransition()`'s job in app.js
  *               (`dueForScheduledOpen()` below is that leg's pure predicate
  *               — this function never flips status itself).
+ *   (DI-404, UN-388) NOW and SCHEDULED both also refuse with
+ *   `reason: 'blurb_required'` (after the checklist passes) until the week's
+ *   blurb holds `blurbCheck().ok` — see `blurbGate()`. DRAFT never asks.
  *   DRAFT     → no status change, no gate check (nothing is being opened);
  *               closing the sheet is the caller's (app.js's) job, same as
  *               today's unlabeled "don't click Open for Picks" exit.
@@ -613,6 +729,12 @@ export function finishWeekSetupFromWizard({ week, mode, scheduledAt, now = Date.
     if (at.getTime() <= now) return { ok: false, mode, reason: 'past_scheduled_at' };
     const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
     if (!gate.canOpen) return { ok: false, mode, gate };
+    // DI-404 (UN-388) — scheduling an open is publishing; same blurb gate as
+    // Open now. (dueForScheduledOpen() asks again at open time, so a week that
+    // was scheduled before this shipped, or whose blurb was cleared since, is
+    // held by the tick rather than opened — coordinator override, 2026-09-30.)
+    const blurbRefusal = blurbRefusalFor(week);
+    if (blurbRefusal) return { ...blurbRefusal, mode, gate };
     const { saveWeek, showToast } = deps;
     const updated = { ...week, picksOpenAt: at.toISOString() };
     saveWeek(updated);
@@ -654,11 +776,22 @@ export function finishWeekSetupFromWizard({ week, mode, scheduledAt, now = Date.
  * scheduled time arrives.
  */
 export function dueForScheduledOpen({ week, now = Date.now(), gamesCount, missingSpreadCount, timingConfigured }) {
-  if (!week || week.status !== 'draft' || !week.picksOpenAt) return { due: false, blocked: false, gate: null };
+  if (!week || week.status !== 'draft' || !week.picksOpenAt) return { due: false, blocked: false, gate: null, blurb: null };
   const at = new Date(week.picksOpenAt).getTime();
-  if (!Number.isFinite(at) || now < at) return { due: false, blocked: false, gate: null };
+  if (!Number.isFinite(at) || now < at) return { due: false, blocked: false, gate: null, blurb: null };
   const gate = gatingChecklist({ gamesCount, missingSpreadCount, timingConfigured });
-  return { due: gate.canOpen, blocked: !gate.canOpen, gate };
+  // DI-404 AMENDED (coordinator override, 2026-09-30) — the weekly blurb is the
+  // fourth requirement here too. The DI first left this leg blind to the blurb (so
+  // a week scheduled before N16 shipped would still open); that let a blank-blurb
+  // week open through Step 4's Auto-Open At, which Drew's rule ("mandatory when
+  // the commissioner makes the week") cannot allow. A due week with no valid blurb
+  // is now BLOCKED, not opened: the tick raises the commissioner alert and the
+  // week opens on the first tick after a blurb exists. gatingChecklist() itself
+  // stays untouched (its three items and its return shape are pinned). Demo weeks
+  // are exempt (blurbGate); `blurb` is the gate so the tick can name WHY.
+  const blurb = blurbGate(week);
+  const ok = gate.canOpen && blurb.ok;
+  return { due: ok, blocked: !ok, gate, blurb };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -933,6 +1066,9 @@ export function createWeekWizard(deps = {}) {
     createWeek: (fields, existingWeek) => createWeekFromWizard({ fields, deps, existingWeek }),
     fetchAndApplySuggestedSlate: (week) => fetchAndApplySuggestedSlate({ week, deps }),
     openForPicks: (args) => openForPicksFromWizard({ ...args, deps }),
+    // DI-404 (UN-388) — the mandatory weekly blurb (pure; needs no deps).
+    blurbCheck: (text) => blurbCheck(text),
+    blurbGate: (week) => blurbGate(week),
     // DI-354 — shared step-navigation, both flows.
     stepBackTarget: (step) => stepBackTarget(step),
     shouldConfirmAnnouncementDiscard: (text) => shouldConfirmAnnouncementDiscard(text),

@@ -1217,6 +1217,37 @@ console.log('\n[sync] the header sync icon — ONE .header-sync-icon, and it is 
   assert(/\}\s*else\s*\{\s*bindPullToRefresh\(getScrollEl, runManualSync,/.test(appSrc.replace(/\/\/.*$/gm, '')),
     "[sync-2d] Picks/Dashboard's own else-branch passes bare runManualSync (never the chat-composed function) to bindPullToRefresh()");
 
+  // ── DI-444 (UN-387, 2026-09-29) — the chat header's refresh button is gone on
+  //    native/touch because pull-to-sync is the ONE manual path. So the pull path
+  //    must run the SAME forceRefresh() the button ran, and fail through the same
+  //    loud-fail seam (a rejection reaches bindBottomPullToRefresh()'s onFail →
+  //    the red banner). Structural, with mutation proofs; the composed function's
+  //    behaviour (both halves called, a rejection from either half rejects) is
+  //    [sync-2a..c] above, and the real-engine pull is chatpagetest [N12-a3/a4/e].
+  console.log('   DI-444 — pull-to-sync runs the SAME forceRefresh() the retired button ran, through the loud-fail seam…');
+  {
+    const strip = src => src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').map(l => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+    const appCode = strip(appSrc);
+    const chatUiCode = strip(readFileSync(new URL('./js/chat-ui.js', import.meta.url), 'utf8'));
+    const fromChat = (code, name) => new RegExp(`import\\s*\\{[^}]*\\b${name}\\b[^}]*\\}\\s*from\\s*'\\./chat\\.js'`).test(code);
+    assert(fromChat(appCode, 'forceRefresh') && fromChat(chatUiCode, 'forceRefresh'),
+      '[n12-sync-a] js/app.js and js/chat-ui.js import forceRefresh from the SAME module (./chat.js) — one function object, no wrapper or second copy');
+    const tapBody = (chatUiCode.match(/async function onChatRefreshTap\(\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+    assert(/await forceRefresh\(\)/.test(tapBody), '[n12-sync-b] the (desktop) button\'s handler onChatRefreshTap() awaits forceRefresh()');
+    const composed = (appCode.match(/function makeChatManualSync\([^)]*\)\s*\{[\s\S]*?\n\}/) || [''])[0];
+    assert(/chatRefreshFn = forceRefresh\b/.test(composed) && /Promise\.all\(\[syncFn\('chat-pull-to-refresh'\), chatRefreshFn\(\)\]\)/.test(composed),
+      '[n12-sync-c] the pull path\'s composed function defaults chatRefreshFn to that same forceRefresh and calls it alongside the league sync');
+    assert(/const runChatManualSync = makeChatManualSync\(\);/.test(appCode)
+      && /bindBottomPullToRefresh\(getScrollEl, null, runChatManualSync, \{\s*onFail: \(\) => showSyncFailureBanner\(/.test(appCode),
+      '[n12-sync-d] Chat\'s bottom pull is bound with runChatManualSync (the UNMODIFIED defaults) and its onFail is showSyncFailureBanner — a rejection is the loud-fail banner');
+    const mutDefault = appCode.replace('chatRefreshFn = forceRefresh', 'chatRefreshFn = async () => {}');
+    assert(mutDefault !== appCode && !/chatRefreshFn = forceRefresh\b/.test(mutDefault),
+      '[n12-sync-c-mut] MUTATION: swapping the pull path\'s default for a no-op goes RED against [n12-sync-c]');
+    const mutFail = appCode.replace(/onFail: \(\) => showSyncFailureBanner\(/, 'onFail: () => (');
+    assert(mutFail !== appCode && !/bindBottomPullToRefresh\(getScrollEl, null, runChatManualSync, \{\s*onFail: \(\) => showSyncFailureBanner\(/.test(mutFail),
+      '[n12-sync-d-mut] MUTATION: dropping the banner from the pull path\'s onFail goes RED against [n12-sync-d]');
+  }
+
   // RG-281 (reviewer round 2) — the STRONG fix for the accumulation bug is
   // the CALLER's own unbind-before-rebind discipline (js/nav-gestures.js's
   // guards are belt-and-suspenders on top of it). Structural, since driving
@@ -1271,7 +1302,12 @@ console.log('\n[copy] no shipped copy sends a player to a "Settings" page that n
   assert(/an admin can turn them on in the Admin panel → Data → Background Jobs/.test(readFileSync(new URL('./js/app.js', import.meta.url), 'utf8')),
     '[copy-0] the reminders toast names where the switch actually is (Admin panel → Data → Background Jobs)');
   const hits = [];
-  for (const f of readdirSync(dir).filter(n => n.endsWith('.js'))) {
+  // Multi-Sport Phase 0/1a: js/sports/*.js is shipped code too — scan it (one level down).
+  const shipped = [
+    ...readdirSync(dir).filter(n => n.endsWith('.js')),
+    ...readdirSync(new URL('sports/', dir)).filter(n => n.endsWith('.js')).map(n => 'sports/' + n),
+  ];
+  for (const f of shipped) {
     let src = readFileSync(new URL(f, dir), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
     src = src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
     for (const a of ALLOWED) src = src.split(a).join('');

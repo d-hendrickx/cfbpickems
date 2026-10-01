@@ -66,7 +66,7 @@ try {
   console.warn('[service-worker] OneSignal SDK import failed — push unavailable, cache-shell unaffected:', err);
 }
 
-const CACHE_NAME = 'cfb-pickems-v27-2';
+const CACHE_NAME = 'cfb-pickems-v28-0';
 
 const STATIC_ASSETS = [
   './',
@@ -172,6 +172,20 @@ const STATIC_ASSETS = [
   './js/control-center.js',
   './js/admin-panel.js',
   './js/comm-panel-layout.js',
+  // N1 league creation (2026-09-30). Five new modules that app.js (directly or through leagues-home.js / recap.js /
+  // control-center.js) now imports STATICALLY — the New League flow (league-create.js, its twin league-defaults.js), the pilot-only
+  // registry (pilot-only.js) and the sport registry the picker is built from (sports/index.js and the two profiles it imports) —
+  // boot-critical for exactly the reason every entry above is: a shell cache one module short serves a graph that cannot resolve
+  // (RG-03's blank app, arriving through the cache instead of through a typo). notifytest [25e] is the guard.
+  './js/league-create.js',
+  './js/league-defaults.js',
+  './js/pilot-only.js',
+  './js/sports/index.js',
+  './js/sports/cfb.js',
+  './js/sports/nfl.js',
+  // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's pure half, imported STATICALLY by app.js: boot-critical for the same reason (RG-236's class — a shell cache one
+  // module short serves a graph that cannot resolve). notifytest [25e] is the guard.
+  './js/account-exit.js',
   './vendor/supabase-js-2.116.0.js',
   './manifest.json',
   'https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap',

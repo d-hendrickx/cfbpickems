@@ -463,13 +463,17 @@ console.log('\n[9] scribePushIsContentFree() — automatic at Savage and above�
 // ═══════════════════════════════════════════════════════════════════════════
 console.log('\n[10] SCRIBE_VERSION — the hosts still agree…');
 {
-  assert(SCRIBE_VERSION === '3.0',
-    `10-1: the Edge runtime's persona is v3.0 — the heat ladder is a voice change, so the number moves with it (got ${SCRIBE_VERSION})`);
+  // AMENDED 3.0 -> 3.1 (N8 / DI-441, 2026-09-29): the persona's clarifying edit to rules 6 and 9 (SCRIBE may
+  // post about a live game on a real trigger, and comment on a live game's PUBLIC picks) is a persona change,
+  // so the number moves with it. Every host moved together: docs/SCRIBE.md (header, changelog, footer),
+  // _shared/scribe-persona.mjs and js/scribeLines.js.
+  assert(SCRIBE_VERSION === '3.1',
+    `10-1: the Edge runtime's persona is v3.1 — the rule 6/9 clarification is a persona change, so the number moves with it (got ${SCRIBE_VERSION})`);
   assert(SCRIBE_VERSION_CLIENT === SCRIBE_VERSION,
     `10-2: …and js/scribeLines.js's exported SCRIBE_VERSION agrees, which is what every tier-0 post stamps into meta.scribeVersion (got ${SCRIBE_VERSION_CLIENT})`);
   assert(SCRIBE_PERSONA_TEXT.includes(`SCRIBE_VERSION: ${SCRIBE_VERSION}`),
     '10-3: …and the snapshot\'s own stamp matches. The docs/SCRIBE.md half of that chain is `scribePersonaDrift.check.mjs`\'s, which reads the real file');
-  assert(SCRIBE_PERSONA_TEXT.includes('**Version:** 3.0'),
+  assert(SCRIBE_PERSONA_TEXT.includes('**Version:** 3.1'),
     '10-4: …including the header the document leads with, not only the trailer nobody scrolls to');
 }
 

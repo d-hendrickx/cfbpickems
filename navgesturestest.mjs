@@ -974,8 +974,13 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
     ts5k(root, 260, 300);
     tm5k(root, 160, 300); // dx=-100 — negative = "next week" = w3, well past commit
+    // RG-TBD-A1 (2026-09-29) — nothing commits while the finger is down: the
+    // page is still following it, 60 px past the old mid-drag commit point.
+    assert(navigated === null && root._props['--week-swipe-x'] === '-100px' && calls.length === 0,
+      `5k-c0: [RG-TBD-A1] 100 px into the drag, the finger is still down — NO navigation, NO haptic, the page follows it 1:1 (navigated ${navigated}, x ${root._props['--week-swipe-x']}, haptics ${calls.length}); v0.27.2 committed here, at the 40 px crossing`);
+    te5k(root);           // release — past SWIPE_COMMIT_PX: commits NOW
     assert(navigated === 'w3',
-      `5k-c1: [B5] onNavigate() fires SYNCHRONOUSLY at commit — no more waiting on a separate exit transition (got ${navigated})`);
+      `5k-c1: [B5 + RG-TBD-A1] onNavigate() fires SYNCHRONOUSLY at RELEASE — no more waiting on a separate exit transition (got ${navigated})`);
     assert(calls.length === 1 && calls[0].style === 'LIGHT',
       `5k-c2: haptic('light') fires at the commit instant, not the drifted 'selection' (got ${JSON.stringify(calls)})`);
     assert(root._props['--week-swipe-x'] === '0px',
@@ -1038,10 +1043,13 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     assert(navigated === null, '5k-d8: …still never navigated, through the whole sequence');
   }
 
-  // 5k-e: reduced motion — MUTATION-PROOF for "a version that ignores
-  // reduced motion": a sub-threshold drag applies NO live transform at all,
-  // and a commit navigates IMMEDIATELY with the transition attribute never
-  // appearing.
+  // 5k-e: Reduce Motion — RG-TBD-A1 under the coordinator-approved rule
+  // (2026-09-29, the same one the chat reply swipe follows): the content
+  // ALWAYS tracks the finger during the drag; the RELEASE never animates
+  // movement — a commit cross-fades, a cancel settles immediately. The OFF
+  // path is 5k-a/5k-b/5k-c above (tracking, "bounce" spring, "commit"
+  // slide); this block is the ON path, and 5k-e5..7 run the SAME gestures
+  // both ways side by side.
   {
     const savedMatchMedia = globalThis.matchMedia;
     globalThis.matchMedia = () => ({ matches: true });
@@ -1052,14 +1060,44 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     ts5k(root, 260, 300); // C2's touchstart reset writes '0px' here — expected baseline, not "no write at all"
     assert(root._props['--week-swipe-x'] === '0px', '5k-e0: fixture — touchstart\'s own C2 reset baseline');
     tm5k(root, 240, 300); // dx=-20 — past dead-zone, below commit
-    assert(root._props['--week-swipe-x'] === '0px',
-      `5k-e1: prefers-reduced-motion — a sub-threshold drag applies NO live transform, so the value stays at touchstart's own baseline — MUTATION: a version that ignores reduced motion sets this to "-20px" (got ${root._props['--week-swipe-x']})`);
-    tm5k(root, 160, 300); // dx=-100 (from start) — crosses commit
+    assert(root._props['--week-swipe-x'] === '-20px',
+      `5k-e1: [Reduce Motion rule] prefers-reduced-motion STILL tracks the finger 1:1 during the drag — MUTATION: the DI-409 version that switched tracking off under reduced motion leaves this at "0px" (the "it just jumps" Drew reported) (got ${root._props['--week-swipe-x']})`);
+    tm5k(root, 160, 300); // dx=-100 (from start) — past commit, finger still down
+    assert(navigated === null && root._props['--week-swipe-x'] === '-100px',
+      `5k-e2-pre: [RG-TBD-A1] …no navigation while the finger is down, and the week is still under it (navigated ${navigated}, x ${root._props['--week-swipe-x']})`);
+    te5k(root);           // release — commits
     assert(navigated === 'w3',
-      `5k-e2: …and a commit still navigates, immediately, with no transition step (got ${navigated})`);
-    assert(root.dataset.weekSwipeAnimating === undefined,
-      '5k-e3: …[data-week-swipe-animating] never appears under reduced motion — MUTATION: a version that ignores reduced motion would animate anyway');
+      `5k-e2: …and release navigates (got ${navigated})`);
+    assert(root.dataset.weekSwipeAnimating === 'fade' && root._props['--week-swipe-x'] === '0px',
+      `5k-e3: [RG-TBD-A1, amends DI-409's instant swap] under reduced motion the commit CROSS-FADES ("fade" kind, opacity only — root is placed straight back at 0, never a "commit" slide) — MUTATION: a version that ignores reduced motion shows "commit" here (got ${root.dataset.weekSwipeAnimating}, x ${root._props['--week-swipe-x']})`);
+    root._fire('animationend', { target: root });
+    assert(root.dataset.weekSwipeAnimating === undefined, '5k-e4: …and the fade clears itself on its own animationend');
     globalThis.matchMedia = savedMatchMedia;
+  }
+  // 5k-e5..7: the SAME short drag and release, Reduce Motion OFF vs ON.
+  {
+    const savedMatchMedia = globalThis.matchMedia;
+    const run = (reduce) => {
+      globalThis.matchMedia = () => ({ matches: reduce });
+      globalThis.window = {};
+      const root = makeFakeWeekSwipeRoot();
+      let navigated = null;
+      bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
+      ts5k(root, 260, 300); tm5k(root, 245, 300); tm5k(root, 230, 300);   // dx=-30, short of the 40 px threshold
+      const during = root._props['--week-swipe-x'];
+      te5k(root);
+      const out = { during, after: root._props['--week-swipe-x'], kind: root.dataset.weekSwipeAnimating, navigated };
+      root._fire('transitionend', { target: root });
+      return out;
+    };
+    const off = run(false), on = run(true);
+    globalThis.matchMedia = savedMatchMedia;
+    assert(off.during === '-30px' && on.during === '-30px',
+      `5k-e5: the drag tracks the finger identically with Reduce Motion OFF and ON (${off.during} / ${on.during})`);
+    assert(off.after === '0px' && off.kind === 'bounce' && off.navigated === null,
+      `5k-e6: OFF — a short release SPRINGS back ("bounce", --motion-fast) and stays on the week (kind ${off.kind})`);
+    assert(on.after === '0px' && on.kind === undefined && on.navigated === null,
+      `5k-e7: ON — the same release SETTLES immediately: back at 0 with no spring animation at all (kind ${on.kind}) — MUTATION: a spring under Reduce Motion shows "bounce"`);
   }
 
   // 5k-f: a vertical-locked drag never touches the transform. MUTATION-PROOF
@@ -1107,7 +1145,8 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     ts5k(root, 260, 300);
     let threw = false;
     try {
-      tm5k(root, 160, 300); // dx=-100 — commits; onNavigate throws SYNCHRONOUSLY (B5)
+      tm5k(root, 160, 300); // dx=-100 — past commit; RG-TBD-A1: nothing commits until release
+      te5k(root);           // release commits; onNavigate throws SYNCHRONOUSLY (B5)
     } catch (e) {
       threw = true;
     }
@@ -1178,10 +1217,14 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     // longer gated behind an exit transitionend at all) — the ORDERING
     // GUARANTEE B1 established is unchanged, only WHEN it happens moved
     // earlier.
-    tm5k(root, 160, 300); // dx=-100 — commits
+    tm5k(root, 160, 300); // dx=-100 — the page follows the finger to -100px
+    te5k(root);           // RG-TBD-A1 — release commits
     assert(navigated === 'w3', `5k-j0: fixture — the commit completed synchronously (got ${navigated})`);
 
-    const oppositeEdgeIdx = log.findIndex(e => e.op === 'setX' && e.value === '100%'); // -exitPct% (exitPct=-100)
+    // RG-TBD-A1 — the commit now starts from where the finger let go
+    // (-100px painted), so the opposite-edge write is "100%" less that live
+    // offset (N-a's flush start): calc(100% - 100px).
+    const oppositeEdgeIdx = log.findIndex(e => e.op === 'setX' && (e.value === '100%' || e.value === 'calc(100% - 100px)')); // -exitPct% (exitPct=-100)
     const reflowIdx = log.findIndex((e, i) => e.op === 'reflow-read' && i > oppositeEdgeIdx);
     const finalAnimatingIdx = log.findIndex((e, i) => e.op === 'animating-set' && e.value === 'commit' && i > (reflowIdx === -1 ? oppositeEdgeIdx : reflowIdx));
     assert(oppositeEdgeIdx !== -1, `5k-j1: fixture — the opposite-edge position write ("100%") happened (log: ${JSON.stringify(log)})`);
@@ -1228,7 +1271,8 @@ console.log('\n[5k] DI-409 (UN-364) — week-swipe VISUAL layer, BINDER-level…
     let navigated = null;
     bindWeekSwipe(root, getState5k, (id) => { navigated = id; });
     ts5k(root, 260, 300);
-    tm5k(root, 160, 300); // dx=-100 — commits (the "commit" kind)
+    tm5k(root, 160, 300); // dx=-100
+    te5k(root);           // RG-TBD-A1 — release commits (the "commit" kind)
     assert(navigated === 'w3', '5k-k5: [B5] onNavigate() already fired synchronously at commit — never gated behind the fallback timer');
     assert(root.dataset.weekSwipeAnimating === 'commit', '5k-k6: fixture — the (single) commit transition is animating with the "commit" kind');
     // Wait past the BOUNCE fallback duration (150+60=210ms) but well short
@@ -1430,9 +1474,9 @@ console.log('\n[5n] REVIEWER ROUND 2 (B2 BLOCK, coordinator ruling, 2026-09-28) 
     const scrollerTarget = makeScrollerTarget('.dashboard-scroll', 50);
     root._fire('touchstart', { touches: [{ clientX: 300, clientY: 300 }], target: scrollerTarget }); // WELL outside any 25% zone
     root._fire('touchmove', { touches: [{ clientX: 360, clientY: 300 }], target: scrollerTarget }); // dx=60, L->R, well past commit
+    root._fire('touchend', {}); // RG-TBD-A1 — release is where a commit would happen now
     assert(navigated === null,
       `5n-weekswipe-scroller: MUTATION PROOF (B2): week-swipe yields to a horizontal scroller with room to scroll back, even starting WELL OUTSIDE the drawer's own 25% zone (got navigated=${navigated})`);
-    root._fire('touchend', {});
   }
   {
     globalThis.window = {};
@@ -1442,9 +1486,9 @@ console.log('\n[5n] REVIEWER ROUND 2 (B2 BLOCK, coordinator ruling, 2026-09-28) 
     const scrollerAtRest = makeScrollerTarget('.dashboard-scroll', 0); // nowhere further to scroll back
     root._fire('touchstart', { touches: [{ clientX: 300, clientY: 300 }], target: scrollerAtRest });
     root._fire('touchmove', { touches: [{ clientX: 360, clientY: 300 }], target: scrollerAtRest });
+    root._fire('touchend', {}); // RG-TBD-A1 — release commits
     assert(navigated === 'w1',
       `5n-weekswipe-scroller-rest: …but a scroller already at rest does NOT yield — week-swipe navigates normally (got ${navigated})`);
-    root._fire('touchend', {});
   }
 }
 
@@ -1510,7 +1554,8 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
       root.innerHTML = `<div>NEW WEEK ${id}</div>`; // the REAL element's content really does get replaced
     });
     root._fire('touchstart', { touches: [{ clientX: 260, clientY: 300 }] });
-    root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] }); // dx=-100, R→L, commits to w3
+    root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] }); // dx=-100, R→L
+    root._fire('touchend', {}); // RG-TBD-A1 — release commits to w3
     assert(navigated === 'w3', '5o-a: fixture — the commit completed');
     assert(children.length === 1,
       `5o-b: MUTATION PROOF (B5): a clone layer was created and inserted as a SIBLING of root (got ${children.length})`);
@@ -1525,24 +1570,39 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     assert(clone.style.top === '60px' && clone.style.left === '0px' && clone.style.width === '390px' && clone.style.height === '700px',
       `5o-h: …sized/positioned to root's OWN getBoundingClientRect() at the commit instant (got top:${clone.style.top} left:${clone.style.left} width:${clone.style.width} height:${clone.style.height})`);
     assert(root._props['--week-swipe-x'] === '0px', '5o-i: root itself lands at 0 (fully in) in the same synchronous pass');
-    assert(clone.style.transform === 'translateX(-100%)',
-      `5o-j: [NO FRAME WHERE NEITHER LAYER IS ON SCREEN] the clone's OWN transform is set to its exit position (matching the drag direction) in the SAME synchronous animate() call that moves root to 0 — both writes happen together, never one before the other across a frame boundary (got "${clone.style.transform}")`);
+    // RG-TBD-A1 — released at a live -100px offset, so the clone's exit is
+    // "-100%" less the distance the finger already carried it (N-a).
+    assert(clone.style.transform === 'translateX(calc(-100% + 100px))',
+      `5o-j: [NO FRAME WHERE NEITHER LAYER IS ON SCREEN] the clone's OWN transform is set to its exit position (matching the drag direction, less the live offset it was released at) in the SAME synchronous animate() call that moves root to 0 — both writes happen together, never one before the other across a frame boundary (got "${clone.style.transform}")`);
     assert(clone.style.transition.includes('260'),
       `5o-k: the clone's own transition duration matches WEEK_SWIPE_COMMIT_MS (260ms) — the SAME single bucket root's own [data-week-swipe-animating="commit"] CSS rule uses, not a second, independent one (got "${clone.style.transition}")`);
     root._fire('transitionend', { target: root }); // the ONE transition completes
     assert(children.length === 0, '5o-l: the clone is removed once the (single) transition completes');
   }
 
-  // 5o-m: reduced motion never creates a clone — the instant-swap path
-  // short-circuits before the clone step even runs.
+  // 5o-m: RG-TBD-A1 (2026-09-29, amends DI-409's instant swap) — reduced
+  // motion CROSS-FADES: the same outgoing clone, but it fades out IN PLACE
+  // (opacity transition, never a transform) while root fades in ("fade"),
+  // and both are cleaned up on root's own animationend.
   {
     const savedMatchMedia5o = globalThis.matchMedia;
     globalThis.matchMedia = () => ({ matches: true });
     const { root, children } = makeCloneableRoot();
-    bindWeekSwipe(root, () => ({ weekIds: WEEKS5O, currentWeekId: 'w2', tab: 'picks' }), () => {});
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5O, currentWeekId: 'w2', tab: 'picks' }), () => { root.innerHTML = '<div>NEW</div>'; });
     root._fire('touchstart', { touches: [{ clientX: 260, clientY: 300 }] });
     root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] });
-    assert(children.length === 0, `5o-m: prefers-reduced-motion — no clone is EVER created (got ${children.length})`);
+    assert(children.length === 0, `5o-m0: prefers-reduced-motion — nothing is cloned while the finger is still down (got ${children.length})`);
+    root._fire('touchend', {});
+    const clone = children[0];
+    assert(children.length === 1 && clone.innerHTML === '<div>OLD WEEK CONTENT</div>' && root.innerHTML === '<div>NEW</div>',
+      `5o-m: prefers-reduced-motion — release cross-fades: an outgoing layer holding the OLD week sits over root, which already holds the NEW one (clones ${children.length})`);
+    assert(clone && clone.style.transform === 'translateX(0px)' && /opacity/.test(clone.style.transition || '') && clone.style.opacity === '0',
+      `5o-m2: …the outgoing layer FADES (opacity transition to 0) and never moves (transform "${clone?.style.transform}", transition "${clone?.style.transition}", opacity "${clone?.style.opacity}")`);
+    assert(root.dataset.weekSwipeAnimating === 'fade' && root._props['--week-swipe-x'] === '0px',
+      `5o-m3: …while root fades in ("fade"), never translated (animating ${root.dataset.weekSwipeAnimating}, x ${root._props['--week-swipe-x']})`);
+    root._fire('animationend', { target: root });
+    assert(children.length === 0 && root.dataset.weekSwipeAnimating === undefined,
+      `5o-m4: …and root's own animationend removes the outgoing layer and clears the fade (clones ${children.length})`);
     globalThis.matchMedia = savedMatchMedia5o;
   }
 
@@ -1551,7 +1611,10 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     const { root, children } = makeCloneableRoot();
     bindWeekSwipe(root, () => ({ weekIds: WEEKS5O, currentWeekId: 'w2', tab: 'picks' }), () => { throw new Error('render exploded'); });
     root._fire('touchstart', { touches: [{ clientX: 260, clientY: 300 }] });
-    try { root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] }); } catch { /* expected, see [5k-h] */ }
+    try {
+      root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] });
+      root._fire('touchend', {});
+    } catch { /* expected, see [5k-h] — RG-TBD-A1: release commits */ }
     assert(children.length === 0, `5o-n: MUTATION PROOF: a throwing onNavigate still removes the clone rather than leaking a permanent overlay (got ${children.length})`);
   }
 
@@ -1571,8 +1634,8 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     return parseFloat(inner);
   };
   for (const [label, moves, exitDir] of [
-    ['R→L', [240, 210], -1],   // dx -20 painted, then dx -50 commits → NEXT week, exits left
-    ['L→R', [280, 310], 1],    // dx +20 painted, then dx +50 commits → PREVIOUS week, exits right
+    ['R→L', [240, 210], -1],   // dx -20, then dx -50 painted; release commits → NEXT week, exits left
+    ['L→R', [280, 310], 1],    // dx +20, then dx +50 painted; release commits → PREVIOUS week, exits right
   ]) {
     const W = 390;
     const handlers = {};
@@ -1593,8 +1656,11 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     bindWeekSwipe(root, () => ({ weekIds: WEEKS5O, currentWeekId: 'w2', tab: 'picks' }), () => { root.innerHTML = '<div>NEW</div>'; });
     root._fire('touchstart', { touches: [{ clientX: 260, clientY: 300 }] });
     root._fire('touchmove', { touches: [{ clientX: moves[0], clientY: 300 }] });
-    const off = paintedX;
     root._fire('touchmove', { touches: [{ clientX: moves[1], clientY: 300 }] });
+    // RG-TBD-A1 — the commit fires on RELEASE, from wherever the finger
+    // carried the page (50 px here), not at the 40 px crossing.
+    const off = paintedX;
+    root._fire('touchend', {});
     const clone = children[0];
     const incomingStart = log[log.length - 2];   // the opposite-edge write, before the final '0px'
     const cloneLeft0 = parseFloat(clone.style.left);                 // clone's own start (fixed, at the painted rect)
@@ -1602,7 +1668,7 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     const inStart = evalX(incomingStart, W), inEnd = evalX(log[log.length - 1], W);
     const gapStart = exitDir < 0 ? inStart - (cloneLeft0 + W) : cloneLeft0 - (inStart + W);
     const gapEnd = exitDir < 0 ? inEnd - (cloneEnd + W) : cloneEnd - (inEnd + W);
-    assert(Math.abs(off) === 20, `5o-p-${label}: fixture — root was painted at a live ${off}px drag offset when the commit fired`);
+    assert(Math.abs(off) === 50, `5o-p-${label}: fixture — root was painted at a live ${off}px drag offset when the finger let go`);
     assert(Math.abs(gapStart) < 0.5,
       `5o-q-${label}: [N-a] the incoming page STARTS flush against the clone (gap ${gapStart.toFixed(1)}px; round 2: ${Math.abs(off)}px strip) — incoming start "${incomingStart}", clone left ${cloneLeft0}px`);
     assert(Math.abs(gapEnd) < 0.5 && inEnd === 0,
@@ -1627,6 +1693,7 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
     bindWeekSwipe(root, () => ({ weekIds: WEEKS5O, currentWeekId: 'w2', tab: 'dashboard' }), () => {});
     root._fire('touchstart', { touches: [{ clientX: 260, clientY: 300 }] });
     root._fire('touchmove', { touches: [{ clientX: 160, clientY: 300 }] });
+    root._fire('touchend', {}); // RG-TBD-A1 — release commits
     const clone = children[0];
     assert(clone && clone._attrs.inert === '' && clone._attrs['aria-hidden'] === 'true',
       `5o-s: [N-b] the clone is inert as well as aria-hidden — its copied buttons can never take focus during the slide (attrs ${JSON.stringify(clone?._attrs)})`);
@@ -1638,6 +1705,303 @@ console.log('\n[5o] REVIEWER ROUND 2 (B5 BLOCK, coordinator ruling, 2026-09-28) 
 
   globalThis.window = savedWindow5o;
   globalThis.document = savedDocument5o;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5p] RG-TBD-A1/A2 (Drew, 2026-09-29) — release decides the week; one owner per touch (week swipe vs. the compact Dashboard reorder vs. the drawer)…');
+// ═════════════════════════════════════════════════════════════════════════
+// The engine-measured proof of both bugs — real app, real touches, real
+// chips — is weekswipetest.mjs [A]/[B]. This section pins the binder-level
+// contract those rest on, against the same fakes as [5k].
+{
+  const savedWindow5p = globalThis.window;
+  const { claimTouch, releaseTouch, touchClaimedBy, clearStaleTouchClaim, WEEK_SWIPE_FADE_MS } = NG;
+  const WEEKS5P = ['w1', 'w2', 'w3', 'w4'];
+  const makeRoot5p = () => {
+    const handlers = {}; const props = {};
+    return {
+      dataset: {}, style: { setProperty: (k, v) => { props[k] = v; } }, _props: props,
+      addEventListener(type, fn) { (handlers[type] ||= []).push(fn); },
+      removeEventListener(type, fn) { handlers[type] = (handlers[type] || []).filter(h => h !== fn); },
+      _fire(type, ev) { (handlers[type] || []).slice().forEach(fn => fn(ev)); },
+    };
+  };
+  const one = (x, y = 300) => ({ touches: [{ clientX: x, clientY: y }] });
+  globalThis.window = {};
+
+  // 5p-a: the claim primitive itself.
+  clearStaleTouchClaim(one(0));
+  assert(touchClaimedBy() === null && claimTouch('a') === true && touchClaimedBy() === 'a',
+    '5p-a1: an unowned touch can be claimed, and reports its owner');
+  assert(claimTouch('a') === true && claimTouch('b') === false && touchClaimedBy() === 'a',
+    '5p-a2: re-claiming by the SAME owner is fine; a DIFFERENT owner is refused while it is held');
+  releaseTouch('b');
+  assert(touchClaimedBy() === 'a', '5p-a3: only the owner can release — a stranger\'s release is a no-op');
+  releaseTouch('a');
+  assert(touchClaimedBy() === null, '5p-a4: the owner\'s release frees it');
+  claimTouch('a');
+  clearStaleTouchClaim({ touches: [{}, {}] });
+  assert(touchClaimedBy() === 'a', '5p-a5: a SECOND finger landing never clears a live claim');
+  clearStaleTouchClaim(one(0));
+  assert(touchClaimedBy() === null, '5p-a6: a fresh ONE-finger touchstart clears a claim left over from a touch whose end never arrived');
+  assert(WEEK_SWIPE_FADE_MS === 150, "5p-a7: WEEK_SWIPE_FADE_MS (the Reduce Motion cross-fade) matches css/styles.css's --motion-fast (150ms)");
+
+  // 5p-b: release decides — a drag carried past the threshold and brought
+  // BACK inside it springs back ("changed my mind"), never navigates.
+  {
+    const root = makeRoot5p(); let navigated = null;
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5P, currentWeekId: 'w2', tab: 'picks' }), (id) => { navigated = id; });
+    root._fire('touchstart', one(300));
+    root._fire('touchmove', one(260)); root._fire('touchmove', one(150)); root._fire('touchmove', one(280));
+    assert(root._props['--week-swipe-x'] === '-20px' && navigated === null,
+      `5p-b1: [RG-TBD-A1] dragged to -150 px and back to -20 px, the page is at -20 px and nothing has navigated (x ${root._props['--week-swipe-x']})`);
+    root._fire('touchend', {});
+    assert(navigated === null && root._props['--week-swipe-x'] === '0px' && root.dataset.weekSwipeAnimating === 'bounce',
+      `5p-b2: …release INSIDE the threshold springs back ("bounce") and stays on w2 — v0.27.2 had already navigated at -40 px (navigated ${navigated})`);
+    root._fire('transitionend', { target: root });
+  }
+  // 5p-c: touchcancel carries the same decision as touchend (the binder has
+  // always handled both with one function).
+  {
+    const root = makeRoot5p(); let navigated = null;
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5P, currentWeekId: 'w2', tab: 'picks' }), (id) => { navigated = id; });
+    root._fire('touchstart', one(300)); root._fire('touchmove', one(250)); root._fire('touchmove', one(200));
+    root._fire('touchcancel', {});
+    assert(navigated === 'w3', `5p-c: a touchcancel past the threshold resolves exactly like a release (got ${navigated})`);
+    root._fire('transitionend', { target: root });
+  }
+
+  // 5p-d: [RG-TBD-A2] the reorder's long-press claimed the touch FIRST (as
+  // js/app.js's timer does at 350 ms): the week swipe never moves the page,
+  // never navigates, and leaves the claim with its owner.
+  {
+    const root = makeRoot5p(); let navigated = null;
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5P, currentWeekId: 'w2', tab: 'dashboard' }), (id) => { navigated = id; });
+    root._fire('touchstart', one(300));
+    assert(claimTouch('column-reorder') === true, '5p-d0: fixture — the reorder claims the still-unlocked touch (its long-press fired)');
+    for (const x of [290, 270, 240, 200, 150]) root._fire('touchmove', one(x));
+    assert(root._props['--week-swipe-x'] === '0px', `5p-d1: [RG-TBD-A2] a 150 px reorder drag never moves the week (x ${root._props['--week-swipe-x']}) — MUTATION: a binder that ignores the claim tracks to -150px`);
+    root._fire('touchend', {});
+    assert(navigated === null, `5p-d2: …and release never changes the week (got ${navigated})`);
+    assert(touchClaimedBy() === 'column-reorder', '5p-d3: …and the week swipe never takes or drops the reorder\'s claim');
+    releaseTouch('column-reorder');
+  }
+  // 5p-e: the claim lands MID-drag, after the week had started following
+  // the finger (cannot happen through the real reorder, whose timer is
+  // cancelled by 8 px of movement — pinned anyway): the week springs back.
+  {
+    const root = makeRoot5p(); let navigated = null;
+    bindWeekSwipe(root, () => ({ weekIds: WEEKS5P, currentWeekId: 'w2', tab: 'dashboard' }), (id) => { navigated = id; });
+    root._fire('touchstart', one(300)); root._fire('touchmove', one(270));
+    assert(touchClaimedBy() === 'week-swipe', `5p-e0: a drag that locks horizontal CLAIMS the touch for the week swipe (owner ${touchClaimedBy()})`);
+    assert(claimTouch('column-reorder') === false, '5p-e1: [RG-TBD-A2] …so the reorder\'s long-press is REFUSED on it — once a week swipe has locked, reorder cannot start');
+    root._fire('touchend', {});
+    assert(touchClaimedBy() === null, '5p-e2: release hands the touch back');
+    root._fire('transitionend', { target: root });
+  }
+  // 5p-f: the control-center edge swipe stands down under a foreign claim
+  // too — a reorder drag from a chip in the left quarter used to open it.
+  {
+    const winHandlers = {};
+    globalThis.window = { innerWidth: 400, addEventListener(t, fn) { (winHandlers[t] ||= []).push(fn); }, removeEventListener() {} };
+    const fire = (t, ev) => (winHandlers[t] || []).forEach(fn => fn(ev));
+    const run = (claimed) => {
+      let started = false;
+      const unbind = CC.bindControlCenterEdgeSwipe((a) => { if (a.type === 'drag-start') started = true; }, () => ({ phase: 'closed', dragProgress: 0 }), { getWidthPx: () => 340, getTab: () => 'dashboard' });
+      fire('touchstart', one(40));                           // 10% — inside the drawer's zone
+      if (claimed) claimTouch('column-reorder');
+      fire('touchmove', one(70)); fire('touchmove', one(140));
+      fire('touchend', {});
+      releaseTouch('column-reorder');
+      unbind();
+      return started;
+    };
+    assert(run(false) === true, '5p-f0: fixture — unclaimed, an L→R drag from 10% opens the drawer as always (DI-419)');
+    assert(run(true) === false, '5p-f1: [RG-TBD-A2] claimed by the reorder, the SAME drag never starts the drawer — MUTATION: a drawer that ignores the claim reports drag-start');
+  }
+  globalThis.window = savedWindow5p;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5q] Reviewer notes on RG-TBD-A1 (2026-09-29) — velocity commit, and no repaint under an active week swipe…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow5q = globalThis.window;
+  globalThis.window = {};
+  const { _weekSwipeShouldCommit, WEEK_SWIPE_VELOCITY_WINDOW_MS, WEEK_SWIPE_BACKTRACK_PX_MS, deferRenderWhileWeekSwiping,
+    _deferredRenderCount, touchClaimedBy, claimTouch, releaseTouch, clearStaleTouchClaim } = NG;
+  assert(WEEK_SWIPE_VELOCITY_WINDOW_MS === 80 && WEEK_SWIPE_BACKTRACK_PX_MS === 0.05 && DISMISS_FLICK_VELOCITY_PX_MS === 0.3,
+    '5q-0: the release reads the last 80 ms; the flick threshold is the SAME 0.3 px/ms the sheet/drawer flicks use');
+  // Pure decision, explicit timestamps (ms).
+  const trail = (pts) => pts.map(([t, dx]) => ({ t, dx }));
+  const fast30 = trail([[0, -10], [16, -20], [32, -30]]);
+  assert(_weekSwipeShouldCommit(-30, fast30, 40) === true,
+    '5q-a: a FAST 30 px flick (0.75 px/ms outward) commits, short of the 40 px distance threshold');
+  assert(_weekSwipeShouldCommit(-30, fast30, 400) === false,
+    '5q-b: the SAME 30 px drag held still before lifting (no motion in the last 80 ms) springs back — distance decides at rest');
+  const outAndBack = trail([[0, -50], [40, -100], [80, -150], [300, -120], [340, -90], [380, -60], [420, -50], [460, -45]]);
+  assert(_weekSwipeShouldCommit(-45, outAndBack, 470) === false,
+    '5q-c: out to 150 px, then SLOWLY back to 45 px and released while still moving back → CANCEL (it follows the final direction; ~0.1 px/ms back)');
+  assert(_weekSwipeShouldCommit(-45, outAndBack, 700) === true,
+    '5q-d: …the same drag held still at 45 px before lifting → COMMIT (≥ 40 px and nothing says otherwise — position decides at rest)');
+  assert(_weekSwipeShouldCommit(-120, trail([[0, -150], [40, -140], [80, -120]]), 90) === false,
+    '5q-e: heading back fast enough is a cancel however far out the finger still is (120 px out, moving back at 0.3 px/ms)');
+  assert(_weekSwipeShouldCommit(-120, trail([[0, -100], [40, -110], [80, -120]]), 90) === true,
+    '5q-f: 120 px out and still heading outward → commit');
+  assert(_weekSwipeShouldCommit(-30, trail([[null, -10], [null, -30]]), null) === false && _weekSwipeShouldCommit(-60, trail([[null, -10], [null, -60]]), null) === true,
+    '5q-g: events with no timestamps (synthetic sequences) fall back to distance alone — no velocity is guessed from them');
+  assert(_weekSwipeShouldCommit(0, fast30, 40) === false, '5q-h: zero offset never commits');
+
+  // Through the real binder, timed events.
+  const makeRoot = () => { const h = {}; const props = {}; return { dataset: {}, style: { setProperty: (k, v) => { props[k] = v; } }, _props: props,
+    addEventListener(t, fn) { (h[t] ||= []).push(fn); }, removeEventListener(t, fn) { h[t] = (h[t] || []).filter(x => x !== fn); },
+    _fire(t, ev) { (h[t] || []).slice().forEach(fn => fn(ev)); } }; };
+  const at = (x, t) => ({ touches: [{ clientX: x, clientY: 300 }], timeStamp: t });
+  {
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'picks' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 1000)); root._fire('touchmove', at(290, 1016)); root._fire('touchmove', at(280, 1032)); root._fire('touchmove', at(270, 1048));
+    root._fire('touchend', { touches: [], timeStamp: 1056 });
+    assert(nav === 'w3', `5q-i: [binder] a fast 30 px flick on Picks commits to the NEXT week (got ${nav})`);
+    root._fire('transitionend', { target: root });
+  }
+  {
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'picks' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 2000));
+    let t = 2000;
+    for (let x = 290; x >= 150; x -= 10) root._fire('touchmove', at(x, t += 16));    // out to -150
+    for (let x = 155; x <= 255; x += 5) root._fire('touchmove', at(x, t += 30));     // slowly back to -45
+    root._fire('touchend', { touches: [], timeStamp: t + 8 });
+    assert(nav === null && root.dataset.weekSwipeAnimating === 'bounce',
+      `5q-j: [binder] out to 150 px then slowly back to 45 px and released moving back → springs back, no navigation (got ${nav}, ${root.dataset.weekSwipeAnimating})`);
+    root._fire('transitionend', { target: root });
+  }
+  {
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2'], currentWeekId: 'w2', tab: 'picks' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 3000)); root._fire('touchmove', at(290, 3016)); root._fire('touchmove', at(270, 3032));
+    root._fire('touchend', { touches: [], timeStamp: 3040 });
+    assert(nav === null, `5q-k: [binder] a fast flick toward a week that does not exist (the last week) still never navigates (got ${nav})`);
+    root._fire('transitionend', { target: root });
+  }
+
+  // Deferred repaint — the "stranding during re-render" note.
+  {
+    clearStaleTouchClaim({ touches: [{}] });
+    let painted = 0;
+    const paint = () => { painted++; };
+    assert(deferRenderWhileWeekSwiping('dashboard', paint) === false && _deferredRenderCount() === 0,
+      '5q-l: with no week swipe in progress a repaint is NOT deferred (renders now)');
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 5000)); root._fire('touchmove', at(270, 5016));
+    assert(touchClaimedBy() === 'week-swipe', '5q-m0: fixture — the drag locked horizontal and owns the touch');
+    assert(deferRenderWhileWeekSwiping('dashboard', paint) === true && deferRenderWhileWeekSwiping('dashboard', paint) === true && _deferredRenderCount() === 1,
+      '5q-m: a live-score repaint mid-drag is PARKED, and a burst of them collapses to one per page');
+    root._fire('touchmove', at(280, 5200));   // hold near 20 px
+    root._fire('touchend', { touches: [], timeStamp: 5400 });
+    assert(nav === null && painted === 1 && _deferredRenderCount() === 0,
+      `5q-n: a release that springs back runs the parked repaint ONCE (painted ${painted}, parked ${_deferredRenderCount()})`);
+    root._fire('transitionend', { target: root });
+  }
+  {
+    let dashPaints = 0, picksPaints = 0;
+    const root = makeRoot(); let nav = null;
+    bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), (id) => { nav = id; });
+    root._fire('touchstart', at(300, 6000)); root._fire('touchmove', at(250, 6016)); root._fire('touchmove', at(180, 6032));
+    deferRenderWhileWeekSwiping('dashboard', () => { dashPaints++; });
+    deferRenderWhileWeekSwiping('picks', () => { picksPaints++; });
+    root._fire('touchend', { touches: [], timeStamp: 6040 });
+    assert(nav === 'w3' && dashPaints === 0 && picksPaints === 1 && _deferredRenderCount() === 0,
+      `5q-o: a release that COMMITS drops the swiped page's parked repaint (onNavigate() repaints it from current data) and still runs the other page's (dashboard ${dashPaints}, picks ${picksPaints}, nav ${nav})`);
+    root._fire('transitionend', { target: root });
+  }
+  {
+    let painted = 0;
+    claimTouch('week-swipe');
+    deferRenderWhileWeekSwiping('picks', () => { painted++; });
+    clearStaleTouchClaim({ touches: [{}] });   // the touchend never arrived; a new touch begins
+    assert(painted === 1 && touchClaimedBy() === null,
+      '5q-p: a week-swipe claim left stale by a lost touchend still runs its parked repaint when the next touch clears it — nothing is dropped');
+    releaseTouch('week-swipe');
+  }
+  globalThis.window = savedWindow5q;
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+console.log('\n[5r] Reviewer notes on c7f8bee (2026-09-29) — the safety net: visibility/pagehide recovery, and a stale-claim flush that waits for the new touch to end…');
+// ═════════════════════════════════════════════════════════════════════════
+{
+  const savedWindow5r = globalThis.window, savedDocument5r = globalThis.document;
+  const { deferRenderWhileWeekSwiping, _deferredRenderCount, touchClaimedBy, claimTouch, releaseTouch } = NG;
+  const makeTarget = (extra = {}) => { const h = {}; return { ...extra,
+    addEventListener(t, fn) { (h[t] ||= []).push(fn); }, removeEventListener(t, fn) { h[t] = (h[t] || []).filter(x => x !== fn); },
+    _fire(t, ev) { (h[t] || []).slice().forEach(fn => fn(ev)); } }; };
+  const makeRoot = () => { const props = {}; return makeTarget({ dataset: {}, style: { setProperty: (k, v) => { props[k] = v; } }, _props: props }); };
+  const one = (x, y = 300) => ({ touches: [{ clientX: x, clientY: y }] });
+  const tick = () => new Promise(r => setTimeout(r, 5));
+
+  // 5r-a..d: backgrounded mid-drag, the touch's end never arrives.
+  for (const how of ['visibilitychange', 'pagehide']) {
+    const doc = makeTarget({ visibilityState: 'visible' });
+    const win = makeTarget({});
+    globalThis.document = doc; globalThis.window = win;
+    const root = makeRoot(); let nav = null, painted = 0;
+    const unbind = bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), (id) => { nav = id; });
+    root._fire('touchstart', one(300)); root._fire('touchmove', one(240));
+    deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    assert(root._props['--week-swipe-x'] === '-60px' && touchClaimedBy() === 'week-swipe' && _deferredRenderCount() === 1,
+      `5r-${how}-0: fixture — mid-drag at -60 px, the touch claimed, a live repaint parked`);
+    if (how === 'visibilitychange') {
+      doc.visibilityState = 'hidden'; doc._fire('visibilitychange', {});
+      doc.visibilityState = 'visible'; doc._fire('visibilitychange', {});
+    } else {
+      win._fire('pagehide', {});
+    }
+    assert(painted === 1 && _deferredRenderCount() === 0,
+      `5r-${how}-1: ${how === 'visibilitychange' ? 'coming back (hidden → visible)' : 'pagehide'} runs the parked repaint (painted ${painted})`);
+    assert(root._props['--week-swipe-x'] === '0px' && touchClaimedBy() === null,
+      `5r-${how}-2: …puts the week back at rest and gives the touch back (x ${root._props['--week-swipe-x']}, claim ${touchClaimedBy()}) — never left parked at the finger's offset`);
+    root._fire('touchend', {});
+    assert(nav === null, `5r-${how}-3: …and a late touchend for the abandoned drag changes nothing (nav ${nav})`);
+    unbind();
+  }
+
+  // 5r-e..h: a claim left stale by a lost touchend, and a NEW touch begins.
+  {
+    const win = makeTarget({});
+    globalThis.window = win; globalThis.document = makeTarget({ visibilityState: 'visible' });
+    const root = makeRoot(); let nav = null, painted = 0;
+    const unbind = bindWeekSwipe(root, () => ({ weekIds: ['w1', 'w2', 'w3'], currentWeekId: 'w2', tab: 'dashboard' }), (id) => { nav = id; });
+    claimTouch('week-swipe');                                  // the stale claim
+    deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    win._fire('touchstart', one(300)); root._fire('touchstart', one(300));
+    await tick();
+    assert(painted === 0 && touchClaimedBy() === null,
+      `5r-e: a new touch clears the stale claim but does NOT repaint under the new finger — not synchronously, not a tick later (painted ${painted})`);
+    root._fire('touchmove', one(280));
+    assert(root._props['--week-swipe-x'] === '-20px' && painted === 0,
+      `5r-f: …so the new swipe proceeds, following the finger (x ${root._props['--week-swipe-x']}), with the repaint still waiting`);
+    win._fire('touchend', {}); root._fire('touchend', {});
+    await tick();
+    assert(painted === 1 && _deferredRenderCount() === 0 && nav === null,
+      `5r-g: …and the parked repaint lands AFTER that touch ends, exactly once (painted ${painted})`);
+    root._fire('transitionend', { target: root });
+    // Same, but the new touch is a vertical scroll that never becomes a swipe.
+    painted = 0;
+    claimTouch('week-swipe');
+    deferRenderWhileWeekSwiping('dashboard', () => { painted++; });
+    win._fire('touchstart', one(200)); root._fire('touchstart', one(200));
+    root._fire('touchmove', one(202, 260));
+    win._fire('touchend', {}); root._fire('touchend', {});
+    assert(painted === 0, '5r-h0: fixture — nothing ran synchronously at a vertical touch\'s end');
+    await tick();
+    assert(painted === 1, `5r-h: …and when the new touch is a plain vertical scroll the parked repaint still lands once it ends (painted ${painted})`);
+    releaseTouch('week-swipe');
+    unbind();
+  }
+  globalThis.window = savedWindow5r; globalThis.document = savedDocument5r;
 }
 
 // ═════════════════════════════════════════════════════════════════════════
@@ -2172,6 +2536,27 @@ console.log('\n[8] js/haptics.js — native-only, no-op off native, never throws
   try { haptic('medium'); } catch { threw = true; }
   assert(!threw, '8f: haptic() swallows a throwing native plugin call rather than propagating it');
 
+  // 8g (N1, DI-430, 2026-09-30): the New League flow's two extra kinds — an error notification and a warning notification, each with a documented impact
+  // fallback, both silent no-ops off native.
+  calls = [];
+  globalThis.window = {
+    Capacitor: { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(['impact', o]), notification: (o) => calls.push(['notification', o]) } } },
+  };
+  haptic('error');
+  haptic('warning');
+  assert(calls.length === 2 && calls[0][0] === 'notification' && calls[0][1].type === 'ERROR' && calls[1][0] === 'notification' && calls[1][1].type === 'WARNING',
+    "8g-1: 'error' -> Haptics.notification({type:'ERROR'}) and 'warning' -> Haptics.notification({type:'WARNING'}), UPPER-CASE like every other type string");
+  calls = [];
+  globalThis.window = { Capacitor: { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(['impact', o]) } } } };
+  haptic('error');
+  haptic('warning');
+  assert(calls.length === 2 && calls[0][1].style === 'MEDIUM' && calls[1][1].style === 'LIGHT',
+    "8g-2: without notification() 'error' falls back to a MEDIUM impact and 'warning' to a LIGHT one");
+  calls = [];
+  globalThis.window = { Capacitor: { isNativePlatform: () => false, Plugins: { Haptics: { impact: (o) => calls.push(['impact', o]), notification: (o) => calls.push(['notification', o]) } } } };
+  haptic('error'); haptic('warning');
+  assert(calls.length === 0, "8g-3: off native both new kinds are silent no-ops");
+
   delete globalThis.window;
 }
 
@@ -2223,6 +2608,10 @@ console.log('     this list was originally written…');
   globalThis.document = makeFakeDocForId('leagues-home-overlay');
   assert(gesturesSuspended() === true,
     '10d: gesturesSuspended() is TRUE while #leagues-home-overlay exists — same reasoning as League Page/the wizard sheet above');
+  // N1 (DI-430, 2026-09-30) — a FOURTH body-appended surface, the New League sheet, built on the wizard's shell.
+  globalThis.document = makeFakeDocForId('league-create-sheet-wrap');
+  assert(gesturesSuspended() === true,
+    '10e: gesturesSuspended() is TRUE while #league-create-sheet-wrap exists — a week-swipe or pull-to-refresh on the page beneath the New League sheet must not arm');
   globalThis.document = savedDocument;
 }
 
@@ -2384,7 +2773,7 @@ console.log('     League Page swipe-back + week wizard drag-to-dismiss, shared p
     const mod = await import('data:text/javascript,' + encodeURIComponent([
       'let document = null; export function _setDoc(d) { document = d; }',
       appSrc.slice(a, c + 2),
-      'export { isDismissGestureBlockedByOtherSurface, isWizardDismissGestureBlocked };',
+      'export { _dismissBlockingSurfaceUp, isDismissGestureBlockedByOtherSurface, isWizardDismissGestureBlocked };',
     ].join('\n')));
     const docWith = (ids = [], sels = []) => ({
       getElementById: (id) => (ids.includes(id) ? { id } : null),
@@ -2427,10 +2816,26 @@ console.log('     League Page swipe-back + week wizard drag-to-dismiss, shared p
     el2._fire('touchend');
     assert(settled2 === null, '11n-real-5 control: bound to the shared predicate (the pre-fix wiring) the same drag never fires — the defect this closes');
     // The wizard opener really binds the wizard predicate (comment-stripped).
-    const opener = appSrc.slice(appSrc.indexOf('_unbindWizardSheetDismiss = (sheetEl && headerEl)'), appSrc.indexOf('_unbindWizardSheetDismiss = (sheetEl && headerEl)') + 900)
+    // N1 (DI-430, 2026-09-30) — the wizard's opener is now a thin caller of the shared mountSheetShell(), which takes the drag hooks in a `drag:` object; the binding this
+    // pins is the same (`getBlocked: isWizardDismissGestureBlocked`), only its home moved. Re-derived against mountWeekWizardSheetShell().
+    const openerAt = appSrc.indexOf('function mountWeekWizardSheetShell() {');
+    const opener = appSrc.slice(openerAt, openerAt + 2200)
       .split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
-    assert(/getBlocked:\s*isWizardDismissGestureBlocked\b/.test(opener) && !/getBlocked:\s*isDismissGestureBlockedByOtherSurface\b/.test(opener),
+    assert(openerAt > -1 && /getBlocked:\s*isWizardDismissGestureBlocked\b/.test(opener) && !/getBlocked:\s*isDismissGestureBlockedByOtherSurface\b/.test(opener),
       '11n-real-6: the wizard sheet opener binds getBlocked: isWizardDismissGestureBlocked (not the shared predicate)');
+    // …and the New League sheet's opener binds ITS OWN predicate (the same "other surface" carve-out, plus off while a create is in flight).
+    const lcAt = appSrc.indexOf('function openLeagueCreateSheet(');
+    const lcOpener = appSrc.slice(lcAt, lcAt + 3200).split('\n').map(l => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+    assert(lcAt > -1 && /getBlocked:\s*isLeagueCreateDismissGestureBlocked\b/.test(lcOpener) && !/getBlocked:\s*isDismissGestureBlockedByOtherSurface\b/.test(lcOpener),
+      '11n-real-7: the New League sheet opener binds getBlocked: isLeagueCreateDismissGestureBlocked (its own predicate — the shared one counts its own wrap and would never arm)');
+    mod._setDoc(docWith(['league-create-sheet-wrap']));
+    assert(mod._dismissBlockingSurfaceUp({ excludeCreate: true }) === false,
+      '11n-real-8: with ONLY the New League sheet\'s own wrap present, its predicate\'s list is FALSE (it does not block itself)');
+    assert(mod.isDismissGestureBlockedByOtherSurface() === true && mod.isWizardDismissGestureBlocked() === true,
+      '11n-real-9: …while the League Page\'s and the wizard\'s predicates both count the New League sheet as a surface on top');
+    mod._setDoc(docWith(['league-create-sheet-wrap'], ['.modal-overlay']));
+    assert(mod._dismissBlockingSurfaceUp({ excludeCreate: true }) === true,
+      '11n-real-10: a modal raised over the New League sheet still blocks its swipe-down');
   }
 
   // Idempotent double-bind — same shape as bindWeekSwipe()'s WeakMap guard.
@@ -2757,11 +3162,25 @@ console.log('\n[13] PILL TAB BAR — CSS PINS (coordinator CSS pass, DI-397 pill
     [/\.update-available-banner\{[^}]*bottom:\s*var\(--nav-bar-clearance\)/, '.update-available-banner bottom'],
     [/#page-chat\.active\{[^}]*height:\s*calc\(100dvh - var\(--nav-bar-clearance\)\)/, '#page-chat.active height (100dvh)'],
     [/@supports not \(height:100dvh\)\{#page-chat\.active\{height:calc\(100vh - var\(--nav-bar-clearance\)\)\}\}/, '#page-chat.active height (100vh fallback)'],
-    [/#page-chat \.chat-jump-latest\{bottom:calc\(var\(--nav-bar-clearance\)\s*\+\s*var\(--chat-composer-h,90px\)\s*\+\s*10px\)/, '.chat-jump-latest bottom'],
+    // DI-442 (2026-09-29): `.chat-jump-latest` is NOT a consumer any more, on purpose.
+    // #page-chat.active already subtracts the clearance from its own height, so the
+    // term was a double count (it floated the button 56px above the composer with the
+    // keyboard down). Its offset is now the composer + 8px, pinned in [13c-jump].
   ];
   for (const [re, label] of consumerChecks) {
     assert(re.test(css), `12c: ${label} reads var(--nav-bar-clearance)`);
   }
+  // [13c-jump] DI-442 (UN-385): the ↓ latest button's sticky offset is the measured composer
+  // + its 8px margin-bottom (Chromium resolves sticky insets against #page-chat's CONTENT
+  // box, so the page's own padding-bottom lift is NOT added) — and carries NO
+  // --nav-bar-clearance term (the clearance is already subtracted from #page-chat's height).
+  assert(/#page-chat \.chat-jump-latest\{bottom:calc\(var\(--chat-composer-h,90px\)\s*\+\s*8px\);margin-bottom:8px/.test(css),
+    '12c-jump: .chat-jump-latest bottom = var(--chat-composer-h,90px) + 8px, with margin-bottom:8px');
+  const jumpRule = (css.match(/#page-chat \.chat-jump-latest\{[^}]*\}/) || [''])[0];
+  assert(jumpRule !== '' && !/--nav-bar-clearance/.test(jumpRule),
+    '12c-jump-b: the ↓ latest rule reads no --nav-bar-clearance (a second subtraction of the clearance #page-chat already took)');
+  assert(/#page-chat\.active\{--chat-nav-gap:8px;[^}]*padding-bottom:var\(--chat-nav-gap\)/.test(css),
+    '12c-gap: #page-chat.active declares --chat-nav-gap:8px and uses it as its padding-bottom (the lift off the tab bar / keyboard)');
 
   // [13d] the keyboard-up reset zeroes the COMPOUND token directly, as a
   // <length> (0px), not a unitless 0 — the exact defect class (a bare `0`

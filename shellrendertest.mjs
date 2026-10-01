@@ -586,6 +586,82 @@ try {
     assert(!/\.control-center-identity-actions\{/.test(cssTextD),
       'D-4 mutation-proof companion: .control-center-identity-actions carries NO rule at all in the shipped stylesheet (RG-298 minor finding) — the old alignment fix is genuinely gone, not merely unused');
   }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[E] RG-TBD-B2 (bug batch B, N7, Drew 2026-09-29: "there is an awkward gap between');
+  console.log('    appearance and SCRIBe settings in the control panel") — the drawer\'s row rhythm (390×844)…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // DI-422 puts SCRIBE settings "directly below the 'My Preferences' group,
+  // ungrouped" — its own UN-labelled .control-center-group (controlcentertest
+  // 15d-3 pins that markup). Every .control-center-group carries the 24px
+  // section gap, which is sized for a group that OPENS WITH A LABEL: gap +
+  // label = a section break. With no label, the same 24px is an empty hole
+  // between Appearance and SCRIBE settings in a list whose rows otherwise sit
+  // flush. Measured on the REAL drawer + REAL stylesheet.
+  {
+    await open(drawerFile, 390, 844, true);
+    for (let i = 0; i < 40 && !(await evaluate('!!window.__ccReady')); i++) await sleep(50);
+    const t = await evaluate(`(() => { const r = document.getElementById('control-center-trigger').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await click(t.x, t.y);
+    await sleep(400);
+    const g = await evaluate(`(() => {
+      const box = sel => { const e = document.querySelector('#control-center ' + sel); if (!e) return null; const r = e.getBoundingClientRect(); return { t: +r.top.toFixed(1), b: +r.bottom.toFixed(1) }; };
+      const labels = [...document.querySelectorAll('#control-center .control-center-group-label')];
+      const helpLabel = labels.find(l => /Help/.test(l.textContent));
+      const hl = helpLabel ? helpLabel.getBoundingClientRect() : null;
+      return { theme: box('[data-row="theme"]'), appearance: box('[data-row="appearance"]'), scribe: box('[data-row="scribe"]'),
+        help: hl ? { t: +hl.top.toFixed(1), b: +hl.bottom.toFixed(1) } : null };
+    })()`);
+    assert(g.theme && g.appearance && g.scribe && g.help,
+      `E-0: fixture — Theme, Appearance, SCRIBE settings and the "Help & Feedback" label all measure (${JSON.stringify(g)})`);
+    const inGroup = +(g.appearance.t - g.theme.b).toFixed(1);
+    const bugGap = +(g.scribe.t - g.appearance.b).toFixed(1);
+    const sectionGap = +(g.help.t - g.scribe.b).toFixed(1);
+    assert(inGroup === 0, `E-1: fixture — inside "My Preferences" rows sit flush (Theme → Appearance ${inGroup}px)`);
+    assert(bugGap === inGroup,
+      `E-2: THE BUG — SCRIBE settings follows Appearance on the list's own row rhythm (${bugGap}px, rows ${inGroup}px); an un-labelled group opens no empty section gap`);
+    assert(sectionGap === 24,
+      `E-3: control — a LABELLED group still opens with the 24px section gap on the 8-pt grid (SCRIBE settings → "Help & Feedback" ${sectionGap}px)`);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  console.log('\n[F] RG-TBD-B3 reviewer follow-up — the Profile alma-mater caption never moves the Save button (375 / 390)…');
+  // ═════════════════════════════════════════════════════════════════════════
+  // The caption goes empty → "Loading…" → result while the player is looking
+  // at the pane. Its line box is reserved (.alma-catalog-note) and every
+  // caption string (js/control-center.js almaCatalogNoteText()) is one line,
+  // so the Save button below it must sit at the SAME y in every state.
+  for (const w of [375, 390]) {
+    await open(drawerFile, w, 844, true);
+    for (let i = 0; i < 40 && !(await evaluate('!!window.__ccReady')); i++) await sleep(50);
+    const t = await evaluate(`(() => { const r = document.getElementById('control-center-trigger').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await click(t.x, t.y);
+    await sleep(400);
+    const p = await evaluate(`(() => { const r = document.querySelector('[data-action="cc-push-profile"]').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+    await click(p.x, p.y);
+    await sleep(400);
+    const states = await evaluate(`(async () => {
+      const cc = await import(${JSON.stringify(jsBase + 'control-center.js')});
+      const note = document.getElementById('cc-field-alma-note');
+      const save = document.querySelector('#control-center [data-action="cc-save-profile"]');
+      const out = [];
+      const texts = [['empty', ''], ['loading', cc.almaCatalogNoteText('loading')], ['loaded', cc.almaCatalogNoteText('loaded', { count: 762 })],
+        ['failed', cc.almaCatalogNoteText('failed')], ['partial', cc.almaCatalogNoteText('partial', { got: 700, count: 762 })]];
+      for (const [k, v] of texts) {
+        note.textContent = v;
+        await new Promise(r => requestAnimationFrame(() => r()));
+        out.push({ k, saveTop: +save.getBoundingClientRect().top.toFixed(1), noteH: +note.getBoundingClientRect().height.toFixed(1), hidden: note.hidden });
+      }
+      return out;
+    })()`);
+    assert(Array.isArray(states) && states.length === 5 && states.every(s => !s.hidden),
+      `F-${w}-0: fixture — the real Profile pane renders the caption slot, visible in all five states (${JSON.stringify(states?.map(s => s.k + ':' + s.hidden))})`);
+    const top0 = states?.[0]?.saveTop;
+    assert(states.every(s => s.saveTop === top0),
+      `F-${w}-1: THE FOLLOW-UP — Save does not move as the caption goes empty → loading → loaded / failed / partial (tops ${states.map(s => s.k + ' ' + s.saveTop).join(', ')})`);
+    assert(states.every(s => s.noteH === states[0].noteH),
+      `F-${w}-2: …because the caption's line box is reserved and every caption is ONE line at ${w}px (heights ${states.map(s => s.k + ' ' + s.noteH).join(', ')})`);
+  }
 } catch (e) {
   assert(false, `the engine sections ran to completion (threw: ${e && e.message})`);
 } finally {

@@ -378,12 +378,15 @@ console.log('\n[10] N1 follow-ups — receipts, the blip, and the stale push-act
   //      hydrate this harness has no business building (the [9] precedent). ──
   // BOUND RAISED 4000 -> 6000 (2026-09-23): the block grew by the note recording
   // that `registerPushAdapter(new OneSignalRelayAdapter())` was removed.
+  // BOUND RAISED 7500 -> 9500 (2026-09-29, UN-315 multi-league push): the block grew again — the native
+  // foreground/click wiring now names the ACTIVE league and routes a tap through routeToLeague(), and the
+  // boot-time identity assertion carries the account id (its comments say why). Same reason as below.
   // BOUND RAISED 6000 -> 7500 (2026-09-23, DI-217 native push): the block grew
   // again by the native adapter registration + foreground/click wiring, added
   // right after the same comment this test anchors on. The bound exists so the
   // lazy match cannot run away into an unrelated part of the file, not as a
   // length budget for the block itself.
-  const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,7500}?refreshPushActiveFlag\(\);/) || [''])[0];
+  const bootBlock10 = (appSrc10.match(/Groups A\/B — notifications boot wiring[\s\S]{0,9500}?refreshPushActiveFlag\(\);/) || [''])[0];
   assert(bootBlock10.length > 0, '10-11: fixture check — the notifications boot-wiring block was located in js/app.js');
   // RG-177 (2026-09-19) — the clear still happens here and still happens FIRST;
   // it just goes through setPushActiveDurable() now. Under dataMode:'supabase'
@@ -1322,7 +1325,7 @@ console.log('\n[12] RG-192 — the external id is never attached, so no player i
     // BOUND RAISED 4500 -> 7500 (2026-09-23, DI-217 native push) — same block,
     // same reason as [10-11]'s identical bound above.
     const appSrc12 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
-    const bootBlock12 = (appSrc12.match(/Groups A\/B — notifications boot wiring[\s\S]{0,7500}?refreshPushActiveFlag\(\);/) || [''])[0];
+    const bootBlock12 = (appSrc12.match(/Groups A\/B — notifications boot wiring[\s\S]{0,9500}?refreshPushActiveFlag\(\);/) || [''])[0];
     assert(bootBlock12.includes('maybeAutoOptInPush('),
       '12j-7: …and the boot wiring really calls it — an exported function nothing calls fixes nobody');
   }
@@ -2436,7 +2439,7 @@ console.log('\n[16] RG-243 — the web pushActive ladder is CORRECT; the boot-or
       .split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, (m, p1) => p1 + ' '.repeat(m.length - p1.length))).join('\n');
     assert(fn16.length > 0 && fn16.length === code16.length,
       '16-13: fixture check — resyncPlayerPreferences() was located in js/app.js and the comment blanker preserves length');
-    assert(/loginOneSignal\(sess\.playerId\)/.test(code16) && /refreshWagerCache\(/.test(code16) && /refreshPushActiveFlag\(\)/.test(code16),
+    assert(/loginOneSignal\(sess\.playerId, getAccountUserId\(\)\)/.test(code16) && /refreshWagerCache\(/.test(code16) && /refreshPushActiveFlag\(\)/.test(code16),
       '16-14: fixture check — the chokepoint really is where RG-192, RG-120 and DI-N3 each re-arm their own boot-order loss. That precedent is the argument for the line below, so it is asserted rather than asserted about');
     assert(/maybeAutoOptInPush\(/.test(code16),
       '16-15: THE FIX\'S WIRING — the subscription repair is re-armed at the SAME session chokepoint as the identity call beside it. Without it the repair has exactly one caller, in the boot tail, at the one moment authMode:\'supabase\' cannot guarantee an identity (RG-177: the tail runs before the league resolves), and a browser that misses it is "allowed to notify, registered nowhere" until the next reload');
@@ -2477,6 +2480,481 @@ console.log('\n[16] RG-243 — the web pushActive ladder is CORRECT; the boot-or
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════════════
+// [17] UN-315 / DI-436.1-3 — THE DEVICE FOLLOWS THE ACCOUNT (multi-league push, 2026-09-29)
+//
+// One phone must hear EVERY league its owner belongs to. The identity it binds to is now the ACCOUNT's
+// private ALIAS (a random uuid only `push-identity-token` can hand out), so:
+//   • a LEAGUE SWITCH makes ZERO SDK calls (and zero mints) once the device is bound;
+//   • logout happens only on sign-out or an ACCOUNT change; the sign-out unlink lands BEFORE the session clears;
+//   • `dual` (or unknown) falls back to the member id when the alias mint fails, then retries — bounded;
+//     `alias` mode has NO fallback; `legacy` asserts the member id exactly as builds 1-3 did;
+//   • a push FROM another league is never suppressed in the foreground and never wakes THIS league's chat.
+// The fake below is the v16 SDK shape [12]/[16] already model (deferred queue that INVOKES callbacks,
+// `User.externalId`, `login(id,jwt)`, `logout()`), extended only to record every call in order.
+// ═══════════════════════════════════════════════════════════════════════════════════════
+console.log('\n[17] UN-315 — the device follows the ACCOUNT: alias identity, a league switch is a no-op, sign-out unlinks first…');
+{
+  const app17   = await import('./js/app.js');
+  const push17  = await import('./js/push-onesignal.js');
+  const notif17 = await import('./js/notifications.js');
+  const ALIAS_A = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const ALIAS_B = 'b2b2b2b2-2222-4222-8222-222222222222';
+
+  const saved17 = {
+    document: globalThis.document, navigator: globalThis.navigator, fetch: globalThis.fetch,
+    matchMedia: globalThis.matchMedia, Notification: globalThis.Notification,
+    PushSubscriptionOptions: globalThis.PushSubscriptionOptions, OneSignalDeferred: globalThis.OneSignalDeferred,
+  };
+  const setNav17 = (v) => { try { globalThis.navigator = v; }
+    catch { Object.defineProperty(globalThis, 'navigator', { value: v, configurable: true, writable: true }); } };
+  const keepAlive17 = async (p) => { const ka = setInterval(() => {}, 5); try { return await p; } finally { clearInterval(ka); } };
+  const settle17 = (ms = 60) => keepAlive17(new Promise(r => setTimeout(r, ms)));
+
+  let calls17 = [];      // every SDK call, in order
+  let tokens17 = [];     // the second argument of each login()
+  let mints17 = [];      // the `scope` of each mint, in order
+  let listeners17 = {};  // Notifications.addEventListener registrations
+
+  /** `minter(scope)` answers each mint. `logoutMs` makes the SDK's logout SLOW (sign-out ordering). */
+  function world17({ minter, permission = 'granted', logoutMs = 0, drains = true } = {}) {
+    calls17 = []; tokens17 = []; mints17 = []; listeners17 = {};
+    push17._resetForTest({ sdkReadyMs: 400 });
+    push17._setIdentityMinterForTest(async (req) => { mints17.push(req && req.scope); return minter(req && req.scope); });
+    const sub = { optedIn: true, id: 'sub-17', async optIn() {}, async optOut() {} };
+    const user = { PushSubscription: sub, externalId: '' };
+    const sdk = {
+      async init() { calls17.push('init'); },
+      async login(id, jwt) { calls17.push(`login(${id})`); tokens17.push(jwt === undefined ? undefined : String(jwt)); user.externalId = String(id); },
+      async logout() {
+        if (logoutMs) await new Promise(r => setTimeout(r, logoutMs));
+        calls17.push('logout'); user.externalId = '';
+      },
+      User: user,
+      Notifications: { addEventListener(type, fn) { listeners17[type] = fn; }, async requestPermission() {} },
+    };
+    globalThis.document = {
+      addEventListener() {}, removeEventListener() {},
+      getElementById: () => null, querySelector: () => null, querySelectorAll: () => [],
+      createElement: () => ({ src: '', defer: false, onload: null, onerror: null,
+        set innerHTML(v) {}, get innerHTML() { return ''; }, appendChild() {}, remove() {},
+        addEventListener() {}, removeEventListener() {}, classList: { add() {}, remove() {} }, style: {}, id: '', className: '' }),
+      head: { appendChild(s) { const t = setTimeout(() => s.onload?.(), 5); t?.unref?.(); } },
+      body: { classList: { add() {}, remove() {} }, appendChild() {}, innerHTML: '', dataset: {} },
+      hidden: false,
+    };
+    setNav17({ userAgent: 'Mozilla/5.0 (Macintosh) Chrome/130', vendor: 'Google Inc.', maxTouchPoints: 0,
+      serviceWorker: { getRegistration: async () => ({ pushManager: { getSubscription: async () => ({ endpoint: 'https://push.example/x' }) } }) } });
+    globalThis.matchMedia = () => ({ matches: false });
+    globalThis.Notification = { permission };
+    globalThis.PushSubscriptionOptions = function () {};
+    globalThis.PushSubscriptionOptions.prototype.applicationServerKey = null;
+    globalThis.OneSignalDeferred = drains ? { push: (fn) => { fn(sdk); } } : [];
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: 'abad65e9-e9d8-4b69-b342-c43947a7189a' }) });
+    return sdk;
+  }
+  const FAR = () => Date.now() + 86_400_000;
+  /** A server that answers like the real one. `who` decides WHOSE alias the mint returns. */
+  const aliasServer = ({ mode = 'dual', who = () => ALIAS_A } = {}) => async (scope) => {
+    if (scope === 'user') return { ok: true, token: `tok-user-${who()}`, expiresAtMs: FAR(), externalId: who(), mode };
+    return { ok: true, token: 'tok-league', expiresAtMs: FAR() };
+  };
+  const logins = () => calls17.filter((c) => /^login\(/.test(c));
+
+  // ── (a) THE ALIAS IS WHAT THE DEVICE BINDS TO — one mint, and the token that proves it.
+  {
+    world17({ minter: aliasServer() });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    assert(JSON.stringify(logins()) === JSON.stringify([`login(${ALIAS_A})`]),
+      `17-1: the device is bound to the ACCOUNT'S ALIAS, not the member id (got ${JSON.stringify(calls17)})`);
+    assert(JSON.stringify(mints17) === JSON.stringify(['user']) && tokens17[0] === `tok-user-${ALIAS_A}`,
+      `17-2: …with exactly ONE mint, the user-scoped one, and the token it returned is what login() carries (mints ${JSON.stringify(mints17)}, token ${JSON.stringify(tokens17[0])})`);
+    assert(push17.boundExternalId() === ALIAS_A, '17-3: the module\'s record of what it bound is the alias (memory only)');
+  }
+
+  // ── (b) A LEAGUE SWITCH IS A NO-OP — zero SDK calls, zero mints. The member id changes; the account does not.
+  {
+    const before = calls17.length, mintsBefore = mints17.length;
+    await keepAlive17(push17.loginOneSignal('p2', 'acctA'));
+    await settle17();
+    assert(calls17.length === before && mints17.length === mintsBefore,
+      `17-4: a league switch (a different member id, the SAME account) makes ZERO SDK calls and ZERO mints (calls ${JSON.stringify(calls17.slice(before))}, mints ${JSON.stringify(mints17.slice(mintsBefore))})`);
+    assert(!calls17.includes('logout'), '17-5: …and NO logout — logout is for sign-out and account changes only');
+    assert(push17.boundExternalId() === ALIAS_A, '17-6: …and the device is still bound to the same alias');
+  }
+  {
+    // The same, with the switch landing WHILE the first login is still being worked on: ONE login, not two.
+    world17({ minter: async (scope) => { await new Promise(r => setTimeout(r, 40)); return aliasServer()(scope); } });
+    const first = push17.loginOneSignal('p1', 'acctA');
+    const second = push17.loginOneSignal('p2', 'acctA');
+    await keepAlive17(Promise.all([first, second]));
+    await settle17(150);
+    assert(logins().length === 1 && mints17.length === 1,
+      `17-7: a switch that lands while the alias is still being minted does NOT queue a second login (logins ${JSON.stringify(logins())}, mints ${JSON.stringify(mints17)})`);
+  }
+
+  // ── (c) A DIFFERENT ACCOUNT RE-ASSERTS — the previous occupant's binding and proof are never reused.
+  {
+    let who = ALIAS_A;
+    world17({ minter: aliasServer({ who: () => who }) });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    who = ALIAS_B;
+    await keepAlive17(push17.loginOneSignal('p9', 'acctB'));
+    await settle17();
+    assert(JSON.stringify(logins()) === JSON.stringify([`login(${ALIAS_A})`, `login(${ALIAS_B})`]),
+      `17-8: a DIFFERENT account is NOT an early return — the device re-binds to the new account's alias (got ${JSON.stringify(calls17)})`);
+    assert(mints17.length === 2 && tokens17[1] === `tok-user-${ALIAS_B}`,
+      `17-9: …with a FRESH mint — account A's cached proof is never presented for account B (mints ${JSON.stringify(mints17)}, tokens ${JSON.stringify(tokens17)})`);
+  }
+
+  // ── (d) SIGN-OUT, THEN A NEW SIGN-IN: logout lifts the no-op.
+  {
+    world17({ minter: aliasServer() });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    await keepAlive17(push17.logoutOneSignal());
+    await settle17();
+    assert(push17.boundExternalId() === '' && calls17.filter((c) => c === 'logout').length === 1,
+      `17-10: sign-out logs the device out (one logout) and forgets the binding (got ${JSON.stringify(calls17)}, bound ${JSON.stringify(push17.boundExternalId())})`);
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    assert(logins().length === 2 && mints17.length === 2,
+      `17-11: …and the next sign-in of the SAME account is a real login again with a FRESH mint — logout cleared the cached proof (logins ${JSON.stringify(logins())}, mints ${JSON.stringify(mints17)})`);
+  }
+
+  // ── (e) `force` — the explicit REPAIR paths (Turn On / Reconnect / boot auto-register) re-assert regardless.
+  {
+    world17({ minter: aliasServer() });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA', { force: true }));
+    await settle17();
+    assert(logins().length === 2 && mints17.length === 1,
+      `17-12: { force:true } re-asserts even though a binding is recorded (RG-192: the identity is re-attached AFTER a subscription exists) — and the cached alias proof is REUSED, so it costs no second mint (logins ${logins().length}, mints ${mints17.length})`);
+    await keepAlive17(push17.loginOneSignal('p1', '', {}));
+    await settle17();
+    assert(logins().length === 3, '17-13: an unknown account (\'\') never early-returns either — without an account there is nothing to prove the binding belongs to this caller');
+  }
+
+  // ── (f) dual: THE ALIAS MINT FAILS → the member id, then a bounded retry of the alias.
+  {
+    let userOk = false;
+    world17({ minter: async (scope) => {
+      if (scope === 'user') return userOk ? { ok: true, token: 'tok-user', expiresAtMs: FAR(), externalId: ALIAS_A, mode: 'dual' } : { ok: false, reason: 'unreachable' };
+      return { ok: true, token: 'tok-league', expiresAtMs: FAR() };
+    } });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17(30);
+    assert(JSON.stringify(logins()) === JSON.stringify(['login(p1)']) && tokens17[0] === 'tok-league',
+      `17-14: dual + a FAILED alias mint falls back to the MEMBER id with the league-scoped token — lossless, because the server addresses both ids in dual (got ${JSON.stringify(calls17)}, tokens ${JSON.stringify(tokens17)})`);
+    userOk = true;
+    await settle17(700);
+    assert(JSON.stringify(logins()) === JSON.stringify(['login(p1)', `login(${ALIAS_A})`]) && push17.boundExternalId() === ALIAS_A,
+      `17-15: …and the alias is retried on the SAME bounded ladder and the device UPGRADES to it (got ${JSON.stringify(calls17)}, bound ${JSON.stringify(push17.boundExternalId())})`);
+  }
+  {
+    // A server that never answers: the ladder is bounded — three attempts, then stop — and the device
+    // stays on the member id (still reachable in dual).
+    world17({ minter: async (scope) => (scope === 'user' ? { ok: false, reason: 'unreachable' } : { ok: true, token: 'tok-league', expiresAtMs: FAR() }) });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17(4800);
+    assert(mints17.filter((s) => s === 'user').length <= 3,
+      `17-16: the alias retry is BOUNDED — at most three attempts, never a background timer on every phone forever (user mints: ${mints17.filter((s) => s === 'user').length})`);
+    assert(push17.boundExternalId() === 'p1' && !logins().some((l) => l !== 'login(p1)'),
+      `17-17: …and the device stays bound to its member id throughout (got ${JSON.stringify(calls17)})`);
+  }
+
+  // ── (f2) THE LADDER IS SPENT → THE "IN FLIGHT" CLAIM ENDS (security finding 2, 2026-09-30).
+  //    `_inflightAccountId` lets a league switch skip a second login while the first is still being worked on.
+  //    It used to be cleared only by a success or a settled refusal — so after the last rung of the bounded
+  //    ladder it stayed set, and every later loginOneSignal(p, sameAccount) returned early FOREVER: the device
+  //    silently unlinked, no retry, no mint, until a reload. The exact failing sequence: the identity cannot be
+  //    minted three times running, then the network comes back and the app asks again.
+  {
+    let up = false;
+    world17({ minter: async (scope) => (up
+      ? (scope === 'user' ? { ok: true, token: 'tok-user', expiresAtMs: FAR(), externalId: ALIAS_A, mode: 'dual' } : { ok: true, token: 'tok-league', expiresAtMs: FAR() })
+      : { ok: false, reason: 'unreachable' }) });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17(150);
+    const mintsMid = mints17.length;
+    await keepAlive17(push17.loginOneSignal('p1b', 'acctA'));            // a league switch while the ladder is still running
+    await settle17(50);
+    assert(mints17.length === mintsMid && logins().length === 0,
+      `17-16a: WHILE the ladder is still running the claim holds — a league switch neither mints nor logs in again (mints ${mintsMid} -> ${mints17.length})`);
+    await settle17(4900);
+    assert(logins().length === 0 && push17.boundExternalId() === '',
+      `17-16b: three failed attempts later nothing was bound (got ${JSON.stringify(calls17)})`);
+    up = true;
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17(200);
+    assert(JSON.stringify(logins()) === JSON.stringify([`login(${ALIAS_A})`]) && push17.boundExternalId() === ALIAS_A,
+      `17-16c: AFTER the ladder is spent the SAME call is honoured again — it mints, logs in and binds the alias (got ${JSON.stringify(calls17)}, bound ${JSON.stringify(push17.boundExternalId())}); before the fix it returned early forever`);
+  }
+
+  // ── (g) alias mode: NO FALLBACK. The member id is no longer addressed; asserting it would say "linked" over a dead binding.
+  {
+    let userOk = true;
+    world17({ minter: async (scope) => {
+      if (scope === 'user') return userOk ? { ok: true, token: 'tok-user', expiresAtMs: FAR(), externalId: ALIAS_A, mode: 'alias' } : { ok: false, reason: 'unreachable' };
+      return { ok: true, token: 'tok-league', expiresAtMs: FAR() };
+    } });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    await keepAlive17(push17.logoutOneSignal());
+    await settle17();
+    userOk = false;
+    const leagueMintsBefore = mints17.filter((s) => s === 'league').length;
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17(800);
+    assert(logins().length === 1 && push17.boundExternalId() === '',
+      `17-18: in ALIAS mode a failed alias mint asserts NOTHING — no member-id fallback (got ${JSON.stringify(calls17)}, bound ${JSON.stringify(push17.boundExternalId())}); the device reads "isn't linked… Reconnect" through the existing status line`);
+    assert(mints17.filter((s) => s === 'league').length === leagueMintsBefore,
+      '17-19: …and the LEGACY league-scoped mint is never even attempted once the server has said alias');
+  }
+
+  // ── (h) legacy: the operator's rollback. Member ids, exactly as builds 1-3 — and a league switch re-binds again.
+  {
+    world17({ minter: async (scope) => (scope === 'user' ? { ok: true, mode: 'legacy' } : { ok: true, token: 'tok-league', expiresAtMs: FAR() }) });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    assert(JSON.stringify(logins()) === JSON.stringify(['login(p1)']) && tokens17[0] === 'tok-league',
+      `17-20: mode:'legacy' asserts the MEMBER id with the league-scoped token, as builds 1-3 did (got ${JSON.stringify(calls17)})`);
+    await keepAlive17(push17.loginOneSignal('p2', 'acctA'));
+    await settle17();
+    assert(JSON.stringify(logins()) === JSON.stringify(['login(p1)', 'login(p2)']),
+      `17-21: …and there a league switch DOES re-bind (the device follows the league's member id again) — the no-op belongs to the alias only (got ${JSON.stringify(calls17)})`);
+  }
+
+  // ── (i) a pre-DI-434 answer: a token, no alias, no mode. That IS the legacy answer — used once, never minted twice.
+  {
+    world17({ minter: async () => ({ ok: true, token: 'tok-old', expiresAtMs: FAR() }) });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    assert(JSON.stringify(logins()) === JSON.stringify(['login(p1)']) && mints17.length === 1 && tokens17[0] === 'tok-old',
+      `17-22: a server that predates DI-434 (a token, no alias, no mode) binds the member id from that ONE answer (got ${JSON.stringify(calls17)}, mints ${JSON.stringify(mints17)})`);
+  }
+
+  // ── (j) SIGN-OUT ORDER: the unlink is AWAITED, bounded, and never blocks.
+  {
+    world17({ minter: aliasServer(), logoutMs: 90 });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    const t0 = Date.now();
+    const done = await keepAlive17(push17.logoutOneSignalAndWait(2000));
+    const took = Date.now() - t0;
+    assert(done === true && calls17.includes('logout') && took >= 80 && took < 1500,
+      `17-23: logoutOneSignalAndWait() RESOLVES ONLY AFTER the SDK's logout has landed (waited ${took}ms for a 90ms logout; logout recorded ${calls17.includes('logout')}; resolved ${done}) — that is what lets signOut() await it BEFORE clearing the session`);
+    assert(push17.boundExternalId() === '', '17-24: …and the binding is already forgotten');
+  }
+  {
+    // An SDK whose logout NEVER completes: bounded by the timeout, never a hang, never a throw.
+    world17({ minter: aliasServer(), logoutMs: 60_000 });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    const t0 = Date.now();
+    const res = await keepAlive17(push17.logoutOneSignalAndWait(150));
+    const took = Date.now() - t0;
+    assert(res === false && took >= 120 && took < 900,
+      `17-25: a logout that never completes is given up on after the bound (resolved ${res} after ${took}ms) — a stalled SDK must never keep anybody signed in`);
+  }
+  {
+    // The SDK is NOT ready on this page (blocked, still loading, an init that never answered): sign-out must not
+    // sit out the bound for a call that may never come — but the unlink is still QUEUED, so it runs the moment
+    // the SDK is up (the chokepoint's own backstop has always done exactly this).
+    // Let the PREVIOUS world's abandoned 60s-logout finish its 400ms give-up timer first: it would otherwise fire
+    // inside THIS world as a stale completion and add a re-asserted logout of its own (test-only leakage — the
+    // module's per-page state is reset between worlds, a pending timer is not).
+    await keepAlive17(new Promise((r) => setTimeout(r, 450)));
+    world17({ minter: aliasServer(), logoutMs: 250 });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    push17._setSdkReadyForTest(false);
+    const before = calls17.filter((c) => c === 'logout').length;
+    const t0 = Date.now();
+    const res = await keepAlive17(push17.logoutOneSignalAndWait(2000));
+    const took = Date.now() - t0;
+    await keepAlive17(new Promise((r) => setTimeout(r, 500)));   // the slow logout (250ms) lands after sign-out has moved on
+    assert(res === false && took < 120,
+      `17-26b: an SDK that has not answered on this page is NOT waited on (resolved ${res} after ${took}ms; a wait would have cost the 250ms logout or the 2s bound) — a blocked or slow SDK never makes Sign Out feel frozen`);
+    assert(calls17.filter((c) => c === 'logout').length === before + 1,
+      `17-26c: …and the unlink was still queued and ran (logout calls ${before} -> ${calls17.filter((c) => c === 'logout').length}) — the wait is skipped, the unlink is not`);
+  }
+  {
+    // Push not configured at all (no App ID): nothing to unlink, and it must not cost the player a 2-second pause.
+    world17({ minter: aliasServer() });
+    globalThis.fetch = async () => ({ ok: true, json: async () => ({ oneSignalAppId: '' }) });
+    push17._resetForTest({ sdkReadyMs: 400 });
+    const t0 = Date.now();
+    const res = await keepAlive17(push17.logoutOneSignalAndWait(2000));
+    const took = Date.now() - t0;
+    assert(res === false && took < 500,
+      `17-26: with push NOT configured there is nothing to unlink and the wait ends immediately (${took}ms, not the 2s bound) — sign-out is never slowed on a device without push`);
+  }
+  {
+    // The sign-out wiring itself, [structural]: auth.js awaits BOTH unlinks BEFORE client.auth.signOut().
+    const authSrc = await readFile(new URL('./js/auth.js', import.meta.url), 'utf8');
+    // CODE only: signOut()'s own prose names `await client.auth.signOut()` before the real call does.
+    const stripC = (t) => t.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    const signOutBody = stripC(authSrc.slice(authSrc.indexOf('export async function signOut(')));
+    const unlinkAt = signOutBody.indexOf('if (unlinkPush) await _unlinkPushBeforeSessionClears();');
+    const clearAt = signOutBody.indexOf('await client.auth.signOut()');
+    assert(unlinkAt > -1 && clearAt > -1 && unlinkAt < clearAt,
+      `17-27: signOut() awaits the push unlink BEFORE client.auth.signOut() clears the session (unlink@${unlinkAt}, clear@${clearAt}) [structural]`);
+    const helper = authSrc.slice(authSrc.indexOf('async function _unlinkPushBeforeSessionClears()'), authSrc.indexOf('export async function signOut('));
+    assert(/logoutOneSignalAndWait\(PUSH_LOGOUT_BOUND_MS\)/.test(helper) && /native\.logoutNativePush\(\)/.test(helper) && /isNativeOrigin\(\)/.test(helper)
+      && /Promise\.allSettled\(jobs\)/.test(helper) && /PUSH_LOGOUT_BOUND_MS = 2000/.test(authSrc),
+      '17-28: …WEB (logoutOneSignalAndWait) and NATIVE (behind isNativeOrigin, raced against the same bound), side by side via allSettled, bounded at 2s, and a failure is only ever a warning [structural]');
+    assert(!/throw/.test(helper.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '')),
+      '17-29: …and the unlink helper cannot throw out of signOut() — a push SDK problem must never keep someone signed in');
+    // The ONLY two callers that skip the awaited unlink are the involuntary fail-closed recovery refusals
+    // (DI-334 Finding 1 / R-f: cleared in the same tick, nobody tapped anything). Every deliberate sign-out —
+    // the tap, cancelling a recovery, a completed account delete — takes the default and unlinks first.
+    const noUnlink = stripC(authSrc).split('\n').filter((l) => /signOut\(\{ unlinkPush: false \}\)/.test(l));
+    assert(noUnlink.length === 2 && noUnlink.every((l) => /recovery-(marker|refusal) signOut failed/.test(l)),
+      `17-29b: exactly TWO call sites skip the push unlink, and both are the fail-closed recovery refusals (got ${noUnlink.length}) — a deliberate sign-out can never opt out of unlinking [structural]`);
+    const appSrc17 = await readFile(new URL('./js/app.js', import.meta.url), 'utf8');
+    assert(!/unlinkPush/.test(stripC(appSrc17)), '17-29c: …and app.js never passes the opt-out — the Sign Out tap and every UI path use the default [structural]');
+  }
+
+  // ── (k) FOREGROUND: another league's push is never suppressed and never wakes THIS league's chat.
+  {
+    world17({ minter: aliasServer() });
+    push17._resetForTest({ sdkReadyMs: 400 });
+    const woke = [];
+    globalThis.OneSignalDeferred = [];
+    push17.wireForegroundSuppression(notif17.destinationFor, (event) => woke.push(event), () => 'league-ACTIVE');
+    const queued = globalThis.OneSignalDeferred.splice(0);
+    const fakeOs = { Notifications: { addEventListener: (t, fn) => { listeners17[t] = fn; } } };
+    await queued[0](fakeOs);
+    const fire = (leagueId) => {
+      let prevented = false;
+      const e = { notification: { additionalData: { event: 'CHAT_MESSAGE_CREATED', route: 'chat', ...(leagueId === undefined ? {} : { league_id: leagueId }) } }, preventDefault() { prevented = true; } };
+      const before = woke.length;
+      listeners17.foregroundWillDisplay(e);
+      return { prevented, woke: woke.length - before };
+    };
+    globalThis.document.body.dataset.tab = 'chat';       // the player is LOOKING at the chat tab
+    const same = fire('league-ACTIVE');
+    assert(same.prevented === true && same.woke === 1,
+      `17-30: a push from the ACTIVE league while its chat tab is showing is suppressed (the player is already looking at it) and wakes its chat (got ${JSON.stringify(same)})`);
+    const other = fire('league-OTHER');
+    assert(other.prevented === false && other.woke === 0,
+      `17-31: a push from ANOTHER league is NOT suppressed even though the chat tab is showing — the banner is the only way the player learns another league spoke — and does NOT wake this league's chat (got ${JSON.stringify(other)})`);
+    const none = fire(undefined);
+    assert(none.prevented === true && none.woke === 1,
+      `17-32: a push with NO league_id (every older push, legacy mode) behaves exactly as before (got ${JSON.stringify(none)})`);
+    // No active league resolvable (the third argument absent, or answering ''): a league_id on the push proves
+    // nothing about "another league", so it fails toward TODAY's behaviour — never toward a banner storm and
+    // never toward silence.
+    for (const resolver of [undefined, () => '']) {
+      globalThis.OneSignalDeferred = [];
+      const woke2 = [];
+      push17.wireForegroundSuppression(notif17.destinationFor, (event) => woke2.push(event), resolver);
+      const q2 = globalThis.OneSignalDeferred.splice(0);
+      const l2 = {};
+      await q2[0]({ Notifications: { addEventListener: (t, fn) => { l2[t] = fn; } } });
+      let prevented2 = false;
+      l2.foregroundWillDisplay({ notification: { additionalData: { event: 'CHAT_MESSAGE_CREATED', route: 'chat', league_id: 'league-OTHER' } }, preventDefault() { prevented2 = true; } });
+      assert(prevented2 === true && woke2.length === 1,
+        `17-33: with NO resolvable active league a push that names one behaves as it always did (suppressed on its own tab, chat woken) — got prevented=${prevented2}, woke=${woke2.length}`);
+    }
+    delete globalThis.document.body.dataset.tab;
+  }
+
+  // ── (l) THE PUSH-ACTIVE FLAG SURVIVES A SWITCH: it is a fact about THIS handset's subscription, not about a league.
+  {
+    world17({ minter: aliasServer() });
+    storage.savePlayer({ playerId: 'p17', displayName: 'Multi', active: true, preferences: {} });
+    storage.setSession('p17', true, true);
+    storage.setPushActive(false);
+    await keepAlive17(push17.loginOneSignal('p17', 'acctA'));
+    await settle17();
+    await keepAlive17(app17.refreshPushActiveFlag());
+    assert(storage.getPushActive() === true, '17-34: fixture — a subscribed, permitted, opted-in, bound device resolves push-ACTIVE');
+    const callsBefore = calls17.length;
+    await keepAlive17(push17.loginOneSignal('p17b', 'acctA'));             // the league switch
+    await settle17();
+    await keepAlive17(app17.refreshPushActiveFlag());                       // the chokepoint recomputes after a switch
+    assert(calls17.length === callsBefore && storage.getPushActive() === true,
+      `17-35: after a league switch (zero SDK calls) the device is STILL push-active — the switch did not unbind it, so in-app surfaces stay quiet and the push is not duplicated by a toast (calls +${calls17.length - callsBefore}, flag ${storage.getPushActive()})`);
+    storage.setPushActive(false);
+    storage.clearSession();
+  }
+
+  // ── (m) THE ALIAS IS MEMORY ONLY — nowhere in the storage seam, and not in a status field a UI could render.
+  {
+    world17({ minter: aliasServer() });
+    await keepAlive17(push17.loginOneSignal('p1', 'acctA'));
+    await settle17();
+    assert(!JSON.stringify([...store]).includes(ALIAS_A),
+      '17-36: the alias appears in NO stored value — not load()/save(), not localStorage: it lives in the module\'s memory for the life of the page');
+    const src17 = await readFile(new URL('./js/push-onesignal.js', import.meta.url), 'utf8');
+    const code17 = src17.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    assert(!/localStorage|sessionStorage|\bsave\(|\bload\(/.test(code17),
+      '17-37: …and the module still names no storage API at all — a credential-adjacent value cannot be persisted by a later edit that "just caches it" [structural]');
+    assert(!/console\.(log|info|warn|error)\([^)]*(externalId|alias)/i.test(code17.replace(/'\[push-onesignal\] identity call failed', err/g, '')),
+      '17-38: …and no console call names the alias or the external id [structural]');
+  }
+
+  // ── (n) DI-436.4 — the prefs card says WHICH league its switches belong to, for a player in two or more.
+  //      Each league keeps its OWN push settings (they live on that league's member record and each league's
+  //      sends are gated by its own), so on a phone that now hears every league the card must not read as global.
+  {
+    const auth17 = await import('./js/auth.js');
+    const card = async () => app17.renderNotifSettingsBodyHTML('p17', 'granted', { known: true, ok: true, hasSubscription: true, optedIn: true, linked: true });
+    const M = (id, name) => ({ leagueId: id, memberId: `m-${id}`, role: 'player', displayName: 'Multi', leagueName: name });
+    try {
+      auth17._setMembershipsForTest([M('L-A', 'IRB Football')]);
+      auth17.setActiveLeagueId('L-A');
+      const one = await keepAlive17(card());
+      assert(!/notif-prefs-footer/.test(one) && !/Each league keeps its own/.test(one),
+        '17-39: a player in ONE league sees no caption — nothing about the card changed for the six people who are in one league today');
+      auth17._setMembershipsForTest([M('L-A', 'IRB Football'), M('L-B', 'Work <b>League</b>')]);
+      auth17.setActiveLeagueId('L-B');
+      const two = await keepAlive17(card());
+      assert(/These settings apply to Work &lt;b&gt;League&lt;\/b&gt;\. Each league keeps its own\./.test(two),
+        `17-40: a player in TWO leagues gets the footer naming the ACTIVE league, with the name ESCAPED (got ${JSON.stringify((two.match(/notif-prefs-footer[^>]*>([^<]*(?:<[^/][^<]*)*)/) || [])[1])})`);
+      assert(two.indexOf('notif-prefs-footer') > two.indexOf('notif-prefs-card') && two.lastIndexOf('</div>') < two.indexOf('notif-prefs-footer'),
+        '17-41: …as a footer UNDER the group (the iOS Settings pattern), not a row inside it — the last row keeps its own bottom rule and the toggles keep their 44px targets');
+      assert((two.match(/<label class="notif-prefs-row/g) || []).length === 6,
+        `17-42: …and the six rows themselves (master + five categories) are untouched (got ${(two.match(/<label class="notif-prefs-row/g) || []).length})`);
+    } finally {
+      auth17._setMembershipsForTest([]);
+      auth17.setActiveLeagueId(null);
+    }
+  }
+
+  // ── (o) DI-435 — the commissioner's reachability card says WHICH BUILD each device is on, when the server can
+  //      tell (push-reach reports aliasDevices/legacyDevices outside legacy mode). The alias cut-over is only
+  //      safe once every player has a device on the update, and this line is how the operator sees that.
+  {
+    const pst17 = await import('./js/push-selftest.js');
+    const nameOf = (id) => ({ p1: 'Drew', p2: 'Brayden', p3: 'Kevin' })[id] || id;
+    const line = (r, e = { reason: null }) => pst17.reachLine({ memberId: 'p1', lookupOk: true, ...r }, e, nameOf).text;
+    assert(/1 device \(iPhone; updated app\)/.test(line({ deviceCount: 1, kinds: ['iPhone'], aliasDevices: 1, legacyDevices: 0 })),
+      '17-43: a device bound to the account-wide alias reads "updated app"');
+    assert(/1 device \(Web; not on the update yet\)/.test(line({ deviceCount: 1, kinds: ['Web'], aliasDevices: 0, legacyDevices: 1 })),
+      '17-44: …a device still on the member id reads "not on the update yet" — the operator\'s cut-over blocker');
+    assert(/2 devices \(iPhone, Web; 1 updated, 1 not yet\)/.test(line({ deviceCount: 2, kinds: ['iPhone', 'Web'], aliasDevices: 1, legacyDevices: 1 })),
+      '17-45: …and a player with both says so');
+    assert(/1 device \(iPhone\) can receive push/.test(line({ deviceCount: 1, kinds: ['iPhone'] })) && !/updated|update yet/.test(line({ deviceCount: 1, kinds: ['iPhone'] })),
+      '17-46: with NO split reported (legacy mode, an older server) the line reads exactly as it always did');
+    assert(/registered, but they have push turned off/.test(line({ deviceCount: 1, kinds: ['iPhone'], aliasDevices: 1, legacyDevices: 0 }, { reason: 'master_off' })) && /updated app/.test(line({ deviceCount: 1, kinds: ['iPhone'], aliasDevices: 1, legacyDevices: 0 }, { reason: 'master_off' })),
+      '17-47: …and the build note rides on the muted/blocked lines too, not only the happy one');
+  }
+
+  // ── restore
+  push17._setIdentityMinterForTest(null);
+  push17._resetForTest({});
+  globalThis.document = saved17.document; setNav17(saved17.navigator); globalThis.fetch = saved17.fetch;
+  globalThis.matchMedia = saved17.matchMedia; globalThis.Notification = saved17.Notification;
+  globalThis.PushSubscriptionOptions = saved17.PushSubscriptionOptions;
+  globalThis.OneSignalDeferred = saved17.OneSignalDeferred;
+}
+
 console.log(`\n${fail === 0 ? '✅' : '❌'} pushtest: ${pass} passed, ${fail} failed`);
 // REVIEWER F3 (seventh gate, 2026-09-17) — FLUSH BEFORE EXITING.
 // `process.exit()` does not drain stdout/stderr, and both are ASYNCHRONOUS

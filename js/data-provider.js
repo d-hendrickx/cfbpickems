@@ -38,7 +38,7 @@
  *  - Multi-day fetchByDateRange merging
  */
 
-import { ALMA_MATERS, TIME_WINDOW, GAME_STATUS, DATA_QUALITY, DATA_SOURCE_MODE, createGame, getAlmaMaterMatch, ESPN_SPORT_ENDPOINTS, espnSportPath } from './data-model.js';
+import { getAlmaMaters, TIME_WINDOW, GAME_STATUS, DATA_QUALITY, DATA_SOURCE_MODE, createGame, getAlmaMaterMatch, ESPN_SPORT_ENDPOINTS, espnSportPath } from './data-model.js';
 
 const ESPN_API_ROOT = 'https://site.api.espn.com/apis/site/v2/sports';
 const ESPN_CFB = `${ESPN_API_ROOT}/football/college-football/scoreboard`;
@@ -130,7 +130,7 @@ export function buildEspnUrl(params = {}) {
  *  - Games outside the requested date range are filtered out.
  *  - season parameter is optional context only; dates are the source of truth.
  */
-export async function fetchByDateRange({ startDate, endDate, season, almaMaters = ALMA_MATERS } = {}) {
+export async function fetchByDateRange({ startDate, endDate, season, almaMaters = getAlmaMaters() } = {}) {
   if (!startDate) {
     return { games: [], error: 'No start date specified.', usingDemo: false, espnUrl: null };
   }
@@ -191,7 +191,7 @@ export async function fetchByDateRange({ startDate, endDate, season, almaMaters 
   };
 }
 
-export async function fetchCurrentCFBGames(almaMaters = ALMA_MATERS) {
+export async function fetchCurrentCFBGames(almaMaters = getAlmaMaters()) {
   const espnUrl = buildEspnUrl({});
   _state.lastFetchUrl = espnUrl;
   return resilientFetch(espnUrl, almaMaters);
@@ -224,9 +224,21 @@ export async function refreshScoresByEventIds(espnEventIds = [], storedGames = [
     bySport.get(sport).push(g);
   }
   // Fetch each sport's scoreboard in parallel
+  // N1 (DI-431 §5, 2026-09-30) — `fetchOptions.scoreboardCache`, an OPTIONAL Map the server caller passes so ONE tick that serves
+  // several leagues makes ONE ESPN request per sport, however many leagues asked. It holds ONLY the fetched scoreboard, keyed by URL;
+  // matching stored games to live events stays per call (so per league — `games.id` is commissioner-chosen text and can collide
+  // across leagues). Every browser call site passes no cache, so `cache` is undefined and this is byte-identical to before.
+  const cache = fetchOptions && fetchOptions.scoreboardCache instanceof Map ? fetchOptions.scoreboardCache : null;
   const fetches = [...bySport.keys()].map(async sport => {
     const url = buildEspnUrl({ sport });
-    const result = await resilientFetch(url, ALMA_MATERS, fetchOptions);
+    let pending = cache ? cache.get(url) : null;
+    if (!pending) {
+      // N1 (coordinator ruling 2026-09-30) — an EXPLICIT empty roster: this path merges scores, status, kickoff and logos into stored games and never reads the alma-mater flag
+      // it would compute, and the fetched scoreboard is shared across leagues (the cache above), so no league's school list belongs in it — least of all the pilot's six.
+      pending = resilientFetch(url, [], fetchOptions);
+      if (cache) cache.set(url, pending);
+    }
+    const result = await pending;
     return { sport, result };
   });
   const settled = await Promise.all(fetches);
@@ -310,7 +322,7 @@ export function getLastFetchUrl()  { return _state.lastFetchUrl; }
 
 // ─── RESILIENT FETCH ──────────────────────────────────────────────────────────
 
-async function resilientFetch(espnUrl, almaMaters = ALMA_MATERS, { allowProxy = true, timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0, userAgent = '' } = {}) {
+async function resilientFetch(espnUrl, almaMaters = getAlmaMaters(), { allowProxy = true, timeoutMs = FETCH_TIMEOUT_MS, maxBytes = 0, userAgent = '' } = {}) {
   // RG-260 candidate (2026-09-26) — `userAgent` reaches the DIRECT fetch only.
   // The proxy loop below never receives it: the only caller that sets it
   // (scores-refresh) also sets allowProxy:false, and a proxy is not ESPN's edge.
@@ -377,16 +389,26 @@ async function attemptFetch(url, method, { timeoutMs = FETCH_TIMEOUT_MS, maxByte
   }
 }
 
-const ESPN_TEAMS_URL = `${ESPN_API_ROOT}/football/college-football/teams?limit=1000`;
+// RG-TBD-B3 (bug batch B, 2026-09-29, Drew: "it only shows the 6 alma maters")
+// — the catalog now comes from ESPN's core v3 endpoint. The site API's
+// `/football/college-football/teams` (used until now) answers WITHOUT an
+// Access-Control-Allow-Origin header — measured 2026-09-29, while the
+// scoreboard on the same host sends `*` — so every browser and WKWebView
+// blocked the read, all three proxies below were dead (allorigins 522,
+// corsproxy.io 403 "keyless_legacy_url", codetabs 522), and the call threw on
+// every device. The core endpoint sends `Access-Control-Allow-Origin: *` and
+// returns the SAME 762 teams with identical `location`/`displayName` for every
+// id (compared id-by-id), in `items[]`, at 268 KB instead of 1.8 MB. The parse
+// below still accepts the site API's `sports[0].leagues[0].teams[].team` shape.
+const ESPN_TEAMS_URL = 'https://sports.core.api.espn.com/v3/sports/football/college-football/teams?limit=1000';
 
 /**
  * ESPN's canonical FBS/FCS team catalog for the alma-mater dropdown (item 1,
- * 2026-09-04 — "Do the dropdown"). Reuses attemptFetch() + CORS_FALLBACKS
- * (the SAME direct-then-proxy chain resilientFetch() uses for the
- * scoreboard) rather than duplicating a second retry loop — this endpoint's
- * response shape (`sports[0].leagues[0].teams[].team`) is unrelated to the
- * scoreboard's `events[]`, so it can't share resilientFetch()/finalise()
- * themselves, only the low-level fetch primitive.
+ * 2026-09-04 — "Do the dropdown"). Reuses attemptFetch(), the low-level fetch
+ * primitive; since RG-TBD-B3 (2026-09-29) it is DIRECT ONLY — no
+ * CORS_FALLBACKS proxies — and pages through `pageCount` (see the body).
+ * An array that still falls short of ESPN's declared `count` carries
+ * `incomplete: { got, expected }` so the caller can say so.
  *
  * Returns a flat array of { location, displayName } — and ONLY those two
  * fields (RG-55, 2026-09-04; it used to also emit `id`, `name` and
@@ -404,29 +426,41 @@ const ESPN_TEAMS_URL = `${ESPN_API_ROOT}/football/college-football/teams?limit=1
  * would be the natural disambiguator and is no longer returned. Re-add it
  * then, deliberately, and re-measure — see RG-55.
  *
- * Throws on total failure (every direct + proxied attempt exhausted). Does
+ * Throws when the (direct) first page cannot be read. Does
  * NOT catch/fallback itself — js/app.js's showEditPlayerModal() is
  * responsible for that (Drew's explicit requirement: "the commissioner must
  * never be stuck because ESPN is down").
  */
 export async function fetchEspnTeamsList() {
-  const direct = await attemptFetch(ESPN_TEAMS_URL, 'direct');
-  let result = direct;
+  // RG-TBD-B3 follow-up (reviewer, 2026-09-29) — DIRECT ONLY. The core v3
+  // endpoint sends `Access-Control-Allow-Origin: *`, so the anonymous
+  // third-party proxies (all dead on 2026-09-29 anyway) are no longer asked
+  // for this catalog: nothing here hands a stranger this request or trusts a
+  // stranger's response body. The scoreboard keeps its own chain
+  // (resilientFetch()) — out of scope here.
+  const result = await attemptFetch(ESPN_TEAMS_URL, 'direct');
   if (!result.ok) {
-    for (let i = 0; i < CORS_FALLBACKS.length; i++) {
-      const proxyUrl = CORS_FALLBACKS[i](ESPN_TEAMS_URL);
-      const label    = ['allorigins', 'corsproxy.io', 'codetabs'][i];
-      result = await attemptFetch(proxyUrl, label);
-      if (result.ok) break;
-      console.warn(`[DataProvider] fetchEspnTeamsList: ${label} failed:`, result.error);
-    }
+    throw new Error(result.error || 'ESPN teams endpoint unreachable.');
   }
-  if (!result.ok) {
-    throw new Error(result.error || 'ESPN teams endpoint unreachable — direct fetch and all proxies failed.');
+  // RG-TBD-B3 — core v3 lists teams flat in `items[]`; the site API nests
+  // each under `.team`. Either shape yields the same team objects.
+  const rawTeams = Array.isArray(result.data?.items)
+    ? [...result.data.items]
+    : (result.data?.sports?.[0]?.leagues?.[0]?.teams || []).map(t => t?.team);
+  // RG-TBD-B3 follow-up — TRUNCATION GUARD. v3 pages (`pageCount`,
+  // `&page=N`; verified live 2026-09-29 at limit=300: 3 pages, 300/300/162).
+  // Today it is one page (762 of limit=1000); if ESPN ever grows past the
+  // limit, the remaining pages are fetched. Whatever still falls short of the
+  // declared `count` is REPORTED on the returned array (`incomplete`), never
+  // silently truncated.
+  const expected = Number(result.data?.count) || 0;
+  const pageCount = Number(result.data?.pageCount) || 1;
+  for (let page = 2; page <= pageCount && Array.isArray(result.data?.items); page++) {
+    const next = await attemptFetch(`${ESPN_TEAMS_URL}&page=${page}`, 'direct');
+    if (!next.ok || !Array.isArray(next.data?.items)) break;
+    rawTeams.push(...next.data.items);
   }
-  const rawTeams = result.data?.sports?.[0]?.leagues?.[0]?.teams || [];
-  return rawTeams
-    .map(t => t?.team)
+  const teams = rawTeams
     .filter(Boolean)
     .map(t => ({
       // RG-55 (2026-09-04): `id`, `name` and `abbreviation` used to be emitted
@@ -442,9 +476,11 @@ export async function fetchEspnTeamsList() {
       displayName: (t.displayName || `${t.location || ''} ${t.name || ''}`.trim()).trim(),
     }))
     .filter(t => t.location);
+  if (expected > rawTeams.length) teams.incomplete = { got: rawTeams.length, expected };
+  return teams;
 }
 
-function finalise(result, espnUrl, method, almaMaters = ALMA_MATERS) {
+function finalise(result, espnUrl, method, almaMaters = getAlmaMaters()) {
   const events = result.data?.events || [];
   _state.lastFetchSuccess  = true;
   _state.lastFetchMethod   = method;
@@ -486,7 +522,7 @@ export function logoOk(u) {
  * Parse ESPN events into game objects.
  * startDate/endDate: filter games outside requested range.
  */
-function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters = ALMA_MATERS) {
+function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters = getAlmaMaters()) {
   let withValidKickoff=0, withConfirmedTime=0, withFinalScores=0;
   let withSpread=0, withoutSpread=0, withUnknownTeam=0, outsideRange=0;
   // Item 2 remediation — keyed by event.id, returned on the wrapper (never
@@ -775,6 +811,10 @@ function parseAndReport(events, espnUrl, method, startDate, endDate, almaMaters 
       name:        statusName || null,
       detail:      event.status?.type?.detail ?? null,
       shortDetail: event.status?.type?.shortDetail ?? null,
+      // RG-TBD-D1 — ESPN's numeric period (1-4; 5+ is overtime), for SCRIBE's
+      // second-half-only coverage-flip rule (js/chat-ui.js). Transient like
+      // every other field on this entry; null when ESPN omits it.
+      period:      Number.isFinite(event.status?.period) ? event.status.period : null,
       isRedZone:   typeof situation?.isRedZone === 'boolean' ? situation.isRedZone : null,
       possessionSide,
     });

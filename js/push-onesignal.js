@@ -60,6 +60,7 @@ let PROMPT_TIMEOUT_MS = 120000;
 
 let _appId = null;          // resolved once on SUCCESS only (see loadAppId)
 let _initOnce = null;       // the single, at-most-once OneSignal.init() attempt
+let _sdkReady = false;      // UN-315: an init attempt has actually ANSWERED ok on this page (see logoutOneSignalAndWait)
 let _configUnreachable = false;   // last config.json read failed outright (vs. read fine, no App ID)
 
 /** Read config.json's public oneSignalAppId. Independent of js/backend.js —
@@ -395,7 +396,9 @@ export async function ensureOneSignalInit() {
     }, SDK_READY_TIMEOUT_MS);
     t?.unref?.();   // node-only; keeps test harnesses from hanging on the timer
   });
-  return Promise.race([_initOnce, timer]);
+  const result = await Promise.race([_initOnce, timer]);
+  if (result && result.ok) _sdkReady = true;
+  return result;
 }
 
 /**
@@ -531,65 +534,142 @@ const IDENTITY_RETRY_DELAYS_MS = [400, 4000];
 /** 24h tokens, re-minted five minutes early: a token that expires mid-call is a
  *  login that fails for a reason nobody can see. */
 const IDENTITY_TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
-/** `{ subject, token, expiresAtMs }` — MEMORY ONLY. Cleared by _resetForTest(),
- *  and by closing the tab, which is the whole of its lifetime. */
+/** `{ key, token, expiresAtMs, externalId, kind }` — MEMORY ONLY. Cleared by
+ *  _resetForTest(), by every logout, and by closing the tab, which is the whole
+ *  of its lifetime. `key` names WHO it proves: `alias:<account>` or `member:<id>`. */
 let _identityToken = null;
 /** Test seam ONLY. See `_setIdentityMinterForTest()`. */
 let _identityMinter = null;
 
 /**
+ * ══ UN-315 / DI-436.1 (2026-09-29) — THE IDENTITY FOLLOWS THE ACCOUNT ═══════════
+ *
+ * One phone must hear EVERY league its owner belongs to. `league_members.id` is
+ * unique only inside a league (and IRB's are the guessable `p1`…`p6`), so binding
+ * the device to it means every league switch re-binds the phone and only one
+ * league can reach it at a time. The identity is now a PRIVATE per-user ALIAS —
+ * a random uuid the server mints (migration 0035) and hands back ONLY here, in
+ * the response of `push-identity-token` for `{ scope:'user' }`.
+ *
+ *   • The alias lives in THIS MODULE'S MEMORY and nowhere else: not `load()`/
+ *     `save()`, not localStorage, not a log line, not a status field the UI
+ *     renders. (OneSignal keeps its own copy of the binding in its own store;
+ *     that is the SDK's business and the reason logout() must be issued.)
+ *   • A league switch makes ZERO SDK calls once the device is bound to the
+ *     account's alias (`loginOneSignal()` returns early — see there). Logout
+ *     happens only on sign-out or an account change.
+ *
+ * WHAT THE SERVER MAY ANSWER, and what this does with each:
+ *   { token, externalId, mode:'dual'|'alias' }  bind the alias; remember the mode.
+ *   { mode:'legacy' }                           the operator has rolled back: assert
+ *                                               the MEMBER id with the league-scoped
+ *                                               token, exactly as builds 1-3 did.
+ *   a failure                                   `dual` (or unknown): fall back to the
+ *                                               member id — the same legacy mint,
+ *                                               lossless because the server addresses
+ *                                               both ids in dual — and retry the alias
+ *                                               on the bounded ladder. `alias`: NO
+ *                                               fallback; the existing ladder and the
+ *                                               "isn't linked… Reconnect" copy.
+ * A pre-DI-434 server (or a test fixture standing in for one) answers a token with
+ * no `externalId` and no `mode`: that IS the legacy answer, and is used as one.
+ */
+let _lastServerMode = '';
+
+/**
  * Ask the Edge Function for this device's own token. Never throws; every
  * outcome is `{ok}` because every outcome is a state the caller has to handle.
  *
+ * `scope` picks WHICH mint: 'user' (the account's alias — no league is named at
+ * all) or 'league' (the legacy member-id mint for the active league).
+ *
  * THE FUNCTION TAKES NO IDENTITY ARGUMENT, and that is the design: the id it
- * signs comes from the caller's own Supabase JWT, server-side, through
- * `my_member_id` under RLS. There is deliberately nowhere on the wire to ask
- * for somebody else's.
+ * signs comes from the caller's own Supabase JWT, server-side. There is
+ * deliberately nowhere on the wire to ask for somebody else's — the one thing
+ * the body ever says is which KIND of answer it wants.
  */
-async function _mintIdentityToken() {
+async function _mintIdentityToken(scope = 'league') {
   if (typeof _identityMinter === 'function') {
-    try { return await _identityMinter(); } catch { return { ok: false, reason: 'mint-threw' }; }
+    try { return await _identityMinter({ scope }); } catch { return { ok: false, reason: 'mint-threw' }; }
   }
   try {
     const { getSupabaseClient, getActiveLeagueId } = await import('./auth.js');
     const client = getSupabaseClient();
-    const leagueId = getActiveLeagueId();
-    if (!client || !leagueId) return { ok: false, reason: 'no-session' };
-    const { data, error } = await client.functions.invoke('push-identity-token', { body: { league_id: leagueId } });
+    if (!client) return { ok: false, reason: 'no-session' };
+    let requestBody = { scope: 'user' };
+    if (scope !== 'user') {
+      const leagueId = getActiveLeagueId();
+      if (!leagueId) return { ok: false, reason: 'no-session' };
+      requestBody = { league_id: leagueId };
+    }
+    const { data, error } = await client.functions.invoke('push-identity-token', { body: requestBody });
     if (error) return { ok: false, reason: 'unreachable' };
+    const mode = data && typeof data.mode === 'string' ? data.mode : undefined;
     const token = data && typeof data.token === 'string' ? data.token : '';
-    if (!token) return { ok: false, reason: String((data && data.skipped) || 'no-token') };
+    // `{ mode:'legacy' }` carries no token by design: it means "assert the member id".
+    if (!token) return { ok: mode === 'legacy', reason: String((data && data.skipped) || 'no-token'), mode };
     const expiresAtMs = Date.parse((data && data.expiresAt) || '');
-    return { ok: true, token, expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : 0 };
+    const alias = data && typeof data.externalId === 'string' ? data.externalId : '';
+    return { ok: true, token, expiresAtMs: Number.isFinite(expiresAtMs) ? expiresAtMs : 0, externalId: alias, mode };
   } catch {
     return { ok: false, reason: 'unreachable' };
   }
 }
 
-/**
- * The cached token for `target`, minting one when there is nothing usable.
- *
- * THE CACHE IS KEYED ON THE SUBJECT. A handover (logout, then a different
- * player's login on the same handset) must never reuse the previous occupant's
- * token — that would be the impersonation this feature exists to stop, arriving
- * from our own cache instead of a console.
- *
- * AN UNPARSEABLE `expiresAt` IS NOT CACHED AT ALL. A token whose expiry we
- * cannot read is one we cannot refresh on time, and minting again is one cheap
- * call (CONVENTIONS #10: an absent field is not a value to invent).
- */
-async function _identityTokenFor(target) {
-  const cached = _identityToken;
-  if (cached && cached.subject === target
-      && cached.expiresAtMs - Date.now() > IDENTITY_TOKEN_REFRESH_MARGIN_MS) {
-    return { ok: true, token: cached.token };
-  }
-  const minted = await _mintIdentityToken();
-  if (!minted.ok) return minted;
-  _identityToken = minted.expiresAtMs
-    ? { subject: target, token: minted.token, expiresAtMs: minted.expiresAtMs }
+/** Cache a proof — but only one whose expiry we can READ (an unparseable
+ *  `expiresAt` is not cached at all: minting again is one cheap call,
+ *  CONVENTIONS #10) and, for an alias, only when we know WHOSE it is. */
+function _rememberIdentity(key, minted, kind, externalId) {
+  _identityToken = minted.expiresAtMs && key
+    ? { key, token: minted.token, expiresAtMs: minted.expiresAtMs, externalId, kind }
     : null;
-  return { ok: true, token: minted.token };
+}
+
+/**
+ * What to assert for `target` (the app's member id) on behalf of `accountId`.
+ *
+ * THE CACHE IS KEYED ON WHO IT PROVES — `alias:<account>` or `member:<id>` — so a
+ * handover (logout, then a different player's login on the same handset) can never
+ * present the previous occupant's proof: that would be the impersonation this
+ * feature exists to stop, arriving from our own cache instead of a console.
+ *
+ * @returns {Promise<{ok:true, kind:'alias'|'member', externalId:string, token:string, upgrade?:boolean}|{ok:false, reason?:string}>}
+ */
+async function _identityFor(target, accountId) {
+  const aliasKey = accountId ? `alias:${accountId}` : '';
+  const memberKey = `member:${target}`;
+  const cached = _identityToken;
+  if (cached && cached.expiresAtMs - Date.now() > IDENTITY_TOKEN_REFRESH_MARGIN_MS
+      && (cached.key === memberKey || (aliasKey && cached.key === aliasKey))) {
+    return { ok: true, kind: cached.kind, externalId: cached.externalId, token: cached.token };
+  }
+  // 1. THE ACCOUNT'S ALIAS.
+  const user = await _mintIdentityToken('user');
+  const userMode = user && typeof user.mode === 'string' ? user.mode : '';
+  if (user && user.ok && user.token && typeof user.externalId === 'string' && user.externalId && userMode !== 'legacy') {
+    _lastServerMode = userMode === 'alias' ? 'alias' : 'dual';
+    _rememberIdentity(aliasKey, user, 'alias', user.externalId);
+    return { ok: true, kind: 'alias', externalId: user.externalId, token: user.token };
+  }
+  // 2. THE MEMBER ID (legacy). Reached three ways, and only these three.
+  if (user && user.ok && user.token && !user.externalId && !userMode) {
+    // A pre-DI-434 answer: a token, no alias, no mode. It IS the legacy answer — use it, do not mint twice.
+    _rememberIdentity(memberKey, user, 'member', target);
+    return { ok: true, kind: 'member', externalId: target, token: user.token };
+  }
+  const serverSaidLegacy = !!(user && user.ok && userMode === 'legacy');
+  if (serverSaidLegacy) _lastServerMode = 'legacy';
+  // Alias mode has stopped addressing member ids: asserting one would bind the device to an id that
+  // receives nothing while the status line claimed a link. No fallback; the caller's ladder retries.
+  if (!serverSaidLegacy && _lastServerMode === 'alias') return { ok: false, reason: (user && user.reason) || 'unreachable' };
+  const legacy = await _mintIdentityToken('league');
+  if (!legacy || !legacy.ok || !legacy.token) return { ok: false, reason: (legacy && legacy.reason) || 'no-token' };
+  // Cached ONLY when the operator said legacy. A member proof obtained because the alias mint FAILED is a
+  // stopgap: caching it would let the bounded retry below hit the cache and never try the alias again.
+  if (serverSaidLegacy) _rememberIdentity(memberKey, legacy, 'member', target);
+  // `upgrade`: we fell back because the ALIAS mint FAILED (not because the operator said legacy), so
+  // the caller arms one more attempt at the alias on the same bounded ladder.
+  return { ok: true, kind: 'member', externalId: target, token: legacy.token, upgrade: !serverSaidLegacy };
 }
 /** Reasons worth a retry: the SDK/its config might still turn up. Everything
  *  else ('unsupported-browser', 'not-installed-ios', 'not-configured',
@@ -623,6 +703,18 @@ const _clearTimeout = _timerHost.clearTimeout.bind(_timerHost);
  *  FALLBACK only — the SDK's own `User.externalId` outranks it when present — so
  *  the player-facing status line cannot claim a linkage the SDK never made. */
 let _boundExternalId = '';
+/** UN-315 / DI-436.1 — WHAT KIND of id the SDK is bound to: 'alias' (the account's private alias),
+ *  'member' (a league member id — legacy mode, or the dual fallback) or '' (unbound). Proven by a
+ *  login() that returned, like `_boundExternalId`; MEMORY ONLY. */
+let _boundKind = '';
+/** …and, for an 'alias' binding, the ACCOUNT it belongs to (app.js passes `getAccountUserId()`).
+ *  A league switch keeps the account, so it keeps the binding; a different account does not. */
+let _boundAccountId = '';
+/** The account of the identity the app most recently ASKED for ('' = signed out / unknown). */
+let _desiredAccountId = '';
+/** The account whose login is being worked on right now (asked, not yet settled) — so a league
+ *  switch landing while the alias is still being minted does not queue a SECOND login. */
+let _inflightAccountId = '';
 /** Bumped by every login/logout. A retry whose generation is stale is dropped. */
 let _identityGen = 0;
 /** The identity the app most recently ASKED for ('' = signed out). Security F-2:
@@ -670,14 +762,20 @@ function _callSdk(fn, done) {
  * Assert `target` ('' = signed out) on the SDK, once, and arm a bounded retry if
  * it could not be done. THE ONLY caller of OneSignal.login()/logout().
  */
-async function _assertIdentity(target, gen, attempt = 0) {
+async function _assertIdentity(target, gen, attempt = 0, onSettled = null) {
+  // `onSettled(ok)` (optional) reports when THIS call has finished — used only by
+  // logoutOneSignalAndWait(), so sign-out can wait, bounded, for the unlink to land.
+  // It is called on EVERY way out, including the early ones (nothing to unlink).
+  const settled = (ok) => { try { if (typeof onSettled === 'function') onSettled(ok); } catch { /* a reporter must never break the queue */ } };
   // A retry for an identity this device has already left is dropped. The FIRST
   // attempt is never dropped — it is the app's own call, in the app's own order.
-  if (attempt > 0 && gen !== _identityGen) return;
+  if (attempt > 0 && gen !== _identityGen) { settled(false); return; }
   const init = await ensureOneSignalInit();
-  if (attempt > 0 && gen !== _identityGen) return;
+  if (attempt > 0 && gen !== _identityGen) { settled(false); return; }
   if (!init.ok) {
     if (RETRYABLE_INIT_REASONS.has(init.reason)) _scheduleIdentityRetry(target, gen, attempt);
+    else if (target) _inflightAccountId = '';
+    settled(false);
     return;
   }
   // ── DI-254 — THE TOKEN, BEFORE THE LOGIN, AND NO LOGIN WITHOUT ONE ────────
@@ -693,52 +791,73 @@ async function _assertIdentity(target, gen, attempt = 0) {
   // prove — and a sign-out that could be blocked by a network failure would
   // leave a handed-off phone on the previous player's id, which is the exact
   // thing correction #2 exists to prevent.
-  let identityToken = '';
+  //
+  // UN-315 / DI-436.1 — WHAT IS ASSERTED IS DECIDED BY `_identityFor()`: the account's private
+  // alias when the server hands one out, the member id when it says `legacy` or (in dual /
+  // unknown) when the alias mint fails. The account this login is FOR was captured when the
+  // app asked (`_desiredAccountId`), and is re-read here only for the cache key.
+  let minted = null;
+  const accountAtRequest = _desiredAccountId;
   if (target) {
-    const minted = await _identityTokenFor(String(target));
+    minted = await _identityFor(String(target), accountAtRequest);
     // The same staleness re-check the awaits above make: a retry for an identity
     // this device has already left must not resume after its own await.
-    if (attempt > 0 && gen !== _identityGen) return;
+    if (attempt > 0 && gen !== _identityGen) { settled(false); return; }
     if (!minted.ok) {
       _scheduleIdentityRetry(target, gen, attempt);
+      settled(false);
       return;
     }
-    identityToken = minted.token;
   }
   _callSdk(
-    target ? (OneSignal => OneSignal.login(String(target), identityToken)) : (OneSignal => OneSignal.logout()),
+    target ? (OneSignal => OneSignal.login(minted.externalId, minted.token)) : (OneSignal => OneSignal.logout()),
     (ok) => {
-      // ══ SECURITY F-2 (RG-192 gate, 2026-09-20) — A SLOW CALL MUST NOT WIN ══
-      //
-      // _callSdk deliberately does not hold the chain (see its header), which
-      // buys ordering of the PUSHES but not of the COMPLETIONS: a login('A')
-      // that the SDK takes seconds to resolve can land after a logout() or a
-      // login('B') has already been pushed and run. The old `return` here was
-      // right about not recording a stale binding — and wrong about the device,
-      // which is now sitting on A with nobody noticing.
-      //
-      // So a stale completion does not merely decline to record; it RE-ASSERTS
-      // whatever the app currently wants. Budgeted rather than unconditional,
-      // because two calls that keep landing out of order must converge, not
-      // ping-pong.
-      // Landed out of order ONLY if something newer has already completed. A
-      // completion that is merely superseded by a call still in flight needs no
-      // help: that call was pushed after this one and will be invoked after it.
-      const landedOutOfOrder = gen < _lastCompletedGen;
-      if (gen > _lastCompletedGen) _lastCompletedGen = gen;
-      if (gen !== _identityGen) {
-        if (!landedOutOfOrder) return;
-        if (_staleReassertBudget <= 0) {
-          console.warn('[push-onesignal] a superseded identity call landed late and the re-assert budget is spent; this device may be bound to the wrong id until it is reloaded');
+      try {
+        // ══ SECURITY F-2 (RG-192 gate, 2026-09-20) — A SLOW CALL MUST NOT WIN ══
+        //
+        // _callSdk deliberately does not hold the chain (see its header), which
+        // buys ordering of the PUSHES but not of the COMPLETIONS: a login('A')
+        // that the SDK takes seconds to resolve can land after a logout() or a
+        // login('B') has already been pushed and run. The old `return` here was
+        // right about not recording a stale binding — and wrong about the device,
+        // which is now sitting on A with nobody noticing.
+        //
+        // So a stale completion does not merely decline to record; it RE-ASSERTS
+        // whatever the app currently wants. Budgeted rather than unconditional,
+        // because two calls that keep landing out of order must converge, not
+        // ping-pong.
+        // Landed out of order ONLY if something newer has already completed. A
+        // completion that is merely superseded by a call still in flight needs no
+        // help: that call was pushed after this one and will be invoked after it.
+        const landedOutOfOrder = gen < _lastCompletedGen;
+        if (gen > _lastCompletedGen) _lastCompletedGen = gen;
+        if (gen !== _identityGen) {
+          if (!landedOutOfOrder) return;
+          if (_staleReassertBudget <= 0) {
+            console.warn('[push-onesignal] a superseded identity call landed late and the re-assert budget is spent; this device may be bound to the wrong id until it is reloaded');
+            return;
+          }
+          _staleReassertBudget--;
+          const want = _desiredTarget;
+          _queueOneSignalCall(() => _assertIdentity(want, _identityGen));
           return;
         }
-        _staleReassertBudget--;
-        const want = _desiredTarget;
-        _queueOneSignalCall(() => _assertIdentity(want, _identityGen));
-        return;
+        if (ok) {
+          _boundExternalId = target ? String(minted.externalId) : '';
+          // What KIND of id the SDK now holds, and for WHICH account — the two facts
+          // `loginOneSignal()` reads to make a league switch a no-op.
+          _boundKind = target ? minted.kind : '';
+          _boundAccountId = target && minted.kind === 'alias' ? accountAtRequest : '';
+          if (target) _inflightAccountId = '';
+          // We fell back to the member id because the alias mint FAILED: one more try at the
+          // alias, on the SAME bounded ladder (never a new timer, never unbounded).
+          if (target && minted.upgrade) _scheduleIdentityRetry(target, gen, attempt);
+          return;
+        }
+        _scheduleIdentityRetry(target, gen, attempt);
+      } finally {
+        settled(ok);
       }
-      if (ok) { _boundExternalId = target ? String(target) : ''; return; }
-      _scheduleIdentityRetry(target, gen, attempt);
     },
   );
 }
@@ -748,6 +867,12 @@ function _scheduleIdentityRetry(target, gen, attempt) {
   if (delay === undefined) {
     console.warn('[push-onesignal] could not attach the push identity after', IDENTITY_RETRY_DELAYS_MS.length + 1,
       'attempts — this device will not receive push until it is reloaded or Turn On is tapped');
+    // UN-315 (security finding 2) — THE LADDER IS SPENT, SO THE "IN FLIGHT" CLAIM ENDS. `_inflightAccountId` is what
+    // lets a league switch skip a second login while the first is still being worked on; left set after the last
+    // rung, it would make every later loginOneSignal(p, sameAccount) return early FOREVER — the device silently
+    // stuck unlinked, no retry, no mint, until a reload. Only the CURRENT attempt may clear it: a newer login
+    // (a higher generation) owns the claim now and must keep it.
+    if (gen === _identityGen) _inflightAccountId = '';
     return;
   }
   const t = _setTimeout(() => {
@@ -757,16 +882,36 @@ function _scheduleIdentityRetry(target, gen, attempt) {
   t?.unref?.();   // node-only; never holds a test harness (or Node) open
 }
 
-/** Associate the current device with `playerId` (correction #2 pairs this with
- *  logoutOneSignal() below). Idempotent: safe — and expected — to call on every
- *  boot and every identity change. No-ops when not configured.
+/** Associate the current device with the signed-in account (correction #2 pairs
+ *  this with logoutOneSignal() below). Idempotent: safe — and expected — to call
+ *  on every boot and every identity change. No-ops when not configured.
  *
  *  ORDER AGAINST logoutOneSignal() IS STRUCTURAL, NOT LUCK: both go through
  *  `_queueOneSignalCall()` above, so the app's call order is the queue order
  *  regardless of where loadAppId()'s memo happens to be. Security F-2 (seventh
  *  gate) made them share one config read; security F-3 (eighth) made the sharing
- *  unnecessary for correctness. */
-export async function loginOneSignal(playerId) {
+ *  unnecessary for correctness.
+ *
+ *  UN-315 / DI-436.1 — `playerId` is the member id for the ACTIVE league (the legacy
+ *  identity, and the fallback); `accountId` is the signed-in ACCOUNT's id (app.js passes
+ *  `getAccountUserId()`), which is what the device is really bound to now. The device
+ *  follows the ACCOUNT, so:
+ *
+ *    A LEAGUE SWITCH IS A NO-OP HERE. When the SDK is already bound to this account's alias
+ *    (or a login for this account is already in flight), this returns without a single SDK
+ *    call and without a mint — the member id changes on a switch, the account does not.
+ *    Logout happens only on sign-out or an account change (a different `accountId` is NOT an
+ *    early return: it re-asserts, replacing the previous occupant's binding).
+ *
+ *    `accountId` absent (PIN mode, a fixture, an explicit repair that does not know it) never
+ *    early-returns — it always asserts, exactly as before this DI.
+ *
+ *    `force` bypasses the early return for the two explicit REPAIR paths (Turn On / Reconnect
+ *    and the boot-time auto-registration): they re-attach the identity AFTER creating a
+ *    subscription (RG-192's whole point) and must not be skipped because a binding already
+ *    exists.
+ */
+export async function loginOneSignal(playerId, accountId = '', { force = false } = {}) {
   // DI-210e (PASS 1b) — guarded at THIS entry, not at app.js's call site, so
   // the .then() chain after ensureOneSignalInit() in app.js needs no edit:
   // ensureOneSignalInit() already resolves inert on native (DI-210e, pass
@@ -774,10 +919,36 @@ export async function loginOneSignal(playerId) {
   // inert shape as the "no App ID" early return below (undefined).
   if (isNativeShell()) return;
   if (!playerId) return;
+  const account = accountId ? String(accountId) : '';
+  if (!force && account
+      && ((_boundKind === 'alias' && _boundAccountId === account) || _inflightAccountId === account)) {
+    return;
+  }
   const gen = ++_identityGen;
   _desiredTarget = String(playerId);
+  _desiredAccountId = account;
+  _inflightAccountId = account;
   _staleReassertBudget = MAX_STALE_REASSERTS;
   return _queueOneSignalCall(() => _assertIdentity(String(playerId), gen));
+}
+
+/** Everything a logout resets, in one place so the two exported logouts cannot disagree. */
+function _beginLogout() {
+  const gen = ++_identityGen;
+  _desiredTarget = '';
+  _desiredAccountId = '';
+  _inflightAccountId = '';
+  _staleReassertBudget = MAX_STALE_REASSERTS;
+  // Dropped IMMEDIATELY, not on the SDK's answer: from this instant the app's
+  // own idea of "who is this device" is nobody, and the status line must say so
+  // even if the SDK call is still in flight or fails.
+  _boundExternalId = '';
+  _boundKind = '';
+  _boundAccountId = '';
+  // A credential must not outlive the sign-in it proved: the cache is keyed on WHO it proves, so
+  // it could not be replayed for someone else, but nothing needs it after this either.
+  _identityToken = null;
+  return gen;
 }
 
 /** correction #2 — MUST be called on sign-out and on player switch, or a
@@ -789,14 +960,46 @@ export async function logoutOneSignal() {
   // (auth.js is EXCLUSIVE to the Supabase thread right now). Same inert
   // shape as loginOneSignal()'s native guard, above.
   if (isNativeShell()) return;
-  const gen = ++_identityGen;
-  _desiredTarget = '';
-  _staleReassertBudget = MAX_STALE_REASSERTS;
-  // Dropped IMMEDIATELY, not on the SDK's answer: from this instant the app's
-  // own idea of "who is this device" is nobody, and the status line must say so
-  // even if the SDK call is still in flight or fails.
-  _boundExternalId = '';
+  const gen = _beginLogout();
   return _queueOneSignalCall(() => _assertIdentity('', gen));
+}
+
+/**
+ * UN-315 / DI-436.1 — THE SIGN-OUT VARIANT: the same logout, but it RESOLVES WHEN THE UNLINK HAS
+ * LANDED (or `timeoutMs` passes), so `signOut()` can await it BEFORE the session is cleared.
+ *
+ * WHY THE ORDER. An account-wide alias is bound to the DEVICE; the sign-out tap is the one moment
+ * that says "this phone is no longer mine". If the session were cleared first and the unlink left to
+ * the auth-state event that follows, a closed tab or a dropped connection would leave the handed-off
+ * phone bound to an alias that receives EVERY league's pushes. So the unlink goes first.
+ *
+ * BOUNDED AND NEVER BLOCKING: it never rejects, it gives up after `timeoutMs` (a failure — an SDK that
+ * never loaded, no App ID, a network stall — must not stop anyone signing out), and it returns at
+ * once when there is nothing to unlink (push not configured / not loaded). The chokepoint's own
+ * `logoutOneSignal()` (session-change event) and DI-180q's device-local clear both remain the backstop.
+ * Resolves `true` when the SDK confirmed the logout, `false` otherwise.
+ */
+export async function logoutOneSignalAndWait(timeoutMs = 2000) {
+  if (isNativeShell()) return true;
+  const gen = _beginLogout();
+  // The SDK is not READY on this page (push not configured, an unsupported browser, an SDK that is blocked or
+  // still loading, a sign-out in the first moments of a boot): there is nothing this page can unlink NOW, and
+  // waiting would mean making sign-out sit out a config read, a script load or the whole bound for a call that
+  // may never come. The unlink is still QUEUED — it runs the moment the SDK is ready, exactly as the chokepoint's
+  // own `logoutOneSignal()` always has — it is just not awaited. Costs zero ticks, so a device without working
+  // push is never slowed by any of this; only a device whose SDK IS up (where the call takes milliseconds) waits.
+  if (!_sdkReady) {
+    _queueOneSignalCall(() => _assertIdentity('', gen));
+    return false;
+  }
+  let finish;
+  const done = new Promise((resolve) => { finish = resolve; });
+  _queueOneSignalCall(() => _assertIdentity('', gen, 0, finish));
+  const timer = new Promise((resolve) => {
+    const t = _setTimeout(() => resolve(false), timeoutMs);
+    t?.unref?.();   // node-only; never holds a test harness open
+  });
+  try { return await Promise.race([done, timer]); } catch { return false; }
 }
 
 /** The external id this device is currently bound to, '' when unbound. Proven
@@ -1243,7 +1446,7 @@ export async function requestPushPermission() {
  *     the case where the room is the only surface the notice has, so it is the
  *     one that most needs to be current.
  */
-export function wireForegroundSuppression(destinationForEvent, onForegroundPush) {
+export function wireForegroundSuppression(destinationForEvent, onForegroundPush, activeLeagueId = null) {
   // DI-210e (PASS 1b) — guarded at entry so app.js's boot call site needs no
   // edit. Native never loads the SDK (loadSdkScript()'s own guard above), so
   // window.OneSignalDeferred would just queue a callback the SDK never
@@ -1256,6 +1459,16 @@ export function wireForegroundSuppression(destinationForEvent, onForegroundPush)
       OneSignal.Notifications.addEventListener('foregroundWillDisplay', (e) => {
         try {
           const event = e?.notification?.additionalData?.event;
+          // ── UN-315 / DI-436.3 — ANOTHER LEAGUE'S PUSH IS NEVER SUPPRESSED, and never wakes the
+          // ACTIVE league's chat. One device now hears every league; `data.league_id` names the one
+          // this push came from (the server puts it there, from the webhook row). When it names a
+          // league other than the one on screen, the banner MUST show — the player is looking at a
+          // different league's tab, and "the destination is the tab I'm on" is not true of it — and
+          // the chat fetch (`wakeChat()` reads the ACTIVE league's room) would be the wrong room.
+          // A payload with NO league_id (an older push, legacy mode) behaves exactly as before.
+          const pushLeague = e?.notification?.additionalData?.league_id;
+          const activeLeague = typeof activeLeagueId === 'function' ? activeLeagueId() : '';
+          if (typeof pushLeague === 'string' && pushLeague && activeLeague && pushLeague !== activeLeague) return;
           // BUG-12 — fetch first, unconditionally. Its own try/catch: a failed
           // wake must never cost the player the banner.
           if (typeof onForegroundPush === 'function') {
@@ -1327,6 +1540,11 @@ export function wireNotificationClicks(onClick) {
  */
 export function _setIdentityMinterForTest(fn) { _identityMinter = typeof fn === 'function' ? fn : null; }
 
+/** Test-only — UN-315 / DI-436.1: whether the SDK counts as READY on this page (see logoutOneSignalAndWait).
+ *  authtest's resetAll() drops it so a scenario on a "fresh page" never inherits an earlier scenario's ready SDK
+ *  without touching the rest of this module's per-page state. */
+export function _setSdkReadyForTest(v) { _sdkReady = !!v; }
+
 /** Test-only reset — mirrors the _resetForTest() convention used elsewhere
  *  (chat.js, backend.js) so notifytest.mjs can exercise loadAppId() fresh. */
 export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
@@ -1352,6 +1570,11 @@ export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
   // scenario would let the next one report a linkage it never made, which is the
   // exact class of false-positive this whole section exists to remove.
   _boundExternalId = '';
+  _boundKind = '';
+  _boundAccountId = '';
+  _desiredAccountId = '';
+  _inflightAccountId = '';
+  _lastServerMode = '';
   _desiredTarget = '';
   // RG-193 — the one-recycle-per-page budget is per-PAGE state too. A scenario
   // inheriting the previous one's spent latch would silently skip the repair.
@@ -1361,6 +1584,7 @@ export function _resetForTest({ sdkReadyMs, promptMs } = {}) {
   _identityGen++;                 // voids any retry still armed from the last scenario
   _scriptPromise = null;
   _initOnce = null;
+  _sdkReady = false;
   _configUnreachable = false;
   // Optional: shrink the two no-dead-tap bounds so notifytest.mjs can prove
   // "every tap gets an answer" in milliseconds. Omit them and the production

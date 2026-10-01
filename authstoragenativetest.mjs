@@ -558,7 +558,11 @@ console.log('\n[10] K2 — the reader set for AUTH_STORAGE_KEY/cfbp_supabase_ses
 {
   const jsDir = path.join(__dirname, 'js');
   const { readdir } = await import('node:fs/promises');
-  const entries = await readdir(jsDir);
+  // Multi-Sport Phase 0/1a: js/sports/*.js is shipped code too — scan it (one level down).
+  const entries = [
+    ...(await readdir(jsDir)),
+    ...(await readdir(path.join(jsDir, 'sports'))).map((n) => 'sports/' + n),
+  ];
   const readers = [];
   for (const name of entries) {
     if (!name.endsWith('.js')) continue;

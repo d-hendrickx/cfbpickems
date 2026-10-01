@@ -470,6 +470,7 @@ const ID_FIELD = {
   cfbp_comments: 'commentId',
   cfbp_notifications: 'id',
   cfbp_game_requests: 'id',
+  cfbp_competitions: 'id',
 };
 
 /** Columns the PROJECTION stamps with "now" every time it runs
@@ -522,6 +523,11 @@ const ROUTES = {
   cfbp_scribe_canon: { table: 'scribe_canon', comm: 'rows', player: 'refuse', noDelete: true, patchCols: ['approval_status'] },
   cfbp_scribe_reports: { table: 'scribe_reports', comm: 'refuse', player: 'refuse' },
   cfbp_game_requests: { table: 'game_requests', comm: 'rows', player: 'rows', noDelete: true, insertOnly: true, memberIdCol: 'member_id' },
+  // Multi-Sport DI-220 (AD-74, migration 0033). Commissioner-written league structure; a player device
+  // may never write it (`competitions_insert/_update` are commissioner-only) and the route says so
+  // before the network does. `noDelete`: competitions are archived, never deleted — there is no DELETE
+  // grant — so a row that vanishes from the array is never sent as a delete.
+  cfbp_competitions: { table: 'competitions', comm: 'rows', player: 'refuse', noDelete: true },
 };
 
 /**
@@ -565,6 +571,10 @@ const READ_TABLES = [
   'league_kv', 'league_members', 'weeks', 'games', 'picks', 'results', 'obligations',
   'tiebreaker_guesses', 'extra_point_guesses', 'reactions', 'feedback', 'comments',
   'notifications', 'scribe_learnings', 'scribe_canon', 'scribe_reports', 'game_requests',
+  // Multi-Sport DI-220 (migration 0033) — LAST on purpose. A league the 0033 backfill has not reached
+  // (or a project that has not applied it) is a hydrate failure by design (AD-06 loud-fail): apply 0033
+  // BEFORE deploying a client that names this table.
+  'competitions',
 ];
 
 /**
@@ -580,7 +590,10 @@ const READ_TABLES = [
  */
 const SELECT_COLS = Object.freeze({
   league_members: 'league_id,id,user_id,role,legacy_player_id,display_name,initials,'
-    + 'alma_mater,active,notify_prefs,preferences,linked_at,extra,created_at,updated_at',
+    + 'alma_mater,active,notify_prefs,preferences,linked_at,extra,created_at,updated_at,'
+    // Multi-Sport DI-403 (migration 0033's additive column grant). Named here, not `*`: `*` is refused
+    // on this table for lack of column privilege (see above).
+    + 'tournament_only_guest',
 });
 
 /**
@@ -599,23 +612,27 @@ const SELECT_COLS = Object.freeze({
  * (the server keeps its value — absent means "no opinion", never "erase"); in an INSERT the key is
  * omitted so the column DEFAULT applies. A genuinely nullable column still takes a null (clearing a
  * tiebreaker value, a kickoff, a claim) — this list is the schema's, not a blanket null filter.
- * adaptertest [A-NN] derives the same map from 0001_schema.sql and fails on drift.
+ * adaptertest [A-NN] derives the same map from EVERY migration (0024 added scribe_*.origin and
+ * scribe_canon.kind) and fails on drift. The INSERT half depends on `_execute()` asking for
+ * `missing=default` — without it a multi-row batch turns an omitted key back into NULL
+ * (RG-TBD-N14, adaptertest [A-NN2]).
  */
 const NOT_NULL_COLS = Object.freeze({
   comments: Object.freeze(['league_id', 'id', 'author_id', 'author_kind', 'body', 'created_at', 'extra']),
+  competitions: Object.freeze(['league_id', 'id', 'sport', 'kind', 'enrollment', 'is_default', 'settings', 'created_at', 'updated_at']),
   extra_point_guesses: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'guess', 'updated_at']),
   feedback: Object.freeze(['league_id', 'id', 'name', 'kind', 'body', 'submitted_at', 'app_version', 'site_url', 'status', 'excluded_from_export', 'extra']),
   game_requests: Object.freeze(['league_id', 'id', 'kind', 'member_id', 'payload', 'created_at']),
   games: Object.freeze(['league_id', 'id', 'week_id', 'data_quality', 'data_source', 'home_team', 'away_team', 'home_mascot', 'away_mascot', 'home_conference', 'away_conference', 'kickoff_confirmed', 'kickoff_date_only', 'time_window', 'spread_source', 'status', 'is_alma_mater_game', 'national_tv', 'marquee_event', 'neutral_site', 'multiplier', 'is_manual', 'league_label', 'extra', 'created_at', 'updated_at']),
   league_kv: Object.freeze(['league_id', 'key', 'value', 'updated_at']),
-  league_members: Object.freeze(['league_id', 'id', 'role', 'display_name', 'initials', 'alma_mater', 'active', 'phone', 'phone_verified', 'notify_prefs', 'preferences', 'extra', 'created_at', 'updated_at']),
+  league_members: Object.freeze(['league_id', 'id', 'role', 'display_name', 'initials', 'alma_mater', 'active', 'phone', 'phone_verified', 'notify_prefs', 'preferences', 'extra', 'created_at', 'updated_at', 'tournament_only_guest']),
   notifications: Object.freeze(['league_id', 'id', 'member_id', 'origin', 'event', 'title', 'body', 'created_at', 'dedup_key', 'extra']),
   obligations: Object.freeze(['league_id', 'id', 'type', 'payer_member_id', 'recipient_member_id', 'amount_or_prize', 'status', 'created_at', 'needs_review', 'voided', 'merged_from', 'extra']),
   picks: Object.freeze(['league_id', 'id', 'week_id', 'game_id', 'member_id', 'selected_team', 'selected_at', 'updated_at', 'locked', 'result', 'extra']),
   reactions: Object.freeze(['league_id', 'id', 'week_id', 'game_id', 'member_id', 'emoji', 'created_at']),
   results: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'display_name', 'correct_picks', 'incorrect_picks', 'correct_count', 'incorrect_count', 'no_decisions', 'pending', 'rank', 'is_winner', 'is_loser', 'won_by_tiebreaker', 'extra']),
-  scribe_canon: Object.freeze(['league_id', 'id', 'ord', 'approval_status', 'payload', 'created_at']),
-  scribe_learnings: Object.freeze(['league_id', 'id', 'ord', 'kind', 'status', 'payload', 'created_at']),
+  scribe_canon: Object.freeze(['league_id', 'id', 'ord', 'approval_status', 'payload', 'created_at', 'origin', 'kind']),
+  scribe_learnings: Object.freeze(['league_id', 'id', 'ord', 'kind', 'status', 'payload', 'created_at', 'origin']),
   scribe_reports: Object.freeze(['league_id', 'id', 'ord', 'payload', 'created_at']),
   tiebreaker_guesses: Object.freeze(['league_id', 'id', 'week_id', 'member_id', 'guess', 'updated_at']),
   weeks: Object.freeze(['league_id', 'id', 'sport', 'season', 'week_number', 'label', 'round_label', 'espn_week_number', 'is_group_tiebreaker', 'start_date', 'end_date', 'status', 'data_source_mode', 'auto_lock_offset_minutes', 'auto_live_enabled', 'auto_finalize_enabled', 'pending_finalization', 'show_in_history', 'blurb', 'recap', 'tiebreaker_question', 'tiebreaker_type', 'tiebreaker_calculation_mode', 'tiebreaker_finalized', 'extra_point_enabled', 'extra', 'created_at', 'updated_at']),
@@ -2785,7 +2802,14 @@ async function _executeOp(client, op, leagueId) {
     // `_select()` already reads with the same list (SELECT_COLS), so one constant serves both.
     const returning = SELECT_COLS[op.table] || '*';
     if (op.op === 'insert') {
-      res = await client.from(op.table).insert(op.rows).select(returning);
+      // RG-TBD-N14 (live 2026-09-29) — `defaultToNull: false` IS WHAT MAKES "OMIT THE KEY" MEAN
+      // "USE THE DEFAULT" FOR A BATCH. supabase-js names the UNION of every row's keys in `?columns=`,
+      // and PostgREST fills a named column that one object omits with NULL unless the request says
+      // `Prefer: missing=default`. So the planner's NOT NULL omission (NOT_NULL_COLS) held for a
+      // one-row insert and failed for a mixed batch: one game with an ESPN line (spread_source
+      // 'espn') and one without (null, omitted) in one save sent NULL for the second → 23502, red
+      // banner, cfbp_games latched. A key a row DOES carry, null included, is sent exactly as before.
+      res = await client.from(op.table).insert(op.rows, { defaultToNull: false }).select(returning);
     } else if (op.op === 'patch') {
       res = await client.from(op.table).update(op.changed).eq('league_id', leagueId).eq('id', op.rowId).select(returning);
     } else {

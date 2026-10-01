@@ -206,6 +206,19 @@ const KEYS = {
   // behaviour. The value is spliced into a CSS class name, so callers validate
   // it against the seven real theme keys rather than trusting the device.
   THEME_HINT: 'cfbp_theme_hint',
+  // Multi-Sport Phase 1a / DI-220 (AD-74, 2026-09-29) — the league's COMPETITIONS: one row per
+  // (sport, season-or-tournament) the league plays, under the league. SHARED league data (a
+  // commissioner's Games/Week surfaces and every player's chat pills read it), so it is deliberately
+  // NOT in DEVICE_LOCAL_KEYS. An array of legacy objects, projected to the `competitions` table by
+  // supabase-projection.js (COMPETITION_COLS); commissioner-writable, refused for a player.
+  //
+  // NOT SEEDED, by construction: absent reads as [] through getCompetitions() and
+  // ensureSeedData() never names this key, so there is no RG-12 seeding surface — a hydrate that
+  // delivered nothing can never be mistaken for "seed a default competition into a real league".
+  // An empty list is a VALID state (a league the 0033 backfill has not reached, local mode, demo):
+  // js/competition.js answers it with a VIRTUAL, never-persisted default competition, so no read
+  // path ever writes one.
+  COMPETITIONS: 'cfbp_competitions',
 };
 
 // Keys that ALWAYS stay device-local even when a shared backend is active.
@@ -273,11 +286,13 @@ const KEYS = {
 //      'cfbp_device_data_owner'      js/auth.js DEVICE_DATA_OWNER_KEY (DI-180q) — the account id + active league id this handset's local data belongs to; device-local (a fact about this handset), never synced, opaque ids only.
 //      'cfbp_supabase_mirror'        js/supabase-backend.js SNAPSHOT_KEY (Phase III Step 4, DI §5.3) — the last-good league snapshot the adapter paints from while a hydrate is in flight (ACTIVE-STALE) or while offline (OFFLINE-READONLY). Device-local because it IS the device's copy; written only from server truth, never while dirty, and it replaces 'cfbp_sheet_mirror' in dataMode:'supabase' (which the first Supabase boot then wipes, §6.1). Under the `cfbp_` prefix on purpose, so auth.js's F-1 handover sweep clears it with no new list entry, and read back through the adapter's exported hasDeviceSnapshot() rather than a second key literal.
 //      'cfbp_recovery_pending'       js/auth.js RECOVERY_PENDING_KEY (DI-334 Finding 1 / Security F-3) — the device-local "a password recovery is mid-flight" marker that survives a reload; written/read ONLY by auth.js (guarded write-then-read-back), never via load()/save(), so not in the Set below.
-//    All five are read/written by their OWNING module directly (the first four
-//    by auth.js, the fifth by supabase-backend.js) rather than through this
-//    seam, for the reasons above; none is in the Set below because none is ever
-//    passed to load()/save(). Named so a future reader does not conclude the
-//    inventory is complete without them.
+//      'cfbp_pending_join'           js/league-create.js PENDING_JOIN_KEY (N1, DI-430, 2026-09-30) — `{code, exp}`: the public 8-character league join code captured from a `?join=CODE` invite link at boot, with a 30-minute expiry, so it survives the Google sign-in round trip (the OAuth redirectTo is origin-only and never carries it). Device-local because it is a fact about this handset's pending invite, never league state; read/written ONLY by js/league-create.js (never via load()/save()), listed in auth.js's `_CLEAR_KEEP_KEYS` (with its justification: it identifies nobody) so the first-sign-in sweep does not erase it mid-invite, and consumed once after memberships load. Not in the Set below.
+//    All of these are read/written by their OWNING module directly (auth.js for
+//    most, supabase-backend.js for the snapshot mirror, js/league-create.js for
+//    the pending invite) rather than through this seam, for the reasons above;
+//    none is in the Set below because none is ever passed to load()/save().
+//    Named so a future reader does not conclude the inventory is complete
+//    without them.
 const DEVICE_LOCAL_KEYS = new Set([
   KEYS.SESSION,
   KEYS.SITE_UNLOCK,
@@ -631,6 +646,11 @@ export function resetToDemo() {
 // ─── SETTINGS ─────────────────────────────────────────────────────────────────
 
 export function getSettings() { return{...DEFAULT_SETTINGS,...(load(KEYS.SETTINGS)||{})}; }
+/** The league settings blob EXACTLY as stored — no DEFAULT_SETTINGS spread. Read-only. Exists so
+ *  getEffectiveSetting() (js/competition.js, DI-225) can tell "the league set this" from "this is the
+ *  built-in default": getSettings() merges the defaults in, which makes every defaulted key look
+ *  league-set. Never write through it; saveSetting()/saveSettings() remain the only writers. */
+export function getStoredSettings() { const s=load(KEYS.SETTINGS); return s&&typeof s==='object'&&!Array.isArray(s)?s:{}; }
 /**
  * Change ONE setting. This is a read-modify-write of the whole `cfbp_settings`
  * blob — ~17 independent fields under a single seam key — so it must tell the
@@ -1190,6 +1210,23 @@ export function setActiveWeekId(weekId){ save(KEYS.ACTIVE_WEEK,weekId); }
 export function getWeeks(){ return load(KEYS.WEEKS)||[]; }
 export function getWeek(weekId){ return getWeeks().find(w=>w.weekId===weekId)||null; }
 
+// ─── COMPETITIONS (Multi-Sport DI-220, AD-74) ─────────────────────────────────
+// The read side is js/competition.js's job (getCompetitions [league-filtered, default first] / getCompetition / getDefaultCompetition /
+// competitionForWeek / getWeeksForCompetition …); this seam only stores. `getCompetitions()`
+// answers the RAW array — never filtered by league or competition, because the mirror already
+// holds exactly one league's rows.
+export function getCompetitions(){ return load(KEYS.COMPETITIONS)||[]; }
+/** Upsert ONE competition by `id` (the saveWeek() shape). Read-modify-write of the whole
+ *  array through the seam, like every other rows-kind key; the adapter turns it into a row diff, and
+ *  `noDelete` on its route means a row that vanished from the array is never sent as a delete. */
+export function saveCompetition(competition){
+  const all=getCompetitions();
+  const idx=all.findIndex(c=>c.id===competition.id);
+  const upd={...competition,updatedAt:new Date().toISOString()};
+  if(idx>=0)all[idx]=upd;else all.push(upd);
+  save(KEYS.COMPETITIONS,all);
+}
+
 export function getCurrentWeek(){
   const activeId=getActiveWeekId();
   if(activeId){ const f=getWeeks().find(w=>w.weekId===activeId); if(f)return f; }
@@ -1199,6 +1236,12 @@ export function getCurrentWeek(){
   return[...weeks].sort((a,b)=>b.weekNumber-a.weekNumber)[0]||null;
 }
 
+// ── MULTI-SPORT DI-220 — THE WRITE PATH IS ALWAYS UNFILTERED (top risk, pinned by competitiontest) ──
+// `saveWeek`/`deleteWeek` read and write the RAW, whole-league `getWeeks()` array and nothing else.
+// The competition-scoped view (`getWeeksForCompetition()` in js/competition.js) is READ-ONLY and must
+// never feed either of these: the adapter diffs a whole-array write against every row the server holds,
+// so a write built from a competition-filtered array would look like "every other competition's weeks
+// were deleted" and emit those deletes. Do not "optimize" these two onto a filtered list.
 export function saveWeek(week){
   const weeks=getWeeks();
   const idx=weeks.findIndex(w=>w.weekId===week.weekId);

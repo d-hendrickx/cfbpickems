@@ -298,6 +298,7 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
 
+  // Re-derived 2026-09-29 (bug batch B — RG-TBD-B3 (alma-mater catalog notes + reviewer follow-ups, ~app.js:4030–4190) and RG-TBD-B1 (Weekly Blurb card title, ~app.js:12960) sit above these sites) — line numbers only, matched by exact text.
   const ENUMERATED_CALL_SITES = [
     // Re-derived 2026-09-27 (app-shell part 3B: header/nav/viewing-week-card
     // pass — code added above both sites shifted their line numbers only;
@@ -314,8 +315,16 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // and doSwitchActiveLeague()'s boolean return all sit above one or more of
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
-    { file: 'app.js', line: 3840, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
-    { file: 'app.js', line: 13586, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+  // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the
+  // sweep's time-zone/display-name/initials repaints (+22) in
+  // buildControlCenterCtx() sit above every site but the 3840/3841 pair) —
+  // line numbers only, matched by exact text.
+    // Re-derived 2026-09-30 (UN-315 / DI-436 — the multi-league push client: routeToLeague(), the banked
+    // league deep link, the switch-cover fade and the alias-first identity call sites all sit above one or
+    // more of these sites) — line numbers only, same sites, matched by exact text.
+    // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every app.js site) — line numbers only, same sites, matched by exact text.
+    { file: 'app.js', line: 3916, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
+    { file: 'app.js', line: 13904, text: 'isPlatformAdmin: getIsPlatformAdmin(),' },
     // UX Revamp wiring pass 3a (2026-09-25) — renderAdminPage()'s own
     // cross-league users-read gate (WIRING_CHECKLIST_B_092526.md
     // §Window(b)): only fetch listUsersAcrossLeagues() when the composed
@@ -329,7 +338,7 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // and doSwitchActiveLeague()'s boolean return all sit above one or more of
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
-    { file: 'app.js', line: 14084, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
+    { file: 'app.js', line: 14436, text: 'if (viewer.isPlatformAdmin && !_usersAcrossLeaguesCache.attempted && !_usersAcrossLeaguesCache.loading) {' },
   ];
 
   function findIdentifierHits(src, ident) {
@@ -439,7 +448,7 @@ console.log('\n── whole-tree isPlatformAdmin allow-list scan (F13) ──');
   // lines later in the same function. Re-derived 2026-09-28 (merge round 2).
   const AUTH_JS_ENUMERATED_HITS = [
     { line: 1892, text: 'return { isPlatformAdmin: false, isSuperAdmin: false };' },
-    { line: 3261, text: 'isPlatformAdmin: !!admin,' },
+    { line: 3323, text: 'isPlatformAdmin: !!admin,' },
   ];
   const authHits = allHits.filter((h) => h.file === 'auth.js'
     && !AUTH_JS_ENUMERATED_HITS.some((c) => c.line === h.line && c.text === h.text));
@@ -872,6 +881,49 @@ console.log('\n── SQL drafts: both GUC escapes are bounded by their SET list
     assert(!/league_members_guard/.test(fDraftSql.split('\n').filter((l) => !l.trim().startsWith('--')).join('\n')),
       'R-c — the Group F draft defines no version of league_members_guard() in live SQL (guard authority stays with B_roles_pilot.sql, whose privileged branch is scanned above) — comment lines naming it are excluded');
   }
+
+  // ── UN-315 / DI-434 (2026-09-29), RE-DERIVED 2026-09-30 for UN-389 / DI-445 — 0035 RE-CREATES anonymize_own_account() ──
+  // Migration 0035 is the LAST definition of this function, so the server will hold THAT body, not
+  // 0029's, and the R-c boundary scan has to hold for it. DI-445 split the `league_members` update in
+  // TWO on purpose (kept seats: four assignments, no `active`; every other seat: the old five), so the
+  // scan no longer captures "the" set list — it isolates EVERY `update public.league_members set …
+  // where …` in the body. What R-c protects is unchanged and is asserted per list: `app.account_anonymize`
+  // opens the whole commissioner-only column set in the guard, so each list is the real boundary, and
+  // neither may assign `role`, `phone_verified` or `created_at`. The new fact is that EXACTLY ONE list
+  // contains `active = false`: the kept-seat list must not, because a kept seat keeps role AND active
+  // (D-2) — the guard's last-commissioner clause and the statement trigger fire on a change to either.
+  {
+    let sql0035 = '';
+    try { sql0035 = await readFile(join(__dirname, 'supabase', 'migrations', '0035_multileague_push.sql'), 'utf8'); }
+    catch (e) { fail++; console.error('  ❌ Migration 0035 not found —', e.message); }
+    if (sql0035) {
+      const m = /^create or replace function public\.anonymize_own_account\(\)[\s\S]*?\$\$([\s\S]*?)\$\$;/m.exec(sql0035);
+      assert(!!m, 'R-c/0035 — anonymize_own_account() found in migration 0035 (fixture check)');
+      const body = (m ? m[1] : '').split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
+      const lists = [...body.matchAll(/update\s+public\.league_members\s+set\s+([\s\S]*?)\s+where\s/gi)].map((x) => x[1]);
+      assert(lists.length === 2,
+        `R-c/0035 — the scan isolates EVERY \`update public.league_members set … where …\` in the re-created body: exactly TWO (kept seats, then every other seat) — a third would be a write surface under the escape GUCs that nobody scanned (found ${lists.length})`);
+      // Non-vacuity on the capture itself: both lists really are the anonymization ones.
+      assert(lists.length === 2 && lists.every((l) => /\buser_id\s*=\s*null/.test(l) && /\bemail\s*=\s*null/.test(l)
+          && /\bphone\s*=\s*''/.test(l) && /\blink_disputed_at\s*=\s*now\(\)/.test(l)),
+        'R-c/0035 — BOTH lists really are the anonymization ones (user_id/email nulled, phone reset, link_disputed_at stamped) — a non-vacuity check on the capture');
+      assert(lists.length === 2 && lists.every((l) => !/\brole\b/.test(l) && !/\bphone_verified\b/.test(l) && !/\bcreated_at\b/.test(l)),
+        'R-c/0035 — NEITHER list assigns `role`, `phone_verified` or `created_at`: the escape opens the whole commissioner-only column set, so a caller must never be able to self-promote (or rewrite a verification fact) on the way out');
+      assert(lists.filter((l) => /\bactive\s*=\s*false/.test(l)).length === 1
+          && lists.length === 2 && !/\bactive\b/.test(lists[0]) && /\bactive\s*=\s*false/.test(lists[1]),
+        'R-c/0035 — EXACTLY ONE list contains `active = false` (the ordinary-seat list, second); the KEPT-seat list (first) never names `active` at all — a kept seat keeps role AND active (D-2), or the last-commissioner guard and statement trigger refuse it');
+      assert(/perform set_config\('app\.account_anonymize', '1', true\)/.test(body),
+        'R-c/0035 — …and the escape is still armed transaction-locally (`true`), after the auth.uid() check');
+      assert(body.indexOf("raise exception 'not_authenticated'") > -1
+          && body.indexOf("raise exception 'not_authenticated'") < body.indexOf("set_config('app.account_anonymize'")
+          && body.indexOf("raise exception 'last_commissioner'") > -1
+          && body.indexOf("raise exception 'last_commissioner'") < body.indexOf("set_config('app.account_anonymize'"),
+        'R-c/0035 — …and BOTH refusals (not_authenticated, last_commissioner) are raised before either escape GUC is armed: a refused caller never holds the escape');
+      assert(/delete from public\.push_identities where user_id = auth\.uid\(\);/.test(body)
+        && !/delete from public\.push_identities where (?!user_id = auth\.uid\(\))/.test(body),
+        'R-c/0035 — the alias delete still deletes only the CALLER\'s alias row (keyed on auth.uid())');
+    }
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════════════════
@@ -1012,14 +1064,17 @@ console.log('\n── whole-tree isSuperAdmin allow-list scan (DI-344 §Render p
   // these sites) — line numbers only, same sites, matched by exact text against
   // the MERGED tree.
   // Re-derived 2026-09-29 (v0.27.2 STAMP — the WHATS_NEW v0.27.2 entry at app.js:102 sits above every site) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-29 (bug batch B — RG-TBD-B3 (alma-mater catalog notes + reviewer follow-ups, ~app.js:4030–4190) and RG-TBD-B1 (Weekly Blurb card title, ~app.js:12960) sit above these sites) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-30 (v0.28.0 STAMP — the WHATS_NEW v0.28.0 entry and its release comment, net +29 lines, sit above every app.js site; the auth.js sites are untouched) — line numbers only, matched by exact text.
+  // Re-derived 2026-09-29 (RG-TBD-N15 — the logo-toggle repaint (+8) and the sweep's repaints (+22) in buildControlCenterCtx() sit above every site but 3841) — line numbers only, matched byexact text.
   const ENUMERATED_SUPER_CALL_SITES = [
-    { file: 'app.js', line: 3841, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 13587, text: 'isSuperAdmin: getIsSuperAdmin(),' },
-    { file: 'app.js', line: 14061, text: 'if (viewer.isSuperAdmin) {' },
+    { file: 'app.js', line: 3917, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 13905, text: 'isSuperAdmin: getIsSuperAdmin(),' },
+    { file: 'app.js', line: 14413, text: 'if (viewer.isSuperAdmin) {' },
     // Text updated, wiring pass 3a-bis (BLOCK 2's `attempted` guard replaces
     // `loaded`/`loading`-only).
-    { file: 'app.js', line: 14076, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
-    { file: 'app.js', line: 14277, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
+    { file: 'app.js', line: 14428, text: 'if (viewer.isSuperAdmin && !_platformKvCache.attempted && !_platformKvCache.loading) refreshPlatformKvCache();' },
+    { file: 'app.js', line: 14629, text: 'if (viewer.isSuperAdmin) bindSuperAdminControls();' },
   ];
 
   function findIdentifierHitsLocal(src, ident) {
@@ -2010,17 +2065,26 @@ end $$;
     return { out, supers };
   }
   function shapeFindings(text) {
-    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('--'));
+    const all = text.split('\n').map((l) => l.trim()).filter((l) => l !== '' && !l.startsWith('--'));
     const out = [];
-    if (lines.some((l) => l.startsWith('\\'))) out.push('psql meta-command line present');
-    if (lines[0] !== 'begin;') out.push(`first statement is not begin; (got ${JSON.stringify(lines[0])})`);
+    if (all.some((l) => l.startsWith('\\'))) out.push('psql meta-command line present');
+    // LIVE GUARD (incident 2026-09-30): the file's FIRST statement is the DEV-only refusal, AHEAD of `begin;`, so
+    // the only thing above it in a paste is the documented line-1 `set cfbp.allow_destructive`. static.check's
+    // LIVE-GUARD rule pins its exact bytes in every verify/ and mutations/ file; this checks the run shape around it.
+    const liveEnd = all.findIndex((l) => /^end\s+\$cfbp_live_guard\$\s*;$/i.test(l));
+    const live = all[0] === 'do $cfbp_live_guard$' && liveEnd > 0 ? all.slice(0, liveEnd + 1).join('\n') : '';
+    if (!live) out.push(`first statement is not the LIVE guard (do $cfbp_live_guard$ … end $cfbp_live_guard$;) (got ${JSON.stringify(all[0])})`);
+    else if (!live.includes("if exists (select 1 from public.leagues where pilot and name = 'IRB Pick ''Ems')")
+      || !live.includes("raise exception 'REFUSED: this file is DEV-only (cfbp-test) and this project is LIVE';")) out.push('the LIVE guard lacks the pilot-name check or the REFUSED exception');
+    const lines = live ? all.slice(liveEnd + 1) : all;
+    if (lines[0] !== 'begin;') out.push(`first statement after the LIVE guard is not begin; (got ${JSON.stringify(lines[0])})`);
     if (lines[lines.length - 1] !== 'rollback;') out.push(`last statement is not rollback; (got ${JSON.stringify(lines[lines.length - 1])})`);
     if (lines.filter((l) => /^begin\s*;$/i.test(l)).length !== 1) out.push('not exactly one begin;');
     if (lines.filter((l) => /^rollback\s*;$/i.test(l)).length !== 1) out.push('not exactly one bare rollback;');
     if (lines.some((l) => /^commit\b/i.test(l))) out.push('contains COMMIT');
     const guardEnd = lines.findIndex((l, i) => i > 1 && /^end\s+\$\$\s*;/i.test(l));
     const guard = /^do\s+\$\$/i.test(lines[1] || '') && guardEnd > 1 ? lines.slice(1, guardEnd + 1).join('\n') : '';
-    if (!/current_setting\('cfbp\.allow_destructive', true\) is distinct from '1'/.test(guard)) out.push('second statement is not the guard DO with the cfbp.allow_destructive check');
+    if (!/current_setting\('cfbp\.allow_destructive', true\) is distinct from '1'/.test(guard)) out.push('the statement after begin; is not the guard DO with the cfbp.allow_destructive check');
     if (!/if exists \(select 1 from public\.leagues where name ilike '%IRB%'\) then/.test(guard)) out.push('guard lacks the live-project identity check (a league named like %IRB%)');
     // AMENDED 2026-09-26: a league-COUNT clause refuses cfbp-test itself (it holds several fixture
     // leagues from earlier RLS runs). The live-project check is identity only.
@@ -2053,13 +2117,22 @@ end $$;
       const sd = superDemoteFindings(text); totalSupers += sd.supers;
       assert(sd.out.length === 0, `R3(e) — ${fname}: every is_super=true fixture is preceded, in its own block, by the demote of any existing super row (platform_admins_is_super_uidx, 23505)`, JSON.stringify(sd.out));
       const sh = shapeFindings(text);
-      assert(sh.length === 0, `R3(e) — ${fname}: ONE editor run — begin; first, the guard DO second (opt-in flag AND the IRB-name live-project check, no league count), balanced savepoints, one closing rollback;, no COMMIT, no psql meta-command, and a seq-counter row wherever messages are written`, JSON.stringify(sh));
+      assert(sh.length === 0, `R3(e) — ${fname}: ONE editor run — the LIVE guard first (2026-09-30), then begin;, then the guard DO (opt-in flag AND the IRB-name live-project check, no league count), balanced savepoints, one closing rollback;, no COMMIT, no psql meta-command, and a seq-counter row wherever messages are written`, JSON.stringify(sh));
     }
     assert(totalInserts >= 40 && totalCodes >= 9 && totalSupers >= 5,
       `R3(e) fixture — the scans found work to check across the ${VERIFY_FILES.length} files (${totalInserts} inserts, ${totalCodes} join codes, ${totalSupers} is_super fixtures)`, `${totalInserts}/${totalCodes}/${totalSupers}`);
 
     // Teeth — each 2026-09-26 rehearsal defect, reproduced, is flagged by the same scanners.
-    const good = `begin;
+    // The LIVE guard's league id below is a PLACEHOLDER on purpose (security F4, 2026-09-30): this file deploys with the
+    // site, and the real LIVE id must stay under supabase/ (which never deploys). shapeFindings() does not read the id.
+    const good = `do $cfbp_live_guard$
+begin
+  if exists (select 1 from public.leagues where pilot and name = 'IRB Pick ''Ems')
+     or exists (select 1 from public.leagues where id = '00000000-0000-0000-0000-000000000000') then
+    raise exception 'REFUSED: this file is DEV-only (cfbp-test) and this project is LIVE';
+  end if;
+end $cfbp_live_guard$;
+begin;
 do $$
 begin
   if current_setting('cfbp.allow_destructive', true) is distinct from '1' then raise exception 'x'; end if;
@@ -2092,6 +2165,12 @@ rollback;
     bad('a guard that also counts leagues (refuses cfbp-test itself)', good.replace("  if exists (select 1 from public.leagues where name ilike '%IRB%') then", "  if (select count(*) from public.leagues) > 3\n     or exists (select 1 from public.leagues where name ilike '%IRB%') then"), shapeFindings);
     bad('per-block begin/rollback (the flag is undone after block 1)', good.replace('savepoint v1;', 'begin;').replace('rollback to savepoint v1;', 'rollback;'), shapeFindings);
     bad('messages written with no seq-counter row', good.replace("  insert into public.league_seq_counters (league_id, next_seq) values ('l', 1);\n", ''), shapeFindings);
+    // The 2026-09-30 incident: a DEV-only file with nothing that could tell LIVE from DEV ahead of its first write.
+    const noLive = good.replace(/^do \$cfbp_live_guard\$[\s\S]*?end \$cfbp_live_guard\$;\n/, '');
+    assert(noLive !== good && noLive.startsWith('begin;\n'), 'R3(e) teeth — the no-LIVE-guard mutant really removed the guard (fixture check)', noLive.slice(0, 40));
+    bad('a verify file with NO LIVE guard (the 2026-09-30 incident shape)', noLive, shapeFindings);
+    bad('`begin;` AHEAD of the LIVE guard (the guard is no longer the first statement)', 'begin;\n' + good.replace('\nbegin;\n', '\n'), shapeFindings);
+    bad('a LIVE guard that only raises a notice', good.replace("raise exception 'REFUSED:", "raise notice 'REFUSED:"), shapeFindings);
   }
 
   // ── (f) Two probe-level rehearsal defects the schema scan cannot see (2026-09-26).

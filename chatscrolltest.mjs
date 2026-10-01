@@ -568,8 +568,11 @@ console.log('\n[9] DI-427 (UN-382) — reply-swipe drag-follow + spring-back vis
     te7(root);
   }
 
-  // 7g: reduced motion — no translate at all; detection/commit/haptic
-  // unchanged (DI-409's/DI-420's own rule, reused here).
+  // 7g: reduced motion — AMENDED by RG-TBD-B4 (2026-09-29). DI-427's
+  // original clause ("no translate at all") left the haptic as the gesture's
+  // ONLY feedback under iOS Reduce Motion — Drew's N10 report. The drag is
+  // direct manipulation and still tracks; the ANIMATED spring-back is what
+  // Reduce Motion drops (7n below pins the full sequence).
   {
     const savedMM7 = globalThis.matchMedia;
     globalThis.matchMedia = () => ({ matches: true });
@@ -577,10 +580,11 @@ console.log('\n[9] DI-427 (UN-382) — reply-swipe drag-follow + spring-back vis
     _bindMessageSwipe(root);
     const { msgEl, colEl, dataset } = makeFakeChatMsg();
     ts7(root, msgEl, 100, 300);
-    tm7(root, msgEl, 120, 300); // dx=20 — under prior conditions this would translate
-    assert(colEl.style.transform === '', `7g-1: prefers-reduced-motion — NO live transform at all (got "${colEl.style.transform}")`);
-    assert(dataset.swipeArmed === undefined, '7g-2: …and the visual arm-glyph never appears either (opacity-only fade is also gated off)');
+    tm7(root, msgEl, 120, 300); // dx=20
+    assert(colEl.style.transform === 'translateX(20px)', `7g-1: prefers-reduced-motion — the bubble still tracks the finger (direct manipulation, not animation) (got "${colEl.style.transform}")`);
+    assert(dataset.swipeArmed === undefined, '7g-2: …and below the 40px arm point the glyph is not armed, same as without Reduce Motion');
     te7(root);
+    assert(colEl.style.transform === '' && colEl.style.transition === '', `7g-3: …release returns it with NO transition (Reduce Motion drops the spring) (transition "${colEl.style.transition}")`);
     globalThis.matchMedia = savedMM7;
   }
 
@@ -731,6 +735,49 @@ console.log('\n[9] DI-427 (UN-382) — reply-swipe drag-follow + spring-back vis
     te7(root);
     assert(root.dataset.replySwiping === undefined,
       `7m-7: an L→R drag on a system row (no bubble column), released, leaves NO [data-reply-swiping] on the thread (got ${JSON.stringify(root.dataset.replySwiping)})`);
+  }
+  {
+    // 7n: RG-TBD-B4 (bug batch B, N10, Drew 2026-09-29: "when I swipe right
+    // on a message to reply I feel the haptic feedback but dont see the
+    // visual feedback of it indenting slightly for a moment"). Drew's report
+    // comes from the iOS app (haptic() is native-only). With iOS Settings →
+    // Accessibility → Motion → Reduce Motion ON, WKWebView matches
+    // `prefers-reduced-motion: reduce`, and the DI-427 build gated the WHOLE
+    // visual layer (drag-follow AND the ↩ arm glyph) off while the haptic
+    // still fired — exactly the reported symptom, reproduced below and in
+    // headless Chrome (bubble moves 45px with no-preference, 0px with
+    // reduce, haptic path unchanged). A finger-tracking drag is direct
+    // manipulation, not an animation (HIG, Motion: under Reduce Motion
+    // "track animations directly with people's gestures"; UIKit's own
+    // interactive swipes keep tracking): what Reduce Motion removes is the
+    // animated spring-back, which snaps home instead.
+    const savedMM7n = globalThis.matchMedia;
+    globalThis.matchMedia = () => ({ matches: true });   // Reduce Motion ON
+    const calls = [];
+    globalThis.Capacitor = { isNativePlatform: () => true, Plugins: { Haptics: { impact: (o) => calls.push(o) } } };
+    const root = makeFakeChatRoot();
+    root.dataset = {};
+    _bindMessageSwipe(root);
+    const { msgEl, colEl, dataset } = makeFakeChatMsg();
+    ts7(root, msgEl, 100, 300);
+    tm7(root, msgEl, 120, 300);   // dx=20, under the cap
+    assert(colEl.style.transform === 'translateX(20px)',
+      `7n-1: THE BUG — under Reduce Motion the bubble still follows the finger 1:1 (direct manipulation) (got "${colEl.style.transform}")`);
+    tm7(root, msgEl, 150, 300);   // dx=50, past the 40px arm point
+    assert(calls.length === 1 && calls[0].style === 'LIGHT', `7n-2: fixture — the haptic fires once at the arm point, as Drew felt it (got ${JSON.stringify(calls)})`);
+    assert(dataset.swipeArmed === 'true' && /^translateX\(\d+(\.\d+)?px\)$/.test(colEl.style.transform) && parseFloat(colEl.style.transform.slice(11)) > 36,
+      `7n-3: THE BUG — the haptic is never the ONLY feedback: the ↩ glyph arms and the bubble is past the cap, resisted (armed ${dataset.swipeArmed}, transform "${colEl.style.transform}")`);
+    const pending7n = [];
+    const stubbedSetTimeout7n = globalThis.setTimeout;
+    globalThis.setTimeout = (fn, ms) => { pending7n.push({ fn, ms }); return 0; };
+    te7(root);
+    globalThis.setTimeout = stubbedSetTimeout7n;
+    assert(colEl.style.transform === '' && colEl.style.transition === '' && pending7n.length === 0,
+      `7n-4: Reduce Motion is respected where it applies — release SNAPS home (no transform, no transition, no animation timer) instead of the 150ms spring (transform "${colEl.style.transform}", transition "${colEl.style.transition}", timers ${pending7n.length})`);
+    assert(dataset.swipeArmed === undefined && root.dataset.replySwiping === undefined,
+      '7n-5: …the glyph un-arms and the thread\'s x-clip lifts on that same release');
+    globalThis.Capacitor = savedCapacitor7;
+    globalThis.matchMedia = savedMM7n;
   }
 
   globalThis.document = savedDoc7;

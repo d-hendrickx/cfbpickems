@@ -48,7 +48,7 @@ import * as sb from './supabase-backend.js';
 // no imports of its own and no top-level side effects, so this edge introduces
 // no cycle and costs a 'pins' boot nothing (the function early-returns without a
 // configured App ID). Using its EXPORTED accessor, never a reimplementation.
-import { logoutOneSignal } from './push-onesignal.js';
+import { logoutOneSignal, logoutOneSignalAndWait } from './push-onesignal.js';
 // AD-68 (2026-09-23, coordinator ruling) — ONE predicate, no second inline
 // implementation. platform.js is zero-dependency and side-effect-free (no
 // import of its own), so this cannot form a cycle back into this file.
@@ -1079,7 +1079,7 @@ function _handleAuthStateChange(event, session) {
     // Emitted BEFORE signOut() is kicked off: signOut() emits events of its own,
     // and "no session" has to reach the listener in the same order it happened.
     _emitSessionRefused(event);
-    signOut().catch(e => console.warn('[auth] recovery-marker signOut failed', e));
+    signOut({ unlinkPush: false }).catch(e => console.warn('[auth] recovery-marker signOut failed', e));   // UN-315: an involuntary fail-closed refusal — see signOut()
     return;
   }
   if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
@@ -1198,7 +1198,7 @@ function _handleAuthStateChange(event, session) {
       // instead of this event's own live session taking it down while the
       // async signOut() is still in flight.
       _emitSessionRefused(event);
-      signOut().catch(e => console.warn('[auth] recovery-refusal signOut failed', e));
+      signOut({ unlinkPush: false }).catch(e => console.warn('[auth] recovery-refusal signOut failed', e));   // UN-315: an involuntary fail-closed refusal — see signOut()
       return;
     }
     _recoverySession = true;
@@ -2529,7 +2529,9 @@ export async function joinLeague(code, { activate = true } = {}) {
   // existing one if already joined — it's idempotent), which is a precise
   // key to find the just-joined league by after refetching, rather than
   // diffing old/new membership lists.
-  const { data: memberId, error } = await client.rpc('join_league', { p_code: String(code || '').trim() });
+  // N1 (DI-430) — `join_league` only does `upper(trim())`, so a code copied as "K7QX 9M2P" or "k7qx-9m2p" would be `invalid_code`. Spaces and hyphens are removed HERE
+  // (the ONE place every join path — landing, pill sheet, invite link — passes through); the server still decides whether the result is a real code.
+  const { data: memberId, error } = await client.rpc('join_league', { p_code: String(code || '').replace(/[\s-]+/g, '') });
   if (error) throw error;
   // REVIEWER F-1/F-2 (third pass) — THE POINTER IS NOT WRITTEN HERE ANY MORE.
   //
@@ -2567,18 +2569,43 @@ export async function joinLeague(code, { activate = true } = {}) {
   return (list || []).find(m => m.memberId === memberId) || null;
 }
 
-/** DI-181 "Create a League" — create_league(p_name) returns the new league's
+/**
+ * N1 (DI-430, 2026-09-30, frame 13) — the league WAS created on the server, but this device could not load it (the membership refresh answered `null` — "could not ask" —
+ * or its list did not carry the new row). Typed so the New League sheet can tell the truth ("… was created, but this device couldn't load it. Pull down to refresh.")
+ * instead of painting a failure over a success or a success over a failure. `leagueId` is the created league's id.
+ */
+export class LeagueCreatedNotLoadedError extends Error {
+  constructor(leagueId) {
+    super('The league was created, but this device could not load it.');
+    this.name = 'LeagueCreatedNotLoadedError';
+    this.code = 'league_created_not_loaded';
+    this.leagueId = leagueId || null;
+  }
+}
+
+/** DI-181 "Create a League" — create_league(p_name, p_sports) returns the new league's
  *  uuid; the caller becomes its commissioner (create_league's own INSERT).
- *  Same post-success shape as joinLeague(). */
-export async function createLeague(name) {
+ *
+ *  N1 (0034) — `sports` is the ordered list of R1 codes the creator ticked (the FIRST season is the league's Main sport and default competition); `null`/omitted sends
+ *  NO `p_sports`, which the server reads as the founders' default (cfb) and which is exactly what the old one-argument call did. `activate` mirrors joinLeague()'s:
+ *  a player who is ALREADY in a league passes `activate:false`, so the refresh keeps the pointer where it is and the caller runs the real league switch (the "Switching
+ *  leagues…" cover, the adapter step) instead of flipping identity under an old mirror. The zero-league landing keeps the default (`true`).
+ *
+ *  Same post-success shape as joinLeague(). If the RPC succeeds and the refresh cannot see the new membership, this throws LeagueCreatedNotLoadedError, never a plain
+ *  failure: nothing is retried (a second create would spend a second allowance) and the caller says the league exists. */
+export async function createLeague(name, sports = null, { activate = true } = {}) {
   const client = ensureClient();
   if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
-  const { data: leagueId, error } = await client.rpc('create_league', { p_name: String(name || '').trim() });
+  const args = { p_name: String(name || '').trim() };
+  if (Array.isArray(sports)) args.p_sports = sports.map(String);
+  const { data: leagueId, error } = await client.rpc('create_league', args);
   if (error) throw error;
   // Same shape, same reason as joinLeague() above — and a sharper case, because
   // creating a league also flips role player -> commissioner, so the identity
   // that moved with nothing watching carried isAdmin with it.
-  await refreshMembershipsAndSession({ preferLeagueId: leagueId });
+  const holdLeagueId = activate === false ? getActiveLeagueId() : null;
+  const list = await refreshMembershipsAndSession(holdLeagueId ? { preferLeagueId: holdLeagueId } : { preferLeagueId: leagueId });
+  if (!Array.isArray(list) || !list.some((m) => m.leagueId === leagueId)) throw new LeagueCreatedNotLoadedError(leagueId);
   return leagueId;
 }
 
@@ -2991,7 +3018,16 @@ export async function superSetPlatformKv(key, value) {
  * security gate finding 1: a PRIOR write-side `JSON.stringify()` bug is why
  * this comment used to (wrongly) describe a symmetric un-wrap step here).
  *
- * @returns {{maintenanceBanner: string, signupsOpen: boolean}}
+ * N1 (DI-433, 2026-09-30) — two more keys ride the SAME read: `league_creation_open` (the release gate, seeded FALSE in 0034) and `offered_sports` (the R1
+ * codes the New League picker may offer). THE DEFAULT-WHEN-MISSING DIRECTIONS ARE DELIBERATELY OPPOSITE TO `signups_open`'s: `signupsOpen` reads TRUE unless the
+ * row is exactly `false` (an unread cache must not disable Join), but `leagueCreationOpen` reads FALSE unless the row is exactly `true` (an unread cache must
+ * never show an open door). `offeredSports` is a list of strings, or [] (nothing offered) for anything else.
+ *
+ * R-F7 / S-1 — a third key rides the same read for the Super Admin card only: `push_alias_mode_live`, the DB-visible marker that migration 0035's alias mode is live (seeded FALSE
+ * in 0034). `pushAliasModeLive` reads TRUE only when the row is exactly `true`. It changes nothing the player sees; the SERVER (super_set_platform_kv) is what refuses to open the
+ * door while it is false — the card merely shows it.
+ *
+ * @returns {{maintenanceBanner: string, signupsOpen: boolean, leagueCreationOpen: boolean, offeredSports: string[], pushAliasModeLive: boolean}}
  */
 export async function getPlatformKv() {
   const client = ensureClient();
@@ -3001,9 +3037,15 @@ export async function getPlatformKv() {
   const byKey = new Map((data || []).map(r => [r.key, r.value]));
   const bannerRaw = byKey.get('maintenance_banner');
   const signupsRaw = byKey.get('signups_open');
+  const creationRaw = byKey.get('league_creation_open');
+  const offeredRaw = byKey.get('offered_sports');
+  const aliasRaw = byKey.get('push_alias_mode_live');
   return {
     maintenanceBanner: typeof bannerRaw === 'string' ? bannerRaw : '',
     signupsOpen: signupsRaw === false ? false : true,
+    leagueCreationOpen: creationRaw === true,
+    offeredSports: Array.isArray(offeredRaw) ? offeredRaw.filter((c) => typeof c === 'string') : [],
+    pushAliasModeLive: aliasRaw === true,
   };
 }
 
@@ -3037,6 +3079,11 @@ let _maintenanceBannerLoading = false;
 // "on by default" — so a device that has not read this yet, or whose read
 // failed, does not spuriously disable Join/Create.
 let _signupsOpenCache = true;
+// N1 (DI-433, 2026-09-30) — THE RELEASE GATE'S CACHE, and it defaults FALSE, DELIBERATELY THE OPPOSITE OF `_signupsOpenCache` ABOVE: a device that has not read
+// the flag yet (or whose read failed) must never show an open "Create new league" door, so unread means CLOSED. It rides the same fetch as the banner.
+let _leagueCreationOpenCache = false;
+// The R1 codes the New League picker may offer (`platform_kv.offered_sports`). Unread means [] (offer nothing), the same fail-closed direction.
+let _offeredSportsCache = [];
 
 /** Synchronous, cached — never a network call. Empty string = no banner,
  *  which is also the correct answer before the first read ever lands
@@ -3050,6 +3097,15 @@ export function getCachedMaintenanceBanner() {
  *  direction `join_league`/`create_league` themselves use server-side. */
 export function getCachedSignupsOpen() {
   return _signupsOpenCache;
+}
+
+/** N1 (DI-433) — synchronous, cached, never a network call. `false` (CLOSED) is the default-when-missing answer — see `_leagueCreationOpenCache`. */
+export function getCachedLeagueCreationOpen() {
+  return _leagueCreationOpenCache;
+}
+/** N1 (DI-431 §1) — the R1 codes the picker may offer; `[]` before the first read. A COPY, so a caller cannot mutate the cache. */
+export function getCachedOfferedSports() {
+  return [..._offeredSportsCache];
 }
 
 /**
@@ -3142,6 +3198,8 @@ export async function refreshMaintenanceBannerCache() {
     const kv = await getPlatformKv();
     _maintenanceBannerCache = kv.maintenanceBanner || '';
     _signupsOpenCache = kv.signupsOpen !== false;
+    _leagueCreationOpenCache = kv.leagueCreationOpen === true;
+    _offeredSportsCache = Array.isArray(kv.offeredSports) ? [...kv.offeredSports] : [];
   } catch (e) {
     console.warn('[auth] maintenance banner read failed — keeping the last-known value', e);
   } finally {
@@ -3153,6 +3211,8 @@ export async function refreshMaintenanceBannerCache() {
 export function _resetMaintenanceBannerCacheForTest() {
   _maintenanceBannerCache = '';
   _signupsOpenCache = true;
+  _leagueCreationOpenCache = false;
+  _offeredSportsCache = [];
   _maintenanceBannerLoading = false;
   _maintenanceBannerAttempted = false;
 }
@@ -3179,6 +3239,8 @@ export function _resetMaintenanceBannerCacheForTest() {
 export function clearMaintenanceBannerCacheOnIdentityChange() {
   _maintenanceBannerCache = '';
   _signupsOpenCache = true;
+  _leagueCreationOpenCache = false;   // N1 — an identity change re-arms the CLOSED default, never leaves the previous account's open door showing
+  _offeredSportsCache = [];
   _maintenanceBannerAttempted = false;
 }
 
@@ -3910,8 +3972,11 @@ export async function deleteOwnAccount() {
       let body = null;
       try { body = await error.context.json(); } catch { body = null; }
       if (body && body.error === 'last_commissioner') {
+        // UN-389 / DI-446 — the sentence now names BOTH ways out (the Delete Account sheet offers both, and normally resolves them BEFORE this can fire; this is the
+        // fallback when the preflight could not be re-run). "only commissioner" / "choose a new commissioner" is the vocabulary the other three last_commissioner
+        // sentences in app.js share.
         throw new AccountDeleteRefusedError('last_commissioner',
-          'You are the only commissioner of a league. Hand it to another commissioner before deleting your account.');
+          "You're the only commissioner of a league that still has members. Choose a new commissioner or archive it first.");
       }
     }
     throw error;
@@ -3929,6 +3994,66 @@ export async function deleteOwnAccount() {
   }
   await signOut();
   return data;
+}
+
+/**
+ * UN-389 / DI-446 — THE DELETE ACCOUNT SHEET'S PREFLIGHT. A thin wrapper over the `account_exit_leagues()` RPC (migration 0035, DI-445): no argument, scoped by `auth.uid()`
+ * on the server, which is the ONE place that decides which of the caller's leagues block the deletion, which are archived by it, and who the candidates are. This client
+ * renders the answer and NEVER re-derives it (CONVENTIONS #21: one rule, one function, two callers).
+ *
+ * The contract it is written against (DI-445 §4, frozen): one row per sole league of the caller, ANY status, each
+ * `{ league_id, league_name, pilot, blocks, auto_archive, candidates }`, `candidates` a jsonb `[{ member_id, display_name }]`. Returned here as camelCase
+ * `{ leagueId, leagueName, pilot, blocks, autoArchive, candidates: [{ memberId, displayName }] }`, every boolean strict (`=== true`), every name a string.
+ *
+ * LOUD, NEVER EMPTY: an RPC error (including PGRST202 / 404 when 0035 has not been pasted yet) THROWS, and so does a reply that is not a list, or a row with no league id. An empty
+ * list is the answer "nothing to resolve" and Delete would then proceed — so "we could not ask" must never be allowed to look like it (AD-06; the sheet renders the
+ * preflight-failed state with Try Again and keeps Delete disabled). The server still refuses a blocked deletion on its own (`last_commissioner`), so this is the
+ * sheet's courtesy and its fail-closed stance, not the control.
+ */
+export async function getAccountExitLeagues() {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { data, error } = await client.rpc('account_exit_leagues');
+  if (error) throw error;
+  if (!Array.isArray(data)) throw new Error('account_exit_leagues returned something other than a list — refusing to read that as "nothing to resolve".');
+  return data.map((r) => {
+    const leagueId = r && typeof r.league_id === 'string' ? r.league_id : '';
+    if (!leagueId) throw new Error('account_exit_leagues returned a row with no league id.');
+    let cands = r.candidates;
+    if (typeof cands === 'string') { try { cands = JSON.parse(cands); } catch { cands = null; } }
+    return {
+      leagueId,
+      leagueName: typeof r.league_name === 'string' ? r.league_name : '',
+      pilot: r.pilot === true,
+      blocks: r.blocks === true,
+      autoArchive: r.auto_archive === true,
+      candidates: (Array.isArray(cands) ? cands : [])
+        .filter((c) => c && typeof c.member_id === 'string' && c.member_id)
+        .map((c) => ({ memberId: c.member_id, displayName: typeof c.display_name === 'string' ? c.display_name : '' })),
+    };
+  });
+}
+
+/**
+ * UN-389 / DI-446 — ARCHIVE ONE LEAGUE ON THE WAY OUT. A thin wrapper over `archive_league_on_exit(p_league)` (0035, DI-445), then `refreshMembershipsAndSession()` so the
+ * cached league status matches. The server refuses, by NAME, every case that is not "I am this league's last linked commissioner and it is not the pilot": `not_last_commissioner`
+ * (also the answer for "not a commissioner" and "unknown league", so it is no oracle), `pilot_league_protected`, `not_authenticated` — all thrown as the PostgREST error for the
+ * caller to classify. It is IDEMPOTENT on an already-paused league.
+ *
+ * The Delete Account sheet calls this ONLY at the final Delete tap, once per queued archive, in list order, stopping at the first failure (D-5: the irreversible step waits
+ * for the last tap). The membership refresh is a courtesy and is NOT part of the answer: if the archive landed and only the refresh failed, the archive DID happen, so the
+ * wrapper reports success (the refresh's own loud path — the membership-error banner / the session-expired banner — has already spoken) rather than claiming "couldn't archive"
+ * about a league that is in fact archived.
+ */
+export async function archiveLeagueOnExit(leagueId) {
+  const client = ensureClient();
+  if (!client) throw new AuthUnavailableError('Supabase client is not configured.');
+  const { error } = await client.rpc('archive_league_on_exit', { p_league: leagueId });
+  if (error) throw error;
+  let refreshed = true;
+  try { await refreshMembershipsAndSession(); }
+  catch (e) { refreshed = false; console.warn('[auth] the membership refresh after archive_league_on_exit failed (the archive itself succeeded)', e); }
+  return { ok: true, refreshed };
 }
 
 /**
@@ -4168,7 +4293,20 @@ const _CLEAR_KEEP_KEYS = Object.freeze([
   //    GUARDED BY unreadtest.mjs §[6] (everything else a Sign Out clears is
   //    still cleared) and §[7] (this list and _SIGNOUT_LOCAL_KEYS agree).
   'cfbp_chat_lastseen2',           // js/chat.js K_LASTSEEN — { seq, byTag, owner: digest }
+  // ── N1 (S-4, 2026-09-30) — `cfbp_pending_join` IS DELIBERATELY NOT ON THIS LIST. It survives a HANDOVER (the first-sign-in sweep — exactly the moment an invitee's code is
+  //    waiting) but NOT a SIGN-OUT, so it is kept per MODE, the way the SDK token is (`_scanKeysToClear()`: `_HANDOVER_ONLY_KEEP_KEYS`, just below). An explicit sign-out means
+  //    "nothing about this session may survive": a code left on a handset a person handed back is a small thing, but a list of things that survive Sign Out is a list that only
+  //    grows, and this one earned an exception for exactly one caller.
 ]);
+/**
+ * N1 (S-4) — the keys kept ONLY on a handover, never on a sign-out (the same per-mode pattern as AUTH_STORAGE_KEY in `_scanKeysToClear()`). `cfbp_pending_join` is
+ * `{code, exp}` written by js/league-create.js when a visitor opens `https://…/?join=CODE`, so the code survives the Google sign-in round trip (the OAuth `redirectTo` is
+ * origin-only and NEVER carries it). `reconcileDeviceDataOwner()` runs the HANDOVER sweep on a FIRST sign-in — exactly when an invitee's code is waiting — and without this
+ * entry that sweep would erase it mid-invite. WHY THAT IS SAFE: a public 8-character league join code with a 30-minute expiry identifies nobody and grants nothing the code,
+ * typed by hand, would not. The literal is duplicated from js/league-create.js PENDING_JOIN_KEY on purpose (auth.js imports no other module); leaguecreatetest pins the two equal.
+ */
+const _HANDOVER_ONLY_KEEP_KEYS = Object.freeze(['cfbp_pending_join']);
+export const _HANDOVER_ONLY_KEEP_KEYS_FOR_TEST = _HANDOVER_ONLY_KEEP_KEYS;
 // SECURITY F-5 (eighth gate) — FROZEN. These three lists are exported for the
 // suites (`_CLEAR_KEEP_KEYS_FOR_TEST` etc.), and an exported mutable array is an
 // allow-list any module — or any test that ran earlier in the same process —
@@ -4205,7 +4343,10 @@ export const _DEVICE_CLEAR_MODES_FOR_TEST = DEVICE_CLEAR_MODES;
  *  predicate the production sweep uses, never a re-derivation of it. */
 function _scanKeysToClear(mode) {
   const keep = new Set(_CLEAR_KEEP_KEYS);
-  if (mode !== 'signout') keep.add(AUTH_STORAGE_KEY);
+  if (mode !== 'signout') {
+    keep.add(AUTH_STORAGE_KEY);
+    for (const k of _HANDOVER_ONLY_KEEP_KEYS) keep.add(k);   // N1 (S-4): the pending invite rides a handover, never a sign-out
+  }
   const out = new Set();
   // SECURITY F-1 (eighth gate) — the ENUMERATION VERDICT travels with the list.
   // A store that cannot be enumerated yields an empty list that means "I could
@@ -4687,7 +4828,51 @@ function _clearExpiredSessionFromDevice(err) {
   });
 }
 
-export async function signOut() {
+/**
+ * ══ UN-315 / DI-436.1 — THE PUSH UNLINK GOES BEFORE THE SESSION IS CLEARED ═══════════════════
+ *
+ * The device is bound to the ACCOUNT's private push alias, which receives every league's pushes. The
+ * sign-out tap is the one moment that says "this phone is no longer mine", so the binding is dropped
+ * FIRST — web (`logoutOneSignalAndWait`) and native (`logoutNativePush`) — and only then does
+ * `client.auth.signOut()` clear the session. Had the session cleared first and the unlink been left to
+ * the SIGNED_OUT event that follows, a closed tab or a dropped connection would leave a handed-off
+ * phone bound to an alias that hears every league of the departed account. (The chokepoint's own
+ * logout on the session change, and DI-180q's device-local clear, both remain — they are the backstop
+ * for every path that does NOT come through signOut(), and they are idempotent.)
+ *
+ * BOUNDED AND NEVER BLOCKING: each side gives up after 2s, a failure or a throw is a warning, and
+ * sign-out proceeds regardless — being unable to unlink a push binding must never keep somebody
+ * signed in. `Promise.allSettled` runs the two sides side by side, so the wait is the slower of them,
+ * not their sum; a device with push unconfigured returns at once (nothing to unlink).
+ */
+const PUSH_LOGOUT_BOUND_MS = 2000;
+async function _unlinkPushBeforeSessionClears() {
+  const jobs = [
+    (async () => { try { return await logoutOneSignalAndWait(PUSH_LOGOUT_BOUND_MS); } catch (e) { console.warn('[auth] the web push unlink failed during sign-out', e); return false; } })(),
+  ];
+  if (isNativeOrigin()) {
+    jobs.push((async () => {
+      try {
+        const native = await import('./push-native.js');
+        // A hung plugin call must not hold sign-out: race it against the same 2s bound.
+        const bound = new Promise((resolve) => { const t = setTimeout(() => resolve(false), PUSH_LOGOUT_BOUND_MS); t?.unref?.(); });
+        return await Promise.race([Promise.resolve(native.logoutNativePush()), bound]);
+      } catch (e) { console.warn('[auth] the native push unlink failed during sign-out', e); return false; }
+    })());
+  }
+  await Promise.allSettled(jobs);
+}
+
+/**
+ * `unlinkPush` (UN-315 / DI-436.1, default true) — whether the device's push binding is dropped BEFORE the session
+ * clears. Every DELIBERATE sign-out (the tap, cancelling a recovery, a completed account delete) takes the default:
+ * that is the moment a phone can change hands. The ONLY callers passing `false` are the two INVOLUNTARY, fail-closed
+ * refusals of a recovery session that must never be honoured (a reload mid-recovery; a device that cannot persist
+ * the recovery marker): their contract — DI-334 Finding 1 / R-f, pinned by authpasswordtest — is that the session
+ * is cleared IMMEDIATELY, in the same tick, and neither is a hand-off (nobody tapped anything). The push binding
+ * there is still dropped, exactly as it was before this DI, by the chokepoint's own logout on the SIGNED_OUT event.
+ */
+export async function signOut({ unlinkPush = true } = {}) {
   _signingOut = true;
   _signOutAt = Date.now();
   // ── SECURITY F-1 (sixth gate) — BEFORE THE AWAIT, NOT AFTER IT ────────────
@@ -4699,6 +4884,9 @@ export async function signOut() {
   // gets back to us. It is also what stops the next caller being handed the
   // departing player's promise.
   _bumpIdentityEpoch('signOut');
+  // UN-315 / DI-436.1 — the push unlink FIRST (bounded, never blocking; see _unlinkPushBeforeSessionClears).
+  if (unlinkPush) await _unlinkPushBeforeSessionClears();
+  _signOutAt = Date.now();   // the grace window for the SIGNED_OUT event starts NOW, not before the (≤2s) unlink
   const client = ensureClient();
   if (client) { try { await client.auth.signOut(); } catch (e) { console.warn('[auth] signOut() call failed', e); } }
   // SEC F2's last probe — ensureClient() returns null whenever the SDK is

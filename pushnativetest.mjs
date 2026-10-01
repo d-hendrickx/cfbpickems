@@ -600,8 +600,8 @@ console.log('\n[13] Structural — app.js\'s two dynamic-import call sites are c
   // The identity call site (loginNativePush/logoutNativePush) must sit beside
   // the EXISTING loginOneSignal/logoutOneSignal chokepoint call, not a
   // second, independent location — same chokepoint, same discipline.
-  const chokepointIdx = appSrc.indexOf('if (sess?.playerId) loginOneSignal(sess.playerId); else logoutOneSignal();');
-  const nativeIdentityIdx = appSrc.indexOf("native.loginNativePush(sess.playerId); else native.logoutNativePush();");
+  const chokepointIdx = appSrc.indexOf('if (sess?.playerId) loginOneSignal(sess.playerId, getAccountUserId()); else logoutOneSignal();');
+  const nativeIdentityIdx = appSrc.indexOf("native.loginNativePush(sess.playerId, getAccountUserId()); else native.logoutNativePush();");
   assert(chokepointIdx > -1 && nativeIdentityIdx > -1 && nativeIdentityIdx - chokepointIdx < 1200,
     `[13e] the native identity call sits immediately beside the existing OneSignal chokepoint call, not a separately-invented location (distance ${nativeIdentityIdx - chokepointIdx} chars)`);
 
@@ -761,8 +761,13 @@ console.log('\n[16] N-4 — the persisted identity flag survives process death, 
     withFetchOk();
     const native1 = await freshPushNative();
     await native1.loginNativePush('memberA');
-    assert(sharedStore.get('cfbp_native_push_identity') === 'memberA',
-      `[16a] a successful login() persists the identity flag (got ${JSON.stringify(sharedStore.get('cfbp_native_push_identity'))})`);
+    // UN-315 / DI-436.1 — the flag is a MARKER now. The device is bound to the account's private alias and
+    // the flag lives in the on-disk Preferences store, so it must identify nobody: neither the alias nor a
+    // member id. (An older build's flag — a member id — still reads as "set"; see [16m].)
+    assert(sharedStore.get('cfbp_native_push_identity') === '1',
+      `[16a] a successful login() persists the identity flag as a MARKER, '1' (got ${JSON.stringify(sharedStore.get('cfbp_native_push_identity'))})`);
+    assert(sharedStore.get('cfbp_native_push_identity') !== 'memberA',
+      '[16a2] …and NOT the member id — nothing identifying is written to the on-disk store');
 
     // "Process restart" — a FRESH module instance (fresh in-memory state,
     // _initAttempted() reads false) and a FRESH OneSignal plugin (native's
@@ -807,7 +812,7 @@ console.log('\n[16] N-4 — the persisted identity flag survives process death, 
     withFetchOk();
     const native = await freshPushNative();
     await native.loginNativePush('memberB');
-    assert(store.get('cfbp_native_push_identity') === 'memberB', '[16g] fixture: login persisted the flag');
+    assert(store.get('cfbp_native_push_identity') === '1', '[16g] fixture: login persisted the flag (the marker)');
     await native.logoutNativePush();
     assert(!store.has('cfbp_native_push_identity'), '[16h] an ordinary same-launch logout still clears the flag');
   }
@@ -861,6 +866,232 @@ console.log('\n[16] N-4 — the persisted identity flag survives process death, 
     installPluginWithPrefs(pluginRestored, fakePreferences(store2));
     await restoredSession2.logoutNativePush();
     assert(pluginRestored.calls.some(c => c[0] === 'logout'), '[16l] GREEN again after restore — the real (non-mutant) code reconciles across the simulated restart (two separate module instances, a genuine restart simulation)');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════════════════
+// [17] UN-315 / DI-436 (2026-09-29) — THE NATIVE DEVICE FOLLOWS THE ACCOUNT, NOT THE LEAGUE
+//
+// Same contract as pushtest.mjs [17] for the web, on the plugin's flat calls: the identity bound is the
+// ACCOUNT's private alias (from `push-identity-token` {scope:'user'}); a LEAGUE SWITCH makes ZERO plugin calls;
+// the persisted flag is a MARKER; `dual` falls back to the member id when the mint fails and retries (bounded);
+// `alias` mode has no fallback; `legacy` binds the member id; a tap names its league (validated) and a push
+// from another league never wakes this league's chat — while its banner ALWAYS shows on native (DI-241).
+// ════════════════════════════════════════════════════════════════════════════════════════
+console.log('\n[17] UN-315 — the native device follows the ACCOUNT: alias identity, a league switch is a no-op, a marker flag, league-aware taps…');
+{
+  const ALIAS_A = 'a1a1a1a1-1111-4111-8111-111111111111';
+  const ALIAS_B = 'b2b2b2b2-2222-4222-8222-222222222222';
+  const LEAGUE_A = 'c3c3c3c3-3333-4333-8333-333333333333';
+  const keep = async (p) => { const ka = setInterval(() => {}, 5); try { return await p; } finally { clearInterval(ka); } };
+  const wait = (ms = 60) => keep(new Promise((r) => setTimeout(r, ms)));
+  const MINE = new Set(['u17x', 'u17y', 'u17z', 'u17q', ALIAS_A, ALIAS_B]);
+  // Only logins for THIS section's ids: modules created by earlier sections may still have a retry timer armed,
+  // and it reaches whichever plugin is installed NOW (they read `window.Capacitor` at fire time).
+  const loginsOf = (plugin) => plugin.calls.filter((c) => c[0] === 'login' && MINE.has(c[1].externalId)).map((c) => c[1].externalId);
+  const created = [];
+  /** Retire every module a previous scenario created: `_resetForTest()` zeroes its generation, so any retry
+   *  timer it still has armed sees a stale generation and does nothing. */
+  const retireAll = () => { for (const n of created.splice(0)) { try { n._resetForTest(); } catch { /* ignore */ } } };
+
+  /** A fresh native module + plugin + prefs, with `minter(scope)` answering the mint. */
+  async function world({ minter, store = new Map() } = {}) {
+    retireAll();
+    const plugin = fakePlugin();
+    installPluginWithPrefs(plugin, fakePreferences(store));
+    withFetchOk();
+    const native = await freshPushNative();
+    created.push(native);
+    const mints = [];
+    native._setIdentityMinterForTest(async (req) => { mints.push(req && req.scope); return minter(); });
+    return { plugin, native, mints, store };
+  }
+  const aliasAnswer = (alias = ALIAS_A, mode = 'dual') => async () => ({ ok: true, externalId: alias, mode });
+
+  // ── (a) THE TARGET IS THE ALIAS.
+  {
+    const { plugin, native, mints, store } = await world({ minter: aliasAnswer() });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify([ALIAS_A]),
+      `[17a] the native login binds the ACCOUNT'S ALIAS, never the member id (got ${JSON.stringify(loginsOf(plugin))})`);
+    assert(JSON.stringify(mints) === JSON.stringify(['user']), `[17b] …after exactly ONE user-scoped mint (got ${JSON.stringify(mints)})`);
+    assert(store.get('cfbp_native_push_identity') === '1' && !JSON.stringify([...store]).includes(ALIAS_A) && !JSON.stringify([...store]).includes('u17x'),
+      `[17c] the persisted flag is a MARKER ('1') — neither the alias nor the member id ever reaches the on-disk Preferences store (got ${JSON.stringify([...store])})`);
+
+    // ── (b) A LEAGUE SWITCH IS A NO-OP — zero plugin calls, zero mints.
+    const callsBefore = plugin.calls.length, mintsBefore = mints.length;
+    await keep(native.loginNativePush('u17y', 'acctA'));
+    await wait();
+    assert(plugin.calls.length === callsBefore && mints.length === mintsBefore,
+      `[17d] a league switch (a different member id, the SAME account) makes ZERO plugin calls and ZERO mints (extra calls ${JSON.stringify(plugin.calls.slice(callsBefore))})`);
+    assert(!plugin.calls.some((c) => c[0] === 'logout'), '[17e] …and no logout — that is for sign-out and account changes only');
+
+    // ── (c) A DIFFERENT ACCOUNT re-asserts.
+    await keep(native.loginNativePush('u17z', 'acctB'));
+    assert(loginsOf(plugin).length === 2 && mints.length === 2,
+      `[17f] a DIFFERENT account is not an early return — it re-binds with a fresh mint (logins ${JSON.stringify(loginsOf(plugin))}, mints ${mints.length})`);
+
+    // ── (d) sign-out then sign-in: logout lifts the no-op.
+    await keep(native.logoutNativePush());
+    assert(plugin.calls.filter((c) => c[0] === 'logout').length === 1 && !store.has('cfbp_native_push_identity'),
+      '[17g] sign-out: one logout, and the marker flag is cleared');
+    await keep(native.loginNativePush('u17x', 'acctB'));
+    assert(loginsOf(plugin).length === 3, '[17h] …and the next sign-in of the same account is a real login again');
+
+    // ── (e) force — the Turn On repair.
+    await keep(native.loginNativePush('u17x', 'acctB', { force: true }));
+    assert(loginsOf(plugin).length === 4, '[17i] { force:true } re-asserts even though a binding is recorded (the explicit Turn On / Reconnect repair)');
+  }
+
+  // ── (f) dual + a failed mint: the member id, then a bounded retry of the alias.
+  {
+    let ok = false;
+    const { plugin, native, mints } = await world({ minter: async () => (ok ? { ok: true, externalId: ALIAS_A, mode: 'dual' } : { ok: false, reason: 'unreachable' }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify(['u17x']),
+      `[17j] dual + a FAILED alias mint falls back to the MEMBER id (lossless: the server addresses both in dual) — a failed mint never blocks the login (got ${JSON.stringify(loginsOf(plugin))})`);
+    ok = true;
+    await wait(700);
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify(['u17x', ALIAS_A]),
+      `[17k] …and the alias is retried on the SAME bounded ladder and the device UPGRADES to it (got ${JSON.stringify(loginsOf(plugin))})`);
+    const callsBefore = plugin.calls.length;
+    await keep(native.loginNativePush('u17q', 'acctA'));
+    assert(plugin.calls.length === callsBefore, '[17l] …and once on the alias, a league switch is a no-op again');
+  }
+  {
+    const { plugin, native, mints } = await world({ minter: async () => ({ ok: false, reason: 'unreachable' }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    await wait(4800);
+    assert(mints.length <= 3, `[17m] the alias retry is BOUNDED — at most three attempts, never a timer on every phone forever (mints ${mints.length})`);
+    assert(loginsOf(plugin).every((id) => id === 'u17x'), `[17n] …and the device stays on its member id throughout (got ${JSON.stringify(loginsOf(plugin))})`);
+  }
+
+  // ── (g) alias mode: NO fallback.
+  {
+    let userOk = true;
+    const { plugin, native } = await world({ minter: async () => (userOk ? { ok: true, externalId: ALIAS_A, mode: 'alias' } : { ok: false, reason: 'unreachable' }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    await keep(native.logoutNativePush());
+    userOk = false;
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    await wait(800);
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify([ALIAS_A]),
+      `[17o] in ALIAS mode a failed mint asserts NOTHING — no member-id fallback; the member id is no longer addressed (got ${JSON.stringify(loginsOf(plugin))})`);
+  }
+
+  // ── (g2) THE LADDER IS SPENT → THE "IN FLIGHT" CLAIM ENDS (security finding 2, 2026-09-30). Same defect and same
+  //    failing sequence as pushtest 17-16a..c on the plugin's flat calls: alias mode (no fallback) cannot mint three
+  //    times running, then the network returns and the app asks again — which used to return early forever.
+  {
+    let userOk = true;
+    const { plugin, native, mints } = await world({ minter: async () => (userOk ? { ok: true, externalId: ALIAS_A, mode: 'alias' } : { ok: false, reason: 'unreachable' }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));               // learns that the server is in alias mode
+    await keep(native.logoutNativePush());
+    userOk = false;
+    await keep(native.loginNativePush('u17x', 'acctA'));               // attempt 1 of 3 fails; the ladder is armed
+    const mintsMid = mints.length;
+    await keep(native.loginNativePush('u17y', 'acctA'));               // a league switch while the ladder is running
+    await wait(50);
+    assert(mints.length === mintsMid, `[17o2] WHILE the ladder is still running the claim holds — a league switch does not mint again (mints ${mintsMid} -> ${mints.length})`);
+    await wait(4900);
+    const loginsBefore = loginsOf(plugin).length;
+    userOk = true;
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    await wait(100);
+    assert(loginsOf(plugin).length === loginsBefore + 1 && loginsOf(plugin).at(-1) === ALIAS_A,
+      `[17o3] AFTER the ladder is spent the SAME call is honoured again — it mints and binds the alias (logins ${loginsBefore} -> ${loginsOf(plugin).length}); before the fix it returned early forever`);
+  }
+
+  // ── (h) legacy (the operator's rollback) and a pre-DI-434 answer both bind the member id.
+  {
+    const { plugin, native } = await world({ minter: async () => ({ ok: true, mode: 'legacy' }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    await keep(native.loginNativePush('u17y', 'acctA'));
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify(['u17x', 'u17y']),
+      `[17p] mode:'legacy' binds the MEMBER id, and there a league switch re-binds (the device follows the league again — the no-op belongs to the alias) (got ${JSON.stringify(loginsOf(plugin))})`);
+  }
+  {
+    const { plugin, native, mints } = await world({ minter: async () => ({ ok: true }) });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    assert(JSON.stringify(loginsOf(plugin)) === JSON.stringify(['u17x']) && mints.length === 1,
+      `[17q] a server that predates DI-434 (ok, no alias, no mode) binds the member id from that ONE answer (got ${JSON.stringify(loginsOf(plugin))}, mints ${mints.length})`);
+  }
+
+  // ── (i) the Turn On grant path re-attaches the identity (force).
+  {
+    const { plugin, native } = await world({ minter: aliasAnswer() });
+    await keep(native.loginNativePush('u17x', 'acctA'));
+    const before = loginsOf(plugin).length;
+    const res = await keep(native.requestNativePushPermission('u17x'));
+    assert(res.ok === true && loginsOf(plugin).length === before + 1,
+      `[17r] a grant via the Turn On button re-asserts the identity (force) even though the device is bound (logins ${before} → ${loginsOf(plugin).length})`);
+  }
+
+  // ── (j) THE LEGACY FLAG (an older build stored the member id) still reads as "an identity was attached".
+  {
+    const store = new Map([['cfbp_native_push_identity', 'memberA']]);
+    const { plugin, native } = await world({ minter: aliasAnswer(), store });
+    await keep(native.logoutNativePush());
+    assert(plugin.calls.some((c) => c[0] === 'logout') && !store.has('cfbp_native_push_identity'),
+      '[17s] an OLDER build\'s flag (a member id) still triggers the signed-out reconcile — the marker change did not orphan a device that was bound before the update');
+  }
+
+  // ── (k) THE CLICK RESOLVER — a league id is a uuid, or the tap is declined.
+  {
+    const native = await freshPushNative();
+    const r = (extra) => native._resolveClickDestinationForTest({ event: 'CHAT_MESSAGE_CREATED', route: 'chat', params: { messageId: 'm1' }, ...extra });
+    const withLeague = r({ league_id: LEAGUE_A });
+    assert(withLeague && withLeague.tab === 'chat' && withLeague.params.messageId === 'm1' && withLeague.leagueId === LEAGUE_A,
+      `[17t] a tap carrying a well-formed league_id resolves {tab, params, leagueId} (got ${JSON.stringify(withLeague)})`);
+    assert(r({ league_id: LEAGUE_A.toUpperCase() }).leagueId === LEAGUE_A, '[17u] …normalised to lower case');
+    const none = r({});
+    assert(none && !('leagueId' in none) && none.tab === 'chat', `[17v] a tap with NO league_id is exactly what it always was — no leagueId key at all (got ${JSON.stringify(none)})`);
+    for (const bad of ['not-a-uuid', `${LEAGUE_A}x`, ` ${LEAGUE_A}`, '', 42, true, {}, [], '<img src=x>', 'https://evil.example/', "1' or '1'='1"]) {
+      assert(r({ league_id: bad }) === null,
+        `[17w] a league_id that is PRESENT but not a uuid (${JSON.stringify(bad)}) declines the tap — malformed is not "missing", and guessing a destination is not safer than declining`);
+    }
+    assert(native._resolveClickDestinationForTest({ event: 'CHAT_MESSAGE_CREATED', route: 'settings', league_id: LEAGUE_A }) === null,
+      '[17x] …and a bad ROUTE still declines regardless of a good league id — the league id never launders a route');
+  }
+
+  // ── (l) FOREGROUND: native NEVER suppresses (DI-241), but another league's push does not wake THIS league's chat.
+  {
+    const plugin = fakePlugin();
+    installPlugin(plugin);
+    withFetchOk();
+    const native = await freshPushNative();
+    const woke = [];
+    native.wireNativeForeground((event) => woke.push(event), () => 'league-ACTIVE');
+    const fire = async (leagueId, id) => {
+      const before = woke.length;
+      await plugin.listeners.notificationForegroundWillDisplay({
+        notificationId: id, additionalData: { event: 'CHAT_MESSAGE_CREATED', ...(leagueId === undefined ? {} : { league_id: leagueId }) },
+      });
+      return { woke: woke.length - before, banner: plugin.calls.filter((c) => c[0] === 'proceedWithWillDisplay' && c[1].notificationId === id).length };
+    };
+    const same = await fire('league-ACTIVE', 'n-same');
+    const other = await fire('league-OTHER', 'n-other');
+    const none = await fire(undefined, 'n-none');
+    assert(same.woke === 1 && same.banner === 1, `[17y] a push from the ACTIVE league wakes its chat and shows its banner (got ${JSON.stringify(same)})`);
+    assert(other.woke === 0 && other.banner === 1,
+      `[17z] a push from ANOTHER league shows its banner (native never suppresses — proceedWithWillDisplay ran) but does NOT wake this league's chat (got ${JSON.stringify(other)})`);
+    assert(none.woke === 1 && none.banner === 1, `[17aa] a push with no league_id behaves as before (got ${JSON.stringify(none)})`);
+  }
+
+  // ── (m) STRUCTURAL: nothing identifying reaches the on-disk store, and the mint never surfaces a reason.
+  {
+    const src = await readFile(new URL('./js/push-native.js', import.meta.url), 'utf8');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/[^\n]*/g, ' ');
+    assert(/async function _writePersistedIdentityFlag\(\)/.test(code) && !/_writePersistedIdentityFlag\([^)]/.test(code),
+      '[17ab] the flag writer takes NO argument — there is no way for a later edit to hand it an id [structural]');
+    assert(/NATIVE_PUSH_IDENTITY_MARKER = '1'/.test(code) && /value: NATIVE_PUSH_IDENTITY_MARKER/.test(code),
+      '[17ac] …and what it writes is the constant marker [structural]');
+    // String LITERALS are blanked first: a log MESSAGE may say the word "alias"; what must never happen is an
+    // argument EXPRESSION that reads an id (`identity.externalId`, `minted.externalId`, a bare `alias`).
+    const noLiterals = code.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, "''");
+    retireAll();
+    assert(!/console\.(log|info|warn|error)\([^)]*\b(externalId|alias)\b/i.test(noLiterals),
+      '[17ad] …and no console call passes the alias or the external id as an ARGUMENT [structural]');
   }
 }
 

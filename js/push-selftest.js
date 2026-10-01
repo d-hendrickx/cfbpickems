@@ -457,7 +457,21 @@ export function reachLine(result, eligibility, nameOf) {
   }
   const kinds = Array.isArray(result.kinds) && result.kinds.length ? result.kinds : [];
   const devices = `${count} device${count === 1 ? '' : 's'}`;
-  const kindPhrase = kinds.length ? ` (${kinds.join(', ')})` : '';
+  // UN-315 / DI-435 — WHICH BUILD each device is on, when the server can tell. Outside legacy mode
+  // push-reach reports `aliasDevices` (bound to the player's account-wide alias — the multi-league
+  // update) and `legacyDevices` (still bound to the old member id). The commissioner reads this
+  // BEFORE the alias cut-over: it is only safe once every player has a device on the update. Absent
+  // (legacy mode, an older server) adds nothing — the line reads exactly as it always did.
+  const aliasN = typeof result.aliasDevices === 'number' ? result.aliasDevices : null;
+  const legacyN = typeof result.legacyDevices === 'number' ? result.legacyDevices : null;
+  let updateNote = '';
+  if (aliasN !== null && legacyN !== null) {
+    if (aliasN > 0 && legacyN === 0) updateNote = 'updated app';
+    else if (aliasN === 0 && legacyN > 0) updateNote = 'not on the update yet';
+    else if (aliasN > 0 && legacyN > 0) updateNote = `${aliasN} updated, ${legacyN} not yet`;
+  }
+  const kindInner = [kinds.join(', '), updateNote].filter(Boolean).join('; ');
+  const kindPhrase = kindInner ? ` (${kindInner})` : '';
   const reason = eligibility ? eligibility.reason : undefined;
   if (reason === 'master_off' || reason === 'push_off') {
     return {

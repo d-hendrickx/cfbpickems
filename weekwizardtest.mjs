@@ -311,7 +311,9 @@ console.log('\n[6] fetchAndApplySuggestedSlate — Step 2\'s one-button combo…
 
 console.log('\n[7] openForPicksFromWizard — gated, never calls applyWeekStatusChange when the gate fails…');
 {
-  const week = { weekId: 'w1', weekNumber: 5, status: 'draft' };
+  // DI-404 (UN-388) — a draft now needs a valid weekly blurb before it opens,
+  // so this fixture carries one; the blurb refusals themselves are [18].
+  const week = { weekId: 'w1', weekNumber: 5, status: 'draft', blurb: 'Rivalry week — bring your A game.' };
   let statusChangeCalls = 0, toastCalls = 0, hapticCalls = 0;
   const deps = {
     applyWeekStatusChange: (w, to) => { statusChangeCalls++; return { ...w, status: to }; },
@@ -493,7 +495,9 @@ console.log('\n[12] DI-357 — tiebreakerWizardStepSummary() / applyTiebreakerQu
 
 console.log('\n[13] DI-358 — finishWeekSetupFromWizard(): Now / Scheduled / Draft, one function, three modes…');
 {
-  const week = { weekId: 'w1', weekNumber: 5, status: 'draft' };
+  // DI-404 (UN-388) — carries a valid blurb so the Now/Scheduled cases below
+  // still test what they always tested; the blurb gate is proven in [18].
+  const week = { weekId: 'w1', weekNumber: 5, status: 'draft', blurb: 'Rivalry week — bring your A game.' };
   const goodArgs = { week, gamesCount: 10, missingSpreadCount: 0, timingConfigured: true };
 
   // ── NOW — delegates to openForPicksFromWizard(), unchanged behavior ──
@@ -602,7 +606,10 @@ console.log('\n[14] DI-358 — dueForScheduledOpen(): {due, blocked, gate} for t
   // coordinator fix, item 6 — a bare boolean conflated "not due yet" with
   // "due, but the week can't actually open," leaving the tick with no way
   // to raise a notice for the second case. Now {due, blocked, gate}.
-  const dueResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: past }, now, ...okArgs });
+  // DI-404 AMENDED (coordinator override, 2026-09-30) — a due week ALSO needs a
+  // valid blurb now, so the "due" fixtures below carry one; blank/short/demo is [18].
+  const blurbOk14 = 'Rivalry week — bring your A game.';
+  const dueResult = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: past, blurb: blurbOk14 }, now, ...okArgs });
   assert(dueResult.due === true && dueResult.blocked === false && !!dueResult.gate && dueResult.gate.canOpen === true,
     `14-1: draft, scheduled time in the past, checklist clear ⇒ due:true, blocked:false, gate present and canOpen (got ${JSON.stringify(dueResult)})`);
 
@@ -644,7 +651,7 @@ console.log('\n[14] DI-358 — dueForScheduledOpen(): {due, blocked, gate} for t
     [true, true, true, true], [false, true, true, false], [true, false, true, false], [true, true, false, false],
   ]) {
     const r = wizard.dueForScheduledOpen({
-      week: { status: 'draft', picksOpenAt: past }, now,
+      week: { status: 'draft', picksOpenAt: past, blurb: blurbOk14 }, now,
       gamesCount: gamesOk ? 5 : 0, missingSpreadCount: spreadsOk ? 0 : 2, timingConfigured: timingOk,
     });
     assert(r.due === expectDue && r.blocked === !expectDue,
@@ -990,6 +997,183 @@ console.log('\n[17] DI-411…416 (UN-366…371, 2026-09-28) — WIZARD_SLATE bat
   }
   assert(wizard.anotherWeekAlreadyOpen([], 'w1') === null, '17-16: an empty week list ⇒ null, not a throw');
   assert(wizard.anotherWeekAlreadyOpen(null, 'w1') === null, '17-17: a null week list ⇒ null, not a throw');
+}
+
+console.log('\n[18] DI-404 (UN-388, N16, 2026-09-29) — the mandatory weekly blurb: blurbCheck(), who is gated, and the two open paths…');
+{
+  const GOOD = 'Rivalry week — bring your A game.';
+
+  // ── blurbCheck(): the ONE definition of "filled" ────────────────────────
+  assert(wizard.BLURB_MIN_LENGTH === 10, '18-1: the minimum is ten characters');
+  for (const [label, input] of [['empty string', ''], ['null', null], ['undefined', undefined], ['a number', 12345678901], ['spaces only', '          '], ['whitespace mix', ' \n\t \n  \t ']]) {
+    const c = wizard.blurbCheck(input);
+    assert(c.ok === false && c.reason === 'empty' && c.length === 0, `18-2 (${label}): reads as EMPTY, not short and not a throw (got ${JSON.stringify(c)})`);
+  }
+  const nine = wizard.blurbCheck('abcdefghi');
+  const ten = wizard.blurbCheck('abcdefghij');
+  assert(nine.ok === false && nine.reason === 'short' && nine.length === 9, `18-3: NINE characters is SHORT (got ${JSON.stringify(nine)})`);
+  assert(ten.ok === true && ten.reason === null && ten.length === 10, `18-4: TEN characters is the first that passes (got ${JSON.stringify(ten)})`);
+  assert(wizard.blurbCheck('abcde          fg').reason === 'short',
+    '18-5: whitespace COLLAPSES before counting — 2 words padded with 10 spaces are 8 characters, not 17');
+  assert(wizard.blurbCheck('abcd\n\n\n\nefgh').reason === 'short',
+    '18-6: newlines collapse too — "abcd" + blank lines + "efgh" is 9, not 12');
+  assert(wizard.blurbCheck('    abcdefghi    ').reason === 'short' && wizard.blurbCheck('    abcdefghij    ').ok === true,
+    '18-7: leading/trailing padding is trimmed before the count (9 stays short, 10 passes)');
+  assert(wizard.blurbCheck('  abcde   fghi  ').ok === true && wizard.blurbCheck('  abcde   fghi  ').text === 'abcde fghi',
+    '18-8: "abcde fghi" is exactly ten once collapsed and trimmed — the boundary is on the COLLAPSED text');
+  assert(wizard.blurbCheck('🔥🔥🔥🔥🔥🔥🔥🔥🔥').reason === 'short' && wizard.blurbCheck('🔥🔥🔥🔥🔥🔥🔥🔥🔥🔥').ok === true,
+    '18-9: characters are counted as a person reads them — an emoji is ONE, so nine 🔥 is short and ten passes');
+  assert(wizard.blurbCheck(GOOD).ok === true, '18-10: a real blurb passes');
+
+  // ── the exact inline copy (DI-404 item 4) ────────────────────────────────
+  assert(wizard.WIZARD_COPY.BLURB_EMPTY === "Add a note for your players — it's the first thing they see on the Picks page.", '18-11: empty copy, verbatim');
+  assert(wizard.WIZARD_COPY.BLURB_SHORT === 'A little longer, please — at least 10 characters.', '18-12: short copy, verbatim');
+  assert(wizard.WIZARD_COPY.BLURB_REQUIRED_AT_OPEN === 'Write the weekly blurb before opening this week.', '18-13: Step 6 copy, verbatim');
+  assert(wizard.blurbErrorCopy('empty') === wizard.WIZARD_COPY.BLURB_EMPTY && wizard.blurbErrorCopy('short') === wizard.WIZARD_COPY.BLURB_SHORT
+    && wizard.blurbErrorCopy(null) === '' && wizard.blurbErrorCopy('nonsense') === '',
+    '18-14: blurbErrorCopy maps each failure to its copy and everything else to nothing');
+  assert(wizard.WIZARD_STEPS[4].id === 'blurb' && wizard.WIZARD_STEPS[4].title === 'Weekly Blurb' && !/optional/i.test(wizard.WIZARD_STEPS[4].title),
+    '18-15: Step 5 is retitled "Weekly Blurb" — "(optional)" is gone');
+
+  // ── who is gated ─────────────────────────────────────────────────────────
+  assert(wizard.blurbRequiredForOpen({ status: 'draft' }) === true, '18-16: a draft is gated');
+  assert(wizard.blurbRequiredForOpen({}) === true, '18-17: a row with NO status counts as a draft — errs toward asking, never toward skipping');
+  for (const status of ['open', 'locked', 'live', 'final']) {
+    assert(wizard.blurbRequiredForOpen({ status, blurb: '' }) === false, `18-18 (${status}): an existing ${status} week is never re-checked (grandfathered)`);
+  }
+  assert(wizard.blurbRequiredForOpen({ status: 'draft', dataSourceMode: 'demo' }) === false, '18-19: a demo week is exempt');
+  assert(wizard.blurbRequiredForOpen({ status: 'draft', dataSourceMode: 'manual' }) === true
+    && wizard.blurbRequiredForOpen({ status: 'draft', dataSourceMode: 'espn_live' }) === true, '18-20: manual and ESPN-live drafts are gated — only demo is exempt');
+  assert(wizard.blurbRequiredForOpen(null) === false && wizard.blurbRequiredForOpen(undefined) === false, '18-21: no week ⇒ nothing to gate, never a throw');
+  for (const sport of ['cfb', 'nfl', 'nhl', 'wjc', undefined]) {
+    assert(wizard.blurbRequiredForOpen({ status: 'draft', sport }) === true && wizard.blurbGate({ status: 'draft', sport, blurb: '' }).ok === false,
+      `18-22 (sport=${sport}): the predicate reads no sport — every week of every sport is gated the same`);
+  }
+  const gBlank = wizard.blurbGate({ status: 'draft', blurb: '' });
+  const gShort = wizard.blurbGate({ status: 'draft', blurb: 'TBD' });
+  const gGood = wizard.blurbGate({ status: 'draft', blurb: GOOD });
+  const gDemoBlank = wizard.blurbGate({ status: 'draft', dataSourceMode: 'demo', blurb: '' });
+  assert(gBlank.required && !gBlank.satisfied && !gBlank.ok && gBlank.check.reason === 'empty', '18-23: blank draft ⇒ required, not satisfied, BLOCKED');
+  assert(gShort.required && !gShort.satisfied && !gShort.ok && gShort.check.reason === 'short', '18-24: a too-short blurb on a draft is blocked as short');
+  assert(gGood.required && gGood.satisfied && gGood.ok, '18-25: a valid blurb ⇒ satisfied, not blocked');
+  assert(!gDemoBlank.required && !gDemoBlank.satisfied && gDemoBlank.ok, '18-26: a blank DEMO draft is not blocked (exempt) — and honestly not "satisfied" either');
+
+  // ── gatingChecklist() / dueForScheduledOpen() are UNTOUCHED ──────────────
+  const gl = wizard.gatingChecklist({ gamesCount: 3, missingSpreadCount: 0, timingConfigured: true });
+  assert(JSON.stringify(Object.keys(gl)) === JSON.stringify(['gamesOk', 'gamesLabel', 'spreadsOk', 'spreadsLabel', 'timingOk', 'timingLabel', 'canOpen']) && gl.canOpen === true,
+    `18-27: gatingChecklist() itself is untouched — its three items and shape stay pinned; dueForScheduledOpen() asks for the blurb BESIDE it (got keys ${Object.keys(gl)})`);
+  const okArgs = { gamesCount: 10, missingSpreadCount: 0, timingConfigured: true };
+  const pastAt = new Date(Date.now() - 60000).toISOString();
+  // COORDINATOR OVERRIDE (2026-09-30) — [18-28/29] used to pin the opposite (the tick
+  // never checks the blurb, so an already-scheduled blank draft still opens). That let
+  // a blank-blurb week open through Step 4's Auto-Open At, so the leg now HOLDS a due
+  // week that has no valid blurb — and releases it on the first tick after one exists.
+  const dueBlank = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt, blurb: '' }, now: Date.now(), ...okArgs });
+  assert(dueBlank.due === false && dueBlank.blocked === true && dueBlank.gate.canOpen === true && dueBlank.blurb.ok === false && dueBlank.blurb.check.reason === 'empty',
+    `18-28: a BLANK scheduled draft whose time has arrived is NOT due — it is BLOCKED, with the checklist itself clear so the reason is the blurb alone (got ${JSON.stringify(dueBlank)})`);
+  const dueNoBlurbField = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt }, now: Date.now(), ...okArgs });
+  assert(dueNoBlurbField.due === false && dueNoBlurbField.blocked === true,
+    '18-29: …and a legacy week with no blurb field at all is held the same way (grandfathered weeks are not exempt from the tick)');
+  const dueShort = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt, blurb: 'abcdefghi' }, now: Date.now(), ...okArgs });
+  assert(dueShort.due === false && dueShort.blocked === true && dueShort.blurb.check.reason === 'short',
+    '18-29b: nine characters is held too — the tick uses the same blurbCheck as every other surface');
+  const dueWritten = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt, blurb: 'abcdefghij' }, now: Date.now(), ...okArgs });
+  assert(dueWritten.due === true && dueWritten.blocked === false && dueWritten.blurb.ok === true,
+    '18-29c: the SAME week is due the moment a valid blurb exists — i.e. it opens on the very next tick once written');
+  const dueDemo = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt, blurb: '', dataSourceMode: 'demo' }, now: Date.now(), ...okArgs });
+  assert(dueDemo.due === true && dueDemo.blocked === false, '18-29d: a blank DEMO week stays exempt — it is due');
+  const dueBoth = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: pastAt, blurb: '' }, now: Date.now(), gamesCount: 0, missingSpreadCount: 0, timingConfigured: true });
+  assert(dueBoth.due === false && dueBoth.blocked === true && dueBoth.gate.canOpen === false && dueBoth.blurb.ok === false,
+    '18-29e: checklist AND blurb unmet ⇒ blocked, and BOTH facts are returned so the alert can name each');
+  const notYet = wizard.dueForScheduledOpen({ week: { status: 'draft', picksOpenAt: new Date(Date.now() + 60000).toISOString(), blurb: '' }, now: Date.now(), ...okArgs });
+  assert(notYet.due === false && notYet.blocked === false && notYet.blurb === null,
+    '18-29f: before the scheduled time nothing is blocked and nothing is checked — the reminder only fires AT open time');
+  assert(wizard.blurbErrorCopy('required_at_open') === wizard.WIZARD_COPY.BLURB_REQUIRED_AT_OPEN,
+    '18-29g: Step 4\'s Auto-Open refusal reuses Step 6\'s exact copy');
+
+  // ── the two open paths ───────────────────────────────────────────────────
+  const gateOk = { gamesCount: 10, missingSpreadCount: 0, timingConfigured: true };
+  const future = new Date(Date.now() + 86400000).toISOString();
+  function mkDeps() {
+    const calls = { status: 0, save: 0, toast: 0, haptic: 0 };
+    return {
+      calls,
+      deps: {
+        applyWeekStatusChange: (w, to) => { calls.status++; return { ...w, status: to }; },
+        saveWeek: () => { calls.save++; },
+        showToast: () => { calls.toast++; },
+        nativeHapticImpact: () => { calls.haptic++; },
+        isNativeShell: () => true,
+      },
+    };
+  }
+  const draftBlank = { weekId: 'w18', weekNumber: 5, status: 'draft', blurb: '' };
+
+  // Open now — through finishWeekSetupFromWizard AND the direct openForPicks
+  {
+    const { calls, deps } = mkDeps();
+    const viaFinish = wizard.finishWeekSetupFromWizard({ week: draftBlank, mode: wizard.OPEN_MODES.NOW, ...gateOk, deps });
+    assert(viaFinish.ok === false && viaFinish.reason === 'blurb_required' && viaFinish.mode === 'now' && viaFinish.blurb.reason === 'empty',
+      `18-30: Open now on a blank draft is REFUSED with blurb_required (got ${JSON.stringify(viaFinish)})`);
+    assert(calls.status === 0 && calls.toast === 0 && calls.haptic === 0, '18-31: …the status is NEVER changed, no success toast, no haptic — the week stays a draft');
+    const viaDirect = wizard.openForPicksFromWizard({ week: draftBlank, ...gateOk, deps });
+    assert(viaDirect.ok === false && viaDirect.reason === 'blurb_required' && calls.status === 0,
+      '18-32: the direct openForPicks() path refuses too — no second door around the gate');
+    const shortRes = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, blurb: 'abcdefghi' }, mode: wizard.OPEN_MODES.NOW, ...gateOk, deps });
+    assert(shortRes.ok === false && shortRes.reason === 'blurb_required' && shortRes.blurb.reason === 'short' && calls.status === 0,
+      '18-33: NINE characters is refused on Open now (the boundary, through the real open path)');
+    const spaces = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, blurb: '            ' }, mode: wizard.OPEN_MODES.NOW, ...gateOk, deps });
+    assert(spaces.ok === false && spaces.reason === 'blurb_required' && calls.status === 0, '18-34: a spaces-only blurb is refused — whitespace is not a note');
+    const valid = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, blurb: 'abcdefghij' }, mode: wizard.OPEN_MODES.NOW, ...gateOk, deps });
+    assert(valid.ok === true && valid.week.status === 'open' && calls.status === 1 && calls.toast === 1 && calls.haptic === 1,
+      `18-35: TEN characters opens — exactly one status change, one toast, one native haptic (got ${JSON.stringify(valid)})`);
+  }
+  // Schedule Open
+  {
+    const { calls, deps } = mkDeps();
+    const res = wizard.finishWeekSetupFromWizard({ week: draftBlank, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, ...gateOk, deps });
+    assert(res.ok === false && res.reason === 'blurb_required' && res.mode === 'scheduled',
+      `18-36: Schedule Open on a blank draft is REFUSED with blurb_required (got ${JSON.stringify(res)})`);
+    assert(calls.save === 0 && calls.status === 0 && calls.toast === 0, '18-37: …nothing is written — picksOpenAt is never saved, no status change, no toast');
+    const short = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, blurb: 'abcdefghi' }, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, ...gateOk, deps });
+    assert(short.ok === false && short.reason === 'blurb_required' && calls.save === 0, '18-38: nine characters is refused on Schedule Open too');
+    const good = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, blurb: GOOD }, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, ...gateOk, deps });
+    assert(good.ok === true && good.week.status === 'draft' && !!good.week.picksOpenAt && calls.save === 1 && calls.status === 0,
+      '18-39: a valid blurb schedules (one save, status stays draft — the tick flips it later)');
+  }
+  // Keep as draft — exempt, touches nothing
+  {
+    const { calls, deps } = mkDeps();
+    const res = wizard.finishWeekSetupFromWizard({ week: draftBlank, mode: wizard.OPEN_MODES.DRAFT, gamesCount: 0, missingSpreadCount: 0, timingConfigured: false, deps });
+    assert(res.ok === true && res.week === draftBlank && calls.status + calls.save + calls.toast + calls.haptic === 0,
+      '18-40: Keep as draft with a BLANK blurb succeeds and calls nothing in deps — a draft is invisible to players, so it is exempt');
+  }
+  // Demo weeks and existing weeks — exempt
+  {
+    const { calls, deps } = mkDeps();
+    const demo = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, dataSourceMode: 'demo' }, mode: wizard.OPEN_MODES.NOW, ...gateOk, deps });
+    assert(demo.ok === true && demo.week.status === 'open' && calls.status === 1, '18-41: a blank DEMO week opens (exempt)');
+    const demoSched = wizard.finishWeekSetupFromWizard({ week: { ...draftBlank, dataSourceMode: 'demo' }, mode: wizard.OPEN_MODES.SCHEDULED, scheduledAt: future, ...gateOk, deps });
+    assert(demoSched.ok === true && calls.save === 1, '18-42: …and schedules');
+    const existing = wizard.openForPicksFromWizard({ week: { ...draftBlank, status: 'locked' }, ...gateOk, deps });
+    assert(existing.ok === true, '18-43: an existing (non-draft) week is never re-checked, blank blurb or not');
+  }
+  // Order — the three-item checklist speaks first; the blurb is the fourth requirement
+  {
+    const { calls, deps } = mkDeps();
+    const both = wizard.finishWeekSetupFromWizard({ week: draftBlank, mode: wizard.OPEN_MODES.NOW, gamesCount: 0, missingSpreadCount: 0, timingConfigured: true, deps });
+    assert(both.ok === false && both.gate?.canOpen === false && both.reason === undefined && calls.status === 0,
+      '18-44: with the checklist AND the blurb both unmet, the checklist refusal comes back (so the handler names the games/spreads gap first)');
+  }
+  // Factory
+  {
+    const { calls, deps } = mkDeps();
+    const w = wizard.createWeekWizard(deps);
+    assert(w.blurbCheck('abcdefghi').reason === 'short' && w.blurbCheck('abcdefghij').ok === true && w.blurbGate(draftBlank).ok === false,
+      '18-45: the factory exposes blurbCheck/blurbGate, identical to the standalone exports');
+    const res = w.finishWeekSetup({ week: draftBlank, mode: 'now', ...gateOk });
+    assert(res.ok === false && res.reason === 'blurb_required' && calls.status === 0, '18-46: the deps-bound finishWeekSetup refuses a blank draft the same way');
+  }
 }
 
 console.log(`\n${'═'.repeat(50)}\n${fail === 0 ? '✅ ALL PASS' : '❌ FAILURES'} — ${pass} passed, ${fail} failed\n`);

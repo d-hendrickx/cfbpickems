@@ -13,6 +13,10 @@
  *  - showInHistory flag on weeks
  */
 
+// N1 (DI-432 §7, 2026-09-30) — the pilot-only registry's one predicate: the six-school list below is read only through getAlmaMaters(). pilot-only.js imports roles.js and
+// nothing else (no cycle), so this module keeps its no-app-import discipline.
+import { isPilotOnlyAllowed } from './pilot-only.js';
+
 // CATALOG, not the roster. There is no separately-editable alma-mater list
 // (Drew, 2026-09-04, correcting 8ae64f4/55f8908's two-list build — verbatim:
 // "the roster of alma maters... should only be comprised of schools claimed
@@ -44,7 +48,22 @@
 // matching only, no exclude-pattern protection, EXCEPT when the claim is an
 // exact match for the team name being tested — see "Exact equality first"
 // below, which covers every claim made through the ESPN-sourced dropdown).
-export const ALMA_MATERS = ['Oklahoma', 'Texas A&M', 'USC', 'Notre Dame', 'Purdue', 'Arkansas'];
+//
+// N1 (DI-432 §7, coordinator ruling 2026-09-30) — THE SIX-SCHOOL LIST IS THE PILOT LEAGUE'S, AND IT IS PILOT-ONLY IN CODE. It used to be a bare exported constant
+// (`ALMA_MATERS`) that every caller — the offline dropdown fallback, getAlmaMaterMatch()'s and data-provider's default parameters, the cfb profile's affinity catalog — read
+// directly, so a league that was not the pilot silently inherited the founders' schools as its fallback. The constant is now MODULE-PRIVATE; the ONLY way to read it is
+// getAlmaMaters(), which asks the pilot-only registry (`isPilotOnlyAllowed('sixSchoolAlmaMaters', league?)`, js/pilot-only.js → isPilotLeague()). A non-pilot league — and a
+// context with no league resolved at all (fail closed) — gets [], so it falls through to the FULL ESPN team catalog, never to these six. The matching PATTERN tables below
+// (ALMA_MATER_EXACT_PATTERNS / ALMA_MATER_EXCLUDE_PATTERNS) stay public: they are matching PRECISION for whatever school someone claims, not a list anyone is offered.
+const PILOT_ALMA_MATERS = Object.freeze(['Oklahoma', 'Texas A&M', 'USC', 'Notre Dame', 'Purdue', 'Arkansas']);
+
+/**
+ * The six pilot-league schools — a FRESH copy for the pilot league, [] for anyone else. `getAlmaMaters()` asks for the ACTIVE league (the resolver app.js installs);
+ * `getAlmaMaters(league)` asks about an explicit league record (`{ pilot: true }` is the pilot). Never throws; never returns the frozen original.
+ */
+export function getAlmaMaters(...league) {
+  return isPilotOnlyAllowed('sixSchoolAlmaMaters', ...league) ? [...PILOT_ALMA_MATERS] : [];
+}
 
 // Precise matching patterns — prevents "Arkansas State" from matching "Arkansas" etc.
 // These are the exact ESPN displayName substrings that identify each alma mater.
@@ -174,9 +193,10 @@ export function getTeamDisplay(game, side='home') {
  * `claimedAlmaMaters()` (app.js — the distinct, non-empty set of ACTIVE
  * players' `player.almaMater` values) from a caller that has the storage
  * seam available (data-model.js itself never imports storage.js, so it
- * can't default to that here). Omitting it falls back to the full
- * ALMA_MATERS catalog, which keeps every caller that hasn't been updated for
- * the derived-roster model working exactly as before.
+ * can't default to that here). Omitting it falls back to the pilot league's
+ * six-school catalog via getAlmaMaters() — and to NOTHING for any other league
+ * (N1: the six schools are pilot-only in code), which keeps every pilot caller
+ * that hasn't been updated for the derived-roster model working exactly as before.
  *
  * PRECISION TRADEOFF, residual after exact-first — a claimed school NOT in
  * the ALMA_MATERS catalog AND not itself an exact match for the `teamName`
@@ -195,7 +215,7 @@ export function getTeamDisplay(game, side='home') {
  * name AND (b) that other program isn't itself claimed too (in which case
  * exact-first already disambiguates them, per the proof above).
  */
-export function getAlmaMaterMatch(teamName, almaMaters = ALMA_MATERS) {
+export function getAlmaMaterMatch(teamName, almaMaters = getAlmaMaters()) {
   if (!teamName) return null;
   const t = teamName.trim();
   const tLow = t.toLowerCase();
@@ -226,6 +246,48 @@ export function getAlmaMaterMatch(teamName, almaMaters = ALMA_MATERS) {
     if ([...patterns].some(p => wordAwareIncludes(tLow, p))) return alma;
   }
   return null;
+}
+
+/**
+ * DI-439 §4 (N8, 2026-09-29) — WHO CLAIMS THE SCHOOL THIS TEAM PLAYS FOR.
+ *
+ * The pure half of the alma-mater "now losing" call-out, shared by BOTH runtimes:
+ * `js/chat-ui.js` passes `getPlayers()`, and the `scribe-autonomous` verifier
+ * (`_shared/scribe-evidence.mjs`) passes `view.players`. It lives HERE because this
+ * file imports nothing — `claimedAlmaMaters()` is in `app.js`, which `chat-ui.js`
+ * must not import (cycle), and an Edge Function cannot import `app.js` at all.
+ *
+ * ── THE LOCKED LIST IS THE ONLY WAY IN. `players.alma_mater` is SELF-EDITABLE
+ * mid-game, so a player could type a school into his own profile during the third
+ * quarter and have SCRIBE announce his team is losing. The matched school must be
+ * one the week FROZE at lock (`week.lockedAlmaMaters` / `weeks.locked_alma_maters`,
+ * F4 2026-09-04). `null`, absent or empty means no alma call-out for this week —
+ * never a fall-back to the live catalog or the live roster.
+ *
+ * ── AND WHAT IS NAMED COMES FROM THE GAME ROW, NEVER FROM THIS FUNCTION'S OUTPUT.
+ * Callers print the school as the GAME's own team name; the players returned here
+ * are only the list of people to name. A player's free-text `alma_mater` string is
+ * compared, never echoed.
+ *
+ * Matching is `getAlmaMaterMatch()` — the ONE shared matcher (RG-02's exclusion
+ * table included, so "Arkansas" never claims "Arkansas State") — followed by the
+ * SAME trim + case-insensitive equality `claimedAlmaMaters()` (app.js) uses to build
+ * the locked list in the first place. A parity test pins the two on one roster.
+ *
+ * @param {Array<{playerId?:string, active?:boolean, almaMater?:string}>} players
+ * @param {string} teamName  the GAME ROW's team name
+ * @param {string[]|null} lockedAlmaMaters  `week.lockedAlmaMaters`
+ * @returns {Array} the ACTIVE players whose `almaMater` is the matched school, in roster order
+ */
+export function almaMaterPlayersForTeam(players, teamName, lockedAlmaMaters) {
+  if (!Array.isArray(lockedAlmaMaters) || !lockedAlmaMaters.length) return [];
+  if (!Array.isArray(players) || !teamName) return [];
+  const matched = getAlmaMaterMatch(String(teamName), lockedAlmaMaters.filter(a => typeof a === 'string'));
+  if (!matched) return [];
+  const want = matched.trim().toLowerCase();
+  if (!want) return [];
+  return players.filter(p => p && p.active
+    && String(p.almaMater || '').trim().toLowerCase() === want);
 }
 
 export const WEEK_STATUS   = { DRAFT:'draft', OPEN:'open', LOCKED:'locked', LIVE:'live', FINAL:'final' };

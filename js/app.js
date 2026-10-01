@@ -4,8 +4,8 @@
  * One-stop place to update the user-visible version string + release date.
  * Surfaced in the footer of the Rules tab (Priority 12).
  */
-export const APP_VERSION = 'v0.27.2';
-export const APP_VERSION_DATE = '2026-09-29';
+export const APP_VERSION = 'v0.28.0';
+export const APP_VERSION_DATE = '2026-09-30';
 
 /**
  * UN-124 + FEAT-3 / DI-200.0 (UN-200/UN-201, 2026-09-12) — release notes,
@@ -98,7 +98,44 @@ export const APP_VERSION_DATE = '2026-09-29';
 // Week flow. Six bullets, plain player-facing copy per the DI's own cap; the
 // FIRST item is SCRIBE's chat-post headline (whatsNewHeadline()'s 90-char
 // cut). CAP: v0.22.5, the oldest, drops to keep 12.
+// Release v0.28.0 (2026-09-30) — SUPERSEDES v0.27.3 (cut, never deployed) and
+// carries v0.27.3's one fix (the multi-game sync refusal, RG-310/N14) as its
+// last `fixed` line. Lists only what a player or the commissioner can SEE today:
+// the Munera sign-in, the chat / Dashboard / Picks / Control Center fixes, the
+// mandatory Weekly Blurb, SCRIBE's quieter live-game commentary, the iPhone
+// bounce, the Delete Account hand-off and the updated privacy page (regulatory
+// condition R-C11 — the page changed, so the release says so). League
+// creation, multi-sport, multi-league push and invite codes ship dark and are
+// NOT mentioned. Each line was checked against the merged code, not the
+// commit titles. The FIRST `added` item is SCRIBE's chat-post headline
+// (whatsNewHeadline()'s 90-char cut).
 const WHATS_NEW_RELEASES = [
+  {
+    version: 'v0.28.0',
+    date: '2026-09-30',
+    added: [
+      'A new Munera sign-in screen, on the web and in the app.',
+      'Commissioners: a week can\'t open until it has a Weekly Blurb of at least 10 characters.',
+      'Commissioners can now delete their account — the Delete Account screen has you hand your league to another member first.',
+      'The privacy policy has been updated. You\'ll find it at the bottom of the menu.',
+    ],
+    fixed: [
+      'Chat: text you type is readable on every theme, even with your phone in dark mode.',
+      'Chat: the message box now sits at the bottom of the thread, just above the tab bar.',
+      'Chat: swiping a message to reply shows the bubble slide and the arrow, even with Reduce Motion on.',
+      'Chat: on phones there is no refresh button now — pull up past the last message to sync.',
+      'Picks and Dashboard: swiping between weeks follows your finger and slides on release instead of jumping.',
+      'Dashboard: holding to reorder is no longer mistaken for a week swipe or the menu swipe.',
+      'The week title on Picks and Dashboard is centered.',
+      'Commissioners: the Weekly Blurb card collapses again.',
+      'The menu no longer has an empty gap between Appearance and SCRIBE settings.',
+      'The alma mater pickers list every college football school, not just six — and say so if the list can\'t load.',
+      'Turning team logos off, or changing your time zone, name or initials, now updates Dashboard and Picks right away.',
+      'SCRIBE is choosier during games: it speaks up only when a real upset turns against the room or an alma mater falls behind — and it may name who\'s on the wrong side.',
+      'iPhone app: pages bounce at the top and bottom when you scroll past the end, like any iPhone app.',
+      'Adding several games at once — Apply Suggested or the week setup — no longer turns off cross-device sync.',
+    ],
+  },
   {
     version: 'v0.27.2',
     date: '2026-09-29',
@@ -440,7 +477,7 @@ import {
   // §[11] asserts they agree), so the card cannot offer a model the server
   // would refuse to price.
   SCRIBE_MODEL_CHOICES,
-  ALMA_MATERS, DEFAULT_RULES, DATA_QUALITY, DATA_SOURCE_MODE,
+  getAlmaMaters, DEFAULT_RULES, DATA_QUALITY, DATA_SOURCE_MODE,
   createPlayer, createGame, createPick, createWeek, formatWeekLabel, formatWeekLabelParts,
   formatGameTime, formatVenueDisplay, formatSpread, getPlayerInitials,
   sourceModeLabelOf, ALMA_MATER_DISPLAY, getAlmaMaterMatch,
@@ -655,6 +692,8 @@ import {
   // OWN copy, not the generic "check your connection" catch-all; see
   // showDeleteAccountSheet()'s catch block below.
   AccountDeleteRefusedError,
+  // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's two server calls (the preflight and the archive) and the ONE expiry classifier it reuses.
+  getAccountExitLeagues, archiveLeagueOnExit, isSessionExpiredError,
 } from './auth.js';
 
 // Phase III Step 4 Part B — THE THIRD STORAGE MODE (DI §1.1).
@@ -825,11 +864,11 @@ import { haptic } from './haptics.js';
 import {
   bindScrollDirection, bindKeyboardAvoid, bindPullToRefresh, bindWeekSwipe, chronologicalWeekIds,
   bindBottomBounce, gesturesSuspended, prefersReducedMotion, bindSwipeToDismiss,
-  bindBottomPullToRefresh,
+  bindBottomPullToRefresh, claimTouch, releaseTouch, deferRenderWhileWeekSwiping,
 } from './nav-gestures.js';
 import {
   mountControlCenter, renderStarredPanels, renderSettingsAccordion,
-  renderFeedbackRulesGroup, renderHelpFooter,
+  renderFeedbackRulesGroup, renderHelpFooter, almaCatalogNoteText,
 } from './control-center.js';
 import {
   resolvePostSignInRoute, renderLeaguesHome, leagueCardHTML, renderLeaguePage,
@@ -842,7 +881,7 @@ import {
 } from './leagues-home.js';
 import {
   createWeekWizard, WIZARD_STEPS, WIZARD_STEP_COUNT, WIZARD_COPY, countMissingSpreads,
-  narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, FINALIZE_STEP_COUNT,
+  narrowedWeekStatusButtons, dueForScheduledOpen, OPEN_MODES, FINALIZE_STEPS, FINALIZE_STEP_COUNT, blurbCheck, blurbGate, blurbErrorCopy, // DI-404 (UN-388): the mandatory weekly blurb — kept on this line so no pinned line number below it moves
   // DI-416 (UN-371) — Step 6's "another week already open" notice predicate.
   anotherWeekAlreadyOpen,
   // DI-359 — the two Finalize-flow summary functions NOT wrapped in
@@ -858,6 +897,8 @@ import {
   getCachedMaintenanceBanner, refreshMaintenanceBannerCache, setCachedMaintenanceBannerLocally,
   clearMaintenanceBannerCacheOnIdentityChange,
   getCachedSignupsOpen,
+  // N1 (DI-430/433, 2026-09-30) — the release gate's cache (DEFAULT FALSE, the opposite of signups) and the sports the picker may offer.
+  getCachedLeagueCreationOpen, getCachedOfferedSports,
   // SECURITY GATE NOTE A (2026-09-25) — wired as the boot-tail call's own
   // guard, below (applyAuthModeDecision()). Was exported and never read.
   hasAttemptedMaintenanceBannerFetch,
@@ -874,6 +915,20 @@ import { renderCommTabBar } from './comm-panel-layout.js';
 // anywhere it's needed, per DI-344/345 §Render paths' "ONE function every
 // paused-state render checks."
 import { isLeaguePaused, isPilotLeague, PAUSED_LEAGUE_BANNER_TEXT } from './roles.js';
+// N1 (DI-430, 2026-09-30) — the New League flow: js/league-create.js is pure (copy, invite-code helpers, `cfbp_pending_join`, the step machine, the renderers);
+// this file is its DOM/network wiring. The picker's rows are the sport registry's own list, intersected with the platform's offered sports.
+import * as LC from './league-create.js';
+// UN-389 / DI-446 (2026-09-30) — the Delete Account sheet's pure half (copy, state, row kinds, renderers); this file is its DOM/network wiring. Imports league-create.js's shared action-sheet builder.
+import * as AX from './account-exit.js';
+import { listProfiles } from './sports/index.js';
+// N1 (DI-432 §7, 2026-09-30) — the pilot-only registry: what belongs to the pilot league alone (the 2025 record, the Permanent Record, the six founders' schools, the IRB
+// wording) is gated by ONE predicate, `isPilotOnlyAllowed(key)`, which delegates to roles.js's isPilotLeague(). pilotonlytest.mjs is the source tripwire over every site.
+import { isPilotOnlyAllowed, setPilotOnlyLeagueResolver } from './pilot-only.js';
+// The resolver for a site with no league in hand (recap.js takes only a week): `isPilotOnlyAllowed(key)` asks THIS — the ACTIVE league's membership row. Installed HERE, at module
+// scope, not in boot(): a boot-time install is one reorder away from running after the first gated render, and this is a pure assignment (no listener, no network, no storage),
+// so it costs an import nothing. A local-only (PIN-era) device has no league concept and IS the founding league's own device, so it answers as the pilot; a Supabase device with no
+// resolved active league answers NO (fail closed) until memberships load, so no gated site can paint another league's content first.
+setPilotOnlyLeagueResolver(() => (getAuthMode() === 'supabase' ? activeLeagueRow() : { pilot: true }));
 
 // DI-208c step 1 (PASS 1b) — the native-shell body class, applied as early as
 // this module can reach `document.body` without touching index.html's inline
@@ -2489,6 +2544,12 @@ async function boot() {
   try { bindSyncBadgeTap(); } catch (e) { console.warn('[sync-badge] tap bind failed', e); }
   try { bindKeyboardAvoid(); } catch (e) { console.warn('[nav-gestures] bindKeyboardAvoid failed', e); }
   try { bindComingSoonDispatcher(); } catch (e) { console.warn('[leagues-home] coming-soon dispatcher bind failed', e); }
+  // N1 (DI-430, 2026-09-30) — the New League entry dispatcher, beside its sibling (one delegated listener for `[data-action="create-league"]`).
+  try { bindCreateLeagueDispatcher(); } catch (e) { console.warn('[league-create] dispatcher bind failed', e); }
+  // N1 (DI-430) — `?join=CODE` is captured NOW, at boot, and the URL is scrubbed in the same call (the value is persisted first). It needs NO resolved precondition —
+  // no SDK, no config, no session — which is exactly why it can sit here, above every await: a link opened while signed out must survive the Google round trip that follows
+  // (the OAuth redirectTo is origin-only and never carries it). Every OTHER query parameter and the hash are left exactly as they were.
+  try { LC.capturePendingJoin(); } catch (e) { console.warn('[league-create] pending-join capture failed', e); }
   // Item A — independent of the score auto-refresh interval (which the
   // commissioner can set to "Off"), so the mid-session chat-off watch always
   // runs regardless of that other setting.
@@ -2939,12 +3000,20 @@ async function runPostHydrateTail() {
         // default display (Finding 4: once ANY listener is attached, native
         // suppresses the banner until proceedWithWillDisplay() is called —
         // see push-native.js's wireNativeForeground()).
-        native.wireNativeForeground(() => { wakeChat(); });
+        // UN-315 / DI-436.3 — the second argument names the ACTIVE league: a push FROM another league
+        // still shows its banner (native never suppresses) but does not wake THIS league's chat.
+        native.wireNativeForeground(() => { wakeChat(); }, () => getActiveLeagueId());
         // DI-221/241 — a tap actually navigates on native: there is no
         // `?ntab=` URL re-open the way the web SDK's merged service worker
         // provides, so this module resolves the destination and this
         // callback performs the SAME navigation a web deep link does.
-        native.wireNativeNotificationClicks((dest) => { wakeChat(); deepLinkTo(dest); });
+        // UN-315 / DI-436.2 — a tap names its league (`dest.leagueId`, validated by the click
+        // resolver): routeToLeague() switches to it FIRST, then navigates. A tap from the league
+        // that is already active (or one that names none) keeps BUG-12's fetch-first behaviour.
+        native.wireNativeNotificationClicks((dest) => {
+          if (!dest.leagueId || dest.leagueId === getActiveLeagueId()) wakeChat();
+          routeToLeague(dest.leagueId, dest);
+        });
         // revealApp() already ran well above this boot-wiring block — this
         // marks the (already-satisfied) ready gate so a click that raced in
         // during the microtasks between addListener() resolving and this
@@ -2962,7 +3031,7 @@ async function runPostHydrateTail() {
       // had not landed yet therefore re-asserted playerId null and skipped the
       // login on a device that WAS signed in by the time the SDK was ready.
       const sess0 = getSession();
-      if (sess0?.playerId) loginOneSignal(sess0.playerId);
+      if (sess0?.playerId) loginOneSignal(sess0.playerId, getAccountUserId());
       // RG-192 gate — register a device that is ALLOWED to notify but has no
       // subscription, without prompting and without asking the player to do
       // anything. Fire-and-forget; every precondition is inside it.
@@ -2974,7 +3043,9 @@ async function runPostHydrateTail() {
       // trigger, an app resume, fires inside the transport itself where the
       // visibilitychange listener already lived. Fire-and-forget here — nothing
       // on this path is waiting on a verdict, and wakeChat() never throws.
-      wireForegroundSuppression(destinationFor, () => { wakeChat(); });   // §3 step 3 — client-side-only foreground suppression, + BUG-12's foreground fetch
+      // UN-315 / DI-436.3 — the third argument names the ACTIVE league: another league's push is never
+      // suppressed and never wakes this league's chat (push-onesignal.js's foreground hook).
+      wireForegroundSuppression(destinationFor, () => { wakeChat(); }, () => getActiveLeagueId());   // §3 step 3 — client-side-only foreground suppression, + BUG-12's foreground fetch
       // RG-245 — …AND IT NOW ROUTES. `wireNotificationClicks(() => { wakeChat(); })`
       // stood here: on the WARM path there is no fresh boot and therefore no
       // ?ntab to re-parse, so this hook was the only signal the tap produced —
@@ -2982,7 +3053,7 @@ async function runPostHydrateTail() {
       // same one from the other side: the tap lands on whatever page you were
       // already on. See routeNotificationTap() for what it will and will not
       // route.
-      wireNotificationClicks((event, data) => { wakeChat(); routeNotificationTap(event, data); });
+      wireNotificationClicks((event, data) => routeNotificationTap(event, data));
       // N1 / DI-N3 (R10) — compute the device's push-active flag AFTER init, so
       // OneSignal's opted-in report is meaningful rather than a guess against an
       // SDK that has not drained its queue yet. Fire-and-forget: showToast()
@@ -3025,11 +3096,16 @@ async function runPostHydrateTail() {
     if (ntab) {
       let nparams = {};
       try { nparams = JSON.parse(params.get('nparams') || '{}'); } catch {}
+      // UN-315 / DI-436.2 — `nleague` names the league the push came from. It is scrubbed with the
+      // other notification params (a URL that still carries it is one a player could bookmark and
+      // re-trigger on every reload) and handed to routeToLeague(), which switches BEFORE navigating.
+      const nleague = params.get('nleague');
       params.delete('ntab');
       params.delete('nparams');
+      params.delete('nleague');
       const rest = params.toString();
       history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : ''));
-      setTimeout(() => deepLinkTo({ tab: ntab, params: nparams }), 0);
+      setTimeout(() => routeToLeague(nleague, { tab: ntab, params: nparams }), 0);
     }
   } catch (e) { console.warn('[notifications] deep-link parse failed', e); }
 
@@ -3873,6 +3949,9 @@ function buildControlCenterCtx() {
       // picking one wiped the claim on save) — see the identical fix and its
       // full reasoning at the registerAlmaMaterOptionsProvider() call above.
       almaMaterOptionsHTML: buildAlmaMaterOptions(player?.almaMater || '', cachedEspnTeamsList() || almaMaterCatalogFallback()),
+      // RG-TBD-B3 — the caption under that picker: '' once ESPN's full list is
+      // in, otherwise what the short list IS (loading, or couldn't load).
+      almaMaterNoteText: almaMaterCatalogNoteText(),
     },
     timeZones: TIME_ZONES, currentTimeZone: getTimezone() || DEFAULT_TZ,
     themes: THEMES, currentTheme: getTheme() || 'neutral',
@@ -3918,8 +3997,22 @@ function buildControlCenterCtx() {
       // DI-335/DI-340 (2026-09-25) — Profile's "Password"/"Delete Account" rows.
       onOpenPasswordChange: () => showPasswordChangeSheet(),
       onOpenDeleteAccount: () => showDeleteAccountSheet(),
-      onSaveDisplayName: (v) => { if (session?.playerId) patchPlayer(session.playerId, { displayName: v }); },
-      onSaveInitials: (v) => { if (session?.playerId) patchPlayer(session.playerId, { initials: v }); },
+      // RG-TBD-N15 sweep (2026-09-29) — the name and initials render on Picks,
+      // Dashboard and Standings, so a CHANGED value repaints the page under the
+      // drawer, same shape as onSaveAlmaMater below (unchanged = no repaint, so
+      // one Profile Save repaints once per field that actually moved).
+      onSaveDisplayName: (v) => {
+        if (!session?.playerId) return;
+        const before = getPlayer(session.playerId)?.displayName;
+        patchPlayer(session.playerId, { displayName: v });
+        if (before !== v) { try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[cc] repaint after the display-name save failed', e); } }
+      },
+      onSaveInitials: (v) => {
+        if (!session?.playerId) return;
+        const before = getPlayer(session.playerId)?.initials;
+        patchPlayer(session.playerId, { initials: v });
+        if (before !== v) { try { navigateTo(state.currentTab || 'dashboard'); } catch (e) { console.warn('[cc] repaint after the initials save failed', e); } }
+      },
       // RG-290 — patchPlayer() now carries the claim-change ripple; the page
       // under the drawer (Rules roster, Watch, the pool's ⭐ badges) is then
       // repainted the way #ep-save repaints the Comm page, so nothing on
@@ -3933,7 +4026,15 @@ function buildControlCenterCtx() {
           catch (e) { console.warn('[cc] repaint after the alma-mater save failed', e); }
         }
       },
-      onSetTimeZone: (v) => { setTimezone(v); refreshControlCenterAndSettingsPage(); },
+      onSetTimeZone: (v) => {
+        setTimezone(v);
+        refreshControlCenterAndSettingsPage();
+        // RG-TBD-N15 sweep (2026-09-29) — kickoff and lock times are formatted
+        // in getTimezone() at render time; repaint the page under the drawer,
+        // as the retired header pills did (renderTzToggle()'s navigateTo()).
+        try { navigateTo(state.currentTab || 'dashboard'); }
+        catch (e) { console.warn('[cc] repaint after the time-zone change failed', e); }
+      },
       onSetTheme: (v) => { applyThemeChoice(v); refreshControlCenterAndSettingsPage(); },
       onSetColorScheme: (v) => { applyColorSchemeChoice(v); refreshControlCenterAndSettingsPage(); },
       onSetLogoView: (v) => {
@@ -3941,6 +4042,14 @@ function buildControlCenterCtx() {
         const p = getPlayer(session.playerId);
         patchPlayer(session.playerId, { preferences: { ...(p?.preferences || {}), logoView: v } });
         refreshControlCenterAndSettingsPage();
+        // RG-TBD-N15 (live v0.27.2, Drew 2026-09-29: "i toggle off the logos
+        // but theyre still there on the dashboard") — repaint the page UNDER
+        // the drawer. Every logo path reads getLogoView() only at render time,
+        // and nothing else repaints on this write (league_members is not a
+        // Realtime table), so the old markup stayed until an unrelated
+        // repaint. Same chokepoint and shape as onSaveAlmaMater above.
+        try { navigateTo(state.currentTab || 'dashboard'); }
+        catch (e) { console.warn('[cc] repaint after the logo toggle failed', e); }
       },
       onNavigate: (target) => navigateTo(target),
       onDrawerVisibilityChange: (open) => {
@@ -4023,25 +4132,74 @@ async function maybeRefreshNotifSettingsRow() {
  * fetch is remembered too: the drawer repaints on every toggle-row dispatch
  * and every one of them used to retry through the direct URL plus three CORS
  * proxies. Once per page load, success or failure — the fallback list is a
- * complete, valid option list either way.
+ * complete, valid option list either way. AMENDED RG-TBD-B3 (reviewer
+ * follow-up, 2026-09-29): once per picker OPEN — a failed/partial load retries
+ * when Profile or Chat settings is opened again (bindControlCenterBodies());
+ * repaints of an already-open pane still never retry.
  */
 let _almaCatalogFetchAttempted = false;
+// RG-TBD-B3 (bug batch B, 2026-09-29) — a failed/empty catalog fetch is
+// REMEMBERED so the pickers can say their list is short. Before this the
+// failure was a console.warn only, and the control-center pickers showed the
+// 6-school fallback as if it were every school there is.
+let _almaCatalogFetchFailed = false;
+// RG-TBD-B3 reviewer follow-ups (2026-09-29) — a fetch in flight (the caption
+// says "Loading" during a retry), and a list ESPN itself says is short
+// (`{ got, expected }` from fetchEspnTeamsList()'s truncation guard).
+let _almaCatalogInFlight = false;
+let _almaCatalogPartial = null;
+/** The full catalog is in memory — nothing left to fetch or say. */
+function almaCatalogComplete() { return !!cachedEspnTeamsList() && !_almaCatalogPartial; }
 async function maybeRefreshAlmaMaterCatalog() {
-  if (_almaCatalogFetchAttempted || cachedEspnTeamsList()) return;
+  if (_almaCatalogFetchAttempted || almaCatalogComplete()) return;
   _almaCatalogFetchAttempted = true;
+  _almaCatalogInFlight = true;
   try {
     const fresh = await fetchEspnTeamsList();
     if (Array.isArray(fresh) && fresh.length) {
       // In-memory only — never through the storage seam (RG-55, see
       // cachedEspnTeamsList()'s own doc comment).
       _espnTeamsCache = { teams: fresh, fetchedAt: new Date().toISOString() };
+      _almaCatalogPartial = fresh.incomplete || null;   // a short list is used AND named
+      _almaCatalogFetchFailed = false;
       patchProfileAlmaMaterOptionsInPlace(fresh);
+      // RG-TBD-B3 — the Chat settings row carries the same picker (#pref-alma).
+      patchProfileAlmaMaterOptionsInPlace(fresh, 'pref-alma');
+    } else {
+      _almaCatalogFetchFailed = true;   // zero teams is still a short list
     }
   } catch (e) {
     console.warn('[control-center] alma-mater catalog fetch failed, staying on the ALMA_MATERS fallback', e);
     // Never blocks Profile or Save — the fallback rendered above is already
     // a valid, complete option list (CONVENTIONS #7's "defensive at the
     // boundary"), same as showEditPlayerModal()'s own identical failure path.
+    _almaCatalogFetchFailed = true;
+  } finally {
+    _almaCatalogInFlight = false;
+  }
+  syncAlmaMaterCatalogNotes();
+}
+/** RG-TBD-B3 — the caption under the control-center alma-mater pickers; the
+ *  copy lives in js/control-center.js almaCatalogNoteText(). Never a silently
+ *  truncated picker (Interaction Principles §Error States: say what happened
+ *  and what to do, calmly, no technical detail). */
+function almaMaterCatalogNoteText() {
+  if (almaCatalogComplete()) return almaCatalogNoteText('loaded', { count: cachedEspnTeamsList().length });
+  if (_almaCatalogInFlight) return almaCatalogNoteText('loading');
+  if (_almaCatalogPartial) return almaCatalogNoteText('partial', { got: _almaCatalogPartial.got, count: _almaCatalogPartial.expected });
+  return almaCatalogNoteText(_almaCatalogFetchFailed ? 'failed' : 'loading');
+}
+/** RG-TBD-B3 — writes that caption onto whichever picker captions are on
+ *  screen (Profile's #cc-field-alma-note, Chat settings' #pref-alma-note).
+ *  Text only: never touches a <select>, so an open picker is safe, and the
+ *  caption's line box is reserved in CSS, so nothing below it moves. */
+function syncAlmaMaterCatalogNotes() {
+  const text = almaMaterCatalogNoteText();
+  for (const id of ['cc-field-alma-note', 'pref-alma-note']) {
+    const note = document.getElementById(id);
+    if (!note) continue;
+    if (note.textContent !== text) note.textContent = text;
+    note.hidden = false;
   }
 }
 /** R2 — the in-place half of the landing above. `sel.value` is the player's
@@ -4050,9 +4208,11 @@ async function maybeRefreshAlmaMaterCatalog() {
  *  — not the stored claim — is what the rebuilt list marks `selected`. The
  *  stored claim is only the fallback for a node that reports no string value.
  *  The value is re-asserted after the swap as well, so the choice survives
- *  even where an engine ignores the `selected` attribute on an options swap. */
-function patchProfileAlmaMaterOptionsInPlace(teams) {
-  const sel = document.getElementById('cc-field-alma-mater');
+ *  even where an engine ignores the `selected` attribute on an options swap.
+ *  RG-TBD-B3 — `id` lets the Chat settings row's picker (#pref-alma) take the
+ *  same in-place landing; the default keeps every existing call unchanged. */
+function patchProfileAlmaMaterOptionsInPlace(teams, id = 'cc-field-alma-mater') {
+  const sel = document.getElementById(id);
   if (!sel) return;   // Profile closed/never painted — the next paint reads the cache
   const current = typeof sel.value === 'string'
     ? sel.value
@@ -4121,10 +4281,29 @@ function bindControlCenterBodies(scopeEl, rowState) {
   // ESPN alma-mater catalog fetch, triggered the moment Profile is pushed
   // open (mirroring showEditPlayerModal()'s "fetch on open" behavior), not
   // left to whatever OTHER surface happens to fetch one first.
-  if (rowState?.pane === 'profile' && !cachedEspnTeamsList()) {
+  // RG-TBD-B3 — …and the moment the Chat settings row opens, which carries
+  // the same picker (#pref-alma) and used to wait on some OTHER surface to
+  // fetch. Then the captions are written for this paint (text only).
+  // RG-TBD-B3 reviewer follow-up — a failed or partial load RETRIES the next
+  // time a picker is OPENED (closed → open, or main → Profile, or the Chat
+  // settings row re-opened), never on a repaint of the same open pane (RG-298
+  // minor (a)'s storm guard still holds for repaints). Backgrounding iOS keeps
+  // the page alive, so "reopen the app" would not have retried; this does.
+  const almaPickerOnScreen = rowState?.phase !== 'closed'
+    && (rowState?.pane === 'profile' || rowState?.settingsOpenRow === 'chat');
+  if (almaPickerOnScreen && !_almaPickerWasOnScreen && _almaCatalogFetchAttempted
+      && !_almaCatalogInFlight && !almaCatalogComplete()) {
+    _almaCatalogFetchAttempted = false;
+  }
+  _almaPickerWasOnScreen = almaPickerOnScreen;
+  if (almaPickerOnScreen && !almaCatalogComplete()) {
     maybeRefreshAlmaMaterCatalog();
   }
+  syncAlmaMaterCatalogNotes();
 }
+let _almaPickerWasOnScreen = false;
+/** RG-TBD-B3 test seam (the `_xForTest` convention) — almatest.mjs [22g]. */
+export const _bindControlCenterBodiesForTest = bindControlCenterBodies;
 
 function mountControlCenterDrawer() {
   const root = document.getElementById('control-center-root');
@@ -5452,7 +5631,7 @@ function navigateTo(tab) {
       // (RG-285): this `window` binding is made once and its listeners stay
       // live on Chat, where window "is at its bottom" on every touch, so
       // every upward drag on Chat lifted the whole page ~20px.
-      bindBottomBounce(getScrollEl, document.querySelector('.page-wrapper') || document.body, {
+      if (!isNativeShell()) bindBottomBounce(getScrollEl, document.querySelector('.page-wrapper') || document.body, {   // RG-TBD-A4 — web-only fallback (DI-327): native runs the WKWebView's own bounce (MuneraBridgeViewController), and the two would double up
         isActive: () => document.body.dataset.tab !== 'chat',
       });
     }
@@ -6454,7 +6633,10 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // phone keeps receiving the PREVIOUS player's pushes. Both no-op cleanly
   // when push isn't configured (empty App ID) or off-browser (loadtest/node).
   const sess = getSession();
-  if (sess?.playerId) loginOneSignal(sess.playerId); else logoutOneSignal();
+  // UN-315 / DI-436.1 — the device follows the ACCOUNT: `getAccountUserId()` lets loginOneSignal()
+  // make a league switch a NO-OP (same account, already bound to its alias → zero SDK calls). A
+  // signed-out session still logs out; so does a change of account (a different id re-asserts).
+  if (sess?.playerId) loginOneSignal(sess.playerId, getAccountUserId()); else logoutOneSignal();
   // DI-217/239/240 (native push, 2026-09-23) — the SAME session chokepoint,
   // native's own identity call. isNativeOrigin() (not isNativeShell() alone)
   // because this changes WHERE DATA GOES (an identity bound at OneSignal) —
@@ -6468,7 +6650,7 @@ function resyncPlayerPreferences({ preserveLayoutEditing = false } = {}) {
   // first real sign-in and never shown on an anonymous launch (DI-240).
   if (isNativeOrigin()) {
     import('./push-native.js').then((native) => {
-      if (sess?.playerId) native.loginNativePush(sess.playerId); else native.logoutNativePush();
+      if (sess?.playerId) native.loginNativePush(sess.playerId, getAccountUserId()); else native.logoutNativePush();
     }).catch((e) => console.warn('[push-native] identity wiring failed', e));
   }
   // ══ RG-243 (2026-09-24) — THE SUBSCRIPTION REPAIR IS A SESSION-CHOKEPOINT
@@ -6893,7 +7075,8 @@ function renderPrimingCardHTML(pushState, device = null) {
     // in a Safari TAB can get push, but only after Add to Home Screen, so it
     // gets instructions and NO Turn On button (a button there can only fail —
     // OneSignal's SDK refuses to load outside the installed app).
-    'needs-install': { title: "Install to get push", body: "Push needs the home-screen app. Tap Share → Add to Home Screen, then open IRB Pick 'Ems from the icon and come back here.", btn: null },
+    // N1 (DI-432 §7): the pilot league's own name only where it IS the pilot; everyone else is told to open "the app".
+    'needs-install': { title: "Install to get push", body: "Push needs the home-screen app. Tap Share → Add to Home Screen, then open " + (isPilotOnlyAllowed('irbCopy') ? "IRB Pick 'Ems" : 'the app') + " from the icon and come back here.", btn: null },
     unsupported:   { title: "Push isn't available here", body: "This browser can't do push notifications. You'll still see everything in the app — try an iPhone home-screen install, or Chrome on Android.", btn: null },
     // DI-210e item 2 (iOS Munera, PASS 1b) — the native shell's own state,
     // never the 'needs-install' copy above (that "Add to Home Screen" step
@@ -6920,6 +7103,14 @@ function renderNotifPrefsCardHTML() {
     ['chat', 'Chat'], ['pickReminders', 'Pick Reminders'], ['leagueUpdates', 'League Updates'],
     ['results', 'Results'], ['obligations', 'Obligations'],
   ];
+  // UN-315 / DI-436.4 — one device now hears EVERY league, and each league keeps its OWN push settings
+  // (they live on that league's member record, and each league's sends are gated by its own). So for a
+  // player in two or more leagues the card says WHICH league these switches belong to, as a footer under
+  // the group — the iOS Settings pattern. A one-league player sees nothing new.
+  const multiLeague = getCachedMemberships().length >= 2;
+  const footer = multiLeague
+    ? `<p class="notif-prefs-footer text-muted text-sm">These settings apply to ${escHtml(getActiveLeagueName() || 'this league')}. Each league keeps its own.</p>`
+    : '';
   return `<div class="card notif-prefs-card">
     <label class="notif-prefs-row notif-prefs-master">
       <span>Push Notifications</span>
@@ -6930,7 +7121,7 @@ function renderNotifPrefsCardHTML() {
         <span>${escHtml(label)}</span>
         <input type="checkbox" class="notif-cat-toggle" data-cat="${key}" ${cats[key] ? 'checked' : ''} />
       </label>`).join('')}
-  </div>`;
+  </div>${footer}`;
 }
 
 /**
@@ -7062,7 +7253,11 @@ function flushPendingDeepLink(reason) {
   const dest = _pendingDeepLink;
   _pendingDeepLink = null;
   _pendingDeepLinkAccount = '';
-  try { deepLinkTo(dest); } catch (e) { console.warn(`[notifications] the held tap could not be replayed after ${reason}`, e); }
+  // UN-315 / DI-436.2 — a banked tap may name its league; replay it through the SAME router that
+  // banked it, so the league is switched to BEFORE the tab is opened (a withheld tap into another
+  // league is exactly the case the bank exists for).
+  try { if (dest.leagueId) routeToLeague(dest.leagueId, dest); else deepLinkTo(dest); }
+  catch (e) { console.warn(`[notifications] the held tap could not be replayed after ${reason}`, e); }
   return true;
 }
 /** Test seam — the slot is page state, like every other latch in this file. */
@@ -7111,20 +7306,110 @@ export function _pendingDeepLinkForTest() { return _pendingDeepLink; }
  */
 function routeNotificationTap(event, data) {
   try {
+    const payload = (data && typeof data === 'object') ? data : {};
+    // UN-315 / DI-436.2-3 — WHICH LEAGUE the push came from (`data.league_id`, set by the server from
+    // the webhook row / the cron's league). It is untrusted payload like everything else here: only a
+    // well-formed uuid is honoured, and a PRESENT-but-malformed one declines the tap (the same rule the
+    // native resolver applies to `route`). The chat fetch (BUG-12) reads the ACTIVE league's room, so
+    // it runs only for a tap from the active league (or one that names none — every older push).
+    const rawLeague = payload.league_id;
+    const leagueId = rawLeague === undefined || rawLeague === null || rawLeague === '' ? '' : rawLeague;
+    if (leagueId && !isLeagueUuid(leagueId)) {
+      console.warn('[notifications] ignored a tap that names a malformed league id');
+      return;
+    }
+    const foreignLeague = !!leagueId && String(leagueId).toLowerCase() !== String(getActiveLeagueId() || '').toLowerCase();
+    if (!foreignLeague) wakeChat();
     if (typeof event !== 'string' || !event) return;
     if (!Object.prototype.hasOwnProperty.call(LIFECYCLE_EVENTS, event)) {
       console.warn('[notifications] ignored a tap whose event is not in the lifecycle vocabulary:', event);
       return;
     }
-    const payload = (data && typeof data === 'object') ? data : {};
     const nested = (payload.params && typeof payload.params === 'object' && !Array.isArray(payload.params))
       ? payload.params : {};
-    deepLinkTo(destinationFor(event, { ...payload, ...nested }));
+    routeToLeague(leagueId, destinationFor(event, { ...payload, ...nested }));
   } catch (e) { console.warn('[notifications] the warm tap could not be routed', e); }
 }
 /** Test seam — the REAL router push-onesignal.js's click hook is handed, so
  *  deeplinktest drives the production function rather than a copy of it. */
 export const _routeNotificationTapForTest = routeNotificationTap;
+
+/** A league id is a uuid (`leagues.id`). Nothing else is ever routed to. */
+const LEAGUE_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isLeagueUuid(value) { return typeof value === 'string' && LEAGUE_UUID_RE.test(value); }
+
+/**
+ * ══ UN-315 / DI-436.2 — A NOTIFICATION TAP NAMES ITS LEAGUE FIRST ═══════════════════════════
+ *
+ * One phone now hears EVERY league its owner belongs to, so a tap can arrive for a league that is not
+ * the one on screen. `deepLinkTo()` navigates within the ACTIVE league, so a tap from another league
+ * must switch leagues first. The three entries — cold web (`?nleague=`), warm web (`data.league_id`
+ * in the click payload) and native (`_resolveClickDestination()`'s validated `leagueId`) — all end here.
+ *
+ *   no league named               no-league  → the EXISTING path, untouched: `deepLinkTo()`
+ *   a malformed league id         malformed  → nothing at all (a malformed routing field declines the tap)
+ *   the league already active     same       → `deepLinkTo()`
+ *   memberships not resolved yet, or content withheld
+ *                                 stashed    → `stashPendingDeepLink()`; replayed through THIS router
+ *                                               at the un-withhold transition (RG-245's bank)
+ *   a league the account is NOT in
+ *                                 refused    → switches NOTHING; toast "That league isn't on your account."
+ *   a member league               switched   → `doSwitchActiveLeague()` (the "Switching leagues…"
+ *                                               cover), then `deepLinkTo()`. Native: one `selection`
+ *                                               haptic.
+ *
+ * SPORT ROUTING IS A SEAM, AND IT STAYS OPEN. The SERVER may already put a shape-validated `params.sport`
+ * on a destination (DI-435: `destinationWithSport()` / `destinationForFanout()`, inert while no row carries
+ * one) — but NOTHING in this tree READS it: neither this router nor `deepLinkTo()` looks at
+ * `params.sport`, so a tap opens the league's tab on whatever sport is current. The reader (a client-side
+ * sport table that validates the code, then switches the sport before landing) is CORE DI-221/224 and
+ * lands with them; until then a tap from another league gets the right LEAGUE, never a sport. (An earlier
+ * revision of this comment, and of commit 4cc972e's notes, claimed the validated sport is run here. It is
+ * not. Corrected 2026-09-30 on the reviewer's note.)
+ *
+ * THE SERVER'S `league_id` IS A HINT, NEVER AN AUTHORITY. A forged id fails TWICE: on the membership
+ * pre-check here, and on `switchActiveLeague()` itself throwing "Not a member of that league"
+ * (auth.js) — which `doSwitchActiveLeague()` maps to the SAME toast. There is no success toast (the
+ * destination arriving IS the acknowledgement) and no haptic on web (Interaction Principles).
+ * Resolves the outcome word, for the suite. NEVER throws.
+ */
+async function routeToLeague(leagueId, destination, deps = null) {
+  // `deps` is the TEST SEAM (production passes none): every collaborator is a real module function by
+  // default, and a suite may replace any of them to drive one decision without booting the whole app.
+  const d = {
+    getActiveLeagueId, getMemberships: getCachedMemberships, isWithheld: isContentWithheld,
+    doSwitch: doSwitchActiveLeague, deepLink: deepLinkTo, stash: stashPendingDeepLink,
+    toast: showToast, isNative: isNativeShell, haptic,
+    ...(deps || {}),
+  };
+  try {
+    if (leagueId === undefined || leagueId === null || leagueId === '') { d.deepLink(destination); return 'no-league'; }
+    if (!isLeagueUuid(leagueId)) { console.warn('[notifications] a tap named a malformed league id; nothing was routed'); return 'malformed'; }
+    const target = String(leagueId).toLowerCase();
+    if (target === String(d.getActiveLeagueId() || '').toLowerCase()) { d.deepLink(destination); return 'same'; }
+    const memberships = d.getMemberships();
+    if (d.isWithheld() || memberships.length === 0) {
+      // Not yet decidable. Banked WITH its league; the replay re-enters this function.
+      if (destination && destination.tab) d.stash({ ...destination, leagueId: target });
+      return 'stashed';
+    }
+    const membership = memberships.find((m) => String(m.leagueId || '').toLowerCase() === target);
+    if (!membership) {
+      d.toast("That league isn't on your account.", 'error');
+      return 'refused';
+    }
+    const switched = await d.doSwitch(membership.leagueId);
+    if (!switched) return 'switch-failed';      // doSwitchActiveLeague() has already said why
+    if (d.isNative()) d.haptic('selection');    // native only (Interaction Principles §Haptics: a selection)
+    d.deepLink(destination);
+    return 'switched';
+  } catch (e) {
+    console.warn('[notifications] a tap could not be routed to its league', e);
+    return 'error';
+  }
+}
+/** Test seam — the REAL router the three tap entries use (`deps` replaces collaborators; see above). */
+export const _routeToLeagueForTest = routeToLeague;
 
 /** DI-A5 — resolve a stored/pushed destination into real navigation +
  *  best-effort scroll. Every entry in notifications.js's DEEP_LINK_TABLE maps
@@ -7267,7 +7552,9 @@ export async function enablePushOnThisDevice(playerId) {
   const sub = await ensurePushSubscription();
   if (!sub.ok) console.warn('[push] the subscription could not be created:', sub.reason, sub.detail || '');
   if (playerId) {
-    try { await loginOneSignal(playerId); }
+    // `force`: this IS the repair — the identity is re-attached AFTER a subscription exists (RG-192),
+    // so it must not be skipped because a binding is already recorded (UN-315's league-switch no-op).
+    try { await loginOneSignal(playerId, getAccountUserId(), { force: true }); }
     catch (e) { console.warn('[push] could not attach the push identity after the grant', e); }
   }
   const status = await pushDeviceStatus();
@@ -7350,7 +7637,7 @@ export async function maybeAutoOptInPush(playerId) {
     }
     // Always re-assert the identity: the device may have had a subscription all
     // along with nobody attached to it, which is the live defect.
-    await loginOneSignal(playerId);
+    await loginOneSignal(playerId, getAccountUserId(), { force: true });
     refreshPushActiveFlag();
     console.info('[push] this device was allowed to notify but not reachable; it has been registered and linked without prompting', created ? '(new subscription)' : '(existing subscription)');
     return true;
@@ -8862,7 +9149,7 @@ function renderPicksPage() {
   // v0.16.0 dispatcher — supports viewing previous locked/closed weeks
   // (read-only) and fills the head slot (What's New + recap) for every branch
   // of the current-week renderer.
-  const c = document.getElementById('page-picks'); if (!c) return;
+  const c = document.getElementById('page-picks'); if (!c || deferRenderWhileWeekSwiping('picks', renderPicksPage)) return;   // reviewer note on RG-TBD-A1: a repaint under an active week swipe waits for the release
   // REVIEWER ROUND 3 (B4 residual, 2026-09-29) — the resolution below now
   // lives in picksShowingWeek(), the ONE answer to "which week is Picks
   // actually showing", shared with the Picks week-swipe's getState() so the
@@ -9253,18 +9540,27 @@ function renderPicksPageCurrent() {
 
   if (!allowed) {
     const ep = week ? getPicks(week.weekId, session.playerId) : [];
+    // N1 (DI-430 touched-screen audit, 2026-09-30) — a league with NO WEEKS at all is not a "locked" state (a padlock and "No active week." told a player nothing): it says WHAT
+    // ("No picks to make yet"), WHY, and — for the commissioner — the NEXT step as a button. Role-aware, no league name, no IRB copy. The same card, so the three-render logout
+    // structure below is untouched.
+    const noWeek = !week;
+    const lockedTitle = noWeek ? 'No picks to make yet' : 'Logged in as ' + escHtml(displayName);
+    const lockedMsg = noWeek ? zeroWeekMessage(!!session.isAdmin) : reason;
+    const lockedExtra = (noWeek && session.isAdmin ? zeroWeekSetupButtonHTML() : '')
+      + (ep.length ? `<div class="text-muted text-xs mt-sm">${ep.length}/${games.length} picks saved.</div>` : '');
     c.innerHTML = `
       ${renderWeekBanner(week)}
       <div id="picks-head-slot"></div>
       <div class="week-status-card">
-        <div class="week-status-icon">🔒</div>
+        <div class="week-status-icon">${noWeek ? icon('calendarWeek') : '🔒'}</div>
         <div class="week-status-body">
-          <div class="week-status-title">Logged in as ${escHtml(displayName)}</div>
-          <div class="week-status-msg">${escHtml(reason)}</div>
-          ${ep.length ? `<div class="text-muted text-xs mt-sm">${ep.length}/${games.length} picks saved.</div>` : ''}
+          <div class="week-status-title">${lockedTitle}</div>
+          <div class="week-status-msg">${escHtml(lockedMsg)}</div>
+          ${lockedExtra}
         </div>
       </div>
       ${picksLogoutButtonHTML('Log Out / Switch Player', 'mt-md')}`;
+    bindZeroWeekEmptyState(c);
     document.getElementById('logout-btn')?.addEventListener('click', () => { clearSession(); clearPickDraft(); resyncPlayerPreferences(); renderPicksPage(); });
     return;
   }
@@ -11017,7 +11313,7 @@ function resolveDashboardLayout() {
 }
 
 function renderDashboard() {
-  renderDashboardInner();
+  if (deferRenderWhileWeekSwiping('dashboard', renderDashboard)) return; renderDashboardInner();   // reviewer note on RG-TBD-A1: a repaint under an active week swipe waits for the release (nav-gestures.js)
   // The chat teaser card (v0.16.0, DI-93) was inserted here — `afterbegin` on
   // the page host, pinned above every ordered section. Retired 2026-09-24
   // (Option A, Drew): push is the channel for chat activity now, and the chat
@@ -11080,7 +11376,8 @@ function renderDashboardInner() {
   const allWeeks=selectableDashboardWeeks(getWeeks(), isCommissioner);
   const currentWeek=getCurrentWeek();
   const currentWeekVisible = currentWeek && (currentWeek.dataSourceMode !== 'demo' || isCommissioner);
-  if(!currentWeekVisible && !allWeeks.length){c.innerHTML=emptyState('📊','No Weeks Yet','Commissioner needs to open a week.');return;}
+  // N1 (DI-430 touched-screen audit): what / why / next, role-aware, no IRB copy (was a bare "No Weeks Yet — Commissioner needs to open a week.").
+  if(!currentWeekVisible && !allWeeks.length){c.innerHTML=zeroWeekEmptyStateHTML();bindZeroWeekEmptyState(c);return;}
 
   // DI-426 — reads the shared state.viewingWeekId (formerly state.dashboardWeekId);
   // the fallback chain itself is UNCHANGED (DI-426's own "the shared field's
@@ -11342,6 +11639,9 @@ function bindColumnReorderHandlers() {
   let touchStart = null;      // {x, y} screen coords of touchstart
   const LONG_PRESS_MS = 350;
   const SCROLL_THRESHOLD = 8; // pixels of pre-press movement that aborts the press
+  // RG-TBD-A2 — this binder's name in nav-gestures.js's one-owner-per-touch
+  // claim (claimTouch()/releaseTouch()).
+  const COLUMN_REORDER_TOUCH_OWNER = 'column-reorder';
 
   draggables.forEach(el => {
     if (el._touchWired) return; el._touchWired = true;
@@ -11354,11 +11654,18 @@ function bindColumnReorderHandlers() {
       // Start the long-press timer. If the user moves before it fires, the
       // 'touchmove' handler cancels it — preserving normal scroll behaviour.
       touchTimer = setTimeout(() => {
+        touchTimer = null;
+        // RG-TBD-A2 — claim the touch for the reorder the instant the
+        // long-press lands, so the week swipe (on #page-dashboard) and the
+        // control-center edge swipe (on window), which hear this same touch,
+        // stand down for the rest of it. Refused if a week swipe already
+        // locked horizontal on this touch — then it is a swipe, not a press.
+        if (!claimTouch(COLUMN_REORDER_TOUCH_OWNER)) { touchStart = null; return; }
         touchSrc = el.dataset.playerId;
         touchEl = el;
         el.classList.add('col-dragging');
-        // Light haptic on supported devices to signal entry into reorder mode
-        if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+        // Light haptic to signal entry into reorder mode — the app's haptic() (iOS never had navigator.vibrate; reviewer note, RG-TBD-A2)
+        haptic('light');
       }, LONG_PRESS_MS);
     }, { passive: true });
 
@@ -11403,6 +11710,7 @@ function bindColumnReorderHandlers() {
       document.querySelectorAll('.col-drop-target').forEach(n => n.classList.remove('col-drop-target'));
       const src = touchSrc;
       touchSrc = null; touchEl = null; touchStart = null;
+      releaseTouch(COLUMN_REORDER_TOUCH_OWNER);   // RG-TBD-A2
       // Commit if dropped on a different player's element
       if (src && targetId && src !== targetId) reorderPlayerColumn(src, targetId);
     });
@@ -11410,6 +11718,7 @@ function bindColumnReorderHandlers() {
     el.addEventListener('touchcancel', () => {
       clearTimeout(touchTimer);
       touchTimer = null;
+      releaseTouch(COLUMN_REORDER_TOUCH_OWNER);   // RG-TBD-A2
       touchEl?.classList.remove('col-dragging');
       document.querySelectorAll('.col-drop-target').forEach(n => n.classList.remove('col-drop-target'));
       touchSrc = null; touchEl = null; touchStart = null;
@@ -12883,14 +13192,23 @@ export function renderCommPage() {
     // Blurb has no existing home in either surface (routine player-facing
     // messaging content, not setup and not admin infrastructure) — it
     // keeps its own small card here, unchanged in behavior.
+    // RG-TBD-B1 (bug batch B, 2026-09-29, Drew: "weekly blurb is still not a
+    // collapsible card") — the lift above dropped the section TITLE the
+    // retired "Week Settings — Week N" card carried, and
+    // wireCollapsibleSections()/wirePanelCollapseAllControls() skip any
+    // .admin-section without one. The title is the card's heading now (the
+    // in-card label it replaces would say the same words twice); the
+    // textarea keeps its accessible name via aria-label. The title is a
+    // STABLE string, so the saved collapsed state ("weekly-blurb") holds
+    // across week changes. Guarded by authtest.mjs [80].
     if (week) {
       sections.push(`
         <div class="admin-section" data-comm-tab="week">
+          <div class="admin-section-title">Weekly Blurb</div>
           <div class="card">
             <div class="form-group mb-0">
-              <label class="form-label">Weekly Blurb</label>
-              <textarea class="form-textarea" id="blurb-input">${escHtml(week.blurb||'')}</textarea>
-              <button class="btn btn-secondary btn-sm mt-sm" id="save-blurb-btn">Save Blurb</button>
+              <textarea class="form-textarea" id="blurb-input" aria-label="Weekly blurb" aria-describedby="blurb-error">${escHtml(week.blurb||'')}</textarea><div class="form-field-error" id="blurb-error" role="alert"></div>
+              <button class="btn btn-secondary btn-sm" id="save-blurb-btn">Save Blurb</button>
             </div>
           </div>
         </div>`);
@@ -13117,7 +13435,7 @@ export function renderCommPage() {
         <div class="admin-section" data-comm-tab="players">
           <div class="admin-section-title">✉️ Invite to League</div>
           <div class="card">
-            <p class="text-muted text-xs mb-sm">Share this code with anyone joining IRB Football.</p>
+            <p class="text-muted text-xs mb-sm">${isPilotOnlyAllowed('irbCopy') ? 'Share this code with anyone joining IRB Football.' : 'Share this code with anyone joining your league.'}</p>
             <div class="api-url-box mb-md" id="invite-code-box">
               <span class="api-url-label">Join Code:</span>
               ${inviteCodeChipHTML(_joinCodeCache)}
@@ -13603,7 +13921,7 @@ function composeAdminViewer() {
 // back in after a failure is the card's own Retry button, which calls the
 // refresh function directly (bypassing the render-time guard entirely, same
 // as it always has).
-let _platformKvCache = { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: false, error: null, attempted: false };
+let _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, loading: false, loaded: false, error: null, attempted: false };
 let _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
 // WIRING_CHECKLIST_B_092526.md §Window(b) — the cross-league Users Across
 // Leagues / Platform Admins read. `rows: null` = never fetched (renders the
@@ -13780,6 +14098,40 @@ export function bindSuperAdminControls() {
     superSetPlatformKv('signups_open', val)
       .then(() => { showToast(val ? 'Signups open.' : 'Signups closed.', 'success'); _platformKvCache = { ..._platformKvCache, signupsOpen: val }; })
       .catch((e2) => { showToast(e2?.message === 'not_super_admin' ? 'Super admin access required.' : 'Unable to save. Try again.', 'error'); e.target.checked = !val; });
+  });
+  // N1 (DI-433, 2026-09-30) — the release gate: `platform_kv.league_creation_open`, a TWO-TAP inline confirm with the same 350ms floor and 3s window as League Status's
+  // Pause (a double-tap must not open the door). Opening is the ninth step of the ONE canonical sequence (DI-433) — after build 4 is on every phone — so it is never a single
+  // tap. RPC-then-repaint: the local cache changes only after the server says yes; the readback of the flag on this device's own cache follows on the next platform read.
+  document.getElementById('super-creation-open-btn')?.addEventListener('click', function onCreationGateClick() {
+    const btn = document.getElementById('super-creation-open-btn');
+    if (!btn) return;
+    const nextOpen = btn.dataset.nextOpen === 'true';
+    if (btn.dataset.confirmArmed !== '1') {
+      btn.dataset.confirmArmed = '1';
+      btn.dataset.armedAt = String(Date.now());
+      const original = btn.textContent;
+      btn.dataset.originalLabel = original;
+      btn.textContent = nextOpen ? 'Tap again to open' : 'Tap again to close';
+      setTimeout(() => { if (btn.isConnected) { btn.dataset.confirmArmed = '0'; btn.textContent = original; } }, 3000);
+      return;
+    }
+    if (Date.now() - (Number(btn.dataset.armedAt) || 0) < 350) return;
+    haptic('medium');
+    btn.disabled = true;
+    superSetPlatformKv('league_creation_open', nextOpen)
+      .then(() => {
+        showToast(nextOpen ? 'New league creation is open.' : 'New league creation is closed.', 'success');
+        _platformKvCache = { ..._platformKvCache, leagueCreationOpen: nextOpen };
+        if (state.currentTab === 'admin') renderAdminPage();
+      })
+      .catch((e2) => {
+        // R-F7 / S-1: the SERVER refuses to open the door until push alias mode is marked live; say why, calmly, never the raw code.
+        const refused = /push_alias_not_live/.test(String(e2?.message || ''));
+        showToast(e2?.message === 'not_super_admin' ? 'Super admin access required.'
+          : refused ? "Can't open creation yet — push alias mode isn't marked live in the database. Check the list above." : 'Unable to save. Try again.', 'error');
+        btn.disabled = false; btn.dataset.confirmArmed = '0';
+        if (btn.dataset.originalLabel) btn.textContent = btn.dataset.originalLabel;   // never leave "Tap again…" on a control that is no longer armed
+      });
   });
   // REVIEWER FINDING 7 (2026-09-25) — retry for a failed platform_kv read;
   // renderSuperAdminPlaceholder() only renders this button when the read
@@ -14660,7 +15012,7 @@ export function renderAvailableGamesList(availGames, currentSlate, week) {
           ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?`<span class="alma-mater-badge ml-sm">${icon('almaMater')}</span>`:''}
+          ${game.isAlmaMaterGame?`<span class="alma-mater-badge ml-sm">${icon('almaMater', { label: 'Alma mater game' })}</span>`:''}
           ${game.nationalTV?`<span class="national-tv-badge ml-sm">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grFolded)}
         </div>
@@ -14708,7 +15060,7 @@ export function renderAdminGamesList(games, week, overrides) {
           ${slateRowLogoHTML(game.awayLogo, game.isManual, logoViewOn)}${game.awayRank?`#${numHtml(game.awayRank)} `:''}${escHtml(td(game,'away'))}
           <span class="text-muted"> ${game.neutralSite?'vs':'@'} </span>
           ${slateRowLogoHTML(game.homeLogo, game.isManual, logoViewOn)}${game.homeRank?`#${numHtml(game.homeRank)} `:''}${escHtml(td(game,'home'))}${game.neutralSite?'':' <span class="home-badge">H</span>'}
-          ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater')}</span>`:''}
+          ${game.isAlmaMaterGame?`<span class="alma-mater-badge">${icon('almaMater', { label: 'Alma mater game' })}</span>`:''}
           ${game.nationalTV?`<span class="national-tv-badge">${icon('tv')} ${escHtml(game.broadcastNetwork||'')}</span>`:''}
           ${gameRequestChipHTML(game, grSlateFolded)}
           ${renderSourceBadge(game)}
@@ -15131,14 +15483,14 @@ export function bindCommEventListeners(week, games, availGames, suggested, setti
     saveWeek({ ...(getWeek(week.weekId) || week), pendingFinalization: false });
     renderCommPage();
   });
+  const armBlurbLive = bindBlurbLiveValidation(document.getElementById('blurb-input'), document.getElementById('blurb-error'),
+    () => ((week && getWeek(week.weekId)) || week)?.blurb || '');
   document.getElementById('save-blurb-btn')?.addEventListener('click', ()=>{
     if(!week)return;
-    // RG-256 (2026-09-26) — spread the week as the MIRROR holds it NOW, never the render-time `week`
-    // this listener closed over: if the week locked while this tab stayed painted (the tick repaints
-    // only the Commissioner tab), a stale `status:'open'` spread back in plans locked->open and
-    // silently reopens picks. Same rule as saveWizardTiming()'s `liveWeek`.
-    saveWeek({...(getWeek(week.weekId)||week),blurb:document.getElementById('blurb-input')?.value||''});
-    showToast('Blurb saved','success');
+    // DI-404 (UN-388): same rule as Step 5 — see saveWeekTabBlurb() (it also re-reads the mirror's row, RG-256). The live re-validation below arms after the first failed Save.
+    // Kept to the original handler's nine lines so no line-pinned test (boottest [35a]/[35b], rolestest F13) below it shifts.
+    const result = saveWeekTabBlurb(document.getElementById('blurb-input'), document.getElementById('blurb-error'), week);
+    if(!result.ok) armBlurbLive();
   });
 
   // ESPN URL preview
@@ -17092,6 +17444,8 @@ function handleOb2025Action(obligationId, action) {
  *  Standings tab. Paid-state syncs via settings.ob2025 (commissioner or the
  *  payer can mark). Collapsible so the current season stays front and center. */
 function renderSeason2025OutstandingSection() {
+  // N1 (DI-432 §7) — the 2K25 ledger is the PILOT league's; another league's Standings never carries it.
+  if (!isPilotOnlyAllowed('season2025Record')) return '';
   const paidMap = getSettings().ob2025 || {};
   const rows = season2025Obligations();
   // "Open" = anything not fully PAID — pending rows still owe the money, so
@@ -17145,6 +17499,8 @@ function renderSeason2025OutstandingSection() {
 
 /** v0.17.0 — the CFP 2K25 season of record, permanently browsable. */
 function renderSeason2025RecordSection() {
+  // N1 (DI-432 §7) — the 2K25 season of record is the PILOT league's.
+  if (!isPilotOnlyAllowed('season2025Record')) return '';
   const wkNames = Object.keys(SEASON_2025.weeklyScores);
   return `
     <div class="admin-section-title">📜 Historical Record — ${escHtml(SEASON_2025.label)}</div>
@@ -17435,6 +17791,8 @@ export function renderObligationCorrectionsAdminSectionHTML() {
 /** v0.17.0 — the 2K25 carryover ledger. Paid-state lives in settings.ob2025
  *  so the baked history data stays immutable and paid-marks sync cross-device. */
 function renderSeason2025ObligationsAdmin() {
+  // N1 (DI-432 §7) — the 2K25 carryover ledger is the PILOT league's; another league's Comm never carries it.
+  if (!isPilotOnlyAllowed('season2025Record')) return '';
   const paidMap = getSettings().ob2025 || {};
   const rows = season2025Obligations();
   const sess = getSession();
@@ -18079,8 +18437,11 @@ function showGameModal(game, week, onSave) {
  * just the 6-school ALMA_MATERS catalog, shaped like fetchEspnTeamsList()'s
  * real return value so buildAlmaMaterOptions() doesn't need two code paths.
  */
+export const _almaMaterCatalogFallbackForTest = () => almaMaterCatalogFallback();
 function almaMaterCatalogFallback() {
-  return ALMA_MATERS.map(am => ({ location: am, displayName: ALMA_MATER_DISPLAY[am] || am }));
+  // N1 (DI-432 §7) — the six founders' schools are the PILOT league's; another league is never offered them as its offline options (its real catalog is ESPN's own list).
+  if (!isPilotOnlyAllowed('sixSchoolAlmaMaters')) return [];
+  return getAlmaMaters().map(am => ({ location: am, displayName: ALMA_MATER_DISPLAY[am] || am }));
 }
 
 /**
@@ -18135,7 +18496,7 @@ function cachedEspnTeamsList() {
  * Callers: almatest.mjs §16b, §16c (which contains a canary proving this
  * function actually empties the cache) and §16f.
  */
-export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; _almaCatalogFetchAttempted = false; }
+export function _resetEspnTeamsCacheForTest() { _espnTeamsCache = null; _almaCatalogFetchAttempted = false; _almaCatalogFetchFailed = false; _almaCatalogInFlight = false; _almaCatalogPartial = null; _almaPickerWasOnScreen = false; }
 
 /**
  * Builds the alma-mater <select>'s <option> list from whichever team source
@@ -18175,6 +18536,14 @@ function buildAlmaMaterOptions(currentValue, teamsList) {
   return opts.join('');
 }
 
+/**
+ * N1 (DI-430 §Invite, F1) — NEW LEAGUES NEVER INVITE BY E-MAIL. The e-mail auto-link (`link_member_by_email`) is a pilot-only door since migration 0032: a planted address on a
+ * non-pilot roster row must never be an invitation. So for a non-pilot Supabase league the roster's e-mail entry is not offered at all (the create flow never asks for one either);
+ * the pilot league and a local-only device keep it exactly as it was.
+ */
+function emailEntryAllowed() {
+  return getAuthMode() !== 'supabase' || isPilotLeague(activeLeagueRow());
+}
 export async function showEditPlayerModal(playerId) {
   const player=getPlayer(playerId); if(!player)return;
   // ESPN-canonical <select>, not free text (Drew's ruling, 2026-09-04 —
@@ -18194,7 +18563,7 @@ export async function showEditPlayerModal(playerId) {
   ov.innerHTML=`<div class="modal">
     <div class="modal-header"><h3>Edit Player</h3><button class="modal-close" id="ep-c">✕</button></div>
     <div class="form-group"><label class="form-label">Display Name</label><input class="form-input" id="ep-name" value="${escHtml(player.displayName)}" /></div>
-    <div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ep-email" type="email" value="${escHtml(player.email||'')}" /></div>
+    ${emailEntryAllowed() ? `<div class="form-group"><label class="form-label">Email</label><input class="form-input" id="ep-email" type="email" value="${escHtml(player.email||'')}" /></div>` : ''}
     <div class="form-group"><label class="form-label">Alma Mater</label>
       <select class="form-select" id="ep-alma">${buildAlmaMaterOptions(player.almaMater, initialTeamsList)}</select>
       <p class="text-muted text-xs mt-sm" id="ep-alma-note">${cached ? `From ESPN's team catalog (${cached.length} schools).` : '⏳ Loading full ESPN school list…'}</p>
@@ -18209,7 +18578,9 @@ export async function showEditPlayerModal(playerId) {
     const n=document.getElementById('ep-name')?.value.trim();
     if(!n){showToast('Name required','error');return;}
     const newAlma=document.getElementById('ep-alma')?.value.trim()||'';
-    savePlayer({...player,displayName:n,email:document.getElementById('ep-email')?.value.trim()||'',almaMater:newAlma});
+    // N1 (DI-430 F1): with the email field absent (a non-pilot Supabase league) the stored email is left exactly as it was — never blanked, never written.
+    const epEmail = document.getElementById('ep-email');
+    savePlayer({...player,displayName:n,email:epEmail ? (epEmail.value.trim()||'') : (player.email||''),almaMater:newAlma});
     // The roster is DERIVED from claims (claimedAlmaMaters()) — a changed
     // claim must ripple to every open/upcoming week's ⭐ flag immediately,
     // the same way the old commissioner add/remove buttons used to (Drew,
@@ -19382,13 +19753,56 @@ export function scribePacingHelperText({ hourlyLimit, cooldownMinutes }) {
   return `At most ${cap} post${cap === 1 ? '' : 's'} an hour, at least ${mins} apart — about ${scribeCostPhrase(cap)} an hour at the very most.`;
 }
 
-/** DI-252 §2b.4 — shown ONLY while Unlimited is selected. The $25/month ceiling
+/**
+ * N1 (DI-432 §3-§4, 2026-09-30) — A NON-PILOT LEAGUE'S SCRIBE RUNS ON THE PLATFORM'S CLAMPS, and the Comm surface must not lie about them. The server (effectiveRateSettings /
+ * effectiveMonthlyBudgetUsd) forces a non-pilot league's model to the default, caps its mention limits at 6 and 20, and caps its monthly budget at $5 (the pilot's stays $25),
+ * whatever its settings say — so a model picker, a mention-limit field or a "$25/month" sentence on such a league would be a control or a claim that looks live and is not.
+ * `isClampedScribeLeague()` is the one question ("is this a Supabase league that is not the pilot?"); a local-only device has no leagues and is never clamped.
+ */
+const SCRIBE_CAP_NON_PILOT_USD = 5;
+const SCRIBE_CAP_PILOT_USD = 25;
+export function isClampedScribeLeague() {
+  return getAuthMode() === 'supabase' && !isPilotLeague(activeLeagueRow());
+}
+/** The monthly cap this league is held to: $5 for a clamped league, $25 for the pilot. */
+export function scribeLeagueCapUsd() {
+  return isClampedScribeLeague() ? SCRIBE_CAP_NON_PILOT_USD : SCRIBE_CAP_PILOT_USD;
+}
+/**
+ * True when the LATEST scribe/trainer job_runs row is a budget skip whose reason is the PLATFORM ceiling, this UTC month — i.e. SCRIBE is stopped for every non-pilot league until
+ * the month turns or the ceiling is raised. Pure over the rows the Background jobs read already caches. The commissioner is told ("SCRIBE is paused platform-wide for this month."),
+ * never left to guess why SCRIBE went quiet (a silent stop is the failure DI-432 §4 names).
+ */
+export function scribePlatformPausedNow(rows, now = Date.now()) {
+  const list = (Array.isArray(rows) ? rows : []).filter(r => r && /^(scribe-|trainer)/.test(String(r.job || '')) && Number.isFinite(Date.parse(r.startedAt)));
+  if (!list.length) return false;
+  const latest = list.reduce((a, b) => (Date.parse(b.startedAt) > Date.parse(a.startedAt) ? b : a));
+  const d = new Date(now); const t = new Date(Date.parse(latest.startedAt));
+  const sameMonth = t.getUTCFullYear() === d.getUTCFullYear() && t.getUTCMonth() === d.getUTCMonth();
+  return sameMonth && latest.skipped === 'budget' && !!latest.payload && latest.payload.budgetReason === 'platform';
+}
+export const SCRIBE_PLATFORM_PAUSED_COPY = 'SCRIBE is paused platform-wide for this month.';
+/** The two lines the SCRIBE card owes a clamped league's commissioner: the platform limit, and (when it applies) the platform-wide pause. Empty for the pilot. */
+function scribePlatformNoteHTML() {
+  // R-F6: the one-line helper is for EVERY league — the pilot's reads "$25 a month" (the server's ceiling), a new league's "$5 a month". The platform-paused note and the
+  // job_runs fetch below are for the clamped (non-pilot) leagues only.
+  if (!isClampedScribeLeague()) return `<p class="text-muted text-xs" id="scribe-platform-limit-note">Platform limit for this league: $${scribeLeagueCapUsd()} a month.</p>`;
+  // The rows come from the Background jobs read; fetch it once if this tab is the first place it is needed (the cache marks a FAILED fetch as loaded, so this cannot loop).
+  if (_bgJobsCache.rows == null && !_bgJobsCache.loading && isSupabaseDataMode()) {
+    refreshBackgroundJobsCard({ rerender: false }).then(() => { if (state.currentTab === 'commissioner') renderCommPage(); }).catch(() => {});
+  }
+  const paused = scribePlatformPausedNow(_bgJobsCache.rows);
+  return `<p class="text-muted text-xs" id="scribe-platform-limit-note">Platform limit for this league: $${scribeLeagueCapUsd()} a month.</p>`
+    + (paused ? `<p class="text-xs" id="scribe-platform-paused-note" style="color:var(--warning-text)" role="status">${escHtml(SCRIBE_PLATFORM_PAUSED_COPY)}</p>` : '');
+}
+
+/** DI-252 §2b.4 — shown ONLY while Unlimited is selected. The monthly ceiling
  *  is named because it is the one thing that still stops SCRIBE, and Drew's own
- *  framing is that it "stays regardless". */
-export function scribePacingUnlimitedWarning({ cooldownMinutes }) {
+ *  framing is that it "stays regardless". N1: `capUsd` is the league's own cap ($25 for the pilot, the default here; $5 for any other league). */
+export function scribePacingUnlimitedWarning({ cooldownMinutes, capUsd = SCRIBE_CAP_PILOT_USD }) {
   const gap = resolveScribeCooldownMinutes(cooldownMinutes);
   const perHour = scribePostsPerHourAtGap(gap);
-  return `Unlimited at a ${gap}-minute gap could post up to ${perHour} time${perHour === 1 ? '' : 's'} an hour — about ${scribeCostPhrase(perHour)}/hour at the high end. Your $25/month budget still stops SCRIBE if it's reached.`;
+  return `Unlimited at a ${gap}-minute gap could post up to ${perHour} time${perHour === 1 ? '' : 's'} an hour — about ${scribeCostPhrase(perHour)}/hour at the high end. Your $${capUsd}/month budget still stops SCRIBE if it's reached.`;
 }
 
 /** DI-252 §2b.4 — the honest state, not a tooltip. Apps Script still runs
@@ -19519,7 +19933,7 @@ export function renderScribeParticipationCardHTML() {
               <option value="0" ${unlimited ? 'selected' : ''}>Unlimited</option>
             </select>
           </div>
-          <p class="text-muted text-xs" id="scribe-pacing-warning">${unlimited ? `⚠️ ${escHtml(scribePacingUnlimitedWarning(pacing))}` : ''}</p>
+          <p class="text-muted text-xs" id="scribe-pacing-warning">${unlimited ? `⚠️ ${escHtml(scribePacingUnlimitedWarning({ ...pacing, capUsd: scribeLeagueCapUsd() }))}` : ''}</p>
           <div class="form-group">
             <label class="form-label" for="scribe-cooldown-select">Minimum gap between unprompted posts</label>
             <select class="form-select" id="scribe-cooldown-select">
@@ -19529,6 +19943,7 @@ export function renderScribeParticipationCardHTML() {
           <p class="text-muted text-xs" id="scribe-pacing-helper">${escHtml(scribePacingHelperText(pacing))}</p>
           <button class="btn btn-secondary btn-sm" id="scribe-pacing-save-btn">Save</button>
         </div>
+        ${scribePlatformNoteHTML()}
       </div>
     </div>`;
 }
@@ -19672,6 +20087,13 @@ export function setScribeModel(model) {
  * SCRIBE line including the replies a direct @SCRIBE question always gets.
  */
 export function renderScribeModelCardHTML() {
+  // N1 (DI-432 §3) — a non-pilot league's model is FORCED to the platform default by the server; a picker here would look live and be clamped, so it is not rendered.
+  if (isClampedScribeLeague()) {
+    return `
+      <div id="comm-scribe-model-card">
+        <p class="text-muted text-xs">This league's SCRIBE model is set by the platform.</p>
+      </div>`;
+  }
   const current = getScribeModel();
   const options = SCRIBE_MODEL_OPTIONS.map(o => `
         <button class="scribe-freq-opt${o.value === current ? ' selected' : ''}" data-scribe-model="${escHtml(o.value)}"
@@ -19684,7 +20106,7 @@ export function renderScribeModelCardHTML() {
       <div id="comm-scribe-model-card">
         <p class="text-muted text-xs mb-sm">Which model writes SCRIBE's lines. Opus is sharper and costs about 2.5× as much per reply; it is used by @SCRIBE replies, unprompted posts and the Trainer alike.</p>
         <div class="scribe-freq-dial" role="radiogroup" aria-label="SCRIBE model">${options}</div>
-        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $25/month budget still stops SCRIBE either way — on Opus it is reached about 2.5× sooner.</p>
+        <p class="text-muted text-xs">Currently <strong>${escHtml(label)}</strong>. Your $${scribeLeagueCapUsd()}/month budget still stops SCRIBE either way — on Opus it is reached about 2.5× sooner.</p>
       </div>`;
 }
 
@@ -20015,8 +20437,20 @@ export function renderScribeTrainerAdminSectionHTML() {
  *  same field `_shared/scribe-rate.js`'s `rateSettings()` uses server-side, so
  *  the number on screen is the number that actually stops the spending. */
 function scribeMonthlyCapUsd() {
-  const raw = Number((getSettings().scribe || {}).monthlyBudgetUsd);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 25;
+  // N1 (DI-432): the meter shows the number that actually stops the spending — the commissioner's own setting, never above this league's platform cap ($5 non-pilot, $25 pilot).
+  return clampScribeMonthlyBudgetUsd((getSettings().scribe || {}).monthlyBudgetUsd, scribeLeagueCapUsd());
+}
+/**
+ * R-F6 (reviewer, 2026-09-30) — THE ONE CLAMP for any monthly SCRIBE budget the client shows or would ever accept: a finite non-negative number, never more than `capUsd`, and
+ * never more than the $25 the SERVER honors at all (`league_platform_limits` CHECKs 0..25; effectiveMonthlyBudgetUsd() takes the minimum) — a field that accepted 100 would be a
+ * control that looks live and is not. A missing / non-numeric / negative value is the cap itself (the server's default-when-missing). There is NO writable budget field in the
+ * client today (the only reader is scribeMonthlyCapUsd() above, which uses this); a future field MUST parse through this function (pinned by pilotonlytest).
+ */
+export const SCRIBE_BUDGET_SERVER_MAX_USD = 25;
+export function clampScribeMonthlyBudgetUsd(raw, capUsd = SCRIBE_BUDGET_SERVER_MAX_USD) {
+  const cap = Math.min(Number.isFinite(Number(capUsd)) && Number(capUsd) >= 0 ? Number(capUsd) : SCRIBE_BUDGET_SERVER_MAX_USD, SCRIBE_BUDGET_SERVER_MAX_USD);
+  const n = (raw === null || raw === undefined || raw === '') ? NaN : Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, cap) : cap;
 }
 
 /**
@@ -21328,7 +21762,7 @@ function renderCommExtrasV16(week, games) {
     if (helper) helper.textContent = scribePacingHelperText(picked);
     const warn = document.getElementById('scribe-pacing-warning');
     if (warn) warn.textContent = resolveScribeHourlyLimit(picked.hourlyLimit) === 0
-      ? `⚠️ ${scribePacingUnlimitedWarning(picked)}` : '';
+      ? `⚠️ ${scribePacingUnlimitedWarning({ ...picked, capUsd: scribeLeagueCapUsd() })}` : '';
   };
   document.getElementById('scribe-hourly-limit-select')?.addEventListener('change', refreshPacingCopy);
   document.getElementById('scribe-cooldown-select')?.addEventListener('change', refreshPacingCopy);
@@ -22249,7 +22683,7 @@ export function tickAutoTransition() {
       if (!wGames?.length) continue;
       const missingForOpen = countMissingSpreads(wGames);
       const timingConfiguredForOpen = !!computeEffectiveLockAt(w, wGames);
-      const { due, blocked, gate: gateForOpen } = dueForScheduledOpen({
+      const { due, blocked, gate: gateForOpen, blurb: blurbForOpen } = dueForScheduledOpen({ // DI-404 (coordinator override, 2026-09-30): a due week with no valid blurb is BLOCKED (below), never opened
         week: w, now: Date.now(), gamesCount: wGames.length, missingSpreadCount: missingForOpen, timingConfigured: timingConfiguredForOpen,
       });
       if (due) {
@@ -22267,7 +22701,7 @@ export function tickAutoTransition() {
         // until someone manually flipped the Active Week selector.
         wizardSetActiveWeekId(w.weekId);
         openedThisTick.add(w.weekId);
-        _scheduledOpenBlockedNoticeSent.delete(w.weekId);
+        for (const k of [..._scheduledOpenBlockedNoticeSent]) { if (k.startsWith(`${w.weekId}|`)) _scheduledOpenBlockedNoticeSent.delete(k); } // DI-404: keys are week|reason
         _scheduledOpenBlockedReason.delete(w.weekId);
         if (state.currentTab === 'picks') renderPicksPage();
         else if (state.currentTab === 'dashboard') renderDashboard();
@@ -22279,14 +22713,14 @@ export function tickAutoTransition() {
         return;
       }
       if (blocked) {
-        const failing = [gateForOpen.gamesOk ? null : gateForOpen.gamesLabel, gateForOpen.spreadsOk ? null : gateForOpen.spreadsLabel, gateForOpen.timingOk ? null : gateForOpen.timingLabel].filter(Boolean).join('; ');
+        const failing = [gateForOpen.gamesOk ? null : gateForOpen.gamesLabel, gateForOpen.spreadsOk ? null : gateForOpen.spreadsLabel, gateForOpen.timingOk ? null : gateForOpen.timingLabel, blurbForOpen?.ok === false ? WIZARD_COPY.BLURB_REQUIRED_AT_OPEN : null].filter(Boolean).join('; '); const noticeKey = `${w.weekId}|${[gateForOpen.gamesOk ? '' : 'g', gateForOpen.spreadsOk ? '' : 's', gateForOpen.timingOk ? '' : 't', blurbForOpen?.ok === false ? 'b' : ''].join('')}`; // DI-404: once per week AND reason (g/s/t/b)
         // Coordinator note 4 (2026-09-27) — PERSISTENT, not only a toast:
         // renderWeekWizardStep6HTML() reads this map and shows an inline
         // warning box whenever the commissioner reopens this still-draft
         // week, so the reason survives past the toast's own lifetime.
         _scheduledOpenBlockedReason.set(w.weekId, failing);
-        if (!_scheduledOpenBlockedNoticeSent.has(w.weekId)) {
-          _scheduledOpenBlockedNoticeSent.add(w.weekId);
+        if (!_scheduledOpenBlockedNoticeSent.has(noticeKey)) {
+          _scheduledOpenBlockedNoticeSent.add(noticeKey);
           showToast(`Scheduled open is blocked: ${failing}`, 'error');
         }
       } else {
@@ -22707,7 +23141,7 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
       try {
         if (upd.status === GAME_STATUS.LIVE) {
           const merged = { ...stored, homeScore: upd.homeScore, awayScore: upd.awayScore, status: upd.status, actualWinner: upd.actualWinner };
-          scribeLiveGameCheck(stored, merged);
+          scribeLiveGameCheck(stored, merged, liveStatus);
         }
       } catch(e){ console.warn('[refresh] display-only live events', e); }
       // RG-292 (Drew, v0.27.1, 2026-09-28: "the logos aren't popping up for the
@@ -22759,7 +23193,7 @@ export async function doRefreshScores(week,games,{ displayOnly = false } = {}) {
     try {
       const fresh0=getGame(upd.gameId);
       if (!wasLive && !wasFinal && upd.status===GAME_STATUS.LIVE) emitKickoffEvent(fresh0);
-      if (upd.status===GAME_STATUS.LIVE) scribeLiveGameCheck(stored, fresh0);
+      if (upd.status===GAME_STATUS.LIVE) scribeLiveGameCheck(stored, fresh0, liveStatus);
     } catch(e){ console.warn('[refresh] live events', e); }
     // v0.16.0 — a game just went FINAL: post the ATS result to its chat thread.
     if (!wasFinal && upd.status===GAME_STATUS.FINAL) {
@@ -23540,6 +23974,32 @@ function matchup(game, { sep, showH = false } = {}) {
 function emptyState(icon,title,msg){
   return`<div class="empty-state"><div class="empty-state-icon">${icon}</div><h3>${title}</h3><p class="text-secondary text-sm mt-sm">${msg}</p></div>`;
 }
+
+/**
+ * N1 (DI-430 touched-screen audit, 2026-09-30) — the empty state for a league with NO WEEKS yet, on Picks and Dashboard (the same words as League Page's, frame 6): what
+ * happened, why, what next. Role-aware; it names no league and carries no IRB copy. The commissioner's next step is a BUTTON (the T-18 week wizard, opened cold — the one
+ * League Page's empty state opens); a player's is one sentence and no button. `[data-action="zero-week-setup"]` is bound by bindZeroWeekEmptyState().
+ */
+function zeroWeekEmptyStateHTML() {
+  const isComm = !!getSession()?.isAdmin;
+  return `<div class="empty-state" data-league-empty="${isComm ? 'commissioner' : 'player'}">
+      <div class="empty-state-icon">${icon('calendarWeek')}</div>
+      <h3>No picks to make yet</h3>
+      <p class="text-secondary text-sm mt-sm">${escHtml(zeroWeekMessage(isComm))}</p>
+      ${isComm ? zeroWeekSetupButtonHTML() : ''}
+    </div>`;
+}
+/** The one sentence per role — the same words League Page's empty state (frame 6) uses. */
+function zeroWeekMessage(isComm) {
+  return isComm ? 'Set up your first week to open picks for your league.' : "Your commissioner hasn't opened a week yet.";
+}
+function zeroWeekSetupButtonHTML() {
+  return '<button type="button" class="btn btn-primary mt-md" data-action="zero-week-setup">Set up first week</button>';
+}
+function bindZeroWeekEmptyState(container) {
+  container?.querySelector?.('[data-action="zero-week-setup"]')?.addEventListener('click', () => { haptic('medium'); openWeekWizardSheet({ forceNew: true }); });
+}
+export const _zeroWeekEmptyStateHTMLForTest = zeroWeekEmptyStateHTML;
 
 function escHtml(s){
   if(!s)return'';
@@ -25006,37 +25466,68 @@ export const _NATIVE_SIGNIN_WATCHDOG_MS_FOR_TEST = NATIVE_SIGNIN_WATCHDOG_MS;
  *  WHY (we genuinely do not know which await is wedged) and everything about
  *  what to do next. */
 export const NATIVE_SIGNIN_WATCHDOG_MESSAGE = 'Sign-in is taking too long — try again.';
+
+// UN-312 / DI-437 — the sign-in gate's platform-independent Munera lockup seam.
+// Its own import (brandtest.mjs pins the getShell* import line at the top of
+// this file byte-for-byte; the header wordmark still resolves through getShell*,
+// which UN-312 leaves alone). It is declared HERE, beside its only consumer,
+// rather than with the imports at the top: several ratchets in this repo
+// (rolestest, boottest) pin app.js call sites by absolute line number, so a
+// change confined to the sign-in gate should not shift the lines above it.
+// Imports are hoisted, so this binds before anything runs.
+import { getGateMarkSVG, getGateWordmark, getGateTagline } from './brand.js';
+
+/**
+ * UN-312 / DI-437 — the Munera lockup the SIGN-IN screen opens with (its hero),
+ * identical on web and native (Drew's Q7: the web gate says Munera too): mark,
+ * wordmark, tagline. The mark is the one fixed-literal SVG from brand.js,
+ * injected raw exactly like GOOGLE_G_MARK_SVG; both text strings go through
+ * escHtml() like every other interpolated string (S-C2). Pure markup, no
+ * state: it cannot touch the recovery-session predicates.
+ *
+ * The COMPACT lockup on the sub-screens (forgot / recovery / expired) and the
+ * hold screens is drawn in CSS, from pseudo-elements, with no markup of its own
+ * (DI-438's technique, applied to all of them so there is exactly one way the
+ * compact lockup is drawn). That is not only tidy: authpasswordtest [15]
+ * extracts the forgot-password region of this file verbatim into a sandbox that
+ * has no brand.js, so markup built from brand.js could not live in it.
+ */
+function gateLockupHTML() {
+  return `<div class="site-gate-hero">
+          ${getGateMarkSVG()}
+          <div class="site-gate-wordmark">${escHtml(getGateWordmark())}</div>
+          <div class="site-gate-tagline">${escHtml(getGateTagline())}</div>
+        </div>`;
+}
+
 export function showGoogleSignInGate(initialNotice, { prefillEmail = '', swap = false } = {}) {
-  const s = getSettings();
-  const titleTop  = s.welcomeTitleTop  || 'welcome to';
-  const titleMain = s.welcomeTitleMain || (s.welcomeTitle ? s.welcomeTitle.replace(/^welcome to\s*/i,'') : "irb pick 'ems");
+  // UN-312 / DI-437 (2026-09-29) — ONE template for both front ends. The web
+  // gate used to render the commissioner-editable "welcome to / irb pick 'ems"
+  // eyebrow+title while only the native shell got the Munera lockup; Drew's Q7
+  // ruling makes the web say Munera too, so the two-branch template (and the
+  // welcomeTitleTop/Main lookups that fed only its web half) are gone. The PIN
+  // gate above, local-only, still reads them. The Google button below is
+  // byte-unchanged from before, inner whitespace included (its lines keep their
+  // old indentation on purpose, so gaterebrandtest can pin the node verbatim);
+  // its message slot now sits DIRECTLY under it on both platforms (web used to
+  // put it above the button, native below).
   document.getElementById('site-gate-overlay')?.remove();
   const wrap = document.createElement('div');
   wrap.id = 'site-gate-overlay';
-  const native = isNativeShell();
-  wrap.innerHTML = native ? `
+  wrap.innerHTML = `
     <div class="site-gate" data-gate-state="google">
       <div class="site-gate-inner">
-        <div class="site-gate-wordmark">${escHtml(getShellWordmark() || '')}</div>
-        <div class="site-gate-tagline">${escHtml(getShellTagline() || '')}</div>
-        <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
+        <div class="gate-screen" data-screen="signin">
+          ${gateLockupHTML()}
+          <div class="site-gate-actions">
+            <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
           <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
           <span id="google-gate-btn-label">Continue with Google</span>
         </button>
-        <div id="google-gate-message" style="display:none"></div>
-        ${passwordGateBlockHTML()}
-      </div>
-    </div>` : `
-    <div class="site-gate">
-      <div class="site-gate-inner">
-        <div class="site-gate-title-top">${escHtml(titleTop)}</div>
-        <div class="site-gate-title">${escHtml(titleMain)}</div>
-        <div id="google-gate-message" style="display:none"></div>
-        <button class="site-gate-btn google-signin-btn" id="google-gate-submit" type="button">
-          <span class="google-g-mark">${GOOGLE_G_MARK_SVG}</span>
-          <span id="google-gate-btn-label">Continue with Google</span>
-        </button>
-        ${passwordGateBlockHTML()}
+            <div id="google-gate-message" style="display:none"></div>
+            ${passwordGateBlockHTML()}
+          </div>
+        </div>
       </div>
     </div>`;
   document.body.appendChild(wrap);
@@ -25064,7 +25555,12 @@ export function showGoogleSignInGate(initialNotice, { prefillEmail = '', swap = 
   const showMessage = (text, tone) => {
     const el = liveEl(msgEl, 'google-gate-message');
     if (!el) return;
+    // UN-312 — the same four statements as applyGateSlot() (below, in the
+    // forgot-password region), INLINE on purpose: authnativetest [10] extracts
+    // this closure's source verbatim into a sandbox that defines only what the
+    // old body used, so it cannot call a helper by name.
     el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
+    el.setAttribute?.('role', tone === 'error' ? 'alert' : 'status');
     el.textContent = text;
     el.style.display = 'block';
   };
@@ -25092,6 +25588,16 @@ export function showGoogleSignInGate(initialNotice, { prefillEmail = '', swap = 
   // RG-233 — which tap owns the UI. A superseded tap's late rejection must not
   // repaint over the attempt that replaced it.
   let clickSeq = 0;
+  // UN-312 / DI-437 — a medium haptic on the primary tap (Interaction
+  // Principles: primary actions). haptic() is native-only by itself (it checks
+  // isNativeShell() and the Capacitor plugin, and never throws), so web gets
+  // nothing (PARITY-BY-DESIGN). It is a SEPARATE listener, registered BEFORE the
+  // handler below, for the same reason showMessage() above is inline:
+  // authnativetest [10] extracts that handler's body verbatim into a sandbox
+  // with no haptic() in it. Listeners run in registration order, so the buzz
+  // lands on the tap itself, before anything can await or fail, and never on
+  // an error path. A disabled button (a connect already in flight) is skipped.
+  btn?.addEventListener('click', () => { if (!btn.disabled) haptic('medium'); });
   btn?.addEventListener('click', async () => {
     if (btn.disabled) return;
     const mySeq = ++clickSeq;
@@ -25282,6 +25788,18 @@ function passwordGateBlockHTML() {
   // "web app smell"); `method="post"` (security audit): if the
   // preventDefault listener were ever unbound, a native submit would POST,
   // never GET `?email=…&password=…` into the URL, history and SW cache.
+  // UN-312 / DI-437 (2026-09-29) — ONE deliberate change to this markup: the
+  // message slot moves from below the links to INSIDE the form, between
+  // Password and the submit button — the error now sits in the eye line of the
+  // thumb that just tapped Sign In (it used to be under both links). Nothing
+  // else moves: ids, names, autocomplete, novalidate/method, the `data-mode`
+  // toggle and the link row are exactly as they were.
+  //
+  // The keyboard hints (`enterkeyhint`, and autocapitalize/autocorrect/
+  // spellcheck OFF on Email) are DELIBERATELY NOT in this string: authtest
+  // [N6-2]/[N6-3] pin the two <input> tags below byte-for-byte and must run
+  // unmodified, so bindPasswordGateBlock() sets those attributes on the live
+  // nodes instead (same DOM on the device, which is all iOS reads).
   return `
     ${dividerOrHTML()}
     <form id="pwacct-gate-form" method="post" novalidate>
@@ -25293,13 +25811,13 @@ function passwordGateBlockHTML() {
       <label class="form-label" for="pwacct-password">Password</label>
       <input class="form-input" id="pwacct-password" name="password" type="password" autocomplete="current-password" required />
     </div>
+    <div id="pwacct-gate-message" style="display:none"></div>
     <button class="site-gate-btn" id="pwacct-gate-submit" type="submit" data-mode="signin">Sign In</button>
     </form>
     <div class="site-gate-link-row">
       <button type="button" class="site-gate-link" id="pwacct-forgot-link">Forgot password?</button>
       <button type="button" class="site-gate-link" id="pwacct-mode-toggle">New here? Create an account</button>
-    </div>
-    <div id="pwacct-gate-message" style="display:none"></div>`;
+    </div>`;
 }
 
 /**
@@ -25336,13 +25854,20 @@ function bindPasswordGateBlock() {
   // DI-332 — cloned closure, NOT coupled to #google-gate-message: only one
   // of the two message slots is ever visible for the flow the player is
   // actually in.
-  const showMsg = (text, tone) => {
-    const el = msgSlot(); if (!el) return;
-    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
-    el.textContent = text;
-    el.style.display = 'block';
-  };
+  const showMsg = (text, tone) => { applyGateSlot(msgSlot(), text, tone); }; // UN-312: the one slot writer
   const hideMsg = () => { const el = msgSlot(); if (el) el.style.display = 'none'; };
+  // UN-312 / DI-437 — `aria-invalid` marks WHICH field a red message is about,
+  // so the red border is never the only signal (VoiceOver reads "invalid data"
+  // on the field; the border colour keys off the same attribute in CSS). Set
+  // only where the message really is about a field: a wrong credential pair
+  // (both — one string for wrong-password and no-such-account, so neither is
+  // singled out: the enumeration boundary is unchanged), a malformed email
+  // (Email), an empty submit (whichever is empty). Network/rate-limit/
+  // unverified-account messages are not about a field, so mark nothing. Each
+  // field's own `input` clears its own mark; a fresh submit clears both.
+  // `?.` on setAttribute/removeAttribute: a bare stub element degrades quietly.
+  const setInvalid = (...els) => { for (const el of els) el?.setAttribute?.('aria-invalid', 'true'); };
+  const clearInvalid = (...els) => { for (const el of els) el?.removeAttribute?.('aria-invalid'); };
 
   const applyMode = (mode) => {
     const btn = submitBtn(); const toggle = modeToggle(); const forgot = forgotLink(); const pw = pwEl();
@@ -25353,10 +25878,17 @@ function bindPasswordGateBlock() {
     if (pw) pw.setAttribute('autocomplete', mode === 'signup' ? 'new-password' : 'current-password');
   };
   applyMode('signin');
+  // UN-312 / DI-437 — the iOS return key says what Return does (Email "next",
+  // Password "go"; the handlers below already advance and submit), and Email is
+  // never auto-capitalised or auto-corrected. Set on the live nodes, not in
+  // passwordGateBlockHTML()'s string — see the comment there for why.
+  { const em = emailEl(); if (em?.setAttribute) { em.setAttribute('enterkeyhint', 'next'); em.setAttribute('autocapitalize', 'none'); em.setAttribute('autocorrect', 'off'); em.setAttribute('spellcheck', 'false'); } }
+  pwEl()?.setAttribute?.('enterkeyhint', 'go');
 
   modeToggle()?.addEventListener('click', () => {
     applyMode((submitBtn()?.dataset.mode || 'signin') === 'signin' ? 'signup' : 'signin');
     hideMsg();
+    clearInvalid(emailEl(), pwEl());
   });
 
   // Forms — "Tapping return on Email advances focus to Password; return/go
@@ -25369,21 +25901,30 @@ function bindPasswordGateBlock() {
   const BAD_EMAIL_COPY = 'Enter a valid email address.';
   emailEl()?.addEventListener('blur', () => {
     const v = (emailEl()?.value || '').trim();
-    if (v && !isPlausibleEmail(v)) showMsg(BAD_EMAIL_COPY, 'error');
-    else if (msgSlot()?.textContent === BAD_EMAIL_COPY) hideMsg();
+    if (v && !isPlausibleEmail(v)) { showMsg(BAD_EMAIL_COPY, 'error'); setInvalid(emailEl()); }
+    else if (msgSlot()?.textContent === BAD_EMAIL_COPY) { hideMsg(); clearInvalid(emailEl()); }
   });
-  for (const el of [emailEl(), pwEl()]) el?.addEventListener('input', () => { if (/^Enter your /.test(msgSlot()?.textContent || '')) hideMsg(); });
+  for (const el of [emailEl(), pwEl()]) el?.addEventListener('input', () => {
+    if (/^Enter your /.test(msgSlot()?.textContent || '')) hideMsg();
+    clearInvalid(el);
+  });
 
   async function doSubmit() {
     const btn = submitBtn(); if (!btn || btn.disabled) return;
     const email = (emailEl()?.value || '').trim();
     const password = pwEl()?.value || '';
     // Empty form: no round trip. B-1 (2026-09-26) — the form is `novalidate` (no native bubble), so the slot names what is missing and focus moves there.
-    if (!email || !password) { showMsg(!email && !password ? 'Enter your email and password.' : !email ? 'Enter your email.' : 'Enter your password.', 'error'); (!email ? emailEl() : pwEl())?.focus?.(); return; }
+    if (!email || !password) {
+      showMsg(!email && !password ? 'Enter your email and password.' : !email ? 'Enter your email.' : 'Enter your password.', 'error');
+      setInvalid(!email ? emailEl() : null, !password ? pwEl() : null); // UN-312: mark the empty field(s)
+      (!email ? emailEl() : pwEl())?.focus?.();
+      return;
+    }
     // N2 — a malformed email is caught here too (a submit that never blurred).
-    if (!isPlausibleEmail(email)) { showMsg(BAD_EMAIL_COPY, 'error'); return; }
+    if (!isPlausibleEmail(email)) { showMsg(BAD_EMAIL_COPY, 'error'); setInvalid(emailEl()); return; }
     const mode = btn.dataset.mode || 'signin';
     hideMsg();
+    clearInvalid(emailEl(), pwEl()); // a fresh attempt starts unmarked
     btn.disabled = true;
     const label = btn.textContent;
     btn.textContent = mode === 'signup' ? 'Creating account…' : 'Signing in…';
@@ -25429,6 +25970,7 @@ function bindPasswordGateBlock() {
         // DI-339's enumeration boundary: UNKNOWN must never accidentally
         // read as more informative than NO_MATCH.
         showMsg("That email and password don't match. Check them and try again.", 'error');
+        setInvalid(emailEl(), pwEl()); // UN-312: both fields, so neither is singled out
       }
     } finally {
       const liveBtn = submitBtn();
@@ -25503,18 +26045,29 @@ export const _bindPasswordGateBlockForTest = bindPasswordGateBlock;
  * DI-332's email field, per DI-333's own "Placement" note.
  */
 function forgotPasswordScreenHTML(prefillEmail) {
+  // UN-312 / DI-437 — same skin as the sign-in screen: the compact Munera lockup
+  // on top (drawn by CSS from `.gate-screen[data-screen]`, see gateLockupHTML()),
+  // the helper on the gate's own `.site-gate-helper` (it was the app-theme
+  // `.text-muted`, the token leak the audit named), and the message slot
+  // directly under the button it belongs to (it sat under Back). Ids, copy and
+  // the value="…" attribute are unchanged; the Email field gains the same
+  // autocapitalize/autocorrect/spellcheck OFF as the sign-in field.
   return `
-    <div class="site-gate-title">Reset your password</div>
-    <p class="text-muted text-sm">We'll email you a link to set a new one.</p>
-    <div class="form-group">
-      <label class="form-label" for="pwacct-reset-email">Email</label>
-      <input class="form-input" id="pwacct-reset-email" type="email" inputmode="email" autocomplete="email" value="${escHtml(prefillEmail || '')}" />
-    </div>
-    <button class="site-gate-btn" id="pwacct-reset-send-btn" type="button">Send Reset Link</button>
-    <div class="site-gate-link-row">
-      <button type="button" class="site-gate-link" id="pwacct-reset-back-btn">Back</button>
-    </div>
-    <div id="pwacct-reset-message" style="display:none"></div>`;
+    <div class="gate-screen" data-screen="forgot">
+      <div class="site-gate-actions">
+        <div class="site-gate-title">Reset your password</div>
+        <p class="site-gate-helper">We'll email you a link to set a new one.</p>
+        <div class="form-group">
+          <label class="form-label" for="pwacct-reset-email">Email</label>
+          <input class="form-input" id="pwacct-reset-email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" autocorrect="off" spellcheck="false" value="${escHtml(prefillEmail || '')}" />
+        </div>
+        <button class="site-gate-btn" id="pwacct-reset-send-btn" type="button">Send Reset Link</button>
+        <div id="pwacct-reset-message" style="display:none"></div>
+        <div class="site-gate-link-row">
+          <button type="button" class="site-gate-link" id="pwacct-reset-back-btn">Back</button>
+        </div>
+      </div>
+    </div>`;
 }
 /**
  * DI-333 / F4 / Security F1 (third pass) — the ONE non-committal notice the
@@ -25531,19 +26084,49 @@ function forgotPasswordSentNotice() {
     // "come back and sign in" close the previous line carried.
     + (isNativeShell() ? " Open the link on your phone or computer's browser to finish — it'll open irbfootball.com, not the app. Then come back and sign in." : '');
 }
+/**
+ * UN-312 / DI-437 — the shared writer for the sign-in gate's message slots
+ * (the email/password form's, forgot-password's, the recovery form's, and the
+ * S1-B notice-on-gate fallback). It used to be four copies of the same four
+ * lines, which is how the slots drifted apart. `className` stays exactly
+ * `site-gate-error` / `site-gate-notice` (authtest pins both strings); the role
+ * is what is new: an error is `alert` (assertive — VoiceOver reads it the
+ * moment it appears), a notice is `status` (polite). `setAttribute?.` so a bare
+ * stub element without it degrades to "no role" rather than throwing. The text
+ * is written with textContent, never markup; the error glyph is a CSS
+ * pseudo-element precisely because textContent wipes any child node.
+ *
+ * It is declared HERE, inside the forgot-password region, on purpose:
+ * authpasswordtest [15] extracts this region (forgotPasswordScreenHTML()
+ * through showForgotPasswordScreen()) verbatim into a sandbox, so a helper the
+ * region calls must live inside it. Function declarations hoist, so the other
+ * writers elsewhere in this file use it unchanged. The one writer that cannot
+ * is the Google slot's `showMessage` (showGoogleSignInGate()): authnativetest
+ * [10] extracts that closure's source verbatim into a sandbox of its own, so it
+ * carries the same four statements inline — gaterebrandtest pins the two
+ * against each other.
+ */
+function applyGateSlot(el, text, tone) {
+  if (!el) return;
+  const isError = tone === 'error';
+  el.className = isError ? 'site-gate-error' : 'site-gate-notice';
+  el.setAttribute?.('role', isError ? 'alert' : 'status');
+  el.textContent = text;
+  el.style.display = 'block';
+}
 function showForgotPasswordScreen(prefillEmail) {
   const inner = document.querySelector('#site-gate-overlay .site-gate-inner');
   if (!inner) return;
   inner.innerHTML = forgotPasswordScreenHTML(prefillEmail);
   playGateSwap(inner);
+  // UN-312 — the gate scrolls (small phones, keyboard up): a screen swap starts
+  // at the top, never mid-way down the screen it replaced (no jump). Guarded
+  // for a bare stub element, which has no closest().
+  { const scroller = inner.closest?.('.site-gate'); if (scroller) scroller.scrollTop = 0; }
   const emailEl = () => document.getElementById('pwacct-reset-email');
   const sendBtn = () => document.getElementById('pwacct-reset-send-btn');
   const msgSlot = () => document.getElementById('pwacct-reset-message');
-  const showMsg = (text, tone) => {
-    const el = msgSlot(); if (!el) return;
-    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
-    el.textContent = text; el.style.display = 'block';
-  };
+  const showMsg = (text, tone) => { applyGateSlot(msgSlot(), text, tone); }; // UN-312: the one slot writer
   // STEP B(4) / N1 — Back keeps what the player typed (either here or on the
   // sign-in screen before they tapped "Forgot password?") and cross-fades.
   document.getElementById('pwacct-reset-back-btn')?.addEventListener('click', () => {
@@ -25602,21 +26185,32 @@ function showForgotPasswordScreen(prefillEmail) {
  * by Finding 1's rules, IS the proof.
  */
 function passwordRecoveryScreenHTML() {
+  // UN-312 / DI-437 — compact Munera lockup on top (CSS-drawn from
+  // `.gate-screen[data-screen]`); the message slot moves from the bottom of the
+  // screen to between the last field and the button (a mismatch or a
+  // weak-password error now reads right above the thing to tap).
+  // `data-gate-state="recovery"` lives on the caller's `.site-gate` wrapper and
+  // is untouched, as is every id; copy is today's (the mockup's optional
+  // "Choose something you'll remember." helper is NOT built — awaiting Drew).
   return `
-    <div class="site-gate-title">Set a new password</div>
-    <div class="form-group">
-      <label class="form-label" for="pwacct-recovery-new">New password</label>
-      <input class="form-input" id="pwacct-recovery-new" type="password" autocomplete="new-password" />
-    </div>
-    <div class="form-group">
-      <label class="form-label" for="pwacct-recovery-confirm">Confirm new password</label>
-      <input class="form-input" id="pwacct-recovery-confirm" type="password" autocomplete="new-password" />
-    </div>
-    <button class="site-gate-btn" id="pwacct-recovery-submit" type="button">Set New Password</button>
-    <div class="site-gate-link-row">
-      <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
-    </div>
-    <div id="pwacct-recovery-message" style="display:none"></div>`;
+    <div class="gate-screen" data-screen="recovery">
+      <div class="site-gate-actions">
+        <div class="site-gate-title">Set a new password</div>
+        <div class="form-group">
+          <label class="form-label" for="pwacct-recovery-new">New password</label>
+          <input class="form-input" id="pwacct-recovery-new" type="password" autocomplete="new-password" />
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="pwacct-recovery-confirm">Confirm new password</label>
+          <input class="form-input" id="pwacct-recovery-confirm" type="password" autocomplete="new-password" />
+        </div>
+        <div id="pwacct-recovery-message" style="display:none"></div>
+        <button class="site-gate-btn" id="pwacct-recovery-submit" type="button">Set New Password</button>
+        <div class="site-gate-link-row">
+          <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
+        </div>
+      </div>
+    </div>`;
 }
 /** DI-334 — the refused/expired-link state (B3): a device whose recovery
  *  marker could not be made durable, or a token_hash `verifyOtp()` rejected
@@ -25625,12 +26219,20 @@ function passwordRecoveryScreenHTML() {
  *  specifies for `CODE_INVALID` inside the form's own catch block below —
  *  one string, reused, not a second invention. */
 function passwordRecoveryExpiredScreenHTML() {
+  // UN-312 / DI-437 — compact lockup (CSS-drawn from `.gate-screen[data-screen]`);
+  // the error keeps `class="site-gate-error"` and `display:block` exactly as
+  // before and gains role="alert" (it is a message that is on screen from the
+  // first paint, so it is announced when the screen appears).
   return `
-    <div class="site-gate-title">Set a new password</div>
-    <div id="pwacct-recovery-message" class="site-gate-error" style="display:block">This reset link has expired or was already used. Request a new one.</div>
-    <button class="site-gate-btn" id="pwacct-recovery-expired-reset-btn" type="button">Request a New Link</button>
-    <div class="site-gate-link-row">
-      <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
+    <div class="gate-screen" data-screen="expired">
+      <div class="site-gate-actions">
+        <div class="site-gate-title">Set a new password</div>
+        <div id="pwacct-recovery-message" class="site-gate-error" role="alert" style="display:block">This reset link has expired or was already used. Request a new one.</div>
+        <button class="site-gate-btn" id="pwacct-recovery-expired-reset-btn" type="button">Request a New Link</button>
+        <div class="site-gate-link-row">
+          <button type="button" class="site-gate-link" id="pwacct-recovery-back-btn">Back</button>
+        </div>
+      </div>
     </div>`;
 }
 /**
@@ -25700,17 +26302,17 @@ function showPasswordRecoveryScreen({ expired = false, overResolvedHold = false 
   const confirmEl = () => document.getElementById('pwacct-recovery-confirm');
   const submitBtn = () => document.getElementById('pwacct-recovery-submit');
   const msgSlot = () => document.getElementById('pwacct-recovery-message');
-  const showMsg = (text, tone) => {
-    const el = msgSlot(); if (!el) return;
-    el.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
-    el.textContent = text; el.style.display = 'block';
-  };
+  const showMsg = (text, tone) => { applyGateSlot(msgSlot(), text, tone); }; // UN-312: the one slot writer
+  // UN-312 (mockup frame 9) — a mismatch marks the CONFIRM field invalid (the
+  // message is about it); its own `input` clears the mark. `?.` for stub elements.
+  confirmEl()?.addEventListener('input', () => { confirmEl()?.removeAttribute?.('aria-invalid'); });
   submitBtn()?.addEventListener('click', async () => {
     const btn = submitBtn(); if (!btn || btn.disabled) return;
     const pw1 = newEl()?.value || '';
     const pw2 = confirmEl()?.value || '';
     if (!pw1 || !pw2) return;
-    if (pw1 !== pw2) { showMsg("Those passwords don't match.", 'error'); return; }
+    if (pw1 !== pw2) { showMsg("Those passwords don't match.", 'error'); confirmEl()?.setAttribute?.('aria-invalid', 'true'); return; }
+    confirmEl()?.removeAttribute?.('aria-invalid');
     btn.disabled = true;
     const label = btn.textContent; btn.textContent = 'Saving…';
     try {
@@ -25795,9 +26397,7 @@ function showNoticeOnGateOrToast(text, tone = 'warning') {
     slot.id = 'site-gate-notice-slot';
     (gate.querySelector?.('.site-gate-inner') || gate).appendChild(slot);
   }
-  slot.className = tone === 'error' ? 'site-gate-error' : 'site-gate-notice';
-  slot.textContent = text;
-  slot.style.display = 'block';
+  applyGateSlot(slot, text, tone); // UN-312: the one slot writer (class, role, text, display)
   return 'gate';
 }
 export const _showNoticeOnGateOrToastForTest = showNoticeOnGateOrToast;
@@ -26002,95 +26602,414 @@ function showPasswordChangeSheet() {
 export const _showPasswordChangeSheetForTest = showPasswordChangeSheet;
 
 /**
- * DI-340 — "Delete Account." SAME `.modal-overlay.centered`/`.modal` idiom,
- * NEVER `confirm()`/`prompt()` (the "named deviation" this DI states: a
- * typed "DELETE" confirmation, the industry-standard pattern for
- * irreversible account actions, is a familiar pattern being reused, not a
- * novel one being invented). Retention list (DI-340 FINDING 11): only the
- * caller's OWN account-linked identity is scrubbed server-side
- * (`anonymize_own_account()`); picks, results, chat and display name all
- * survive as league history (AD-28).
+ * DI-340 — "Delete Account." A typed "DELETE" confirmation (the named deviation DI-340 states, a familiar pattern reused, never `confirm()`/`prompt()`). Retention list
+ * (DI-340 FINDING 11): only the caller's OWN account-linked identity is scrubbed server-side (`anonymize_own_account()`); picks, results, chat and display name all survive
+ * as league history (AD-28).
+ *
+ * UN-389 / DI-446 (2026-09-30) — A SOLE COMMISSIONER CAN DELETE THEIR OWN ACCOUNT. The centered `.modal-overlay` is now N1's shared sheet shell (`mountSheetShell()`, the
+ * New League sheet's own), and the sheet walks a person who runs a league on their own through leaving it in a safe state BEFORE the deletion:
+ *   • the pure half is js/account-exit.js (copy, state, row kinds, renderers); this section is its DOM and network wiring and nothing else;
+ *   • the RULE lives on the server. On open, when the cached memberships hold a commissioner seat, `getAccountExitLeagues()` (the `account_exit_leagues()` RPC) answers which
+ *     leagues block, which auto-archive and who the candidates are; nothing here re-derives it, and a fresh answer beats this session's own record (server truth wins);
+ *   • a HAND-OFF (`setMemberRole`) runs at once and the sheet re-asks; an ARCHIVE is only QUEUED and runs at the FINAL Delete tap (`archiveLeagueOnExit`, in list order,
+ *     stopping at the first failure BEFORE `deleteOwnAccount()`), so abandoning the sheet abandons the queue (D-5);
+ *   • a preflight that cannot be answered is LOUD and fail-closed (Try Again, Delete disabled) — never an empty list read as "nothing to resolve";
+ *   • a person with no commissioner seat gets today's sheet at once and NO call (zero regression for a plain player).
+ * The five ids authtest [57d]-[57f] pin (`pwacct-delete-overlay|confirm|submit|message|close`) are byte-stable.
  */
-function deleteAccountSheetHTML() {
-  return `<div class="modal">
-    <div class="modal-header"><h3>Delete your account?</h3><button class="modal-close" id="pwacct-delete-close">✕</button></div>
-    <p class="text-sm">This removes your sign-in and profile. Your name, picks, and results stay part of your leagues' history — they won't be deleted, just no longer linked to your account. This can't be undone.</p>
-    <p class="text-sm text-muted">A record of this change is kept in your league's audit history, visible only to your commissioner.</p>
-    <div class="form-group">
-      <label class="form-label" for="pwacct-delete-confirm">Type DELETE to confirm</label>
-      <input class="form-input" id="pwacct-delete-confirm" autocomplete="off" placeholder="Type DELETE" />
-    </div>
-    <button type="button" class="btn btn-danger btn-block" id="pwacct-delete-submit" disabled>Delete My Account</button>
-    <div id="pwacct-delete-message" style="display:none" class="text-sm mt-sm"></div>
-  </div>`;
+const AX_WRAP_ID = 'pwacct-delete-overlay';
+const AX_SHEET_ID = 'pwacct-delete-sheet';
+const AX_EXIT_SLIDE_MS = 300;   // --motion-modal
+const AX_EXIT_FADE_MS = 150;    // --motion-fast
+// { state, seq, painted, promptEl, listScrollTop, invoker, unbindDrag, onKey } while the sheet is up, else null.
+let _ax = null;
+const axDeps = () => ({ escHtml, icon });
+const axById = (id) => document.getElementById(id);
+/** True while THIS sheet is still the live one and its node is in the document — every async continuation asks before it paints or continues. */
+const axLive = (ax) => _ax === ax && !!document.getElementById(AX_WRAP_ID);
+
+function axDetach(ax) {
+  try { ax.unbindDrag?.(); } catch { /* an unbind is hygiene */ }
+  ax.unbindDrag = null;
+  try { document.removeEventListener('keydown', ax.onKey); } catch { /* same */ }
 }
+/** The identity chokepoint / a hold sweeps every `[data-hold-teardown]` node, this sheet's wrap included; the state it leaves behind is dropped the next time anything asks. */
+function axAbandonIfSwept() {
+  const ax = _ax;
+  if (!ax || document.getElementById(AX_WRAP_ID)) return;
+  axDetach(ax);
+  _ax = null;
+}
+
+/** A mapped (named) server refusal for a hand-off, or null — the same code table the claim/link and Comm flows share (`CLAIM_CODE_ERROR_COPY`), so the vocabulary cannot drift. */
+function mappedMemberActionCopy(err) {
+  const raw = `${err?.message || ''} ${err?.code || ''}`;
+  for (const [code, copy] of CLAIM_CODE_ERROR_COPY) if (raw.includes(code)) return copy;
+  return null;
+}
+
 function showDeleteAccountSheet() {
-  document.getElementById('pwacct-delete-overlay')?.remove();
-  const ov = document.createElement('div');
-  ov.id = 'pwacct-delete-overlay';
-  ov.className = 'modal-overlay centered';
-  // F5 (security gate, 3c fix window, 2026-09-25) — same reasoning as
-  // showPasswordChangeSheet()'s own comment: swept on an ordinary identity
-  // change, not only a hold.
-  ov.setAttribute('data-hold-teardown', '');
-  ov.innerHTML = deleteAccountSheetHTML();
-  document.body.appendChild(ov);
-  const close = () => ov.remove();
-  document.getElementById('pwacct-delete-close')?.addEventListener('click', close);
-  ov.addEventListener('click', e => { if (e.target === ov) close(); });
-  const showMsg = (text) => {
-    const el = document.getElementById('pwacct-delete-message');
-    if (!el) return;
-    el.style.color = 'var(--loss)';
-    el.textContent = text; el.style.display = 'block';
+  // Same guard every body-appended surface carries (SECURITY GATE FINDING 1): never open one while content is withheld.
+  if (isContentWithheld()) return;
+  axAbandonIfSwept();
+  if (_ax) { axDetach(_ax); _ax = null; }   // a re-open replaces the live sheet (mountSheetShell() removes the old node)
+  const st = AX.createInitialState({ commissionerLeagues: AX.cachedCommissionerLeagues(getCachedMemberships()) });
+  const ax = { state: st, seq: 0, painted: {}, promptEl: null, listScrollTop: 0, invoker: null, unbindDrag: null, onKey: null };
+  _ax = ax;
+  // F5 (security gate, 3c fix window, 2026-09-25) — `data-hold-teardown` (set by the shell) keeps this sheet swept on an ordinary identity change, not only a hold.
+  const { wrap, unbind } = mountSheetShell({
+    wrapId: AX_WRAP_ID,
+    sheetId: AX_SHEET_ID,
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="pwacct-delete-title"',
+    headerInnerHTML: '<div id="pwacct-delete-nav"></div>',
+    bodyId: 'pwacct-delete-body',
+    onBackdrop: requestDeleteSheetDismiss,
+    renderBody: () => paintDeleteSheetFirst(),
+    drag: { getBlocked: isDeleteAccountDismissGestureBlocked, onProgress: deleteAccountDragProgress, onSettle: settleDeleteAccountDrag },
+  });
+  ax.unbindDrag = unbind;
+  wrap.addEventListener('click', onDeleteSheetClick);
+  const input = axById('pwacct-delete-confirm');
+  const submitBtn = axById('pwacct-delete-submit');
+  input?.addEventListener('input', () => axDispatch({ type: 'typed', value: input.value }));
+  // Return dismisses the keyboard and does NOT submit (Interaction Principles §Forms: a destructive action is never one Return away).
+  input?.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault?.(); try { input.blur?.(); } catch { /* courtesy */ } } });
+  // On focus the field and Delete scroll into view above the keyboard, after the keyboard's own animation has started.
+  input?.addEventListener('focus', () => {
+    setTimeout(() => {
+      if (!axLive(ax)) return;
+      let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+      try { axById('pwacct-delete-caption')?.scrollIntoView?.({ block: 'nearest', behavior: reduced ? 'auto' : 'smooth' }); } catch { /* courtesy */ }
+    }, 300);
+  });
+  submitBtn?.addEventListener('click', () => runDeleteAccount());
+  // Esc asks the same question the backdrop does (web; a phone has no Esc key). Self-cleaning if the node was swept out from under it.
+  ax.onKey = (e) => {
+    if (e.key !== 'Escape') return;
+    if (!document.getElementById(AX_WRAP_ID)) { axAbandonIfSwept(); return; }
+    requestDeleteSheetDismiss();
   };
-  const input = document.getElementById('pwacct-delete-confirm');
-  const submitBtn = document.getElementById('pwacct-delete-submit');
-  // Set explicitly, not left to the static `disabled` HTML attribute alone
-  // — belt and suspenders (the markup already carries it too), and it is
-  // what makes the STARTING state a real, observable JS property rather
-  // than something only a browser's own attribute-reflection provides.
-  if (submitBtn) submitBtn.disabled = true;
-  input?.addEventListener('input', () => {
-    if (submitBtn) submitBtn.disabled = (input.value !== 'DELETE');
-  });
-  submitBtn?.addEventListener('click', async () => {
-    const btn = document.getElementById('pwacct-delete-submit');
-    if (!btn || btn.disabled) return;
-    btn.disabled = true; const label = btn.textContent; btn.textContent = 'Deleting…';
-    try {
-      await deleteOwnAccount();
-      close();
-      showToast('Your account has been deleted.', 'success');
-      // deleteOwnAccount() already signs out / clears local session data
-      // (js/auth.js's own header) — the sign-in gate shows via the SDK's
-      // own SIGNED_OUT event, the same path every other sign-out already
-      // uses, no manual gate call needed here.
-    } catch (e) {
-      console.warn('[account] delete failed', e);
-      // B6 (3c fix window, 2026-09-25) — a sole-commissioner refusal is a
-      // NAMED, non-retryable reason (js/auth.js's AccountDeleteRefusedError,
-      // F-6), not a transport failure. It gets its OWN copy — "check your
-      // connection" is actively wrong here (retrying changes nothing until
-      // the player hands off the league) — and its own message is already
-      // rendering-ready (auth.js constructs it), so it's shown verbatim.
-      if (e instanceof AccountDeleteRefusedError && e.reason === 'last_commissioner') {
-        showMsg(e.message);
-      } else {
-        // LOUD-FAIL (AD-06) — including the safe partial-failure state where
-        // the anonymize RPC succeeded but the Admin API step failed; the
-        // player does not need to distinguish "fully deleted" from
-        // "anonymized, auth row pending" — the account is unusable to them
-        // either way, and DI-340's audit_log row already carries the timing
-        // for anyone who does need to distinguish it.
-        showMsg("Couldn't delete your account — check your connection and try again, or tell your commissioner.");
-      }
-      const liveBtn = document.getElementById('pwacct-delete-submit');
-      if (liveBtn) { liveBtn.disabled = false; liveBtn.textContent = label; }
-    }
-  });
+  document.addEventListener('keydown', ax.onKey);
+  patchDeleteForm();
+  // Focus moves INTO the dialog on open (VoiceOver reads its title first). The title, not the typed field: a focused field would raise the keyboard before the person has read a word.
+  try { axById('pwacct-delete-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  if (st.mode === 'live') runAccountExitPreflight();
 }
 export const _showDeleteAccountSheetForTest = showDeleteAccountSheet;
+export const _deleteAccountSheetStateForTest = () => (_ax ? _ax.state : null);
+export function _resetDeleteAccountSheetForTest() { if (_ax) { axDetach(_ax); _ax = null; } }
+
+/** The mount paint: the body once (the list pane with the typed-confirm form, the hidden picker pane) and the nav. After this, only the regions that changed are rewritten. */
+function paintDeleteSheetFirst() {
+  const ax = _ax;
+  const wrap = document.getElementById(AX_WRAP_ID);
+  if (!ax || !wrap) return;
+  const st = ax.state;
+  const body = wrap.querySelector('#pwacct-delete-body');
+  const nav = wrap.querySelector('#pwacct-delete-nav');
+  if (body) body.innerHTML = AX.bodyHTML(st, axDeps());
+  if (nav) nav.innerHTML = AX.navHTML(st, axDeps());
+  ax.painted = { nav: AX.navHTML(st, axDeps()), rows: AX.rowsRegionHTML(st, axDeps()), picker: '' };
+}
+
+function axDispatch(action) {
+  const ax = _ax;
+  if (!ax) return;
+  const prev = ax.state;
+  ax.state = AX.reduce(prev, action);
+  if (ax.state === prev) return;
+  paintDeleteSheet(prev);
+}
+
+/** The typed-confirm form, patched IN PLACE (the field is never re-rendered: a repaint would drop the text and the keyboard). */
+function patchDeleteForm() {
+  const ax = _ax;
+  if (!ax) return;
+  const st = ax.state;
+  const btn = axById('pwacct-delete-submit');
+  const input = axById('pwacct-delete-confirm');
+  const cap = axById('pwacct-delete-caption');
+  const msg = axById('pwacct-delete-message');
+  if (btn) {
+    btn.disabled = !AX.canDelete(st);
+    const label = AX.deleteLabel(st);
+    if (btn.textContent !== label) btn.textContent = label;
+    if (st.running) btn.setAttribute('aria-busy', 'true'); else btn.removeAttribute('aria-busy');
+  }
+  if (input) input.disabled = !!st.running;
+  if (cap) { const t = AX.captionText(st); if (cap.textContent !== t) cap.textContent = t; }
+  if (msg) {
+    if (st.message) { msg.textContent = st.message; msg.style.display = 'block'; }
+    else { if (msg.textContent) msg.textContent = ''; msg.style.display = 'none'; }
+  }
+}
+
+/** Repaint only what this transition changed: the nav on a step change, the rows region (the 150ms crossfade on cards whose kind changed), the picker pane, the action sheet, the form. */
+function paintDeleteSheet(prev) {
+  const ax = _ax;
+  const wrap = document.getElementById(AX_WRAP_ID);
+  if (!ax || !wrap) return;
+  const st = ax.state;
+  const deps = axDeps();
+  const painted = ax.painted;
+  const setHTML = (key, el, html, compareKey = html) => {
+    if (!el || painted[key] === compareKey) return false;
+    painted[key] = compareKey; el.innerHTML = html; return true;
+  };
+  const nav = wrap.querySelector('#pwacct-delete-nav');
+  const rows = wrap.querySelector('#pwacct-delete-rows');
+  const listPane = wrap.querySelector('#pwacct-delete-list');
+  const pickerPane = wrap.querySelector('#pwacct-delete-picker');
+  const body = wrap.querySelector('#pwacct-delete-body');
+  const stepChanged = !!prev && prev.step !== st.step;
+  setHTML('nav', nav, AX.navHTML(st, deps));
+  const animate = new Set(prev ? AX.changedLeagueIds(prev, st) : []);
+  const rowsHTML = AX.rowsRegionHTML(st, deps, { animate });
+  setHTML('rows', rows, rowsHTML, rowsHTML.replace(/ ax-card-in/g, ''));
+  rows?.setAttribute('aria-busy', AX.rowsBusy(st) ? 'true' : 'false');
+  setHTML('picker', pickerPane, AX.pickerHTML(st, deps));   // a repaint WITHIN the picker (a row went busy, a failure banner landed) is the same pane: no push
+  if (listPane) listPane.hidden = st.step === 'picker';
+  if (pickerPane) pickerPane.hidden = st.step !== 'picker';
+  if (stepChanged) {
+    // A step change plays the 250ms push (`lc-step-in`, the New League sheet's own); the list's scroll position is kept and restored, never reset.
+    if (st.step === 'picker') {
+      ax.listScrollTop = body?.scrollTop || 0;
+      if (body) body.scrollTop = 0;
+      try { pickerPane?.firstElementChild?.classList.add('lc-step-in'); } catch { /* the push is decoration */ }
+      try { pickerPane?.querySelector?.('#pwacct-delete-picker-title')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+    } else {
+      if (body) body.scrollTop = ax.listScrollTop || 0;
+      try { if (listPane) { listPane.classList.remove('lc-step-in'); void listPane.offsetWidth; listPane.classList.add('lc-step-in'); } } catch { /* decoration */ }
+      axRestoreFocus(ax, wrap);
+    }
+  }
+  // The archive action sheet lives in the wrap, over the sheet (the New League discard prompt's own arrangement).
+  const promptHTML = AX.archiveSheetHTML(st, deps);
+  if (promptHTML && !ax.promptEl) {
+    const el = document.createElement('div');
+    el.id = 'pwacct-delete-archive';
+    el.innerHTML = promptHTML;
+    wrap.appendChild(el);
+    ax.promptEl = el;
+    haptic('warning');
+    try { el.querySelector?.('.lc-as-bold')?.focus?.({ preventScroll: true }); } catch { /* focus is a courtesy */ }
+  } else if (!promptHTML && ax.promptEl) {
+    try { ax.promptEl.remove(); } catch { /* already gone */ }
+    ax.promptEl = null;
+  }
+  patchDeleteForm();
+}
+
+/** Focus returns to the control that opened the picker (full-sentence label, so VoiceOver says where it is); if that row has resolved, to the sheet title. */
+function axRestoreFocus(ax, wrap) {
+  try {
+    const want = ax.invoker && ax.invoker.leagueId;
+    let target = null;
+    if (want) {
+      const list = wrap.querySelector('#pwacct-delete-rows')?.querySelectorAll?.('[data-ax-action="choose"]') || [];
+      for (const b of list) { if (b.getAttribute('data-ax-league') === want) { target = b; break; } }
+    }
+    (target || wrap.querySelector('#pwacct-delete-title'))?.focus?.({ preventScroll: true });
+  } catch { /* focus is a courtesy */ }
+}
+
+/** One delegated handler for every `[data-ax-action]` in the wrap (the header, the rows, the picker, the action sheet). */
+function onDeleteSheetClick(e) {
+  const ax = _ax;
+  if (!ax) return;
+  const el = e.target?.closest?.('[data-ax-action]');
+  if (!el || el.disabled || el.getAttribute?.('aria-disabled') === 'true') return;
+  const act = el.getAttribute('data-ax-action');
+  const leagueId = el.getAttribute('data-ax-league') || '';
+  const memberId = el.getAttribute('data-ax-member') || '';
+  switch (act) {
+    case 'close': requestDeleteSheetDismiss(); break;
+    case 'back': axDispatch({ type: 'close-picker' }); break;
+    case 'retry': runAccountExitPreflight(); break;
+    case 'choose': ax.invoker = { leagueId }; axDispatch({ type: 'open-picker', leagueId }); break;
+    case 'handoff-one': runDeleteHandoff({ leagueId, memberId }); break;
+    case 'pick': haptic('selection'); runDeleteHandoff({ leagueId, memberId }); break;
+    case 'ask-archive': axDispatch({ type: 'ask-archive', leagueId }); break;
+    case 'confirm-archive': axDispatch({ type: 'queue-archive' }); haptic('light'); break;
+    case 'cancel-archive': axDispatch({ type: 'cancel-archive' }); break;
+    case 'undo-archive': axDispatch({ type: 'undo-archive', leagueId }); break;
+    default: break;
+  }
+}
+
+/** The ONE preflight. Fired on open (when a commissioner seat is cached), by Try Again, and after every change this session makes — the answer replaces the local record. */
+async function runAccountExitPreflight() {
+  const ax = _ax;
+  if (!ax) return;
+  const seq = ++ax.seq;
+  axDispatch({ type: 'preflight-start' });
+  try {
+    const rows = await getAccountExitLeagues();
+    if (!axLive(ax) || ax.seq !== seq) return;
+    axDispatch({ type: 'preflight-ok', rows });
+  } catch (err) {
+    // LOUD and fail-closed (AD-06): an unanswerable preflight is never an empty list.
+    console.warn('[account] the delete-account preflight failed', err);
+    if (!axLive(ax) || ax.seq !== seq) return;
+    axDispatch({ type: 'preflight-fail', expired: AX.classifyExitError(err, { isExpired: isSessionExpiredError(err) }) === 'expired' });
+    haptic('error');
+  }
+}
+
+/** Hand the league to a member NOW (reversible: the giver is still a commissioner until the deletion and can undo it from Comm -> Players). */
+async function runDeleteHandoff({ leagueId, memberId }) {
+  const ax = _ax;
+  if (!ax || ax.state.pending || ax.state.running) return;
+  const row = (ax.state.snapshot || []).find((r) => r.leagueId === leagueId);
+  const cand = row?.candidates?.find((c) => c.memberId === memberId);
+  if (!row || !cand) return;
+  const name = cand.displayName;
+  const leagueName = row.leagueName;
+  axDispatch({ type: 'handoff-start', leagueId, memberId });
+  if (!ax.state.pending) return;
+  try {
+    await setMemberRole(leagueId, memberId, 'commissioner');
+  } catch (err) {
+    console.warn('[account] the hand-off failed', err);
+    if (!axLive(ax)) return;
+    const expired = AX.classifyExitError(err, { isExpired: isSessionExpiredError(err) }) === 'expired';
+    axDispatch({ type: 'handoff-fail', text: expired ? AX.AX_COPY.sessionExpired : (mappedMemberActionCopy(err) || AX.handoffFailed(name)) });
+    haptic('error');
+    // "Nothing was changed" is only as true as the answer we have: re-ask, so a hand-off that landed but whose membership refresh failed is shown as what it is.
+    if (!expired) runAccountExitPreflight();
+    return;
+  }
+  if (!axLive(ax)) return;
+  axDispatch({ type: 'handoff-ok', leagueId, leagueName, name });
+  haptic('success');
+  runAccountExitPreflight();   // server truth wins
+}
+
+/**
+ * THE FINAL TAP. For each queued archive, in list order: `archiveLeagueOnExit()`, stopping at the first failure — which names the league and leaves the account untouched. Only
+ * then `deleteOwnAccount()`. A server refusal at the last step (the state changed under the sheet) re-asks and says so; it is never painted as "check your connection".
+ */
+async function runDeleteAccount() {
+  const ax = _ax;
+  if (!ax || !AX.canDelete(ax.state)) return;
+  haptic('medium');
+  const queue = AX.queuedInOrder(ax.state);
+  axDispatch({ type: 'run-start', stage: queue.length ? 'archiving' : 'deleting' });
+  let archivedAny = false;
+  for (const id of queue) {
+    const name = ax.state.names[id] || '';
+    try {
+      await archiveLeagueOnExit(id);
+    } catch (err) {
+      console.warn('[account] archiving a league failed — the account was NOT deleted', err);
+      if (!axLive(ax)) return;
+      const kind = AX.classifyExitError(err, { isExpired: isSessionExpiredError(err) });
+      haptic('error');
+      axDispatch({ type: 'run-fail', text: kind === 'expired' ? AX.AX_COPY.sessionExpired : (kind === 'stale' ? '' : AX.archiveFailed(name)), stale: true });
+      if (kind === 'stale') axDispatch({ type: 'set-notice', notice: { kind: 'info', text: AX.AX_COPY.stale } });
+      runAccountExitPreflight();
+      return;
+    }
+    if (!axLive(ax)) return;
+    archivedAny = true;
+    axDispatch({ type: 'archive-ok', leagueId: id });
+  }
+  if (queue.length) axDispatch({ type: 'run-start', stage: 'deleting' });
+  try {
+    await deleteOwnAccount();
+    haptic('success');
+    closeDeleteAccountSheet({ immediate: true });
+    showToast('Your account has been deleted.', 'success');
+    // deleteOwnAccount() already signs out / clears local session data (js/auth.js's own header) — the sign-in gate shows via the SDK's own SIGNED_OUT event, the same path
+    // every other sign-out already uses, no manual gate call needed here.
+  } catch (e) {
+    console.warn('[account] delete failed', e);
+    if (!axLive(ax)) return;
+    haptic('error');
+    // B6 (3c fix window, 2026-09-25) — a sole-commissioner refusal is a NAMED, non-retryable reason (js/auth.js's AccountDeleteRefusedError, F-6), not a transport failure. UN-389:
+    // the state changed under the sheet (a co-commissioner left, a member joined) — re-ask, re-render, say so; never "check your connection".
+    if (e instanceof AccountDeleteRefusedError && e.reason === 'last_commissioner') {
+      axDispatch({ type: 'run-fail', text: '', stale: true });
+      axDispatch({ type: 'set-notice', notice: { kind: 'info', text: AX.AX_COPY.stale } });
+      runAccountExitPreflight();
+      return;
+    }
+    // LOUD-FAIL (AD-06) — including the safe partial-failure state where the anonymize RPC succeeded but the Admin API step failed; the player does not need to distinguish "fully
+    // deleted" from "anonymized, auth row pending" — the account is unusable to them either way, and DI-340's audit_log row already carries the timing for anyone who does.
+    const expired = AX.classifyExitError(e, { isExpired: isSessionExpiredError(e) }) === 'expired';
+    axDispatch({ type: 'run-fail', text: expired ? AX.AX_COPY.sessionExpired : AX.AX_COPY.deleteFailed, stale: archivedAny });
+    if (archivedAny) runAccountExitPreflight();   // the archives that landed show as archived; Delete re-enables once the answer is current
+  }
+}
+
+// ── dismissal: the close button, the backdrop, Esc and (native) a completed swipe all come here ──────────────────────────────────────────────────────────────────────────────
+function requestDeleteSheetDismiss() {
+  const ax = _ax;
+  if (!ax) return;
+  if (ax.state.confirmArchive) { axDispatch({ type: 'cancel-archive' }); return; }   // the scrim / Esc while asking = Cancel
+  if (AX.dismissBlocked(ax.state)) return;                                             // archives or the delete are running: nothing can abandon them
+  closeDeleteAccountSheet();
+}
+
+/** Closing discards any queued archive (the state is dropped with the sheet); hand-offs already made persist. `immediate` is the deletion's own success (the sign-out sweeps the node anyway). */
+function closeDeleteAccountSheet({ immediate = false } = {}) {
+  const ax = _ax;
+  if (!ax) return;
+  axDetach(ax);
+  _ax = null;
+  const wrap = document.getElementById(AX_WRAP_ID);
+  if (!wrap) return;
+  if (immediate) { wrap.remove(); return; }
+  playDeleteSheetExit(wrap, () => { try { if (document.getElementById(AX_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } });
+}
+export const _closeDeleteAccountSheetForTest = (opts) => closeDeleteAccountSheet(opts);
+export const _DELETE_SHEET_EXIT_MS_FOR_TEST = { slide: AX_EXIT_SLIDE_MS + 80, fade: AX_EXIT_FADE_MS + 80 };
+
+/**
+ * The sheet LEAVES the way it arrived — 300ms on --ease-native (`--ax-drag-y` -> 1 drives the sheet's own transition and dims the backdrop with it), a Reduce Motion crossfade of
+ * the whole wrap (`data-closing="fade"`) — and only THEN is its node removed (that node and no other: a sheet re-opened during the exit is a different node and must survive).
+ * `done` runs once, on the transition's end or on a bounded fallback (a backgrounded tab, an interrupted transition). While closing the wrap takes no touches.
+ */
+function playDeleteSheetExit(wrap, done) {
+  let reduced = false; try { reduced = prefersReducedMotion(); } catch { reduced = false; }
+  let finished = false; let timer = null;
+  const sheetEl = wrap.querySelector?.(`#${AX_SHEET_ID}`);
+  const target = reduced ? wrap : sheetEl;
+  const onEnd = (e) => { if (!e || !e.target || e.target === target) finish(); };
+  function finish() {
+    if (finished) return;
+    finished = true;
+    try { target?.removeEventListener?.('transitionend', onEnd); } catch { /* hygiene */ }
+    if (timer !== null) { try { clearTimeout(timer); } catch { /* hygiene */ } }
+    done();
+  }
+  try { wrap.setAttribute('data-closing', reduced ? 'fade' : 'slide'); } catch { /* decoration */ }
+  target?.addEventListener?.('transitionend', onEnd);
+  if (typeof setTimeout === 'function') timer = setTimeout(finish, (reduced ? AX_EXIT_FADE_MS : AX_EXIT_SLIDE_MS) + 80);
+  if (!reduced) { try { wrap.style.setProperty('--ax-drag-y', '1'); } catch { /* decoration */ } }
+}
+
+// ── swipe-down (native; `bindSwipeToDismiss()` is a no-op on web) ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+/** The sheet's OWN swipe-down: the same "OTHER surface" list minus its own wrap, OFF while the final sequence runs or the archive action sheet is up. */
+function isDeleteAccountDismissGestureBlocked() {
+  const ax = _ax;
+  if (ax && (AX.dismissBlocked(ax.state) || ax.state.confirmArchive)) return true;
+  return _dismissBlockingSurfaceUp({ excludeDelete: true });
+}
+export const _isDeleteAccountDismissGestureBlockedForTest = () => isDeleteAccountDismissGestureBlocked();
+function deleteAccountDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--ax-drag-y', String(progress));
+}
+function settleDeleteAccountDrag(wrap, sheetEl, { dismissed } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  const ax = _ax;
+  // Cancelled, or the sequence is running / the action sheet is up: the sheet springs back (the CSS transition; off under Reduce Motion) and stays.
+  if (!dismissed || !ax || AX.dismissBlocked(ax.state) || ax.state.confirmArchive) { wrap.style.setProperty('--ax-drag-y', '0'); return; }
+  closeDeleteAccountSheet();
+}
 
 /** DI-180c "Session expired" — a NEW banner, distinct DOM node from
  *  showBackendErrorBanner() (never merged — see that function's own
@@ -26145,6 +27064,10 @@ export function wireAuthUIEvents() {
   onAuthEvent((event, payload) => {
     try { refreshAuthUI(event, payload); }
     catch (e) { console.warn('[auth] UI refresh failed', e); }
+    // N1 (DI-430) — after memberships have loaded, a pending `?join=` invite opens the Join sheet prefilled (one visible tap to join); its own try/catch so an invite
+    // can never be the thing that breaks a session event.
+    try { maybePromptPendingInvite(event); }
+    catch (e) { console.warn('[league-create] pending-invite prompt failed', e); }
   });
 }
 /**
@@ -26157,6 +27080,7 @@ export function wireAuthUIEvents() {
  */
 export function _resetAuthUIWiringForTest() {
   _authEventsWired = false;
+  _pendingInvitePrompted = false;   // N1 — the prompt latch has the same lifecycle as the wiring latch beside it
   _lastIdentityKey = null;
   // DI-180o(b) — the suspension box has the same lifecycle as the latch beside
   // it: both are "what this PAGE remembers about who was here". A box that
@@ -26412,7 +27336,7 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
   // one chokepoint every identity change passes through — the SAME
   // discipline `refreshPlatformAdminFlags()`/`refreshMaintenanceBannerCache()`
   // immediately below already follow for the flags/banner themselves.
-  _platformKvCache = { maintenanceBanner: '', signupsOpen: true, loading: false, loaded: false, error: null, attempted: false };
+  _platformKvCache = { maintenanceBanner: '', signupsOpen: true, leagueCreationOpen: false, pushAliasModeLive: false, loading: false, loaded: false, error: null, attempted: false };
   _allLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
   _usersAcrossLeaguesCache = { rows: null, loading: false, error: null, attempted: false };
   _joinCodeCache = { leagueId: null, code: '', loading: false, error: null };
@@ -26453,7 +27377,9 @@ function applyIdentityDeltaIfChanged(reason, { expiry = false, discard = false }
     // Page, now closed here too.
     const hadLeaguesHome = !!document.getElementById('leagues-home-overlay');
     const hadChatSheet = !!document.getElementById('chat-sheet-wrap');
-    document.querySelectorAll('[data-hold-teardown]').forEach(el => el.remove());
+    // N1 (DI-430) — every surface but the New League sheet while the SAME account is mid-create or has just created (see leagueCreateSheetSurvivesIdentityChange()).
+    document.querySelectorAll('[data-hold-teardown]').forEach(el => { if (!leagueCreateSheetSurvivesIdentityChange(el)) el.remove(); });
+    lcAbandonIfSwept();
     if (hadLeaguePage) hideLeaguePageOverlay();
     if (hadLeaguesHome) hideLeaguesHomeOverlay();
     if (hadChatSheet) resetGameChatSheetForTeardown();
@@ -27193,14 +28119,17 @@ const SIGNUPS_CLOSED_COPY = "New leagues aren't being created right now — chec
  *  DI-181a's landing card below, and the header pill sheet's "Join a League"
  *  sheet (`showJoinLeagueSheet()`, REVIEWER ROUND 3 R1). Same ids in both, so
  *  `bindLeagueJoinForm()` binds either — never a second join implementation. */
-function leagueJoinFormHTML() {
+function leagueJoinFormHTML({ prefill = '' } = {}) {
   const signupsOpen = getCachedSignupsOpen();
   const disabledAttr = signupsOpen ? '' : 'disabled';
   const closedNotice = signupsOpen ? '' : `<div class="text-xs mb-sm" style="color:var(--text-muted)">${escHtml(SIGNUPS_CLOSED_COPY)}</div>`;
+  // N1 (DI-430) — the placeholder is a neutral example of the real shape (8 characters, shown 4+4), no longer the pilot league's "IRB-4F2K"; `prefill` is the code from
+  // a `?join=` invite link (already validated by js/league-create.js), shown 4+4 — joinLeague() strips the space. The value is escaped like every other attribute.
+  const prefillAttr = prefill ? `value="${escHtml(LC.formatInviteCode(prefill))}"` : '';
   return `${closedNotice}
         <div class="form-group">
           <label for="league-join-code">Invitation code</label>
-          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. IRB-4F2K" autocomplete="off" maxlength="16" ${disabledAttr} />
+          <input type="text" class="form-input" id="league-join-code" placeholder="e.g. K7QX 9M2P" autocomplete="off" maxlength="16" ${prefillAttr} ${disabledAttr} />
           <p class="text-muted" style="font-size:.78rem;margin-top:4px">Ask your commissioner for this — it's how they add you, not a password.</p>
         </div>
         <div class="site-gate-error" id="league-join-error" style="display:none;color:var(--loss)"></div>
@@ -27214,27 +28143,27 @@ function leagueFlowLandingHTML() {
   // `true` until the first read lands, so a not-yet-loaded cache never
   // falsely disables these controls.
   const signupsOpen = getCachedSignupsOpen();
-  const disabledAttr = signupsOpen ? '' : 'disabled';
   const closedNotice = signupsOpen ? '' : `<div class="text-xs mb-sm" style="color:var(--text-muted)">${escHtml(SIGNUPS_CLOSED_COPY)}</div>`;
+  // N1 (DI-430, 2026-09-30) — the Create card is no longer a name-only form: it is the SECOND entry point of the one New League sheet (Leagues Home's card is the first).
+  // With the release gate CLOSED (the default) it is a disabled button and "Creating leagues isn't available yet — it's coming in a future update."; open, it opens the
+  // sheet. A pending `?join=` invite prefills the Join card and a loud notice explains an expired or malformed link (never silent).
+  const inv = resolvePendingInviteView();
+  const inviteNotice = inv.notice ? LC.bannerHTML('err', inv.notice, { escHtml, icon }) : '';
   return `
     <div class="card text-center">
       <h2>You're not in a league yet</h2>
       <p class="text-muted">Join with an invitation code, or start your own.</p>
     </div>
+    ${leaguesHomeNoticeHTML()}${inviteNotice}
     <div class="league-flow-row">
       <div class="card">
         <h3>Join a League</h3>
-        ${leagueJoinFormHTML()}
+        ${leagueJoinFormHTML({ prefill: inv.code })}
       </div>
       <div class="card">
         <h3>Create a League</h3>
         ${closedNotice}
-        <div class="form-group">
-          <label for="league-create-name">League name</label>
-          <input type="text" class="form-input" id="league-create-name" placeholder="e.g. IRB Pick 'Ems" autocomplete="off" maxlength="80" ${disabledAttr} />
-        </div>
-        <div class="site-gate-error" id="league-create-error" style="display:none;color:var(--loss)"></div>
-        <button type="button" class="btn btn-primary btn-block" id="league-create-btn" ${disabledAttr}>Create League</button>
+        ${LC.landingCreateCardHTML({ open: getCachedLeagueCreationOpen(), signupsOpen, escHtml })}
       </div>
     </div>`;
 }
@@ -27277,6 +28206,9 @@ function leagueSelectorHTML() {
     isPilotLeague: isMembershipPilot,
     escHtml, icon,
     roleBadgeHTML: leagueRoleBadgeHTML,
+    // N1 (DI-430/433) — the release gate (default CLOSED) and frame 13's "created, but this device couldn't load it" notice.
+    createOpen: getCachedLeagueCreationOpen(),
+    notice: leaguesHomeNoticeHTML(),
   });
 }
 /** Binds every `[data-action="switch-league"]` card inside `container` to
@@ -27346,6 +28278,13 @@ const LEAGUE_RPC_ERROR_COPY = [
   // same constant, imported by reference — a future copy edit can no longer
   // update one call site and silently leave the other quoting stale text.
   ['signups_closed',    SIGNUPS_CLOSED_COPY],
+  // N1 (DI-430/431/433, 2026-09-30) — `create_league`'s four new named refusals (0034). `creation_closed` is the release gate / emergency valve and reads as the
+  // signups line does (same string, by reference — never a second typed copy). The other three — the per-account limit, the daily rate and the platform breaker — share
+  // ONE line on purpose (DI-430: "one copy for all three, no cap disclosure"): a player is never told which cap they hit, or what the numbers are.
+  ['creation_closed',   SIGNUPS_CLOSED_COPY],
+  ['league_limit',      LC.LC_COPY.limit],
+  ['creation_rate',     LC.LC_COPY.limit],
+  ['creation_paused',   LC.LC_COPY.limit],
 ];
 const LEAGUE_CONNECTIVITY_COPY = "Couldn't reach the server — check your connection and try again.";
 const LEAGUE_UNKNOWN_COPY      = "That didn't go through. Try again, and tell your commissioner what you typed if it keeps failing.";
@@ -27389,6 +28328,7 @@ function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false
       if (!switchToJoined) {
         // The zero-league landing — unchanged: joinLeague() moves the pointer.
         const joined = await joinLeague(code);
+        consumePendingInvite();   // N1 (DI-430): a successful join clears the `?join=` invite that may have prefilled this form
         if (onJoined) onJoined(joined);
         showToast(welcome(joined), 'success');
         navigateTo(state.currentTab || 'dashboard');
@@ -27402,6 +28342,7 @@ function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false
       // under B's pill.
       const fromLeagueId = getActiveLeagueId();
       const joined = await joinLeague(code, { activate: false });
+      consumePendingInvite();   // N1 (DI-430): same as the landing path above
       if (onJoined) onJoined(joined);
       if (!joined?.leagueId) {
         // The join went through but the refreshed list did not carry the row
@@ -27433,22 +28374,9 @@ function bindLeagueJoinForm(container, { onJoined = null, switchToJoined = false
 
 function bindLeagueFlowScreen(container) {
   bindLeagueJoinForm(container);
-  const createBtn = container.querySelector('#league-create-btn');
-  const createErr = container.querySelector('#league-create-error');
-  createBtn?.addEventListener('click', async () => {
-    const name = container.querySelector('#league-create-name')?.value || '';
-    if (createErr) createErr.style.display = 'none';
-    createBtn.disabled = true; createBtn.textContent = 'Creating…';
-    try {
-      await createLeague(name);
-      showToast("League created — you're the commissioner.", 'success');
-      navigateTo(state.currentTab || 'dashboard');
-    } catch (err) {
-      if (createErr) { createErr.textContent = leagueRpcErrorCopy(err); createErr.style.display = 'block'; }
-    } finally {
-      createBtn.disabled = false; createBtn.textContent = 'Create League';
-    }
-  });
+  bindLeaguesHomeNotice(container, () => navigateTo(state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard')));   // R-F4
+  // N1 (DI-430, 2026-09-30) — the landing's inline name-only create form is GONE: creating is the one New League sheet, opened by `[data-action="create-league"]`
+  // through the document-level dispatcher (bindCreateLeagueDispatcher(), below), the same way every coming-soon stub already routes.
   bindLeagueSelectorRows(container, null);
 }
 
@@ -27969,7 +28897,56 @@ function _markLinkFlowUnmatchedAfterDispute() {
   _linkFlow = { state: 'unmatched', memberId: '', leagueId: '', displayName: '', error: '' };
 }
 
+/**
+ * N1 (DI-430 §Zero-membership landing, S-9, 2026-09-30) — the claim-code screen now offers TWO choices: "I have a claim code" (today's card, unchanged, the default when
+ * no invite is pending) and "I have an invite code" (the Join form, reused: `leagueJoinFormHTML()` + `bindLeagueJoinForm()`, never a second join implementation). With a
+ * VALID pending `?join=` code the screen opens on the invite card, code prefilled, with the note "You opened an invite link. Check the code, then tap Join League." and a text
+ * link back to the claim card; an expired or malformed link is said out loud. Nothing here names a league before the server accepts the code, and nothing auto-executes:
+ * the join happens on the tap. `_claimScreenTouched` records that the person chose a segment themselves, so a repaint never overrides their choice.
+ */
+let _claimScreenMode = 'claim';       // 'claim' | 'invite'
+let _claimScreenTouched = false;
+export function _resetClaimScreenModeForTest() { _claimScreenMode = 'claim'; _claimScreenTouched = false; }
+function claimInviteCardHTML(inv) {
+  return `
+    <div class="card" id="link-invite-card">
+      <h2>Enter your invitation code.</h2>
+      ${inv.code ? LC.inviteLinkNoteHTML({ escHtml }) : ''}
+      ${leagueJoinFormHTML({ prefill: inv.code })}
+      ${inv.code ? LC.claimInsteadHTML({ escHtml }) : ''}
+    </div>`;
+}
+function claimScreenHTML() {
+  // R-F1 / S-9 (coordinator ruling 2026-09-30): the WHOLE invite-code surface — the two-segment control, the invite card, the loud expired-link notice — sits behind the release
+  // gate, exactly like the "Create a league" choice below. With the door CLOSED (the default) the claim-code screen is BYTE-IDENTICAL to today's (DI-183 §3d: an unmatched
+  // account is offered the claim card and nothing else). A stored `?join=` invite is left alone (it expires by itself); nothing here reads or consumes it.
+  if (!getCachedLeagueCreationOpen()) return claimCodeScreenHTML();
+  const inv = resolvePendingInviteView();
+  const mode = (!_claimScreenTouched && inv.code) ? 'invite' : _claimScreenMode;
+  const notice = inv.notice ? LC.bannerHTML('err', inv.notice, { escHtml, icon }) : '';
+  // The THIRD choice (coordinator ruling 2026-09-30): "Create a league", shown only while `league_creation_open` is true — with the gate closed (the default) it is ABSENT, not
+  // disabled, and this screen is byte-identical to today's. It is reached only after the auto-link attempt found nothing (this screen IS the "auto-link found nothing" state).
+  // R-F8: only after a CLEAN "found nothing" — an auto-link that ERRORED (the server could not be asked) keeps its loud-fail treatment ("we couldn't check your email
+  // automatically") and never offers to create a league on top of an unanswered question.
+  const createChoice = _linkFlow.state === 'unmatched' ? LC.claimCreateEntryHTML({ escHtml }) : '';
+  return `${notice}${LC.landingSegmentsHTML({ mode, escHtml })}${mode === 'invite' ? claimInviteCardHTML(inv) : claimCodeScreenHTML()}${createChoice}`;
+}
+
 function bindLinkFlowScreen(container) {
+  // S-9 — the two segments (and the invite card's "I have a claim code instead" link) switch the card underneath; a chosen segment is remembered for this page.
+  container.querySelectorAll?.('[data-lc-seg]').forEach((seg) => {
+    seg.addEventListener('click', () => {
+      _claimScreenMode = seg.getAttribute('data-lc-seg') === 'invite' ? 'invite' : 'claim';
+      _claimScreenTouched = true;
+      _pendingInvite = { code: _pendingInvite.code, notice: '' };   // the loud message was seen; a chosen card clears it (the stored invite, if valid, stays)
+      // Repaint the container this screen is IN — not "whatever tab is current" — so the switch can never land on a different page than the one that was tapped.
+      container.innerHTML = claimScreenHTML();
+      bindLinkFlowScreen(container);
+      const f = container.querySelector(_claimScreenMode === 'invite' ? '#league-join-code' : '#link-claim-code');
+      if (f && !f.disabled) { try { f.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+    });
+  });
+  if (container.querySelector?.('#league-join-btn')) bindLeagueJoinForm(container);
   container.querySelector('#link-continue-btn')?.addEventListener('click', () => {
     // The card has done its job; the player goes to their season. The flow is
     // reset so a later navigation does not re-render a card about a link that
@@ -28048,7 +29025,7 @@ export function renderLinkFlowScreen(tab) {
   if (!which) return;
   const c = document.getElementById(`page-${tab}`);
   if (!c) return;
-  c.innerHTML = which === 'confirm' ? linkConfirmCardHTML() : claimCodeScreenHTML();
+  c.innerHTML = which === 'confirm' ? linkConfirmCardHTML() : claimScreenHTML();
   bindLinkFlowScreen(c);
 }
 
@@ -28526,7 +29503,7 @@ function showLeagueSelectorSheet() {
   ov.innerHTML = `<div class="modal">
     <div class="modal-header"><h3>Choose a League</h3><button class="modal-close" id="league-selector-sheet-close">✕</button></div>
     ${leagueSelectorListHTML()}
-    ${renderCreateLeagueStubCard({ escHtml })}
+    ${renderCreateLeagueStubCard({ escHtml, icon, open: getCachedLeagueCreationOpen() })}
     <button type="button" class="btn btn-ghost btn-block mt-sm" id="league-selector-join-btn">Join a League</button>
   </div>`;
   document.body.appendChild(ov);
@@ -28549,12 +29526,13 @@ function showLeagueSelectorSheet() {
  *  SWITCHES to the new league through doSwitchActiveLeague() — the cover and
  *  the full adapter switch (R3, see bindLeagueJoinForm()'s `switchToJoined`),
  *  never joinLeague()'s own pointer move. */
-function showJoinLeagueSheet() {
+function showJoinLeagueSheet({ prefill = '' } = {}) {
   const ov = document.createElement('div');
   ov.className = 'modal-overlay centered';
   ov.innerHTML = `<div class="modal" id="league-join-sheet">
     <div class="modal-header"><h3>Join a League</h3><button class="modal-close" id="league-join-sheet-close" aria-label="Close">✕</button></div>
-    ${leagueJoinFormHTML()}
+    ${prefill ? LC.inviteLinkNoteHTML({ escHtml }) : ''}
+    ${leagueJoinFormHTML({ prefill })}
   </div>`;
   document.body.appendChild(ov);
   const close = () => ov.remove();
@@ -28580,7 +29558,29 @@ function showLeagueSwitchOverlay() {
   el.innerHTML = `<div class="loading-state"><div class="spinner"></div><p>Switching leagues…</p></div>`;
   document.body.appendChild(el);
 }
-function hideLeagueSwitchOverlay() { document.getElementById('league-switch-overlay')?.remove(); }
+function hideLeagueSwitchOverlay() {
+  const el = document.getElementById('league-switch-overlay');
+  if (!el) return;
+  // The blocking cover comes off IMMEDIATELY, exactly as it always did — `getElementById('league-switch-overlay')`
+  // is null the instant the switch settles, in every environment (authtest [11]/[79] read exactly that).
+  el.remove();
+  // UN-315 / DI-436.5 touched-screen audit — the cover used to VANISH, an abrupt cut. A cover-coloured GHOST
+  // now fades out in its place (css/styles.css `.league-switch-leaving`, --motion-nav, click-through) so the new
+  // league's content arrives under a fading veil rather than popping in. It is a FRESH element, never the cover
+  // itself, so nothing that reasons about "is the blocking cover still up" can ever see it. Best-effort by
+  // construction: a missing animation, a detached body or a stubbed DOM only means no fade — this function runs
+  // in doSwitchActiveLeague()'s `finally` and must never throw out of it.
+  try {
+    const ghost = document.createElement('div');
+    ghost.className = 'league-switch-leaving';
+    ghost.setAttribute?.('aria-hidden', 'true');
+    document.body.appendChild(ghost);
+    const remove = () => { try { ghost.remove(); } catch { /* already gone */ } };
+    try { ghost.addEventListener('animationend', remove, { once: true }); } catch { /* no animation events here */ }
+    const t = setTimeout(remove, 400);   // the backstop: reduced motion, no animation support, a detached node
+    t?.unref?.();
+  } catch { /* the fade is a courtesy, never a requirement */ }
+}
 
 /** Resolves `true` when the switch landed (SWITCH_END), `false` otherwise —
  *  the join sheet's welcome toast waits on it (round 5, reviewer N1). Every
@@ -28594,7 +29594,12 @@ export async function doSwitchActiveLeague(leagueId) {
     switched = true;
   } catch (e) {
     console.warn('[auth] league switch failed', e);
-    showToast("Couldn't switch leagues — check your connection and try again.", 'error');
+    // UN-315 / DI-436.2 — `switchActiveLeague()` throws "Not a member of that league" for an id the
+    // account is not in (a forged push, or a membership that ended a moment ago). That is not a
+    // connection problem, and the connection toast would send the player to retry a thing that can
+    // never work; it gets its own sentence.
+    if (e && /Not a member of that league/.test(String(e.message || ''))) showToast("That league isn't on your account.", 'error');
+    else showToast("Couldn't switch leagues — check your connection and try again.", 'error');
   } finally {
     // REVIEWER NOTE 5 — WHAT THIS LINE IS, STATED CORRECTLY.
     //
@@ -28627,6 +29632,509 @@ export async function doSwitchActiveLeague(leagueId) {
     navigateTo(state.currentTab || 'dashboard');
   }
   return switched;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// N1 (DI-430, UN-310, 2026-09-30) — THE NEW LEAGUE FLOW
+// Approved mockup: docs/mockups/league-create.html (frames 1-14). The pure half
+// (copy, invite-code helpers, `cfbp_pending_join`, the step machine, every
+// renderer) is js/league-create.js; this section is its DOM and network wiring
+// and nothing else. There is exactly ONE server call — `createLeague(name,
+// sports)` (js/auth.js → the `create_league` RPC) — so "Nothing was saved" in
+// the failure banner is true and a retry after a real failure is safe.
+//
+// TWO ENTRY POINTS, ONE SHEET: Leagues Home's "+ Create new league" card and the
+// zero-league landing's Create card both carry `data-action="create-league"`,
+// handled by ONE document-level dispatcher (bindCreateLeagueDispatcher()), the
+// same delegation every coming-soon stub already uses. The sheet is built on the
+// T-18 shell (mountSheetShell(), below), generalized rather than forked.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** The ACTIVE league's membership row (carries `pilot`, `role`, `leagueName`), or null. The one place app.js turns "which league" into a record the pilot predicate can read. */
+function activeLeagueRow() {
+  try {
+    const id = getActiveLeagueId();
+    return getCachedMemberships().find(m => m.leagueId === id) || null;
+  } catch { return null; }
+}
+export const _activeLeagueRowForTest = activeLeagueRow;
+
+// ── the pending `?join=CODE` invite, as the screens see it ────────────────────
+// `cfbp_pending_join` is owned and read by js/league-create.js (device-local, 30-minute
+// expiry, listed in storage.js's inventory comment, kept across the first-sign-in
+// sweep by auth.js's _CLEAR_KEEP_KEYS). This is the in-memory VIEW of it, so a loud
+// "that link expired" message survives the repaints a Realtime event causes — the
+// message is shown until the person acts, not once for one frame.
+let _pendingInvite = { code: '', notice: '' };
+/** Reads (never consumes) the stored invite and returns what the screen owes: a valid code to prefill, and/or a loud notice for an expired or malformed link. */
+function resolvePendingInviteView() {
+  let r = { state: 'none', code: '' };
+  try { r = LC.readPendingJoin(); } catch { /* an unreadable key is treated as none */ }
+  if (r.state === 'valid') _pendingInvite = { code: r.code, notice: '' };
+  else if (r.state === 'expired' || r.state === 'malformed') _pendingInvite = { code: '', notice: LC.LC_COPY.invalidLink };
+  else _pendingInvite = { code: '', notice: _pendingInvite.notice };
+  return _pendingInvite;
+}
+/** A successful join (or an explicit choice of the other card) — the invite is done: key removed, notice dropped. */
+function consumePendingInvite() {
+  try { LC.clearPendingJoin(); } catch { /* an expiring key removes itself */ }
+  _pendingInvite = { code: '', notice: '' };
+}
+export const _resolvePendingInviteViewForTest = resolvePendingInviteView;
+export function _resetPendingInviteViewForTest() { _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false; }
+
+/** The identity chokepoint sweeps every `[data-hold-teardown]` surface when the person or the league changes. THIS sheet is exempt in exactly one case: the SAME account
+ *  is mid-create or has just created (the zero-league creator's own pointer moves from nothing to the new league — the very event the sheet is reporting — and sweeping the
+ *  sheet there would erase the Created screen). A different account, a sign-out or a hold still removes it; the orphaned state is then dropped by lcAbandonIfSwept(). */
+function leagueCreateSheetSurvivesIdentityChange(el) {
+  const lc = _lc;
+  return !!lc && el?.id === LC_WRAP_ID && !!lc.accountId && lc.accountId === getAccountUserId()
+    && (lc.state.phase === 'creating' || !!lc.state.created);
+}
+function lcAbandonIfSwept() {
+  const lc = _lc;
+  if (!lc || document.getElementById(LC_WRAP_ID)) return;
+  clearTimeout(lc.slowTimer);
+  try { document.removeEventListener('keydown', lc.onKey); } catch { /* hygiene */ }
+  _lc = null;
+}
+
+/** Frame 13's banner ("{name} was created, but this device couldn't load it." + a Try Again button — R-F4), held here until the league shows up in the membership list. */
+let _leaguesHomeNotice = null;   // { leagueId, text } | null
+function leaguesHomeNoticeHTML() {
+  if (!_leaguesHomeNotice) return '';
+  if (_leaguesHomeNotice.leagueId && getCachedMemberships().some(m => m.leagueId === _leaguesHomeNotice.leagueId)) { _leaguesHomeNotice = null; return ''; }
+  return LC.bannerHTML('err', _leaguesHomeNotice.text, { escHtml, icon, cta: { id: 'leagues-notice-retry', label: LC.LC_COPY.tryAgain } });
+}
+/**
+ * R-F4 — the frame-13 banner's Try Again (Interaction Principles' error-state pattern: what happened + a visible way to retry, the state kept, never a toast). It re-asks the
+ * membership list (`refreshMembershipsAndSession()`); the busy label is on the button itself; on success the notice drops and the surface it sat on repaints; on failure the
+ * banner stays, the button comes back, and the error haptic fires. Bound after every paint that can carry the notice (the Leagues Home overlay, the flow screen / landing).
+ */
+function bindLeaguesHomeNotice(container, repaint) {
+  const btn = container?.querySelector?.('#leagues-notice-retry');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return;
+    btn.disabled = true; btn.textContent = LC.LC_COPY.retrying;
+    let list = null;
+    try { list = await refreshMembershipsAndSession(); } catch (e) { console.warn('[league-create] the retry read failed', e); }
+    const wanted = _leaguesHomeNotice && _leaguesHomeNotice.leagueId;
+    if (Array.isArray(list) && (!wanted || list.some(m => m.leagueId === wanted))) {
+      _leaguesHomeNotice = null;
+      haptic('success');
+      try { repaint(); } catch (e) { console.warn('[league-create] repaint after retry failed', e); }
+    } else {
+      btn.disabled = false; btn.textContent = LC.LC_COPY.tryAgain;
+      haptic('error');
+    }
+  });
+}
+export const _bindLeaguesHomeNoticeForTest = bindLeaguesHomeNotice;
+
+// ── the sheet ─────────────────────────────────────────────────────────────────
+const LC_WRAP_ID = 'league-create-sheet-wrap';
+// { state, groups, unbindDrag, onKey, slowTimer, landOnClose } while the sheet is up, else null.
+let _lc = null;
+const lcDeps = () => ({ escHtml, icon });
+async function lcCopyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
+}
+const LC_COPY_FAILED = "Couldn't copy automatically — the code is on the screen, read it from there.";
+
+/**
+ * Opens the New League sheet. `invite` (frame 6's "Invite Friends") opens it on the Invite step for a league that already exists; otherwise it is the create flow,
+ * which the release gate can refuse (a stale button under a closed gate answers with the ordinary "isn't available yet" toast, never a sheet).
+ */
+function openLeagueCreateSheet({ invite = null } = {}) {
+  // Same guard every body-appended surface carries: never open one while content is withheld.
+  if (isContentWithheld()) return;
+  lcAbandonIfSwept();
+  if (_lc) return;
+  const groups = LC.pickerGroups({ profiles: listProfiles(), offered: getCachedOfferedSports() });
+  let st;
+  if (invite) {
+    st = LC.createInviteState(invite);
+  } else {
+    if (!getCachedLeagueCreationOpen()) { showComingSoonToast(LC.LC_COPY.landingClosed); return; }
+    st = LC.createInitialState({ signupsOpen: getCachedSignupsOpen(), groups });
+  }
+  _lc = { state: st, groups, unbindDrag: null, onKey: null, slowTimer: null, landOnClose: !invite, accountId: getAccountUserId() };
+  const lc = _lc;
+  const { unbind } = mountSheetShell({
+    wrapId: LC_WRAP_ID,
+    sheetId: 'league-create-sheet',
+    sheetAttrs: ' role="dialog" aria-modal="true" aria-labelledby="league-create-title"',
+    headerInnerHTML: '<div id="league-create-nav"></div>',
+    bodyId: 'league-create-body',
+    onBackdrop: requestLeagueCreateDismiss,
+    renderBody: () => renderLeagueCreateSheet({ animate: false }),
+    drag: { getBlocked: isLeagueCreateDismissGestureBlocked, onProgress: leagueCreateDragProgress, onSettle: settleLeagueCreateDrag },
+  });
+  lc.unbindDrag = unbind;
+  const wrap = document.getElementById(LC_WRAP_ID);
+  wrap?.addEventListener('click', onLeagueCreateClick);
+  wrap?.addEventListener('input', onLeagueCreateInput);
+  wrap?.addEventListener('keydown', onLeagueCreateKeydown);
+  // Esc asks the same question the backdrop does (web; a phone has no Esc key).
+  lc.onKey = (e) => { if (e.key === 'Escape') requestLeagueCreateDismiss(); };
+  document.addEventListener('keydown', lc.onKey);
+  // Light haptic on entry (native only — haptic() gates itself). Then the field: auto-focused inside the tap that opened the sheet, so iOS raises the keyboard.
+  haptic('light');
+  const field = wrap?.querySelector('#league-create-name');
+  if (field && !field.disabled) { try { field.focus({ preventScroll: true }); } catch { /* focus is a courtesy */ } }
+  if (invite && !st.created.code) ensureCreatedCode();
+}
+
+/** The one dispatch: reduce, then repaint only what the step or phase changed. A step change plays the 250ms push (the CSS class); a repaint within a step does not. */
+function lcDispatch(action) {
+  const lc = _lc;
+  if (!lc) return;
+  const prev = lc.state;
+  lc.state = LC.reduce(prev, action);
+  if (lc.state === prev) return;
+  renderLeagueCreateSheet({ animate: lc.state.step !== prev.step });
+}
+
+function renderLeagueCreateSheet({ animate = false } = {}) {
+  const lc = _lc;
+  const wrap = document.getElementById(LC_WRAP_ID);
+  if (!lc || !wrap) return;
+  const nav = wrap.querySelector('#league-create-nav');
+  const body = wrap.querySelector('#league-create-body');
+  if (!nav || !body) return;
+  const st = lc.state;
+  nav.innerHTML = LC.navBarHTML(st, lcDeps());
+  const scrollTop = body.scrollTop || 0;
+  body.innerHTML = LC.stepBodyHTML(st, lc.groups, lcDeps());
+  if (animate) { try { body.firstElementChild?.classList.add('lc-step-in'); } catch { /* the push is decoration */ } }
+  else if (scrollTop) body.scrollTop = scrollTop;
+  // The discard prompt lives in the wrap (over the sheet), not in the step body.
+  let prompt = wrap.querySelector('#league-create-discard');
+  if (st.discardPrompt && !prompt) {
+    prompt = document.createElement('div');
+    prompt.id = 'league-create-discard';
+    prompt.innerHTML = LC.discardSheetHTML({ escHtml });
+    wrap.appendChild(prompt);
+  } else if (!st.discardPrompt && prompt) {
+    prompt.remove();
+  }
+}
+
+/** Typing patches the counter, the clear control and the Next state IN PLACE. A repaint here would drop focus and dismiss the keyboard on every keystroke. */
+function onLeagueCreateInput(e) {
+  const lc = _lc;
+  const inp = e.target;
+  if (!lc || !inp || inp.id !== 'league-create-name') return;
+  lc.state = LC.reduce(lc.state, { type: 'name', value: inp.value });
+  if (inp.value !== lc.state.name) inp.value = lc.state.name;   // the 80-character cap (the server's own limit)
+  const wrap = document.getElementById(LC_WRAP_ID);
+  const count = wrap?.querySelector('#league-create-count');
+  if (count) count.textContent = `${lc.state.name.length} / ${LC.NAME_MAX}`;
+  const clear = wrap?.querySelector('.lc-input-clear');
+  if (clear) { if (lc.state.name.length) clear.removeAttribute('hidden'); else clear.setAttribute('hidden', ''); }
+  const ok = LC.canAdvance(lc.state);
+  wrap?.querySelectorAll('[data-lc-action="next"]').forEach((b) => {
+    if (ok) { b.removeAttribute('disabled'); b.removeAttribute('aria-disabled'); }
+    else { b.setAttribute('disabled', ''); b.setAttribute('aria-disabled', 'true'); }
+  });
+}
+
+function onLeagueCreateKeydown(e) {
+  const lc = _lc;
+  if (!lc) return;
+  // Return on the one field = Next (Interaction Principles §Forms "Advance correctly").
+  if (e.key === 'Enter' && e.target?.id === 'league-create-name') {
+    e.preventDefault?.();
+    if (LC.canAdvance(lc.state)) lcDispatch({ type: 'next' });
+  }
+}
+
+function onLeagueCreateClick(e) {
+  const lc = _lc;
+  if (!lc) return;
+  const sport = e.target?.closest?.('[data-lc-sport]');
+  if (sport) {
+    const before = lc.state;
+    lcDispatch({ type: 'toggle', key: sport.getAttribute('data-lc-sport') });
+    if (lc.state !== before) haptic('selection');
+    return;
+  }
+  const el = e.target?.closest?.('[data-lc-action]');
+  if (!el || el.disabled || el.getAttribute?.('aria-disabled') === 'true') return;
+  switch (el.getAttribute('data-lc-action')) {
+    case 'cancel': requestLeagueCreateDismiss(); break;
+    case 'next': lcDispatch({ type: 'next' }); break;
+    case 'back': {
+      lcDispatch({ type: 'back' });
+      // Back to the name step re-mounts the field; focus it again (inside the tap) so the keyboard comes back with it.
+      const f = document.getElementById(LC_WRAP_ID)?.querySelector('#league-create-name');
+      if (f && !f.disabled) { try { f.focus({ preventScroll: true }); } catch { /* courtesy */ } }
+      break;
+    }
+    case 'clear-name': {
+      lcDispatch({ type: 'name', value: '' });
+      const f = document.getElementById(LC_WRAP_ID)?.querySelector('#league-create-name');
+      if (f) { f.value = ''; onLeagueCreateInput({ target: f }); try { f.focus({ preventScroll: true }); } catch { /* courtesy */ } }
+      break;
+    }
+    case 'create': submitLeagueCreate(); break;
+    case 'done-limit': closeLeagueCreateSheet({ landing: false }); break;
+    case 'invite': goLeagueCreateInvite(el); break;
+    case 'not-now': closeLeagueCreateSheet({ landing: lc.landOnClose }); break;
+    case 'done': closeLeagueCreateSheet({ landing: lc.landOnClose }); break;
+    case 'copy-code': copyLeagueInviteCode(); break;
+    case 'share': shareLeagueInvite(); break;
+    case 'keep-editing': lcDispatch({ type: 'keepEditing' }); break;
+    case 'discard': closeLeagueCreateSheet({ landing: false }); break;
+    default: break;
+  }
+}
+
+/** Cancel, the backdrop, Esc and (native) a completed swipe all come here. Nothing entered → dismiss; input → the discard question; mid-create or a bare prompt → handled. */
+function requestLeagueCreateDismiss() {
+  const lc = _lc;
+  if (!lc) return;
+  if (lc.state.discardPrompt) { lcDispatch({ type: 'keepEditing' }); return; }   // the scrim / Esc while asking = Keep Editing
+  const mode = LC.dismissMode(lc.state);
+  if (mode === 'blocked') return;   // a half-finished create cannot be abandoned
+  if (mode === 'confirm') { lcDispatch({ type: 'askDiscard' }); haptic('warning'); return; }
+  closeLeagueCreateSheet({ landing: lc.landOnClose });
+}
+
+function closeLeagueCreateSheet({ landing = false } = {}) {
+  const lc = _lc;
+  if (!lc) return;
+  clearTimeout(lc.slowTimer);
+  try { lc.unbindDrag?.(); } catch { /* an unbind is hygiene */ }
+  try { document.removeEventListener('keydown', lc.onKey); } catch { /* same */ }
+  const wrap = document.getElementById(LC_WRAP_ID);
+  _lc = null;
+  // R-F9: the sheet LEAVES the way it arrived — 300ms on --ease-native (the entry's own curve), a Reduce Motion crossfade — and only THEN is its node removed (that node
+  // and no other: a sheet re-opened during the exit is a different node and must survive).
+  // (Removed only if it is still THE live node: a re-opened sheet's mountSheetShell() has already taken this one out, and the new node keeps the id.)
+  if (wrap) playLeagueCreateExit(wrap, () => { try { if (document.getElementById(LC_WRAP_ID) === wrap) wrap.remove(); } catch { /* already gone */ } });
+  const created = lc.state.created;
+  // The league exists, so every way out of the Created and Invite steps ("Not Now", Done, swipe-down, the backdrop) lands on the new league's page (frame 6).
+  if (landing && created && created.leagueId) landOnCreatedLeague(created);
+}
+
+/** R-F9 — the exit (mirrors the entry). Slide: `--lc-drag-y` -> 1 drives the sheet's own `--motion-modal` / `--ease-native` transition (and dims the backdrop with it). Reduce
+ *  Motion: no movement, a `--motion-fast` opacity crossfade of the whole wrap (`data-closing="fade"`). `done` runs once — on the transition's end, or on a bounded fallback
+ *  (a backgrounded tab, an interrupted transition). While closing the wrap takes no touches. */
+const LC_EXIT_SLIDE_MS = 300;   // --motion-modal
+const LC_EXIT_FADE_MS = 150;    // --motion-fast
+function playLeagueCreateExit(wrap, done) {
+  const reduced = (() => { try { return prefersReducedMotion(); } catch { return false; } })();
+  let finished = false; let timer = null;
+  const sheetEl = wrap.querySelector?.('#league-create-sheet');
+  const target = reduced ? wrap : sheetEl;
+  const onEnd = (e) => { if (!e || !e.target || e.target === target) finish(); };
+  function finish() {
+    if (finished) return;
+    finished = true;
+    try { target?.removeEventListener?.('transitionend', onEnd); } catch { /* hygiene */ }
+    if (timer !== null) { try { clearTimeout(timer); } catch { /* hygiene */ } }
+    done();
+  }
+  try { wrap.setAttribute('data-closing', reduced ? 'fade' : 'slide'); } catch { /* decoration */ }
+  target?.addEventListener?.('transitionend', onEnd);
+  if (typeof setTimeout === 'function') timer = setTimeout(finish, (reduced ? LC_EXIT_FADE_MS : LC_EXIT_SLIDE_MS) + 80);
+  if (!reduced) { try { wrap.style.setProperty('--lc-drag-y', '1'); } catch { /* decoration */ } }
+}
+export const _LC_EXIT_MS_FOR_TEST = { slide: LC_EXIT_SLIDE_MS + 80, fade: LC_EXIT_FADE_MS + 80 };
+
+/** Frame 6 — the new league's League Page. A player who was already in a league is moved there by the ordinary league switch (the "Switching leagues…" cover, the adapter step). */
+async function landOnCreatedLeague(created) {
+  try {
+    if (getActiveLeagueId() !== created.leagueId) {
+      const switched = await doSwitchActiveLeague(created.leagueId);
+      if (!switched) return;   // doSwitchActiveLeague() has already said why (its own error toast)
+    }
+    hideLeaguesHomeOverlay();
+    showLeaguePageOverlay();
+  } catch (e) {
+    console.warn('[league-create] could not open the new league page', e);
+  }
+}
+
+async function ensureCreatedCode() {
+  const lc = _lc;
+  const created = lc?.state?.created;
+  if (!created) return false;
+  if (created.code) return true;
+  try {
+    const code = await getLeagueJoinCode(created.leagueId);
+    if (_lc === lc && code) { lcDispatch({ type: 'code', code }); return true; }
+  } catch (e) {
+    console.warn('[league-create] the join code could not be read', e);
+  }
+  return false;
+}
+
+async function goLeagueCreateInvite(btn) {
+  if (btn) btn.disabled = true;
+  const ok = await ensureCreatedCode();
+  if (!_lc) return;
+  if (!ok) {
+    if (btn) btn.disabled = false;
+    showToast("Couldn't load the league code — try again in a moment.", 'error');
+    return;
+  }
+  lcDispatch({ type: 'invite' });
+}
+
+async function copyLeagueInviteCode() {
+  const code = LC.normalizeInviteCode(_lc?.state?.created?.code);
+  if (!code) return;
+  if (await lcCopyText(code)) { haptic('light'); showToast(LC.LC_COPY.codeCopied, 'success'); }
+  else showToast(LC_COPY_FAILED, 'warning');
+}
+
+/** Share Invite — PARITY-BY-DESIGN. Native shell with the Share plugin: the system share sheet. Everything else: the LINK is copied. `navigator.share` is never used. */
+async function shareLeagueInvite() {
+  const created = _lc?.state?.created;
+  if (!created) return;
+  const r = await LC.shareInvite({
+    leagueName: created.name, code: created.code,
+    isNative: isNativeShell(), plugins: typeof window !== 'undefined' ? window.Capacitor?.Plugins : null,
+    copyText: lcCopyText,
+  });
+  if (r.via === 'copy') {
+    if (r.ok) { haptic('light'); showToast(LC.LC_COPY.linkCopied, 'success'); }
+    else showToast(LC_COPY_FAILED, 'warning');
+  } else if (r.via === 'share' && r.ok) {
+    haptic('light');
+  }
+}
+
+/** THE ONE SERVER CALL. */
+async function submitLeagueCreate() {
+  const lc = _lc;
+  if (!lc || !LC.canCreate(lc.state)) return;
+  const st = lc.state;
+  lcDispatch({ type: 'creating' });
+  clearTimeout(lc.slowTimer);
+  lc.slowTimer = setTimeout(() => lcDispatch({ type: 'slow' }), 8000);   // "Still working…" past 8 seconds
+  // A player who is ALREADY in a league keeps the pointer where it is (`activate:false`) and is moved by the ordinary league switch when the sheet closes; the
+  // zero-league landing has no league to leave, so the refresh points the device at the new one.
+  const hadLeague = !!getActiveLeagueId();
+  const name = st.name.trim();
+  let leagueId = null; let failure = null;
+  try {
+    leagueId = await createLeague(name, LC.sportsPayload(st), { activate: !hadLeague });
+  } catch (err) {
+    failure = { kind: LC.createErrorKind(err), leagueId: err?.leagueId || null };
+    if (failure.kind === 'failed') console.warn('[league-create] create failed', err);
+  }
+  clearTimeout(lc.slowTimer);
+  if (_lc !== lc) return;   // the sheet was torn down under the call (a hold gate); nothing left to paint
+  if (!failure) {
+    lcDispatch({ type: 'created', created: { leagueId, name, code: '' } });
+    haptic('success');
+    ensureCreatedCode();   // read the code while the person reads the Created screen
+    return;
+  }
+  if (failure.kind === 'created_not_loaded') {
+    // Frame 13: the server made the league, this device could not load it. Told plainly and loudly, on the Leagues Home surface, never a fake success.
+    closeLeagueCreateSheet({ landing: false });
+    _leaguesHomeNotice = { leagueId: failure.leagueId, text: LC.refreshFailedCopy(name) };
+    if (document.getElementById('leagues-home-overlay')) renderLeaguesHomeOverlayBody();
+    else if (needsLeagueFlowScreen()) renderLeagueFlowScreen(state.currentTab === 'chat' ? 'dashboard' : (state.currentTab || 'dashboard'));
+    else showLeaguesHomeOverlay();
+    haptic('error');
+    return;
+  }
+  if (failure.kind === 'paused') { lcDispatch({ type: 'paused' }); return; }
+  if (failure.kind === 'limit') { lcDispatch({ type: 'limit' }); return; }
+  lcDispatch({ type: 'failed' });
+  haptic('error');
+}
+
+// ── swipe-down (native) ───────────────────────────────────────────────────────
+function leagueCreateDragProgress(wrap, sheetEl, progress) {
+  sheetEl.setAttribute('data-dragging', 'true');
+  wrap.setAttribute('data-dragging', 'true');
+  wrap.style.setProperty('--lc-drag-y', String(progress));
+}
+function settleLeagueCreateDrag(wrap, sheetEl, { dismissed, reducedMotion } = {}) {
+  sheetEl.removeAttribute('data-dragging');
+  wrap.removeAttribute('data-dragging');
+  const lc = _lc;
+  if (!dismissed || !lc) { wrap.style.setProperty('--lc-drag-y', '0'); return; }
+  const mode = LC.dismissMode(lc.state);
+  if (mode !== 'close') {
+    // Input worth keeping → the sheet springs back and asks (frame 11); a create in flight → springs back and stays.
+    wrap.style.setProperty('--lc-drag-y', '0');
+    if (mode === 'confirm') { lcDispatch({ type: 'askDiscard' }); haptic('warning'); }
+    return;
+  }
+  const landing = lc.landOnClose;
+  finishSlideThenRemove({
+    listenEl: sheetEl,
+    apply: () => wrap.style.setProperty('--lc-drag-y', '1'),
+    reducedMotion: !!reducedMotion,
+    done: () => closeLeagueCreateSheet({ landing }),
+  });
+}
+
+// ── the entry ─────────────────────────────────────────────────────────────────
+/** ONE document-level delegated handler for `[data-action="create-league"]`, the same shape as bindComingSoonDispatcher(). Deferred INTO boot(): importing this module
+ *  registers no listener (nativeguardtest [8c]). */
+function bindCreateLeagueDispatcher() {
+  document.addEventListener('click', (e) => {
+    const el = e.target.closest?.('[data-action="create-league"]');
+    if (!el || el.disabled) return;
+    // From the header-pill sheet (a .modal-overlay) the tap closes that sheet first: one surface at a time.
+    try { el.closest?.('.modal-overlay')?.remove(); } catch { /* courtesy */ }
+    openLeagueCreateSheet();
+  });
+}
+/** "Invite Friends" on the League Page's empty state (frame 6): the Invite step for the league that already exists. */
+function openLeagueInviteSheet() {
+  const leagueId = getActiveLeagueId();
+  if (!leagueId) return;
+  const m = getCachedMemberships().find(x => x.leagueId === leagueId);
+  openLeagueCreateSheet({ invite: { leagueId, name: m?.leagueName || '', code: '' } });
+}
+
+// ── a pending invite for a player who is already in a league ──────────────────
+// Zero memberships: the claim screen / landing owns it (below). One or more: once memberships have loaded, the Join sheet opens PREFILLED — never a silent join (joining
+// creates a membership, so it takes one visible tap), and an expired or malformed link is said out loud.
+let _pendingInvitePrompted = false;
+/** How long the prompt waits for a withheld app (the adapter is still hydrating at the moment memberships land) before it stops asking: 20 tries, 1.5 seconds apart. */
+const PENDING_INVITE_RETRY_MS = 1500;
+const PENDING_INVITE_MAX_TRIES = 20;
+function maybePromptPendingInvite(event, attempt = 0) {
+  if (_pendingInvitePrompted || event !== 'MEMBERSHIPS_REFRESHED') return;
+  if (getAuthMode() !== 'supabase' || !isSignedInForApp() || getMembershipsError() || !hasResolvedMemberships()) return;
+  if (getCachedMemberships().length < 1) return;   // zero memberships: the claim screen / landing owns the invite
+  // Nothing pending → nothing to wait for. (This read consumes an expired or malformed value and remembers the loud notice for the retry below.)
+  const r = resolvePendingInviteView();
+  if (!r.code && !r.notice) return;
+  // At the instant memberships land the adapter is usually still hydrating, i.e. the app is WITHHELD (a skeleton, or a security hold). A modal over that would be wrong for
+  // the hold and pointless over the skeleton, so wait for the app to be serving — bounded, so a hold that never lifts costs 30 seconds of a timer and nothing more.
+  if (isContentWithheld()) {
+    if (attempt < PENDING_INVITE_MAX_TRIES) setTimeout(() => { try { maybePromptPendingInvite(event, attempt + 1); } catch (e) { console.warn('[league-create] pending-invite retry failed', e); } }, PENDING_INVITE_RETRY_MS);
+    return;
+  }
+  _pendingInvitePrompted = true;
+  if (r.code) setTimeout(() => showJoinLeagueSheet({ prefill: r.code }), 0);
+  else if (r.notice) { showToast(r.notice, 'error'); _pendingInvite = { code: '', notice: '' }; }
+}
+export const _maybePromptPendingInviteForTest = maybePromptPendingInvite;
+
+/** Test seams — the sheet's state and a way to open it without the click dispatcher. */
+export const _openLeagueCreateSheetForTest = openLeagueCreateSheet;
+export const _leagueCreateStateForTest = () => (_lc ? { ..._lc.state } : null);
+export const _closeLeagueCreateSheetForTest = closeLeagueCreateSheet;
+export const _bindCreateLeagueDispatcherForTest = bindCreateLeagueDispatcher;
+export const _isLeagueCreateDismissGestureBlockedForTest = () => isLeagueCreateDismissGestureBlocked();
+export function _leaguesHomeNoticeForTest() { return _leaguesHomeNotice; }
+export function _resetLeagueCreateForTest() {
+  try { document.getElementById(LC_WRAP_ID)?.remove(); } catch { /* fixture hygiene */ }
+  if (_lc) { clearTimeout(_lc.slowTimer); try { document.removeEventListener('keydown', _lc.onKey); } catch { /* same */ } }
+  _lc = null; _leaguesHomeNotice = null; _pendingInvite = { code: '', notice: '' }; _pendingInvitePrompted = false;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28764,9 +30272,19 @@ function renderLeaguePageOverlayBody() {
         sportDefault: active?.sportDefault || undefined,
         weekSports: getWeeks().map(w => w?.sport).filter(Boolean),
       }),
+      // N1 (DI-430 frame 6) — a league with NO weeks states what happened, why and what next; the commissioner gets "Set up first week", a player gets one line.
+      // Only when content is being served: an un-hydrated mirror reads as no weeks, and that must never be painted as "no picks to make yet".
+      slateEmpty: (!isContentWithheld() && getWeeks().length === 0) ? (getSession()?.isAdmin ? 'commissioner' : 'player') : null,
       escHtml, icon },
   );
   ov.querySelector('[data-action="league-page-back"]')?.addEventListener('click', hideLeaguePageOverlay);
+  // N1 (DI-430 frame 6): "Set up first week" opens the T-18 wizard cold (the League Page steps aside first: the wizard's "Edit slate in Games tab" navigates to Comm).
+  ov.querySelector('[data-action="league-setup-first-week"]')?.addEventListener('click', () => {
+    haptic('medium');
+    hideLeaguePageOverlay();
+    openWeekWizardSheet({ forceNew: true });
+  });
+  ov.querySelector('[data-action="league-invite-friends"]')?.addEventListener('click', () => { haptic('light'); openLeagueInviteSheet(); });
   // Sport-card tap: "the current CFB pickems page" the sport card names IS
   // the six-tab shell this overlay sits above — closing the overlay reveals
   // it directly, no separate navigation target to compute (single-sport
@@ -28798,11 +30316,16 @@ function renderLeaguePageOverlayBody() {
 // self-block on touchstart, since each of these overlays' own presence is
 // one of THAT function's suspending conditions. A short, occasionally-
 // duplicated list, not a cycle.
-function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome = false } = {}) {
+function _dismissBlockingSurfaceUp({ excludeWizard = false, excludeLeaguesHome = false, excludeCreate = false, excludeDelete = false } = {}) {
   if (document.getElementById('site-gate-overlay')) return true;
   if (document.querySelector('.modal-overlay')) return true;
   if (document.getElementById('chat-sheet-wrap')) return true;
   if (!excludeWizard && document.getElementById('week-wizard-sheet-wrap')) return true;
+  // N1 (DI-430, 2026-09-30) — the New League sheet is a FOURTH surface on this list, with its own "OTHER surface" carve-out (excludeCreate), same shape as the wizard's.
+  if (!excludeCreate && document.getElementById('league-create-sheet-wrap')) return true;
+  // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet is a FIFTH surface on this list (it was a `.modal-overlay`, which the `.modal-overlay` line above already counted; now that it
+  // is the shared sheet shell it needs its own entry), with the same "OTHER surface" carve-out (excludeDelete) so its own swipe-down can arm.
+  if (!excludeDelete && document.getElementById('pwacct-delete-overlay')) return true;
   // DI-418 (2026-09-28) — the Leagues Home overlay is a THIRD full-screen
   // surface with its own native swipe-back (bindSwipeToDismiss() on
   // #leagues-home-overlay, mirroring showLeaguePageOverlay()'s own). Same
@@ -28829,6 +30352,11 @@ function isWizardDismissGestureBlocked() {
  *  `#leagues-home-overlay` entry. */
 function isLeaguesHomeDismissGestureBlocked() {
   return _dismissBlockingSurfaceUp({ excludeLeaguesHome: true });
+}
+/** N1 (DI-430) — the New League sheet's OWN swipe-down: the same list minus its own wrap, and OFF while a create is in flight (a half-finished create cannot be abandoned). */
+function isLeagueCreateDismissGestureBlocked() {
+  if (_lc && LC.isBusy(_lc.state)) return true;
+  return _dismissBlockingSurfaceUp({ excludeCreate: true });
 }
 
 /** League Page overlay's own swipe-back: standings -> league one level, or
@@ -28992,8 +30520,12 @@ function renderLeaguesHomeOverlayBody() {
       // (leagueSelectorHTML(), unchanged) keeps its title — it has no outer
       // nav-bar heading of its own.
       showTitle: false,
+      // N1 (DI-430/433) — same two inputs as the boot-time selector above: one card list, one gate.
+      createOpen: getCachedLeagueCreationOpen(),
+      notice: leaguesHomeNoticeHTML(),
     })}</div>`;
   ov.querySelector('[data-action="leagues-home-back"]')?.addEventListener('click', hideLeaguesHomeOverlay);
+  bindLeaguesHomeNotice(ov, renderLeaguesHomeOverlayBody);   // R-F4 — the frame-13 notice's Try Again
   // Reuses bindLeagueSelectorRows() verbatim — the SAME row binder the
   // header pill's sheet and the boot-time full-page selector both already
   // use (DI-184f "no second selector implementation," DI-312's own
@@ -29305,6 +30837,13 @@ const _scheduledOpenBlockedReason = new Map();
 // has not been touched yet this session.
 let _weekWizardOpenMode = null;
 let _weekWizardScheduleAt = null;
+// DI-404 (reviewer note 1, 2026-09-30) — an Auto-Open At time typed on Step 4
+// while the blurb is still missing, carried through "Write it" so it is never
+// dropped silently: Step 4 re-shows it if the commissioner comes back, and once
+// the blurb is written (Step 5's Next) Step 6 opens on "Open at a scheduled
+// time" with its field prefilled from it — Schedule Open then applies it.
+// A datetime-local string, not persisted; cleared by every sheet open/close.
+let _weekWizardPendingOpenAt = null;
 // DI-359 — the guided Finalize Week flow's current step. `null` = not in the
 // flow at all (renderWeekWizardSheetBody() falls through to Manage/steps as
 // today); 1-4 = FINALIZE_STEPS.step. Entered from the Manage screen's
@@ -29620,7 +31159,7 @@ function bindWeekWizardStep3(bodyEl, week, games) {
 /** Shared by Step 4 and the Manage screen — same fields, same defaults,
  *  same underlying `saveWeek()` write (`saveWizardTiming()`, below) as the
  *  standalone Week Settings card's own timing block. */
-function renderWeekWizardTimingFieldsHTML(week, games) {
+function renderWeekWizardTimingFieldsHTML(week, games, guardHTML = '', openAtDescribedBy = '') { // DI-404 override: Step 4 slots its blurb guard under Auto-Open At; Manage passes neither
   const lockAt = computeEffectiveLockAt(week, games);
   const liveAt = computeEffectiveLiveAt(week, games);
   const tz = getTimezone();
@@ -29628,8 +31167,8 @@ function renderWeekWizardTimingFieldsHTML(week, games) {
   return `
     <div class="form-group">
       <label class="form-label">Auto-Open At</label>
-      <input class="form-input" type="datetime-local" id="wiz-picks-open-at" value="${escHtml(isoToLocalDateTimeInput(week.picksOpenAt))}" />
-    </div>
+      <input class="form-input" type="datetime-local" id="wiz-picks-open-at"${openAtDescribedBy} value="${escHtml(isoToLocalDateTimeInput(week.picksOpenAt))}" />
+    </div>${guardHTML}
     <div class="form-group">
       <label class="form-label">Lock N minutes before first kickoff <span class="text-muted text-xs">— default 30</span></label>
       <input class="form-input" type="number" min="0" max="720" id="wiz-auto-lock-offset" value="${getAutoLockOffsetMinutes(week)}" />
@@ -29643,7 +31182,7 @@ function renderWeekWizardTimingFieldsHTML(week, games) {
       <div><strong>Effective live:</strong> ${escHtml(fmt(liveAt))}</div>
     </div>`;
 }
-function saveWizardTiming(bodyEl, week) {
+function saveWizardTiming(bodyEl, week, { skipOpenAt = false } = {}) { // DI-404 override: skipOpenAt keeps the STORED Auto-Open (Step 4's "Write it" must not set a time)
   const openRaw = bodyEl.querySelector('#wiz-picks-open-at')?.value;
   const offsetRaw = parseInt(bodyEl.querySelector('#wiz-auto-lock-offset')?.value, 10);
   const autoLockOffsetMinutes = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 30;
@@ -29672,7 +31211,7 @@ function saveWizardTiming(bodyEl, week) {
   const openUnchanged = (openRaw || '') === isoToLocalDateTimeInput(week.picksOpenAt);
   saveWeek({
     ...liveWeek,
-    picksOpenAt: openUnchanged ? (liveWeek.picksOpenAt ?? null) : (openRaw ? new Date(openRaw).toISOString() : null),
+    picksOpenAt: (openUnchanged || skipOpenAt) ? (liveWeek.picksOpenAt ?? null) : (openRaw ? new Date(openRaw).toISOString() : null),
     autoLockOffsetMinutes, autoLiveEnabled,
   });
   refreshHeader();
@@ -29680,28 +31219,114 @@ function saveWizardTiming(bodyEl, week) {
 /** SECURITY GATE FINDING 2 test-only seam — same `_xForTest` convention. */
 export const _saveWizardTimingForTest = saveWizardTiming;
 
+/** DI-404 (UN-388) — Step 4's copy of Step 6's "Weekly blurb not written yet
+ *  [Write it]" checklist row, the guard's neutral half (same classes, same
+ *  copy constants, its own button id). */
+function renderStep4BlurbGuardHTML() {
+  return `<div class="week-wizard-check-row"><span aria-hidden="true">○</span> ${escHtml(WIZARD_COPY.BLURB_ROW_MISSING)}<button type="button" class="btn btn-secondary btn-sm" id="wiz-step4-blurb-write">${escHtml(WIZARD_COPY.BLURB_WRITE_IT)}</button></div><div class="form-field-error" id="wiz-open-at-error" role="alert"></div>`;
+}
+/** The week as Step 4's Auto-Open field should SHOW it: a time carried through
+ *  "Write it" (`_weekWizardPendingOpenAt`, not yet saved) wins over the stored
+ *  one, so coming back from Step 5 never shows the typed time gone. Display only —
+ *  saves still compare against the real stored week (RG-287). */
+function step4DisplayWeek(week) {
+  const carried = _weekWizardPendingOpenAt ? new Date(_weekWizardPendingOpenAt) : null;
+  return (carried && !Number.isNaN(carried.getTime())) ? { ...week, picksOpenAt: carried.toISOString() } : week;
+}
+/** Is an Auto-Open time on Step 4 (stored or carried) sitting on a week that still has no blurb? */
+function step4NeedsGuard(week) {
+  return !blurbGate(week).ok && !!isoToLocalDateTimeInput(step4DisplayWeek(week).picksOpenAt);
+}
 function renderWeekWizardStep4HTML(week, games) {
+  // DI-404 AMENDED (coordinator override, 2026-09-30; reviewer note 3) — setting
+  // or confirming an Auto-Open At time needs a valid blurb, or a draft could open
+  // blank through this field. The guard (the neutral "Weekly blurb not written
+  // yet [Write it]" row and the role="alert" slot the refusal writes into) exists
+  // ONLY once a time is entered while the blurb is missing: until then Step 4
+  // shows nothing about the blurb and reserves no space — the empty wrapper below
+  // has no height. It is filled in on the field's `change`, on a refused Next, or
+  // here at render when a stored/carried time is already there.
+  const needsGuard = step4NeedsGuard(week);
+  const guardHTML = `<div id="wiz-open-at-guard">${needsGuard ? renderStep4BlurbGuardHTML() : ''}</div>`;
+  const openAtDescribedBy = needsGuard ? ' aria-describedby="wiz-open-at-error"' : '';
   return `<div class="admin-section-title">Timing & auto-transitions</div>
-    ${renderWeekWizardTimingFieldsHTML(week, games)}
+    ${renderWeekWizardTimingFieldsHTML(step4DisplayWeek(week), games, guardHTML, openAtDescribedBy)}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step4-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step4-next">Next</button></div>`;
 }
 function bindWeekWizardStep4(bodyEl, week) {
+  const openAtEl = bodyEl.querySelector('#wiz-picks-open-at');
+  const guardEl = bodyEl.querySelector('#wiz-open-at-guard');
+  const blurbMissing = () => !blurbGate(getWeek(week.weekId) || week).ok;
+  // Everything about the guard is reached THROUGH its wrapper, so the row, the
+  // slot and the "Write it" button are the same nodes whether the guard was
+  // rendered with the step or filled in later.
+  const slotEl = () => guardEl?.querySelector('#wiz-open-at-error');
+  let guardShown = step4NeedsGuard(week);
+  // "Write it" — the way forward. Saves the OTHER timing fields but NOT the
+  // typed Auto-Open time (it may not be set until a blurb exists) — and does not
+  // throw it away either: it is carried (`_weekWizardPendingOpenAt`) to Step 6.
+  const writeIt = () => {
+    const typed = openAtEl?.value || '';
+    saveWizardTiming(bodyEl, week, { skipOpenAt: true });
+    _weekWizardPendingOpenAt = typed || null;
+    _weekWizardStep = 5;
+    renderWeekWizardSheetBody();
+  };
+  const bindWriteIt = () => guardEl?.querySelector('#wiz-step4-blurb-write')?.addEventListener('click', writeIt);
+  if (guardShown) bindWriteIt();
+  // Live re-validation, armed only after the first refused Next (same rule as
+  // Step 5). Separately, the guard itself appears when a time is COMMITTED
+  // (`change`) on a blurb-less week, and goes — disarmed — when it is cleared.
+  let openAtArmed = false;
+  const showGuard = () => {
+    if (!guardEl || guardShown) return;
+    guardEl.innerHTML = renderStep4BlurbGuardHTML();
+    guardShown = true;
+    openAtEl?.setAttribute('aria-describedby', 'wiz-open-at-error');
+    bindWriteIt();
+  };
+  const hideGuard = () => {
+    if (!guardEl || !guardShown) return;
+    guardEl.innerHTML = '';
+    guardShown = false;
+    openAtArmed = false;
+    openAtEl?.removeAttribute('aria-describedby');
+    openAtEl?.removeAttribute('aria-invalid');
+  };
+  const onOpenAtEdit = (committed) => {
+    if (committed || openAtArmed) { if (blurbMissing() && openAtEl?.value) showGuard(); else hideGuard(); }
+    if (openAtArmed && guardShown) paintBlurbFieldError(openAtEl, slotEl(), 'required_at_open');
+  };
+  openAtEl?.addEventListener('input', () => onOpenAtEdit(false));
+  openAtEl?.addEventListener('change', () => onOpenAtEdit(true));
   bodyEl.querySelector('#wiz-step4-back')?.addEventListener('click', () => { _weekWizardStep = 3; renderWeekWizardSheetBody(); });
   bodyEl.querySelector('#wiz-step4-next')?.addEventListener('click', () => {
+    // DI-404 AMENDED — an Auto-Open At time (typed now, or already stored and
+    // being confirmed) with no valid blurb is REFUSED, inline: nothing is saved,
+    // the step stays put, focus returns to the field. Clearing the time (or
+    // writing the blurb) is the way through. Demo weeks are exempt (blurbGate).
+    if (blurbMissing() && (openAtEl?.value || '')) {
+      openAtArmed = true;
+      showGuard();
+      paintBlurbFieldError(openAtEl, slotEl(), 'required_at_open');
+      openAtEl?.focus();
+      return;
+    }
     saveWizardTiming(bodyEl, week);
-    // REVIEWER BLOCK item 5 (916bdb7 review, 2026-09-25) — UN-295's ≤6-tap
-    // budget. Step 5 is OPTIONAL and, on a fresh forward pass, ALWAYS blank
-    // — landing on it still cost a real tap to move past nothing, making
-    // the do-nothing path 7 taps instead of 6. Forward navigation skips
-    // straight to Step 6; Step 5 stays fully reachable — Step 6's own
-    // "Edit weekly blurb" row (below) and its existing Back button both
-    // still land on it — for the commissioner who actually wants to write
-    // one, which is real, opt-in extra work and correctly costs an extra
-    // tap. DI-424 (2026-09-28) repointed Step 5 from a one-time announcement
-    // draft to the persistent week.blurb field — this skip-forward behavior
-    // itself is UNCHANGED by that DI ("this DI does not touch step
-    // navigation").
-    _weekWizardStep = 6;
+    _weekWizardPendingOpenAt = null; // whatever the field showed is now saved (or cleared) — nothing left to carry
+    // DI-404 (UN-388, N16, 2026-09-29) — the weekly blurb is REQUIRED before a
+    // week can open, so Step 5 is no longer skipped. This used to jump
+    // straight to Step 6 (REVIEWER BLOCK item 5, 916bdb7 review: Step 5 was
+    // optional and always blank on a fresh pass, so landing on it cost a tap to
+    // move past nothing — UN-295's ≤6-tap budget). Now: land on Step 5 unless
+    // the week ALREADY holds a valid blurb (or is exempt — a demo week), in
+    // which case there is nothing to ask and the old one-tap skip stands. The
+    // one extra tap on a fresh week is inherent in Drew's own request;
+    // design-matrix-pm records UN-295's budget as amended. Read the week from
+    // the mirror (RG-256 class), not the render-time closure — Step 5 may have
+    // saved a blurb since this sheet painted.
+    const liveWeekForBlurb = getWeek(week.weekId) || week;
+    _weekWizardStep = blurbGate(liveWeekForBlurb).ok ? 6 : 5;
     renderWeekWizardSheetBody();
   });
 }
@@ -29728,9 +31353,53 @@ function sendWizardAnnouncement(text) {
  * form implementation.
  */
 function renderWeekWizardBlurbFieldsHTML(week) {
+  // DI-404 (UN-388) — the field is REQUIRED for a draft, non-demo week (the
+  // rule the Step 5 Next handler enforces). `aria-required` tells VoiceOver up
+  // front; the message slot below is ONE reserved region (`role="alert"`, so a
+  // message written into it is announced), sized for the longest copy so the
+  // sheet never jumps when it appears. Empty until a failed Next.
+  const requiredAttr = blurbGate(week).required ? ' aria-required="true"' : '';
   return `<div class="form-group">
-      <textarea class="form-textarea" id="wiz-blurb-body" rows="3" placeholder="A note for players, shown on the Picks page all week — rivalry stakes, a reminder, anything.">${escHtml(week?.blurb || '')}</textarea>
+      <textarea class="form-textarea" id="wiz-blurb-body" rows="3" aria-label="Weekly blurb" aria-describedby="wiz-blurb-error"${requiredAttr} placeholder="A note for players, shown on the Picks page all week — rivalry stakes, a reminder, anything.">${escHtml(week?.blurb || '')}</textarea>
+      <div class="form-field-error" id="wiz-blurb-error" role="alert"></div>
     </div>`;
+}
+/**
+ * DI-404 (UN-388) — the ONE painter for the blurb's inline validation, used by
+ * BOTH surfaces (the wizard's Step 5 and the Week-tab card) so they can never
+ * look or behave differently. `reason` is a `blurbCheck()` failure ('empty' /
+ * 'short') or falsy to clear. Inline only — never a toast or an alert(): the
+ * message sits under the field (`.form-field-error`, which fades in over the
+ * shared 160 ms token), the field turns `aria-invalid` (red border via
+ * var(--loss)), and the text is written with textContent, never markup.
+ */
+function paintBlurbFieldError(fieldEl, errEl, reason) {
+  const msg = reason ? blurbErrorCopy(reason) : '';
+  if (errEl) {
+    errEl.textContent = msg;
+    errEl.classList.toggle('is-visible', !!msg);
+  }
+  if (fieldEl) {
+    if (msg) fieldEl.setAttribute('aria-invalid', 'true');
+    else fieldEl.removeAttribute('aria-invalid');
+  }
+}
+/**
+ * DI-404 — live re-validation, armed ONLY after the first failed attempt (a
+ * field must never scold someone who has not finished typing). Returns the
+ * arm function the failing handler calls.
+ */
+function bindBlurbLiveValidation(fieldEl, errEl, getUnchangedValue = null) {
+  let armed = false;
+  fieldEl?.addEventListener('input', () => {
+    if (!armed) return;
+    const value = fieldEl.value || '';
+    // The Week-tab card treats "back to what is already saved" as fine (Save is a
+    // silent no-op there), so it passes the saved text and is not scolded for it.
+    if (getUnchangedValue && value === getUnchangedValue()) { paintBlurbFieldError(fieldEl, errEl, null); return; }
+    paintBlurbFieldError(fieldEl, errEl, blurbCheck(value).reason);
+  });
+  return () => { armed = true; };
 }
 /** Reuses the SAME saveWeek() call the standalone Week-tab blurb card
  *  already uses (`save-blurb-btn`'s handler, ~line 14626) — not a second
@@ -29745,21 +31414,67 @@ function renderWeekWizardBlurbFieldsHTML(week) {
 function saveWizardBlurb(bodyEl, week) {
   const value = bodyEl.querySelector('#wiz-blurb-body')?.value || '';
   const liveWeek = getWeek(week.weekId) || week;
-  if (value === (liveWeek.blurb || '')) return;
+  // DI-404 (UN-388) — the ONE choke point: on a week that must carry a blurb
+  // before it opens (draft, non-demo — `blurbGate().required`), an empty or
+  // too-short value is REFUSED here, before the unchanged-value no-op below
+  // (unlike the Week-tab card, blank->blank must FAIL on this step: Step 5's
+  // Next is the required act). Returns `{ ok:false, reason }` so the Next
+  // handler can show the inline message; nothing is written.
+  if (blurbGate(liveWeek).required) {
+    const check = blurbCheck(value);
+    if (!check.ok) return { ok: false, reason: check.reason };
+  }
+  if (value === (liveWeek.blurb || '')) return { ok: true, saved: false };
   saveWeek({ ...liveWeek, blurb: value });
   // Same toast the standalone Week-tab card's own save gives (`showToast('Blurb saved','success')`,
   // ~line 14627) — one consistent feel for the same field, edited from either surface.
   showToast('Blurb saved', 'success');
+  return { ok: true, saved: true };
 }
 /** Test-only seam, same `_xForTest` convention as `_saveWizardTimingForTest`. */
 export const _saveWizardBlurbForTest = saveWizardBlurb;
 
+/**
+ * DI-404 (UN-388, item 5) — the Week-tab "Save Blurb" card. Save runs
+ * `blurbCheck()`: an UNCHANGED value (blank->blank included) is a silent no-op
+ * (no write, no toast, no message), and anything else must pass — so an
+ * existing blurb can never be blanked or cut below the minimum from here. That
+ * is what keeps "mandatory" true after the week is made. RG-256 class: spreads
+ * the week as the mirror holds it NOW, never the render-time closure (a week
+ * that locked while this tab stayed painted must not be spread back to open).
+ * A refusal paints the inline message and puts focus back in the field.
+ */
+function saveWeekTabBlurb(fieldEl, errEl, week) {
+  const value = fieldEl?.value || '';
+  const liveWeek = getWeek(week.weekId) || week;
+  if (value === (liveWeek.blurb || '')) {
+    paintBlurbFieldError(fieldEl, errEl, null);
+    return { ok: true, saved: false };
+  }
+  const check = blurbCheck(value);
+  if (!check.ok) {
+    paintBlurbFieldError(fieldEl, errEl, check.reason);
+    fieldEl?.focus();
+    return { ok: false, reason: check.reason };
+  }
+  paintBlurbFieldError(fieldEl, errEl, null);
+  saveWeek({ ...liveWeek, blurb: value });
+  showToast('Blurb saved', 'success');
+  return { ok: true, saved: true };
+}
+export const _saveWeekTabBlurbForTest = saveWeekTabBlurb;
+
 function renderWeekWizardStep5HTML(week) {
-  return `<div class="admin-section-title">Weekly Blurb (optional)</div>
+  // DI-404 (UN-388) — retitled "Weekly Blurb": "(optional)" is gone, the blurb
+  // is required before the week opens.
+  return `<div class="admin-section-title">Weekly Blurb</div>
     ${renderWeekWizardBlurbFieldsHTML(week)}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step5-back">Back</button><button type="button" class="btn btn-primary" id="wiz-step5-next">Next</button></div>`;
 }
 function bindWeekWizardStep5(bodyEl, week) {
+  const fieldEl = bodyEl.querySelector('#wiz-blurb-body');
+  const errEl = bodyEl.querySelector('#wiz-blurb-error');
+  const armLiveValidation = bindBlurbLiveValidation(fieldEl, errEl);
   // Back discards this step's own local edit, same convention every other
   // step's Back button already uses (e.g. Step 4's Back does not call
   // saveWizardTiming()) — only Next commits.
@@ -29768,7 +31483,27 @@ function bindWeekWizardStep5(bodyEl, week) {
     renderWeekWizardSheetBody();
   });
   bodyEl.querySelector('#wiz-step5-next')?.addEventListener('click', () => {
-    if (week) saveWizardBlurb(bodyEl, week);
+    if (week) {
+      const saved = saveWizardBlurb(bodyEl, week);
+      if (!saved.ok) {
+        // DI-404 — a failed Next STAYS on this step: the message appears inline
+        // under the field, the field is aria-invalid, and focus goes straight
+        // back into it so the keyboard stays up (no dismiss-and-retap). From
+        // here the field validates live as they type.
+        armLiveValidation();
+        paintBlurbFieldError(fieldEl, errEl, saved.reason);
+        fieldEl?.focus();
+        return;
+      }
+      // DI-404 (reviewer note 1) — the blurb is written: hand the Auto-Open time
+      // typed on Step 4 to Step 6, which opens on "Open at a scheduled time" with
+      // its field prefilled; Schedule Open applies it there. Never dropped.
+      if (_weekWizardPendingOpenAt) {
+        _weekWizardScheduleAt = _weekWizardPendingOpenAt;
+        _weekWizardOpenMode = OPEN_MODES.SCHEDULED;
+        _weekWizardPendingOpenAt = null;
+      }
+    }
     _weekWizardStep = 6;
     renderWeekWizardSheetBody();
   });
@@ -29842,14 +31577,47 @@ function renderWeekWizardStep6HTML(week, games) {
     ? `<div class="warning-box mt-sm">⚠️ Scheduled open is blocked: ${escHtml(blockedReason)}</div>`
     : '';
 
+  // DI-404 (UN-388) — the weekly blurb is the fourth checklist row, kept out
+  // of gatingChecklist() (the scheduled-open tick reads that and must never
+  // block on it). Shown only when the rule applies to this week (a draft,
+  // non-demo week — blurbGate().required). ○ carries a "Write it" button
+  // (>=44 px, styled in css) straight to Step 5; ✓ leaves the quieter "Edit
+  // weekly blurb" below. `blurbBlocked` drives Open now / Schedule Open ONLY —
+  // "Keep as draft" is exempt (nothing is published).
+  const blurb = blurbGate(week);
+  const blurbBlocked = blurb.required && !blurb.satisfied;
+  // Each piece is its own small, plainly-classifiable value (a ternary of
+  // literals, or one escHtml() call) rather than one nested template — the
+  // xsstest interpolation sweep can prove every one of them safe.
+  const blurbRowClass = blurb.satisfied ? 'week-wizard-check-row ok' : 'week-wizard-check-row';
+  const blurbRowMark = blurb.satisfied ? '✓' : '○';
+  const blurbRowLabel = blurb.satisfied ? WIZARD_COPY.BLURB_ROW_DONE : WIZARD_COPY.BLURB_ROW_MISSING;
+  const blurbWriteBtnHTML = blurb.satisfied
+    ? ''
+    : `<button type="button" class="btn btn-secondary btn-sm" id="wiz-step6-blurb-write">${escHtml(WIZARD_COPY.BLURB_WRITE_IT)}</button>`;
+  const blurbRowHTML = blurb.required
+    ? `<div class="${blurbRowClass}"><span aria-hidden="true">${blurbRowMark}</span> ${escHtml(blurbRowLabel)}${blurbWriteBtnHTML}</div>`
+    : '';
+  // The reason Open is disabled, always visible beside it (a disabled button
+  // cannot be tapped to ask "why"). Loud red while it is actually blocking the
+  // chosen mode; muted under "Keep as draft", where it is a heads-up, not a
+  // block — colour changes, layout does not, so switching mode never jumps.
+  const blurbReasonClass = mode === OPEN_MODES.DRAFT ? 'wiz-blurb-reason is-muted' : 'wiz-blurb-reason';
+  const blurbReasonHTML = blurbBlocked
+    ? `<p class="text-xs mt-xs ${blurbReasonClass}" id="wiz-blurb-reason">${escHtml(WIZARD_COPY.BLURB_REQUIRED_AT_OPEN)}</p>`
+    : '';
+
   const finishLabel = mode === OPEN_MODES.NOW ? 'Open for Picks' : mode === OPEN_MODES.SCHEDULED ? 'Schedule Open' : 'Save as Draft';
   // Ruling: "Keep as draft" is exempt from the gating checklist entirely
-  // (DI-358 — nothing is being opened); Now/Scheduled both still require it.
-  const finishDisabled = mode !== OPEN_MODES.DRAFT && !gate.canOpen;
+  // (DI-358 — nothing is being opened); Now/Scheduled both still require it
+  // — and, DI-404, the weekly blurb.
+  const finishDisabled = mode !== OPEN_MODES.DRAFT && (!gate.canOpen || blurbBlocked);
+  const finishDescribedBy = (finishDisabled && blurbBlocked) ? ' aria-describedby="wiz-blurb-reason"' : '';
 
   return `<div class="admin-section-title">Open for picks</div>
     ${otherWeekNoticeHTML}
-    ${row(gate.gamesOk, gate.gamesLabel)}${row(gate.spreadsOk, gate.spreadsLabel)}${row(gate.timingOk, gate.timingLabel)}
+    ${row(gate.gamesOk, gate.gamesLabel)}${row(gate.spreadsOk, gate.spreadsLabel)}${row(gate.timingOk, gate.timingLabel)}${blurbRowHTML}
+    ${blurbReasonHTML}
     <div class="admin-section-title mt-md">Tiebreaker</div>
     <div class="form-group">
       <label class="form-label" for="wiz-tb-question">Question</label>
@@ -29861,9 +31629,9 @@ function renderWeekWizardStep6HTML(week, games) {
     ${scheduleFieldHTML}
     <div id="wiz-schedule-refusal" class="text-sm" style="color:var(--loss)"></div>
     ${blockedBannerHTML}
-    <button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-blurb">Edit weekly blurb</button>
+    ${blurbBlocked ? '' : '<button type="button" class="btn btn-ghost btn-sm mt-sm" id="wiz-step6-blurb">Edit weekly blurb</button>'}
     <div class="flex gap-sm mt-md"><button type="button" class="btn btn-ghost" id="wiz-step6-back">Back</button>
-    <button type="button" class="btn btn-primary" id="wiz-open-btn" ${finishDisabled ? 'disabled' : ''}>${escHtml(finishLabel)}</button></div>`;
+    <button type="button" class="btn btn-primary" id="wiz-open-btn"${finishDescribedBy} ${finishDisabled ? 'disabled' : ''}>${escHtml(finishLabel)}</button></div>`;
 }
 function bindWeekWizardStep6(bodyEl, week, games) {
   bodyEl.querySelector('#wiz-step6-back')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
@@ -29875,6 +31643,9 @@ function bindWeekWizardStep6(bodyEl, week, games) {
   // identity — its destination changed meaning, so leaving the old label
   // pointing at a blurb textarea would have been a stale, misleading copy.
   bodyEl.querySelector('#wiz-step6-blurb')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
+  // DI-404 (UN-388) — the checklist row's "Write it": same destination as the
+  // two above, rendered only while the blurb is what's blocking the open.
+  bodyEl.querySelector('#wiz-step6-blurb-write')?.addEventListener('click', () => { _weekWizardStep = 5; renderWeekWizardSheetBody(); });
 
   // DI-357 — the tiebreaker question, saved through the SAME write path
   // (applyTiebreakerQuestion() + saveWeek()) the standalone card's own
@@ -29918,6 +31689,12 @@ function bindWeekWizardStep6(bodyEl, week, games) {
       // Inline refusal copy — never a browser alert (DI's own convention).
       let text = '';
       if (result.reason === 'missing_scheduled_at') text = WIZARD_COPY.SCHEDULE_MISSING_DATETIME;
+      // DI-404 (UN-388) — the backstop for a blurb that went missing after the
+      // sheet painted (the sheet does not repaint on Realtime): the disabled
+      // button normally makes this unreachable. Checked BEFORE `result.gate`,
+      // which a blurb refusal also carries (with canOpen true — it would read
+      // as an empty message).
+      else if (result.reason === 'blurb_required') text = WIZARD_COPY.BLURB_REQUIRED_AT_OPEN;
       else if (result.reason === 'past_scheduled_at' || result.reason === 'invalid_scheduled_at') text = WIZARD_COPY.SCHEDULE_PAST_DATETIME;
       else if (result.gate) text = [result.gate.gamesOk ? null : result.gate.gamesLabel, result.gate.spreadsOk ? null : result.gate.spreadsLabel, result.gate.timingOk ? null : result.gate.timingLabel].filter(Boolean).join('; ');
       if (refusalEl) refusalEl.textContent = text;
@@ -30499,42 +32276,68 @@ let _unbindWizardSheetDismiss = null;
  * deliberate "do not re-derive, they're already correct").
  */
 function mountWeekWizardSheetShell() {
-  document.getElementById('week-wizard-sheet-wrap')?.remove();
+  // N1 (DI-430, 2026-09-30) — the DOM shell is now the shared mountSheetShell() (below), which the New League sheet also mounts; this is its thin wizard caller. The
+  // markup, the ids, the backdrop/close bindings, the first paint and the header-only swipe-to-dismiss are exactly what they were.
+  _unbindWizardSheetDismiss?.();
+  _unbindWizardSheetDismiss = null;
+  const { unbind } = mountSheetShell({
+    wrapId: 'week-wizard-sheet-wrap',
+    sheetId: 'week-wizard-sheet',
+    headerInnerHTML: `<div class="chat-sheet-title" id="week-wizard-title">Set up Week</div>
+        <button class="chat-sheet-close" id="week-wizard-close" aria-label="Close">✕</button>`,
+    afterHeaderHTML: '<div id="week-wizard-step-tracker"></div>',
+    bodyId: 'week-wizard-body',
+    closeId: 'week-wizard-close',
+    onBackdrop: closeWeekWizardSheet,
+    renderBody: renderWeekWizardSheetBody,
+    // Drag-to-dismiss, header/handle only — see the file comment above. No-ops on web (bindSwipeToDismiss() is native-only). Bound ONCE per mount;
+    // renderWeekWizardSheetBody() only ever repaints #week-wizard-body, never the header, so this never needs rebinding mid-flow.
+    // Security gate F2 (third pass) — its OWN predicate: the shared one counts this very sheet as a blocking surface, so the gesture never armed.
+    drag: { getBlocked: isWizardDismissGestureBlocked, onProgress: wizardSheetDragProgress, onSettle: settleWizardSheetDrag },
+  });
+  _unbindWizardSheetDismiss = unbind;
+}
+
+/**
+ * N1 (DI-430, 2026-09-30) — THE T-18 SHEET SHELL, GENERALIZED, NEVER FORKED. Everything `mountWeekWizardSheetShell()` used to do inline, parameterized by ids and
+ * the three things that differ per sheet: what goes in the header (the wizard's title + close; the New League sheet's own nav bar), what repaints the body, and the
+ * drag hooks. The wrap carries `data-hold-teardown` (SECURITY GATE FINDING 1: a hold sweeps every surface that carries it), the native grabber shows on the shell only,
+ * the backdrop tap runs `onBackdrop`, and a `closeId` button (the wizard's ✕) runs `onClose || onBackdrop`. Returns `{ wrap, sheetEl, unbind }`; `unbind` is the swipe's
+ * teardown (null when no drag was requested or the shell is not native).
+ */
+function mountSheetShell({
+  wrapId, sheetId, sheetAttrs = '', headerInnerHTML = '', afterHeaderHTML = '', bodyId,
+  closeId = null, onClose = null, onBackdrop, renderBody, drag = null,
+}) {
+  document.getElementById(wrapId)?.remove();
   const wrap = document.createElement('div');
-  wrap.id = 'week-wizard-sheet-wrap';
+  wrap.id = wrapId;
   // SECURITY GATE FINDING 1 — swept by tearDownRenderedContentForHold() if a
   // hold fires while this sheet is open.
   wrap.setAttribute('data-hold-teardown', '');
   wrap.innerHTML = `
     <div class="chat-sheet-backdrop"></div>
-    <div class="chat-sheet" id="week-wizard-sheet">
+    <div class="chat-sheet" id="${escHtml(sheetId)}"${sheetAttrs}>
       <div class="chat-sheet-header">${isNativeShell() ? '<span class="sheet-grabber" aria-hidden="true"></span>' : ''}
-        <div class="chat-sheet-title" id="week-wizard-title">Set up Week</div>
-        <button class="chat-sheet-close" id="week-wizard-close" aria-label="Close">✕</button>
+        ${headerInnerHTML}
       </div>
-      <div id="week-wizard-step-tracker"></div>
-      <div id="week-wizard-body" class="chat-sheet-scroll"></div>
+      ${afterHeaderHTML}
+      <div id="${escHtml(bodyId)}" class="chat-sheet-scroll"></div>
     </div>`;
   document.body.appendChild(wrap);
-  wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', closeWeekWizardSheet);
-  wrap.querySelector('#week-wizard-close')?.addEventListener('click', closeWeekWizardSheet);
-  renderWeekWizardSheetBody();
-  // Drag-to-dismiss, header/handle only — see the file comment just above.
-  // No-ops on web (bindSwipeToDismiss() is native-only). Bound ONCE per
-  // mount; renderWeekWizardSheetBody() only ever repaints #week-wizard-body,
-  // never the header, so this never needs rebinding mid-flow.
-  const sheetEl = wrap.querySelector('#week-wizard-sheet');
+  wrap.querySelector('.chat-sheet-backdrop')?.addEventListener('click', onBackdrop);
+  if (closeId) wrap.querySelector(`#${closeId}`)?.addEventListener('click', onClose || onBackdrop);
+  renderBody();
+  const sheetEl = wrap.querySelector(`#${sheetId}`);
   const headerEl = wrap.querySelector('.chat-sheet-header');
-  _unbindWizardSheetDismiss?.();
-  _unbindWizardSheetDismiss = (sheetEl && headerEl) ? bindSwipeToDismiss(headerEl, {
+  const unbind = (drag && sheetEl && headerEl) ? bindSwipeToDismiss(headerEl, {
     axis: 'y',
-    // Security gate F2 (third pass) — its OWN predicate: the shared one counts
-    // this very sheet as a blocking surface, so the gesture never armed.
-    getBlocked: isWizardDismissGestureBlocked,
+    getBlocked: drag.getBlocked,
     getDistancePx: () => sheetEl.getBoundingClientRect().height || window.innerHeight || 1,
-    onProgress: (progress) => wizardSheetDragProgress(wrap, sheetEl, progress),
-    onSettle: (result) => settleWizardSheetDrag(wrap, sheetEl, result),
+    onProgress: (progress) => drag.onProgress(wrap, sheetEl, progress),
+    onSettle: (result) => drag.onSettle(wrap, sheetEl, result),
   }) : null;
+  return { wrap, sheetEl, unbind };
 }
 
 function openWeekWizardSheet({ forceNew = false } = {}) {
@@ -30576,6 +32379,7 @@ function openWeekWizardSheet({ forceNew = false } = {}) {
   // DI-358 — fresh open-mode selection each time the sheet opens.
   _weekWizardOpenMode = null;
   _weekWizardScheduleAt = null;
+  _weekWizardPendingOpenAt = null; // DI-404: a time carried from a previous sheet must never leak into this one
   // DI-359 — a fresh open never starts inside the Finalize flow; it is only
   // ever entered explicitly from the Manage screen's own button.
   _finalizeStep = null;
@@ -30635,6 +32439,7 @@ function closeWeekWizardSheet() {
   // Hygiene — the next open() always re-derives its own target (above); this
   // just avoids holding a stale weekId in memory between opens.
   _weekWizardTargetWeekId = null;
+  _weekWizardPendingOpenAt = null; // DI-404: closing the sheet ends the session — a carried Auto-Open time goes with it
   _finalizeStep = null;
   // BLOCK fix (a)/(b) hygiene — same reasoning: the next open() always
   // recomputes both from scratch (openWeekWizardSheet(), above), so nothing

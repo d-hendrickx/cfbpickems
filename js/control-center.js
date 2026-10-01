@@ -315,7 +315,7 @@
  */
 
 import { haptic } from './haptics.js';
-import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone } from './nav-gestures.js';
+import { prefersReducedMotion, AXIS_DEAD_ZONE_PX, isInDrawerOpenZone, touchClaimedBy, clearStaleTouchClaim } from './nav-gestures.js';
 import { comingSoonCopy } from './leagues-home.js';
 import { getShellBrandName } from './brand.js';
 import { TIME_ZONES, DEFAULT_TZ, THEMES } from './data-model.js';
@@ -330,6 +330,8 @@ import { captureDirtyFields, restoreDirtyFields, stampFieldOwner } from './field
 // `session` bag first. "Shape mismatch" here was nominal (the PARAMETER
 // name roles.js's JSDoc uses), not structural.
 import { isSuperAdmin, isPlatformAdmin } from './roles.js';
+// N1 (DI-432 §7, 2026-09-30) — the pilot-only registry's one predicate (renderIdentityHeader()'s league-name fallback).
+import { isPilotOnlyAllowed } from './pilot-only.js';
 
 // ═════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -583,6 +585,8 @@ function isBlockedByOtherSurface() {
   // (mirrors showLeaguePageOverlay() byte-for-byte), same reasoning as the
   // League Page/wizard entries just above.
   if (document.getElementById?.('leagues-home-overlay')) return true;
+  // UN-389 / DI-446 (2026-09-30) — the Delete Account sheet left `.modal-overlay` for the shared sheet shell; the drawer's edge swipe must not arm under it (one owner per touch).
+  if (document.getElementById?.('pwacct-delete-overlay')) return true;
   return false;
 }
 
@@ -626,6 +630,7 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
   }
 
   function onTouchStart(e) {
+    clearStaleTouchClaim(e);   // RG-TBD-A2 — see nav-gestures.js
     if (isBlockedByOtherSurface()) { start = null; return; }
     const t = e.touches?.[0];
     if (!t) return;
@@ -660,6 +665,11 @@ export function bindControlCenterEdgeSwipe(dispatch, getState, opts = {}) {
     const dy = t.clientY - start.y;
     if (axis === null && (Math.abs(dx) > AXIS_DEAD_ZONE_PX || Math.abs(dy) > AXIS_DEAD_ZONE_PX)) {
       axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      // RG-TBD-A2 — another recognizer already owns this touch (the compact
+      // Dashboard's long-press reorder, or a week swipe that locked first):
+      // the drawer never starts a drag on it. A reorder drag from a chip in
+      // the left quarter used to open the drawer.
+      if (axis === 'x' && touchClaimedBy() !== null) { start = null; return; }
       if (axis === 'x') {
         dragActive = true; dispatch({ type: 'drag-start' });
         // Round 2 (finding 7) — continue from where the panel IS (drag-start
@@ -773,7 +783,8 @@ export function renderIdentityHeader(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderIdentityHeader');
   const player = ctx.session?.player || {};
   const name = ctx.escHtml(player.displayName || '');
-  const leagueName = ctx.escHtml(ctx.league?.name || "IRB Pick'Ems");
+  // N1 (DI-432 §7) — the fallback league name is the pilot league's own name ONLY for the pilot; any other league whose name has not loaded reads a neutral "Your league".
+  const leagueName = ctx.escHtml(ctx.league?.name || (isPilotOnlyAllowed('irbCopy', ctx.league) ? "IRB Pick'Ems" : 'Your league'));
   const initials = ctx.escHtml(initialsOf(ctx));
   const versionLine = ctx.escHtml(`${getShellBrandName()} ${ctx.version?.APP_VERSION || ''} · ${ctx.version?.APP_VERSION_DATE || ''}`.trim());
 
@@ -830,11 +841,35 @@ export function renderIdentityHeader(ctx) {
  *  ABOVE `accountRowsHTML()`'s Password/Sign Out/Delete Account sequence —
  *  see D1's own reasoning at `accountRowsHTML()`'s doc comment. Both share
  *  the SAME `ctx.accountRows` gate — see file-header note 8. */
+/**
+ * RG-TBD-B3 (bug batch B, 2026-09-29) — the ONE copy source for the caption
+ * under the control-center alma-mater pickers (Profile's #cc-field-alma-note,
+ * Chat settings' #pref-alma-note); js/app.js picks the status. Every string is
+ * ONE line at the drawer's width (shellrendertest [F] measures it), so the
+ * reserved line box never grows. "Reopen to retry" is literal: a failed or
+ * partial load retries the next time the picker is opened (app.js
+ * bindControlCenterBodies()), which stays true when iOS merely backgrounds
+ * the app. Plain concatenation, no markup — callers escape or set textContent.
+ */
+export function almaCatalogNoteText(status, { count = 0, got = 0 } = {}) {
+  switch (status) {
+    case 'loaded': return 'All ' + Number(count) + ' schools, from ESPN.';
+    case 'partial': return 'Only ' + Number(got) + ' of ' + Number(count) + ' schools loaded. Reopen to retry.';
+    case 'failed': return 'Couldn’t reach ESPN — short list. Reopen to retry.';
+    default: return 'Loading every school…';
+  }
+}
+
 export function renderProfileScreen(ctx) {
   requireFn(ctx.escHtml, 'escHtml', 'renderProfileScreen');
   const player = ctx.session?.player || {};
   const almaIcon = iconOrNothing(ctx, 'almaMater');
   const backIcon = iconOrNothing(ctx, 'chevronLeft');
+  // RG-TBD-B3 (2026-09-29) — the picker's one-line caption (almaCatalogNoteText()
+  // below, chosen by app.js; patched in place when the fetch settles). Its
+  // line box is RESERVED (.alma-catalog-note, css/styles.css) so the Save
+  // button never moves when the caption arrives or changes.
+  const almaNote = ctx.bodies?.almaMaterNoteText || '';
   return `<div class="control-center-profile">
       <button type="button" class="control-center-back" data-action="cc-pop-profile">
         <span class="cc-row-icon" aria-hidden="true">${backIcon}</span> Control Center
@@ -853,6 +888,7 @@ export function renderProfileScreen(ctx) {
       <div class="form-group">
         <label class="form-label" for="cc-field-alma-mater">${almaIcon ? `<span class="cc-row-icon">${almaIcon}</span>` : ''}Alma mater &amp; home teams</label>
         <select class="form-input" id="cc-field-alma-mater" data-field="alma-mater">${ctx.bodies?.almaMaterOptionsHTML || ''}</select>
+        <p class="text-muted text-xs mt-sm alma-catalog-note" id="cc-field-alma-note" role="status">${ctx.escHtml(almaNote)}</p>
       </div>
       <button type="button" class="btn btn-primary btn-block" data-action="cc-save-profile">Save</button>
       <!-- UX Revamp Group F (DI-335/DI-340, 2026-09-25) — account-identity

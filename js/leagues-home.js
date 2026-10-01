@@ -70,6 +70,9 @@
  */
 
 import { ESPN_SPORT_ENDPOINTS } from './data-model.js';
+// N1 (DI-430, 2026-09-30) — the OPEN "+ Create new league" card is league-create.js's own markup (one implementation, two entry points); this module only chooses
+// between it and the gate-CLOSED coming-soon stub below. league-create.js imports nothing from here, so there is no cycle.
+import { entryCardHTML } from './league-create.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §0 — THE ONE HELD DECISION
@@ -284,6 +287,8 @@ export function renderLeaguesHome({
   roleBadgeHTML,
   loading = false,
   showTitle = true,
+  createOpen = false,
+  notice = '',
 } = {}) {
   requireEscHtml(escHtml, 'renderLeaguesHome');
   const title = showTitle ? '<div class="admin-section-title">Your Leagues</div>' : '';
@@ -293,10 +298,12 @@ export function renderLeaguesHome({
   }
   const list = Array.isArray(memberships) ? memberships : [];
   const cards = list.map(m => leagueCardHTML(m, { activeLeagueId, isPilotLeague, escHtml, icon, roleBadgeHTML })).join('');
-  return `${title}
+  // `notice` (N1, frame 13) — an already-rendered banner (league-create.js bannerHTML(), whose text went through escHtml) shown above the list: "{name} was created, but
+  // this device couldn't load it." Empty string = today's markup exactly.
+  return `${title}${notice || ''}
     <div class="league-card-list">
       ${cards}
-      ${renderCreateLeagueStubCard({ escHtml, icon })}
+      ${renderCreateLeagueStubCard({ escHtml, icon, open: createOpen === true })}
     </div>`;
 }
 
@@ -339,8 +346,13 @@ export function renderComingSoonCard({ title, subtitle = '', copy, escHtml, extr
     </button>`;
 }
 
-/** DI-313 — always the last card in Leagues Home's list. */
-export function renderCreateLeagueStubCard({ escHtml } = {}) {
+/** DI-313 — always the last card in Leagues Home's list.
+ *
+ *  N1 (DI-430/433, 2026-09-30) — `open` is the release gate (`platform_kv.league_creation_open`, read by auth.js's `getCachedLeagueCreationOpen()`; DEFAULT FALSE). With
+ *  the gate CLOSED (the default, and every call that does not pass `open`) the markup is TODAY'S, byte for byte: the coming-soon stub with `data-action="coming-soon"`
+ *  and the exact DI-313 copy. With it OPEN the same slot renders the real entry card (`data-action="create-league"`, the `plus` icon and "Create new league"). */
+export function renderCreateLeagueStubCard({ escHtml, icon = defaultIcon, open = false } = {}) {
+  if (open === true) return entryCardHTML({ escHtml, icon });
   return renderComingSoonCard({
     title: '+ Create new league',
     copy: COMING_SOON_COPY.createLeague,
@@ -446,6 +458,7 @@ export function renderLeaguePage(league, {
   isCommissioner = false,
   hasSportChoice = null, // eslint-disable-line no-unused-vars -- accepted, not required; see doc comment
   sports = null,
+  slateEmpty = null,
   escHtml,
   icon = defaultIcon,
 } = {}) {
@@ -463,6 +476,24 @@ export function renderLeaguePage(league, {
       <span class="sport-card-chevron" aria-hidden="true">${icon('chevronRight')}</span>
     </button>`;
   }).join('');
+  // N1 (DI-430 frame 6, 2026-09-30) — the empty state a league with NO WEEKS needs (Interaction Principles: what happened, why, what next). `slateEmpty` is
+  // the caller's already-resolved answer: 'commissioner' | 'player' | null (null = a slate exists, today's markup exactly). The commissioner gets the primary
+  // "Set up first week" (the T-18 week wizard, opened cold) and a text "Invite Friends"; a player gets one sentence and NO button. No league name, no IRB copy.
+  const emptyState = slateEmpty === 'commissioner'
+    ? `<div class="card league-page-empty" data-league-empty="commissioner">
+        <span class="league-page-empty-ic" aria-hidden="true">${icon('calendarWeek')}</span>
+        <h3 class="league-page-empty-title">No picks to make yet</h3>
+        <p class="league-page-empty-text">Set up your first week to open picks for your league.</p>
+        <button type="button" class="btn btn-primary btn-block" data-action="league-setup-first-week">Set up first week</button>
+        <button type="button" class="btn btn-ghost btn-block" data-action="league-invite-friends">Invite Friends</button>
+      </div>`
+    : slateEmpty === 'player'
+      ? `<div class="card league-page-empty" data-league-empty="player">
+        <span class="league-page-empty-ic" aria-hidden="true">${icon('calendarWeek')}</span>
+        <h3 class="league-page-empty-title">No picks to make yet</h3>
+        <p class="league-page-empty-text">Your commissioner hasn't opened a week yet.</p>
+      </div>`
+      : '';
   return `<div class="league-page-header">
       <button type="button" class="league-page-back" data-action="league-page-back" aria-label="Back">${icon('chevronLeft')}</button>
       <h2 class="league-page-title">${escHtml(lg.leagueName || lg.name || '')}</h2>
@@ -474,6 +505,7 @@ export function renderLeaguePage(league, {
         <span>League Standings</span>
         <span aria-hidden="true">${icon('chevronRight')}</span>
       </button>
+      ${emptyState}
       ${isCommissioner ? renderAddSportStubCard({ escHtml }) : ''}
     </div>`;
 }

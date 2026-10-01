@@ -24,6 +24,8 @@
  *                 a second Light impact (documented fallback, DI-326 item 1).
  *   'success'   — Haptics.notification({ type: 'SUCCESS' }) if the plugin
  *                 exposes it, else a Light impact fallback.
+ *   'error'     — Haptics.notification({ type: 'ERROR' }), else a Medium impact (N1, DI-430: a failed create).
+ *   'warning'   — Haptics.notification({ type: 'WARNING' }), else a Light impact (N1, DI-430: the discard confirmation).
  *
  * An unknown kind is a silent no-op (never throws, never guesses).
  */
@@ -58,6 +60,17 @@ export function haptic(kind) {
         break;
       case 'success':
         if (typeof Haptics.notification === 'function') Haptics.notification({ type: 'SUCCESS' });
+        else Haptics.impact?.({ style: 'LIGHT' });
+        break;
+      // N1 (DI-430, 2026-09-30) — the New League flow's two remaining moments (Interaction Principles §Haptics): a FAILED create is an error
+      // notification, a DISCARD confirmation is a warning notification. Same shape as 'success': the notification type when the plugin exposes it,
+      // a documented impact fallback when it does not (MEDIUM for an error so it still reads heavier than a tap, LIGHT for a warning).
+      case 'error':
+        if (typeof Haptics.notification === 'function') Haptics.notification({ type: 'ERROR' });
+        else Haptics.impact?.({ style: 'MEDIUM' });
+        break;
+      case 'warning':
+        if (typeof Haptics.notification === 'function') Haptics.notification({ type: 'WARNING' });
         else Haptics.impact?.({ style: 'LIGHT' });
         break;
       default:

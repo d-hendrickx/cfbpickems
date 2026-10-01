@@ -301,7 +301,10 @@ try {
     st.saveGame({ ...manual15, isManual: true, espnSport: null, espnEventId: null });
     // Step 4's Auto-Open At, two days out, with seconds.
     const open = new Date(Date.now() + 2 * 86400000); open.setUTCHours(18, 5, 41, 0);
-    st.saveWeek({ ...st.getWeeks().find(w => w.weekId === wk.weekId), picksOpenAt: open.toISOString() });
+    // DI-404 (coordinator override, 2026-09-30): setting or confirming an Auto-Open At
+    // time now needs a valid weekly blurb, so this week carries one — else Step 4
+    // refuses the time and [D] would stop exercising the real save path (RG-287).
+    st.saveWeek({ ...st.getWeeks().find(w => w.weekId === wk.weekId), picksOpenAt: open.toISOString(), blurb: 'Rivalry week — bring your A game.' });
     st.setSession(null, true, false);
     await new Promise(r => setTimeout(r, 1200));   // storage.js's debounced write lands
     return { weekId: wk.weekId, games: st.getGames(wk.weekId).length, picksOpenAt: open.toISOString() };

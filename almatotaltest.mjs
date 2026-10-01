@@ -548,6 +548,9 @@ console.log('\n[9] Mutation battery — calculateAlmaMaterTotal()…');
     mutantDirs.push(dir);
     await cp(jsDir, dir, { recursive: true });
     await writeFile(path.join(dir, 'scoring.js'), mutatedScoringSrc, 'utf8');
+    // N1: the mutant's OWN pilot-only.js has no resolver, so its default alma list would be [] and "restore the original bug" (catalog-based filter half) would stop being
+    // visible. The mutant's copy is told it is the pilot league's, exactly as app.js tells the real one.
+    (await import(new URL(`file://${path.join(dir, 'pilot-only.js')}`).href)).setPilotOnlyLeagueResolver(() => ({ pilot: true }));
     const url = new URL(`file://${path.join(dir, 'scoring.js')}?t=${Date.now()}_${Math.random()}`);
     return import(url.href);
   }
@@ -680,7 +683,7 @@ console.log('\n[9] Mutation battery — calculateAlmaMaterTotal()…');
       ),
       proveRed: async (mod) => {
         // `undefined` is NOT a useful probe here — getAlmaMaterMatch's own
-        // default parameter (`almaMaters = ALMA_MATERS`) only activates for
+        // default parameter (`almaMaters = getAlmaMaters()`) only activates for
         // literally `undefined`, silently masking this exact mutation. Pass
         // `null` instead: default params do NOT intercept `null`, so it
         // reaches `for (const alma of almaMaters)` inside getAlmaMaterMatch
@@ -806,7 +809,7 @@ console.log('\n[10] Structural call-site scans…');
         `detector does NOT false-positive on: ${label} — ${frag}`);
     }
     // The declaration itself must not be treated as a call.
-    const declCalls = findCalls('getAlmaMaterMatch', 'export function getAlmaMaterMatch(teamName, almaMaters = ALMA_MATERS) {}');
+    const declCalls = findCalls('getAlmaMaterMatch', 'export function getAlmaMaterMatch(teamName, almaMaters = getAlmaMaters()) {}');
     assert(declCalls.length === 0, 'detector correctly excludes the function\'s OWN declaration, not just its call sites');
 
     // A short, explicit, documented allowlist for genuinely intentional
@@ -851,7 +854,7 @@ console.log('\n[10] Structural call-site scans…');
       const calls = findCalls('fetchByDateRange', frag);
       assert(calls.length === 1 && /\balmaMaters\s*:/.test(calls[0]), `detector does NOT false-positive on: ${label} — ${frag}`);
     }
-    const declCalls = findCalls('fetchByDateRange', 'export async function fetchByDateRange({ startDate, endDate, season, almaMaters = ALMA_MATERS } = {}) {}');
+    const declCalls = findCalls('fetchByDateRange', 'export async function fetchByDateRange({ startDate, endDate, season, almaMaters = getAlmaMaters() } = {}) {}');
     assert(declCalls.length === 0, 'detector correctly excludes the function\'s OWN declaration');
 
     let totalCalls = 0, violations = [];
